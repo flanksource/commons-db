@@ -12,15 +12,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/artifacts"
+	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/types"
 	fileUtils "github.com/flanksource/commons/files"
 	"github.com/flanksource/commons/hash"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/commons/utils"
-	"github.com/flanksource/commons-db/connection"
-	"github.com/flanksource/commons-db/context"
-	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 	"github.com/samber/lo"
 	"github.com/samber/oops"
@@ -68,13 +67,16 @@ type Exec struct {
 	Connections connection.ExecConnections
 	Checkout    *connection.GitConnection
 	Artifacts   []Artifact
-	EnvVars     []types.EnvVar
-	Chroot      string
+
+	EnvVars []types.EnvVar
+	Chroot  string
 }
 
 // +kubebuilder:object:generate=true
 type Artifact struct {
-	Path string `json:"path" yaml:"path" template:"true"`
+	Path    string        `json:"path" yaml:"path" template:"true"`
+	Content io.ReadCloser `json:"-" yaml:"-"`
+	// Content is the content of the artifact. If Path is /dev/stdout or /dev/stderr, Content will be populated with the respective output.
 }
 
 type ExecDetails struct {
@@ -87,15 +89,15 @@ type ExecDetails struct {
 	// Any extra details about the command execution, e.g. git commit id, etc.
 	Extra map[string]any `json:"extra,omitempty"`
 
-	Error     error                `json:"-" yaml:"-"`
-	Artifacts []artifacts.Artifact `json:"-" yaml:"-"`
+	Error     error      `json:"-" yaml:"-"`
+	Artifacts []Artifact `json:"-" yaml:"-"`
 }
 
 func (e ExecDetails) String() string {
 	return fmt.Sprintf("%s %s exit=%d stdout=%s stderr=%s", e.Path, e.Args, e.ExitCode, e.Stdout, e.Stderr)
 }
 
-func (e *ExecDetails) GetArtifacts() []artifacts.Artifact {
+func (e *ExecDetails) GetArtifacts() []Artifact {
 	if e == nil {
 		return nil
 	}
@@ -238,13 +240,13 @@ func runCmd(ctx context.Context, cmd *commandContext) (*ExecDetails, error) {
 	for _, artifactConfig := range cmd.artifacts {
 		switch artifactConfig.Path {
 		case "/dev/stdout":
-			result.Artifacts = append(result.Artifacts, artifacts.Artifact{
+			result.Artifacts = append(result.Artifacts, Artifact{
 				Content: io.NopCloser(strings.NewReader(result.Stdout)),
 				Path:    "stdout",
 			})
 
 		case "/dev/stderr":
-			result.Artifacts = append(result.Artifacts, artifacts.Artifact{
+			result.Artifacts = append(result.Artifacts, Artifact{
 				Content: io.NopCloser(strings.NewReader(result.Stderr)),
 				Path:    "stderr",
 			})
@@ -267,7 +269,7 @@ func runCmd(ctx context.Context, cmd *commandContext) (*ExecDetails, error) {
 					return nil, fmt.Errorf("artifact path (%s) is a directory. expected file", path)
 				}
 
-				result.Artifacts = append(result.Artifacts, artifacts.Artifact{
+				result.Artifacts = append(result.Artifacts, Artifact{
 					Content: file,
 					Path:    path,
 				})
