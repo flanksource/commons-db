@@ -1,0 +1,61 @@
+version: '3'
+
+vars:
+  LOCALBIN: "{{.PWD}}/.bin"
+  CONTROLLER_TOOLS_VERSION: v0.16.5
+  GOLANGCI_LINT_VERSION: v2.1.6
+
+tasks:
+  generate:
+    desc: Generate DeepCopy, DeepCopyInto, and DeepCopyObject method implementations
+    deps: [controller-gen]
+    cmds:
+      - "{{.LOCALBIN}}/controller-gen object paths=./types/..."
+      - "{{.LOCALBIN}}/controller-gen object paths=./connection/..."
+      - "{{.LOCALBIN}}/controller-gen object paths=./models/..."
+      - PATH={{.LOCALBIN}}:${PATH} go generate ./...
+
+  fmt:
+    desc: Format Go code
+    cmds:
+      - go fmt ./...
+
+  lint:
+    desc: Run linters
+    deps: [golangci-lint]
+    cmds:
+      - "{{.LOCALBIN}}/golangci-lint run ./..."
+      - go vet ./...
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v ./...
+
+  tidy:
+    desc: Tidy go modules
+    cmds:
+      - go mod tidy
+
+  build:
+    desc: Build all packages
+    cmds:
+      - go build ./...
+
+  controller-gen:
+    desc: Download controller-gen locally if necessary
+    cmds:
+      - mkdir -p {{.LOCALBIN}}
+      - |
+        test -s {{.LOCALBIN}}/controller-gen && {{.LOCALBIN}}/controller-gen --version | grep -q {{.CONTROLLER_TOOLS_VERSION}} || \
+        GOBIN={{.LOCALBIN}} go install sigs.k8s.io/controller-tools/cmd/controller-gen@{{.CONTROLLER_TOOLS_VERSION}}
+    status:
+      - test -s {{.LOCALBIN}}/controller-gen && {{.LOCALBIN}}/controller-gen --version | grep -q {{.CONTROLLER_TOOLS_VERSION}}
+
+  golangci-lint:
+    desc: Download golangci-lint locally if necessary
+    cmds:
+      - mkdir -p {{.LOCALBIN}}
+      - test -s {{.LOCALBIN}}/golangci-lint || curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh | sh -s -- -b {{.LOCALBIN}} {{.GOLANGCI_LINT_VERSION}}
+    status:
+      - test -s {{.LOCALBIN}}/golangci-lint
