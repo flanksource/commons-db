@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/fs"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
 )
@@ -77,4 +79,13 @@ func (c SFTPConnection) GetPort() int {
 		return c.Port
 	}
 	return 22
+}
+
+// Filesystem returns a filesystem interface for SFTP operations
+func (c *SFTPConnection) Filesystem(ctx context.Context) (fs.FilesystemRW, error) {
+	if err := c.HydrateConnection(ctx); err != nil {
+		return nil, err
+	}
+	host := fmt.Sprintf("%s:%d", c.Host, c.GetPort())
+	return fs.NewSFTPFS(host, c.Username.ValueStatic, c.Password.ValueStatic)
 }
