@@ -1,0 +1,164 @@
+apiVersion: deps.flanksource.com/v1
+kind: Dependencies
+metadata:
+  name: commons-db-e2e
+  namespace: default
+spec:
+  # Native Services (via binary packages)
+  services:
+    # PostgreSQL - Already available via zonky binaries
+    postgres:
+      manager: maven
+      source:
+        maven:
+          groupId: io.zonky.test
+          artifactId: embedded-postgres-binaries-bom
+          version: 16.1.0
+
+    # Redis - New addition
+    redis:
+      manager: direct
+      source:
+        url: "https://download.redis.io/releases/redis-{{.version}}.tar.gz"
+        version: "7.2.4"
+      platforms:
+        - os: darwin
+          arch: amd64
+        - os: darwin
+          arch: arm64
+        - os: linux
+          arch: amd64
+        - os: linux
+          arch: arm64
+      postProcess: "make"
+      binaries:
+        - name: redis-server
+          path: src/redis-server
+        - name: redis-cli
+          path: src/redis-cli
+
+    # OpenSearch - New addition
+    opensearch:
+      manager: direct
+      source:
+        url: "https://artifacts.opensearch.org/releases/bundle/opensearch/{{.version}}/opensearch-{{.version}}-{{.os}}-{{.arch}}.tar.gz"
+        version: "2.11.1"
+      platforms:
+        - os: darwin
+          arch: x64
+        - os: darwin
+          arch: arm64
+        - os: linux
+          arch: x64
+        - os: linux
+          arch: arm64
+      binaries:
+        - name: opensearch
+          path: bin/opensearch
+        - name: opensearch-plugin
+          path: bin/opensearch-plugin
+      config:
+        mode: directory
+        symlinks:
+          - bin/opensearch
+          - bin/opensearch-plugin
+      environment:
+        - name: OPENSEARCH_JAVA_OPTS
+          value: "-Xms512m -Xmx512m"
+
+    # Loki - New addition
+    loki:
+      manager: github_release
+      source:
+        repo: grafana/loki
+        version: "v2.9.3"
+      assetPattern: "loki-{{.os}}-{{.arch}}.zip"
+      platforms:
+        - os: darwin
+          arch: amd64
+        - os: darwin
+          arch: arm64
+        - os: linux
+          arch: amd64
+        - os: linux
+          arch: arm64
+      binaries:
+        - name: loki
+          path: loki
+
+    # LocalStack CLI - New addition
+    localstack:
+      manager: github_release
+      source:
+        repo: localstack/localstack-cli
+        version: "3.0.2"
+      assetPattern: "localstack-cli-{{.version}}-{{.os}}-{{.arch}}.tar.gz"
+      platforms:
+        - os: darwin
+          arch: amd64
+        - os: darwin
+          arch: arm64
+        - os: linux
+          arch: amd64
+        - os: linux
+          arch: arm64
+      binaries:
+        - name: localstack
+          path: localstack
+      services:
+        - s3
+        - sqs
+        - cloudwatch
+        - iam
+
+    # envtest - Already available
+    envtest:
+      manager: envtest
+      version: latest
+
+  # Docker Images
+  docker:
+    images:
+      # SFTP Server
+      - name: sftp
+        image: atmoz/sftp:latest
+        ports:
+          - "2222:22"
+        environment:
+          SFTP_USERS: "test:test:1001:1001:/tmp/sftp"
+
+      # SMB Server
+      - name: smb
+        image: filesysorg/jfileserver:latest
+        ports:
+          - "445:445"
+        environment: {}
+
+      # Fake GCS Server
+      - name: gcs
+        image: fsouza/fake-gcs-server:latest
+        ports:
+          - "4443:4443"
+        command:
+          - "-scheme"
+          - "http"
+          - "-public-host"
+          - "localhost:4443"
+
+      # Azurite (Azure Storage Emulator)
+      - name: azurite
+        image: mcr.microsoft.com/azure-storage/azurite:latest
+        ports:
+          - "10000:10000"  # Blob service
+          - "10001:10001"  # Queue service
+          - "10002:10002"  # Table service
+
+  # Configuration
+  config:
+    tempDirectory: "/tmp/commons-db-e2e"
+    healthCheckInterval: 5s
+    healthCheckTimeout: 30s
+    startupTimeout: 2m
+    shutdownTimeout: 1m
+    parallel: true
+    cleanup: true

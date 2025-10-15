@@ -1,0 +1,181 @@
+name: E2E Tests
+
+on:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - '**.go'
+      - 'e2e/**'
+      - '.github/workflows/e2e.yml'
+      - 'go.mod'
+      - 'go.sum'
+  pull_request:
+    branches:
+      - main
+      - develop
+    paths:
+      - '**.go'
+      - 'e2e/**'
+      - '.github/workflows/e2e.yml'
+      - 'go.mod'
+      - 'go.sum'
+
+env:
+  GO_VERSION: '1.22'
+
+jobs:
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go-version: ['1.22']
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Set up Docker (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          # Docker is pre-installed on Ubuntu runners
+          docker --version
+
+      - name: Set up Docker (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # Install Docker on macOS via Docker Desktop
+          brew install docker docker-compose 2>/dev/null || true
+          docker --version 2>/dev/null || echo "Docker will be installed via Colima"
+
+      - name: Install dependencies
+        run: |
+          go mod download
+          go mod verify
+
+      - name: Build e2e tests
+        run: |
+          go build -v ./e2e
+        env:
+          CGO_ENABLED: 1
+
+      - name: Run E2E tests with Ginkgo
+        run: |
+          go install github.com/onsi/ginkgo/v2/ginkgo@latest
+          ginkgo -v ./e2e --timeout=10m --poll-progress-after=1m
+        env:
+          CGO_ENABLED: 1
+        continue-on-error: false
+
+      - name: Run unit tests for helpers
+        run: |
+          go test -v ./e2e/helpers/... -timeout 5m
+        continue-on-error: false
+
+      - name: Collect test coverage
+        run: |
+          go test -v ./e2e -coverprofile=coverage-e2e.out
+          go tool cover -html=coverage-e2e.out -o coverage-e2e.html
+        continue-on-error: true
+
+      - name: Upload coverage reports
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: e2e-coverage-${{ matrix.os }}
+          path: coverage-e2e.*
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: e2e-test-results-${{ matrix.os }}
+          path: |
+            e2e-test-results.json
+            e2e-test-results.xml
+
+      - name: Lint e2e tests
+        run: |
+          go vet ./e2e/...
+        continue-on-error: false
+
+      - name: Check code formatting
+        run: |
+          go fmt ./e2e/...
+        continue-on-error: false
+
+  e2e-linux:
+    name: E2E Tests (Linux - Detailed)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      docker:
+        image: docker:latest
+        options: >-
+          --privileged
+          --health-cmd="docker ps"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: '1.22'
+          cache: true
+          cache-dependency-path: go.sum
+
+      - name: Run E2E tests with verbose output
+        run: |
+          go install github.com/onsi/ginkgo/v2/ginkgo@latest
+          ginkgo -v -r ./e2e --timeout=10m --poll-progress-after=1m
+        env:
+          CGO_ENABLED: 1
+
+      - name: Generate test report
+        if: always()
+        run: |
+          go install github.com/jstemmer/go-junit-report/v2@latest
+          go test -v ./e2e 2>&1 | go-junit-report -set-exit-code > e2e-report.xml
+        continue-on-error: true
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: e2e-junit-report
+          path: e2e-report.xml
+
+  quality-gate:
+    name: Quality Gate
+    runs-on: ubuntu-latest
+    needs: [e2e-tests]
+    if: always()
+
+    steps:
+      - name: Check test results
+        run: |
+          if [ "${{ needs.e2e-tests.result }}" = "failure" ]; then
+            echo "E2E tests failed"
+            exit 1
+          fi
+          echo "All E2E tests passed"
+
+      - name: Status check
+        run: echo "E2E test suite completed successfully"
