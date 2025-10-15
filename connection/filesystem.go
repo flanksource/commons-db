@@ -3,8 +3,8 @@ package connection
 import (
 	"fmt"
 
-	"github.com/flanksource/commons-db-migrate-artifacts/fs"
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/fs"
 )
 
 // FilesystemProvider is implemented by connections that can provide a filesystem interface

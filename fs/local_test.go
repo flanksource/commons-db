@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/flanksource/commons-db-migrate-artifacts/fs"
+	"github.com/flanksource/commons-db/fs"
 )
 
 func TestLocalFS_ImplementsFilesystemRW(t *testing.T) {

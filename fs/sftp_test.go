@@ -3,7 +3,7 @@ package fs_test
 import (
 	"testing"
 
-	"github.com/flanksource/commons-db-migrate-artifacts/fs"
+	"github.com/flanksource/commons-db/fs"
 )
 
 func TestSFTPFS_ImplementsFilesystemRW(t *testing.T) {

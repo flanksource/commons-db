@@ -3,8 +3,8 @@ package connection_test
 import (
 	"testing"
 
-	"github.com/flanksource/commons-db-migrate-artifacts/connection"
-	"github.com/flanksource/commons-db-migrate-artifacts/fs"
+	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/fs"
 	dbctx "github.com/flanksource/commons-db/context"
 )
 
