@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/flanksource/commons/collections"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/fs"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons/collections"
 )
 
 // +kubebuilder:object:generate=true

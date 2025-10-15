@@ -1,0 +1,277 @@
+package query
+
+import (
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/grammar"
+	"github.com/pkg/errors"
+	"github.com/samber/lo"
+	"github.com/timberio/go-datemath"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
+
+// DateMapper maps date expressions (including datemath like "now-7d") to actual time values
+var DateMapper = func(ctx context.Context, val string) (any, error) {
+	if expr, err := datemath.Parse(val); err != nil {
+		return nil, fmt.Errorf("invalid date '%s': %s", val, err)
+	} else {
+		return expr.Time(), nil
+	}
+}
+
+// JSONPathMapper handles JSONPath queries against JSONB columns
+var JSONPathMapper = func(ctx context.Context, tx *gorm.DB, column string, op grammar.QueryOperator, path string, val string) *gorm.DB {
+	if !slices.Contains([]grammar.QueryOperator{grammar.Eq, grammar.Neq}, op) {
+		op = grammar.Eq
+	}
+	values := strings.Split(val, ",")
+	for _, v := range values {
+		tx = tx.Where(fmt.Sprintf(`TRIM(BOTH '"' from jsonb_path_query_first(%s, '$.%s')::TEXT) %s ?`, column, path, op), v)
+	}
+	return tx
+}
+
+// CommonFields provides built-in query field handlers for common operations
+var CommonFields = map[string]func(ctx context.Context, tx *gorm.DB, val string) (*gorm.DB, error){
+	"limit": func(ctx context.Context, tx *gorm.DB, val string) (*gorm.DB, error) {
+		if i, err := strconv.Atoi(val); err == nil {
+			return tx.Limit(i), nil
+		} else {
+			return nil, err
+		}
+	},
+	"sort": func(ctx context.Context, tx *gorm.DB, sort string) (*gorm.DB, error) {
+		return tx.Order(clause.OrderByColumn{Column: clause.Column{Name: sort}}), nil
+	},
+	"offset": func(ctx context.Context, tx *gorm.DB, val string) (*gorm.DB, error) {
+		if i, err := strconv.Atoi(val); err == nil {
+			return tx.Offset(i), nil
+		} else {
+			return nil, err
+		}
+	},
+}
+
+// QueryModel defines the structure and capabilities of a queryable table/resource.
+// Consumers can create their own QueryModel instances for their specific tables.
+type QueryModel struct {
+	// Table name
+	Table string
+
+	// Custom functions to map fields to clauses
+	// Example: map["custom_field"] = func(ctx, tx, val) { ... custom query logic ... }
+	Custom map[string]func(ctx context.Context, tx *gorm.DB, val string) (*gorm.DB, error)
+
+	// List of jsonb columns that store a map.
+	// These columns can be addressed using dot notation to access the JSON fields directly
+	// Example: tags.cluster or tags.namespace.
+	JSONMapColumns []string
+
+	// List of columns that can be addressed on the search query.
+	// Any other fields will be treated as a property lookup.
+	Columns []string
+
+	// Alias maps fields from the search query to the table columns
+	// Example: map["created"] = "created_at"
+	Aliases map[string]string
+
+	// True when the table has a "tags" column
+	HasTags bool
+
+	// True when the table has a "labels" column
+	HasLabels bool
+
+	// True when the table has properties column
+	HasProperties bool
+
+	// FieldMapper maps the value of these fields
+	// Example: map["created_at"] = DateMapper
+	FieldMapper map[string]func(ctx context.Context, id string) (any, error)
+}
+
+// QueryModel.Apply will ignore these fields when converting to clauses
+// as we modify the tx directly for them
+var ignoreFieldsForClauses = []string{"sort", "offset", "limit", "labels", "config", "tags", "properties"}
+
+// Apply processes a query field and converts it to GORM clauses.
+// It handles:
+// - Field aliases
+// - Field value mapping (via FieldMapper)
+// - Common field operations (limit, sort, offset)
+// - Custom field handlers
+// - JSON path queries
+// - Property filtering
+// Returns the modified transaction, clauses to add, and any error
+func (qm QueryModel) Apply(ctx context.Context, q grammar.QueryField, tx *gorm.DB) (*gorm.DB, []clause.Expression, error) {
+	if tx == nil {
+		tx = ctx.DB().Table(qm.Table)
+	}
+	clauses := []clause.Expression{}
+	var err error
+
+	if q.Field != "" {
+		originalField := q.Field
+		q.Field = strings.ToLower(q.Field)
+		if alias, ok := qm.Aliases[q.Field]; ok {
+			q.Field = alias
+		}
+
+		if q.Field == "@order" {
+			if strings.HasPrefix(q.Value.(string), "-") {
+				tx = tx.Order(clause.OrderByColumn{Column: clause.Column{Name: strings.TrimPrefix(q.Value.(string), "-")}, Desc: true})
+			} else {
+				tx = tx.Order(clause.OrderByColumn{Column: clause.Column{Name: q.Value.(string)}})
+			}
+
+			return tx, nil, nil
+		}
+
+		val := fmt.Sprint(q.Value)
+		if mapper, ok := qm.FieldMapper[q.Field]; ok {
+			mappedVal, err := mapper(ctx, val)
+			if err != nil {
+				return nil, nil, err
+			}
+			// In certain cases, the mapper can return nil without error
+			// indicating that mapper should not be applied
+			if mappedVal == nil {
+				return tx, nil, nil
+			}
+			q.Value = mappedVal
+		}
+
+		if mapper, ok := CommonFields[q.Field]; ok {
+			tx, err = mapper(ctx, tx, val)
+			if err != nil {
+				return nil, nil, errors.Wrapf(err, "Invalid value for %s", q.Field)
+			}
+		}
+
+		if mapper, ok := qm.Custom[q.Field]; ok {
+			tx, err = mapper(ctx, tx, val)
+			if err != nil {
+				return nil, nil, errors.Wrapf(err, "Invalid value for %s", q.Field)
+			}
+		}
+
+		for _, column := range qm.JSONMapColumns {
+			// Keys in JSON fields are addressable as <column>.<key>
+			// example: labels.cluster or tags.namespace
+			if strings.HasPrefix(originalField, fmt.Sprintf("%s.", column)) {
+				tx = JSONPathMapper(ctx, tx, column, q.Op, strings.TrimPrefix(originalField, column+"."), val)
+				q.Field = column
+			} else if strings.HasPrefix(q.Field, fmt.Sprintf("%s.", column)) {
+				tx = JSONPathMapper(ctx, tx, column, q.Op, strings.TrimPrefix(q.Field, column+"."), val)
+				q.Field = column
+			}
+
+			// Another way to search jsonb maps is to do an unkeyed lookup on the values
+			// example: tags=default (matches tags={namespace: default})
+			if originalField == column && (q.Op == grammar.Eq || q.Op == grammar.Neq) {
+				tx = filterJSONColumnValues(tx, column, q.Op, val)
+				q.Field = column
+			}
+		}
+
+		if qm.HasProperties {
+			column := "properties"
+			if strings.HasPrefix(originalField, fmt.Sprintf("%s.", column)) {
+				name := strings.TrimPrefix(originalField, fmt.Sprintf("%s.", column))
+				tx = filterProperties(tx, q.Op, name, val)
+				q.Field = column
+			} else if originalField == column {
+				tx = filterJSONColumnValues(tx, column, q.Op, val)
+				q.Field = column
+			}
+		}
+
+		if !slices.Contains(ignoreFieldsForClauses, q.Field) {
+			if !slices.Contains(qm.Columns, q.Field) {
+				return nil, nil, fmt.Errorf("query for column:%s in table:%s not supported", q.Field, qm.Table)
+			}
+
+			if c, err := q.ToClauses(); err != nil {
+				return nil, nil, err
+			} else {
+				clauses = append(clauses, c...)
+			}
+		}
+	}
+
+	for _, f := range q.Fields {
+		_tx, _clauses, err := qm.Apply(ctx, *f, tx)
+		if err != nil {
+			return nil, nil, err
+		}
+		tx = _tx
+		clauses = append(clauses, _clauses...)
+	}
+
+	return tx, clauses, nil
+}
+
+// filterJSONColumnValues handles filtering on JSON column values
+func filterJSONColumnValues(tx *gorm.DB, column string, op grammar.QueryOperator, val string) *gorm.DB {
+	if !slices.Contains([]grammar.QueryOperator{grammar.Eq, grammar.Neq}, op) {
+		op = grammar.Eq
+	}
+
+	values := strings.Split(val, ",")
+
+	switch column {
+	case "tags":
+		qf := grammar.QueryField{Field: "tags_values", FieldType: grammar.FieldTypeJsonbArray, Value: val, Op: op}
+		clauses, err := qf.ToClauses()
+		if err != nil {
+			return nil
+		}
+
+		tx = tx.Clauses(clauses...)
+
+	case "properties":
+		qf := grammar.QueryField{Field: "properties_values", FieldType: grammar.FieldTypeJsonbArray, Value: val, Op: op}
+		clauses, err := qf.ToClauses()
+		if err != nil {
+			return nil
+		}
+
+		tx = tx.Clauses(clauses...)
+
+	default:
+		subQueryCondition := lo.Ternary(op == grammar.Neq, "NOT EXISTS", "EXISTS")
+		tx = tx.Where(fmt.Sprintf(`%s (
+			SELECT 1
+			FROM jsonb_each_text(%s)
+			WHERE value IN ?
+		)`, subQueryCondition, column), values)
+	}
+
+	return tx
+}
+
+// filterProperties handles filtering on properties JSONB array
+func filterProperties(tx *gorm.DB, op grammar.QueryOperator, name string, text string) *gorm.DB {
+	var subQueryCondition string
+	switch op {
+	case grammar.Neq:
+		subQueryCondition = "NOT EXISTS"
+	default:
+		subQueryCondition = "EXISTS"
+	}
+
+	values := strings.Split(text, ",")
+	subquery := fmt.Sprintf(`%s (
+		SELECT 1
+		FROM jsonb_array_elements(properties) AS prop
+		WHERE prop->>'name' = ?
+		AND prop->>'text' IN ?
+	)`, subQueryCondition)
+
+	tx = tx.Where(subquery, name, values)
+	return tx
+}
