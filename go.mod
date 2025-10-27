@@ -53,7 +53,7 @@ require (
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/patrickmn/go-cache v2.1.0+incompatible
 	github.com/pkg/errors v0.9.1
-	github.com/pkg/sftp v1.13.6
+	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
 	github.com/samber/lo v1.52.0
 	github.com/samber/oops v1.19.3
