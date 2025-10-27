@@ -384,13 +384,13 @@ func (k Context) WithLocalKubernetes(client *dutyKubernetes.Client) Context {
 	return k
 }
 
-func (k Context) LocalKubernetes() (*dutyKubernetes.Client, error) {
+func (k Context) LocalKubernetes(kubeconfigPaths ...string) (*dutyKubernetes.Client, error) {
 	if localKubernetes != nil {
 		return localKubernetes, nil
 	}
 
 	var k8s = logger.GetLogger("k8s")
-	c, rc, err := dutyKubernetes.NewClient(k8s)
+	c, rc, err := dutyKubernetes.NewClient(k8s, kubeconfigPaths...)
 	if err != nil {
 		return nil, err
 	}

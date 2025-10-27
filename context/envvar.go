@@ -13,8 +13,8 @@ import (
 	"github.com/ohler55/ojg/jp"
 	"github.com/samber/lo"
 
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons-db/types"
+	"github.com/flanksource/commons/logger"
 	"github.com/patrickmn/go-cache"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -69,6 +69,46 @@ func GetEnvStringFromCache(ctx Context, env string, namespace string) (string, e
 		return "", err
 	}
 	return GetEnvValueFromCache(ctx, envvar, namespace)
+}
+
+// debugJsonPath is a helper function to visualize the result of a jsonpath expression on some data
+// it splits the jsonpath into parts, and then applies each part sequentially, printing the intermediate success
+// and highlighting which part failed, and what the available keys where at the failure point
+//
+//	jsonPath: "spec.template.spec.containers[0].image"
+//
+// spec: ✓
+// template: ✓
+// spec: ✓
+// containers: ✓
+// [0]: ✓
+// image: ✖ available keys: [name image ports]
+func debugJsonPath(key string, data any) string {
+	parts := strings.Split(key, ".")
+	current := data
+	var result strings.Builder
+	for _, part := range parts {
+		jpExpr, err := jp.ParseString(part)
+		if err != nil {
+			result.WriteString(fmt.Sprintf("%s: ✖ could not parse jsonpath expression: %s\n", part, err))
+			break
+		}
+		values := jpExpr.Get(current)
+		if len(values) == 0 {
+			switch v := current.(type) {
+			case map[string]any:
+				result.WriteString(fmt.Sprintf("%s: ✖ available keys: [%s]\n", part, strings.Join(lo.Keys(v), ", ")))
+			default:
+				result.WriteString(fmt.Sprintf("%s: ✖ could not find key in current data\n", part))
+			}
+			break
+		} else {
+			result.WriteString(fmt.Sprintf("%s: ✓\n", part))
+			current = values[0]
+		}
+	}
+	return result.String()
+
 }
 
 func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (string, error) {
@@ -132,7 +172,13 @@ func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (str
 
 	results := keyJPExpr.Get(merged)
 	if len(results) == 0 {
-		return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s: %w", key, namespace, secret.Name, err)
+		switch v := merged.(type) {
+		case map[string]any:
+
+			return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s (%s)", key, namespace, secret.Name, debugJsonPath(key, v))
+		default:
+			return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s", key, namespace, secret.Name)
+		}
 	}
 
 	val := ""
@@ -230,4 +276,60 @@ func GetServiceAccountTokenFromCache(ctx Context, namespace, serviceAccount stri
 
 	envCache.Set(id, tokenRequest.Status.Token, time.Until(tokenRequest.Status.ExpirationTimestamp.Time))
 	return tokenRequest.Status.Token, nil
+}
+
+func (ctx Context) Lookup(namespace string) *EnvVarSourceBuilder {
+	return &EnvVarSourceBuilder{
+		envVarSource: &types.EnvVarSource{},
+		context:      ctx,
+		namespace:    namespace,
+	}
+}
+
+type EnvVarSourceBuilder struct {
+	envVarSource *types.EnvVarSource
+	context      Context
+	namespace    string
+}
+
+func (b *EnvVarSourceBuilder) MustGetString() string {
+	value, err := b.GetString()
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
+func (b *EnvVarSourceBuilder) GetString() (string, error) {
+
+	return GetEnvValueFromCache(b.context, types.EnvVar{ValueFrom: b.envVarSource}, b.namespace)
+}
+
+func (b *EnvVarSourceBuilder) WithServiceAccount(name string) *EnvVarSourceBuilder {
+	b.envVarSource.ServiceAccount = &name
+	return b
+}
+
+func (b *EnvVarSourceBuilder) WithHelmRef(name, key string) *EnvVarSourceBuilder {
+	b.envVarSource.HelmRef = &types.HelmRefKeySelector{
+		LocalObjectReference: types.LocalObjectReference{Name: name},
+		Key:                  key,
+	}
+	return b
+}
+
+func (b *EnvVarSourceBuilder) WithConfigMapKeyRef(name, key string) *EnvVarSourceBuilder {
+	b.envVarSource.ConfigMapKeyRef = &types.ConfigMapKeySelector{
+		LocalObjectReference: types.LocalObjectReference{Name: name},
+		Key:                  key,
+	}
+	return b
+}
+
+func (b *EnvVarSourceBuilder) WithSecretKeyRef(name, key string) *EnvVarSourceBuilder {
+	b.envVarSource.SecretKeyRef = &types.SecretKeySelector{
+		LocalObjectReference: types.LocalObjectReference{Name: name},
+		Key:                  key,
+	}
+	return b
 }
