@@ -23,7 +23,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.38.6
 	github.com/bmatcuk/doublestar/v4 v4.8.1
 	github.com/eko/gocache/lib/v4 v4.2.2
-	github.com/eko/gocache/store/go_cache/v4 v4.2.2
+	github.com/eko/gocache/store/go_cache/v4 v4.2.3
 	github.com/exaring/otelpgx v0.9.3
 	github.com/flanksource/commons v1.42.3
 	github.com/flanksource/gomplate/v3 v3.24.60
@@ -166,7 +166,6 @@ require (
 	github.com/gofrs/uuid v4.2.0+incompatible // indirect
 	github.com/gogo/protobuf v1.3.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
-	github.com/golang/mock v1.6.0 // indirect
 	github.com/golang/snappy v1.0.0 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/flatbuffers v23.5.26+incompatible // indirect
