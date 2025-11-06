@@ -5,55 +5,103 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/tmc/langchaingo/llms"
-	"github.com/tmc/langchaingo/llms/openai"
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/option"
+	"github.com/openai/openai-go/shared"
 )
 
 // executeOpenAI executes a request using the OpenAI provider.
 func executeOpenAI(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
-	var opts []openai.Option
+	// Build client options
+	opts := []option.RequestOption{}
 
 	// Set API key
 	if req.APIKey != "" {
-		opts = append(opts, openai.WithToken(req.APIKey))
+		opts = append(opts, option.WithAPIKey(req.APIKey))
 	}
 
 	// Set base URL if provided
 	if req.APIURL != "" {
-		opts = append(opts, openai.WithBaseURL(req.APIURL))
+		opts = append(opts, option.WithBaseURL(req.APIURL))
 	}
-
-	// Set model
-	if req.Model != "" {
-		opts = append(opts, openai.WithModel(req.Model))
-	}
-
-	// FIXME: Handle structured output via JSON schema when langchaingo supports it
-	// For now, structured output is handled via prompt engineering
 
 	// Create OpenAI client
-	client, err := openai.New(opts...)
-	if err != nil {
-		return ProviderResponse{}, fmt.Errorf("failed to create OpenAI client: %w", err)
+	client := openai.NewClient(opts...)
+
+	// Set default model if not provided
+	model := req.Model
+	if model == "" {
+		model = "gpt-4o"
 	}
 
 	// Build messages
-	messages := []llms.MessageContent{}
-	if req.SystemPrompt != "" {
-		messages = append(messages, llms.TextParts(llms.ChatMessageTypeSystem, req.SystemPrompt))
-	}
-	messages = append(messages, llms.TextParts(llms.ChatMessageTypeHuman, req.Prompt))
+	var messages []openai.ChatCompletionMessageParamUnion
 
-	// Build call options
-	callOpts := []llms.CallOption{
-		llms.WithTemperature(0), // Deterministic output
+	if req.SystemPrompt != "" {
+		messages = append(messages, openai.ChatCompletionMessageParamUnion{
+			OfSystem: &openai.ChatCompletionSystemMessageParam{
+				Content: openai.ChatCompletionSystemMessageParamContentUnion{
+					OfString: openai.String(req.SystemPrompt),
+				},
+			},
+		})
 	}
+
+	messages = append(messages, openai.ChatCompletionMessageParamUnion{
+		OfUser: &openai.ChatCompletionUserMessageParam{
+			Content: openai.ChatCompletionUserMessageParamContentUnion{
+				OfString: openai.String(req.Prompt),
+			},
+		},
+	})
+
+	// Build chat completion params
+	params := openai.ChatCompletionNewParams{
+		Model:    shared.ChatModel(model),
+		Messages: messages,
+	}
+
+	// Handle structured output
+	if req.StructuredOutput != nil {
+		schema, err := generateJSONSchema(req.StructuredOutput)
+		if err != nil {
+			return ProviderResponse{}, fmt.Errorf("failed to generate schema: %w", err)
+		}
+
+		// Convert schema to interface{} for OpenAI
+		schemaBytes, err := json.Marshal(schema)
+		if err != nil {
+			return ProviderResponse{}, fmt.Errorf("failed to marshal schema: %w", err)
+		}
+
+		var schemaInterface interface{}
+		if err := json.Unmarshal(schemaBytes, &schemaInterface); err != nil {
+			return ProviderResponse{}, fmt.Errorf("failed to unmarshal schema: %w", err)
+		}
+
+		// Set response format to JSON schema
+		params.ResponseFormat = openai.ChatCompletionNewParamsResponseFormatUnion{
+			OfJSONSchema: &shared.ResponseFormatJSONSchemaParam{
+				JSONSchema: shared.ResponseFormatJSONSchemaJSONSchemaParam{
+					Name:        "response",
+					Description: openai.String("Structured response"),
+					Schema:      schemaInterface,
+					Strict:      openai.Bool(true),
+				},
+			},
+		}
+	}
+
+	// Set max tokens if provided
 	if req.MaxTokens != nil {
-		callOpts = append(callOpts, llms.WithMaxTokens(*req.MaxTokens))
+		params.MaxTokens = openai.Int(int64(*req.MaxTokens))
 	}
+
+	// Set temperature to 0 for deterministic output
+	params.Temperature = openai.Float(0.0)
 
 	// Execute request
-	resp, err := client.GenerateContent(ctx, messages, callOpts...)
+	resp, err := client.Chat.Completions.New(ctx, params)
 	if err != nil {
 		return ProviderResponse{}, fmt.Errorf("OpenAI request failed: %w", err)
 	}
@@ -64,7 +112,7 @@ func executeOpenAI(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 
 	// Extract response
 	choice := resp.Choices[0]
-	text := choice.Content
+	text := choice.Message.Content
 
 	// Handle structured output
 	var structuredData interface{}
@@ -73,38 +121,24 @@ func executeOpenAI(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 			return ProviderResponse{}, fmt.Errorf("%w: %v", ErrSchemaValidation, err)
 		}
 		structuredData = req.StructuredOutput
-		text = "" // Clear text when structured output is used
+		text = ""
 	}
 
-	// Extract token usage from generation info
-	inputTokens := 0
-	outputTokens := 0
+	// Extract token usage
+	inputTokens := int(resp.Usage.PromptTokens)
+	outputTokens := int(resp.Usage.CompletionTokens)
 	var reasoningTokens *int
-	model := req.Model
 
-	if choice.GenerationInfo != nil {
-		genInfo := choice.GenerationInfo
-		if val, exists := genInfo["PromptTokens"]; exists {
-			if tokens, ok := val.(int); ok {
-				inputTokens = tokens
-			}
-		}
-		if val, exists := genInfo["CompletionTokens"]; exists {
-			if tokens, ok := val.(int); ok {
-				outputTokens = tokens
-			}
-		}
-		if val, exists := genInfo["Model"]; exists {
-			if modelStr, ok := val.(string); ok && modelStr != "" {
-				model = modelStr
-			}
-		}
+	// OpenAI o1 models have reasoning tokens
+	if resp.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
+		tokens := int(resp.Usage.CompletionTokensDetails.ReasoningTokens)
+		reasoningTokens = &tokens
 	}
 
 	return ProviderResponse{
 		Text:            text,
 		StructuredData:  structuredData,
-		Model:           model,
+		Model:           resp.Model,
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		ReasoningTokens: reasoningTokens,

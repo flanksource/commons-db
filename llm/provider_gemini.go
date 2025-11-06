@@ -92,7 +92,7 @@ func executeGemini(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 			return ProviderResponse{}, fmt.Errorf("%w: %v", ErrSchemaValidation, err)
 		}
 		structuredData = req.StructuredOutput
-		text = "" // Clear text when structured output is used
+		text = ""
 	}
 
 	// Extract token usage
@@ -114,9 +114,53 @@ func executeGemini(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 
 // convertToGeminiSchema converts a Go struct to a Gemini Schema.
 func convertToGeminiSchema(v interface{}) (*genai.Schema, error) {
-	// FIXME: Implement proper Gemini schema generation from Go structs
-	// For now, return a simple schema that accepts any object
-	return &genai.Schema{
-		Type: genai.TypeObject,
-	}, nil
+	// Generate JSON schema first
+	jsonSchema, err := generateJSONSchema(v)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate JSON schema: %w", err)
+	}
+
+	// Convert JSON schema to Gemini schema
+	return jsonSchemaToGemini(jsonSchema), nil
+}
+
+// jsonSchemaToGemini converts a JSONSchema to a Gemini Schema
+func jsonSchemaToGemini(js *JSONSchema) *genai.Schema {
+	schema := &genai.Schema{}
+
+	// Map type
+	switch js.Type {
+	case "object":
+		schema.Type = genai.TypeObject
+		if js.Properties != nil {
+			schema.Properties = make(map[string]*genai.Schema)
+			for name, prop := range js.Properties {
+				propCopy := prop
+				schema.Properties[name] = jsonSchemaToGemini(&propCopy)
+			}
+		}
+		if len(js.Required) > 0 {
+			schema.Required = js.Required
+		}
+	case "array":
+		schema.Type = genai.TypeArray
+		if js.Items != nil {
+			schema.Items = jsonSchemaToGemini(js.Items)
+		}
+	case "string":
+		schema.Type = genai.TypeString
+	case "integer":
+		schema.Type = genai.TypeInteger
+	case "number":
+		schema.Type = genai.TypeNumber
+	case "boolean":
+		schema.Type = genai.TypeBoolean
+	}
+
+	// Add description if present
+	if js.Description != "" {
+		schema.Description = js.Description
+	}
+
+	return schema
 }
