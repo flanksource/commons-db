@@ -29,4 +29,10 @@ var (
 
 	// ErrInvalidTimeout is returned when timeout is <= 0.
 	ErrInvalidTimeout = errors.New("timeout must be greater than 0")
+
+	// ErrCLINotFound is returned when the claude-code CLI executable is not found in PATH.
+	ErrCLINotFound = errors.New("claude-code CLI not found in PATH")
+
+	// ErrCLIExecutionFailed is returned when the CLI process exits with a non-zero status.
+	ErrCLIExecutionFailed = errors.New("claude-code CLI execution failed")
 )

@@ -11,9 +11,10 @@ import (
 type LLMBackend string
 
 const (
-	LLMBackendOpenAI    LLMBackend = "openai"
-	LLMBackendAnthropic LLMBackend = "anthropic"
-	LLMBackendGemini    LLMBackend = "gemini"
+	LLMBackendOpenAI     LLMBackend = "openai"
+	LLMBackendAnthropic  LLMBackend = "anthropic"
+	LLMBackendGemini     LLMBackend = "gemini"
+	LLMBackendClaudeCode LLMBackend = "claude-code"
 )
 
 // Provider is the interface that all LLM provider implementations must satisfy.
@@ -62,6 +63,8 @@ func getProvider(conn *Connection) (Provider, error) {
 		return &anthropicProvider{}, nil
 	case LLMBackendGemini:
 		return &geminiProvider{}, nil
+	case LLMBackendClaudeCode:
+		return &claudeCodeProvider{}, nil
 	default:
 		return nil, fmt.Errorf("%w: %s", ErrInvalidProvider, conn.Backend)
 	}
@@ -89,4 +92,12 @@ type geminiProvider struct{}
 // Execute sends a request to Google Gemini.
 func (p *geminiProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
 	return executeGemini(ctx, req)
+}
+
+// claudeCodeProvider implements the Provider interface for Claude Code CLI.
+type claudeCodeProvider struct{}
+
+// Execute sends a request to Claude Code CLI.
+func (p *claudeCodeProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+	return executeClaudeCode(ctx, req)
 }

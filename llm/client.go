@@ -67,6 +67,11 @@ func inferBackendFromModel(model string) (LLMBackend, error) {
 		return LLMBackendOpenAI, nil
 	}
 
+	// Claude Code CLI models (check before Anthropic to avoid conflict)
+	if strings.HasPrefix(modelLower, "claude-code-") {
+		return LLMBackendClaudeCode, nil
+	}
+
 	// Anthropic models
 	if strings.HasPrefix(modelLower, "claude-") {
 		return LLMBackendAnthropic, nil
@@ -92,6 +97,9 @@ func getAPIKeyFromEnv(backend LLMBackend) (string, error) {
 		envVars = []string{"ANTHROPIC_API_KEY"}
 	case LLMBackendGemini:
 		envVars = []string{"GEMINI_API_KEY", "GOOGLE_API_KEY"}
+	case LLMBackendClaudeCode:
+		// Claude Code CLI handles authentication independently
+		return "", nil
 	default:
 		return "", fmt.Errorf("unsupported backend: %s", backend)
 	}
