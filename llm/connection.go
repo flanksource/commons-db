@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	dutyctx "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/types"
 )
 
 // resolveConnection resolves a named connection from the duty/connection registry.
@@ -25,28 +26,27 @@ func resolveConnection(ctx gocontext.Context, name string) (*Connection, error) 
 		return nil, fmt.Errorf("%w: %s", ErrConnectionNotFound, name)
 	}
 
-	// Extract API key from password field
-	apiKey := conn.Password
-	if apiKey == "" {
-		return nil, fmt.Errorf("%w for connection: %s", ErrMissingAPIKey, name)
-	}
-
 	// Map connection type to LLM backend
 	backend, err := mapConnectionTypeToBackend(conn.Type)
 	if err != nil {
 		return nil, err
 	}
 
-	// Extract optional fields
-	model := conn.Properties["model"]
-	apiURL := conn.URL
-
-	return &Connection{
+	// Build Connection with types.HTTP embedded
+	llmConn := &Connection{
 		Backend: backend,
-		Model:   model,
-		APIKey:  apiKey,
-		APIURL:  apiURL,
-	}, nil
+		Model:   conn.Properties["model"],
+		HTTP: types.HTTP{
+			URL: types.EnvVar{
+				ValueStatic: conn.URL,
+			},
+			Bearer: types.EnvVar{
+				ValueStatic: conn.Password,
+			},
+		},
+	}
+
+	return llmConn, nil
 }
 
 // mapConnectionTypeToBackend maps a connection type string to an LLMBackend.

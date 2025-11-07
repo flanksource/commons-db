@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"time"
+
+	"github.com/flanksource/commons-db/types"
 )
 
 // Client provides a fluent interface for making LLM requests.
@@ -29,6 +31,7 @@ func (c *client) NewRequest() *RequestBuilder {
 // RequestBuilder provides a fluent interface for building LLM requests.
 type RequestBuilder struct {
 	connection       string
+	model            string
 	systemPrompt     string
 	prompt           string
 	maxTokens        *int
@@ -80,18 +83,27 @@ func (b *RequestBuilder) Execute(ctx context.Context) (*Response, error) {
 	if b.prompt == "" {
 		return nil, ErrMissingPrompt
 	}
-	if b.connection == "" {
-		return nil, ErrMissingConnection
-	}
 
 	// Apply timeout to context
 	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 
-	// Resolve connection
-	conn, err := resolveConnection(ctx, b.connection)
-	if err != nil {
-		return nil, err
+	var conn *Connection
+	var err error
+
+	// Resolve connection or build from model
+	if b.connection != "" {
+		conn, err = resolveConnection(ctx, b.connection)
+		if err != nil {
+			return nil, err
+		}
+	} else if b.model != "" {
+		conn, err = buildConnectionFromModel(b.model)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		return nil, ErrMissingConnection
 	}
 
 	// Get provider
@@ -101,14 +113,27 @@ func (b *RequestBuilder) Execute(ctx context.Context) (*Response, error) {
 	}
 
 	// Build provider request
+	model := conn.Model
+	if model == "" {
+		model = b.model
+	}
+
+	// Extract string values from EnvVar fields
+	apiURL := conn.URL.ValueStatic
+	apiKey := conn.Bearer.ValueStatic
+
+	if apiKey == "" {
+		return nil, ErrMissingAPIKey
+	}
+
 	req := ProviderRequest{
 		SystemPrompt:     b.systemPrompt,
 		Prompt:           b.prompt,
 		MaxTokens:        b.maxTokens,
 		StructuredOutput: b.structuredOutput,
-		Model:            conn.Model,
-		APIKey:           conn.APIKey,
-		APIURL:           conn.APIURL,
+		Model:            model,
+		APIKey:           apiKey,
+		APIURL:           apiURL,
 	}
 
 	// Execute request
@@ -130,6 +155,29 @@ func (b *RequestBuilder) Execute(ctx context.Context) (*Response, error) {
 		CostInfo:       costInfo,
 		Model:          resp.Model,
 		Provider:       string(conn.Backend),
+	}, nil
+}
+
+// buildConnectionFromModel builds a connection from a model name and environment variables.
+func buildConnectionFromModel(model string) (*Connection, error) {
+	backend, err := inferBackendFromModel(model)
+	if err != nil {
+		return nil, err
+	}
+
+	apiKey, err := getAPIKeyFromEnv(backend)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Connection{
+		Backend: backend,
+		Model:   model,
+		HTTP: types.HTTP{
+			Bearer: types.EnvVar{
+				ValueStatic: apiKey,
+			},
+		},
 	}, nil
 }
 

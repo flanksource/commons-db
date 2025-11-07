@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"fmt"
+
+	"github.com/flanksource/commons-db/types"
 )
 
 // LLMBackend represents the supported LLM providers.
@@ -44,11 +46,11 @@ type ProviderResponse struct {
 }
 
 // Connection represents a resolved connection with provider-specific configuration.
+// It embeds types.HTTP to reuse URL and Bearer token fields with EnvVar lookup support.
 type Connection struct {
+	types.HTTP
 	Backend LLMBackend
 	Model   string
-	APIKey  string
-	APIURL  string
 }
 
 // getProvider returns the appropriate provider based on the connection backend.
