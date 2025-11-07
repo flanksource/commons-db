@@ -13,6 +13,7 @@ import (
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
+	"github.com/flanksource/commons/logger"
 )
 
 type Searcher struct {
@@ -91,6 +92,8 @@ func (t *Searcher) Search(ctx context.Context, q Request) (*logs.LogResult, erro
 			return nil, ctx.Oops().Wrapf(err, "error converting limit to int")
 		}
 	}
+
+	logger.Tracef("searching index %s with query %s", q.Index, q.Query)
 
 	res, err := t.client.Search(
 		t.client.Search.WithContext(ctx),

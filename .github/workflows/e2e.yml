@@ -6,24 +6,24 @@ on:
       - main
       - develop
     paths:
-      - '**.go'
-      - 'e2e/**'
-      - '.github/workflows/e2e.yml'
-      - 'go.mod'
-      - 'go.sum'
+      - "**.go"
+      - "e2e/**"
+      - ".github/workflows/e2e.yml"
+      - "go.mod"
+      - "go.sum"
   pull_request:
     branches:
       - main
       - develop
     paths:
-      - '**.go'
-      - 'e2e/**'
-      - '.github/workflows/e2e.yml'
-      - 'go.mod'
-      - 'go.sum'
+      - "**.go"
+      - "e2e/**"
+      - ".github/workflows/e2e.yml"
+      - "go.mod"
+      - "go.sum"
 
 env:
-  GO_VERSION: '1.22'
+  GO_VERSION: "1.22"
 
 jobs:
   e2e-tests:
@@ -32,7 +32,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go-version: ['1.22']
+        go-version: ["1.22"]
     timeout-minutes: 30
 
     steps:
@@ -137,7 +137,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: '1.22'
+          go-version: "1.22"
           cache: true
           cache-dependency-path: go.sum
 
@@ -147,20 +147,6 @@ jobs:
           ginkgo -v -r ./e2e --timeout=10m --poll-progress-after=1m
         env:
           CGO_ENABLED: 1
-
-      - name: Generate test report
-        if: always()
-        run: |
-          go install github.com/jstemmer/go-junit-report/v2@latest
-          go test -v ./e2e 2>&1 | go-junit-report -set-exit-code > e2e-report.xml
-        continue-on-error: true
-
-      - name: Upload test report
-        if: always()
-        uses: actions/upload-artifact@v3
-        with:
-          name: e2e-junit-report
-          path: e2e-report.xml
 
   quality-gate:
     name: Quality Gate

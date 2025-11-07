@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/tmc/langchaingo/llms"
@@ -74,7 +73,8 @@ func executeAnthropic(ctx context.Context, req ProviderRequest) (ProviderRespons
 	// Handle structured output
 	var structuredData interface{}
 	if req.StructuredOutput != nil {
-		if err := json.Unmarshal([]byte(text), req.StructuredOutput); err != nil {
+		// Use cleanup to handle markdown, extra text, etc.
+		if err := UnmarshalWithCleanup(text, req.StructuredOutput); err != nil {
 			return ProviderResponse{}, fmt.Errorf("%w: %v", ErrSchemaValidation, err)
 		}
 		structuredData = req.StructuredOutput

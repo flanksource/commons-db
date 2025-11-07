@@ -228,7 +228,8 @@ func executeClaudeCode(ctx context.Context, req ProviderRequest) (ProviderRespon
 			return ProviderResponse{}, fmt.Errorf("failed to marshal structured response: %w", err)
 		}
 
-		if err := json.Unmarshal(structBytes, req.StructuredOutput); err != nil {
+		// Use cleanup to handle any formatting issues
+		if err := UnmarshalWithCleanup(string(structBytes), req.StructuredOutput); err != nil {
 			return ProviderResponse{}, fmt.Errorf("%w: %v", ErrSchemaValidation, err)
 		}
 

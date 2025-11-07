@@ -2,7 +2,6 @@ package llm
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"google.golang.org/genai"
@@ -88,7 +87,8 @@ func executeGemini(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 	// Handle structured output
 	var structuredData interface{}
 	if req.StructuredOutput != nil {
-		if err := json.Unmarshal([]byte(text), req.StructuredOutput); err != nil {
+		// Use cleanup to handle any formatting issues
+		if err := UnmarshalWithCleanup(text, req.StructuredOutput); err != nil {
 			return ProviderResponse{}, fmt.Errorf("%w: %v", ErrSchemaValidation, err)
 		}
 		structuredData = req.StructuredOutput

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/RaveNoX/go-jsonmerge"
+	"dario.cat/mergo"
 	"github.com/ohler55/ojg/jp"
 	"github.com/samber/lo"
 
@@ -111,20 +111,11 @@ func debugJsonPath(key string, data any) string {
 
 }
 
-func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (string, error) {
-	id := fmt.Sprintf("helm/%s/%s/%s", namespace, releaseName, key)
-	if value, found := envCache.Get(id); found {
-		return value.(string), nil
-	}
-
-	keyJPExpr, err := jp.ParseString(key)
-	if err != nil {
-		return "", fmt.Errorf("could not parse key:%s. must be a valid jsonpath expression. %w", key, err)
-	}
+func GetHelmValuesFromCache(ctx Context, namespace, releaseName string) (map[string]any, error) {
 
 	client, err := ctx.LocalKubernetes()
 	if err != nil {
-		return "", fmt.Errorf("error creating kubernetes client: %w", err)
+		return nil, fmt.Errorf("error creating kubernetes client: %w", err)
 	}
 
 	secretList, err := client.CoreV1().Secrets(namespace).List(ctx, metav1.ListOptions{
@@ -133,52 +124,62 @@ func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (str
 		Limit:         1,
 	})
 	if err != nil {
-		return "", fmt.Errorf("could not get secrets in namespace: %s: %w", namespace, err)
+		return nil, fmt.Errorf("could not get secrets in namespace: %s: %w", namespace, err)
 	}
 
 	if len(secretList.Items) == 0 {
-		return "", fmt.Errorf("a deployed helm secret was not found %s/%s", namespace, releaseName)
+		return nil, fmt.Errorf("a deployed helm secret was not found %s/%s", namespace, releaseName)
 	}
 	secret := secretList.Items[0]
 
 	if secret.Name == "" {
-		return "", fmt.Errorf("could not find helm secret %s/%s", namespace, releaseName)
+		return nil, fmt.Errorf("could not find helm secret %s/%s", namespace, releaseName)
 	}
 
 	release, err := base64.StdEncoding.DecodeString(string(secret.Data["release"]))
 	if err != nil {
-		return "", fmt.Errorf("could not base64 decode helm secret %s/%s: %w", namespace, secret.Name, err)
+		return nil, fmt.Errorf("could not base64 decode helm secret %s/%s: %w", namespace, secret.Name, err)
 	}
 
 	gzipReader, err := gzip.NewReader(bytes.NewReader(release))
 	if err != nil {
-		return "", fmt.Errorf("could not unzip helm secret %s/%s: %w", namespace, secret.Name, err)
+		return nil, fmt.Errorf("could not unzip helm secret %s/%s: %w", namespace, secret.Name, err)
 	}
 
 	var rawJson map[string]any
 	if err := json.NewDecoder(gzipReader).Decode(&rawJson); err != nil {
-		return "", fmt.Errorf("could not decode unzipped helm secret %s/%s: %w", namespace, secret.Name, err)
+		return nil, fmt.Errorf("could not decode unzipped helm secret %s/%s: %w", namespace, secret.Name, err)
 	}
 
 	var chartValues any = map[string]any{}
 	if chart, ok := rawJson["chart"].(map[string]any); ok {
 		chartValues = chart["values"]
 	}
+	merged := rawJson["config"].(map[string]any)
 
-	merged, info := jsonmerge.Merge(chartValues, rawJson["config"])
-	if len(info.Errors) != 0 {
-		return "", fmt.Errorf("could not merge helm config and values of helm secret %s/%s: %v", namespace, secret.Name, info.Errors)
+	if err := mergo.Merge(&merged, chartValues); err != nil {
+		return nil, fmt.Errorf("could not merge helm config and values of helm secret %s/%s: %w", namespace, secret.Name, err)
+	}
+	return merged, nil
+}
+func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (string, error) {
+	id := fmt.Sprintf("helm/%s/%s/%s", namespace, releaseName, key)
+	if value, found := envCache.Get(id); found {
+		return value.(string), nil
+	}
+	merged, err := GetHelmValuesFromCache(ctx, namespace, releaseName)
+	if err != nil {
+		return "", err
+	}
+
+	keyJPExpr, err := jp.ParseString(key)
+	if err != nil {
+		return "", fmt.Errorf("could not parse key:%s. must be a valid jsonpath expression. %w", key, err)
 	}
 
 	results := keyJPExpr.Get(merged)
 	if len(results) == 0 {
-		switch v := merged.(type) {
-		case map[string]any:
-
-			return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s (%s)", key, namespace, secret.Name, debugJsonPath(key, v))
-		default:
-			return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s", key, namespace, secret.Name)
-		}
+		return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s", key, namespace, lo.Keys(merged))
 	}
 
 	val := ""
@@ -195,7 +196,7 @@ func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (str
 		default:
 			b, err := json.Marshal(v)
 			if err != nil {
-				return "", fmt.Errorf("could not marshal merged helm secret %s/%s: %w", namespace, secret.Name, err)
+				return "", fmt.Errorf("could not marshal merged helm secret %s/%s: %w", namespace, releaseName, err)
 			}
 			val = string(b)
 
