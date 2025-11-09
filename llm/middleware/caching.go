@@ -5,38 +5,60 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flanksource/commons-db/llm"
 	"github.com/flanksource/commons-db/llm/cache"
+	. "github.com/flanksource/commons-db/llm/types"
+	"github.com/flanksource/commons/logger"
 )
 
 // CacheConfig holds configuration for caching middleware
 type CacheConfig struct {
-	Cache *cache.Cache  // Cache instance (required)
-	TTL   time.Duration // Time-to-live for cache entries
+	Cache *cache.Cache // Cache instance (required)
 }
 
 // cachingProvider wraps a Provider with caching capabilities
 type cachingProvider struct {
-	provider llm.Provider
+	provider Provider
 	cache    *cache.Cache
-	ttl      time.Duration
 }
 
 // newCachingProvider creates a new caching middleware
-func newCachingProvider(provider llm.Provider, config CacheConfig) (llm.Provider, error) {
-	if config.Cache == nil {
+func newCachingProvider(provider Provider, config ...CacheConfig) (Provider, error) {
+	if len(config) == 0 || config[0].Cache == nil {
+		c, err := cache.New(cache.Config{
+			TTL: 24 * time.Hour,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to create cache: %w", err)
+		}
+		config = []CacheConfig{
+			{
+				Cache: c,
+			},
+		}
+	}
+
+	if config[0].Cache == nil {
 		return nil, fmt.Errorf("cache instance is required")
 	}
 
 	return &cachingProvider{
 		provider: provider,
-		cache:    config.Cache,
-		ttl:      config.TTL,
+		cache:    config[0].Cache,
 	}, nil
 }
 
+// GetModel returns the model name from the wrapped provider
+func (c *cachingProvider) GetModel() string {
+	return c.provider.GetModel()
+}
+
+// GetBackend returns the backend type from the wrapped provider
+func (c *cachingProvider) GetBackend() LLMBackend {
+	return c.provider.GetBackend()
+}
+
 // Execute implements the Provider interface with caching
-func (c *cachingProvider) Execute(ctx context.Context, req llm.ProviderRequest) (llm.ProviderResponse, error) {
+func (c *cachingProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
 	// Check if cache should be bypassed
 	if shouldBypassCache(ctx) {
 		return c.provider.Execute(ctx, req)
@@ -53,7 +75,7 @@ func (c *cachingProvider) Execute(ctx context.Context, req llm.ProviderRequest) 
 	cachedEntry, err := c.cache.Get(req.Prompt, req.Model, temperature, maxTokens)
 	if err == nil && cachedEntry != nil && cachedEntry.Error == "" {
 		// Cache hit - return cached response
-		resp := llm.ProviderResponse{
+		resp := ProviderResponse{
 			Text:         cachedEntry.Response,
 			Model:        cachedEntry.Model,
 			InputTokens:  cachedEntry.TokensInput,
@@ -116,7 +138,7 @@ func (c *cachingProvider) Execute(ctx context.Context, req llm.ProviderRequest) 
 	}
 
 	// Calculate cost using actual pricing from llm package
-	costInfo, err := llm.CalculateCost(req.Model, resp.InputTokens, resp.OutputTokens,
+	costInfo, err := CalculateCost(req.Model, resp.InputTokens, resp.OutputTokens,
 		resp.ReasoningTokens, resp.CacheReadTokens, resp.CacheWriteTokens)
 	if err == nil {
 		cacheEntry.CostUSD = costInfo.Cost
@@ -155,12 +177,12 @@ func inferProvider(model string) string {
 }
 
 // WithCache returns a middleware option that adds caching capabilities
-func WithCache(config CacheConfig) Option {
-	return func(p llm.Provider) llm.Provider {
-		provider, err := newCachingProvider(p, config)
+func WithCache(config ...CacheConfig) Option {
+	return func(p Provider) Provider {
+		provider, err := newCachingProvider(p, config...)
 		if err != nil {
 			// If cache creation fails, return the original provider
-			fmt.Printf("Warning: failed to create caching middleware: %v\n", err)
+			logger.Errorf("Warning: failed to create caching middleware: %v", err)
 			return p
 		}
 		return provider
@@ -171,6 +193,5 @@ func WithCache(config CacheConfig) Option {
 func WithCacheInstance(cache *cache.Cache) Option {
 	return WithCache(CacheConfig{
 		Cache: cache,
-		TTL:   24 * time.Hour,
 	})
 }

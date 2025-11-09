@@ -6,7 +6,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/flanksource/commons-db/llm"
+	. "github.com/flanksource/commons-db/llm/types"
 )
 
 // LogConfig holds configuration for logging middleware
@@ -35,12 +35,12 @@ func DefaultLogConfig() LogConfig {
 
 // loggingProvider wraps a Provider with logging capabilities
 type loggingProvider struct {
-	provider llm.Provider
+	provider Provider
 	config   LogConfig
 }
 
 // newLoggingProvider creates a new logging middleware
-func newLoggingProvider(provider llm.Provider, config LogConfig) llm.Provider {
+func newLoggingProvider(provider Provider, config LogConfig) Provider {
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
@@ -50,8 +50,18 @@ func newLoggingProvider(provider llm.Provider, config LogConfig) llm.Provider {
 	}
 }
 
+// GetModel returns the model name from the wrapped provider
+func (l *loggingProvider) GetModel() string {
+	return l.provider.GetModel()
+}
+
+// GetBackend returns the backend type from the wrapped provider
+func (l *loggingProvider) GetBackend() LLMBackend {
+	return l.provider.GetBackend()
+}
+
 // Execute implements the Provider interface with logging
-func (l *loggingProvider) Execute(ctx context.Context, req llm.ProviderRequest) (llm.ProviderResponse, error) {
+func (l *loggingProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
 	startTime := time.Now()
 
 	// Extract correlation ID from context if available
@@ -142,7 +152,7 @@ func (l *loggingProvider) truncate(s string, maxLen int) string {
 
 // WithLogging returns a middleware option that adds logging capabilities
 func WithLogging(config LogConfig) Option {
-	return func(p llm.Provider) llm.Provider {
+	return func(p Provider) Provider {
 		return newLoggingProvider(p, config)
 	}
 }

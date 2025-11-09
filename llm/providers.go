@@ -4,100 +4,155 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/flanksource/commons-db/types"
+	. "github.com/flanksource/commons-db/llm/types"
 )
-
-// LLMBackend represents the supported LLM providers.
-type LLMBackend string
-
-const (
-	LLMBackendOpenAI     LLMBackend = "openai"
-	LLMBackendAnthropic  LLMBackend = "anthropic"
-	LLMBackendGemini     LLMBackend = "gemini"
-	LLMBackendClaudeCode LLMBackend = "claude-code"
-)
-
-// Provider is the interface that all LLM provider implementations must satisfy.
-type Provider interface {
-	// Execute sends a request to the LLM provider and returns the response.
-	Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error)
-}
-
-// ProviderRequest contains all the information needed to make an LLM request.
-type ProviderRequest struct {
-	SystemPrompt     string
-	Prompt           string
-	MaxTokens        *int
-	StructuredOutput interface{} // Schema for structured JSON output
-	Model            string
-	APIKey           string
-	APIURL           string
-}
-
-// ProviderResponse contains the raw response from an LLM provider.
-type ProviderResponse struct {
-	Text             string
-	StructuredData   interface{} // Populated if structured output was requested
-	Model            string
-	InputTokens      int
-	OutputTokens     int
-	ReasoningTokens  *int
-	CacheReadTokens  *int
-	CacheWriteTokens *int
-}
-
-// Connection represents a resolved connection with provider-specific configuration.
-// It embeds types.HTTP to reuse URL and Bearer token fields with EnvVar lookup support.
-type Connection struct {
-	types.HTTP
-	Backend LLMBackend
-	Model   string
-}
-
-// getProvider returns the appropriate provider based on the connection backend.
-func getProvider(conn *Connection) (Provider, error) {
-	switch conn.Backend {
-	case LLMBackendOpenAI:
-		return &openAIProvider{}, nil
-	case LLMBackendAnthropic:
-		return &anthropicProvider{}, nil
-	case LLMBackendGemini:
-		return &geminiProvider{}, nil
-	case LLMBackendClaudeCode:
-		return &claudeCodeProvider{}, nil
-	default:
-		return nil, fmt.Errorf("%w: %s", ErrInvalidProvider, conn.Backend)
-	}
-}
 
 // openAIProvider implements the Provider interface for OpenAI.
-type openAIProvider struct{}
+type openAIProvider struct {
+	apiKey string
+	model  string
+	apiURL string
+}
 
 // Execute sends a request to OpenAI.
 func (p *openAIProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+	req.Model = p.model
+	req.APIKey = p.apiKey
+	req.APIURL = p.apiURL
 	return executeOpenAI(ctx, req)
 }
 
+// GetModel returns the model name.
+func (p *openAIProvider) GetModel() string {
+	return p.model
+}
+
+// GetBackend returns the backend type.
+func (p *openAIProvider) GetBackend() LLMBackend {
+	return LLMBackendOpenAI
+}
+
 // anthropicProvider implements the Provider interface for Anthropic.
-type anthropicProvider struct{}
+type anthropicProvider struct {
+	apiKey string
+	model  string
+	apiURL string
+}
 
 // Execute sends a request to Anthropic.
 func (p *anthropicProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+	req.Model = p.model
+	req.APIKey = p.apiKey
+	req.APIURL = p.apiURL
 	return executeAnthropic(ctx, req)
 }
 
+// GetModel returns the model name.
+func (p *anthropicProvider) GetModel() string {
+	return p.model
+}
+
+// GetBackend returns the backend type.
+func (p *anthropicProvider) GetBackend() LLMBackend {
+	return LLMBackendAnthropic
+}
+
 // geminiProvider implements the Provider interface for Google Gemini.
-type geminiProvider struct{}
+type geminiProvider struct {
+	apiKey string
+	model  string
+	apiURL string
+}
 
 // Execute sends a request to Google Gemini.
 func (p *geminiProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+	req.Model = p.model
+	req.APIKey = p.apiKey
+	req.APIURL = p.apiURL
 	return executeGemini(ctx, req)
 }
 
+// GetModel returns the model name.
+func (p *geminiProvider) GetModel() string {
+	return p.model
+}
+
+// GetBackend returns the backend type.
+func (p *geminiProvider) GetBackend() LLMBackend {
+	return LLMBackendGemini
+}
+
 // claudeCodeProvider implements the Provider interface for Claude Code CLI.
-type claudeCodeProvider struct{}
+type claudeCodeProvider struct {
+	model string
+}
 
 // Execute sends a request to Claude Code CLI.
 func (p *claudeCodeProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+	req.Model = p.model
 	return executeClaudeCode(ctx, req)
+}
+
+// GetModel returns the model name.
+func (p *claudeCodeProvider) GetModel() string {
+	return p.model
+}
+
+// GetBackend returns the backend type.
+func (p *claudeCodeProvider) GetBackend() LLMBackend {
+	return LLMBackendClaudeCode
+}
+
+// NewOpenAIProvider creates a new OpenAI provider with the specified configuration.
+func NewOpenAIProvider(apiKey, model, apiURL string) Provider {
+	return &openAIProvider{
+		apiKey: apiKey,
+		model:  model,
+		apiURL: apiURL,
+	}
+}
+
+// NewAnthropicProvider creates a new Anthropic provider with the specified configuration.
+func NewAnthropicProvider(apiKey, model, apiURL string) Provider {
+	return &anthropicProvider{
+		apiKey: apiKey,
+		model:  model,
+		apiURL: apiURL,
+	}
+}
+
+// NewGeminiProvider creates a new Gemini provider with the specified configuration.
+func NewGeminiProvider(apiKey, model, apiURL string) Provider {
+	return &geminiProvider{
+		apiKey: apiKey,
+		model:  model,
+		apiURL: apiURL,
+	}
+}
+
+// NewClaudeCodeProvider creates a new Claude Code provider with the specified model.
+func NewClaudeCodeProvider(model string) Provider {
+	return &claudeCodeProvider{
+		model: model,
+	}
+}
+
+// NewProvider creates a provider from a connection configuration.
+func NewProvider(conn *Connection) (Provider, error) {
+	apiKey := conn.Bearer.ValueStatic
+	apiURL := conn.URL.ValueStatic
+	model := conn.Model
+
+	switch conn.Backend {
+	case LLMBackendOpenAI:
+		return NewOpenAIProvider(apiKey, model, apiURL), nil
+	case LLMBackendAnthropic:
+		return NewAnthropicProvider(apiKey, model, apiURL), nil
+	case LLMBackendGemini:
+		return NewGeminiProvider(apiKey, model, apiURL), nil
+	case LLMBackendClaudeCode:
+		return NewClaudeCodeProvider(model), nil
+	default:
+		return nil, fmt.Errorf("%w: %s", ErrInvalidProvider, conn.Backend)
+	}
 }

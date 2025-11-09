@@ -5,11 +5,13 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	. "github.com/flanksource/commons-db/llm/types"
 )
 
 // directClient is a client implementation that uses environment variables for API keys.
 type directClient struct {
-	model string
+	provider Provider
 }
 
 // NewClientWithModel creates a new LLM client for the specified model.
@@ -30,25 +32,41 @@ func NewClientWithModel(model string) (Client, error) {
 		return nil, fmt.Errorf("model cannot be empty")
 	}
 
-	// Verify provider can be inferred
+	// Infer provider backend from model name
 	backend, err := inferBackendFromModel(model)
 	if err != nil {
 		return nil, err
 	}
 
-	// Verify API key is available
-	if _, err := getAPIKeyFromEnv(backend); err != nil {
+	// Get API key from environment
+	apiKey, err := getAPIKeyFromEnv(backend)
+	if err != nil {
 		return nil, err
 	}
 
-	return &directClient{model: model}, nil
+	// Create provider based on backend
+	var provider Provider
+	switch backend {
+	case LLMBackendOpenAI:
+		provider = NewOpenAIProvider(apiKey, model, "")
+	case LLMBackendAnthropic:
+		provider = NewAnthropicProvider(apiKey, model, "")
+	case LLMBackendGemini:
+		provider = NewGeminiProvider(apiKey, model, "")
+	case LLMBackendClaudeCode:
+		provider = NewClaudeCodeProvider(model)
+	default:
+		return nil, fmt.Errorf("unsupported backend: %s", backend)
+	}
+
+	return &directClient{provider: provider}, nil
 }
 
-// NewRequest creates a new request builder.
+// NewRequest creates a new request builder with the provider pre-configured.
 func (c *directClient) NewRequest() *RequestBuilder {
 	return &RequestBuilder{
-		model:   c.model,
-		timeout: 60 * time.Second,
+		Provider: c.provider,
+		Timeout:  60 * time.Second,
 	}
 }
 

@@ -7,27 +7,35 @@ import (
 	"testing"
 	"time"
 
-	"github.com/flanksource/commons-db/llm"
 	"github.com/flanksource/commons-db/llm/cache"
+	. "github.com/flanksource/commons-db/llm/types"
 )
 
-// mockProvider is a mock implementation of llm.Provider for testing
+// mockProvider is a mock implementation of Provider for testing
 type mockProvider struct {
-	executeFunc func(ctx context.Context, req llm.ProviderRequest) (llm.ProviderResponse, error)
+	executeFunc func(ctx context.Context, req ProviderRequest) (ProviderResponse, error)
 	callCount   int
 }
 
-func (m *mockProvider) Execute(ctx context.Context, req llm.ProviderRequest) (llm.ProviderResponse, error) {
+func (m *mockProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
 	m.callCount++
 	if m.executeFunc != nil {
 		return m.executeFunc(ctx, req)
 	}
-	return llm.ProviderResponse{
+	return ProviderResponse{
 		Text:         "mock response",
 		Model:        req.Model,
 		InputTokens:  10,
 		OutputTokens: 20,
 	}, nil
+}
+
+func (m *mockProvider) GetModel() string {
+	return "test-model"
+}
+
+func (m *mockProvider) GetBackend() LLMBackend {
+	return LLMBackendOpenAI
 }
 
 func TestCacheMiddleware_CacheHit(t *testing.T) {
@@ -54,7 +62,7 @@ func TestCacheMiddleware_CacheHit(t *testing.T) {
 	provider := Wrap(mock, WithCacheInstance(c))
 
 	ctx := context.Background()
-	req := llm.ProviderRequest{
+	req := ProviderRequest{
 		Prompt: "test prompt",
 		Model:  "gpt-4o",
 	}
@@ -107,7 +115,7 @@ func TestCacheMiddleware_BypassCache(t *testing.T) {
 	// Wrap with caching middleware
 	provider := Wrap(mock, WithCacheInstance(c))
 
-	req := llm.ProviderRequest{
+	req := ProviderRequest{
 		Prompt: "test prompt",
 		Model:  "gpt-4o",
 	}
@@ -153,9 +161,9 @@ func TestCacheMiddleware_TTL(t *testing.T) {
 	// Create mock provider that returns different responses
 	responseNum := 0
 	mock := &mockProvider{
-		executeFunc: func(ctx context.Context, req llm.ProviderRequest) (llm.ProviderResponse, error) {
+		executeFunc: func(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
 			responseNum++
-			return llm.ProviderResponse{
+			return ProviderResponse{
 				Text:         fmt.Sprintf("response %d", responseNum),
 				Model:        req.Model,
 				InputTokens:  10,
@@ -168,7 +176,7 @@ func TestCacheMiddleware_TTL(t *testing.T) {
 	provider := Wrap(mock, WithCacheInstance(c))
 
 	ctx := context.Background()
-	req := llm.ProviderRequest{
+	req := ProviderRequest{
 		Prompt: "test prompt",
 		Model:  "gpt-4o",
 	}
@@ -223,8 +231,8 @@ func TestCacheMiddleware_DifferentPrompts(t *testing.T) {
 
 	// Create mock provider
 	mock := &mockProvider{
-		executeFunc: func(ctx context.Context, req llm.ProviderRequest) (llm.ProviderResponse, error) {
-			return llm.ProviderResponse{
+		executeFunc: func(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+			return ProviderResponse{
 				Text:         "response to: " + req.Prompt,
 				Model:        req.Model,
 				InputTokens:  10,
@@ -239,7 +247,7 @@ func TestCacheMiddleware_DifferentPrompts(t *testing.T) {
 	ctx := context.Background()
 
 	// First prompt
-	resp1, err := provider.Execute(ctx, llm.ProviderRequest{
+	resp1, err := provider.Execute(ctx, ProviderRequest{
 		Prompt: "prompt1",
 		Model:  "gpt-4o",
 	})
@@ -251,7 +259,7 @@ func TestCacheMiddleware_DifferentPrompts(t *testing.T) {
 	}
 
 	// Second prompt (different) - should not be cached
-	resp2, err := provider.Execute(ctx, llm.ProviderRequest{
+	resp2, err := provider.Execute(ctx, ProviderRequest{
 		Prompt: "prompt2",
 		Model:  "gpt-4o",
 	})
