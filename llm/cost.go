@@ -24,7 +24,12 @@ type PriceTier struct {
 	Price      float64 // Per million tokens
 }
 
-// calculateCost calculates the cost of an LLM request based on token usage and model pricing.
+// CalculateCost calculates the cost of an LLM request based on token usage and model pricing.
+func CalculateCost(model string, inputTokens, outputTokens int, reasoningTokens, cacheReadTokens, cacheWriteTokens *int) (CostInfo, error) {
+	return calculateCost(model, inputTokens, outputTokens, reasoningTokens, cacheReadTokens, cacheWriteTokens)
+}
+
+// calculateCost is the internal cost calculation function
 func calculateCost(model string, inputTokens, outputTokens int, reasoningTokens, cacheReadTokens, cacheWriteTokens *int) (CostInfo, error) {
 	costInfo := CostInfo{
 		InputTokens:      inputTokens,

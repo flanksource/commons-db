@@ -115,9 +115,18 @@ func (c *cachingProvider) Execute(ctx context.Context, req llm.ProviderRequest) 
 		cacheEntry.TokensCacheWrite = *resp.CacheWriteTokens
 	}
 
-	// Calculate cost (simplified - should use actual cost calculation from llm package)
-	// This is a placeholder - the actual cost calculation should be imported from llm.cost
-	cacheEntry.CostUSD = calculateApproximateCost(resp.InputTokens, resp.OutputTokens)
+	// Calculate cost using actual pricing from llm package
+	costInfo, err := llm.CalculateCost(req.Model, resp.InputTokens, resp.OutputTokens,
+		resp.ReasoningTokens, resp.CacheReadTokens, resp.CacheWriteTokens)
+	if err == nil {
+		cacheEntry.CostUSD = costInfo.Cost
+	} else {
+		// If cost calculation fails, log warning but continue caching
+		fmt.Printf("Warning: failed to calculate cost: %v\n", err)
+	}
+
+	// Infer provider from model
+	cacheEntry.Provider = inferProvider(req.Model)
 
 	// Store in cache
 	if err := c.cache.Set(cacheEntry); err != nil {
@@ -128,12 +137,21 @@ func (c *cachingProvider) Execute(ctx context.Context, req llm.ProviderRequest) 
 	return resp, nil
 }
 
-// calculateApproximateCost is a placeholder for cost calculation
-// TODO: Use the actual cost calculation from llm.calculateCost
-func calculateApproximateCost(inputTokens, outputTokens int) float64 {
-	// Rough estimate: $0.000003 per input token, $0.000015 per output token
-	// This should be replaced with actual model-specific pricing
-	return (float64(inputTokens) * 0.000003) + (float64(outputTokens) * 0.000015)
+// inferProvider infers the provider from model name
+func inferProvider(model string) string {
+	if len(model) >= 4 && model[:4] == "gpt-" {
+		return "openai"
+	}
+	if len(model) >= 7 && model[:7] == "claude-" {
+		return "anthropic"
+	}
+	if len(model) >= 7 && model[:7] == "gemini-" {
+		return "gemini"
+	}
+	if len(model) >= 3 && model[:3] == "o1-" {
+		return "openai"
+	}
+	return "unknown"
 }
 
 // WithCache returns a middleware option that adds caching capabilities
