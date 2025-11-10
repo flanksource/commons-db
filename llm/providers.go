@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"context"
 	"fmt"
 
 	. "github.com/flanksource/commons-db/llm/types"
@@ -15,11 +14,11 @@ type openAIProvider struct {
 }
 
 // Execute sends a request to OpenAI.
-func (p *openAIProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (p *openAIProvider) Execute(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 	req.Model = p.model
 	req.APIKey = p.apiKey
 	req.APIURL = p.apiURL
-	return executeOpenAI(ctx, req)
+	return executeOpenAI(sess, req)
 }
 
 // GetModel returns the model name.
@@ -32,6 +31,11 @@ func (p *openAIProvider) GetBackend() LLMBackend {
 	return LLMBackendOpenAI
 }
 
+// GetOpenRouterModelID returns the OpenRouter model identifier.
+func (p *openAIProvider) GetOpenRouterModelID() string {
+	return "openai/" + p.model
+}
+
 // anthropicProvider implements the Provider interface for Anthropic.
 type anthropicProvider struct {
 	apiKey string
@@ -40,11 +44,11 @@ type anthropicProvider struct {
 }
 
 // Execute sends a request to Anthropic.
-func (p *anthropicProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (p *anthropicProvider) Execute(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 	req.Model = p.model
 	req.APIKey = p.apiKey
 	req.APIURL = p.apiURL
-	return executeAnthropic(ctx, req)
+	return executeAnthropic(sess, req)
 }
 
 // GetModel returns the model name.
@@ -57,6 +61,11 @@ func (p *anthropicProvider) GetBackend() LLMBackend {
 	return LLMBackendAnthropic
 }
 
+// GetOpenRouterModelID returns the OpenRouter model identifier.
+func (p *anthropicProvider) GetOpenRouterModelID() string {
+	return "anthropic/" + p.model
+}
+
 // geminiProvider implements the Provider interface for Google Gemini.
 type geminiProvider struct {
 	apiKey string
@@ -65,11 +74,11 @@ type geminiProvider struct {
 }
 
 // Execute sends a request to Google Gemini.
-func (p *geminiProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (p *geminiProvider) Execute(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 	req.Model = p.model
 	req.APIKey = p.apiKey
 	req.APIURL = p.apiURL
-	return executeGemini(ctx, req)
+	return executeGemini(sess, req)
 }
 
 // GetModel returns the model name.
@@ -82,15 +91,20 @@ func (p *geminiProvider) GetBackend() LLMBackend {
 	return LLMBackendGemini
 }
 
+// GetOpenRouterModelID returns the OpenRouter model identifier.
+func (p *geminiProvider) GetOpenRouterModelID() string {
+	return "google/" + p.model
+}
+
 // claudeCodeProvider implements the Provider interface for Claude Code CLI.
 type claudeCodeProvider struct {
 	model string
 }
 
 // Execute sends a request to Claude Code CLI.
-func (p *claudeCodeProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (p *claudeCodeProvider) Execute(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 	req.Model = p.model
-	return executeClaudeCode(ctx, req)
+	return executeClaudeCode(sess, req)
 }
 
 // GetModel returns the model name.
@@ -101,6 +115,12 @@ func (p *claudeCodeProvider) GetModel() string {
 // GetBackend returns the backend type.
 func (p *claudeCodeProvider) GetBackend() LLMBackend {
 	return LLMBackendClaudeCode
+}
+
+// GetOpenRouterModelID returns the OpenRouter model identifier.
+// Claude Code CLI is not available on OpenRouter.
+func (p *claudeCodeProvider) GetOpenRouterModelID() string {
+	return ""
 }
 
 // NewOpenAIProvider creates a new OpenAI provider with the specified configuration.

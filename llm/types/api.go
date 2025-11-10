@@ -1,8 +1,6 @@
 package types
 
 import (
-	"context"
-
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -19,13 +17,17 @@ const (
 // Provider is the interface that all LLM provider implementations must satisfy.
 type Provider interface {
 	// Execute sends a request to the LLM provider and returns the response.
-	Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error)
+	Execute(ctx *Session, req ProviderRequest) (ProviderResponse, error)
 
 	// GetModel returns the model name configured for this provider.
 	GetModel() string
 
 	// GetBackend returns the backend type for this provider.
 	GetBackend() LLMBackend
+
+	// GetOpenRouterModelID returns the OpenRouter model identifier for pricing lookups.
+	// Returns empty string if the model is not available on OpenRouter.
+	GetOpenRouterModelID() string
 }
 
 // ProviderRequest contains all the information needed to make an LLM request.
@@ -41,6 +43,7 @@ type ProviderRequest struct {
 
 // ProviderResponse contains the raw response from an LLM provider.
 type ProviderResponse struct {
+	Cached           bool
 	Text             string
 	StructuredData   interface{} // Populated if structured output was requested
 	Model            string
@@ -49,6 +52,7 @@ type ProviderResponse struct {
 	ReasoningTokens  *int
 	CacheReadTokens  *int
 	CacheWriteTokens *int
+	Raw              interface{} // Raw provider-specific response
 }
 
 // Connection represents a resolved connection with provider-specific configuration.

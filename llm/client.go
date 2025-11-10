@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/llm/middleware"
 	. "github.com/flanksource/commons-db/llm/types"
 )
 
@@ -27,7 +28,7 @@ type directClient struct {
 //	resp, err := client.NewRequest().
 //	    WithPrompt("Hello world").
 //	    Execute(ctx)
-func NewClientWithModel(model string) (Client, error) {
+func NewClientWithModel(model string, options ...middleware.Option) (Client, error) {
 	if model == "" {
 		return nil, fmt.Errorf("model cannot be empty")
 	}
@@ -57,6 +58,12 @@ func NewClientWithModel(model string) (Client, error) {
 		provider = NewClaudeCodeProvider(model)
 	default:
 		return nil, fmt.Errorf("unsupported backend: %s", backend)
+	}
+	for _, option := range options {
+		provider, err = option(provider)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &directClient{provider: provider}, nil

@@ -1,20 +1,20 @@
 package llm
 
 import (
-	"context"
 	"fmt"
 
+	. "github.com/flanksource/commons-db/llm/types"
 	"google.golang.org/genai"
 )
 
 // executeGemini executes a request using the Google Gemini provider.
-func executeGemini(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func executeGemini(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 	// Create Gemini client
 	config := &genai.ClientConfig{
 		APIKey: req.APIKey,
 	}
 
-	client, err := genai.NewClient(ctx, config)
+	client, err := genai.NewClient(sess.Context, config)
 	if err != nil {
 		return ProviderResponse{}, fmt.Errorf("failed to create Gemini client: %w", err)
 	}
@@ -63,7 +63,7 @@ func executeGemini(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 	}
 
 	// Execute request
-	resp, err := client.Models.GenerateContent(ctx, model, contents, &genConfig)
+	resp, err := client.Models.GenerateContent(sess.Context, model, contents, &genConfig)
 	if err != nil {
 		return ProviderResponse{}, fmt.Errorf("Gemini request failed: %w", err)
 	}
@@ -103,12 +103,55 @@ func executeGemini(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 		outputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
 	}
 
-	return ProviderResponse{
+	providerResp := ProviderResponse{
 		Text:           text,
 		StructuredData: structuredData,
 		Model:          model,
 		InputTokens:    inputTokens,
 		OutputTokens:   outputTokens,
+		Raw:            resp,
+	}
+
+	// Track costs in session
+	cost, err := calcGeminiCosts(resp, model)
+	if err == nil {
+		sess.AddCost(cost)
+	}
+
+	return providerResp, nil
+}
+
+// calcGeminiCosts calculates costs from Gemini API response
+func calcGeminiCosts(resp *genai.GenerateContentResponse, model string) (Cost, error) {
+	// Extract token counts
+	inputTokens := 0
+	outputTokens := 0
+	if resp.UsageMetadata != nil {
+		inputTokens = int(resp.UsageMetadata.PromptTokenCount)
+		outputTokens = int(resp.UsageMetadata.CandidatesTokenCount)
+	}
+
+	// Convert to OpenRouter format for pricing lookup
+	openRouterModel := "google/" + model
+	modelInfo, exists := GetModelInfo(openRouterModel)
+	if !exists {
+		return Cost{}, fmt.Errorf("model %s not found in pricing registry", model)
+	}
+
+	// Calculate input cost
+	inputCost := float64(inputTokens) * modelInfo.InputPrice / 1_000_000
+
+	// Calculate output cost
+	outputCost := float64(outputTokens) * modelInfo.OutputPrice / 1_000_000
+
+	return Cost{
+		Model:        model,
+		ModelType:    ModelTypeLLM,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  inputTokens + outputTokens,
+		InputCost:    inputCost,
+		OutputCost:   outputCost,
 	}, nil
 }
 

@@ -4,13 +4,18 @@ Composable middleware for LLM providers with caching and logging capabilities.
 
 ## Overview
 
-This package provides middleware wrappers for LLM providers, enabling transparent caching and comprehensive logging without modifying provider implementations. Middleware can be composed using functional options to create flexible processing pipelines.
+This package provides middleware wrappers for LLM providers, enabling transparent
+caching and comprehensive logging without modifying provider implementations.
+Middleware can be composed using functional options to create flexible processing
+pipelines.
 
 ## Features
 
 - **Caching Middleware**: SQLite-based response caching with TTL support
-- **Logging Middleware**: Structured logging with slog, including request/response details and performance metrics
-- **Context Propagation**: Full Go context support for cancellation, timeouts, and correlation IDs
+- **Logging Middleware**: Structured logging with slog, including request/response
+  details and performance metrics
+- **Context Propagation**: Full Go context support for cancellation, timeouts,
+  and correlation IDs
 - **Composable Design**: Chain multiple middleware using functional options
 - **Zero Provider Changes**: Works with any `llm.Provider` implementation
 
@@ -26,7 +31,9 @@ import (
 
 ## Quick Start
 
-### Basic Usage with Caching and Logging
+### Using Middleware at the Provider Level
+
+The middleware wraps `llm.Provider` implementations. Here's how to use it:
 
 ```go
 package main
@@ -34,8 +41,6 @@ package main
 import (
     "context"
     "fmt"
-    "log"
-    "log/slog"
     "time"
 
     "github.com/flanksource/commons-db/llm"
@@ -43,46 +48,43 @@ import (
     "github.com/flanksource/commons-db/llm/cache"
 )
 
-func main() {
-    // Create cache instance
+// Example: Wrapping a provider with caching and logging
+func example() error {
+    // Step 1: Create cache instance
     c, err := cache.New(cache.Config{
         DBPath:  "~/.cache/llm.db",
         TTL:     24 * time.Hour,
-        NoCache: false,
-        Debug:   false,
     })
     if err != nil {
-        log.Fatal(err)
+        return err
     }
     defer c.Close()
 
-    // Create base provider (using OpenAI as example)
-    client, err := llm.NewClientWithModel("gpt-4o")
-    if err != nil {
-        log.Fatal(err)
-    }
+    // Step 2: Get a base provider (implementation-specific)
+    // This example shows the pattern - actual provider creation
+    // depends on your setup
+    var baseProvider llm.Provider // from your provider factory
 
-    // Get the base provider
-    baseProvider := getProviderFromClient(client)
-
-    // Wrap with middleware
+    // Step 3: Wrap with middleware
     provider := middleware.Wrap(baseProvider,
         middleware.WithCacheInstance(c),
         middleware.WithDefaultLogging(),
     )
 
-    // Use the wrapped provider
+    // Step 4: Use the wrapped provider
     ctx := context.Background()
     resp, err := provider.Execute(ctx, llm.ProviderRequest{
         Prompt: "What is the capital of France?",
         Model:  "gpt-4o",
     })
     if err != nil {
-        log.Fatal(err)
+        return err
     }
 
     fmt.Println("Response:", resp.Text)
-    fmt.Printf("Tokens: %d input, %d output\n", resp.InputTokens, resp.OutputTokens)
+    fmt.Printf("Tokens: %d input, %d output\n",
+        resp.InputTokens, resp.OutputTokens)
+    return nil
 }
 ```
 

@@ -1,17 +1,17 @@
 package llm
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
+	. "github.com/flanksource/commons-db/llm/types"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/shared"
 )
 
 // executeOpenAI executes a request using the OpenAI provider.
-func executeOpenAI(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func executeOpenAI(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 	// Build client options
 	opts := []option.RequestOption{}
 
@@ -101,7 +101,7 @@ func executeOpenAI(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 	params.Temperature = openai.Float(0.0)
 
 	// Execute request
-	resp, err := client.Chat.Completions.New(ctx, params)
+	resp, err := client.Chat.Completions.New(sess.Context, params)
 	if err != nil {
 		return ProviderResponse{}, fmt.Errorf("OpenAI request failed: %w", err)
 	}
@@ -136,12 +136,69 @@ func executeOpenAI(ctx context.Context, req ProviderRequest) (ProviderResponse, 
 		reasoningTokens = &tokens
 	}
 
-	return ProviderResponse{
+	providerResp := ProviderResponse{
 		Text:            text,
 		StructuredData:  structuredData,
 		Model:           resp.Model,
 		InputTokens:     inputTokens,
 		OutputTokens:    outputTokens,
 		ReasoningTokens: reasoningTokens,
+		Raw:             resp,
+	}
+
+	// Track costs in session
+	cost, err := calcOpenAICosts(resp)
+	if err == nil {
+		sess.AddCost(cost)
+	}
+
+	return providerResp, nil
+}
+
+// calcOpenAICosts calculates costs from OpenAI API response
+func calcOpenAICosts(resp *openai.ChatCompletion) (Cost, error) {
+	// Extract token counts
+	inputTokens := int(resp.Usage.PromptTokens)
+	outputTokens := int(resp.Usage.CompletionTokens)
+	var reasoningTokens *int
+
+	// OpenAI o1 models have reasoning tokens
+	if resp.Usage.CompletionTokensDetails.ReasoningTokens > 0 {
+		tokens := int(resp.Usage.CompletionTokensDetails.ReasoningTokens)
+		reasoningTokens = &tokens
+	}
+
+	// Convert to OpenRouter format for pricing lookup
+	openRouterModel := "openai/" + resp.Model
+	modelInfo, exists := GetModelInfo(openRouterModel)
+	if !exists {
+		return Cost{}, fmt.Errorf("model %s not found in pricing registry", resp.Model)
+	}
+
+	// Calculate input cost
+	inputCost := float64(inputTokens) * modelInfo.InputPrice / 1_000_000
+
+	// Calculate output cost
+	outputCost := float64(outputTokens) * modelInfo.OutputPrice / 1_000_000
+
+	// Add reasoning token cost (uses output pricing)
+	if reasoningTokens != nil && *reasoningTokens > 0 {
+		outputCost += float64(*reasoningTokens) * modelInfo.OutputPrice / 1_000_000
+	}
+
+	// Calculate total tokens
+	totalTokens := inputTokens + outputTokens
+	if reasoningTokens != nil {
+		totalTokens += *reasoningTokens
+	}
+
+	return Cost{
+		Model:        resp.Model,
+		ModelType:    ModelTypeLLM,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  totalTokens,
+		InputCost:    inputCost,
+		OutputCost:   outputCost,
 	}, nil
 }

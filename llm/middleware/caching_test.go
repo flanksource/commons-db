@@ -1,7 +1,6 @@
 package middleware
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -13,14 +12,14 @@ import (
 
 // mockProvider is a mock implementation of Provider for testing
 type mockProvider struct {
-	executeFunc func(ctx context.Context, req ProviderRequest) (ProviderResponse, error)
+	executeFunc func(sess *Session, req ProviderRequest) (ProviderResponse, error)
 	callCount   int
 }
 
-func (m *mockProvider) Execute(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func (m *mockProvider) Execute(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 	m.callCount++
 	if m.executeFunc != nil {
-		return m.executeFunc(ctx, req)
+		return m.executeFunc(sess, req)
 	}
 	return ProviderResponse{
 		Text:         "mock response",
@@ -36,6 +35,10 @@ func (m *mockProvider) GetModel() string {
 
 func (m *mockProvider) GetBackend() LLMBackend {
 	return LLMBackendOpenAI
+}
+
+func (m *mockProvider) GetOpenRouterModelID() string {
+	return "openai/test-model"
 }
 
 func TestCacheMiddleware_CacheHit(t *testing.T) {
@@ -59,16 +62,16 @@ func TestCacheMiddleware_CacheHit(t *testing.T) {
 	mock := &mockProvider{}
 
 	// Wrap with caching middleware
-	provider := Wrap(mock, WithCacheInstance(c))
+	provider, _ := Wrap(mock, WithCacheInstance(c))
 
-	ctx := context.Background()
+	sess := NewSession("test-session", "test-project")
 	req := ProviderRequest{
 		Prompt: "test prompt",
 		Model:  "gpt-4o",
 	}
 
 	// First call - cache miss
-	resp1, err := provider.Execute(ctx, req)
+	resp1, err := provider.Execute(sess, req)
 	if err != nil {
 		t.Fatalf("First Execute failed: %v", err)
 	}
@@ -80,7 +83,7 @@ func TestCacheMiddleware_CacheHit(t *testing.T) {
 	}
 
 	// Second call - cache hit (should not call provider again)
-	resp2, err := provider.Execute(ctx, req)
+	resp2, err := provider.Execute(sess, req)
 	if err != nil {
 		t.Fatalf("Second Execute failed: %v", err)
 	}
@@ -113,7 +116,7 @@ func TestCacheMiddleware_BypassCache(t *testing.T) {
 	mock := &mockProvider{}
 
 	// Wrap with caching middleware
-	provider := Wrap(mock, WithCacheInstance(c))
+	provider, _ := Wrap(mock, WithCacheInstance(c))
 
 	req := ProviderRequest{
 		Prompt: "test prompt",
@@ -121,8 +124,8 @@ func TestCacheMiddleware_BypassCache(t *testing.T) {
 	}
 
 	// First call without bypass
-	ctx1 := context.Background()
-	_, err = provider.Execute(ctx1, req)
+	sess1 := NewSession("test-session-1", "test-project")
+	_, err = provider.Execute(sess1, req)
 	if err != nil {
 		t.Fatalf("First Execute failed: %v", err)
 	}
@@ -131,8 +134,9 @@ func TestCacheMiddleware_BypassCache(t *testing.T) {
 	}
 
 	// Second call with bypass - should call provider again
-	ctx2 := WithNoCache(context.Background())
-	_, err = provider.Execute(ctx2, req)
+	sess2 := NewSession("test-session-2", "test-project")
+	sess2.Context = WithNoCache(sess2.Context)
+	_, err = provider.Execute(sess2, req)
 	if err != nil {
 		t.Fatalf("Second Execute with bypass failed: %v", err)
 	}
@@ -161,7 +165,7 @@ func TestCacheMiddleware_TTL(t *testing.T) {
 	// Create mock provider that returns different responses
 	responseNum := 0
 	mock := &mockProvider{
-		executeFunc: func(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+		executeFunc: func(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 			responseNum++
 			return ProviderResponse{
 				Text:         fmt.Sprintf("response %d", responseNum),
@@ -173,16 +177,16 @@ func TestCacheMiddleware_TTL(t *testing.T) {
 	}
 
 	// Wrap with caching middleware
-	provider := Wrap(mock, WithCacheInstance(c))
+	provider, _ := Wrap(mock, WithCacheInstance(c))
 
-	ctx := context.Background()
+	sess := NewSession("test-session", "test-project")
 	req := ProviderRequest{
 		Prompt: "test prompt",
 		Model:  "gpt-4o",
 	}
 
 	// First call
-	resp1, err := provider.Execute(ctx, req)
+	resp1, err := provider.Execute(sess, req)
 	if err != nil {
 		t.Fatalf("First Execute failed: %v", err)
 	}
@@ -191,7 +195,7 @@ func TestCacheMiddleware_TTL(t *testing.T) {
 	}
 
 	// Second call immediately - should be cached
-	resp2, err := provider.Execute(ctx, req)
+	resp2, err := provider.Execute(sess, req)
 	if err != nil {
 		t.Fatalf("Second Execute failed: %v", err)
 	}
@@ -203,7 +207,7 @@ func TestCacheMiddleware_TTL(t *testing.T) {
 	time.Sleep(200 * time.Millisecond)
 
 	// Third call after TTL - should execute again
-	resp3, err := provider.Execute(ctx, req)
+	resp3, err := provider.Execute(sess, req)
 	if err != nil {
 		t.Fatalf("Third Execute failed: %v", err)
 	}
@@ -231,7 +235,7 @@ func TestCacheMiddleware_DifferentPrompts(t *testing.T) {
 
 	// Create mock provider
 	mock := &mockProvider{
-		executeFunc: func(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+		executeFunc: func(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 			return ProviderResponse{
 				Text:         "response to: " + req.Prompt,
 				Model:        req.Model,
@@ -242,12 +246,12 @@ func TestCacheMiddleware_DifferentPrompts(t *testing.T) {
 	}
 
 	// Wrap with caching middleware
-	provider := Wrap(mock, WithCacheInstance(c))
+	provider, _ := Wrap(mock, WithCacheInstance(c))
 
-	ctx := context.Background()
+	sess := NewSession("test-session", "test-project")
 
 	// First prompt
-	resp1, err := provider.Execute(ctx, ProviderRequest{
+	resp1, err := provider.Execute(sess, ProviderRequest{
 		Prompt: "prompt1",
 		Model:  "gpt-4o",
 	})
@@ -259,7 +263,7 @@ func TestCacheMiddleware_DifferentPrompts(t *testing.T) {
 	}
 
 	// Second prompt (different) - should not be cached
-	resp2, err := provider.Execute(ctx, ProviderRequest{
+	resp2, err := provider.Execute(sess, ProviderRequest{
 		Prompt: "prompt2",
 		Model:  "gpt-4o",
 	})

@@ -3,11 +3,11 @@ package middleware
 import (
 	"context"
 
-	"github.com/flanksource/commons-db/llm"
+	. "github.com/flanksource/commons-db/llm/types"
 )
 
 // Option is a functional option for configuring middleware
-type Option func(llm.Provider) llm.Provider
+type Option func(Provider) (Provider, error)
 
 // Wrap wraps a provider with the specified middleware options.
 // Options are applied in order, creating a middleware chain.
@@ -18,11 +18,15 @@ type Option func(llm.Provider) llm.Provider
 //	    middleware.WithCache(cacheConfig),
 //	    middleware.WithDefaultLogging(),
 //	)
-func Wrap(provider llm.Provider, options ...Option) llm.Provider {
+func Wrap(provider Provider, options ...Option) (Provider, error) {
+	var err error
 	for _, option := range options {
-		provider = option(provider)
+		provider, err = option(provider)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return provider
+	return provider, nil
 }
 
 // contextKey is a type for context keys to avoid collisions

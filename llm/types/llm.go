@@ -4,6 +4,9 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/api"
 )
 
 // Client provides a fluent interface for making LLM requests.
@@ -13,7 +16,8 @@ type Client interface {
 }
 
 // client is the default implementation of Client.
-type client struct{}
+type client struct {
+}
 
 // NewClient creates a new LLM client.
 func NewClient() Client {
@@ -90,6 +94,14 @@ func (b *RequestBuilder) Execute(ctx context.Context) (*Response, error) {
 	ctx, cancel := context.WithTimeout(ctx, b.Timeout)
 	defer cancel()
 
+	// Create session from context
+	sess := &Session{
+		Context: ctx,
+		Model:   b.Provider.GetModel(),
+		ID:      "request",
+		Costs:   Costs{},
+	}
+
 	// Build provider request
 	req := ProviderRequest{
 		SystemPrompt:     b.SystemPrompt,
@@ -99,7 +111,7 @@ func (b *RequestBuilder) Execute(ctx context.Context) (*Response, error) {
 	}
 
 	// Execute request
-	resp, err := b.Provider.Execute(ctx, req)
+	resp, err := b.Provider.Execute(sess, req)
 	if err != nil {
 		return nil, err
 	}
@@ -148,4 +160,44 @@ type CostInfo struct {
 	Cost             float64 `json:"cost"`
 	Model            string  `json:"model"`
 	CostError        *string `json:"costCalculationError,omitempty"`
+}
+
+func (c CostInfo) String() string {
+	return c.Pretty().String()
+}
+
+func (c CostInfo) Pretty() api.Text {
+	t := clicky.Text("")
+	if c.Cost > 0 {
+		t = t.Append("Cost: ", "text-muted").Append(fmt.Sprintf("$%.6f", c.Cost), "text-success")
+	}
+	if c.InputTokens > 0 {
+		t = t.Append("Input: ", "text-muted").Append(c.InputTokens)
+	}
+	if c.OutputTokens > 0 {
+		if !t.IsEmpty() {
+			t = t.Space()
+		}
+		t = t.Append("Output: ", "text-muted").Append(c.OutputTokens)
+	}
+	if c.ReasoningTokens != nil && *c.ReasoningTokens > 0 {
+		if !t.IsEmpty() {
+			t = t.Space()
+		}
+		t = t.Append("Reasoning: ", "text-muted").Append(*c.ReasoningTokens)
+	}
+	if c.CacheReadTokens != nil && *c.CacheReadTokens > 0 {
+		if !t.IsEmpty() {
+			t = t.Space()
+		}
+		t = t.Append("Cache R/W: ", "text-muted").Append(*c.CacheReadTokens)
+	}
+	if c.CacheWriteTokens != nil && *c.CacheWriteTokens > 0 {
+		if !t.IsEmpty() {
+			t = t.Space()
+		}
+		t = t.Append("/").Append(*c.CacheWriteTokens)
+	}
+	return t
+
 }

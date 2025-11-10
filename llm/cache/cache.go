@@ -9,7 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/samber/lo"
 )
 
 var (
@@ -77,6 +79,10 @@ type Cache struct {
 	config Config
 }
 
+func (c Cache) GetTTL() time.Duration {
+	return c.config.TTL
+}
+
 // New creates a new cache instance
 func New(config Config) (*Cache, error) {
 	if config.DBPath == "" {
@@ -139,25 +145,19 @@ func (c *Cache) Close() error {
 }
 
 // generateCacheKey creates a unique key for cache lookup
-func (c *Cache) generateCacheKey(prompt, model string, temperature float64, maxTokens int) string {
-	data := fmt.Sprintf("%s|%s|%.2f|%d", prompt, model, temperature, maxTokens)
+func generateCacheKey(prompt, model string) string {
+	data := fmt.Sprintf("%s|%s", prompt, model)
 	hash := sha256.Sum256([]byte(data))
 	return fmt.Sprintf("%x", hash)
 }
 
-// generatePromptHash creates a hash of just the prompt for history lookup
-func (c *Cache) generatePromptHash(prompt string) string {
-	hash := sha256.Sum256([]byte(prompt))
-	return fmt.Sprintf("%x", hash)[:16] // Use first 16 chars for brevity
-}
-
 // Get retrieves a cached response
-func (c *Cache) Get(prompt, model string, temperature float64, maxTokens int) (*Entry, error) {
+func (c *Cache) Get(prompt, model string) (*Entry, error) {
 	if c.config.NoCache {
 		return nil, ErrCacheDisabled
 	}
 
-	cacheKey := c.generateCacheKey(prompt, model, temperature, maxTokens)
+	cacheKey := generateCacheKey(prompt, model)
 
 	query := `
 		SELECT id, cache_key, prompt_hash, model, prompt, response, error,
@@ -166,7 +166,7 @@ func (c *Cache) Get(prompt, model string, temperature float64, maxTokens int) (*
 		       cost_usd, duration_ms, provider, temperature, max_tokens,
 		       created_at, accessed_at, expires_at
 		FROM llm_cache
-		WHERE cache_key = ? AND model = ?
+		WHERE cache_key = ?
 		  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
 		ORDER BY created_at DESC
 		LIMIT 1
@@ -174,7 +174,7 @@ func (c *Cache) Get(prompt, model string, temperature float64, maxTokens int) (*
 
 	var entry Entry
 	var expiresAt sql.NullTime
-	err := c.db.QueryRow(query, cacheKey, model).Scan(
+	err := c.db.QueryRow(query, cacheKey).Scan(
 		&entry.ID, &entry.CacheKey, &entry.PromptHash, &entry.Model,
 		&entry.Prompt, &entry.Response, &entry.Error,
 		&entry.TokensInput, &entry.TokensOutput, &entry.TokensReasoning,
@@ -202,22 +202,21 @@ func (c *Cache) Get(prompt, model string, temperature float64, maxTokens int) (*
 	// Update access time
 	_, _ = c.db.Exec("UPDATE llm_cache SET accessed_at = CURRENT_TIMESTAMP WHERE id = ?", entry.ID)
 
-	if c.config.Debug {
-		fmt.Fprintf(os.Stderr, "Cache hit for prompt hash %s (model: %s)\n", entry.PromptHash, model)
-	}
-
 	return &entry, nil
 }
 
 // Set stores a response in the cache
 func (c *Cache) Set(entry *Entry) error {
+
 	if c.config.NoCache {
 		return nil
 	}
 
-	// Generate keys
-	entry.CacheKey = c.generateCacheKey(entry.Prompt, entry.Model, entry.Temperature, entry.MaxTokens)
-	entry.PromptHash = c.generatePromptHash(entry.Prompt)
+	entry.CreatedAt = time.Now()
+	entry.CacheKey = generateCacheKey(entry.Prompt, entry.Model)
+	entry.PromptHash = generateCacheKey(entry.Prompt, entry.Model)
+
+	logger.Tracef("[%s] caching response for %s: (hash:%s)", entry.Model, lo.Ellipsis(entry.Prompt, 20), entry.PromptHash)
 
 	// Calculate expiration
 	var expiresAt *time.Time
@@ -244,11 +243,6 @@ func (c *Cache) Set(entry *Entry) error {
 	)
 	if err != nil {
 		return fmt.Errorf("failed to set cache entry: %w", err)
-	}
-
-	if c.config.Debug {
-		fmt.Fprintf(os.Stderr, "Cached response for prompt hash %s (model: %s, tokens: %d, cost: $%.6f)\n",
-			entry.PromptHash, entry.Model, entry.TokensTotal, entry.CostUSD)
 	}
 
 	// Update daily stats
@@ -386,10 +380,10 @@ func (c *Cache) updateStats(entry *Entry) {
 			updated_at = CURRENT_TIMESTAMP
 	`
 
+	// Set all token values to 0 - we only track cost now
 	_, _ = c.db.Exec(query,
 		date, entry.Model, entry.Provider,
-		entry.TokensInput, entry.TokensOutput, entry.TokensReasoning,
-		entry.TokensCacheRead, entry.TokensCacheWrite,
+		0, 0, 0, 0, 0,
 		entry.CostUSD,
 	)
 }

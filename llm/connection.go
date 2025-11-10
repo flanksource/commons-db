@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	dutyctx "github.com/flanksource/commons-db/context"
+	. "github.com/flanksource/commons-db/llm/types"
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -61,4 +62,27 @@ func mapConnectionTypeToBackend(connType string) (LLMBackend, error) {
 	default:
 		return "", fmt.Errorf("%w: %s", ErrInvalidProvider, connType)
 	}
+}
+
+// buildConnectionFromModel builds a connection from a model name and environment variables.
+func buildConnectionFromModel(model string) (*Connection, error) {
+	backend, err := inferBackendFromModel(model)
+	if err != nil {
+		return nil, err
+	}
+
+	apiKey, err := getAPIKeyFromEnv(backend)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Connection{
+		Backend: backend,
+		Model:   model,
+		HTTP: types.HTTP{
+			Bearer: types.EnvVar{
+				ValueStatic: apiKey,
+			},
+		},
+	}, nil
 }

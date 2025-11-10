@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	. "github.com/flanksource/commons-db/llm/types"
 )
 
 // claudeCodeRequest represents the JSON request sent to Claude Code CLI stdin.
@@ -38,7 +40,7 @@ type claudeCodeTokenUsage struct {
 }
 
 // executeClaudeCode executes a request using the Claude Code CLI provider.
-func executeClaudeCode(ctx context.Context, req ProviderRequest) (ProviderResponse, error) {
+func executeClaudeCode(sess *Session, req ProviderRequest) (ProviderResponse, error) {
 	// Determine timeout based on operation type
 	timeout := 60 * time.Second // Default for text generation
 	if req.StructuredOutput != nil {
@@ -46,7 +48,7 @@ func executeClaudeCode(ctx context.Context, req ProviderRequest) (ProviderRespon
 	}
 
 	// Check if context has a deadline and use the shorter timeout
-	if deadline, ok := ctx.Deadline(); ok {
+	if deadline, ok := sess.Deadline(); ok {
 		ctxTimeout := time.Until(deadline)
 		if ctxTimeout < timeout {
 			timeout = ctxTimeout
@@ -54,7 +56,7 @@ func executeClaudeCode(ctx context.Context, req ProviderRequest) (ProviderRespon
 	}
 
 	// Create context with timeout
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(sess.Context, timeout)
 	defer cancel()
 
 	// Set default model if not provided
@@ -266,7 +268,7 @@ func executeClaudeCode(ctx context.Context, req ProviderRequest) (ProviderRespon
 		text = ""
 	}
 
-	return ProviderResponse{
+	providerResp := ProviderResponse{
 		Text:             text,
 		StructuredData:   structuredData,
 		Model:            model, // Return original model name
@@ -275,6 +277,94 @@ func executeClaudeCode(ctx context.Context, req ProviderRequest) (ProviderRespon
 		ReasoningTokens:  reasoningTokens,
 		CacheReadTokens:  cacheReadTokens,
 		CacheWriteTokens: cacheWriteTokens,
+		Raw:              cliResp,
+	}
+
+	// Track costs in session
+	cost, err := calcClaudeCodeCosts(cliResp.Usage, actualModel)
+	if err == nil {
+		sess.AddCost(cost)
+	}
+
+	return providerResp, nil
+}
+
+// calcClaudeCodeCosts calculates costs from Claude Code CLI response
+func calcClaudeCodeCosts(usage *claudeCodeTokenUsage, model string) (Cost, error) {
+	if usage == nil {
+		return Cost{}, fmt.Errorf("no usage information in response")
+	}
+
+	// Extract token counts
+	inputTokens := usage.InputTokens
+	outputTokens := usage.OutputTokens
+	var reasoningTokens *int
+	var cacheReadTokens *int
+	var cacheWriteTokens *int
+
+	if usage.ReasoningTokens > 0 {
+		tokens := usage.ReasoningTokens
+		reasoningTokens = &tokens
+	}
+
+	if usage.CacheReadTokens > 0 {
+		tokens := usage.CacheReadTokens
+		cacheReadTokens = &tokens
+	}
+
+	if usage.CacheWriteTokens > 0 {
+		tokens := usage.CacheWriteTokens
+		cacheWriteTokens = &tokens
+	}
+
+	// Convert to OpenRouter format for pricing lookup
+	openRouterModel := "anthropic/" + model
+	modelInfo, exists := GetModelInfo(openRouterModel)
+	if !exists {
+		return Cost{}, fmt.Errorf("model %s not found in pricing registry", model)
+	}
+
+	// Calculate input cost
+	inputCost := float64(inputTokens) * modelInfo.InputPrice / 1_000_000
+
+	// Calculate output cost
+	outputCost := float64(outputTokens) * modelInfo.OutputPrice / 1_000_000
+
+	// Add reasoning token cost (uses output pricing)
+	if reasoningTokens != nil && *reasoningTokens > 0 {
+		outputCost += float64(*reasoningTokens) * modelInfo.OutputPrice / 1_000_000
+	}
+
+	// Add cache read cost (to input)
+	if cacheReadTokens != nil && *cacheReadTokens > 0 {
+		inputCost += float64(*cacheReadTokens) * modelInfo.CacheReadsPrice / 1_000_000
+	}
+
+	// Add cache write cost (to input)
+	if cacheWriteTokens != nil && *cacheWriteTokens > 0 {
+		inputCost += float64(*cacheWriteTokens) * modelInfo.CacheWritesPrice / 1_000_000
+	}
+
+	// Calculate total tokens
+	totalTokens := inputTokens + outputTokens
+	if reasoningTokens != nil {
+		totalTokens += *reasoningTokens
+	}
+	if cacheReadTokens != nil {
+		totalTokens += *cacheReadTokens
+	}
+	if cacheWriteTokens != nil {
+		totalTokens += *cacheWriteTokens
+	}
+
+	return Cost{
+		Model:        model,
+		ModelType:    ModelTypeLLM,
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		TotalTokens:  totalTokens,
+		InputCost:    inputCost,
+		OutputCost:   outputCost,
 	}, nil
 }
 

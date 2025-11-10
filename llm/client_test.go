@@ -4,6 +4,7 @@ import (
 	"os"
 	"testing"
 
+	. "github.com/flanksource/commons-db/llm/types"
 	"github.com/flanksource/commons-db/types"
 )
 
