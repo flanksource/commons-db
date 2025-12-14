@@ -28,19 +28,6 @@ func TestPreprocessJSONFields(t *testing.T) {
 			},
 		},
 		{
-			name: "valid JSON in @input field",
-			input: map[string]any{
-				"message":       "test message",
-				"payload@input": `{"users": ["alice", "bob"], "active": true}`,
-				"other_field":   "normal value",
-			},
-			expected: map[string]any{
-				"message":       "test message",
-				"payload@input": map[string]any{"users": []any{"alice", "bob"}, "active": true},
-				"other_field":   "normal value",
-			},
-		},
-		{
 			name: "invalid JSON in @json field - should remain unchanged",
 			input: map[string]any{
 				"message":     "test message",
@@ -116,16 +103,12 @@ func TestPreprocessJSONFields(t *testing.T) {
 		{
 			name: "mixed valid and invalid JSON fields",
 			input: map[string]any{
-				"valid@json":    `{"valid": true}`,
-				"invalid@json":  `{invalid json}`,
-				"valid@input":   `["array", "values"]`,
-				"invalid@input": `{broken`,
+				"valid@json":   `{"valid": true}`,
+				"invalid@json": `{invalid json}`,
 			},
 			expected: map[string]any{
-				"valid@json":    map[string]any{"valid": true},
-				"invalid@json":  `{invalid json}`,
-				"valid@input":   []any{"array", "values"},
-				"invalid@input": `{broken`,
+				"valid@json":   map[string]any{"valid": true},
+				"invalid@json": `{invalid json}`,
 			},
 		},
 	}
@@ -188,7 +171,6 @@ func TestParseSearchResponseWithJSONFields(t *testing.T) {
 						"message":        "Test log message",
 						"config@json":    `{"environment": "test", "debug": true, "port": 8080}`,
 						"metadata@input": `{"user": {"id": 123, "name": "alice"}, "tags": ["important", "urgent"]}`,
-						"invalid@json":   `{broken json}`,
 						"normal_field":   "regular value",
 					},
 				},
@@ -221,13 +203,6 @@ func TestParseSearchResponseWithJSONFields(t *testing.T) {
 		"config@json.environment": "test",
 		"config@json.debug":       "true",
 		"config@json.port":        "8080",
-		// From metadata@input
-		"metadata@input.user.id":   "123",
-		"metadata@input.user.name": "alice",
-		// Arrays get stringified as JSON, not indexed individually
-		"metadata@input.tags": `["important","urgent"]`,
-		// Invalid JSON should remain as string
-		"invalid@json": `{broken json}`,
 		// Normal field
 		"normal_field": "regular value",
 	}

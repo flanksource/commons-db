@@ -12,14 +12,18 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/commons-db/cache"
+	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/commons/timer"
-	"github.com/flanksource/commons-db/cache"
-	"github.com/flanksource/commons-db/types"
+	"github.com/flanksource/is-healthy/pkg/health"
 	"github.com/samber/lo"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
 	apiErrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,6 +46,7 @@ type gvkClientResourceCacheValue struct {
 
 type Client struct {
 	kubernetes.Interface
+	defaultNamespace       string
 	restMapper             *restmapper.DeferredDiscoveryRESTMapper
 	dynamicClient          *dynamic.DynamicClient
 	Config                 *rest.Config // Prefer updaating token in place
@@ -56,6 +61,7 @@ func (c *Client) SetLogger(logger logger.Logger) {
 func NewKubeClient(logger logger.Logger, client kubernetes.Interface, config *rest.Config) *Client {
 	return &Client{
 		Interface:              client,
+		defaultNamespace:       "default",
 		Config:                 config,
 		gvkClientResourceCache: cache.NewCache[gvkClientResourceCacheValue]("gvk-cache", 24*time.Hour),
 		logger:                 logger,
@@ -64,6 +70,13 @@ func NewKubeClient(logger logger.Logger, client kubernetes.Interface, config *re
 
 func (c *Client) Reset() {
 	c.dynamicClient = nil
+	c.defaultNamespace = "default"
+}
+
+func (c *Client) WithNamespace(namespace string) *Client {
+	newClient := *c
+	newClient.defaultNamespace = namespace
+	return &newClient
 }
 
 func (c *Client) ResetRestMapper() {
@@ -146,6 +159,34 @@ func (c *Client) GetClientByGroupVersionKind(
 
 func (c *Client) RestConfig() *rest.Config {
 	return c.Config
+}
+
+func (c *Client) Get(ctx context.Context, kind, namespace, name string) (*unstructured.Unstructured, error) {
+	client, _, err := c.GetClientByKind(kind)
+	if err != nil {
+		return nil, err
+	}
+
+	resource, err := client.Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, err
+	}
+
+	return resource, nil
+}
+
+func (c *Client) List(ctx context.Context, kind, namespace, selector string) ([]unstructured.Unstructured, error) {
+	client, _, err := c.GetClientByKind(kind)
+	if err != nil {
+		return nil, err
+	}
+
+	resource, err := client.Namespace(namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return nil, err
+	}
+
+	return resource.Items, nil
 }
 
 // WARN: "Kind" is not specific enough.
@@ -304,6 +345,9 @@ func (c *Client) WaitForPod(
 	phases ...v1.PodPhase,
 ) error {
 	start := time.Now()
+	if len(phases) == 0 {
+		phases = []v1.PodPhase{v1.PodRunning}
+	}
 
 	pods := c.CoreV1().Pods(namespace)
 	for {
@@ -551,6 +595,226 @@ func (c *Client) QueryResources(ctx context.Context, selector types.ResourceSele
 
 	c.logger.Debugf("%s => count=%d duration=%s", selector, len(resources), timer)
 	return resources, nil
+}
+
+type Resource struct {
+	unstructured.Unstructured
+	health.HealthStatus
+}
+
+func (r *Resource) IsHealthy() bool {
+	return r.Health == health.HealthHealthy
+}
+
+func (r Resource) Pretty() api.Text {
+	t := api.Text{}
+	t = t.Append(r.GetKind(), "text-bold").Append("/", "text-muted").Append(r.GetNamespace()).Append("/", "text-muted").Append(r.GetName())
+	t = t.Space()
+	if r.IsHealthy() {
+		t = t.Append(icons.Pass, "text-green-500")
+	} else if r.Health == health.HealthWarning {
+		t = t.Append(icons.Warning, "text-yellow-500")
+	} else {
+		t = t.Append(icons.Fail, "text-red-500")
+	}
+	if r.Message != "" {
+		t = t.Space().Append(r.Message)
+	}
+	return t
+}
+
+type Resources []Resource
+
+func (r Resources) AsUnstructured() []unstructured.Unstructured {
+	out := []unstructured.Unstructured{}
+	for _, res := range r {
+		out = append(out, res.Unstructured)
+	}
+	return out
+}
+
+func (r Resources) Pretty() api.Text {
+	t := api.Text{}
+	for i, res := range r {
+		if i > 0 {
+			t = t.NewLine()
+		}
+		t = t.Append(res.Pretty())
+	}
+	return t
+}
+
+func NewResources(objs ...unstructured.Unstructured) Resources {
+	resources := Resources{}
+	for _, obj := range objs {
+		healthy, _ := health.GetResourceHealth(&obj, health.DefaultOverrides)
+		if healthy == nil {
+			healthy = &health.HealthStatus{
+				Health: health.HealthUnknown,
+			}
+		}
+		resources = append(resources, Resource{Unstructured: obj, HealthStatus: *healthy})
+	}
+	return resources
+}
+
+func (c *Client) GetResource(ctx context.Context, kind, namespace, name string) (*Resource, error) {
+
+	resource, err := c.Get(ctx, kind, namespace, name)
+	if errors.IsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil || resource == nil {
+		return nil, err
+	}
+
+	healthy, err := health.GetResourceHealth(resource, health.DefaultOverrides)
+	if healthy == nil {
+		healthy = &health.HealthStatus{
+			Health: health.HealthUnknown,
+		}
+	}
+
+	return &Resource{
+		Unstructured: *resource,
+		HealthStatus: *healthy,
+	}, err
+}
+
+func (c *Client) WaitForReady(ctx context.Context, kind, namespace, name string, timeout ...time.Duration) (*Resource, error) {
+	var timeoutDuration time.Duration
+	if len(timeout) > 0 {
+		timeoutDuration = timeout[0]
+	} else {
+		timeoutDuration = time.Minute
+	}
+
+	start := time.Now()
+
+	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+
+		case <-ticker.C:
+			r, _ := c.GetResource(ctx, kind, namespace, name)
+			if r != nil && r.IsHealthy() {
+				return r, nil
+			}
+
+			if start.Add(timeoutDuration).Before(time.Now()) {
+
+				if r != nil {
+					return nil, fmt.Errorf("timeout exceeded waiting for %s", r.Pretty().String())
+				} else {
+					return nil, fmt.Errorf("timeout exceeded waiting for %s/%s/%s", kind, namespace, name)
+				}
+
+			}
+		}
+	}
+}
+
+func (c *Client) WaitFor(ctx context.Context, kind, namespace, name string, condition func(*unstructured.Unstructured) bool, timeout time.Duration) (*unstructured.Unstructured, error) {
+	client, _, err := c.GetClientByKind(kind)
+	if err != nil {
+		return nil, err
+	}
+
+	ticker := time.NewTicker(time.Second * 1)
+	defer ticker.Stop()
+
+	timeoutTimer := time.NewTimer(timeout)
+	defer timeoutTimer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timeoutTimer.C:
+			return nil, fmt.Errorf("timeout exceeded waiting for %s/%s/%s", kind, namespace, name)
+		case <-ticker.C:
+			resource, err := client.Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				if apiErrors.IsNotFound(err) {
+					continue
+				}
+				return nil, err
+			}
+
+			if condition(resource) {
+				return resource, nil
+			}
+		}
+	}
+}
+
+func (c *Client) ApplyFile(ctx context.Context, files ...string) (Resources, error) {
+	all := Resources{}
+	for _, file := range files {
+		manifest, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		out, err := c.Apply(ctx, string(manifest))
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, out...)
+	}
+	return all, nil
+}
+
+func (c *Client) Apply(ctx context.Context, manifest string) (Resources, error) {
+	out := []unstructured.Unstructured{}
+	in, err := GetUnstructuredObjects([]byte(manifest))
+	if err != nil {
+		return nil, err
+	}
+
+	for _, o := range in {
+		if !strings.HasPrefix(o.GetKind(), "Cluster") {
+			o.SetNamespace(c.defaultNamespace)
+		}
+		c.logger.Infof("Applying %s", NewResources(o).Pretty().ANSI())
+		dynClient, err := c.GetClientByGroupVersionKind(ctx, o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind())
+		if err != nil {
+			return nil, fmt.Errorf("Failed to get client for %s/%s/%s", o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind())
+		}
+		saved, err := dynClient.Namespace(o.GetNamespace()).Apply(ctx, o.GetName(), &o, metav1.ApplyOptions{
+			FieldManager: "flanksource-commons",
+		})
+		if err != nil {
+			return nil, fmt.Errorf("Failed to apply %s/%s/%s: %w", o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind(), err)
+		}
+		out = append(out, *saved)
+	}
+
+	return NewResources(out...), nil
+}
+
+func (c *Client) GetPodIP(ctx context.Context, namespace, selector string) (string, error) {
+	pods, err := c.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return "", err
+	}
+	if len(pods.Items) == 0 {
+		return "", fmt.Errorf("no pods found for selector %s in namespace %s", selector, namespace)
+	}
+	messages := make(map[string]string)
+	for _, pod := range pods.Items {
+		if ok, msg := health.IsPodReady(&pod); ok {
+			return pod.Status.PodIP, nil
+		} else {
+			messages[pod.Name] = msg
+		}
+	}
+	return "", fmt.Errorf("no ready pods found for selector %s in namespace %s: %v", selector, namespace, messages)
 }
 
 func safeString(buf *bytes.Buffer) string {
