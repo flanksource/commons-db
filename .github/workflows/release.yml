@@ -1,4 +1,4 @@
-name: Release
+name: Auto Release
 
 on:
   push:
@@ -12,58 +12,21 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Install svu
-        run: |
-          curl -sL https://github.com/caarlos0/svu/releases/download/v2.3.0/svu_2.3.0_linux_amd64.tar.gz | tar xvz
-          sudo mv svu /usr/local/bin/
-
-      - name: Get current version
-        id: current
-        run: |
-          CURRENT=$(svu current 2>/dev/null || echo "v0.0.0")
-          echo "version=$CURRENT" >> $GITHUB_OUTPUT
-
-      - name: Calculate next patch version
-        id: next
-        run: |
-          NEXT=$(svu patch)
-          echo "version=$NEXT" >> $GITHUB_OUTPUT
-
-      - name: Check if version changed
-        id: check
-        run: |
-          if [ "${{ steps.current.outputs.version }}" == "${{ steps.next.outputs.version }}" ]; then
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "No new commits since last release"
-          else
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "New version: ${{ steps.next.outputs.version }}"
-          fi
-
-      - name: Create and push tag
-        if: steps.check.outputs.changed == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag ${{ steps.next.outputs.version }}
-          git push origin ${{ steps.next.outputs.version }}
+      - name: Calculate next version
+        id: version
+        uses: charlesthomas/github-action-svu@v1.1.4+3.2.3
+        with:
+          cmd: patch
+          pushTag: true
 
       - name: Create GitHub Release
-        if: steps.check.outputs.changed == 'true'
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        if: steps.version.outputs.changed == 'true'
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.next.outputs.version }}
-          release_name: ${{ steps.next.outputs.version }}
-          draft: false
-          prerelease: false
-          body: |
-            Automated patch release ${{ steps.next.outputs.version }}
-
-            See [CHANGELOG](https://github.com/${{ github.repository }}/compare/${{ steps.current.outputs.version }}...${{ steps.next.outputs.version }}) for details.
+          tag_name: ${{ steps.version.outputs.next }}
+          generate_release_notes: true
