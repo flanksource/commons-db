@@ -25,7 +25,7 @@ type cachingProvider struct {
 func newCachingProvider(provider Provider, config ...CacheConfig) (Provider, error) {
 	if len(config) == 0 || config[0].Cache == nil {
 		c, err := cache.New(cache.Config{
-			TTL: 24 * time.Hour,
+			TTL: 24 * time.Hour * 7,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create cache: %w", err)
@@ -87,7 +87,7 @@ func (c *cachingProvider) Execute(sess *Session, req ProviderRequest) (ProviderR
 		// Cache error
 		return ProviderResponse{}, fmt.Errorf("failed to get cache: %w", err)
 	}
-	logger.Infof("[%s] cache miss", req.Model)
+	logger.Infof("[%s/%s] cache miss", req.Model)
 
 	// Cache miss - execute request
 	startTime := time.Now()

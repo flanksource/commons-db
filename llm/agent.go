@@ -56,8 +56,15 @@ func NewLLMAgent(config ai.AgentConfig) (*LLMAgent, error) {
 		return nil, fmt.Errorf("--ai-model is required")
 	}
 
+	middlewares := []middleware.Option{
+		middleware.WithDefaultLogging(),
+	}
+
+	if !config.NoCache {
+		middlewares = append(middlewares, middleware.WithCache())
+	}
 	// Create LLM client with ai.Model inference
-	client, err := NewClientWithModel(config.Model, middleware.WithCache())
+	client, err := NewClientWithModel(config.Model, middlewares...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create LLM client: %w", err)
 	}
