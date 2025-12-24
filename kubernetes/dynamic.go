@@ -372,6 +372,54 @@ func (c *Client) WaitForPod(
 	}
 }
 
+// WaitForJob waits for a job to complete or fail within the specified timeout.
+// Returns nil if the job completes successfully, or an error if the job fails or times out.
+func (c *Client) WaitForJob(
+	ctx context.Context,
+	namespace, name string,
+	timeout time.Duration,
+) error {
+	timeoutTimer := time.NewTimer(timeout)
+	defer timeoutTimer.Stop()
+
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	jobs := c.BatchV1().Jobs(namespace)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+
+		case <-timeoutTimer.C:
+			job, _ := jobs.Get(ctx, name, metav1.GetOptions{})
+			if job != nil {
+				return fmt.Errorf("timeout exceeded waiting for job %s: active=%d, succeeded=%d, failed=%d",
+					name, job.Status.Active, job.Status.Succeeded, job.Status.Failed)
+			}
+			return fmt.Errorf("timeout exceeded waiting for job %s", name)
+
+		case <-ticker.C:
+			job, err := jobs.Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				if apiErrors.IsNotFound(err) {
+					continue
+				}
+				return fmt.Errorf("failed to get job %s: %w", name, err)
+			}
+
+			for _, condition := range job.Status.Conditions {
+				if condition.Type == "Complete" && condition.Status == "True" {
+					return nil
+				}
+				if condition.Type == "Failed" && condition.Status == "True" {
+					return fmt.Errorf("job %s failed: %s", name, condition.Message)
+				}
+			}
+		}
+	}
+}
+
 func (c *Client) StreamLogsV2(
 	ctx context.Context,
 	namespace, name string,
