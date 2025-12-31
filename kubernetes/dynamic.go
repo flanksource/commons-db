@@ -95,7 +95,7 @@ func (c *Client) FetchResources(
 	items := make(chan unstructured.Unstructured, len(resources))
 	for i := range resources {
 		resource := resources[i]
-		client, err := c.GetClientByGroupVersionKind(
+		client, _, err := c.GetClientByGroupVersionKind(
 			ctx,
 			resource.GroupVersionKind().Group,
 			resource.GroupVersionKind().Version,
@@ -126,15 +126,15 @@ func (c *Client) FetchResources(
 
 func (c *Client) GetClientByGroupVersionKind(
 	ctx context.Context, group, version, kind string,
-) (dynamic.NamespaceableResourceInterface, error) {
+) (dynamic.NamespaceableResourceInterface, *meta.RESTMapping, error) {
 	dynamicClient, err := c.GetDynamicClient()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	cacheKey := group + version + kind
 	if res, err := c.gvkClientResourceCache.Get(ctx, cacheKey); err == nil {
-		return dynamicClient.Resource(res.gvr), nil
+		return dynamicClient.Resource(res.gvr), res.mapping, nil
 	}
 
 	rm, _ := c.GetRestMapper()
@@ -144,17 +144,17 @@ func (c *Client) GetClientByGroupVersionKind(
 		Version:  version,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	gk := schema.GroupKind{Group: gvk.Group, Kind: gvk.Kind}
 	mapping, err := rm.RESTMapping(gk, gvk.Version)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	_ = c.gvkClientResourceCache.Set(ctx, cacheKey, gvkClientResourceCacheValue{gvr: mapping.Resource, mapping: mapping})
-	return dynamicClient.Resource(mapping.Resource), nil
+	return dynamicClient.Resource(mapping.Resource), mapping, nil
 }
 
 func (c *Client) RestConfig() *rest.Config {
@@ -226,7 +226,7 @@ func (c *Client) GetClientByKind(kind string) (dynamic.NamespaceableResourceInte
 }
 
 func (c *Client) DeleteByGVK(ctx context.Context, namespace, name string, gvk schema.GroupVersionKind) (bool, error) {
-	client, err := c.GetClientByGroupVersionKind(ctx, gvk.Group, gvk.Version, gvk.Kind)
+	client, _, err := c.GetClientByGroupVersionKind(ctx, gvk.Group, gvk.Version, gvk.Kind)
 	if err != nil {
 		return false, err
 	}
@@ -824,13 +824,14 @@ func (c *Client) Apply(ctx context.Context, manifest string) (Resources, error) 
 	}
 
 	for _, o := range in {
-		if !strings.HasPrefix(o.GetKind(), "Cluster") {
-			o.SetNamespace(c.defaultNamespace)
-		}
 		c.logger.Infof("Applying %s", NewResources(o).Pretty().ANSI())
-		dynClient, err := c.GetClientByGroupVersionKind(ctx, o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind())
+		dynClient, mapping, err := c.GetClientByGroupVersionKind(ctx, o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind())
 		if err != nil {
 			return nil, fmt.Errorf("Failed to get client for %s/%s/%s", o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind())
+		}
+		// Only set namespace for namespaced resources that don't already have one
+		if mapping.Scope.Name() == meta.RESTScopeNameNamespace && o.GetNamespace() == "" {
+			o.SetNamespace(c.defaultNamespace)
 		}
 		saved, err := dynClient.Namespace(o.GetNamespace()).Apply(ctx, o.GetName(), &o, metav1.ApplyOptions{
 			FieldManager: "flanksource-commons",
