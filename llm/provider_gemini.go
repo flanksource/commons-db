@@ -2,6 +2,7 @@ package llm
 
 import (
 	"fmt"
+	"strings"
 
 	. "github.com/flanksource/commons-db/llm/types"
 	"google.golang.org/genai"
@@ -65,6 +66,12 @@ func executeGemini(sess *Session, req ProviderRequest) (ProviderResponse, error)
 	// Execute request
 	resp, err := client.Models.GenerateContent(sess.Context, model, contents, &genConfig)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") || strings.Contains(err.Error(), "404") {
+			if models, listErr := listGeminiModels(client, sess); listErr == nil && len(models) > 0 {
+				return ProviderResponse{}, fmt.Errorf("Gemini model %q not found. Available models:\n  %s\nOriginal error: %w",
+					model, strings.Join(models, "\n  "), err)
+			}
+		}
 		return ProviderResponse{}, fmt.Errorf("Gemini request failed: %w", err)
 	}
 
@@ -153,6 +160,20 @@ func calcGeminiCosts(resp *genai.GenerateContentResponse, model string) (Cost, e
 		InputCost:    inputCost,
 		OutputCost:   outputCost,
 	}, nil
+}
+
+func listGeminiModels(client *genai.Client, sess *Session) ([]string, error) {
+	page, err := client.Models.List(sess.Context, &genai.ListModelsConfig{PageSize: 100})
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, m := range page.Items {
+		if m.Name != "" {
+			names = append(names, m.Name)
+		}
+	}
+	return names, nil
 }
 
 // convertToGeminiSchema converts a Go struct to a Gemini Schema.
