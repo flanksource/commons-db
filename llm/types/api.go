@@ -12,6 +12,7 @@ const (
 	LLMBackendAnthropic  LLMBackend = "anthropic"
 	LLMBackendGemini     LLMBackend = "gemini"
 	LLMBackendClaudeCode LLMBackend = "claude-code"
+	LLMBackendMock       LLMBackend = "mock"
 )
 
 // Provider is the interface that all LLM provider implementations must satisfy.

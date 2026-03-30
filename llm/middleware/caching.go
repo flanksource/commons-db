@@ -10,6 +10,13 @@ import (
 	"github.com/flanksource/commons/logger"
 )
 
+func valueOrZero(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
+}
+
 // CacheConfig holds configuration for caching middleware
 type CacheConfig struct {
 	Cache *cache.Cache // Cache instance (required)
@@ -87,7 +94,7 @@ func (c *cachingProvider) Execute(sess *Session, req ProviderRequest) (ProviderR
 		// Cache error
 		return ProviderResponse{}, fmt.Errorf("failed to get cache: %w", err)
 	}
-	logger.Infof("[%s/%s] cache miss", req.Model)
+	logger.Infof("[%s/%s] cache miss", c.GetBackend(), req.Model)
 
 	// Cache miss - execute request
 	startTime := time.Now()
@@ -111,6 +118,22 @@ func (c *cachingProvider) Execute(sess *Session, req ProviderRequest) (ProviderR
 		}
 
 		return resp, execErr
+	}
+
+	cacheEntry.Response = resp.Text
+	cacheEntry.TokensInput = resp.InputTokens
+	cacheEntry.TokensOutput = resp.OutputTokens
+	cacheEntry.TokensReasoning = valueOrZero(resp.ReasoningTokens)
+	cacheEntry.TokensCacheRead = valueOrZero(resp.CacheReadTokens)
+	cacheEntry.TokensCacheWrite = valueOrZero(resp.CacheWriteTokens)
+	cacheEntry.TokensTotal = resp.InputTokens +
+		resp.OutputTokens +
+		valueOrZero(resp.ReasoningTokens) +
+		valueOrZero(resp.CacheReadTokens) +
+		valueOrZero(resp.CacheWriteTokens)
+	cacheEntry.Provider = string(c.GetBackend())
+	if req.MaxTokens != nil {
+		cacheEntry.MaxTokens = *req.MaxTokens
 	}
 
 	// Store in cache

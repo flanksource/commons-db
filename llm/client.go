@@ -33,6 +33,10 @@ func NewClientWithModel(model string, options ...middleware.Option) (Client, err
 		return nil, fmt.Errorf("model cannot be empty")
 	}
 
+	if os.Getenv("MOCK") != "false" {
+		return &directClient{provider: NewMockProvider(model)}, nil
+	}
+
 	// Infer provider backend from model name
 	backend, err := inferBackendFromModel(model)
 	if err != nil {
