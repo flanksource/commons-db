@@ -81,17 +81,17 @@ func (c *cachingProvider) Execute(sess *Session, req ProviderRequest) (ProviderR
 	// Try to get from cache
 	cachedEntry, err := c.cache.Get(req.Prompt, req.Model)
 	if err == nil && cachedEntry != nil && cachedEntry.Error == "" {
-		logger.Infof("[%s] cache hit %v", c.GetOpenRouterModelID(), cachedEntry.CostUSD)
-		// Cache hit - return cached response
-		resp := ProviderResponse{
-			Cached: true,
-			Text:   cachedEntry.Response,
-			Model:  cachedEntry.Model,
+		if cachedEntry.Response == "" {
+			logger.Debugf("[%s/%s] ignoring cached empty response", c.GetBackend(), c.GetModel())
+		} else {
+			logger.Infof("[%s/%s] cache hit $%.4f", c.GetBackend(), c.GetModel(), cachedEntry.CostUSD)
+			return ProviderResponse{
+				Cached: true,
+				Text:   cachedEntry.Response,
+				Model:  cachedEntry.Model,
+			}, nil
 		}
-
-		return resp, nil
 	} else if err != nil && !errors.Is(err, cache.ErrNotFound) && !errors.Is(err, cache.ErrCacheDisabled) {
-		// Cache error
 		return ProviderResponse{}, fmt.Errorf("failed to get cache: %w", err)
 	}
 	logger.Infof("[%s/%s] cache miss", c.GetBackend(), c.GetModel())
