@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"fmt"
+	"time"
+
 	. "github.com/flanksource/commons-db/llm/types"
 	"github.com/flanksource/commons/logger"
 )
@@ -65,7 +68,7 @@ func (l *loggingProvider) GetOpenRouterModelID() string {
 
 // Execute implements the Provider interface with logging
 func (l *loggingProvider) Execute(sess *Session, req ProviderRequest) (ProviderResponse, error) {
-	// startTime := time.Now()
+	startTime := time.Now()
 
 	if l.IsTraceEnabled() {
 		l.Tracef(req.Pretty().ANSI())
@@ -73,21 +76,42 @@ func (l *loggingProvider) Execute(sess *Session, req ProviderRequest) (ProviderR
 		l.Debugf(req.PrettShort().ANSI())
 	}
 
-	// Execute the actual request
 	resp, err := l.provider.Execute(sess, req)
+	duration := time.Since(startTime)
+
 	if err != nil {
-		l.Errorf("LLM request failed: %v", err)
+		l.Errorf("[%s/%s] request failed after %s: %v", l.provider.GetBackend(), req.Model, duration.Round(time.Millisecond), err)
 		return resp, err
 	}
-	// duration := time.Since(startTime)
 
-	if logger.IsTraceEnabled() {
+	if l.IsTraceEnabled() {
 		l.Tracef(resp.Pretty().ANSI())
-	} else if logger.IsDebugEnabled() {
+	} else if l.IsDebugEnabled() {
 		l.Debugf(resp.PrettyShort().ANSI())
 	}
 
+	model := resp.Model
+	if model == "" {
+		model = req.Model
+	}
+	if resp.Text == "" && resp.StructuredData == nil {
+		l.Warnf("[%s/%s] empty response after %s (in=%d out=%d)", l.provider.GetBackend(), model, duration.Round(time.Millisecond), resp.InputTokens, resp.OutputTokens)
+	} else {
+		l.Infof("[%s/%s] %s (in=%d out=%d%s)", l.provider.GetBackend(), model, duration.Round(time.Millisecond), resp.InputTokens, resp.OutputTokens, formatCost(sess))
+	}
+
 	return resp, nil
+}
+
+func formatCost(sess *Session) string {
+	if sess == nil {
+		return ""
+	}
+	cost := sess.Costs.Sum().TotalCost()
+	if cost <= 0 {
+		return ""
+	}
+	return fmt.Sprintf(" $%.4f", cost)
 }
 
 // WithLogging returns a middleware option that adds logging capabilities

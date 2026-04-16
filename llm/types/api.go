@@ -1,6 +1,8 @@
 package types
 
 import (
+	"net/http"
+
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -40,6 +42,7 @@ type ProviderRequest struct {
 	Model            string
 	APIKey           string
 	APIURL           string
+	HTTPClient       *http.Client
 }
 
 // ProviderResponse contains the raw response from an LLM provider.

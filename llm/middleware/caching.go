@@ -94,7 +94,7 @@ func (c *cachingProvider) Execute(sess *Session, req ProviderRequest) (ProviderR
 		// Cache error
 		return ProviderResponse{}, fmt.Errorf("failed to get cache: %w", err)
 	}
-	logger.Infof("[%s/%s] cache miss", c.GetBackend(), req.Model)
+	logger.Infof("[%s/%s] cache miss", c.GetBackend(), c.GetModel())
 
 	// Cache miss - execute request
 	startTime := time.Now()

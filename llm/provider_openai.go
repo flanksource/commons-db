@@ -25,7 +25,10 @@ func executeOpenAI(sess *Session, req ProviderRequest) (ProviderResponse, error)
 		opts = append(opts, option.WithBaseURL(req.APIURL))
 	}
 
-	// Create OpenAI client
+	if req.HTTPClient != nil {
+		opts = append(opts, option.WithHTTPClient(req.HTTPClient))
+	}
+
 	client := openai.NewClient(opts...)
 
 	// Set default model if not provided

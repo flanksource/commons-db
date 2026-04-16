@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/llm/middleware"
 	"github.com/flanksource/commons-db/llm/types"
 	flanksourcecontext "github.com/flanksource/commons/context"
+	"github.com/flanksource/commons/logger"
 )
 
 const AgentTypeLLM ai.AgentType = "llm"
@@ -57,6 +58,7 @@ func NewLLMAgent(config ai.AgentConfig) (*LLMAgent, error) {
 	}
 
 	middlewares := []middleware.Option{
+		middleware.WithHTTPLogging(logger.Trace, logger.Trace2),
 		middleware.WithDefaultLogging(),
 	}
 

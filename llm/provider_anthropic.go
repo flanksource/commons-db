@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	. "github.com/flanksource/commons-db/llm/types"
+	"github.com/flanksource/commons/logger"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/anthropic"
 )
@@ -27,7 +28,10 @@ func executeAnthropic(sess *Session, req ProviderRequest) (ProviderResponse, err
 		opts = append(opts, anthropic.WithModel(req.Model))
 	}
 
-	// Create Anthropic client
+	if req.HTTPClient != nil {
+		opts = append(opts, anthropic.WithHTTPClient(req.HTTPClient))
+	}
+
 	client, err := anthropic.New(opts...)
 	if err != nil {
 		return ProviderResponse{}, fmt.Errorf("failed to create Anthropic client: %w", err)
@@ -73,12 +77,14 @@ func executeAnthropic(sess *Session, req ProviderRequest) (ProviderResponse, err
 	// Handle structured output
 	var structuredData interface{}
 	if req.StructuredOutput != nil {
-		// Use cleanup to handle markdown, extra text, etc.
+		logger.Tracef("[anthropic] raw response for structured output:\n%s", text)
 		if err := UnmarshalWithCleanup(text, req.StructuredOutput); err != nil {
+			logger.Debugf("[anthropic] structured output unmarshal failed, raw text=%q", text)
 			return ProviderResponse{}, fmt.Errorf("%w: %v", ErrSchemaValidation, err)
 		}
+		logger.Debugf("[anthropic] structured output parsed from %d chars", len(text))
 		structuredData = req.StructuredOutput
-		text = "" // Clear text when structured output is used
+		text = ""
 	}
 
 	// Extract token usage from generation info

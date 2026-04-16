@@ -33,7 +33,7 @@ func NewClientWithModel(model string, options ...middleware.Option) (Client, err
 		return nil, fmt.Errorf("model cannot be empty")
 	}
 
-	if os.Getenv("MOCK") != "false" {
+	if os.Getenv("MOCK") == "true" {
 		return &directClient{provider: NewMockProvider(model)}, nil
 	}
 
