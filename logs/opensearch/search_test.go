@@ -215,3 +215,68 @@ func TestParseSearchResponseWithJSONFields(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSearchResponseWithAggregations(t *testing.T) {
+	searcher := &Searcher{}
+
+	aggs := map[string]any{
+		"operations": map[string]any{
+			"doc_count_error_upper_bound": float64(0),
+			"sum_other_doc_count":         float64(0),
+			"buckets": []any{
+				map[string]any{"key": "asfile.SCO", "doc_count": float64(42)},
+				map[string]any{"key": "asfile.VPM", "doc_count": float64(17)},
+			},
+		},
+	}
+
+	response := Response{
+		Hits: HitsInfo{
+			Hits: []SearchHit{
+				{ID: "hit-1", Source: map[string]any{"message": "first"}},
+			},
+		},
+		Aggregations: aggs,
+	}
+
+	ctx := dutyContext.New()
+	result := searcher.parseSearchResponse(ctx, response)
+
+	if result.Metadata == nil {
+		t.Fatal("expected Metadata to be populated with aggregations, got nil")
+	}
+
+	got, ok := result.Metadata["aggregations"]
+	if !ok {
+		t.Fatal("expected Metadata[\"aggregations\"] to be set")
+	}
+
+	if !reflect.DeepEqual(got, aggs) {
+		t.Errorf("aggregation round-trip mismatch:\nwant: %#v\ngot:  %#v", aggs, got)
+	}
+
+	if len(result.Logs) != 1 || result.Logs[0].ID != "hit-1" {
+		t.Errorf("expected aggregation handling not to disturb hits parsing, got %+v", result.Logs)
+	}
+}
+
+func TestParseSearchResponseWithoutAggregations(t *testing.T) {
+	searcher := &Searcher{}
+
+	response := Response{
+		Hits: HitsInfo{
+			Hits: []SearchHit{
+				{ID: "hit-1", Source: map[string]any{"message": "first"}},
+			},
+		},
+	}
+
+	ctx := dutyContext.New()
+	result := searcher.parseSearchResponse(ctx, response)
+
+	if result.Metadata != nil {
+		if _, ok := result.Metadata["aggregations"]; ok {
+			t.Errorf("expected no aggregations metadata when response has none, got %v", result.Metadata)
+		}
+	}
+}

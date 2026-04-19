@@ -74,10 +74,11 @@ func (t *HitsInfo) NextPage(requestedRowsCount int) string {
 }
 
 type Response struct {
-	Took     float64  `json:"took"`
-	TimedOut bool     `json:"timed_out"`
-	Hits     HitsInfo `json:"hits"`
-	ScrollID string   `json:"_scroll_id,omitempty"`
+	Took         float64        `json:"took"`
+	TimedOut     bool           `json:"timed_out"`
+	Hits         HitsInfo       `json:"hits"`
+	ScrollID     string         `json:"_scroll_id,omitempty"`
+	Aggregations map[string]any `json:"aggregations,omitempty"`
 }
 
 type SearchHit struct {

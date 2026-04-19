@@ -266,6 +266,13 @@ func (t *Searcher) parseSearchResponse(ctx context.Context, r Response) *logs.Lo
 	var logResult = logs.LogResult{}
 	logResult.Logs = make([]*logs.LogLine, 0, len(r.Hits.Hits))
 
+	if len(r.Aggregations) > 0 {
+		if logResult.Metadata == nil {
+			logResult.Metadata = make(map[string]any)
+		}
+		logResult.Metadata["aggregations"] = r.Aggregations
+	}
+
 	mappingConfig := DefaultFieldMappingConfig
 	if t.mappingConfig != nil {
 		mappingConfig = t.mappingConfig.WithDefaults(DefaultFieldMappingConfig)
