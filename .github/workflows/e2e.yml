@@ -72,8 +72,7 @@ jobs:
 
       - name: Run E2E tests with Ginkgo
         run: |
-          go install github.com/onsi/ginkgo/v2/ginkgo@latest
-          ginkgo run -v --timeout=10m --poll-progress-after=1m ./e2e
+          go run github.com/onsi/ginkgo/v2/ginkgo run -v --timeout=10m --poll-progress-after=1m ./e2e
         env:
           CGO_ENABLED: 1
         continue-on-error: false
@@ -143,8 +142,7 @@ jobs:
 
       - name: Run E2E tests with verbose output
         run: |
-          go install github.com/onsi/ginkgo/v2/ginkgo@latest
-          ginkgo run -v -r --timeout=10m --poll-progress-after=1m ./e2e
+          go run github.com/onsi/ginkgo/v2/ginkgo run -v -r --timeout=10m --poll-progress-after=1m ./e2e
         env:
           CGO_ENABLED: 1
 
