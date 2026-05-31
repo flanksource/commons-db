@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons/logger"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/samber/lo"
@@ -260,7 +261,7 @@ func (c *Cache) Clear() error {
 
 	rows, _ := result.RowsAffected()
 	if c.config.Debug {
-		fmt.Fprintf(os.Stderr, "Cleared %d cache entries\n", rows)
+		fmt.Fprintf(task.GatedStderr(), "Cleared %d cache entries\n", rows)
 	}
 
 	return nil
@@ -347,13 +348,13 @@ func (c *Cache) cleanupExpired() {
 		result, err := c.db.Exec(query)
 		if err != nil {
 			if c.config.Debug {
-				fmt.Fprintf(os.Stderr, "Failed to cleanup expired entries: %v\n", err)
+				fmt.Fprintf(task.GatedStderr(), "Failed to cleanup expired entries: %v\n", err)
 			}
 			continue
 		}
 
 		if rows, _ := result.RowsAffected(); rows > 0 && c.config.Debug {
-			fmt.Fprintf(os.Stderr, "Cleaned up %d expired cache entries\n", rows)
+			fmt.Fprintf(task.GatedStderr(), "Cleaned up %d expired cache entries\n", rows)
 		}
 	}
 }

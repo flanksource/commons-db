@@ -157,7 +157,11 @@ func (l *SqlLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 				level = l.baseLevel + commons.Debug
 			}
 		case "create", "alter", "drop":
-			level = l.baseLevel
+			if strings.Contains(strings.ToLower(sql), "index") {
+				level = l.baseLevel + commons.Debug
+			} else {
+				level = l.baseLevel
+			}
 		default:
 			level = l.baseLevel + commons.Debug
 		}
