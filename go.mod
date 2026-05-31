@@ -27,10 +27,10 @@ require (
 	github.com/exaring/otelpgx v0.9.3
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/flanksource/clicky v1.21.8
-	github.com/flanksource/commons v1.51.0
+	github.com/flanksource/commons v1.52.0
 	github.com/flanksource/deps v1.0.26
-	github.com/flanksource/gomplate/v3 v3.24.77
-	github.com/flanksource/is-healthy v1.0.86
+	github.com/flanksource/gomplate/v3 v3.24.81
+	github.com/flanksource/is-healthy v1.0.87
 	github.com/go-git/go-git/v5 v5.16.3
 	github.com/golang-jwt/jwt/v5 v5.3.0
 	github.com/google/cel-go v0.27.0
