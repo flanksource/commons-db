@@ -23,7 +23,7 @@ on:
       - "go.sum"
 
 env:
-  GO_VERSION: "1.22"
+  GO_VERSION: "1.26"
 
 jobs:
   e2e-tests:
@@ -32,7 +32,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        go-version: ["1.22"]
+        go-version: ["1.26"]
     timeout-minutes: 30
 
     steps:
@@ -73,7 +73,7 @@ jobs:
       - name: Run E2E tests with Ginkgo
         run: |
           go install github.com/onsi/ginkgo/v2/ginkgo@latest
-          ginkgo -v ./e2e --timeout=10m --poll-progress-after=1m
+          ginkgo run -v --timeout=10m --poll-progress-after=1m ./e2e
         env:
           CGO_ENABLED: 1
         continue-on-error: false
@@ -91,14 +91,14 @@ jobs:
 
       - name: Upload coverage reports
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: e2e-coverage-${{ matrix.os }}
           path: coverage-e2e.*
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: e2e-test-results-${{ matrix.os }}
           path: |
@@ -137,14 +137,14 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
-          go-version: "1.22"
+          go-version: "1.26"
           cache: true
           cache-dependency-path: go.sum
 
       - name: Run E2E tests with verbose output
         run: |
           go install github.com/onsi/ginkgo/v2/ginkgo@latest
-          ginkgo -v -r ./e2e --timeout=10m --poll-progress-after=1m
+          ginkgo run -v -r --timeout=10m --poll-progress-after=1m ./e2e
         env:
           CGO_ENABLED: 1
 
