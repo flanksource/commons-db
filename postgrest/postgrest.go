@@ -6,8 +6,8 @@ import (
 	"strconv"
 
 	"github.com/flanksource/clicky/exec"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons-db/api"
+	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/deps"
 )
 
