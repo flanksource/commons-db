@@ -4,19 +4,26 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
-	"os/exec"
+	"strconv"
 	"time"
+
+	"github.com/flanksource/commons-db/db"
 )
 
+// ServiceManager starts the native services the e2e suite depends on.
+//
+// Only Postgres is started for real (via db.StartEmbedded). The other
+// services (Redis, OpenSearch, Loki, LocalStack) are not yet implemented;
+// the current e2e specs only assert on their connection-URL strings and on
+// locally-generated fixture data, so no live instance is required. Their
+// URL/port accessors remain so those specs keep compiling.
 type ServiceManager struct {
-	postgresCmd   *exec.Cmd
-	redisCmd      *exec.Cmd
-	opensearchCmd *exec.Cmd
-	lokiCmd       *exec.Cmd
-	localstackCmd *exec.Cmd
+	postgresDSN  string
+	postgresPort int
+	postgresStop func() error
 
-	postgresPort   int
 	redisPort      int
 	opensearchPort int
 	lokiPort       int
@@ -27,7 +34,6 @@ type ServiceManager struct {
 
 func NewServiceManager() *ServiceManager {
 	return &ServiceManager{
-		postgresPort:   5432,
 		redisPort:      6379,
 		opensearchPort: 9200,
 		lokiPort:       3100,
@@ -42,25 +48,8 @@ func (sm *ServiceManager) StartAll(ctx context.Context) error {
 	}
 	sm.tmpDir = tmpDir
 
-	// Start services in order
-	if err := sm.startPostgres(ctx); err != nil {
+	if err := sm.startPostgres(); err != nil {
 		return fmt.Errorf("failed to start postgres: %w", err)
-	}
-
-	if err := sm.startRedis(ctx); err != nil {
-		return fmt.Errorf("failed to start redis: %w", err)
-	}
-
-	if err := sm.startOpenSearch(ctx); err != nil {
-		return fmt.Errorf("failed to start opensearch: %w", err)
-	}
-
-	if err := sm.startLoki(ctx); err != nil {
-		return fmt.Errorf("failed to start loki: %w", err)
-	}
-
-	if err := sm.startLocalStack(ctx); err != nil {
-		return fmt.Errorf("failed to start localstack: %w", err)
 	}
 
 	return nil
@@ -69,24 +58,10 @@ func (sm *ServiceManager) StartAll(ctx context.Context) error {
 func (sm *ServiceManager) StopAll(ctx context.Context) error {
 	var errs []error
 
-	if sm.postgresCmd != nil && sm.postgresCmd.Process != nil {
-		_ = sm.postgresCmd.Process.Kill()
-	}
-
-	if sm.redisCmd != nil && sm.redisCmd.Process != nil {
-		_ = sm.redisCmd.Process.Kill()
-	}
-
-	if sm.opensearchCmd != nil && sm.opensearchCmd.Process != nil {
-		_ = sm.opensearchCmd.Process.Kill()
-	}
-
-	if sm.lokiCmd != nil && sm.lokiCmd.Process != nil {
-		_ = sm.lokiCmd.Process.Kill()
-	}
-
-	if sm.localstackCmd != nil && sm.localstackCmd.Process != nil {
-		_ = sm.localstackCmd.Process.Kill()
+	if sm.postgresStop != nil {
+		if err := sm.postgresStop(); err != nil {
+			errs = append(errs, fmt.Errorf("stop postgres: %w", err))
+		}
 	}
 
 	if sm.tmpDir != "" {
@@ -102,77 +77,39 @@ func (sm *ServiceManager) StopAll(ctx context.Context) error {
 	return nil
 }
 
+// AllHealthy reports whether every service StartAll actually started is
+// reachable. Only Postgres is started today, so only Postgres is checked.
 func (sm *ServiceManager) AllHealthy() bool {
-	return sm.isPostgresHealthy() && sm.isRedisHealthy() && sm.isOpenSearchHealthy() && sm.isLokiHealthy() && sm.isLocalStackHealthy()
+	return sm.isPostgresHealthy()
 }
 
-func (sm *ServiceManager) startPostgres(ctx context.Context) error {
-	if !sm.isPortAvailable(sm.postgresPort) {
-		return fmt.Errorf("postgres port %d not available", sm.postgresPort)
+func (sm *ServiceManager) startPostgres() error {
+	dsn, stop, err := db.StartEmbedded(db.EmbeddedConfig{
+		DataDir:  sm.tmpDir,
+		Database: "test",
+		Port:     0,
+	})
+	if err != nil {
+		return err
 	}
 
-	// TODO: Implement postgres startup using embedded binaries from deps
-	// This is a placeholder that would use zonky postgres binaries
-	return nil
-}
-
-func (sm *ServiceManager) startRedis(ctx context.Context) error {
-	if !sm.isPortAvailable(sm.redisPort) {
-		return fmt.Errorf("redis port %d not available", sm.redisPort)
+	port, err := portFromDSN(dsn)
+	if err != nil {
+		_ = stop()
+		return err
 	}
 
-	// TODO: Implement redis startup
-	return nil
-}
-
-func (sm *ServiceManager) startOpenSearch(ctx context.Context) error {
-	if !sm.isPortAvailable(sm.opensearchPort) {
-		return fmt.Errorf("opensearch port %d not available", sm.opensearchPort)
-	}
-
-	// TODO: Implement opensearch startup
-	return nil
-}
-
-func (sm *ServiceManager) startLoki(ctx context.Context) error {
-	if !sm.isPortAvailable(sm.lokiPort) {
-		return fmt.Errorf("loki port %d not available", sm.lokiPort)
-	}
-
-	// TODO: Implement loki startup
-	return nil
-}
-
-func (sm *ServiceManager) startLocalStack(ctx context.Context) error {
-	if !sm.isPortAvailable(sm.localstackPort) {
-		return fmt.Errorf("localstack port %d not available", sm.localstackPort)
-	}
-
-	// TODO: Implement localstack startup
+	sm.postgresDSN = dsn
+	sm.postgresPort = port
+	sm.postgresStop = stop
 	return nil
 }
 
 func (sm *ServiceManager) isPostgresHealthy() bool {
-	return sm.isPortHealthy(sm.postgresPort)
+	return sm.postgresPort != 0 && isPortHealthy(sm.postgresPort)
 }
 
-func (sm *ServiceManager) isRedisHealthy() bool {
-	return sm.isPortHealthy(sm.redisPort)
-}
-
-func (sm *ServiceManager) isOpenSearchHealthy() bool {
-	return sm.isPortHealthy(sm.opensearchPort)
-}
-
-func (sm *ServiceManager) isLokiHealthy() bool {
-	return sm.isPortHealthy(sm.lokiPort)
-}
-
-func (sm *ServiceManager) isLocalStackHealthy() bool {
-	return sm.isPortHealthy(sm.localstackPort)
-}
-
-func (sm *ServiceManager) isPortHealthy(port int) bool {
+func isPortHealthy(port int) bool {
 	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 1*time.Second)
 	if err != nil {
 		return false
@@ -181,17 +118,21 @@ func (sm *ServiceManager) isPortHealthy(port int) bool {
 	return true
 }
 
-func (sm *ServiceManager) isPortAvailable(port int) bool {
-	conn, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
+// portFromDSN extracts the TCP port from a postgres:// DSN.
+func portFromDSN(dsn string) (int, error) {
+	u, err := url.Parse(dsn)
 	if err != nil {
-		return false
+		return 0, fmt.Errorf("parse dsn: %w", err)
 	}
-	defer conn.Close()
-	return true
+	p, err := strconv.Atoi(u.Port())
+	if err != nil {
+		return 0, fmt.Errorf("dsn port %q: %w", u.Port(), err)
+	}
+	return p, nil
 }
 
 func (sm *ServiceManager) PostgresURL() string {
-	return fmt.Sprintf("postgres://localhost:%d/test", sm.postgresPort)
+	return sm.postgresDSN
 }
 
 func (sm *ServiceManager) RedisURL() string {
