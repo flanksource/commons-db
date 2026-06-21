@@ -44,6 +44,8 @@ func (t *lokiSearcher) Search(ctx context.Context, request Request) (*logs.LogRe
 	apiURL.RawQuery = request.Params().Encode()
 
 	client := http.NewClient()
+	// Maintain HAR capture / HTTP logging for the "loki" feature.
+	connection.ApplyHTTPClientObservability(ctx, "loki", client, nil)
 
 	if t.conn.Username != nil && t.conn.Password != nil {
 		client.Auth(t.conn.Username.ValueStatic, t.conn.Password.ValueStatic)

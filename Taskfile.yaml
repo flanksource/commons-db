@@ -42,6 +42,31 @@ tasks:
     cmds:
       - go build ./...
 
+  www:install:
+    desc: Install the query web UI dependencies
+    dir: cmd/query/www
+    cmds:
+      - pnpm install
+
+  www:build:
+    desc: Build the query web UI into cmd/query/www/dist (embedded by go:embed)
+    dir: cmd/query/www
+    deps: [www:install]
+    cmds:
+      - pnpm build
+
+  query:build:
+    desc: Build the query binary with the embedded web UI
+    deps: [www:build]
+    cmds:
+      - mkdir -p {{.LOCALBIN}}
+      - go build -o {{.LOCALBIN}}/query ./cmd/query
+
+  query:serve:
+    desc: Run the query app in dev mode (Vite dev server proxied through the binary)
+    cmds:
+      - go run ./cmd/query serve --dev
+
   controller-gen:
     desc: Download controller-gen locally if necessary
     cmds:

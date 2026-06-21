@@ -11,6 +11,7 @@ import (
 	opensearch "github.com/opensearch-project/opensearch-go/v2"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchtransport"
 
+	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons/logger"
@@ -33,6 +34,8 @@ func (t *Searcher) GetRawClient() *opensearch.Client {
 func New(ctx context.Context, backend Backend, mappingConfig *logs.FieldMappingConfig) (*Searcher, error) {
 	cfg := opensearch.Config{
 		Addresses: []string{backend.Address},
+		// Maintain HAR capture / HTTP logging for the "opensearch" feature.
+		Transport: connection.ApplyHTTPObservability(ctx, "opensearch", nil, nil),
 	}
 
 	if ctx.Logger.V(3).Enabled() {
