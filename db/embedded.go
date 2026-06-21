@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -28,6 +29,10 @@ type EmbeddedConfig struct {
 	// Username / Password. Default to "postgres"/"postgres" — fine for the
 	// localhost-only instances this helper is meant for.
 	Username, Password string
+	// Logger receives the embedded-postgres / pg_ctl diagnostic output. Defaults
+	// to os.Stderr (the library default is os.Stdout, which would corrupt callers
+	// that write binary or structured data to stdout).
+	Logger io.Writer
 }
 
 // StartEmbedded launches a fergusstrange/embedded-postgres under cfg.DataDir
@@ -76,6 +81,12 @@ func StartEmbedded(cfg EmbeddedConfig) (dsn string, stop func() error, err error
 
 	logger.Infof("Starting embedded postgres at %s (version %s, port %d)", cfg.DataDir, pgVersion, port)
 
+	// Logger defaults to stderr (the library default is stdout, which corrupts
+	// callers that emit binary/structured data on stdout, e.g. a CLI piping a PDF).
+	pgLog := cfg.Logger
+	if pgLog == nil {
+		pgLog = os.Stderr
+	}
 	server := embeddedpostgres.NewDatabase(embeddedpostgres.DefaultConfig().
 		Port(port).
 		DataPath(dataPath).
@@ -83,7 +94,8 @@ func StartEmbedded(cfg EmbeddedConfig) (dsn string, stop func() error, err error
 		BinariesPath(filepath.Join(cfg.DataDir, "bin")).
 		Version(pgVersion).
 		Username(cfg.Username).Password(cfg.Password).
-		Database(cfg.Database))
+		Database(cfg.Database).
+		Logger(pgLog))
 
 	ownedByUs := true
 	if err := server.Start(); err != nil {

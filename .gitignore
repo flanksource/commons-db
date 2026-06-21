@@ -1,3 +1,4 @@
 .bin
 bin/
 .claude/.settings.localjson
+.ginkgo/
