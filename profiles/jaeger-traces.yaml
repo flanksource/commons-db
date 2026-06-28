@@ -1,0 +1,36 @@
+# Jaeger spans as a logs profile. The jaeger provider returns one row per span
+# (traceID/spanID/operationName/serviceName/startTime/duration + a merged tags
+# map), and the CEL columns map those onto the canonical LogsTable keys. The
+# search filters (service, lookback, limit) are provider options; per-span
+# filtering stays server-side at the Jaeger query.
+profile: Jaeger Traces
+render: logs
+provider:
+  type: jaeger
+  connection: connection://jaeger
+  options:
+    service: policy-api
+    lookback: 1h
+    limit: "200"
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+    cel: row.startTime
+  - name: level
+    label: Level
+    type: status
+    cel: "'error' in row.tags ? 'error' : 'info'"
+  - name: logger
+    label: Service
+    cel: row.serviceName
+  - name: pod
+    label: Pod
+    cel: "'k8s.pod.name' in row.tags ? row.tags['k8s.pod.name'] : ''"
+  - name: message
+    label: Operation
+    cel: row.operationName
+  - name: duration
+    label: Duration
+    type: duration
+    cel: row.duration

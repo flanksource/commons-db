@@ -1,0 +1,129 @@
+package main
+
+import (
+	"context"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/models"
+)
+
+func TestMaskedConnection(t *testing.T) {
+	got := maskedConnection(&models.Connection{
+		Type:        "postgres",
+		Namespace:   "prod",
+		URL:         "postgres://db.prod.svc.cluster.local:5432",
+		Username:    "app",
+		Password:    "supersecret",
+		Certificate: "----BEGIN CERT----abcdefgh----END----",
+	})
+	if got.URL != "postgres://db.prod.svc.cluster.local:5432" || got.Username != "app" {
+		t.Errorf("url/username should be preserved, got %+v", got)
+	}
+	if got.Password != "supe••••cret" {
+		t.Errorf("password should be mid-masked, got %q", got.Password)
+	}
+	if got.Certificate == "" || got.Certificate == "----BEGIN CERT----abcdefgh----END----" {
+		t.Errorf("certificate should be masked, got %q", got.Certificate)
+	}
+}
+
+func TestDefaultPort(t *testing.T) {
+	cases := map[string]string{"http": "80", "https": "443", "postgres": "5432", "redis": "6379", "weird": ""}
+	for scheme, want := range cases {
+		if got := defaultPort(scheme); got != want {
+			t.Errorf("defaultPort(%q) = %q, want %q", scheme, got, want)
+		}
+	}
+}
+
+func TestDialTarget(t *testing.T) {
+	cases := []struct {
+		name     string
+		url      string
+		connType string
+		wantHost string
+		wantOK   bool
+	}{
+		{"url with port", "postgres://db.local:6543", "postgres", "db.local:6543", true},
+		{"url default port", "postgres://db.local", "postgres", "db.local:5432", true},
+		{"sqlserver url", "sqlserver://u:p@db.local?database=x", "sql_server", "db.local:1433", true},
+		{
+			name:     "ado key-value dsn",
+			url:      "server=mssql.lab;user id=sa;password=YourStrong@Passw0rd;database=LAB_APP_QA;port=31433;trustServerCertificate=true",
+			connType: "sql_server",
+			wantHost: "mssql.lab:31433",
+			wantOK:   true,
+		},
+		{"ado without port", "server=mssql.lab;database=x", "sql_server", "mssql.lab:1433", true},
+		{"ado server,port", "data source=mssql.lab,31433;database=x", "sql_server", "mssql.lab:31433", true},
+		{"ado tcp prefix and instance", "server=tcp:mssql.lab\\SQLEXPRESS,1433", "sql_server", "mssql.lab:1433", true},
+		{"unparseable", "not a url or dsn", "sql_server", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			host, _, ok := dialTarget(tc.url, tc.connType)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if host != tc.wantHost {
+				t.Errorf("host = %q, want %q", host, tc.wantHost)
+			}
+		})
+	}
+}
+
+func TestTestConnectionADOReachable(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	defer func() { _ = ln.Close() }()
+
+	host, port, err := net.SplitHostPort(ln.Addr().String())
+	if err != nil {
+		t.Fatalf("split host port: %v", err)
+	}
+
+	ctx := dbcontext.NewContext(context.Background())
+	dsn := "server=" + host + ";port=" + port + ";database=x;trustServerCertificate=true"
+	res := testConnection(ctx, &models.Connection{Type: "sql_server", URL: dsn})
+	if !res.OK {
+		t.Fatalf("expected ADO DSN host reachable, got %+v", res)
+	}
+}
+
+func TestTestConnectionHTTPReachable(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	ctx := dbcontext.NewContext(context.Background())
+	res := testConnection(ctx, &models.Connection{Type: "http", URL: ts.URL})
+	if !res.OK {
+		t.Fatalf("expected reachable, got %+v", res)
+	}
+	if res.Message != "HTTP 200 OK" {
+		t.Errorf("message = %q, want HTTP 200 OK", res.Message)
+	}
+}
+
+func TestTestConnectionUnreachable(t *testing.T) {
+	ctx := dbcontext.NewContext(context.Background())
+	// Port 1 is reserved and not listening — the TCP connect must fail.
+	res := testConnection(ctx, &models.Connection{Type: "postgres", URL: "postgres://127.0.0.1:1"})
+	if res.OK {
+		t.Errorf("expected unreachable for closed port, got %+v", res)
+	}
+}
+
+func TestTestConnectionNoURL(t *testing.T) {
+	ctx := dbcontext.NewContext(context.Background())
+	if res := testConnection(ctx, &models.Connection{Type: "http"}); res.OK {
+		t.Errorf("expected failure for empty url, got %+v", res)
+	}
+}

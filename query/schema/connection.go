@@ -1,108 +1,125 @@
 package schema
 
-// Connection returns the JSON Schema for models.Connection. The base properties
-// are always present; an `allOf` of if/then branches keyed on `type` narrows the
-// relevant fields (and marks per-type requirements) for each backend, so the
-// connection form adapts to the selected type.
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/flanksource/clicky/rpc"
+	"github.com/flanksource/commons-db/types"
+)
+
+// baseConnectionForm is the minimal field set every connection shares: name and
+// namespace plus the generic properties map. The discriminator `type` is added
+// separately (its enum is dynamic). The per-type fields (url, credentials,
+// certificate, ...) live on the provider structs (connection_providers.go) so a
+// connection only shows the fields it uses. The order= tags drive the render
+// order (emitted as x-clicky-order, sorted by clicky-ui).
+type baseConnectionForm struct {
+	Name       string              `json:"name"       clicky:"title=Name,order=0,required"`
+	Namespace  string              `json:"namespace"  clicky:"type=k8s-namespace-selector,title=Namespace,order=1"`
+	Properties types.JSONStringMap `json:"properties" clicky:"title=Properties,order=7"`
+}
+
+// Connection returns the JSON Schema for the connection form. A minimal base
+// (name/namespace/type/properties) is always present; an `allOf` of if/then
+// branches keyed on `type` adds the per-type fields for the backends modelled in
+// connection_providers.go, so the form adapts to the selected type. The
+// `x-discriminator` hint tells clicky-ui to render the `type` picker (an icon
+// grid, via x-enum-icons) first, then the matched type's form.
 func Connection() Schema {
-	base := Schema{
-		"name":         Schema{"type": "string", "title": "Name"},
-		"namespace":    Schema{"type": "string", "title": "Namespace"},
-		"type":         Schema{"type": "string", "title": "Type", "enum": connectionTypeEnum()},
-		"url":          Schema{"type": "string", "title": "URL"},
-		"username":     Schema{"type": "string", "title": "Username"},
-		"password":     Schema{"type": "string", "title": "Password", "format": "password"},
-		"certificate":  Schema{"type": "string", "title": "Certificate"},
-		"insecure_tls": Schema{"type": "boolean", "title": "Insecure TLS"},
-		"properties": Schema{
-			"type":                 "object",
-			"title":                "Properties",
-			"additionalProperties": Schema{"type": "string"},
-		},
+	flat := reflectStruct(baseConnectionForm{})
+	props := Schema{}
+	for name, raw := range flat["properties"].(map[string]any) {
+		props[name] = Schema(raw.(map[string]any))
+	}
+	props["type"] = Schema{
+		"type":           "string",
+		"title":          "Type",
+		"enum":           connectionTypeEnum(),
+		"x-enum-icons":   connectionTypeIcons,
+		"x-enum-display": "grid",
 	}
 
-	allOf := make([]any, 0, len(connectionTypes))
-	for _, spec := range connectionTypes {
-		allOf = append(allOf, connectionBranch(spec))
+	var allOf []any
+	for _, typ := range allConnectionTypes {
+		if cfg, ok := tailoredProviders[typ]; ok {
+			allOf = append(allOf, tailoredBranch(typ, cfg))
+		}
 	}
 
 	return Schema{
-		"$schema":    Draft,
-		"title":      "Connection",
-		"type":       "object",
-		"required":   []string{"name", "type"},
-		"properties": base,
-		"allOf":      allOf,
+		"$schema":         Draft,
+		"title":           "Connection",
+		"type":            "object",
+		"required":        []string{"name", "type"},
+		"properties":      props,
+		"x-discriminator": "type",
+		"allOf":           allOf,
 	}
 }
 
-// connectionBranch builds one `{if: type==X, then: {...}}` conditional for a
-// connection type, narrowing base fields and (for property-backed fields) the
-// nested `properties` object.
-func connectionBranch(spec connTypeSpec) Schema {
-	props := Schema{}
-	var required []string
-	propProps := Schema{}
-	var propRequired []string
+// tailoredBranch builds one `{if: type==X, then: {...}}` conditional by reflecting
+// a provider struct: top-level fields land in `then.properties`, `property=`-tagged
+// fields nest under the `properties` object (the connection's Properties map).
+func tailoredBranch(typ string, cfg any) Schema {
+	flat := reflectStruct(cfg)
 
-	for _, f := range spec.Fields {
-		fs := fieldSchema(f)
-		if f.Property != "" {
-			propProps[f.Property] = fs
-			if f.Required {
-				propRequired = append(propRequired, f.Property)
-			}
+	props := Schema{}
+	propProps := Schema{}
+	for name, raw := range flat["properties"].(map[string]any) {
+		fs := Schema(raw.(map[string]any))
+		if key, ok := fs["x-clicky-property"].(string); ok {
+			delete(fs, "x-clicky-property")
+			propProps[key] = fs
 			continue
 		}
-		props[f.Base] = fs
-		if f.Required {
-			required = append(required, f.Base)
-		}
+		props[name] = fs
 	}
 
 	if len(propProps) > 0 {
-		propsObj := Schema{"type": "object", "title": "Properties", "properties": propProps}
-		if len(propRequired) > 0 {
-			propsObj["required"] = propRequired
-		}
-		props["properties"] = propsObj
+		props["properties"] = Schema{"type": "object", "title": "Properties", "properties": propProps}
 	}
 
 	then := Schema{}
 	if len(props) > 0 {
 		then["properties"] = props
 	}
-	if len(required) > 0 {
-		then["required"] = required
+	if req := stringSlice(flat["required"]); len(req) > 0 {
+		then["required"] = req
 	}
 
 	return Schema{
 		"if": Schema{
-			"properties": Schema{"type": Schema{"const": spec.Type}},
+			"properties": Schema{"type": Schema{"const": typ}},
 			"required":   []string{"type"},
 		},
 		"then": then,
 	}
 }
 
-// fieldSchema converts a connField to its property subschema.
-func fieldSchema(f connField) Schema {
-	typ := f.Type
-	if typ == "" {
-		typ = "string"
+// reflectStruct reflects a provider struct into a Schema map via clicky, honoring
+// the clicky:"..." widget tags and the EnvVar SchemaDescriber.
+func reflectStruct(cfg any) Schema {
+	b, err := json.Marshal(rpc.SchemaForStruct(cfg))
+	if err != nil {
+		panic(fmt.Sprintf("reflect connection provider %T: %v", cfg, err))
 	}
-	s := Schema{"type": typ}
-	if f.Label != "" {
-		s["title"] = f.Label
+	var m Schema
+	if err := json.Unmarshal(b, &m); err != nil {
+		panic(fmt.Sprintf("decode connection provider %T: %v", cfg, err))
 	}
-	if f.Description != "" {
-		s["description"] = f.Description
+	return m
+}
+
+// stringSlice converts a reflected JSON []any of strings to []string.
+func stringSlice(v any) []string {
+	raw, ok := v.([]any)
+	if !ok {
+		return nil
 	}
-	if f.Format != "" {
-		s["format"] = f.Format
+	out := make([]string, len(raw))
+	for i, e := range raw {
+		out[i] = e.(string)
 	}
-	if len(f.Enum) > 0 {
-		s["enum"] = f.Enum
-	}
-	return s
+	return out
 }

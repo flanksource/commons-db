@@ -1,0 +1,19 @@
+profile: SQL Users
+provider:
+  type: postgres
+  options:
+    url: postgres://postgres:postgres@localhost:56729/postgres?sslmode=disable
+query: |
+  SELECT 'u1' AS id, 'Alice' AS name, 'alice@example.com' AS email
+  UNION ALL SELECT 'u2', 'Bob', 'bob@example.com'
+  UNION ALL SELECT 'u3', 'Carol', 'carol@example.com'
+columns:
+  - name: id
+    label: ID
+    type: string
+  - name: name
+    label: Name
+    type: string
+  - name: email
+    label: Email
+    type: string

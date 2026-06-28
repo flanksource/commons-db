@@ -4,32 +4,28 @@ import (
 	gocontext "context"
 	"fmt"
 	"net/http"
-	"net/http/httputil"
-	"net/url"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/cmd/query/www"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/models"
 	"github.com/spf13/cobra"
+	"k8s.io/client-go/kubernetes"
 )
 
 type serveOptions struct {
-	host        string
-	port        int
-	profilesDir string
-	dataDir     string
-	dev         bool
-	devURL      string
+	host    string
+	port    int
+	dataDir string
+	dev     bool
 }
 
 func newServeCmd() *cobra.Command {
-	o := serveOptions{host: "localhost", port: 8080, profilesDir: "./profiles", dataDir: ".query/pg", devURL: "http://localhost:5173"}
+	o := serveOptions{host: "localhost", port: 8080, dataDir: ".query/pg"}
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the query web app (connections, profiles, execution)",
@@ -40,10 +36,8 @@ func newServeCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&o.host, "host", o.host, "Host to bind")
 	f.IntVarP(&o.port, "port", "p", o.port, "Port to bind")
-	f.StringVar(&o.profilesDir, "profiles-dir", o.profilesDir, "Directory of profile YAML files")
 	f.StringVar(&o.dataDir, "data-dir", o.dataDir, "Embedded postgres data directory")
-	f.BoolVar(&o.dev, "dev", o.dev, "Proxy the UI to a running Vite dev server")
-	f.StringVar(&o.devURL, "dev-url", o.devURL, "Vite dev server URL (with --dev)")
+	f.BoolVar(&o.dev, "dev", o.dev, "Spawn a Vite dev server (cmd/query/www) and proxy the UI to it")
 	return cmd
 }
 
@@ -70,16 +64,12 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 
 	appCtx := dbcontext.NewContext(ctx).WithDB(gdb, pool).WithConnectionString(dsn)
 
-	store, err := NewProfileStore(o.profilesDir)
-	if err != nil {
-		return err
-	}
-
-	// Register entities, then materialize the cobra command tree so the executor
-	// (built by NewSwaggerServer from the root command) sees them.
-	registerConnectionEntity(gdb)
-	registerProfileEntity(store)
-	clicky.GenerateCLI(cmd.Root())
+	// Entities were registered (and the cobra tree generated) by shadowInit; serve
+	// only injects the request-time dependencies they resolve lazily — the DB for
+	// connection CRUD and the DB-backed context for profile execution.
+	setDB(gdb)
+	setContext(appCtx)
+	store := currentStore()
 
 	server := rpc.NewSwaggerServer(
 		&rpc.ServeConfig{
@@ -97,18 +87,39 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
 
-	uiHandler, err := uiHandler(o)
-	if err != nil {
-		return err
+	// In --dev the binary spawns Vite and proxies the UI to it (live HMR);
+	// otherwise it serves the embedded production build.
+	var ui http.Handler
+	if o.dev {
+		proxy, cleanup, err := startViteDevProxy(ctx, o.host, o.port)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		ui = proxy
+	} else {
+		ui, err = www.Handler()
+		if err != nil {
+			return err
+		}
 	}
-	mux.Handle("/", uiHandler)
+	mux.Handle("/", ui)
 
-	// Request pipeline (outer → inner): writes → profile execution → schema
-	// content-negotiation → clicky executor + UI mux. Reads and discovery flow to
-	// clicky; mutations, execution and schemas are owned by the wrappers.
-	handler := newWriteHandler("/api/v1", gdb, store,
-		newExecHandler("/api/v1", appCtx, store,
-			newSchemaHandler("/api/v1", store, mux)))
+	// Request pipeline (outer → inner): profile execution → secret listing →
+	// schema content-negotiation → clicky executor + UI mux. Reads, discovery and
+	// all connection/profile CRUD flow through clicky entities; execution, the
+	// SecretKeySelector data source, and schemas are owned by the wrappers.
+	kube := func() (kubernetes.Interface, error) {
+		c, err := appCtx.LocalKubernetes()
+		if err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+	handler := newExecHandler("/api/v1", appCtx, store,
+		newConnectionActionsHandler("/api/v1", appCtx,
+			newSecretsHandler("/api/v1", kube,
+				newSchemaHandler("/api/v1", store, mux))))
 
 	addr := fmt.Sprintf("%s:%d", o.host, o.port)
 	httpSrv := &http.Server{
@@ -132,18 +143,4 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 		return fmt.Errorf("server: %w", err)
 	}
 	return nil
-}
-
-// uiHandler returns the SPA handler — a reverse proxy to the Vite dev server in
-// --dev mode, otherwise the embedded build.
-func uiHandler(o serveOptions) (http.Handler, error) {
-	if o.dev {
-		target, err := url.Parse(o.devURL)
-		if err != nil {
-			return nil, fmt.Errorf("invalid --dev-url: %w", err)
-		}
-		fmt.Printf("🔧 proxying UI to Vite dev server at %s\n", o.devURL)
-		return httputil.NewSingleHostReverseProxy(target), nil
-	}
-	return www.Handler()
 }

@@ -1,0 +1,36 @@
+# Kubernetes logs as a logs profile via Loki. The loki provider already returns
+# rows keyed timestamp/message (+ severity, host, source and the stream labels
+# merged in), so timestamp/message map straight through and the remaining
+# canonical columns are mapped with small CEL guards. Filtering is server-side:
+# the namespace/pod params are templated into the LogQL selector.
+profile: Kubernetes Logs
+render: logs
+provider:
+  type: loki
+  connection: connection://loki
+  options:
+    limit: "500"
+    since: 1h
+query: '{namespace="{{.params.namespace}}", pod=~"{{.params.pod}}.*"}'
+params:
+  - name: namespace
+    label: Namespace
+    type: string
+    required: true
+  - name: pod
+    label: Pod prefix
+    type: string
+    default: ""
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+  - name: level
+    label: Level
+    type: status
+    cel: 'has(row.severity) ? row.severity : "info"'
+  - name: pod
+    label: Pod
+    cel: 'has(row.pod) ? row.pod : ""'
+  - name: message
+    label: Message

@@ -1,12 +1,36 @@
 package schema
 
-import "github.com/flanksource/commons-db/query"
+import (
+	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/query"
+)
 
 // providerTypes are the registered query provider keys, used as the enum for the
 // profile-setup form's provider.type field.
 var providerTypes = []string{
 	"sql", "postgres", "mysql", "sqlserver", "clickhouse",
-	"http", "prometheus", "postgrest", "loki", "opensearch",
+	"http", "prometheus", "postgrest", "loki", "opensearch", "jaeger",
+}
+
+// providerConnectionTypes maps each profile provider type to the connection
+// type(s) it can use, so the connection picker only offers compatible
+// connections. The mapping mirrors the per-key connType registered in
+// query/providers (e.g. the generic "sql" provider accepts any SQL backend). The
+// connection lookup widget reads this off `x-clicky-connection-types` and sends
+// the eligible types as a scope filter. Note ConnectionTypeSQLServer is
+// "sql_server" — the value the connection list filters on.
+var providerConnectionTypes = map[string][]string{
+	"sql":        {models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse},
+	"postgres":   {models.ConnectionTypePostgres},
+	"mysql":      {models.ConnectionTypeMySQL},
+	"sqlserver":  {models.ConnectionTypeSQLServer},
+	"clickhouse": {models.ConnectionTypeClickHouse},
+	"http":       {models.ConnectionTypeHTTP},
+	"postgrest":  {models.ConnectionTypeHTTP},
+	"prometheus": {models.ConnectionTypePrometheus},
+	"loki":       {models.ConnectionTypeLoki},
+	"opensearch": {models.ConnectionTypeOpenSearch},
+	"jaeger":     {models.ConnectionTypeJaeger},
 }
 
 // Profile returns the profile-setup JSON Schema used to create/edit a Profile.
@@ -47,7 +71,7 @@ func Profile() Schema {
 		"required": []string{"type"},
 		"properties": Schema{
 			"type":       Schema{"type": "string", "title": "Type", "enum": providerTypes},
-			"connection": strProp("Connection", "connection://name or an inline DSN/URL"),
+			"connection": connectionProp(),
 			"options":    Schema{"type": "object", "title": "Options"},
 		},
 	}
@@ -64,6 +88,31 @@ func Profile() Schema {
 			"params":   Schema{"type": "array", "title": "Params", "items": paramDef},
 			"columns":  Schema{"type": "array", "title": "Columns", "items": columnDef},
 			"output":   Schema{"type": "array", "title": "Output", "items": Schema{"type": "string"}},
+			"render":   Schema{"type": "string", "title": "Render", "enum": []string{"table", "logs"}, "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)"},
+		},
+	}
+}
+
+// connectionProp is the provider.connection field: an x-clicky-lookup entity
+// picker over saved connections. The lookup fetches options from the connection
+// list endpoint (server-side search), scoped to the connection types valid for
+// the selected provider.type (scope.map). Single-select allows free-form entry so
+// an inline DSN/URL still commits.
+func connectionProp() Schema {
+	return Schema{
+		"type":        "string",
+		"title":       "Connection",
+		"description": "Pick a saved connection or type an inline DSN/URL",
+		"x-clicky-lookup": Schema{
+			"url":         "/api/v1/connection",
+			"filter":      "connection",
+			"searchParam": "__lookup_q",
+			"multi":       false,
+			"scope": Schema{
+				"param": "types",
+				"from":  "provider.type",
+				"map":   providerConnectionTypes,
+			},
 		},
 	}
 }
@@ -105,6 +154,9 @@ func ProfileInstance(p query.Profile) Schema {
 		"type":             "object",
 		"properties":       props,
 		"x-clicky-columns": columns,
+	}
+	if p.Render != "" {
+		s["x-clicky-render"] = p.Render
 	}
 	if len(required) > 0 {
 		s["required"] = required

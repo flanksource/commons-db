@@ -1,9 +1,21 @@
 import {
   EntityExplorerApp,
   RouterProvider,
+  ThemeProvider,
   createOperationsApiClient,
   useBrowserRouter,
 } from "@flanksource/clicky-ui";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { secretFormExtensions } from "./secretKeySelector";
+import { namespaceFormExtensions } from "./namespacePicker";
+import { connectionFormActions } from "./connectionActions";
+import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
+
+// Compose the form extensions: the namespace picker, plus the secret/workload
+// url selector (which reads the selected namespace from the form's root value).
+const formExtensions = {
+  post: [...namespaceFormExtensions.post, ...secretFormExtensions.post],
+};
 
 // The Go server (query serve) exposes:
 //   - the OpenAPI spec + executor under /api (entity discovery, list/get),
@@ -21,11 +33,34 @@ const client = createOperationsApiClient({
   openApiPath: "/api/openapi.json",
 });
 
+// EntityExplorerApp consumes both @tanstack/react-query (data fetching) and
+// clicky-ui's ThemeProvider (ThemeSwitcher) from context but provides neither
+// itself, so the host app owns the QueryClient and theme lifecycle.
+const queryClient = new QueryClient();
+
+// Explorer reads the logs-surface set (needs the QueryClient context) and wires
+// the result renderer so `render: logs` profiles present via clicky-ui LogsTable.
+function Explorer() {
+  const logsEntityNames = useLogsEntityNames();
+  return (
+    <EntityExplorerApp
+      client={client}
+      formExtensions={formExtensions}
+      formActions={connectionFormActions}
+      resultRenderer={logsResultRenderer(logsEntityNames)}
+    />
+  );
+}
+
 export function App() {
   const router = useBrowserRouter();
   return (
-    <RouterProvider adapter={router}>
-      <EntityExplorerApp client={client} />
-    </RouterProvider>
+    <QueryClientProvider client={queryClient}>
+      <ThemeProvider>
+        <RouterProvider adapter={router}>
+          <Explorer />
+        </RouterProvider>
+      </ThemeProvider>
+    </QueryClientProvider>
   );
 }
