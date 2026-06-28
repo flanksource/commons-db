@@ -46,6 +46,7 @@ const (
 	ConnectionTypeGoogleChat     = "google_chat"
 	ConnectionTypeHTTP           = "http"
 	ConnectionTypeIFTTT          = "ifttt"
+	ConnectionTypeJaeger         = "jaeger"
 	ConnectionTypeJMeter         = "jmeter"
 	ConnectionTypeKubernetes     = "kubernetes"
 	ConnectionTypeLDAP           = "ldap"

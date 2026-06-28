@@ -53,6 +53,12 @@ func (e EnvVar) IsEmpty() bool {
 	return e.ValueStatic == "" && (e.ValueFrom == nil || e.ValueFrom.IsEmpty())
 }
 
+// JSONSchema renders EnvVar as a plain string in generated schemas: its value
+// round-trips as secret://name/key, configmap://name/key, or a literal, so the
+// form stores a single string. The widget is selected per field via the
+// clicky:"type=..." struct tag. Implements clicky/rpc.SchemaDescriber.
+func (EnvVar) JSONSchema() map[string]any { return map[string]any{"type": "string"} }
+
 // +kubebuilder:object:generate=true
 type EnvVarSource struct {
 	// ServiceAccount specifies the service account whose token should be fetched

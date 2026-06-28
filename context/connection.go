@@ -249,6 +249,12 @@ func HydrateConnection(ctx Context, connection *models.Connection) (*models.Conn
 	connection.Username = strings.TrimSpace(connection.Username)
 	connection.Password = strings.TrimSpace(connection.Password)
 
+	// Expand a workload URL (svc://, ip://, proxy://, host://) picked in the
+	// connection form into a concrete address using the cluster client.
+	if connection.URL, err = ctx.expandServiceURL(connection.URL, connection.Type, connection.Namespace); err != nil {
+		return nil, err
+	}
+
 	domain := ""
 	parts := strings.Split(connection.Username, "@")
 	if len(parts) == 2 {

@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@flanksource/clicky-ui": "^0.2.20",
+    "@flanksource/icons": "1.0.60",
+    "@tanstack/react-query": "catalog:",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
@@ -18,7 +20,13 @@
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "react-grab": "catalog:",
     "typescript": "^5.7.0",
     "vite": "^6.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@flanksource/clicky-ui": "link:../../../../clicky-ui/packages/ui"
+    }
   }
 }

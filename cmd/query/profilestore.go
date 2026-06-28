@@ -17,15 +17,21 @@ type ProfileStore struct {
 	Dir string
 }
 
-// NewProfileStore opens (creating if needed) a profile store rooted at dir.
+// NewProfileStore opens (creating if needed) a profile store rooted at dir. The
+// directory is resolved to an absolute path so the load location is unambiguous
+// in logs and errors regardless of the working directory.
 func NewProfileStore(dir string) (*ProfileStore, error) {
 	if dir == "" {
 		return nil, fmt.Errorf("profiles dir is required")
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("create profiles dir %q: %w", dir, err)
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return nil, fmt.Errorf("resolve profiles dir %q: %w", dir, err)
 	}
-	return &ProfileStore{Dir: dir}, nil
+	if err := os.MkdirAll(abs, 0o755); err != nil {
+		return nil, fmt.Errorf("create profiles dir %q: %w", abs, err)
+	}
+	return &ProfileStore{Dir: abs}, nil
 }
 
 // List returns all profiles in the store, sorted by name.

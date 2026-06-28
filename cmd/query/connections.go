@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/commons-db/models"
@@ -10,21 +12,34 @@ import (
 	"gorm.io/gorm"
 )
 
-// connListOpts are the list/filter options for the connection entity.
+// connListOpts are the list/filter options for the connection entity. Types is
+// the comma-separated form used by the connection lookup to scope a picker to the
+// connection types valid for a profile's provider (e.g. sql → postgres,mysql,...).
 type connListOpts struct {
-	Type string `flag:"type" help:"Filter by connection type"`
+	Type  string `flag:"type" help:"Filter by connection type"`
+	Types string `flag:"types" help:"Filter by connection types (comma-separated)"`
 }
 
-// registerConnectionEntity registers the DB-backed connection read entity for
-// OpenAPI/CLI discovery. Mutations (create/update/delete) are served by
-// writeHandler — clicky's executor can't accept nested JSON bodies (e.g.
-// properties) — and the if/then schema is served via content negotiation.
-func registerConnectionEntity(db *gorm.DB) {
+// registerConnectionEntity registers the DB-backed connection entity with full
+// CRUD on both the CLI and over HTTP. Create/Update use the context-aware
+// handlers so they can read the raw nested JSON body (e.g. connection
+// `properties`) clicky stashes on the context via rpc.RequestFromContext, which
+// the executor would otherwise flatten to string flags. The DB is resolved
+// lazily (currentDB) because entities register before the database exists.
+func registerConnectionEntity() {
 	clicky.NewEntity[*models.Connection, connListOpts, *models.Connection]("connection").
 		List(func(o connListOpts) ([]*models.Connection, error) {
+			db, err := currentDB()
+			if err != nil {
+				return nil, err
+			}
 			return listConnections(db, o)
 		}).
 		Get(func(id string) (*models.Connection, error) {
+			db, err := currentDB()
+			if err != nil {
+				return nil, err
+			}
 			c, err := findConnection(db, id)
 			if err != nil {
 				return nil, err
@@ -32,14 +47,44 @@ func registerConnectionEntity(db *gorm.DB) {
 			redactConnection(c)
 			return c, nil
 		}).
+		CreateWithContext(func(ctx context.Context, body map[string]any) (*models.Connection, error) {
+			db, err := currentDB()
+			if err != nil {
+				return nil, err
+			}
+			b, err := nestedBody(ctx, body)
+			if err != nil {
+				return nil, err
+			}
+			return createConnection(db, b)
+		}).
+		UpdateWithContext(func(ctx context.Context, id string, body map[string]any) (*models.Connection, error) {
+			db, err := currentDB()
+			if err != nil {
+				return nil, err
+			}
+			b, err := nestedBody(ctx, body)
+			if err != nil {
+				return nil, err
+			}
+			return updateConnection(db, id, b)
+		}).
+		DeleteWithContext(func(_ context.Context, id string) error {
+			db, err := currentDB()
+			if err != nil {
+				return err
+			}
+			return deleteConnection(db, id)
+		}).
+		Filters(connectionFilter{}).
 		Register()
 }
 
-// listConnections returns redacted connections, optionally filtered by type.
+// listConnections returns redacted connections, optionally filtered by type(s).
 func listConnections(db *gorm.DB, o connListOpts) ([]*models.Connection, error) {
 	q := db.Model(&models.Connection{})
-	if o.Type != "" {
-		q = q.Where("type = ?", o.Type)
+	if types := connectionTypeFilter(o); len(types) > 0 {
+		q = q.Where("type IN ?", types)
 	}
 	var conns []*models.Connection
 	if err := q.Order("name").Find(&conns).Error; err != nil {
@@ -49,6 +94,21 @@ func listConnections(db *gorm.DB, o connListOpts) ([]*models.Connection, error) 
 		redactConnection(c)
 	}
 	return conns, nil
+}
+
+// connectionTypeFilter collects the type filter from the single `type` flag and
+// the comma-separated `types` scope used by the lookup, de-duplicating blanks.
+func connectionTypeFilter(o connListOpts) []string {
+	var types []string
+	if o.Type != "" {
+		types = append(types, o.Type)
+	}
+	for _, t := range strings.Split(o.Types, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			types = append(types, t)
+		}
+	}
+	return types
 }
 
 // createConnection inserts a new connection and returns it redacted.
@@ -111,8 +171,11 @@ func findConnection(db *gorm.DB, id string) (*models.Connection, error) {
 }
 
 // connectionFromBody decodes a request body into a Connection, failing fast on a
-// missing name or type.
+// missing name or type. The body's id is dropped: create lets the DB assign one
+// and update addresses the row by path/flag id, so a body id (which may be a name
+// on update) must never be parsed into the uuid ID field.
 func connectionFromBody(body map[string]any) (*models.Connection, error) {
+	delete(body, "id")
 	data, err := json.Marshal(body)
 	if err != nil {
 		return nil, fmt.Errorf("encode connection body: %w", err)

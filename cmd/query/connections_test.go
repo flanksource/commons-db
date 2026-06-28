@@ -1,6 +1,23 @@
 package main
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/google/uuid"
+)
+
+// TestConnectionFromBodyIgnoresID guards the update path: the body carries the id
+// (a uuid or a name) to address the row, but it must not be parsed into the uuid
+// ID field — a name like "pg-e2e" would otherwise fail with "invalid UUID length".
+func TestConnectionFromBodyIgnoresID(t *testing.T) {
+	c, err := connectionFromBody(map[string]any{"id": "pg-e2e", "name": "db", "type": "postgres"})
+	if err != nil {
+		t.Fatalf("connectionFromBody with a name id should not error: %v", err)
+	}
+	if c.ID != uuid.Nil {
+		t.Fatalf("body id must be ignored, got %v", c.ID)
+	}
+}
 
 func TestConnectionFromBody(t *testing.T) {
 	c, err := connectionFromBody(map[string]any{

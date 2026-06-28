@@ -36,7 +36,17 @@ type Profile struct {
 
 	// Output lists the render targets (e.g. table, html, xlsx, json).
 	Output []string `json:"output,omitempty" yaml:"output,omitempty"`
+
+	// Render selects how the frontend presents the result. "table" (the default,
+	// when empty) uses the generic data table; "logs" maps the columns onto the
+	// canonical LogsTable view (timestamp/level/pod/logger/thread/message, plus an
+	// optional duration column) for trace/log profiles. Filtering stays server-side
+	// via Params regardless of render mode.
+	Render string `json:"render,omitempty" yaml:"render,omitempty"`
 }
+
+// RenderLogs is the Render value that selects the canonical LogsTable presentation.
+const RenderLogs = "logs"
 
 // ProviderConfig selects a registered Provider and supplies the connection and
 // provider-specific options.

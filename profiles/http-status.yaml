@@ -1,0 +1,16 @@
+profile: HTTP Status
+provider:
+  type: http
+  connection: connection://status-api
+query: /status
+columns:
+  - name: service
+    label: Service
+    type: string
+  - name: status
+    label: Status
+    type: status
+  - name: latency_ms
+    label: Latency
+    type: number
+    format: duration

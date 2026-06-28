@@ -1,0 +1,15 @@
+profile: Prometheus Targets
+provider:
+  type: prometheus
+  connection: connection://prometheus
+query: up
+columns:
+  - name: instance
+    label: Instance
+    type: string
+  - name: job
+    label: Job
+    type: string
+  - name: value
+    label: Up
+    type: number

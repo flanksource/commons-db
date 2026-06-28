@@ -1,0 +1,45 @@
+# SQL Server trace as a logs profile: the column mapping lives in the SELECT
+# aliases, so the provider rows already carry the canonical LogsTable keys
+# (timestamp/level/pod/logger/thread/message + duration). This is the declarative
+# equivalent of the SQL Server plugin's hard-coded eventToLog(). Filtering is
+# server-side via the min_duration_us param templated into the WHERE clause.
+profile: SQL Server Trace
+render: logs
+provider:
+  type: sqlserver
+  connection: connection://app-db
+query: |
+  SELECT TOP (500)
+    start_time    AS timestamp,
+    event_name    AS level,
+    database_name AS pod,
+    login_name    AS logger,
+    session_id    AS thread,
+    statement     AS message,
+    duration      AS duration
+  FROM xe_trace_events
+  WHERE duration >= {{.params.min_duration_us}}
+  ORDER BY start_time DESC
+params:
+  - name: min_duration_us
+    label: Min duration (µs)
+    type: number
+    default: 0
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+  - name: level
+    label: Event
+    type: status
+  - name: pod
+    label: Database
+  - name: logger
+    label: User
+  - name: thread
+    label: SPID
+  - name: message
+    label: Statement
+  - name: duration
+    label: Duration
+    type: duration
