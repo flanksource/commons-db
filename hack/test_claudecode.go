@@ -18,21 +18,22 @@ type TestStructure struct {
 }
 
 func main() {
-	fmt.Println("=== Testing Claude Code CLI Provider ===\n")
+	fmt.Println("=== Testing Claude Code CLI Provider ===")
+	fmt.Println()
 
 	// Test 1: Simple text generation
 	fmt.Println("Test 1: Text Generation")
 	fmt.Println("-----------------------")
 	testTextGeneration()
 
-	fmt.Println("\n")
+	fmt.Println()
 
 	// Test 2: Structured output
 	fmt.Println("Test 2: Structured Output")
 	fmt.Println("-------------------------")
 	testStructuredOutput()
 
-	fmt.Println("\n")
+	fmt.Println()
 
 	// Test 3: Error handling - timeout
 	fmt.Println("Test 3: Timeout Handling")

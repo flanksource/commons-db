@@ -5,28 +5,29 @@ on:
     branches:
       - main
 
-permissions:
-  contents: write
+permissions: read-all
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
 
       - name: Calculate next version
         id: version
-        uses: charlesthomas/github-action-svu@v1.1.4+3.2.3
+        uses: charlesthomas/github-action-svu@da0337f57ff7d77c58363c32e9f863bfb01c0098 # v1.1.4+3.2.3
         with:
           cmd: patch
           pushTag: true
 
       - name: Create GitHub Release
         if: steps.version.outputs.changed == 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ steps.version.outputs.next }}
           generate_release_notes: true
