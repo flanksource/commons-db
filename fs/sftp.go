@@ -11,6 +11,7 @@ import (
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 type sshFS struct {
@@ -27,14 +28,36 @@ func (t *sshFileInfo) FullPath() string {
 	return t.fullpath
 }
 
+func knownHostKeyCallback() (ssh.HostKeyCallback, error) {
+	knownHostsPath := os.Getenv("SSH_KNOWN_HOSTS")
+	if knownHostsPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, fmt.Errorf("failed to locate home directory for SSH known_hosts: %w", err)
+		}
+		knownHostsPath = filepath.Join(home, ".ssh", "known_hosts")
+	}
+
+	callback, err := knownhosts.New(knownHostsPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load SSH known_hosts file %q: %w", knownHostsPath, err)
+	}
+
+	return callback, nil
+}
+
 func NewSFTPFS(host, user, password string) (*sshFS, error) {
-	// Inline SSHConnect logic
+	hostKeyCallback, err := knownHostKeyCallback()
+	if err != nil {
+		return nil, err
+	}
+
 	config := &ssh.ClientConfig{
 		User: user,
 		Auth: []ssh.AuthMethod{
 			ssh.Password(password),
 		},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 	}
 
 	conn, err := ssh.Dial("tcp", host, config)

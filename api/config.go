@@ -1,7 +1,7 @@
 package api
 
 import (
-	"crypto/md5"
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"net/url"
@@ -75,9 +75,9 @@ func PrintableSecret(secret string) string {
 	if len(secret) == 0 {
 		return "<nil>"
 	} else if len(secret) > 30 {
-		sum := md5.Sum([]byte(secret))
+		sum := sha256.Sum256([]byte(secret))
 		hash := hex.EncodeToString(sum[:])
-		return fmt.Sprintf("md5(%s),length=%d", hash[0:8], len(secret))
+		return fmt.Sprintf("sha256(%s),length=%d", hash[0:8], len(secret))
 	} else if len(secret) > 16 {
 		return fmt.Sprintf("%s****%s", secret[0:1], secret[len(secret)-2:])
 	} else if len(secret) > 10 {

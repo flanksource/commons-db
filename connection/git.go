@@ -4,13 +4,15 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/utils"
-	"github.com/flanksource/commons-db/context"
 	"github.com/samber/lo"
 
 	git "github.com/go-git/go-git/v5"
@@ -22,6 +24,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	ssh2 "golang.org/x/crypto/ssh"
+	"golang.org/x/crypto/ssh/knownhosts"
 )
 
 const (
@@ -301,7 +304,10 @@ func CreateGitConfig(ctx context.Context, conn *GitConnection) (*GitClient, erro
 		if err != nil {
 			return nil, ctx.Oops().Wrapf(err, "failed to create public keys")
 		}
-		publicKeys.HostKeyCallback = ssh2.InsecureIgnoreHostKey()
+		publicKeys.HostKeyCallback, err = gitKnownHostKeyCallback()
+		if err != nil {
+			return nil, ctx.Oops().Wrapf(err, "failed to load SSH known_hosts")
+		}
 		config.Auth = publicKeys
 
 	} else {
@@ -312,6 +318,18 @@ func CreateGitConfig(ctx context.Context, conn *GitConnection) (*GitClient, erro
 	}
 
 	return config, nil
+}
+
+func gitKnownHostKeyCallback() (ssh2.HostKeyCallback, error) {
+	knownHostsPath := os.Getenv("SSH_KNOWN_HOSTS")
+	if knownHostsPath == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return nil, err
+		}
+		knownHostsPath = filepath.Join(home, ".ssh", "known_hosts")
+	}
+	return knownhosts.New(knownHostsPath)
 }
 
 var azureDevopsRepoURLRegexp = regexp.MustCompile(`^https:\/\/[a-zA-Z0-9_-]+@dev\.azure\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)\/_git\/([a-zA-Z0-9_-]+)`)
