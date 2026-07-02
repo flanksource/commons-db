@@ -3,12 +3,14 @@ package connection
 import (
 	"errors"
 	"fmt"
+	netHTTP "net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons/logger"
@@ -21,11 +23,14 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
-	"github.com/go-git/go-git/v5/plumbing/transport/http"
+	gitClient "github.com/go-git/go-git/v5/plumbing/transport/client"
+	gitHTTP "github.com/go-git/go-git/v5/plumbing/transport/http"
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
 	ssh2 "golang.org/x/crypto/ssh"
 	"golang.org/x/crypto/ssh/knownhosts"
 )
+
+var gitHTTPTransportMu sync.Mutex
 
 const (
 	ServiceGithub = "github"
@@ -38,6 +43,15 @@ type GitClient struct {
 	Owner, Repo, Branch string
 	Depth               int
 	AzureDevops         bool
+}
+
+// RedactedURL returns the URL with userinfo elided, falling back to the raw URL
+// when it doesn't parse.
+func (gitClient GitClient) RedactedURL() string {
+	if uri, err := url.Parse(gitClient.URL); err == nil {
+		return uri.Redacted()
+	}
+	return gitClient.URL
 }
 
 func (gitClient GitClient) GetContext() map[string]any {
@@ -81,18 +95,25 @@ func (gitClient *GitClient) Clone(ctx context.Context, dir string) (map[string]a
 	}
 
 	ctx = ctx.WithObject(*gitClient)
-	if ctx.Logger.IsLevelEnabled(4) {
-		ctx.Logger.V(4).Infof("cloning to %s", dir)
-	} else {
-		ctx.Tracef("cloning")
+	var gitLog logger.Logger = logger.GetLogger("git")
+	if headers, bodies := ctx.HTTPLoggingContent("git"); bodies {
+		gitLog = gitLog.WithV(logger.Trace)
+	} else if headers {
+		gitLog = gitLog.WithV(logger.Debug)
 	}
+	progress := gitLog.V(2)
+	restoreGitTransport := configureGitHTTPTransport(ctx, gitClient.URL)
+	defer restoreGitTransport()
+
+	redactedURL := gitClient.RedactedURL()
+	gitLog.V(1).Infof("clone url=%s branch=%s depth=%d dir=%s", redactedURL, gitClient.Branch, gitClient.Depth, dir)
 	extra := map[string]any{
 		"git": gitClient.GetShortURL(),
 	}
 
 	repo, err := git.PlainCloneContext(ctx, dir, false, &git.CloneOptions{
 		URL:           gitClient.URL,
-		Progress:      ctx.Logger.V(4).WithFilter("Compressing objects", "Counting objects"),
+		Progress:      progress,
 		Auth:          gitClient.Auth,
 		ReferenceName: plumbing.NewBranchReferenceName(gitClient.Branch),
 		Depth:         gitClient.Depth,
@@ -109,14 +130,14 @@ func (gitClient *GitClient) Clone(ctx context.Context, dir string) (map[string]a
 			return extra, ctx.Oops().Wrapf(err, "unable to open worktree")
 		}
 
-		ctx.Logger.V(4).Infof("fetching ")
+		gitLog.V(1).Infof("fetch url=%s branch=%s depth=%d", redactedURL, gitClient.Branch, gitClient.Depth)
 		if err := repo.FetchContext(ctx, &git.FetchOptions{
-			Progress:  ctx.Logger.V(4).WithFilter("Compressing objects", "Counting objects"),
+			Progress:  progress,
 			RemoteURL: gitClient.URL,
 			Force:     true,
 			Prune:     true,
 			Auth:      gitClient.Auth,
-			Depth:     gitClient.Depth}); err != nil {
+			Depth:     gitClient.Depth}); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
 			return extra, ctx.Oops().Wrapf(err, "error during git fetch")
 		}
 
@@ -130,9 +151,9 @@ func (gitClient *GitClient) Clone(ctx context.Context, dir string) (map[string]a
 			}
 
 			for _, ref := range list {
-				if strings.HasSuffix(ref.Name().String(), gitClient.Branch) {
+				if ref.Name().Short() == gitClient.Branch {
 					refName = ref.Name()
-					ctx.Logger.V(4).Infof("found ref %s matching %s", refName, gitClient.Branch)
+					gitLog.V(2).Infof("found ref %s matching %s", refName, gitClient.Branch)
 				}
 			}
 
@@ -157,7 +178,7 @@ func (gitClient *GitClient) Clone(ctx context.Context, dir string) (map[string]a
 			if commit, err := iter.Next(); err != nil {
 				return extra, ctx.Oops().Wrapf(err, "unable to get HEAD commit")
 			} else {
-				ctx.Logger.V(4).Infof("checked out commit: %s (%s)", strings.Split(commit.Message, "\n")[0], commit.Hash.String()[0:8])
+				gitLog.Infof("checked out %s dir=%s", commit.Hash.String()[0:8], dir)
 			}
 		}
 	}
@@ -168,6 +189,7 @@ func (gitClient *GitClient) Clone(ctx context.Context, dir string) (map[string]a
 // +kubebuilder:object:generate=true
 type GitConnection struct {
 	URL         string        `yaml:"url,omitempty" json:"url,omitempty"`
+	Path        string        `yaml:"path,omitempty" json:"path,omitempty"`
 	Connection  string        `yaml:"connection,omitempty" json:"connection,omitempty"`
 	Username    *types.EnvVar `yaml:"username,omitempty" json:"username,omitempty"`
 	Password    *types.EnvVar `yaml:"password,omitempty" json:"password,omitempty"`
@@ -175,9 +197,41 @@ type GitConnection struct {
 	// Type of connection e.g. github, gitlab
 	Type   string `yaml:"type,omitempty" json:"type,omitempty"`
 	Branch string `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Depth  *int   `yaml:"depth,omitempty" json:"depth,omitempty"`
+	// Worktree creates a native git worktree for the checkout before running.
+	Worktree *GitWorktree `yaml:"worktree,omitempty" json:"worktree,omitempty"`
+	// Dirty selects local staged/unstaged/untracked changes to copy into a
+	// temporary worktree when Path is used.
+	Dirty *GitDirty `yaml:"dirty,omitempty" json:"dirty,omitempty"`
 	// Destination is the full path to where the contents of the URL should be downloaded to.
 	// If left empty, the sha256 hash of the URL will be used as the dir name.
 	Destination *string `yaml:"destination,omitempty" json:"destination,omitempty"`
+}
+
+// +kubebuilder:object:generate=true
+type GitWorktree struct {
+	Enabled bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
+	Prefix  string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
+	Branch  string `yaml:"branch,omitempty" json:"branch,omitempty"`
+	Base    string `yaml:"base,omitempty" json:"base,omitempty"`
+	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
+	Keep    bool   `yaml:"keep,omitempty" json:"keep,omitempty"`
+}
+
+func (w *GitWorktree) IsEnabled() bool {
+	return w != nil && (w.Enabled || w.Prefix != "" || w.Branch != "" || w.Base != "" || w.Path != "" || w.Keep)
+}
+
+// +kubebuilder:object:generate=true
+type GitDirty struct {
+	Staged    bool   `yaml:"staged,omitempty" json:"staged,omitempty"`
+	Unstaged  bool   `yaml:"unstaged,omitempty" json:"unstaged,omitempty"`
+	Untracked bool   `yaml:"untracked,omitempty" json:"untracked,omitempty"`
+	Since     string `yaml:"since,omitempty" json:"since,omitempty"`
+}
+
+func (d *GitDirty) IsEmpty() bool {
+	return d == nil || (!d.Staged && !d.Unstaged && !d.Untracked && d.Since == "")
 }
 
 func (git GitConnection) GetURL() types.EnvVar {
@@ -205,13 +259,13 @@ func (c *GitConnection) HydrateConnection(ctx context.Context) error {
 			return err
 		}
 		if conn != nil {
-			if conn.Username != "" {
+			if (c.Username == nil || c.Username.IsEmpty()) && conn.Username != "" {
 				c.Username = &types.EnvVar{ValueStatic: conn.Username}
 			}
-			if conn.Password != "" {
+			if (c.Password == nil || c.Password.IsEmpty()) && conn.Password != "" {
 				c.Password = &types.EnvVar{ValueStatic: conn.Password}
 			}
-			if conn.Certificate != "" {
+			if (c.Certificate == nil || c.Certificate.IsEmpty()) && conn.Certificate != "" {
 				c.Certificate = &types.EnvVar{ValueStatic: conn.Certificate}
 			}
 			if c.URL == "" {
@@ -220,7 +274,9 @@ func (c *GitConnection) HydrateConnection(ctx context.Context) error {
 		}
 	}
 
-	if uri, err := url.Parse(c.URL); err == nil {
+	if c.URL == "" && c.Path != "" {
+		// Local paths do not need URL normalization or remote auth.
+	} else if uri, err := url.Parse(c.URL); err == nil {
 		if uri.Scheme == "" {
 			uri.Scheme = "https"
 			c.URL = uri.String()
@@ -265,7 +321,7 @@ func (c *GitConnection) HydrateConnection(ctx context.Context) error {
 func CreateGitConfig(ctx context.Context, conn *GitConnection) (*GitClient, error) {
 	config := &GitClient{
 		URL:    conn.URL,
-		Depth:  1,
+		Depth:  lo.Ternary(conn.Depth == nil, 1, lo.FromPtr(conn.Depth)),
 		Branch: lo.CoalesceOrEmpty(conn.Branch, "main"),
 	}
 
@@ -311,7 +367,7 @@ func CreateGitConfig(ctx context.Context, conn *GitConnection) (*GitClient, erro
 		config.Auth = publicKeys
 
 	} else {
-		config.Auth = &http.BasicAuth{
+		config.Auth = &gitHTTP.BasicAuth{
 			Username: conn.Username.ValueStatic,
 			Password: conn.Password.ValueStatic,
 		}
