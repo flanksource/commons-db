@@ -1,0 +1,230 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "columns": {
+      "items": {
+        "properties": {
+          "cel": {
+            "description": "Expression computing the cell value from `row`",
+            "title": "CEL",
+            "type": "string"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "hidden": {
+            "title": "Hidden",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "datetime",
+              "duration",
+              "bytes",
+              "status",
+              "health"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "title": "Columns",
+      "type": "array"
+    },
+    "output": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output",
+      "type": "array"
+    },
+    "params": {
+      "items": {
+        "properties": {
+          "default": {
+            "title": "Default"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "description": "Parameter key, referenced as {{.params.\u003cname\u003e}}",
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "template": {
+            "description": "Value rewrite; {value} is the supplied value",
+            "title": "Template",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "date",
+              "enum"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "title": "Params",
+      "type": "array"
+    },
+    "profile": {
+      "description": "Profile name",
+      "title": "Name",
+      "type": "string"
+    },
+    "provider": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "enum": [
+            "sql",
+            "postgres",
+            "mysql",
+            "sqlserver",
+            "clickhouse",
+            "http",
+            "prometheus",
+            "postgrest",
+            "loki",
+            "opensearch",
+            "jaeger"
+          ],
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Provider",
+      "type": "object"
+    },
+    "query": {
+      "description": "Provider-native query; may reference {{.params.\u003cname\u003e}}",
+      "title": "Query",
+      "type": "string"
+    },
+    "render": {
+      "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)",
+      "enum": [
+        "table",
+        "logs"
+      ],
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile",
+    "provider"
+  ],
+  "title": "Profile",
+  "type": "object"
+}
