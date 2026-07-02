@@ -1,6 +1,8 @@
 package connection
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	netHTTP "net/http"
@@ -43,6 +45,9 @@ type GitClient struct {
 	Owner, Repo, Branch string
 	Depth               int
 	AzureDevops         bool
+	// TLS is the git-over-HTTPS transport config (custom CA, client
+	// certificate, insecure-skip-verify). nil leaves go-git's default TLS.
+	TLS *tls.Config
 }
 
 // RedactedURL returns the URL with userinfo elided, falling back to the raw URL
@@ -86,6 +91,46 @@ func (gitClient GitClient) LoggerName() string {
 	return gitClient.GetShortURL()
 }
 
+// configureGitHTTPTransport installs an auth/TLS-aware, logging HTTP transport
+// into go-git's process-global protocol registry for the duration of a
+// clone/fetch. It applies the connection's TLS settings (custom CA, client
+// certificate, insecure-skip-verify) and wraps the transport with
+// ApplyHTTPObservability so git-over-HTTP traffic is logged/redacted at the
+// "git" feature's effective level (BasicAuth is applied by go-git from
+// CloneOptions.Auth). It returns a restore func that reinstalls go-git's
+// default HTTP client.
+//
+// The registry is process-wide, so gitHTTPTransportMu serialises concurrent
+// HTTP clones: the lock is held until the returned restore func runs (callers
+// defer it), guaranteeing the default client is put back and never left pointing
+// at one clone's transport for another's request. Non-HTTP schemes
+// (ssh/file/git) need no HTTP transport and get a no-op restore.
+func configureGitHTTPTransport(ctx context.Context, rawURL string, tlsConfig *tls.Config) func() {
+	scheme := "https"
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "" {
+		scheme = strings.ToLower(u.Scheme)
+	}
+	if scheme != "http" && scheme != "https" {
+		return func() {}
+	}
+
+	gitHTTPTransportMu.Lock()
+
+	base := netHTTP.DefaultTransport.(*netHTTP.Transport).Clone()
+	if tlsConfig != nil {
+		base.TLSClientConfig = tlsConfig
+	}
+	httpClient := &netHTTP.Client{
+		Transport: ApplyHTTPObservability(ctx, "git", base, nil),
+	}
+	gitClient.InstallProtocol(scheme, gitHTTP.NewClient(httpClient))
+
+	return func() {
+		gitClient.InstallProtocol(scheme, gitHTTP.DefaultClient)
+		gitHTTPTransportMu.Unlock()
+	}
+}
+
 func (gitClient *GitClient) Clone(ctx context.Context, dir string) (map[string]any, error) {
 
 	if gitClient.AzureDevops {
@@ -102,7 +147,7 @@ func (gitClient *GitClient) Clone(ctx context.Context, dir string) (map[string]a
 		gitLog = gitLog.WithV(logger.Debug)
 	}
 	progress := gitLog.V(2)
-	restoreGitTransport := configureGitHTTPTransport(ctx, gitClient.URL)
+	restoreGitTransport := configureGitHTTPTransport(ctx, gitClient.URL, gitClient.TLS)
 	defer restoreGitTransport()
 
 	redactedURL := gitClient.RedactedURL()
@@ -194,6 +239,9 @@ type GitConnection struct {
 	Username    *types.EnvVar `yaml:"username,omitempty" json:"username,omitempty"`
 	Password    *types.EnvVar `yaml:"password,omitempty" json:"password,omitempty"`
 	Certificate *types.EnvVar `yaml:"certificate,omitempty" json:"certificate,omitempty"`
+	// TLS configures custom CA, client certificate and insecure-skip-verify for
+	// git-over-HTTPS. InsecureSkipVerify also skips SSH host-key verification.
+	TLS TLSConfig `yaml:"tls,omitempty" json:"tls,omitempty"`
 	// Type of connection e.g. github, gitlab
 	Type   string `yaml:"type,omitempty" json:"type,omitempty"`
 	Branch string `yaml:"branch,omitempty" json:"branch,omitempty"`
@@ -313,6 +361,22 @@ func (c *GitConnection) HydrateConnection(ctx context.Context) error {
 		c.Certificate.ValueStatic = certificate
 	}
 
+	if ca, err := ctx.GetEnvValueFromCache(c.TLS.CA, ctx.GetNamespace()); err != nil {
+		return fmt.Errorf("could not parse tls ca: %w", err)
+	} else if ca != "" {
+		c.TLS.CA.ValueStatic = ca
+	}
+	if cert, err := ctx.GetEnvValueFromCache(c.TLS.Cert, ctx.GetNamespace()); err != nil {
+		return fmt.Errorf("could not parse tls cert: %w", err)
+	} else if cert != "" {
+		c.TLS.Cert.ValueStatic = cert
+	}
+	if key, err := ctx.GetEnvValueFromCache(c.TLS.Key, ctx.GetNamespace()); err != nil {
+		return fmt.Errorf("could not parse tls key: %w", err)
+	} else if key != "" {
+		c.TLS.Key.ValueStatic = key
+	}
+
 	ctx.Logger.V(9).Infof("Hydrated GitConnection %s", logger.Pretty(*c))
 
 	return nil
@@ -360,8 +424,9 @@ func CreateGitConfig(ctx context.Context, conn *GitConnection) (*GitClient, erro
 		if err != nil {
 			return nil, ctx.Oops().Wrapf(err, "failed to create public keys")
 		}
-		publicKeys.HostKeyCallback, err = gitKnownHostKeyCallback()
-		if err != nil {
+		if conn.TLS.InsecureSkipVerify {
+			publicKeys.HostKeyCallback = ssh2.InsecureIgnoreHostKey()
+		} else if publicKeys.HostKeyCallback, err = gitKnownHostKeyCallback(); err != nil {
 			return nil, ctx.Oops().Wrapf(err, "failed to load SSH known_hosts")
 		}
 		config.Auth = publicKeys
@@ -371,9 +436,47 @@ func CreateGitConfig(ctx context.Context, conn *GitConnection) (*GitClient, erro
 			Username: conn.Username.ValueStatic,
 			Password: conn.Password.ValueStatic,
 		}
+		tlsConfig, err := buildGitHTTPSTLSConfig(conn.TLS)
+		if err != nil {
+			return nil, ctx.Oops().Wrapf(err, "failed to configure git TLS")
+		}
+		config.TLS = tlsConfig
 	}
 
 	return config, nil
+}
+
+// buildGitHTTPSTLSConfig builds a *tls.Config for git-over-HTTPS from the
+// connection's TLS settings: a custom CA (RootCAs), a client certificate for
+// mutual TLS, and/or insecure-skip-verify. Returns nil when no TLS
+// customisation is requested, leaving go-git's default transport in place.
+func buildGitHTTPSTLSConfig(t TLSConfig) (*tls.Config, error) {
+	ca := t.CA.ValueStatic
+	cert := t.Cert.ValueStatic
+	key := t.Key.ValueStatic
+	if !t.InsecureSkipVerify && ca == "" && cert == "" && key == "" {
+		return nil, nil
+	}
+
+	cfg := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify} //nolint:gosec // insecure is an explicit per-connection opt-in
+
+	if ca != "" {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(ca)) {
+			return nil, fmt.Errorf("invalid PEM CA certificate")
+		}
+		cfg.RootCAs = pool
+	}
+
+	if cert != "" && key != "" {
+		pair, err := tls.X509KeyPair([]byte(cert), []byte(key))
+		if err != nil {
+			return nil, fmt.Errorf("invalid client certificate/key: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{pair}
+	}
+
+	return cfg, nil
 }
 
 func gitKnownHostKeyCallback() (ssh2.HostKeyCallback, error) {
