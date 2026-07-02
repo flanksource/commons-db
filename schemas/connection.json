@@ -1,0 +1,945 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "clickhouse"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "url": {
+            "description": "clickhouse://user:pass@host:9000/db",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "google_cloud"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Service Account JSON",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "url": {
+            "title": "Endpoint",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          }
+        },
+        "required": [
+          "certificate"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "gcp_kms"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Service Account JSON",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "url": {
+            "title": "Endpoint",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          }
+        },
+        "required": [
+          "certificate"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "gcs"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Service Account JSON",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "url": {
+            "title": "Endpoint",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          }
+        },
+        "required": [
+          "certificate"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "git"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "SSH Private Key",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "url": {
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "http"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Certificate",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "insecure_tls": {
+            "title": "Insecure TLS",
+            "type": "boolean",
+            "x-clicky-order": 3
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "properties": {
+            "properties": {
+              "bearer": {
+                "format": "password",
+                "title": "Bearer Token",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 8
+              },
+              "clientID": {
+                "title": "OAuth Client ID",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "value",
+                "x-clicky-order": 9
+              },
+              "clientSecret": {
+                "format": "password",
+                "title": "OAuth Client Secret",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 10
+              },
+              "scopes": {
+                "title": "OAuth Scopes",
+                "type": "string",
+                "x-clicky-order": 12
+              },
+              "tokenURL": {
+                "title": "OAuth Token URL",
+                "type": "string",
+                "x-clicky-order": 11
+              }
+            },
+            "title": "Properties",
+            "type": "object"
+          },
+          "url": {
+            "description": "Base URL of the HTTP endpoint",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "jaeger"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Certificate",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "insecure_tls": {
+            "title": "Insecure TLS",
+            "type": "boolean",
+            "x-clicky-order": 3
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "properties": {
+            "properties": {
+              "bearer": {
+                "format": "password",
+                "title": "Bearer Token",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 8
+              },
+              "clientID": {
+                "title": "OAuth Client ID",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "value",
+                "x-clicky-order": 9
+              },
+              "clientSecret": {
+                "format": "password",
+                "title": "OAuth Client Secret",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 10
+              },
+              "scopes": {
+                "title": "OAuth Scopes",
+                "type": "string",
+                "x-clicky-order": 12
+              },
+              "tokenURL": {
+                "title": "OAuth Token URL",
+                "type": "string",
+                "x-clicky-order": 11
+              }
+            },
+            "title": "Properties",
+            "type": "object"
+          },
+          "url": {
+            "description": "Base URL of the HTTP endpoint",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "kubernetes"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Kubeconfig",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "loki"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Certificate",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "insecure_tls": {
+            "title": "Insecure TLS",
+            "type": "boolean",
+            "x-clicky-order": 3
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "properties": {
+            "properties": {
+              "bearer": {
+                "format": "password",
+                "title": "Bearer Token",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 8
+              },
+              "clientID": {
+                "title": "OAuth Client ID",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "value",
+                "x-clicky-order": 9
+              },
+              "clientSecret": {
+                "format": "password",
+                "title": "OAuth Client Secret",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 10
+              },
+              "scopes": {
+                "title": "OAuth Scopes",
+                "type": "string",
+                "x-clicky-order": 12
+              },
+              "tokenURL": {
+                "title": "OAuth Token URL",
+                "type": "string",
+                "x-clicky-order": 11
+              }
+            },
+            "title": "Properties",
+            "type": "object"
+          },
+          "url": {
+            "description": "Base URL of the HTTP endpoint",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "mysql"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "url": {
+            "description": "user:pass@tcp(host:3306)/db",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "opensearch"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Certificate",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "insecure_tls": {
+            "title": "Insecure TLS",
+            "type": "boolean",
+            "x-clicky-order": 3
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "properties": {
+            "properties": {
+              "bearer": {
+                "format": "password",
+                "title": "Bearer Token",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 8
+              },
+              "clientID": {
+                "title": "OAuth Client ID",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "value",
+                "x-clicky-order": 9
+              },
+              "clientSecret": {
+                "format": "password",
+                "title": "OAuth Client Secret",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 10
+              },
+              "scopes": {
+                "title": "OAuth Scopes",
+                "type": "string",
+                "x-clicky-order": 12
+              },
+              "tokenURL": {
+                "title": "OAuth Token URL",
+                "type": "string",
+                "x-clicky-order": 11
+              }
+            },
+            "title": "Properties",
+            "type": "object"
+          },
+          "url": {
+            "description": "Base URL of the HTTP endpoint",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "postgres"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "url": {
+            "description": "postgres://user:pass@host:5432/db?sslmode=disable",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "prometheus"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "certificate": {
+            "title": "Certificate",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 6
+          },
+          "insecure_tls": {
+            "title": "Insecure TLS",
+            "type": "boolean",
+            "x-clicky-order": 3
+          },
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "properties": {
+            "properties": {
+              "bearer": {
+                "format": "password",
+                "title": "Bearer Token",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 8
+              },
+              "clientID": {
+                "title": "OAuth Client ID",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "value",
+                "x-clicky-order": 9
+              },
+              "clientSecret": {
+                "format": "password",
+                "title": "OAuth Client Secret",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-order": 10
+              },
+              "scopes": {
+                "title": "OAuth Scopes",
+                "type": "string",
+                "x-clicky-order": 12
+              },
+              "tokenURL": {
+                "title": "OAuth Token URL",
+                "type": "string",
+                "x-clicky-order": 11
+              }
+            },
+            "title": "Properties",
+            "type": "object"
+          },
+          "url": {
+            "description": "Base URL of the HTTP endpoint",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "sql_server"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "properties": {
+          "password": {
+            "format": "password",
+            "title": "Password",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "secret",
+            "x-clicky-order": 5
+          },
+          "url": {
+            "description": "sqlserver://user:pass@host:1433?database=db",
+            "title": "URL",
+            "type": "string",
+            "x-clicky-component": "k8s-url-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 2
+          },
+          "username": {
+            "title": "Username",
+            "type": "string",
+            "x-clicky-component": "k8s-secret-selector",
+            "x-clicky-default-source": "value",
+            "x-clicky-order": 4
+          }
+        },
+        "required": [
+          "url"
+        ]
+      }
+    }
+  ],
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string",
+      "x-clicky-order": 0
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
+    },
+    "properties": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Properties",
+      "type": "object",
+      "x-clicky-order": 7
+    },
+    "type": {
+      "enum": [
+        "anthropic",
+        "aws",
+        "aws_kms",
+        "azure",
+        "azure_devops",
+        "azure_key_vault",
+        "clickhouse",
+        "discord",
+        "dynatrace",
+        "elasticsearch",
+        "email",
+        "folder",
+        "google_cloud",
+        "gcp_kms",
+        "gcs",
+        "gemini",
+        "generic_webhook",
+        "git",
+        "github",
+        "gitlab",
+        "google_chat",
+        "http",
+        "ifttt",
+        "jaeger",
+        "jmeter",
+        "kubernetes",
+        "ldap",
+        "loki",
+        "matrix",
+        "mattermost",
+        "mongo",
+        "mysql",
+        "ntfy",
+        "ollama",
+        "openai",
+        "opensearch",
+        "opsgenie",
+        "postgres",
+        "prometheus",
+        "pushbullet",
+        "pushover",
+        "redis",
+        "restic",
+        "rocketchat",
+        "s3",
+        "sftp",
+        "slack",
+        "slackwebhook",
+        "smb",
+        "sql_server",
+        "teams",
+        "telegram",
+        "webhook",
+        "windows",
+        "zulip_chat"
+      ],
+      "title": "Type",
+      "type": "string",
+      "x-enum-display": "grid",
+      "x-enum-icons": {
+        "anthropic": "anthropic",
+        "aws": "aws",
+        "aws_kms": "aws-kms",
+        "azure": "azure",
+        "azure_devops": "azure-devops",
+        "azure_key_vault": "azure-key-vault",
+        "clickhouse": "clickhouse",
+        "discord": "discord",
+        "dynatrace": "dynatrace",
+        "elasticsearch": "elasticsearch",
+        "email": "email",
+        "folder": "folder",
+        "gcp_kms": "gcp-kms",
+        "gcs": "gcs",
+        "gemini": "gemini",
+        "generic_webhook": "webhook",
+        "git": "git",
+        "github": "github",
+        "gitlab": "gitlab",
+        "google_chat": "google-chat",
+        "google_cloud": "google-cloud",
+        "http": "http",
+        "ifttt": "ifttt",
+        "jaeger": "jaeger",
+        "jmeter": "jmeter",
+        "kubernetes": "kubernetes",
+        "ldap": "ldap",
+        "loki": "grafana",
+        "matrix": "matrix",
+        "mattermost": "mattermost",
+        "mongo": "mongo",
+        "mysql": "mysql",
+        "ntfy": "ntfy",
+        "ollama": "ollama",
+        "openai": "openai",
+        "opensearch": "opensearch",
+        "opsgenie": "opsgenie",
+        "postgres": "postgres",
+        "prometheus": "prometheus",
+        "pushbullet": "pushbullet",
+        "pushover": "pushover",
+        "redis": "redis",
+        "restic": "restic",
+        "rocketchat": "rocket",
+        "s3": "aws-s3",
+        "sftp": "sftp",
+        "slack": "slack",
+        "slackwebhook": "slack",
+        "smb": "smb",
+        "sql_server": "sqlserver",
+        "teams": "teams",
+        "telegram": "telegram",
+        "webhook": "webhook",
+        "windows": "windows",
+        "zulip_chat": "zulip"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "type"
+  ],
+  "title": "Connection",
+  "type": "object",
+  "x-discriminator": "type"
+}
