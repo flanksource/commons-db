@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -28,6 +29,38 @@ func TestMaskedConnection(t *testing.T) {
 	}
 	if got.Certificate == "" || got.Certificate == "----BEGIN CERT----abcdefgh----END----" {
 		t.Errorf("certificate should be masked, got %q", got.Certificate)
+	}
+}
+
+func TestMaskedConnectionRedactsEmbeddedCredentials(t *testing.T) {
+	got := maskedConnection(&models.Connection{
+		Type: "postgres",
+		URL:  "postgres://app:supersecret@db.prod.svc.cluster.local:5432/app?sslmode=require&password=querysecret",
+		Properties: map[string]string{
+			"host":     "db.prod.svc.cluster.local",
+			"password": "propertysecret",
+		},
+	})
+
+	if strings.Contains(got.URL, "app:supersecret") || strings.Contains(got.URL, "querysecret") {
+		t.Fatalf("url should be redacted, got %q", got.URL)
+	}
+	if got.URL != "postgres://db.prod.svc.cluster.local:5432/app?password=redacted&sslmode=require" {
+		t.Errorf("redacted url = %q", got.URL)
+	}
+	if got.Properties["password"] == "propertysecret" {
+		t.Errorf("sensitive properties should be masked, got %+v", got.Properties)
+	}
+}
+
+func TestRedactConnectionURLKeyValueDSN(t *testing.T) {
+	raw := "server=mssql.lab;user id=sa;password=YourStrong@Passw0rd;database=LAB_APP_QA;port=31433"
+	got := redactConnectionURL(raw)
+	if strings.Contains(got, "YourStrong@Passw0rd") || strings.Contains(got, "user id=sa") {
+		t.Fatalf("DSN credentials should be redacted, got %q", got)
+	}
+	if !strings.Contains(got, "server=mssql.lab") || !strings.Contains(got, "port=31433") {
+		t.Fatalf("non-sensitive DSN fields should be preserved, got %q", got)
 	}
 }
 
@@ -109,6 +142,23 @@ func TestTestConnectionHTTPReachable(t *testing.T) {
 	}
 	if res.Message != "HTTP 200 OK" {
 		t.Errorf("message = %q, want HTTP 200 OK", res.Message)
+	}
+}
+
+func TestTestConnectionHTTPRedactsURL(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer ts.Close()
+
+	u := strings.Replace(ts.URL, "http://", "http://user:pass@", 1) + "?token=secret-token"
+	ctx := dbcontext.NewContext(context.Background())
+	res := testConnection(ctx, &models.Connection{Type: "http", URL: u})
+	if !res.OK {
+		t.Fatalf("expected reachable, got %+v", res)
+	}
+	if strings.Contains(res.URL, "user:pass") || strings.Contains(res.URL, "secret-token") {
+		t.Fatalf("test result URL should be redacted, got %+v", res)
 	}
 }
 

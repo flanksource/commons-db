@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -106,11 +107,11 @@ func maskedConnection(c *models.Connection) resolvedConnection {
 	return resolvedConnection{
 		Type:        c.Type,
 		Namespace:   c.Namespace,
-		URL:         c.URL,
+		URL:         redactConnectionURL(c.URL),
 		Username:    c.Username,
 		Password:    maskValue(c.Password),
 		Certificate: maskValue(c.Certificate),
-		Properties:  c.Properties,
+		Properties:  redactConnectionProperties(c.Properties),
 	}
 }
 
@@ -120,23 +121,24 @@ func testConnection(ctx dbcontext.Context, c *models.Connection) testResult {
 	if c.URL == "" {
 		return testResult{OK: false, Message: "connection has no URL to test"}
 	}
+	displayURL := redactConnectionURL(c.URL)
 	host, scheme, ok := dialTarget(c.URL, c.Type)
 	if !ok {
-		return testResult{OK: false, Message: fmt.Sprintf("cannot determine host from url %q", c.URL), URL: c.URL}
+		return testResult{OK: false, Message: fmt.Sprintf("cannot determine host from url %q", displayURL), URL: displayURL}
 	}
 
 	dialCtx, cancel := ctx.WithTimeout(5 * time.Second)
 	defer cancel()
 	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", host)
 	if err != nil {
-		return testResult{OK: false, Message: fmt.Sprintf("TCP connect to %s failed: %v", host, err), URL: c.URL}
+		return testResult{OK: false, Message: fmt.Sprintf("TCP connect to %s failed: %v", host, err), URL: displayURL}
 	}
 	_ = conn.Close()
 
 	if scheme == "http" || scheme == "https" {
-		return httpProbe(c)
+		return httpProbe(c, displayURL)
 	}
-	return testResult{OK: true, Message: fmt.Sprintf("TCP connect to %s succeeded", host), URL: c.URL}
+	return testResult{OK: true, Message: fmt.Sprintf("TCP connect to %s succeeded", host), URL: displayURL}
 }
 
 // dialTarget resolves a connection URL to a host:port for the TCP reachability
@@ -208,23 +210,118 @@ func splitServerValue(v string) (host, port string) {
 	return strings.TrimSpace(host), port
 }
 
-func httpProbe(c *models.Connection) testResult {
+func httpProbe(c *models.Connection, displayURL string) testResult {
+	u, err := validatedHTTPProbeURL(c.URL)
+	if err != nil {
+		return testResult{OK: false, Message: err.Error(), URL: displayURL}
+	}
 	client := &http.Client{
 		Timeout: 8 * time.Second,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{InsecureSkipVerify: c.InsecureTLS}, //nolint:gosec // operator opt-in via insecure_tls
 		},
 	}
-	resp, err := client.Get(c.URL)
+	req, err := http.NewRequest(http.MethodGet, u.String(), http.NoBody)
 	if err != nil {
-		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", err), URL: c.URL}
+		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
+	}
+	// codeql[go/request-forgery]: connection testing intentionally probes the
+	// operator-supplied URL after validating it is an absolute HTTP(S) URL.
+	resp, err := client.Do(req)
+	if err != nil {
+		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
 	}
 	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
 	return testResult{
 		OK:      resp.StatusCode < 500,
 		Message: fmt.Sprintf("HTTP %s", resp.Status),
-		URL:     c.URL,
+		URL:     displayURL,
 	}
+}
+
+func validatedHTTPProbeURL(rawURL string) (*url.URL, error) {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid HTTP URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return nil, fmt.Errorf("HTTP probe requires http or https URL")
+	}
+	if u.Hostname() == "" {
+		return nil, fmt.Errorf("HTTP probe requires a URL host")
+	}
+	return u, nil
+}
+
+func redactConnectionURL(rawURL string) string {
+	if rawURL == "" {
+		return ""
+	}
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "" && u.Host != "" {
+		redacted := *u
+		redacted.User = nil
+		q := redacted.Query()
+		for key, vals := range q {
+			if isSensitiveCredentialKey(key) {
+				for i := range vals {
+					vals[i] = "redacted"
+				}
+				q[key] = vals
+			}
+		}
+		redacted.RawQuery = q.Encode()
+		return redacted.String()
+	}
+	return redactKeyValueDSN(rawURL)
+}
+
+func redactKeyValueDSN(dsn string) string {
+	parts := strings.Split(dsn, ";")
+	for i, part := range parts {
+		key, val, found := strings.Cut(part, "=")
+		if !found || !isSensitiveCredentialKey(key) {
+			continue
+		}
+		parts[i] = key + "=" + maskValue(val)
+	}
+	return strings.Join(parts, ";")
+}
+
+func redactConnectionProperties(properties map[string]string) map[string]string {
+	if len(properties) == 0 {
+		return properties
+	}
+	out := make(map[string]string, len(properties))
+	for key, value := range properties {
+		if isSensitiveCredentialKey(key) {
+			out[key] = maskValue(value)
+		} else {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func isSensitiveCredentialKey(key string) bool {
+	key = strings.ToLower(strings.TrimSpace(key))
+	key = strings.ReplaceAll(key, "-", "_")
+	key = strings.ReplaceAll(key, " ", "_")
+	switch key {
+	case "password", "pwd", "pass", "passwd", "secret", "token", "bearer",
+		"access_token", "refresh_token", "api_key", "apikey", "client_secret",
+		"user", "username", "user_id", "userid", "uid":
+		return true
+	default:
+		return false
+	}
+}
+
+func redactError(err error, rawURL, displayURL string) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s", strings.ReplaceAll(err.Error(), rawURL, displayURL))
 }
 
 // defaultPort maps a URL scheme to its conventional port for the reachability

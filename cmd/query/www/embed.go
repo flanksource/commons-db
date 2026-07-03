@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-//go:embed all:dist
+//go:embed dist
 var distFS embed.FS
 
 // Handler returns an http.Handler that serves the embedded SPA. Existing files
