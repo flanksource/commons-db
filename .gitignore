@@ -7,3 +7,5 @@ go.work.sum
 # Embedded postgres data dir created by `query serve` (default --data-dir)
 .query/
 .tmp/
+.grite/
+hack/
