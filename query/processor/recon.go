@@ -48,7 +48,7 @@ func Recon(baseline, target []query.Row, opts ReconOptions) ([]query.Row, error)
 	baseIndex := indexByKey(baseline, opts.Key)
 	targetIndex := indexByKey(target, opts.Key)
 
-	out := make([]query.Row, 0, len(target)+len(baseline))
+	out := make([]query.Row, 0, len(target))
 
 	// Walk target rows in order: added, changed, or unchanged.
 	for _, trow := range target {
@@ -142,7 +142,7 @@ func keyOf(row query.Row, key []string) string {
 
 // withStatus returns a shallow copy of row with the reconciliation status set.
 func withStatus(row query.Row, status string) query.Row {
-	out := make(query.Row, len(row)+1)
+	out := make(query.Row, len(row))
 	for k, v := range row {
 		out[k] = v
 	}

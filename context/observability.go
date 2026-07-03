@@ -77,7 +77,7 @@ func (k Context) HARConfig(feature string) har.HARConfig {
 
 // EffectiveHARCollector resolves which HAR collector to use for a feature. An
 // explicit collector always wins; otherwise the context-owned collector is
-// returned (configured per-feature) only when the feature's level is >= Debug.
+// returned only when the feature's level is >= Debug.
 func (k Context) EffectiveHARCollector(feature string, explicit *har.Collector) *har.Collector {
 	if explicit != nil {
 		return explicit
@@ -86,11 +86,7 @@ func (k Context) EffectiveHARCollector(feature string, explicit *har.Collector) 
 	if level < logger.Debug {
 		return nil
 	}
-	collector := k.HARCollector()
-	if collector != nil {
-		collector.Config = k.HARConfig(feature)
-	}
-	return collector
+	return k.HARCollector()
 }
 
 func (k Context) effectiveObservabilityLevel(feature string, harCapture bool) (logger.LogLevel, string) {
