@@ -64,6 +64,16 @@ func TestRedactConnectionURLKeyValueDSN(t *testing.T) {
 	}
 }
 
+func TestRedactConnectionURLHostlessUserinfo(t *testing.T) {
+	got := redactConnectionURL("https://user:secret@?token=secret-token")
+	if strings.Contains(got, "user:secret") || strings.Contains(got, "secret-token") {
+		t.Fatalf("URL userinfo and sensitive query values should be redacted, got %q", got)
+	}
+	if got != "https:?token=redacted" {
+		t.Fatalf("redacted URL = %q", got)
+	}
+}
+
 func TestDefaultPort(t *testing.T) {
 	cases := map[string]string{"http": "80", "https": "443", "postgres": "5432", "redis": "6379", "weird": ""}
 	for scheme, want := range cases {
@@ -159,6 +169,22 @@ func TestTestConnectionHTTPRedactsURL(t *testing.T) {
 	}
 	if strings.Contains(res.URL, "user:pass") || strings.Contains(res.URL, "secret-token") {
 		t.Fatalf("test result URL should be redacted, got %+v", res)
+	}
+}
+
+func TestTestConnectionHTTPSReachableWithInsecureTLS(t *testing.T) {
+	ts := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	ctx := dbcontext.NewContext(context.Background())
+	res := testConnection(ctx, &models.Connection{Type: "https", URL: ts.URL, InsecureTLS: true})
+	if !res.OK {
+		t.Fatalf("expected reachable, got %+v", res)
+	}
+	if res.Message != "HTTP 204 No Content" {
+		t.Errorf("message = %q, want HTTP 204 No Content", res.Message)
 	}
 }
 

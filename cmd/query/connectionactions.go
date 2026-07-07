@@ -1,10 +1,10 @@
 package main
 
 import (
+	"bufio"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -211,28 +211,47 @@ func splitServerValue(v string) (host, port string) {
 }
 
 func httpProbe(c *models.Connection, displayURL string) testResult {
-	u, err := validatedHTTPProbeURL(c.URL)
+	target, err := validatedHTTPProbeTarget(c.URL)
 	if err != nil {
 		return testResult{OK: false, Message: err.Error(), URL: displayURL}
 	}
-	client := &http.Client{
-		Timeout: 8 * time.Second,
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: c.InsecureTLS}, //nolint:gosec // operator opt-in via insecure_tls
-		},
-	}
-	req, err := http.NewRequest(http.MethodGet, u.String(), http.NoBody)
+	conn, err := (&net.Dialer{Timeout: 8 * time.Second}).Dial("tcp", target.hostPort)
 	if err != nil {
+		return testResult{OK: false, Message: fmt.Sprintf("HTTP connect failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
+	}
+	defer func() { _ = conn.Close() }()
+
+	if target.url.Scheme == "https" {
+		tlsConn := tls.Client(conn, &tls.Config{
+			ServerName:         target.url.Hostname(),
+			InsecureSkipVerify: c.InsecureTLS, //nolint:gosec // operator opt-in via insecure_tls
+		})
+		if err := tlsConn.Handshake(); err != nil {
+			return testResult{OK: false, Message: fmt.Sprintf("TLS handshake failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
+		}
+		conn = tlsConn
+	}
+
+	deadline := time.Now().Add(8 * time.Second)
+	_ = conn.SetDeadline(deadline)
+	req := &http.Request{
+		Method:     http.MethodGet,
+		URL:        target.url,
+		Host:       target.hostHeader,
+		Header:     http.Header{"Connection": []string{"close"}},
+		Proto:      "HTTP/1.1",
+		ProtoMajor: 1,
+		ProtoMinor: 1,
+		Body:       http.NoBody,
+	}
+	if err := req.Write(conn); err != nil {
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
 	}
-	// codeql[go/request-forgery]: connection testing intentionally probes the
-	// operator-supplied URL after validating it is an absolute HTTP(S) URL.
-	resp, err := client.Do(req)
+	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
 	if err != nil {
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
 	}
 	defer func() { _ = resp.Body.Close() }()
-	_, _ = io.Copy(io.Discard, resp.Body)
 	return testResult{
 		OK:      resp.StatusCode < 500,
 		Message: fmt.Sprintf("HTTP %s", resp.Status),
@@ -240,7 +259,13 @@ func httpProbe(c *models.Connection, displayURL string) testResult {
 	}
 }
 
-func validatedHTTPProbeURL(rawURL string) (*url.URL, error) {
+type httpProbeTarget struct {
+	url        *url.URL
+	hostPort   string
+	hostHeader string
+}
+
+func validatedHTTPProbeTarget(rawURL string) (*httpProbeTarget, error) {
 	u, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("invalid HTTP URL: %w", err)
@@ -251,14 +276,28 @@ func validatedHTTPProbeURL(rawURL string) (*url.URL, error) {
 	if u.Hostname() == "" {
 		return nil, fmt.Errorf("HTTP probe requires a URL host")
 	}
-	return u, nil
+	port := u.Port()
+	if port == "" {
+		port = defaultPort(u.Scheme)
+	}
+	if port == "" {
+		return nil, fmt.Errorf("HTTP probe requires a URL port")
+	}
+
+	probeURL := *u
+	probeURL.User = nil
+	return &httpProbeTarget{
+		url:        &probeURL,
+		hostPort:   net.JoinHostPort(u.Hostname(), port),
+		hostHeader: u.Host,
+	}, nil
 }
 
 func redactConnectionURL(rawURL string) string {
 	if rawURL == "" {
 		return ""
 	}
-	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "" && u.Host != "" {
+	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "" {
 		redacted := *u
 		redacted.User = nil
 		q := redacted.Query()
