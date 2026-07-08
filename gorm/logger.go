@@ -60,14 +60,37 @@ type Config struct {
 type SqlLogger struct {
 	Config
 	commons.Logger
-	traceParams bool
-	maxLength   int
-	baseLevel   commons.LogLevel
+	traceParams            bool
+	maxLength              int
+	baseLevel              commons.LogLevel
+	loggerName             string
+	defaultStatementOffset bool
+}
+
+type schemaChangeContextKey struct{}
+
+// SchemaChangeSession returns a GORM session whose DDL is treated as an
+// intentional schema change for SQL log classification.
+func SchemaChangeSession(db *gorm.DB) *gorm.DB {
+	if db == nil {
+		return nil
+	}
+	ctx := context.Background()
+	if db.Statement != nil && db.Statement.Context != nil {
+		ctx = db.Statement.Context
+	}
+	return db.Session(&gorm.Session{Context: context.WithValue(ctx, schemaChangeContextKey{}, true)})
+}
+
+func isSchemaChange(ctx context.Context) bool {
+	v, _ := ctx.Value(schemaChangeContextKey{}).(bool)
+	return v
 }
 
 func (l *SqlLogger) WithLogLevel(level any) *SqlLogger {
 	newlogger := *l
 	newlogger.Logger = l.Logger.WithV(level)
+	newlogger.defaultStatementOffset = false
 	return &newlogger
 }
 
@@ -75,6 +98,8 @@ func (l *SqlLogger) WithLogger(name string, level any) *SqlLogger {
 	newlogger := *l
 	newlogger.Logger = commons.GetLogger(name)
 	newlogger.baseLevel = commons.ParseLevel(l.Logger, level)
+	newlogger.loggerName = name
+	newlogger.defaultStatementOffset = false
 	return &newlogger
 }
 
@@ -93,10 +118,12 @@ func NewSqlLogger(logger *commons.SlogLogger) logger.Interface {
 			SlowThreshold:             properties.Duration(time.Second, "log.db.slowThreshold"),
 			IgnoreRecordNotFoundError: true,
 		},
-		Logger:      logger,
-		traceParams: logger.IsTraceEnabled() || properties.On(false, "log.db.params"),
-		maxLength:   properties.Int(1024, "log.db.maxLength"),
-		baseLevel:   commons.Info,
+		Logger:                 logger,
+		traceParams:            logger.IsTraceEnabled() || properties.On(false, "log.db.params"),
+		maxLength:              properties.Int(1024, "log.db.maxLength"),
+		baseLevel:              commons.Info,
+		loggerName:             logger.Prefix,
+		defaultStatementOffset: true,
 	}
 }
 
@@ -141,36 +168,62 @@ func (l *SqlLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 	case l.LogLevel == int(commons.Info):
 		sql, rows := fc()
 		sql = trunc(sql, l.maxLength)
-
-		switch strings.ToLower(strings.Split(strings.TrimSpace(sql), " ")[0]) {
-		case "select", "notify":
-			if rows == 0 {
-				level = l.baseLevel + commons.Trace1
-			} else {
-				level = commons.Trace
-			}
-
-		case "update", "insert", "delete":
-			if rows == 0 {
-				level = l.baseLevel + commons.Trace
-			} else {
-				level = l.baseLevel + commons.Debug
-			}
-		case "create", "alter", "drop":
-			if strings.Contains(strings.ToLower(sql), "index") {
-				level = l.baseLevel + commons.Debug
-			} else {
-				level = l.baseLevel
-			}
-		default:
-			level = l.baseLevel + commons.Debug
-		}
-
+		level = classifySQLLevel(sql, rows, l.baseLevel, isSchemaChange(ctx))
+		level += l.statementLevelOffset()
 		msg = fmt.Sprintf(detailsFmt, elapsed/1e6, rows, sql)
 	}
 	if l.IsLevelEnabled(level) {
 		l.V(level).Infof(msg)
 	}
+}
+
+func (l *SqlLogger) statementLevelOffset() commons.LogLevel {
+	return statementLevelOffset(l.loggerName, l.defaultStatementOffset, properties.Get)
+}
+
+func statementLevelOffset(loggerName string, defaultStatementOffset bool, get func(string) string) commons.LogLevel {
+	if !defaultStatementOffset || hasExplicitSQLLogLevel(loggerName, get) {
+		return 0
+	}
+	return commons.Trace
+}
+
+func hasExplicitSQLLogLevel(loggerName string, get func(string) string) bool {
+	if loggerName == "" {
+		return false
+	}
+	if get("log.level."+loggerName) != "" {
+		return true
+	}
+	return loggerName == "db" && get("db.log.level") != ""
+}
+
+func classifySQLLevel(sql string, rows int64, baseLevel commons.LogLevel, schemaChange bool) commons.LogLevel {
+	verb := firstSQLVerb(sql)
+	switch verb {
+	case "insert", "update", "delete":
+		if rows > 0 {
+			return baseLevel
+		}
+		return baseLevel + commons.Debug
+	case "truncate":
+		return baseLevel
+	case "create", "alter", "drop":
+		if schemaChange {
+			return baseLevel
+		}
+		return baseLevel + commons.Debug
+	default:
+		return baseLevel + commons.Debug
+	}
+}
+
+func firstSQLVerb(sql string) string {
+	fields := strings.Fields(strings.TrimSpace(sql))
+	if len(fields) == 0 {
+		return ""
+	}
+	return strings.ToLower(fields[0])
 }
 
 func trunc(s string, length int) string {
