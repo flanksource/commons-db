@@ -1,0 +1,92 @@
+{
+  "$id": "opensearch.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "connection": {
+      "description": "Pick a saved connection or type an inline DSN/URL",
+      "title": "Connection",
+      "type": "string",
+      "x-clicky-lookup": {
+        "filter": "connection",
+        "multi": false,
+        "scope": {
+          "from": "provider.type",
+          "map": {
+            "clickhouse": [
+              "clickhouse"
+            ],
+            "http": [
+              "http"
+            ],
+            "jaeger": [
+              "jaeger"
+            ],
+            "loki": [
+              "loki"
+            ],
+            "mysql": [
+              "mysql"
+            ],
+            "opensearch": [
+              "opensearch"
+            ],
+            "postgres": [
+              "postgres"
+            ],
+            "postgrest": [
+              "http"
+            ],
+            "prometheus": [
+              "prometheus"
+            ],
+            "sql": [
+              "postgres",
+              "mysql",
+              "sql_server",
+              "clickhouse"
+            ],
+            "sqlserver": [
+              "sql_server"
+            ]
+          },
+          "param": "types"
+        },
+        "searchParam": "__lookup_q",
+        "url": "/api/v1/connection"
+      }
+    },
+    "options": {
+      "properties": {
+        "address": {
+          "description": "Inline OpenSearch address used instead of a saved connection",
+          "title": "Address",
+          "type": "string",
+          "x-clicky-component": "k8s-url-selector",
+          "x-clicky-default-source": "value"
+        },
+        "index": {
+          "description": "Index or index pattern",
+          "title": "Index",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum number of hits",
+          "title": "Limit",
+          "type": "string"
+        }
+      },
+      "title": "Options",
+      "type": "object"
+    },
+    "type": {
+      "const": "opensearch",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "Query provider: opensearch",
+  "type": "object"
+}

@@ -1,4 +1,1031 @@
 {
+  "$defs": {
+    "clickhouse": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "url": {
+              "description": "Inline database URL used instead of a saved connection",
+              "title": "URL / DSN",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "clickhouse",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: clickhouse",
+      "type": "object"
+    },
+    "http": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "body": {
+              "format": "textarea",
+              "title": "Body",
+              "type": "string"
+            },
+            "jsonpath": {
+              "description": "Extract rows from a wrapped JSON response",
+              "title": "JSONPath",
+              "type": "string"
+            },
+            "method": {
+              "enum": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ],
+              "title": "Method",
+              "type": "string"
+            },
+            "url": {
+              "description": "Inline HTTP base URL used instead of a saved connection",
+              "title": "Base URL",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "http",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: http",
+      "type": "object"
+    },
+    "jaeger": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "end": {
+              "title": "End",
+              "type": "string"
+            },
+            "limit": {
+              "title": "Limit",
+              "type": "string"
+            },
+            "lookback": {
+              "title": "Lookback",
+              "type": "string"
+            },
+            "maxDuration": {
+              "title": "max Duration",
+              "type": "string"
+            },
+            "minDuration": {
+              "title": "min Duration",
+              "type": "string"
+            },
+            "operation": {
+              "title": "Operation",
+              "type": "string"
+            },
+            "service": {
+              "title": "Service",
+              "type": "string"
+            },
+            "start": {
+              "title": "Start",
+              "type": "string"
+            },
+            "tags": {
+              "title": "Tags",
+              "type": "string"
+            },
+            "url": {
+              "description": "Inline Jaeger query URL used instead of a saved connection",
+              "title": "URL",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "jaeger",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: jaeger",
+      "type": "object"
+    },
+    "loki": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "direction": {
+              "enum": [
+                "forward",
+                "backward"
+              ],
+              "title": "Direction",
+              "type": "string"
+            },
+            "end": {
+              "title": "End",
+              "type": "string"
+            },
+            "limit": {
+              "title": "Limit",
+              "type": "string"
+            },
+            "since": {
+              "title": "Since",
+              "type": "string"
+            },
+            "start": {
+              "title": "Start",
+              "type": "string"
+            },
+            "step": {
+              "title": "Step",
+              "type": "string"
+            },
+            "url": {
+              "description": "Inline Loki URL used instead of a saved connection",
+              "title": "URL",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "loki",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: loki",
+      "type": "object"
+    },
+    "mysql": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "url": {
+              "description": "Inline database URL used instead of a saved connection",
+              "title": "URL / DSN",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "mysql",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: mysql",
+      "type": "object"
+    },
+    "opensearch": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "address": {
+              "description": "Inline OpenSearch address used instead of a saved connection",
+              "title": "Address",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            },
+            "index": {
+              "description": "Index or index pattern",
+              "title": "Index",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Maximum number of hits",
+              "title": "Limit",
+              "type": "string"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "opensearch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: opensearch",
+      "type": "object"
+    },
+    "postgres": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "url": {
+              "description": "Inline database URL used instead of a saved connection",
+              "title": "URL / DSN",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "postgres",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: postgres",
+      "type": "object"
+    },
+    "postgrest": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "jsonpath": {
+              "description": "Extract rows from a wrapped JSON response",
+              "title": "JSONPath",
+              "type": "string"
+            },
+            "url": {
+              "description": "Inline PostgREST base URL used instead of a saved connection",
+              "title": "Base URL",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "postgrest",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: postgrest",
+      "type": "object"
+    },
+    "prometheus": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "range": {
+              "properties": {
+                "end": {
+                  "description": "Date math, for example now",
+                  "title": "End",
+                  "type": "string"
+                },
+                "start": {
+                  "description": "Date math, for example now-1h",
+                  "title": "Start",
+                  "type": "string"
+                },
+                "step": {
+                  "description": "Sample step, for example 30s",
+                  "title": "Step",
+                  "type": "string"
+                }
+              },
+              "title": "Range",
+              "type": "object"
+            },
+            "selectLabels": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Select labels",
+              "type": "array"
+            },
+            "url": {
+              "description": "Inline Prometheus URL used instead of a saved connection",
+              "title": "URL",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "prometheus",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: prometheus",
+      "type": "object"
+    },
+    "sql": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "type": {
+              "enum": [
+                "postgres",
+                "mysql",
+                "sql_server",
+                "clickhouse"
+              ],
+              "title": "Driver",
+              "type": "string",
+              "x-enum-display": "combobox",
+              "x-enum-icons": {
+                "clickhouse": "clickhouse",
+                "mysql": "mysql",
+                "postgres": "postgres",
+                "sql_server": "sqlserver"
+              }
+            },
+            "url": {
+              "description": "Inline database URL used instead of a saved connection",
+              "title": "URL / DSN",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "sql",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: sql",
+      "type": "object"
+    },
+    "sqlserver": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "url": {
+              "description": "Inline database URL used instead of a saved connection",
+              "title": "URL / DSN",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "sqlserver",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: sqlserver",
+      "type": "object"
+    }
+  },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "columns": {
@@ -55,6 +1082,12 @@
       },
       "title": "Columns",
       "type": "array"
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
     },
     "output": {
       "items": {
@@ -124,6 +1157,173 @@
       "type": "string"
     },
     "provider": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "sql"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/sql"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "postgres"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/postgres"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "mysql"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/mysql"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "sqlserver"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/sqlserver"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "clickhouse"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/clickhouse"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "http"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/http"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "prometheus"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/prometheus"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "postgrest"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/postgrest"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "loki"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/loki"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "opensearch"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/opensearch"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "jaeger"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/jaeger"
+          }
+        }
+      ],
       "properties": {
         "connection": {
           "description": "Pick a saved connection or type an inline DSN/URL",
@@ -197,17 +1397,33 @@
             "jaeger"
           ],
           "title": "Type",
-          "type": "string"
+          "type": "string",
+          "x-enum-display": "combobox",
+          "x-enum-icons": {
+            "clickhouse": "clickhouse",
+            "http": "globe",
+            "jaeger": "activity",
+            "loki": "grafana",
+            "mysql": "mysql",
+            "opensearch": "opensearch",
+            "postgres": "postgres",
+            "postgrest": "globe",
+            "prometheus": "prometheus",
+            "sql": "database",
+            "sqlserver": "sqlserver"
+          }
         }
       },
       "required": [
         "type"
       ],
       "title": "Provider",
-      "type": "object"
+      "type": "object",
+      "x-discriminator": "type"
     },
     "query": {
       "description": "Provider-native query; may reference {{.params.\u003cname\u003e}}",
+      "format": "textarea",
       "title": "Query",
       "type": "string"
     },

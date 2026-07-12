@@ -58,7 +58,7 @@ tasks:
       - pnpm build
 
   query:schema:
-    desc: Generate connection/profile JSON Schemas into schemas/
+    desc: Generate per-type/provider source schemas and bundled Clicky UI schemas into schemas/
     cmds:
       - go run ./cmd/query schema --out schemas
 
