@@ -8,8 +8,10 @@ import { UiCheckFilled, UiWarningCircleFilled } from "@flanksource/clicky-ui/ico
 // svc:// / ip:// / proxy:// / host:// workload URLs) and shows the resolved values
 // with secrets masked. Both POST the live form value to the backend, so they work
 // before the connection is saved. Other entities get no extra actions.
-export const connectionFormActions: FormActionsRenderer = ({ value, action }) =>
-  action.path.includes("/connection") ? <ConnectionTestButton value={value} /> : null;
+export const connectionFormActions: FormActionsRenderer = ({ value, action, canSubmit }) =>
+  action.path.includes("/connection") ? (
+    <ConnectionTestButton value={value} canSubmit={canSubmit} />
+  ) : null;
 
 type ResolvedConnection = {
   type?: string;
@@ -38,7 +40,13 @@ async function postConnection(action: "test" | "resolve", value: unknown): Promi
   return res.json();
 }
 
-function ConnectionTestButton({ value }: { value: Record<string, unknown> }) {
+function ConnectionTestButton({
+  value,
+  canSubmit,
+}: {
+  value: Record<string, unknown>;
+  canSubmit: boolean;
+}) {
   const [pending, setPending] = useState<"test" | "resolve" | null>(null);
   const [outcome, setOutcome] = useState<ActionOutcome | null>(null);
 
@@ -76,7 +84,7 @@ function ConnectionTestButton({ value }: { value: Record<string, unknown> }) {
         label={pending === "test" ? "Testing…" : pending === "resolve" ? "Resolving…" : "Test"}
         variant="outline"
         loading={pending !== null}
-        disabled={pending !== null}
+        disabled={pending !== null || !canSubmit}
         onClick={() => run("test")}
         items={[{ label: "Resolve values", onSelect: () => run("resolve") }]}
         title="Connection actions"
