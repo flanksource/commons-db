@@ -8,9 +8,16 @@ packages:
 # Mirror of clicky-ui/pnpm-workspace.yaml catalog so pnpm can resolve the
 # `catalog:` specifiers declared by @flanksource/clicky-ui when it is linked.
 catalog:
+  "@codemirror/commands": ^6.10.4
+  "@codemirror/lang-json": ^6.0.2
+  "@codemirror/lang-sql": ^6.10.0
+  "@codemirror/state": ^6.7.0
+  "@codemirror/view": ^6.43.4
   "@ai-sdk/react": ^3.0.201
   "@chromatic-com/storybook": ^5.2.1
   "@floating-ui/react": ^0.27.19
+  "@mdxeditor/editor": ^4.0.4
+  "@monaco-editor/react": ^4.7.0
   "@oxlint/plugins": ^1.60.0
   "@playwright/test": ^1.49.1
   "@preact/preset-vite": ^2.9.3
@@ -48,7 +55,10 @@ catalog:
   cmdk: ^1.0.4
   dompurify: ^3.4.7
   jsdom: ^26.0.0
+  jotai: ^2.20.1
   marked: ^15.0.0
+  monaco-editor: 0.48.0
+  monaco-yaml: 5.1.1
   oxlint: ^1.60.0
   postcss: ^8.4.49
   preact: ^10.25.3
@@ -66,6 +76,7 @@ catalog:
   vite: ^6.0.3
   vite-plugin-dts: ^4.3.0
   vitest: ^3.0.5
+  yaml: ^2.8.3
 catalogMode: prefer
 
 linkWorkspacePackages: true

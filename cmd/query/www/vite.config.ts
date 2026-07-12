@@ -15,7 +15,7 @@ const clickyUI = path.resolve(__dirname, "../../../../clicky-ui/packages/ui");
 export default defineConfig({
   plugins: [react()],
   resolve: {
-    dedupe: ["react", "react-dom", "react/jsx-runtime", "@tanstack/react-query"],
+    dedupe: ["react", "react-dom", "react/jsx-runtime", "@tanstack/react-query", "monaco-editor"],
   },
   build: {
     outDir: "dist",
