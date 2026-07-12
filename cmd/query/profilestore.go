@@ -28,7 +28,7 @@ func NewProfileStore(dir string) (*ProfileStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve profiles dir %q: %w", dir, err)
 	}
-	if err := os.MkdirAll(abs, 0o755); err != nil {
+	if err := ensurePrivateDir(abs); err != nil {
 		return nil, fmt.Errorf("create profiles dir %q: %w", abs, err)
 	}
 	return &ProfileStore{Dir: abs}, nil
@@ -67,6 +67,12 @@ func (s *ProfileStore) Get(name string) (query.Profile, error) {
 			return p, nil
 		}
 	}
+	slug := strings.TrimPrefix(name, "profile-")
+	for _, p := range profiles {
+		if slugify(p.Name) == slug {
+			return p, nil
+		}
+	}
 	return query.Profile{}, fmt.Errorf("profile %q not found", name)
 }
 
@@ -86,8 +92,11 @@ func (s *ProfileStore) Save(p query.Profile) error {
 		return fmt.Errorf("marshal profile %q: %w", name, err)
 	}
 	path := filepath.Join(s.Dir, slug+".yaml")
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write profile %q: %w", name, err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("secure profile %q: %w", name, err)
 	}
 	return nil
 }

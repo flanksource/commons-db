@@ -25,7 +25,7 @@ type serveOptions struct {
 }
 
 func newServeCmd() *cobra.Command {
-	o := serveOptions{host: "localhost", port: 8080, dataDir: ".query/pg"}
+	o := serveOptions{host: "localhost", port: 8080}
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Start the query web app (connections, profiles, execution)",
@@ -36,7 +36,7 @@ func newServeCmd() *cobra.Command {
 	f := cmd.Flags()
 	f.StringVar(&o.host, "host", o.host, "Host to bind")
 	f.IntVarP(&o.port, "port", "p", o.port, "Port to bind")
-	f.StringVar(&o.dataDir, "data-dir", o.dataDir, "Embedded postgres data directory")
+	f.StringVar(&o.dataDir, "data-dir", o.dataDir, "Embedded postgres data directory (default: <config-dir>/postgres)")
 	f.BoolVar(&o.dev, "dev", o.dev, "Spawn a Vite dev server (cmd/query/www) and proxy the UI to it")
 	return cmd
 }
@@ -45,7 +45,19 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	dsn, stop, err := db.StartEmbedded(db.EmbeddedConfig{DataDir: o.dataDir})
+	configDir, err := cmd.Root().PersistentFlags().GetString("config-dir")
+	if err != nil {
+		return fmt.Errorf("read config-dir: %w", err)
+	}
+	if configDir == "" {
+		configDir = defaultQueryConfigDir()
+	}
+	if err := ensurePrivateDir(configDir); err != nil {
+		return fmt.Errorf("create config dir %q: %w", configDir, err)
+	}
+	dataDir := resolveDataDir(configDir, o.dataDir)
+
+	dsn, stop, err := db.StartEmbedded(db.EmbeddedConfig{DataDir: dataDir})
 	if err != nil {
 		return fmt.Errorf("start embedded postgres: %w", err)
 	}
@@ -84,8 +96,12 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 		&rpc.OpenAPIConfig{Title: "Query", Description: "Connections, profiles and execution", Version: "0.1.0"},
 	)
 
+	serverMux := http.NewServeMux()
+	server.RegisterRoutes(serverMux)
 	mux := http.NewServeMux()
-	server.RegisterRoutes(mux)
+	mux.Handle("/api/openapi.json", newProfileOpenAPIHandler(cmd.Root(), server.ConverterConfig(), store))
+	mux.Handle("/api/", serverMux)
+	mux.Handle("/health", serverMux)
 
 	// In --dev the binary spawns Vite and proxies the UI to it (live HMR);
 	// otherwise it serves the embedded production build.
@@ -117,9 +133,10 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 		return c, nil
 	}
 	handler := newExecHandler("/api/v1", appCtx, store,
-		newConnectionActionsHandler("/api/v1", appCtx,
-			newSecretsHandler("/api/v1", kube,
-				newSchemaHandler("/api/v1", store, mux))))
+		newConnectionBrowserHandler("/api/v1", appCtx,
+			newConnectionActionsHandler("/api/v1", appCtx,
+				newSecretsHandler("/api/v1", kube,
+					newSchemaHandler("/api/v1", store, mux)))))
 
 	addr := fmt.Sprintf("%s:%d", o.host, o.port)
 	httpSrv := &http.Server{
