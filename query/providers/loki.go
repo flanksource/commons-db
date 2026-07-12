@@ -48,7 +48,10 @@ func (lokiProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 
 	conn := connection.Loki{ConnectionName: req.Connection}
 	if opts.URL != "" {
-		conn.URL = opts.URL
+		conn.URL, err = resolveInlineURL(ctx, opts.URL, "loki")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	searcher := loki.New(conn, nil)

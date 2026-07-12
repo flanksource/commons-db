@@ -20,13 +20,9 @@ type baseConnectionForm struct {
 	Properties types.JSONStringMap `json:"properties" clicky:"title=Properties,order=7"`
 }
 
-// Connection returns the JSON Schema for the connection form. A minimal base
-// (name/namespace/type/properties) is always present; an `allOf` of if/then
-// branches keyed on `type` adds the per-type fields for the backends modelled in
-// connection_providers.go, so the form adapts to the selected type. The
-// `x-discriminator` hint tells clicky-ui to render the `type` picker (an icon
-// grid, via x-enum-icons) first, then the matched type's form.
-func Connection() Schema {
+// ConnectionSource returns the externally referenced connection schema graph.
+// Bundle converts it to the self-contained document returned by Connection.
+func ConnectionSource() Schema {
 	flat := reflectStruct(baseConnectionForm{})
 	props := Schema{}
 	for name, raw := range flat["properties"].(map[string]any) {
@@ -37,14 +33,18 @@ func Connection() Schema {
 		"title":          "Type",
 		"enum":           connectionTypeEnum(),
 		"x-enum-icons":   connectionTypeIcons,
-		"x-enum-display": "grid",
+		"x-enum-display": "combobox",
 	}
 
 	var allOf []any
 	for _, typ := range allConnectionTypes {
-		if cfg, ok := tailoredProviders[typ]; ok {
-			allOf = append(allOf, tailoredBranch(typ, cfg))
-		}
+		allOf = append(allOf, Schema{
+			"if": Schema{
+				"properties": Schema{"type": Schema{"const": typ}},
+				"required":   []string{"type"},
+			},
+			"then": Schema{"$ref": "connections/" + typ + ".json"},
+		})
 	}
 
 	return Schema{
@@ -56,6 +56,70 @@ func Connection() Schema {
 		"x-discriminator": "type",
 		"allOf":           allOf,
 	}
+}
+
+// ConnectionComponents returns a standalone form schema for every known
+// connection type. Types without tailored fields still receive the base form.
+func ConnectionComponents() map[string]Schema {
+	components := make(map[string]Schema, len(allConnectionTypes))
+	for _, typ := range allConnectionTypes {
+		flat := reflectStruct(baseConnectionForm{})
+		props := Schema{}
+		for name, raw := range flat["properties"].(map[string]any) {
+			props[name] = Schema(raw.(map[string]any))
+		}
+		props["type"] = Schema{"type": "string", "title": "Type", "const": typ}
+		required := []string{"name", "type"}
+		if cfg, ok := tailoredProviders[typ]; ok {
+			branch := tailoredBranch(typ, cfg)["then"].(Schema)
+			for name, raw := range branch["properties"].(Schema) {
+				props[name] = raw
+			}
+			required = appendUnique(required, stringSlice(branch["required"])...)
+		}
+		components[typ] = Schema{
+			"$schema":    Draft,
+			"$id":        typ + ".json",
+			"title":      "Connection: " + typ,
+			"type":       "object",
+			"required":   required,
+			"properties": props,
+		}
+	}
+	return components
+}
+
+// Connection returns the bundled schema consumed by clicky-ui.
+func Connection() Schema {
+	refs := SchemaRefs("connections", ConnectionComponents())
+	bundled, err := Bundle(ConnectionSource(), refs)
+	if err != nil {
+		panic(fmt.Sprintf("bundle connection schema: %v", err))
+	}
+	return bundled
+}
+
+// SchemaRefs keys component schemas by their relative external-ref path.
+func SchemaRefs(dir string, components map[string]Schema) map[string]Schema {
+	refs := make(map[string]Schema, len(components))
+	for name, component := range components {
+		refs[dir+"/"+name+".json"] = component
+	}
+	return refs
+}
+
+func appendUnique(base []string, values ...string) []string {
+	seen := make(map[string]bool, len(base)+len(values))
+	for _, value := range base {
+		seen[value] = true
+	}
+	for _, value := range values {
+		if !seen[value] {
+			base = append(base, value)
+			seen[value] = true
+		}
+	}
+	return base
 }
 
 // tailoredBranch builds one `{if: type==X, then: {...}}` conditional by reflecting
@@ -113,6 +177,9 @@ func reflectStruct(cfg any) Schema {
 
 // stringSlice converts a reflected JSON []any of strings to []string.
 func stringSlice(v any) []string {
+	if values, ok := v.([]string); ok {
+		return values
+	}
 	raw, ok := v.([]any)
 	if !ok {
 		return nil

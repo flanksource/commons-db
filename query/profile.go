@@ -10,6 +10,10 @@ type Profile struct {
 	// Name identifies the Profile (e.g. "SQL Server trace").
 	Name string `json:"profile" yaml:"profile"`
 
+	// Namespace scopes Kubernetes secret/configmap lookups and workload URLs used
+	// by inline provider connections. When empty, the caller's namespace is used.
+	Namespace string `json:"namespace,omitempty" yaml:"namespace,omitempty"`
+
 	// Provider selects and configures the backend the Profile reads from.
 	Provider ProviderConfig `json:"provider" yaml:"provider"`
 

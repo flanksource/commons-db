@@ -86,7 +86,10 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 	conn := connection.PrometheusConnection{}
 	conn.ConnectionName = req.Connection
 	if opts.URL != "" {
-		conn.URL = opts.URL
+		conn.URL, err = resolveInlineURL(ctx, opts.URL, "prometheus")
+		if err != nil {
+			return nil, err
+		}
 	}
 	if err := conn.Populate(ctx); err != nil {
 		return nil, fmt.Errorf("failed to populate prometheus connection: %w", err)

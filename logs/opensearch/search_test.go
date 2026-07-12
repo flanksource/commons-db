@@ -1,12 +1,50 @@
 package opensearch
 
 import (
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"testing"
 
 	dutyContext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
 )
+
+func TestSearchRawPreservesNativeEnvelope(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{
+          "took": 7,
+          "timed_out": false,
+          "hits": {"total":{"value":1,"relation":"eq"},"max_score":1,"hits":[
+            {"_index":"logs","_id":"one","_score":1,"_source":{"message":"hello","custom":42}}
+          ]},
+          "aggregations":{"levels":{"buckets":[{"key":"info","doc_count":1}]}}
+        }`)
+	}))
+	defer server.Close()
+
+	ctx := dutyContext.New()
+	searcher, err := New(ctx, Backend{Address: server.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Took != 7 || result.Hits.Total.Value != 1 || result.Hits.Hits[0].Source["custom"] != float64(42) {
+		t.Fatalf("raw response lost native fields: %#v", result)
+	}
+	if result.Aggregations["levels"] == nil {
+		t.Fatalf("raw response lost aggregations: %#v", result.Aggregations)
+	}
+}
 
 func TestPreprocessJSONFields(t *testing.T) {
 	tests := []struct {

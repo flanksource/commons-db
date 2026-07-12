@@ -82,8 +82,19 @@ func New(ctx context.Context, backend Backend, mappingConfig *logs.FieldMappingC
 }
 
 func (t *Searcher) Search(ctx context.Context, q Request) (*logs.LogResult, error) {
+	r, err := t.SearchRaw(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	return t.parseSearchResponse(ctx, r), nil
+}
+
+// SearchRaw executes the same OpenSearch request as Search but preserves the
+// native hit, aggregation and timing envelope. Connection browsers use this to
+// inspect arbitrary documents; log callers continue through Search's mapping.
+func (t *Searcher) SearchRaw(ctx context.Context, q Request) (Response, error) {
 	if q.Index == "" {
-		return nil, ctx.Oops().Errorf("index is empty")
+		return Response{}, ctx.Oops().Errorf("index is empty")
 	}
 
 	const defaultLimit = 500
@@ -92,7 +103,7 @@ func (t *Searcher) Search(ctx context.Context, q Request) (*logs.LogResult, erro
 		var err error
 		limit, err = strconv.Atoi(q.Limit)
 		if err != nil {
-			return nil, ctx.Oops().Wrapf(err, "error converting limit to int")
+			return Response{}, ctx.Oops().Wrapf(err, "error converting limit to int")
 		}
 	}
 
@@ -106,26 +117,24 @@ func (t *Searcher) Search(ctx context.Context, q Request) (*logs.LogResult, erro
 		t.client.Search.WithErrorTrace(),
 	)
 	if err != nil {
-		return nil, ctx.Oops().Wrapf(err, "error searching")
+		return Response{}, ctx.Oops().Wrapf(err, "error searching")
 	}
 	defer res.Body.Close()
 
 	if res.IsError() {
 		body, err := io.ReadAll(res.Body)
 		if err != nil {
-			return nil, ctx.Oops().Wrapf(err, "failed to read error response body from opensearch")
+			return Response{}, ctx.Oops().Wrapf(err, "failed to read error response body from opensearch")
 		}
 
-		return nil, ctx.Oops().Errorf("opensearch: search failed with status %s: %s", res.Status(), string(body))
+		return Response{}, ctx.Oops().Errorf("opensearch: search failed with status %s: %s", res.Status(), string(body))
 	}
 
 	var r Response
 	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		return nil, ctx.Oops().Wrapf(err, "error parsing the response body")
+		return Response{}, ctx.Oops().Wrapf(err, "error parsing the response body")
 	}
-
-	logResult := t.parseSearchResponse(ctx, r)
-	return logResult, nil
+	return r, nil
 }
 
 var DefaultFieldMappingConfig = logs.FieldMappingConfig{

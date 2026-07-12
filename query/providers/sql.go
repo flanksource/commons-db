@@ -65,7 +65,15 @@ func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]
 		Type:           connType,
 	}
 	if opts.URL != "" {
-		conn.URL.ValueStatic = opts.URL
+		resolveType := connType
+		if resolveType == "" {
+			resolveType = models.ConnectionTypePostgres
+		}
+		resolved, err := resolveInlineURL(ctx, opts.URL, resolveType)
+		if err != nil {
+			return nil, err
+		}
+		conn.URL.ValueStatic = resolved
 	}
 
 	if err := conn.HydrateConnection(ctx); err != nil {
