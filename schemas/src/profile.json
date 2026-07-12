@@ -1,0 +1,419 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "columns": {
+      "items": {
+        "properties": {
+          "cel": {
+            "description": "Expression computing the cell value from `row`",
+            "title": "CEL",
+            "type": "string"
+          },
+          "format": {
+            "title": "Format",
+            "type": "string"
+          },
+          "hidden": {
+            "title": "Hidden",
+            "type": "boolean"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "datetime",
+              "duration",
+              "bytes",
+              "status",
+              "health"
+            ],
+            "title": "Type",
+            "type": "string"
+          },
+          "unit": {
+            "title": "Unit",
+            "type": "string"
+          },
+          "width": {
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "title": "Columns",
+      "type": "array"
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
+    },
+    "output": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Output",
+      "type": "array"
+    },
+    "params": {
+      "items": {
+        "properties": {
+          "default": {
+            "title": "Default"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "name": {
+            "description": "Parameter key, referenced as {{.params.\u003cname\u003e}}",
+            "title": "Name",
+            "type": "string"
+          },
+          "options": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Options",
+            "type": "array"
+          },
+          "required": {
+            "title": "Required",
+            "type": "boolean"
+          },
+          "template": {
+            "description": "Value rewrite; {value} is the supplied value",
+            "title": "Template",
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "string",
+              "number",
+              "boolean",
+              "date",
+              "enum"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "title": "Params",
+      "type": "array"
+    },
+    "profile": {
+      "description": "Profile name",
+      "title": "Name",
+      "type": "string"
+    },
+    "provider": {
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "sql"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/sql.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "postgres"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/postgres.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "mysql"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/mysql.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "sqlserver"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/sqlserver.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "clickhouse"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/clickhouse.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "http"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/http.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "prometheus"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/prometheus.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "postgrest"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/postgrest.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "loki"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/loki.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "opensearch"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/opensearch.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "jaeger"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/jaeger.json"
+          }
+        }
+      ],
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "enum": [
+            "sql",
+            "postgres",
+            "mysql",
+            "sqlserver",
+            "clickhouse",
+            "http",
+            "prometheus",
+            "postgrest",
+            "loki",
+            "opensearch",
+            "jaeger"
+          ],
+          "title": "Type",
+          "type": "string",
+          "x-enum-display": "combobox",
+          "x-enum-icons": {
+            "clickhouse": "clickhouse",
+            "http": "globe",
+            "jaeger": "activity",
+            "loki": "grafana",
+            "mysql": "mysql",
+            "opensearch": "opensearch",
+            "postgres": "postgres",
+            "postgrest": "globe",
+            "prometheus": "prometheus",
+            "sql": "database",
+            "sqlserver": "sqlserver"
+          }
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Provider",
+      "type": "object",
+      "x-discriminator": "type"
+    },
+    "query": {
+      "description": "Provider-native query; may reference {{.params.\u003cname\u003e}}",
+      "format": "textarea",
+      "title": "Query",
+      "type": "string"
+    },
+    "render": {
+      "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)",
+      "enum": [
+        "table",
+        "logs"
+      ],
+      "title": "Render",
+      "type": "string"
+    }
+  },
+  "required": [
+    "profile",
+    "provider"
+  ],
+  "title": "Profile",
+  "type": "object"
+}

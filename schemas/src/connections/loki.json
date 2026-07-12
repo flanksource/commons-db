@@ -1,0 +1,101 @@
+{
+  "$id": "loki.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "certificate": {
+      "title": "Certificate",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "secret",
+      "x-clicky-order": 6
+    },
+    "insecure_tls": {
+      "title": "Insecure TLS",
+      "type": "boolean",
+      "x-clicky-order": 3
+    },
+    "name": {
+      "title": "Name",
+      "type": "string",
+      "x-clicky-order": 0
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
+    },
+    "password": {
+      "format": "password",
+      "title": "Password",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "secret",
+      "x-clicky-order": 5
+    },
+    "properties": {
+      "properties": {
+        "bearer": {
+          "format": "password",
+          "title": "Bearer Token",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-order": 8
+        },
+        "clientID": {
+          "title": "OAuth Client ID",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-default-source": "value",
+          "x-clicky-order": 9
+        },
+        "clientSecret": {
+          "format": "password",
+          "title": "OAuth Client Secret",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-order": 10
+        },
+        "scopes": {
+          "title": "OAuth Scopes",
+          "type": "string",
+          "x-clicky-order": 12
+        },
+        "tokenURL": {
+          "title": "OAuth Token URL",
+          "type": "string",
+          "x-clicky-order": 11
+        }
+      },
+      "title": "Properties",
+      "type": "object"
+    },
+    "type": {
+      "const": "loki",
+      "title": "Type",
+      "type": "string"
+    },
+    "url": {
+      "description": "Base URL of the HTTP endpoint",
+      "title": "URL",
+      "type": "string",
+      "x-clicky-component": "k8s-url-selector",
+      "x-clicky-default-source": "value",
+      "x-clicky-order": 2
+    },
+    "username": {
+      "title": "Username",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "value",
+      "x-clicky-order": 4
+    }
+  },
+  "required": [
+    "name",
+    "type",
+    "url"
+  ],
+  "title": "Connection: loki",
+  "type": "object"
+}

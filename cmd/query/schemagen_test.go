@@ -14,8 +14,8 @@ import (
 // `task query:schema`. The committed files are the source of truth the clicky-ui
 // add/edit forms render from (served live with identical content).
 func TestGeneratedSchemasMatchCommitted(t *testing.T) {
-	for name, gen := range schemaFiles {
-		want, err := schema.JSON(gen())
+	for name, doc := range generatedSchemas() {
+		want, err := schema.JSON(doc)
 		if err != nil {
 			t.Fatalf("render %s: %v", name, err)
 		}
@@ -34,12 +34,22 @@ func TestGeneratedSchemasMatchCommitted(t *testing.T) {
 
 func TestWriteSchemasProducesBothFiles(t *testing.T) {
 	dir := t.TempDir()
+	stale := filepath.Join(dir, "src", "connections", "stale.json")
+	if err := os.MkdirAll(filepath.Dir(stale), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(stale, []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeSchemas(dir); err != nil {
 		t.Fatalf("writeSchemas: %v", err)
 	}
-	for name := range schemaFiles {
+	for name := range generatedSchemas() {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
 			t.Errorf("expected %s to be written: %v", name, err)
 		}
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Errorf("stale generated component was not removed: %v", err)
 	}
 }

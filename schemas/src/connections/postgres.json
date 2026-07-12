@@ -1,0 +1,60 @@
+{
+  "$id": "postgres.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string",
+      "x-clicky-order": 0
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
+    },
+    "password": {
+      "format": "password",
+      "title": "Password",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "secret",
+      "x-clicky-order": 5
+    },
+    "properties": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Properties",
+      "type": "object",
+      "x-clicky-order": 7
+    },
+    "type": {
+      "const": "postgres",
+      "title": "Type",
+      "type": "string"
+    },
+    "url": {
+      "description": "postgres://user:pass@host:5432/db?sslmode=disable",
+      "title": "URL",
+      "type": "string",
+      "x-clicky-component": "k8s-url-selector",
+      "x-clicky-default-source": "value",
+      "x-clicky-order": 2
+    },
+    "username": {
+      "title": "Username",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "value",
+      "x-clicky-order": 4
+    }
+  },
+  "required": [
+    "name",
+    "type",
+    "url"
+  ],
+  "title": "Connection: postgres",
+  "type": "object"
+}

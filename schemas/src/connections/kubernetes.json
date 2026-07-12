@@ -1,0 +1,43 @@
+{
+  "$id": "kubernetes.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "certificate": {
+      "title": "Kubeconfig",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "secret",
+      "x-clicky-order": 6
+    },
+    "name": {
+      "title": "Name",
+      "type": "string",
+      "x-clicky-order": 0
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
+    },
+    "properties": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Properties",
+      "type": "object",
+      "x-clicky-order": 7
+    },
+    "type": {
+      "const": "kubernetes",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "type"
+  ],
+  "title": "Connection: kubernetes",
+  "type": "object"
+}

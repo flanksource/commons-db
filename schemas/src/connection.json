@@ -1,0 +1,977 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "anthropic"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/anthropic.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "aws"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/aws.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "aws_kms"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/aws_kms.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "azure"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/azure.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "azure_devops"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/azure_devops.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "azure_key_vault"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/azure_key_vault.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "clickhouse"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/clickhouse.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "discord"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/discord.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "dynatrace"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/dynatrace.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "elasticsearch"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/elasticsearch.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "email"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/email.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "folder"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/folder.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "google_cloud"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/google_cloud.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "gcp_kms"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/gcp_kms.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "gcs"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/gcs.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "gemini"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/gemini.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "generic_webhook"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/generic_webhook.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "git"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/git.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "github"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/github.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "gitlab"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/gitlab.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "google_chat"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/google_chat.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "http"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/http.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "ifttt"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/ifttt.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "jaeger"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/jaeger.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "jmeter"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/jmeter.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "kubernetes"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/kubernetes.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "ldap"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/ldap.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "loki"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/loki.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "matrix"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/matrix.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "mattermost"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/mattermost.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "mongo"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/mongo.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "mysql"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/mysql.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "ntfy"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/ntfy.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "ollama"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/ollama.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "openai"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/openai.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "opensearch"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/opensearch.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "opsgenie"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/opsgenie.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "postgres"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/postgres.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "prometheus"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/prometheus.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "pushbullet"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/pushbullet.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "pushover"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/pushover.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "redis"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/redis.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "restic"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/restic.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "rocketchat"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/rocketchat.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "s3"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/s3.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "sftp"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/sftp.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "slack"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/slack.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "slackwebhook"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/slackwebhook.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "smb"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/smb.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "sql_server"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/sql_server.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "teams"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/teams.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "telegram"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/telegram.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "webhook"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/webhook.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "windows"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/windows.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "zulip_chat"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/zulip_chat.json"
+      }
+    }
+  ],
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string",
+      "x-clicky-order": 0
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
+    },
+    "properties": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Properties",
+      "type": "object",
+      "x-clicky-order": 7
+    },
+    "type": {
+      "enum": [
+        "anthropic",
+        "aws",
+        "aws_kms",
+        "azure",
+        "azure_devops",
+        "azure_key_vault",
+        "clickhouse",
+        "discord",
+        "dynatrace",
+        "elasticsearch",
+        "email",
+        "folder",
+        "google_cloud",
+        "gcp_kms",
+        "gcs",
+        "gemini",
+        "generic_webhook",
+        "git",
+        "github",
+        "gitlab",
+        "google_chat",
+        "http",
+        "ifttt",
+        "jaeger",
+        "jmeter",
+        "kubernetes",
+        "ldap",
+        "loki",
+        "matrix",
+        "mattermost",
+        "mongo",
+        "mysql",
+        "ntfy",
+        "ollama",
+        "openai",
+        "opensearch",
+        "opsgenie",
+        "postgres",
+        "prometheus",
+        "pushbullet",
+        "pushover",
+        "redis",
+        "restic",
+        "rocketchat",
+        "s3",
+        "sftp",
+        "slack",
+        "slackwebhook",
+        "smb",
+        "sql_server",
+        "teams",
+        "telegram",
+        "webhook",
+        "windows",
+        "zulip_chat"
+      ],
+      "title": "Type",
+      "type": "string",
+      "x-enum-display": "combobox",
+      "x-enum-icons": {
+        "anthropic": "anthropic",
+        "aws": "aws",
+        "aws_kms": "aws-kms",
+        "azure": "azure",
+        "azure_devops": "azure-devops",
+        "azure_key_vault": "azure-key-vault",
+        "clickhouse": "clickhouse",
+        "discord": "discord",
+        "dynatrace": "dynatrace",
+        "elasticsearch": "elasticsearch",
+        "email": "email",
+        "folder": "folder",
+        "gcp_kms": "gcp-kms",
+        "gcs": "gcs",
+        "gemini": "gemini",
+        "generic_webhook": "webhook",
+        "git": "git",
+        "github": "github",
+        "gitlab": "gitlab",
+        "google_chat": "google-chat",
+        "google_cloud": "google-cloud",
+        "http": "http",
+        "ifttt": "ifttt",
+        "jaeger": "jaeger",
+        "jmeter": "jmeter",
+        "kubernetes": "kubernetes",
+        "ldap": "ldap",
+        "loki": "grafana",
+        "matrix": "matrix",
+        "mattermost": "mattermost",
+        "mongo": "mongo",
+        "mysql": "mysql",
+        "ntfy": "ntfy",
+        "ollama": "ollama",
+        "openai": "openai",
+        "opensearch": "opensearch",
+        "opsgenie": "opsgenie",
+        "postgres": "postgres",
+        "prometheus": "prometheus",
+        "pushbullet": "pushbullet",
+        "pushover": "pushover",
+        "redis": "redis",
+        "restic": "restic",
+        "rocketchat": "rocket",
+        "s3": "aws-s3",
+        "sftp": "sftp",
+        "slack": "slack",
+        "slackwebhook": "slack",
+        "smb": "smb",
+        "sql_server": "sqlserver",
+        "teams": "teams",
+        "telegram": "telegram",
+        "webhook": "webhook",
+        "windows": "windows",
+        "zulip_chat": "zulip"
+      }
+    }
+  },
+  "required": [
+    "name",
+    "type"
+  ],
+  "title": "Connection",
+  "type": "object",
+  "x-discriminator": "type"
+}

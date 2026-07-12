@@ -1,0 +1,51 @@
+{
+  "$id": "gcs.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "certificate": {
+      "title": "Service Account JSON",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "secret",
+      "x-clicky-order": 6
+    },
+    "name": {
+      "title": "Name",
+      "type": "string",
+      "x-clicky-order": 0
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
+    },
+    "properties": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "title": "Properties",
+      "type": "object",
+      "x-clicky-order": 7
+    },
+    "type": {
+      "const": "gcs",
+      "title": "Type",
+      "type": "string"
+    },
+    "url": {
+      "title": "Endpoint",
+      "type": "string",
+      "x-clicky-component": "k8s-url-selector",
+      "x-clicky-default-source": "value",
+      "x-clicky-order": 2
+    }
+  },
+  "required": [
+    "name",
+    "type",
+    "certificate"
+  ],
+  "title": "Connection: gcs",
+  "type": "object"
+}
