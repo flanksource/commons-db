@@ -1,12 +1,14 @@
 package connection
 
 import (
+	"encoding/json"
 	"fmt"
 
 	"github.com/flanksource/commons-db/context"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
+	"github.com/flanksource/commons/hash"
 	"github.com/samber/lo"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -85,22 +87,14 @@ func (c KubernetesConnection) String() string {
 
 // Hash returns a unique identifier of a KubernetesConnection, suitable for caching
 func (c KubernetesConnection) Hash() string {
-	if c.ConnectionName != "" {
-		return "connection=" + c.ConnectionName
+	data, err := json.Marshal(c)
+	if err != nil {
+		return hash.Sha256Hex(c.String())
 	}
-	if c.Kubeconfig != nil {
-		return "kubeconfig=" + c.Kubeconfig.String()
-	}
-	if c.EKS != nil {
-		return fmt.Sprintf("eks=%s/%v", c.EKS.Cluster, c.EKS.ToModel())
-	}
-	if c.GKE != nil {
-		return fmt.Sprintf("gke=%s/%v", c.GKE.Cluster, c.GKE.ToModel())
-	}
-	if c.CNRM != nil {
-		return fmt.Sprintf("cnrm=%s/%v", c.CNRM.ClusterResource, c.GKE.ToModel())
-	}
-	return "local"
+	// Hash is used in cache keys and metric labels. Never return the serialized
+	// connection itself: kubeconfigs and cloud connection models can contain
+	// static credential material.
+	return hash.Sha256Hex(string(data))
 }
 
 func (c KubernetesConnection) CanExpire() bool {

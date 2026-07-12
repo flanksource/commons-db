@@ -1,6 +1,7 @@
 package kubernetes
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -20,14 +21,25 @@ func RestConfigFingerprint(rc *rest.Config) string {
 		return ""
 	}
 
-	return hash.Sha256Hex(fmt.Sprintf("%s/%s/%s/%s/%s/%s/%s",
-		rc.Host,
-		rc.APIPath,
-		rc.Username,
-		rc.Password,
-		rc.BearerToken,
-		rc.BearerTokenFile,
-		rc.TLSClientConfig.CertData))
+	identity := struct {
+		Host, APIPath, Username, Password, BearerToken, BearerTokenFile string
+		TLS                                                             rest.TLSClientConfig
+		Impersonate                                                     rest.ImpersonationConfig
+		AuthProvider                                                    any
+		ExecProvider                                                    any
+		TransportIdentity                                               string
+	}{
+		Host: rc.Host, APIPath: rc.APIPath, Username: rc.Username, Password: rc.Password,
+		BearerToken: rc.BearerToken, BearerTokenFile: rc.BearerTokenFile,
+		TLS: rc.TLSClientConfig, Impersonate: rc.Impersonate,
+		AuthProvider: rc.AuthProvider, ExecProvider: rc.ExecProvider,
+		TransportIdentity: fmt.Sprintf("proxy=%p|dial=%p|wrap=%p", rc.Proxy, rc.Dial, rc.WrapTransport),
+	}
+	data, err := json.Marshal(identity)
+	if err != nil {
+		return hash.Sha256Hex(rc.Host + rc.APIPath + rc.Username)
+	}
+	return hash.Sha256Hex(string(data))
 }
 
 func GetAPIServer(kubeconfigRaw []byte) (string, error) {

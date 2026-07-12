@@ -4,6 +4,7 @@ import {
   QueryBrowser,
   TimeseriesPanel,
   type EntityDetailBodyRenderContext,
+  type EntityDetailHeaderRenderContext,
   type JsonSchemaObject,
   type QueryBrowserResult,
   type TimeseriesResponse,
@@ -22,6 +23,37 @@ type BrowserDescriptor = {
   optionsSchema?: JsonSchemaObject;
   initialOptions?: Record<string, unknown>;
   catalog?: boolean;
+};
+
+type ConnectionPresence = {
+  configured: boolean;
+  resolved: boolean;
+};
+
+type ConnectionInfo = {
+  connection: {
+    name: string;
+    type: string;
+    namespace?: string;
+    configuredEndpoint?: string;
+    resolvedEndpoint?: string;
+    configuredUsername?: string;
+    resolvedUsername?: string;
+    password: ConnectionPresence;
+    certificate: ConnectionPresence;
+  };
+  server: {
+    status: "available" | "unavailable" | "error";
+    product?: string;
+    version?: string;
+    database?: string;
+    user?: string;
+    cluster?: string;
+    node?: string;
+    details?: Record<string, string>;
+    message?: string;
+  };
+  discoveredAt: string;
 };
 
 type CatalogNode = {
@@ -73,12 +105,92 @@ function ConnectionBrowser({ id, fallback }: { id: string; fallback: ReactNode }
   if (!descriptor.data) return fallback;
   if (descriptor.data.kind === "cache") {
     return (
-      <div className="h-[calc(100vh-15rem)] min-h-[32rem] overflow-hidden rounded-xl border bg-card">
-        <CacheBrowser baseUrl={baseUrl} />
+      <div className="flex min-h-[32rem] flex-col gap-3">
+        <div className="h-[calc(100vh-15rem)] min-h-[32rem] overflow-hidden rounded-xl border bg-card">
+          <CacheBrowser baseUrl={baseUrl} />
+        </div>
       </div>
     );
   }
-  return <ConnectionQueryBrowser id={id} baseUrl={baseUrl} descriptor={descriptor.data} />;
+  return (
+    <div className="flex min-w-0 flex-col gap-3">
+      <ConnectionQueryBrowser id={id} baseUrl={baseUrl} descriptor={descriptor.data} />
+    </div>
+  );
+}
+
+export function connectionDetailHeaderRenderer(context: EntityDetailHeaderRenderContext): ReactNode {
+  if (context.surfaceKey !== "connection") return context.defaultHeader;
+  return <ConnectionInfoHeader id={context.id} icon={context.icon} fallbackName={context.title} />;
+}
+
+// ConnectionInfoHeader renders the connection's identity and resolved server on
+// a single line for the explorer heading: [icon] name · endpoint · product ·
+// status. It shares the ["connection-info", id] query cache with the browser.
+function ConnectionInfoHeader({ id, icon, fallbackName }: { id: string; icon?: ReactNode; fallbackName: string }) {
+  const info = useQuery({
+    queryKey: ["connection-info", id],
+    queryFn: () => fetchJSON<ConnectionInfo>(`/api/v1/connection/${encodeURIComponent(id)}/info`),
+    retry: 0,
+    staleTime: 30_000,
+  });
+  const data = info.data;
+  const name = data?.connection.name ?? fallbackName;
+  const endpoint = data?.connection.resolvedEndpoint ?? data?.connection.configuredEndpoint;
+  const product = data ? [data.server.product, data.server.version].filter(Boolean).join(" ") : "";
+  return (
+    <h1 className="flex min-w-0 items-center gap-2 text-2xl font-semibold tracking-tight">
+      {icon}
+      <span className="shrink-0">{name}</span>
+      {info.isLoading ? (
+        <span className="text-sm font-normal text-muted-foreground">resolving…</span>
+      ) : info.isError ? (
+        <span
+          className="truncate text-sm font-normal text-destructive"
+          title={info.error instanceof Error ? info.error.message : undefined}
+        >
+          {info.error instanceof Error ? info.error.message : "unresolved"}
+        </span>
+      ) : data ? (
+        <span className="flex min-w-0 items-center gap-2 text-sm font-normal text-muted-foreground">
+          {endpoint ? (
+            <>
+              <HeaderDot />
+              <code className="min-w-0 truncate">{endpoint}</code>
+            </>
+          ) : null}
+          {product ? (
+            <>
+              <HeaderDot />
+              <span className="shrink-0">{product}</span>
+            </>
+          ) : null}
+          <HeaderDot />
+          <ServerStatus server={data.server} />
+        </span>
+      ) : null}
+    </h1>
+  );
+}
+
+function HeaderDot() {
+  return <span className="shrink-0 opacity-40">·</span>;
+}
+
+function ServerStatus({ server }: { server: ConnectionInfo["server"] }) {
+  const tone =
+    server.status === "available"
+      ? "text-emerald-600 dark:text-emerald-400"
+      : server.status === "error"
+        ? "text-destructive"
+        : "text-muted-foreground";
+  const label = server.status === "available" ? "available" : server.status === "error" ? "unreachable" : "unavailable";
+  return (
+    <span className={`inline-flex shrink-0 items-center gap-1 ${tone}`} title={server.message ?? undefined}>
+      <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
+      {label}
+    </span>
+  );
 }
 
 function ConnectionQueryBrowser({

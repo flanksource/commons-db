@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/www"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/db"
+	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
 )
@@ -43,6 +44,7 @@ func newServeCmd() *cobra.Command {
 func runServe(cmd *cobra.Command, o serveOptions) error {
 	ctx, cancel := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
+	defer dutyKubernetes.DefaultForwardManager().CloseAll()
 
 	configDir, err := cmd.Root().PersistentFlags().GetString("config-dir")
 	if err != nil {
@@ -137,7 +139,7 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 	handler := newExecHandler("/api/v1", appCtx, store,
 		newConnectionBrowserHandler("/api/v1", appCtx,
 			newConnectionActionsHandler("/api/v1", appCtx,
-				newSecretsHandler("/api/v1", kube,
+				newSecretsHandler("/api/v1", appCtx, kube,
 					newSchemaHandler("/api/v1", store, mux)))))
 
 	addr := fmt.Sprintf("%s:%d", o.host, o.port)

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	commons "github.com/flanksource/commons/context"
@@ -361,41 +362,63 @@ func (k Context) Kubernetes() (*dutyKubernetes.Client, error) {
 		return nil, fmt.Errorf("kubernetes connection not set")
 	}
 	connHash := conn.Hash()
-	if client, err := k8sclientcache.Get(k, connHash); err == nil {
+	cacheKey := fmt.Sprintf("%s|namespace=%s|db=%p", connHash, k.GetNamespace(), k.DB())
+	if client, err := k8sclientcache.Get(k, cacheKey); err == nil {
 		k.Counter("context_kubernetes_client_cache_hit", "connection", connHash).Add(1)
 		if _, err := client.Refresh(k); err != nil {
 			return nil, err
 		}
-		return client.Client, nil
+		return client.DutyClient(), nil
 	}
-	client, err := NewKubernetesClient(k, conn)
+	client, err := NewKubernetesClient(k, conn, cacheKey)
 	if err != nil {
 		return nil, err
 	}
-	_ = k8sclientcache.Set(k, connHash, client)
+	_ = k8sclientcache.Set(k, cacheKey, client)
 	k.Counter("context_kubernetes_client_cache_miss", "connection", connHash).Add(1)
-	return client.Client, nil
+	return client.DutyClient(), nil
 }
 
-var localKubernetes *dutyKubernetes.Client
+type localKubernetesContextKeyType struct{}
+
+var localKubernetesContextKey localKubernetesContextKeyType
+
+var (
+	defaultLocalKubernetesOnce sync.Once
+	defaultLocalKubernetes     *dutyKubernetes.Client
+	defaultLocalKubernetesErr  error
+)
 
 func (k Context) WithLocalKubernetes(client *dutyKubernetes.Client) Context {
-	localKubernetes = client
-	return k
+	return k.WithValue(localKubernetesContextKey, client)
 }
 
 func (k Context) LocalKubernetes(kubeconfigPaths ...string) (*dutyKubernetes.Client, error) {
-	if localKubernetes != nil {
-		return localKubernetes, nil
+	if client, ok := k.Value(localKubernetesContextKey).(*dutyKubernetes.Client); ok && client != nil {
+		return client, nil
 	}
 
-	var k8s = logger.GetLogger("k8s")
-	c, rc, err := dutyKubernetes.NewClient(k8s, kubeconfigPaths...)
-	if err != nil {
-		return nil, err
+	// Explicit paths describe a caller-specific client and must never populate or
+	// reuse the process default.
+	if len(kubeconfigPaths) > 0 {
+		log := logger.GetLogger("k8s")
+		client, rc, err := dutyKubernetes.NewClient(log, kubeconfigPaths...)
+		if err != nil {
+			return nil, err
+		}
+		return dutyKubernetes.NewKubeClient(log, client, rc), nil
 	}
-	localKubernetes = dutyKubernetes.NewKubeClient(k8s, c, rc)
-	return localKubernetes, nil
+
+	defaultLocalKubernetesOnce.Do(func() {
+		log := logger.GetLogger("k8s")
+		client, rc, err := dutyKubernetes.NewClient(log)
+		if err != nil {
+			defaultLocalKubernetesErr = err
+			return
+		}
+		defaultLocalKubernetes = dutyKubernetes.NewKubeClient(log, client, rc)
+	})
+	return defaultLocalKubernetes, defaultLocalKubernetesErr
 }
 
 func (k Context) Topology() any {
@@ -532,11 +555,15 @@ func (k Context) HydrateConnection(connection *models.Connection) (*models.Conne
 }
 
 func (k Context) Wrap(ctx gocontext.Context) Context {
-	return NewContext(ctx, commons.WithTracer(k.GetTracer()), commons.WithLogger(k.Logger)).
+	wrapped := NewContext(ctx, commons.WithTracer(k.GetTracer()), commons.WithLogger(k.Logger)).
 		WithDB(k.DB(), k.Pool()).
 		WithConnectionString(k.ConnectionString()).
 		WithKubernetes(k.KubernetesConnection()).
 		WithNamespace(k.GetNamespace())
+	if client, ok := k.Value(localKubernetesContextKey).(*dutyKubernetes.Client); ok && client != nil {
+		wrapped = wrapped.WithLocalKubernetes(client)
+	}
+	return wrapped
 }
 
 func stringSliceToMap(s []string) map[string]string {

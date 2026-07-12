@@ -11,7 +11,7 @@ import { secretFormExtensions } from "./secretKeySelector";
 import { namespaceFormExtensions } from "./namespacePicker";
 import { connectionFormActions } from "./connectionActions";
 import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
-import { connectionDetailBodyRenderer } from "./connectionBrowser";
+import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
 import { getMonacoWorker } from "./monacoWorkers";
 
 // Compose the form extensions: the namespace picker, plus the secret/workload
@@ -56,6 +56,7 @@ function Explorer() {
       }}
       resultRenderer={logsResultRenderer(logsEntityNames)}
       entityDetailBodyRenderer={connectionDetailBodyRenderer}
+      entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
     />
   );
 }
