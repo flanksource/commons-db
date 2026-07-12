@@ -57,6 +57,12 @@ func (jaegerProvider) Execute(ctx context.Context, req query.ProviderRequest) ([
 	}
 
 	base := opts.URL
+	if base != "" {
+		base, err = resolveInlineURL(ctx, base, "jaeger")
+		if err != nil {
+			return nil, err
+		}
+	}
 	if base == "" {
 		base = hydrated.URL
 	}

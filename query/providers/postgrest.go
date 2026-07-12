@@ -22,6 +22,9 @@ type postgrestProvider struct{}
 func (postgrestProvider) Type() string { return "postgrest" }
 
 type postgrestOptions struct {
+	// URL is an inline PostgREST base URL used when no stored connection is referenced.
+	URL string `json:"url,omitempty"`
+
 	// JSONPath optionally extracts an inner array from the response.
 	JSONPath string `json:"jsonpath,omitempty"`
 }
@@ -36,6 +39,12 @@ func (postgrestProvider) Execute(ctx context.Context, req query.ProviderRequest)
 	hydrated, err := conn.Hydrate(ctx, ctx.GetNamespace())
 	if err != nil {
 		return nil, fmt.Errorf("failed to hydrate postgrest connection: %w", err)
+	}
+	if opts.URL != "" {
+		hydrated.URL, err = resolveInlineURL(ctx, opts.URL, "http")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	url := requestURL(hydrated.URL, req.Query)

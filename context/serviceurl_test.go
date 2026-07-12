@@ -3,10 +3,10 @@ package context
 import (
 	"context"
 
-	commons "github.com/flanksource/commons/context"
-	"github.com/flanksource/commons/logger"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/models"
+	commons "github.com/flanksource/commons/context"
+	"github.com/flanksource/commons/logger"
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
@@ -136,5 +136,11 @@ var _ = ginkgo.Describe("expandServiceURL", func() {
 		got, err := newCtx().expandServiceURL("postgres://user:pass@host:5432/db", models.ConnectionTypePostgres, "")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got).To(Equal("postgres://user:pass@host:5432/db"))
+	})
+
+	ginkgo.It("resolves inline workload URLs through the public connection URL seam", func() {
+		got, err := newCtx().ResolveConnectionURL("svc://db:5432", models.ConnectionTypePostgres, "prod")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(Equal("postgres://db.prod.svc.cluster.local:5432"))
 	})
 })

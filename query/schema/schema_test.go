@@ -23,7 +23,12 @@ func branchFor(s schema.Schema, typ string) map[string]any {
 		b := raw.(map[string]any)
 		ifClause := b["if"].(map[string]any)["properties"].(map[string]any)
 		if ifClause["type"].(map[string]any)["const"] == typ {
-			return b["then"].(map[string]any)
+			then := b["then"].(map[string]any)
+			if ref, ok := then["$ref"].(string); ok {
+				const prefix = "#/$defs/"
+				return s["$defs"].(schema.Schema)[ref[len(prefix):]].(map[string]any)
+			}
+			return then
 		}
 	}
 	return nil
@@ -63,10 +68,10 @@ var _ = Describe("Connection schema", func() {
 		Expect(props["namespace"].(schema.Schema)["x-clicky-component"]).To(Equal("k8s-namespace-selector"))
 	})
 
-	It("marks type as the discriminator with an icon grid for every type", func() {
+	It("marks type as the discriminator with an icon combobox for every type", func() {
 		Expect(s["x-discriminator"]).To(Equal("type"))
 		typeProp := s["properties"].(schema.Schema)["type"].(schema.Schema)
-		Expect(typeProp["x-enum-display"]).To(Equal("grid"))
+		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
 		icons := typeProp["x-enum-icons"].(map[string]string)
 		Expect(icons).To(HaveLen(55))
 		Expect(icons[models.ConnectionTypePostgres]).To(Equal("postgres"))
@@ -119,8 +124,8 @@ var _ = Describe("Connection schema", func() {
 	It("surfaces certificate per type: optional for kubernetes, required for GCP", func() {
 		k8s := branchFor(s, models.ConnectionTypeKubernetes)
 		Expect(k8s["properties"].(schema.Schema)).To(HaveKey("certificate"))
-		// kubernetes cert is optional: the branch declares no required fields
-		Expect(k8s).ToNot(HaveKey("required"))
+		// Kubernetes cert is optional: only the universal name/type fields are required.
+		Expect(k8s["required"]).To(ConsistOf("name", "type"))
 
 		gcp := branchFor(s, models.ConnectionTypeGCP)
 		Expect(gcp["properties"].(schema.Schema)).To(HaveKey("certificate"))
@@ -140,6 +145,18 @@ var _ = Describe("Connection schema", func() {
 			Expect(icons).To(HaveKey(typ), "missing icon for connection type %q", typ)
 		}
 	})
+
+	It("emits external source refs and a local-ref bundle for all 55 components", func() {
+		Expect(schema.ConnectionComponents()).To(HaveLen(55))
+		source := schema.ConnectionSource()
+		firstSourceBranch := source["allOf"].([]any)[0].(schema.Schema)
+		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("connections/"))
+
+		bundled := schema.Connection()
+		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(55))
+		firstBundledBranch := bundled["allOf"].([]any)[0].(schema.Schema)
+		Expect(firstBundledBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("#/$defs/"))
+	})
 })
 
 // allConnectionTypesSet is the connection type enum as a set, for the drift guard.
@@ -157,6 +174,32 @@ var _ = Describe("Profile schema", func() {
 		s := schema.Profile()
 		Expect(s["required"]).To(ConsistOf("profile", "provider"))
 		Expect(s["properties"].(schema.Schema)).To(HaveKey("params"))
+	})
+
+	It("uses a nested provider discriminator with icon combobox options", func() {
+		s := schema.Profile()
+		props := s["properties"].(schema.Schema)
+		Expect(props["namespace"].(schema.Schema)["x-clicky-component"]).To(Equal("k8s-namespace-selector"))
+		provider := props["provider"].(schema.Schema)
+		Expect(provider["x-discriminator"]).To(Equal("type"))
+		typeProp := provider["properties"].(schema.Schema)["type"].(schema.Schema)
+		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
+		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(11))
+	})
+
+	It("bundles every provider component and enriches inline URLs", func() {
+		Expect(schema.ProfileComponents()).To(HaveLen(11))
+		source := schema.ProfileSource()
+		provider := source["properties"].(schema.Schema)["provider"].(schema.Schema)
+		firstSourceBranch := provider["allOf"].([]any)[0].(schema.Schema)
+		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("profiles/"))
+
+		bundled := schema.Profile()
+		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(11))
+		http := bundled["$defs"].(schema.Schema)["http"].(schema.Schema)
+		options := http["properties"].(schema.Schema)["options"].(schema.Schema)
+		url := options["properties"].(schema.Schema)["url"].(schema.Schema)
+		Expect(url["x-clicky-component"]).To(Equal("k8s-url-selector"))
 	})
 
 	It("makes provider.connection an x-clicky-lookup picker scoped by provider type", func() {
@@ -228,5 +271,18 @@ var _ = Describe("ProfileInstance schema", func() {
 			Expect(col).ToNot(HaveKey("sortable"))
 			Expect(col).ToNot(HaveKey("filterable"))
 		}
+	})
+})
+
+var _ = Describe("Schema bundling", func() {
+	It("rejects unresolved and cyclic external refs", func() {
+		_, err := schema.Bundle(schema.Schema{"$ref": "missing.json"}, nil)
+		Expect(err).To(MatchError(ContainSubstring("unresolved schema ref")))
+
+		_, err = schema.Bundle(
+			schema.Schema{"$ref": "self.json"},
+			map[string]schema.Schema{"self.json": {"$ref": "self.json"}},
+		)
+		Expect(err).To(MatchError(ContainSubstring("cyclic schema ref")))
 	})
 })

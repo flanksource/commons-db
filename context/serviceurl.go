@@ -173,6 +173,17 @@ func (k Context) expandServiceURL(raw, connType, defaultNS string) (string, erro
 	return raw, nil
 }
 
+// ResolveConnectionURL resolves a literal/EnvVar URL and then expands workload
+// references (svc://, ip://, proxy://, host://, portforward://) using namespace.
+// It is the shared inline-connection counterpart of HydrateConnection.
+func (k Context) ResolveConnectionURL(raw, connType, namespace string) (string, error) {
+	resolved, err := GetEnvStringFromCache(k, raw, namespace)
+	if err != nil {
+		return "", err
+	}
+	return k.expandServiceURL(strings.TrimSpace(resolved), connType, namespace)
+}
+
 func buildServiceURL(scheme, host, port, path string) string {
 	authority := host
 	if port != "" {

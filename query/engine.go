@@ -17,6 +17,9 @@ import (
 // (omit when there are none). They are validated/coerced against the
 // declarations and exposed to the query template as `params`.
 func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result, error) {
+	if p.Namespace != "" {
+		ctx = ctx.WithNamespace(p.Namespace)
+	}
 	var supplied map[string]any
 	if len(params) > 0 {
 		supplied = params[0]

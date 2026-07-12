@@ -10,6 +10,7 @@ import { secretFormExtensions } from "./secretKeySelector";
 import { namespaceFormExtensions } from "./namespacePicker";
 import { connectionFormActions } from "./connectionActions";
 import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
+import { connectionDetailBodyRenderer } from "./connectionBrowser";
 
 // Compose the form extensions: the namespace picker, plus the secret/workload
 // url selector (which reads the selected namespace from the form's root value).
@@ -47,7 +48,12 @@ function Explorer() {
       client={client}
       formExtensions={formExtensions}
       formActions={connectionFormActions}
+      surfaceActionLabels={{
+        connection: { create: "Add Connection", update: "Edit" },
+        profiles: { create: "Add Profile" },
+      }}
       resultRenderer={logsResultRenderer(logsEntityNames)}
+      entityDetailBodyRenderer={connectionDetailBodyRenderer}
     />
   );
 }

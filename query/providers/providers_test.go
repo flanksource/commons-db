@@ -19,6 +19,21 @@ func jsonServer(status int, body string) *httptest.Server {
 }
 
 var _ = Describe("http provider", func() {
+	It("uses an inline base URL from provider options", func() {
+		srv := jsonServer(http.StatusOK, `[{"source":"options"}]`)
+		defer srv.Close()
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name: "http-options-url",
+			Provider: query.ProviderConfig{
+				Type:    "http",
+				Options: map[string]any{"url": srv.URL},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(ConsistOf(query.Row{"source": "options"}))
+	})
+
 	It("returns one row per element of a JSON array response", func() {
 		srv := jsonServer(http.StatusOK, `[{"id":1,"name":"a"},{"id":2,"name":"b"}]`)
 		defer srv.Close()

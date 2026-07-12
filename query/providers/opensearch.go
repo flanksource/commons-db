@@ -38,7 +38,11 @@ func (opensearchProvider) Execute(ctx context.Context, req query.ProviderRequest
 		return nil, err
 	}
 
-	backend := opensearch.Backend{Address: opts.Address}
+	address, err := resolveInlineURL(ctx, opts.Address, "opensearch")
+	if err != nil {
+		return nil, err
+	}
+	backend := opensearch.Backend{Address: address}
 	if req.Connection != "" {
 		conn, err := ctx.HydrateConnectionByURL(req.Connection)
 		if err != nil {

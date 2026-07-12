@@ -220,7 +220,8 @@ func CreateHTTPClient(ctx ConnectionContext, conn HTTPConnection) (*http.Client,
 func NewHTTPConnection(ctx ConnectionContext, conn models.Connection) (HTTPConnection, error) {
 	var httpConn HTTPConnection
 	switch conn.Type {
-	case models.ConnectionTypeHTTP, models.ConnectionTypePrometheus:
+	case models.ConnectionTypeHTTP, models.ConnectionTypePrometheus,
+		models.ConnectionTypeOpenSearch, models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
 		httpConn.URL = conn.URL
 		if err := httpConn.Username.Scan(conn.Username); err != nil {
 			return httpConn, fmt.Errorf("error scanning username: %w", err)

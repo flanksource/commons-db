@@ -33,8 +33,9 @@ var providerConnectionTypes = map[string][]string{
 	"jaeger":     {models.ConnectionTypeJaeger},
 }
 
-// Profile returns the profile-setup JSON Schema used to create/edit a Profile.
-func Profile() Schema {
+// ProfileSource returns the externally referenced profile form schema. Each
+// provider branch points at its standalone component under profiles/.
+func ProfileSource() Schema {
 	paramDef := Schema{
 		"type":     "object",
 		"required": []string{"name"},
@@ -66,14 +67,30 @@ func Profile() Schema {
 	}
 
 	provider := Schema{
-		"type":     "object",
-		"title":    "Provider",
-		"required": []string{"type"},
+		"type":            "object",
+		"title":           "Provider",
+		"required":        []string{"type"},
+		"x-discriminator": "type",
 		"properties": Schema{
-			"type":       Schema{"type": "string", "title": "Type", "enum": providerTypes},
+			"type": Schema{
+				"type":           "string",
+				"title":          "Type",
+				"enum":           providerTypes,
+				"x-enum-icons":   providerTypeIcons,
+				"x-enum-display": "combobox",
+			},
 			"connection": connectionProp(),
 			"options":    Schema{"type": "object", "title": "Options"},
 		},
+	}
+	for _, typ := range providerTypes {
+		provider["allOf"] = append(providerAllOf(provider), Schema{
+			"if": Schema{
+				"properties": Schema{"type": Schema{"const": typ}},
+				"required":   []string{"type"},
+			},
+			"then": Schema{"$ref": "profiles/" + typ + ".json"},
+		})
 	}
 
 	return Schema{
@@ -82,15 +99,43 @@ func Profile() Schema {
 		"type":     "object",
 		"required": []string{"profile", "provider"},
 		"properties": Schema{
-			"profile":  strProp("Name", "Profile name"),
+			"profile": strProp("Name", "Profile name"),
+			"namespace": Schema{
+				"type":               "string",
+				"title":              "Namespace",
+				"x-clicky-component": "k8s-namespace-selector",
+				"x-clicky-order":     1,
+			},
 			"provider": provider,
-			"query":    strProp("Query", "Provider-native query; may reference {{.params.<name>}}"),
-			"params":   Schema{"type": "array", "title": "Params", "items": paramDef},
-			"columns":  Schema{"type": "array", "title": "Columns", "items": columnDef},
-			"output":   Schema{"type": "array", "title": "Output", "items": Schema{"type": "string"}},
-			"render":   Schema{"type": "string", "title": "Render", "enum": []string{"table", "logs"}, "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)"},
+			"query": Schema{
+				"type":        "string",
+				"title":       "Query",
+				"format":      "textarea",
+				"description": "Provider-native query; may reference {{.params.<name>}}",
+			},
+			"params":  Schema{"type": "array", "title": "Params", "items": paramDef},
+			"columns": Schema{"type": "array", "title": "Columns", "items": columnDef},
+			"output":  Schema{"type": "array", "title": "Output", "items": Schema{"type": "string"}},
+			"render":  Schema{"type": "string", "title": "Render", "enum": []string{"table", "logs"}, "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)"},
 		},
 	}
+}
+
+func providerAllOf(provider Schema) []any {
+	if allOf, ok := provider["allOf"].([]any); ok {
+		return allOf
+	}
+	return nil
+}
+
+// Profile returns the bundled profile schema consumed by clicky-ui.
+func Profile() Schema {
+	refs := SchemaRefs("profiles", ProfileComponents())
+	bundled, err := Bundle(ProfileSource(), refs)
+	if err != nil {
+		panic("bundle profile schema: " + err.Error())
+	}
+	return bundled
 }
 
 // connectionProp is the provider.connection field: an x-clicky-lookup entity

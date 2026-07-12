@@ -11,15 +11,17 @@ import (
 // mockProvider is a Provider that records the request it was given and returns
 // a fixed set of rows, so engine dispatch can be tested without a backend.
 type mockProvider struct {
-	typ  string
-	rows []query.Row
-	last query.ProviderRequest
+	typ           string
+	rows          []query.Row
+	last          query.ProviderRequest
+	lastNamespace string
 }
 
 func (m *mockProvider) Type() string { return m.typ }
 
-func (m *mockProvider) Execute(_ context.Context, req query.ProviderRequest) ([]query.Row, error) {
+func (m *mockProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
 	m.last = req
+	m.lastNamespace = ctx.GetNamespace()
 	return m.rows, nil
 }
 
@@ -112,6 +114,25 @@ var _ = Describe("Execute", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Profile).To(Equal("trace"))
 		Expect(result.Rows).To(Equal(rows))
+	})
+
+	It("scopes primary and context providers to the profile namespace", func() {
+		primary := &mockProvider{typ: "exec-namespaced-primary"}
+		secondary := &mockProvider{typ: "exec-namespaced-secondary"}
+		query.RegisterProvider(primary)
+		query.RegisterProvider(secondary)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:      "namespaced",
+			Namespace: "prod",
+			Provider:  query.ProviderConfig{Type: primary.typ},
+			Context: map[string]query.SubQuery{
+				"secondary": {Provider: query.ProviderConfig{Type: secondary.typ}},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(primary.lastNamespace).To(Equal("prod"))
+		Expect(secondary.lastNamespace).To(Equal("prod"))
 	})
 
 	It("runs context SubQueries into named side objects", func() {

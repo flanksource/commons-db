@@ -34,6 +34,9 @@ func (httpProvider) Type() string { return "http" }
 
 // httpOptions are decoded from ProviderRequest.Options.
 type httpOptions struct {
+	// URL is an inline HTTP base URL used when no stored connection is referenced.
+	URL string `json:"url,omitempty"`
+
 	// Method is the HTTP method (default GET).
 	Method string `json:"method,omitempty"`
 
@@ -55,6 +58,12 @@ func (httpProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 	hydrated, err := conn.Hydrate(ctx, ctx.GetNamespace())
 	if err != nil {
 		return nil, fmt.Errorf("failed to hydrate http connection: %w", err)
+	}
+	if opts.URL != "" {
+		hydrated.URL, err = resolveInlineURL(ctx, opts.URL, "http")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	url := requestURL(hydrated.URL, req.Query)

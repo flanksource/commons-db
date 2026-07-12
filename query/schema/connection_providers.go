@@ -80,6 +80,14 @@ type ClickHouseProvider struct {
 	secretCreds
 }
 
+// RedisProvider models a Redis/Valkey endpoint. A URL may carry the database
+// number and credentials; explicit username/password fields override URI auth
+// after hydration when the browser creates its client.
+type RedisProvider struct {
+	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=URL,source=value,required,order=2,desc=redis://host:6379/0"`
+	secretCreds
+}
+
 // KubernetesProvider models a Kubernetes cluster connection: an optional
 // kubeconfig (in-cluster config is used when empty).
 type KubernetesProvider struct {
@@ -128,6 +136,7 @@ var tailoredProviders = map[string]any{
 	models.ConnectionTypeMySQL:      MySQLProvider{},
 	models.ConnectionTypeSQLServer:  SQLServerProvider{},
 	models.ConnectionTypeClickHouse: ClickHouseProvider{},
+	models.ConnectionTypeRedis:      RedisProvider{},
 	models.ConnectionTypeKubernetes: KubernetesProvider{},
 	models.ConnectionTypeGCP:        GCPProvider{},
 	models.ConnectionTypeGCS:        GCSProvider{},
