@@ -3,9 +3,11 @@ package kubernetes
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/onsi/gomega"
+	"k8s.io/client-go/rest"
 )
 
 func TestGetAPIServer(t *testing.T) {
@@ -32,5 +34,24 @@ func TestGetAPIServer(t *testing.T) {
 			g.Expect(err).To(gomega.BeNil())
 			g.Expect(result).To(gomega.Equal(tc.expected))
 		})
+	}
+}
+
+func TestRestConfigFingerprintScopesCredentialsWithoutExposingThem(t *testing.T) {
+	secret := "bearer-secret"
+	base := &rest.Config{Host: "https://cluster", BearerToken: secret, TLSClientConfig: rest.TLSClientConfig{CAData: []byte("ca-one")}}
+	got := RestConfigFingerprint(base)
+	if len(got) != 64 || strings.Contains(got, secret) {
+		t.Fatalf("unsafe fingerprint %q", got)
+	}
+	otherPrincipal := rest.CopyConfig(base)
+	otherPrincipal.BearerToken = "other"
+	if got == RestConfigFingerprint(otherPrincipal) {
+		t.Fatal("different principals shared a fingerprint")
+	}
+	otherCA := rest.CopyConfig(base)
+	otherCA.TLSClientConfig.CAData = []byte("ca-two")
+	if got == RestConfigFingerprint(otherCA) {
+		t.Fatal("different TLS trust roots shared a fingerprint")
 	}
 }

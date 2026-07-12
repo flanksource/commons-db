@@ -13,16 +13,24 @@ import (
 	"github.com/ohler55/ojg/jp"
 	"github.com/samber/lo"
 
+	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/logger"
 	"github.com/patrickmn/go-cache"
+	"golang.org/x/sync/singleflight"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// Create a cache with a default expiration time of 5 minutes, and which
-// purges expired items every 10 minutes
-var envCache = cache.New(5*time.Minute, 10*time.Minute)
+const defaultEnvCacheTTL = time.Minute
+
+// envCache is scoped in every key by the Kubernetes API and authorization
+// fingerprint. This prevents a value fetched by one cluster or principal from
+// satisfying a lookup made by another.
+var (
+	envCache       = cache.New(defaultEnvCacheTTL, 2*defaultEnvCacheTTL)
+	envLookupGroup singleflight.Group
+)
 
 const helmSecretType = "helm.sh/release.v1"
 
@@ -52,6 +60,9 @@ func GetEnvValueFromCache(ctx Context, input types.EnvVar, namespace string) (va
 	} else if !lo.IsEmpty(input.ValueFrom.ServiceAccount) {
 		source = fmt.Sprintf("service-account(%s/%s)", namespace, *input.ValueFrom.ServiceAccount)
 		value, err = GetServiceAccountTokenFromCache(ctx, namespace, *input.ValueFrom.ServiceAccount)
+	} else if !lo.IsEmpty(input.ValueFrom.OnePassword) {
+		source = fmt.Sprintf("1password(%s)", *input.ValueFrom.OnePassword)
+		value, err = GetOnePasswordValueFromCache(ctx, *input.ValueFrom.OnePassword)
 	}
 
 	if err != nil {
@@ -163,120 +174,181 @@ func GetHelmValuesFromCache(ctx Context, namespace, releaseName string) (map[str
 	return merged, nil
 }
 func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (string, error) {
-	id := fmt.Sprintf("helm/%s/%s/%s", namespace, releaseName, key)
-	if value, found := envCache.Get(id); found {
-		return value.(string), nil
-	}
-	merged, err := GetHelmValuesFromCache(ctx, namespace, releaseName)
+	_, scope, err := localKubernetesCacheScope(ctx)
 	if err != nil {
 		return "", err
 	}
-
-	keyJPExpr, err := jp.ParseString(key)
-	if err != nil {
-		return "", fmt.Errorf("could not parse key:%s. must be a valid jsonpath expression. %w", key, err)
+	id := fmt.Sprintf("%s/helm/%s/%s/%s", scope, namespace, releaseName, key)
+	if value, found := envCache.Get(id); found {
+		return value.(string), nil
 	}
-
-	results := keyJPExpr.Get(merged)
-	if len(results) == 0 {
-		return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s", key, namespace, lo.Keys(merged))
-	}
-
-	val := ""
-	if len(results) == 1 {
-		switch v := results[0].(type) {
-		case string:
-			val = v
-		case []byte:
-			val = string(v)
-		case int, int32, int64:
-			val = fmt.Sprintf("%d", v)
-		case float32, float64:
-			val = fmt.Sprintf("%0f", v)
-		default:
-			b, err := json.Marshal(v)
-			if err != nil {
-				return "", fmt.Errorf("could not marshal merged helm secret %s/%s: %w", namespace, releaseName, err)
-			}
-			val = string(b)
-
+	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
+		merged, err := GetHelmValuesFromCache(ctx, namespace, releaseName)
+		if err != nil {
+			return "", err
 		}
+		keyJPExpr, err := jp.ParseString(key)
+		if err != nil {
+			return "", fmt.Errorf("could not parse key:%s. must be a valid jsonpath expression. %w", key, err)
+		}
+		results := keyJPExpr.Get(merged)
+		if len(results) == 0 {
+			return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s", key, namespace, lo.Keys(merged))
+		}
+		val := ""
+		if len(results) == 1 {
+			switch v := results[0].(type) {
+			case string:
+				val = v
+			case []byte:
+				val = string(v)
+			case int, int32, int64:
+				val = fmt.Sprintf("%d", v)
+			case float32, float64:
+				val = fmt.Sprintf("%0f", v)
+			default:
+				b, err := json.Marshal(v)
+				if err != nil {
+					return "", fmt.Errorf("could not marshal merged helm secret %s/%s: %w", namespace, releaseName, err)
+				}
+				val = string(b)
+			}
+		}
+		envCache.Set(id, val, envCacheTTL(ctx, "envvar.helm.cache.timeout"))
+		return val, nil
+	})
+	if err != nil {
+		return "", err
 	}
-
-	envCache.Set(id, val, ctx.Properties().Duration("envvar.helm.cache.timeout", ctx.Properties().Duration("envvar.cache.timeout", 5*time.Minute)))
-	return val, nil
+	return value.(string), nil
 }
 
 func GetSecretFromCache(ctx Context, namespace, name, key string) (string, error) {
-	id := fmt.Sprintf("secret/%s/%s/%s", namespace, name, key)
+	client, scope, err := localKubernetesCacheScope(ctx)
+	if err != nil {
+		return "", err
+	}
+	id := fmt.Sprintf("%s/secret/%s/%s/%s", scope, namespace, name, key)
 	if value, found := envCache.Get(id); found {
 		return value.(string), nil
 	}
-	client, err := ctx.LocalKubernetes()
+	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
+		secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("could not find secret %s/%s: %s", namespace, name, err)
+		}
+		if secret == nil {
+			return "", fmt.Errorf("could not get contents of secret %s/%s", namespace, name)
+		}
+		resolved, ok := secret.Data[key]
+		if !ok {
+			return "", fmt.Errorf("could not find key %v in secret %s/%s (%s)", key, namespace, name, strings.Join(lo.Keys(secret.Data), ", "))
+		}
+		envCache.Set(id, string(resolved), envCacheTTL(ctx, "envvar.cache.timeout"))
+		return string(resolved), nil
+	})
 	if err != nil {
-		return "", fmt.Errorf("error creating kubernetes client: %w", err)
+		return "", err
 	}
-
-	secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("could not find secret %s/%s: %s", namespace, name, err)
-	}
-
-	if secret == nil {
-		return "", fmt.Errorf("could not get contents of secret %s/%s: %w", namespace, name, err)
-	}
-
-	value, ok := secret.Data[key]
-
-	if !ok {
-		return "", fmt.Errorf("could not find key %v in secret %s/%s (%s)", key, namespace, name, strings.Join(lo.Keys(secret.Data), ", "))
-	}
-	envCache.Set(id, string(value), ctx.Properties().Duration("envvar.cache.timeout", 5*time.Minute))
-	return string(value), nil
+	return value.(string), nil
 }
 
 func GetConfigMapFromCache(ctx Context, namespace, name, key string) (string, error) {
-	id := fmt.Sprintf("cm/%s/%s/%s", namespace, name, key)
+	client, scope, err := localKubernetesCacheScope(ctx)
+	if err != nil {
+		return "", err
+	}
+	id := fmt.Sprintf("%s/cm/%s/%s/%s", scope, namespace, name, key)
 	if value, found := envCache.Get(id); found {
 		return value.(string), nil
 	}
-	client, err := ctx.LocalKubernetes()
+	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
+		configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return "", fmt.Errorf("could not get configmap %s/%s: %s", namespace, name, err)
+		}
+		if configMap == nil {
+			return "", fmt.Errorf("could not get contents of configmap %s/%s", namespace, name)
+		}
+		resolved, ok := configMap.Data[key]
+		if !ok {
+			return "", fmt.Errorf("could not find key %v in configmap %s/%s (%s)", key, namespace, name,
+				strings.Join(lo.Keys(configMap.Data), ", "))
+		}
+		envCache.Set(id, resolved, envCacheTTL(ctx, "envvar.cache.timeout"))
+		return resolved, nil
+	})
 	if err != nil {
-		return "", fmt.Errorf("error creating kubernetes client: %w", err)
+		return "", err
 	}
-	configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return "", fmt.Errorf("could not get configmap %s/%s: %s", namespace, name, err)
-	}
-	if configMap == nil {
-		return "", fmt.Errorf("could not get contents of configmap %s/%s: %w", namespace, name, err)
-	}
-
-	value, ok := configMap.Data[key]
-	if !ok {
-		return "", fmt.Errorf("could not find key %v in configmap %s/%s (%s)", key, namespace, name,
-			strings.Join(lo.Keys(configMap.Data), ", "))
-	}
-	envCache.Set(id, string(value), ctx.Properties().Duration("envvar.cache.timeout", 5*time.Minute))
-	return string(value), nil
+	return value.(string), nil
 }
 
 func GetServiceAccountTokenFromCache(ctx Context, namespace, serviceAccount string) (string, error) {
-	id := fmt.Sprintf("sa-token/%s/%s", namespace, serviceAccount)
+	client, scope, err := localKubernetesCacheScope(ctx)
+	if err != nil {
+		return "", err
+	}
+	id := fmt.Sprintf("%s/sa-token/%s/%s", scope, namespace, serviceAccount)
 	if value, found := envCache.Get(id); found {
 		return value.(string), nil
 	}
+	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
+		tokenRequest, err := client.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, serviceAccount, &authenticationv1.TokenRequest{}, metav1.CreateOptions{})
+		if err != nil {
+			return "", fmt.Errorf("could not get token for service account %s/%s: %w", namespace, serviceAccount, err)
+		}
+		ttl := time.Until(tokenRequest.Status.ExpirationTimestamp.Time) - time.Minute
+		if ttl <= 0 {
+			return "", fmt.Errorf("service account token for %s/%s expires too soon", namespace, serviceAccount)
+		}
+		envCache.Set(id, tokenRequest.Status.Token, ttl)
+		return tokenRequest.Status.Token, nil
+	})
+	if err != nil {
+		return "", err
+	}
+	return value.(string), nil
+}
+
+func localKubernetesCacheScope(ctx Context) (*dutyKubernetes.Client, string, error) {
 	client, err := ctx.LocalKubernetes()
 	if err != nil {
-		return "", fmt.Errorf("error creating kubernetes client: %w", err)
+		return nil, "", fmt.Errorf("error creating kubernetes client: %w", err)
 	}
-	tokenRequest, err := client.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, serviceAccount, &authenticationv1.TokenRequest{}, metav1.CreateOptions{})
-	if err != nil {
-		return "", fmt.Errorf("could not get token for service account %s/%s: %w", namespace, serviceAccount, err)
+	scope := dutyKubernetes.RestConfigFingerprint(client.RestConfig())
+	if scope == "" {
+		scope = fmt.Sprintf("client-%p", client)
 	}
+	return client, scope, nil
+}
 
-	envCache.Set(id, tokenRequest.Status.Token, time.Until(tokenRequest.Status.ExpirationTimestamp.Time))
-	return tokenRequest.Status.Token, nil
+func envCacheTTL(ctx Context, override string) time.Duration {
+	base := ctx.Properties().Duration("envvar.cache.timeout", defaultEnvCacheTTL)
+	if override != "" {
+		return ctx.Properties().Duration(override, base)
+	}
+	return base
+}
+
+// InvalidateSecretCache and InvalidateConfigMapCache provide an explicit hook
+// for controllers that observe Kubernetes resource-version changes.
+func InvalidateSecretCache(ctx Context, namespace, name, key string) error {
+	_, scope, err := localKubernetesCacheScope(ctx)
+	if err != nil {
+		return err
+	}
+	envCache.Delete(fmt.Sprintf("%s/secret/%s/%s/%s", scope, namespace, name, key))
+	return nil
+}
+
+func InvalidateConfigMapCache(ctx Context, namespace, name, key string) error {
+	_, scope, err := localKubernetesCacheScope(ctx)
+	if err != nil {
+		return err
+	}
+	envCache.Delete(fmt.Sprintf("%s/cm/%s/%s/%s", scope, namespace, name, key))
+	return nil
 }
 
 func (ctx Context) Lookup(namespace string) *EnvVarSourceBuilder {

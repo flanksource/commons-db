@@ -5,15 +5,10 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
-	"github.com/eko/gocache/lib/v4/cache"
-	"github.com/eko/gocache/lib/v4/store"
-	gocache_store "github.com/eko/gocache/store/go_cache/v4"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/google/uuid"
-	gocache "github.com/patrickmn/go-cache"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 
@@ -67,12 +62,6 @@ func extractConnectionNameType(connectionString string) (name, namespace string,
 	return
 }
 
-var connectionCache = cache.New[*models.Connection](gocache_store.NewGoCache(gocache.New(30*time.Minute, 30*time.Minute)))
-
-func getConnectionCacheKey(connString, ctxNamespace string) string {
-	return connString + ctxNamespace
-}
-
 // HydrateConnectionByURL retrieves a connection from the given connection string.
 // The connection string is expected to be in one of the following forms:
 //   - connection://<namespace>/<name> or connection://<name>
@@ -80,11 +69,6 @@ func getConnectionCacheKey(connString, ctxNamespace string) string {
 func HydrateConnectionByURL(ctx Context, connectionString string) (*models.Connection, error) {
 	if connectionString == "" {
 		return nil, nil
-	}
-
-	cacheKey := getConnectionCacheKey(connectionString, ctx.GetNamespace())
-	if cacheVal, err := connectionCache.Get(ctx, cacheKey); err == nil {
-		return cacheVal, nil
 	}
 
 	_, uuidErr := uuid.Parse(connectionString)
@@ -108,16 +92,14 @@ func HydrateConnectionByURL(ctx Context, connectionString string) (*models.Conne
 	}
 
 	if connection == nil {
-		// Setting a smaller cache for connection not found
-		_ = connectionCache.Set(ctx, cacheKey, connection, store.WithExpiration(5*time.Minute))
 		return nil, fmt.Errorf("connection %q not found", connectionString)
 	}
 
-	hydratedConnection, err := HydrateConnection(ctx, connection)
-	if err == nil {
-		_ = connectionCache.Set(ctx, cacheKey, hydratedConnection)
-	}
-	return hydratedConnection, err
+	// Hydrated connections deliberately are not cached. They contain resolved
+	// credentials and, for port-forward URLs, an ephemeral localhost port. The
+	// narrower env-value and forward caches provide reuse without making database
+	// edits or secret rotations stale for the lifetime of a connection cache entry.
+	return HydrateConnection(ctx, connection)
 }
 
 func IsValidConnectionURL(connectionString string) bool {
@@ -214,9 +196,6 @@ func GetConnection(ctx Context, name, namespace string) (*models.Connection, err
 	return HydrateConnection(ctx, connection)
 }
 
-// Create a cache with a default expiration time of 5 minutes, and which
-// purges expired items every 10 minutes
-// var connectionCache = cache.New(5*time.Minute, 10*time.Minute)
 func HydrateConnection(ctx Context, connection *models.Connection) (*models.Connection, error) {
 	var err error
 

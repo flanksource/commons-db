@@ -3,13 +3,15 @@ package connection
 import (
 	databasesql "database/sql"
 	"fmt"
+	"net/url"
 	"slices"
 	"strings"
 
 	_ "github.com/ClickHouse/clickhouse-go/v2"
-	_ "github.com/go-sql-driver/mysql"
+	mysql "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/microsoft/go-mssqldb"
+	"github.com/microsoft/go-mssqldb/msdsn"
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -81,12 +83,101 @@ func (s *SQLConnection) Client(ctx context.Context) (*databasesql.DB, error) {
 		return nil, fmt.Errorf("sql connection url cannot be empty")
 	}
 
-	client, err := databasesql.Open(driverName, s.URL.ValueStatic)
+	connectionString, err := s.connectionString()
+	if err != nil {
+		return nil, err
+	}
+
+	client, err := databasesql.Open(driverName, connectionString)
 	if err != nil {
 		return nil, err
 	}
 
 	return client, nil
+}
+
+// connectionString applies credentials resolved from EnvVar-backed username and
+// password fields to the driver DSN. Keeping credentials outside URL is useful
+// for secret:// references, but database/sql drivers only receive the DSN passed
+// to Open and otherwise fall back to process defaults (for pgx, the OS user).
+func (s SQLConnection) connectionString() (string, error) {
+	raw := s.URL.ValueStatic
+	username := s.Username.ValueStatic
+	password := s.Password.ValueStatic
+	if username == "" && password == "" {
+		return raw, nil
+	}
+
+	switch s.Type {
+	case "", models.ConnectionTypePostgres:
+		if strings.Contains(raw, "://") {
+			return applyURLCredentials(raw, username, password)
+		}
+		if username != "" {
+			raw += " user=" + quotePostgresDSNValue(username)
+		}
+		if password != "" {
+			raw += " password=" + quotePostgresDSNValue(password)
+		}
+		return strings.TrimSpace(raw), nil
+	case models.ConnectionTypeMySQL:
+		cfg, err := mysql.ParseDSN(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid mysql connection string: %w", err)
+		}
+		if username != "" {
+			cfg.User = username
+		}
+		if password != "" {
+			cfg.Passwd = password
+		}
+		return cfg.FormatDSN(), nil
+	case models.ConnectionTypeSQLServer:
+		cfg, err := msdsn.Parse(raw)
+		if err != nil {
+			return "", fmt.Errorf("invalid sqlserver connection string: %w", err)
+		}
+		if username != "" {
+			cfg.User = username
+		}
+		if password != "" {
+			cfg.Password = password
+		}
+		return cfg.URL().String(), nil
+	case models.ConnectionTypeClickHouse:
+		return applyURLCredentials(raw, username, password)
+	default:
+		return raw, nil
+	}
+}
+
+func applyURLCredentials(raw, username, password string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid sql connection URL: %w", err)
+	}
+	currentUsername := ""
+	currentPassword := ""
+	if parsed.User != nil {
+		currentUsername = parsed.User.Username()
+		currentPassword, _ = parsed.User.Password()
+	}
+	if username != "" {
+		currentUsername = username
+	}
+	if password != "" {
+		currentPassword = password
+	}
+	if currentPassword != "" {
+		parsed.User = url.UserPassword(currentUsername, currentPassword)
+	} else if currentUsername != "" {
+		parsed.User = url.User(currentUsername)
+	}
+	return parsed.String(), nil
+}
+
+func quotePostgresDSNValue(value string) string {
+	return "'" + strings.NewReplacer(`\`, `\\`, `'`, `\'`).Replace(value) + "'"
 }
 
 func (s *SQLConnection) HydrateConnection(ctx context.Context) error {

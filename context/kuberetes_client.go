@@ -2,14 +2,15 @@ package context
 
 import (
 	"fmt"
+	"sync"
 	"time"
 
 	"k8s.io/client-go/rest"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 
-	"github.com/flanksource/commons/logger"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/pkg/kube/auth"
+	"github.com/flanksource/commons/logger"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/samber/lo"
 )
@@ -19,6 +20,8 @@ type KubernetesClient struct {
 	Connection KubernetesConnection
 	expiry     time.Time
 	logger     logger.Logger
+	mu         sync.Mutex
+	cacheKey   string
 }
 
 var defaultExpiry = 15 * time.Minute
@@ -32,7 +35,11 @@ func authProvider(clusterAddress string, config map[string]string, persister res
 	return ap, err
 }
 
-func NewKubernetesClient(ctx Context, conn KubernetesConnection) (*KubernetesClient, error) {
+func NewKubernetesClient(ctx Context, conn KubernetesConnection, cacheKeys ...string) (*KubernetesClient, error) {
+	cacheKey := conn.Hash()
+	if len(cacheKeys) > 0 && cacheKeys[0] != "" {
+		cacheKey = cacheKeys[0]
+	}
 	c, rc, err := conn.Populate(ctx, true)
 	if err != nil {
 		return nil, fmt.Errorf("error refreshing kubernetes client: %w", err)
@@ -42,15 +49,16 @@ func NewKubernetesClient(ctx Context, conn KubernetesConnection) (*KubernetesCli
 		Client:     dutyKubernetes.NewKubeClient(log, c, rc),
 		Connection: conn,
 		logger:     logger.GetLogger("k8s"),
+		cacheKey:   cacheKey,
 	}
 
 	if client.logger.IsLevelEnabled(logger.Trace4) {
 		client.logger.V(logger.Trace1).Infof(logger.Stacktrace())
 	}
 
-	client.SetExpiry(defaultExpiry)
+	client.setExpiryLocked(defaultExpiry)
 
-	connHash := conn.Hash()
+	connHash := cacheKey
 	if rc.ExecProvider == nil && rc.BearerToken != "" {
 		refreshCallback := func() (*rest.Config, error) {
 			ctx.Counter("kubernetes_auth_plugin_refreshed", "connection", connHash).Add(1)
@@ -78,7 +86,7 @@ func (c *KubernetesClient) SetLogger(log logger.Logger) {
 	c.Client.SetLogger(log)
 }
 
-func (c *KubernetesClient) SetExpiry(def time.Duration) {
+func (c *KubernetesClient) setExpiryLocked(def time.Duration) {
 	// Try parsing BearerToken as JWT and extract expiry
 	if expiry := extractExpiryFromJWT(lo.FromPtr(c.Config).BearerToken); !expiry.IsZero() {
 		c.expiry = expiry
@@ -88,38 +96,42 @@ func (c *KubernetesClient) SetExpiry(def time.Duration) {
 }
 
 func (c *KubernetesClient) Refresh(ctx Context) (*rest.Config, error) {
-	if !c.HasExpired() && (c.Config.AuthProvider == nil || c.Config.BearerToken != "") {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.hasExpiredLocked() && (c.Config.AuthProvider == nil || c.Config.BearerToken != "") {
 		return c.RestConfig(), nil
 	}
-	client, rc, err := c.Connection.Populate(ctx, true)
+	clientset, rc, err := c.Connection.Populate(ctx, true)
 	if err != nil {
 		return nil, fmt.Errorf("error refreshing kubernetes client: %w", err)
 	}
 
-	// Update rest config in place for easy reuse
-	c.Config.Host = rc.Host
-	c.Config.TLSClientConfig = rc.TLSClientConfig
-	c.Config.BearerTokenFile = rc.BearerTokenFile
-	c.Config.Username = rc.Username
-
-	if c.Config.BearerToken != rc.BearerToken || c.Config.Password != rc.Password {
-		c.Config.BearerToken = rc.BearerToken
-		c.Config.Password = rc.Password
-		c.Client.Reset()
-	}
-
-	c.Client.Interface = client
-	c.SetExpiry(defaultExpiry)
+	// Swap the client atomically instead of mutating a rest.Config or clientset
+	// already in use by concurrent callers.
+	c.Client = dutyKubernetes.NewKubeClient(c.logger, clientset, rc)
+	c.setExpiryLocked(defaultExpiry)
 	c.logger.V(5).Infof("token refreshed, expires at %s", c.expiry.Format(time.RFC3339))
 	return rc, nil
 }
 
-func (c KubernetesClient) HasExpired() bool {
+func (c *KubernetesClient) HasExpired() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.hasExpiredLocked()
+}
+
+func (c *KubernetesClient) hasExpiredLocked() bool {
 	if c.Connection.CanExpire() && !c.expiry.IsZero() {
 		// We give a 1 minute window as a buffer
 		return time.Until(c.expiry) <= time.Minute
 	}
 	return false
+}
+
+func (c *KubernetesClient) DutyClient() *dutyKubernetes.Client {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.Client
 }
 
 func extractExpiryFromJWT(token string) time.Time {

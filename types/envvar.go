@@ -66,13 +66,22 @@ type EnvVarSource struct {
 	HelmRef         *HelmRefKeySelector   `json:"helmRef,omitempty" yaml:"helmRef,omitempty" protobuf:"bytes,2,opt,name=helmRef"`
 	ConfigMapKeyRef *ConfigMapKeySelector `json:"configMapKeyRef,omitempty" yaml:"configMapKeyRef,omitempty" protobuf:"bytes,3,opt,name=configMapKeyRef"`
 	SecretKeyRef    *SecretKeySelector    `json:"secretKeyRef,omitempty" yaml:"secretKeyRef,omitempty" protobuf:"bytes,4,opt,name=secretKeyRef"`
+	// OnePassword is a 1Password secret reference of the form
+	// op://<vault>/<item>/<field>. It is resolved via the `op` CLI — with a
+	// service-account token when OP_SERVICE_ACCOUNT_TOKEN is set, otherwise the
+	// ambient CLI session.
+	OnePassword *string `json:"onePassword,omitempty" yaml:"onePassword,omitempty" protobuf:"bytes,5,opt,name=onePassword"`
 }
+
+// OnePasswordScheme prefixes a 1Password secret reference (op://vault/item/field).
+const OnePasswordScheme = "op://"
 
 func (e EnvVarSource) IsEmpty() bool {
 	return (e.ServiceAccount == nil || *e.ServiceAccount == "") &&
 		(e.HelmRef == nil || e.HelmRef.IsEmpty()) &&
 		(e.ConfigMapKeyRef == nil || e.ConfigMapKeyRef.IsEmpty()) &&
-		(e.SecretKeyRef == nil || e.SecretKeyRef.IsEmpty())
+		(e.SecretKeyRef == nil || e.SecretKeyRef.IsEmpty()) &&
+		(e.OnePassword == nil || *e.OnePassword == "")
 }
 
 func (e EnvVarSource) String() string {
@@ -87,6 +96,9 @@ func (e EnvVarSource) String() string {
 	}
 	if e.HelmRef != nil {
 		return "helm://" + e.HelmRef.String()
+	}
+	if e.OnePassword != nil {
+		return *e.OnePassword
 	}
 	return ""
 }
@@ -229,6 +241,21 @@ func (e *EnvVar) Scan(value any) error {
 			*e = EnvVar{
 				ValueFrom: &EnvVarSource{
 					ServiceAccount: &segments[2],
+				},
+			}
+			return nil
+		}
+
+		if strings.HasPrefix(v, OnePasswordScheme) {
+			// A 1Password reference is op://<vault>/<item>/<field>[/<section-field>...],
+			// so it has at least a vault, item and field after the scheme.
+			if len(strings.Split(strings.TrimPrefix(v, OnePasswordScheme), "/")) < 3 {
+				return fmt.Errorf("invalid 1password reference (want op://vault/item/field): %s", v)
+			}
+			ref := v
+			*e = EnvVar{
+				ValueFrom: &EnvVarSource{
+					OnePassword: &ref,
 				},
 			}
 			return nil

@@ -84,7 +84,7 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, base)
-	idPart, tail, ok := strings.Cut(rest, "/browser")
+	idPart, resource, ok := strings.Cut(rest, "/")
 	if !ok || idPart == "" {
 		h.next.ServeHTTP(w, r)
 		return
@@ -94,6 +94,15 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "invalid connection id", http.StatusBadRequest)
 		return
 	}
+	if strings.TrimSuffix(resource, "/") == "info" && r.Method == http.MethodGet {
+		h.serveConnectionInfo(w, r, id)
+		return
+	}
+	if resource != "browser" && !strings.HasPrefix(resource, "browser/") {
+		h.next.ServeHTTP(w, r)
+		return
+	}
+	tail := strings.TrimPrefix(resource, "browser")
 	conn, err := findConnectionMust(h.ctx, id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -219,8 +228,8 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 }
 
 func (h *connectionBrowserHandler) executeSQL(r *http.Request, conn *models.Connection, statement string) (browserQueryResult, error) {
-	sqlConn := dbconnection.SQLConnection{ConnectionName: conn.ID.String(), Type: conn.Type}
-	if err := sqlConn.HydrateConnection(h.ctx); err != nil {
+	var sqlConn dbconnection.SQLConnection
+	if err := sqlConn.FromModel(*conn); err != nil {
 		return browserQueryResult{}, err
 	}
 	client, err := sqlConn.Client(h.ctx)
@@ -328,8 +337,8 @@ func (h *connectionBrowserHandler) serveCatalog(w http.ResponseWriter, r *http.R
 }
 
 func (h *connectionBrowserHandler) sqlCatalog(r *http.Request, conn *models.Connection) (browserCatalog, error) {
-	sqlConn := dbconnection.SQLConnection{ConnectionName: conn.ID.String(), Type: conn.Type}
-	if err := sqlConn.HydrateConnection(h.ctx); err != nil {
+	var sqlConn dbconnection.SQLConnection
+	if err := sqlConn.FromModel(*conn); err != nil {
 		return browserCatalog{}, err
 	}
 	client, err := sqlConn.Client(h.ctx)
