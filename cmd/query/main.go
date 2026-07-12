@@ -6,6 +6,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/clicky"
@@ -16,16 +17,13 @@ import (
 	_ "github.com/flanksource/commons-db/query/providers"
 )
 
-// defaultProfilesDir is the profile YAML directory used when --profiles-dir and
-// QUERY_PROFILES_DIR are both unset.
-const defaultProfilesDir = "./profiles"
-
 func main() {
 	root := &cobra.Command{
 		Use:   "query",
 		Short: "Connections, query profiles, and a web app to run them",
 	}
-	root.PersistentFlags().String("profiles-dir", defaultProfilesDir, "Directory of profile YAML files")
+	root.PersistentFlags().String("config-dir", resolveConfigDir(os.Args[1:]), "Query state directory (defaults to XDG config)")
+	root.PersistentFlags().String("profiles-dir", "", "Directory of profile YAML files (default: <config-dir>/profiles)")
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newSchemaCmd())
 
@@ -78,5 +76,5 @@ func resolveProfilesDir(args []string) string {
 	if v := os.Getenv("QUERY_PROFILES_DIR"); v != "" {
 		return v
 	}
-	return defaultProfilesDir
+	return filepath.Join(resolveConfigDir(args), "profiles")
 }

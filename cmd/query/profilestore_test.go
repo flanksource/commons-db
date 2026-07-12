@@ -1,6 +1,8 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/flanksource/commons-db/query"
@@ -39,6 +41,17 @@ func TestProfileStoreRoundTrip(t *testing.T) {
 	}
 	if len(got.Columns) != 1 || got.Columns[0].Name != "id" {
 		t.Fatalf("columns not preserved: %+v", got.Columns)
+	}
+	bySlug, err := store.Get("profile-sales-report")
+	if err != nil || bySlug.Name != want.Name {
+		t.Fatalf("profile slug lookup failed: %+v err=%v", bySlug, err)
+	}
+	info, err := os.Stat(filepath.Join(store.Dir, "sales-report.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotMode := info.Mode().Perm(); gotMode != 0o600 {
+		t.Fatalf("profile file mode = %o, want 600", gotMode)
 	}
 }
 
