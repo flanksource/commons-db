@@ -12,7 +12,6 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/www"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/db"
-	"github.com/flanksource/commons-db/models"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
 )
@@ -67,11 +66,8 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 	if err != nil {
 		return fmt.Errorf("setup db: %w", err)
 	}
-	if err := ensureSchema(gdb); err != nil {
+	if err := migrateSchema(ctx, dsn); err != nil {
 		return err
-	}
-	if err := gdb.AutoMigrate(&models.Connection{}); err != nil {
-		return fmt.Errorf("migrate connections: %w", err)
 	}
 
 	appCtx := dbcontext.NewContext(ctx).WithDB(gdb, pool).WithConnectionString(dsn)
@@ -82,6 +78,12 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 	setDB(gdb)
 	setContext(appCtx)
 	store := currentStore()
+	if err := store.UseDB(gdb); err != nil {
+		return fmt.Errorf("initialize profile database store: %w", err)
+	}
+	if err := registerProfileEntities(store); err != nil {
+		return fmt.Errorf("register database profiles: %w", err)
+	}
 
 	server := rpc.NewSwaggerServer(
 		&rpc.ServeConfig{
