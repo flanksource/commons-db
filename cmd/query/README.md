@@ -19,9 +19,12 @@ go run ./cmd/query serve --port 8080 --profiles-dir ./profiles
    clicky-ui `SecretKeySelector` (Secret / ConfigMap / Value) backed by
    `GET /api/v1/secrets[/preview]`; the chosen reference is stored as an
    `EnvVar` string (`secret://<name>/<key>`) and resolved at runtime.
-2. **Create profiles** — stored as YAML under `--profiles-dir`; the form is driven
-   by the profile-setup schema. A profile declares a `provider`, a `query`,
-   server-side filter `params`, and output `columns`.
+2. **Create profiles** — stored in the migrated PostgreSQL `profiles` table under
+   `query serve`; standalone CLI commands continue to use YAML under
+   `--profiles-dir`. Existing YAML profiles are imported without overwriting
+   database rows. The form is driven by the profile-setup schema. A profile
+   declares a `provider`, a `query`, server-side filter `params`, and output
+   `columns`.
 3. **Run profiles** — `GET /api/v1/profile/{name}?<param>=<value>` validates the
    params, templates them into the query (`{{.params.<name>}}`), executes via the
    query engine, and returns the rows.
@@ -78,15 +81,17 @@ execHandler → schemaHandler → clicky executor + UI mux
 
 Runtime state defaults to `$XDG_CONFIG_HOME/flanksource/query`, falling back to
 `~/.config/flanksource/query` on every operating system. Embedded PostgreSQL
-uses the `postgres/` subdirectory and query profiles use `profiles/`. Override
+uses the `postgres/` subdirectory and standalone/imported query profiles use
+`profiles/`. Override
 the root with `--config-dir` or `QUERY_CONFIG_DIR`; the existing
 `--data-dir`/`QUERY_DATA_DIR` and `--profiles-dir`/`QUERY_PROFILES_DIR`
 overrides remain available. Existing `.query/pg` and `./profiles` directories
 are not migrated automatically.
 
 The toolbar exposes explicit **Add Connection** and **Add Profile** actions.
-Connections are persisted in the embedded database and profiles are stored as
-private YAML files. After a profile is added, the UI refreshes its OpenAPI
+Connections and profiles are persisted in the embedded database. Private YAML
+profiles are imported on startup and remain the standalone CLI fallback. After
+a profile is added, the UI refreshes its OpenAPI
 discovery data and exposes the profile as a runnable sidebar surface without a
 server restart.
 

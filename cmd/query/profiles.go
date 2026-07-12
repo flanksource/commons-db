@@ -126,6 +126,9 @@ func registerProfileEntities(store *ProfileStore) error {
 		if err != nil {
 			return fmt.Errorf("build entity schema for profile %q: %w", name, err)
 		}
+		if !store.markRegistered(name) {
+			continue
+		}
 		entity.NewDynamicEntity("profile-"+slugify(name), schemaJSON).
 			List(func(_ context.Context, opts map[string]string) ([]map[string]any, error) {
 				live, err := store.Get(name) // re-read so edits to the profile reflect
