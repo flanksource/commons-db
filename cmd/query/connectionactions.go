@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bufio"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -11,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 )
@@ -61,9 +60,13 @@ func (h *connectionActionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	conn, err := decodeConnectionDraft(r)
+	conn, draftID, err := decodeConnectionDraft(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.mergeStoredDraftSecrets(draftID, conn); err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
 	if _, err := dbcontext.HydrateConnection(h.ctx, conn); err != nil {
@@ -81,24 +84,45 @@ func (h *connectionActionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 // decodeConnectionDraft reads the request body into a Connection. Unlike the CRUD
 // path it does not require a name (the operator may test before naming), but a
 // type is needed to pick the URL scheme.
-func decodeConnectionDraft(r *http.Request) (*models.Connection, error) {
+func decodeConnectionDraft(r *http.Request) (*models.Connection, string, error) {
 	var body map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decode request body: %w", err)
+		return nil, "", fmt.Errorf("decode request body: %w", err)
 	}
+	draftID, _ := body["id"].(string)
 	delete(body, "id")
 	data, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("encode connection body: %w", err)
+		return nil, "", fmt.Errorf("encode connection body: %w", err)
 	}
 	var c models.Connection
 	if err := json.Unmarshal(data, &c); err != nil {
-		return nil, fmt.Errorf("invalid connection: %w", err)
+		return nil, "", fmt.Errorf("invalid connection: %w", err)
 	}
 	if c.Type == "" {
-		return nil, fmt.Errorf("connection type is required")
+		return nil, "", fmt.Errorf("connection type is required")
 	}
-	return &c, nil
+	return &c, strings.TrimSpace(draftID), nil
+}
+
+// mergeStoredDraftSecrets mirrors update semantics for edit-form tests. The
+// connection API never returns passwords or certificates, so an unchanged edit
+// draft has blank secret fields even though the stored connection has values.
+func (h *connectionActionsHandler) mergeStoredDraftSecrets(draftID string, draft *models.Connection) error {
+	if draftID == "" || (draft.Password != "" && draft.Certificate != "") {
+		return nil
+	}
+	existing, err := findConnection(h.ctx.DB(), draftID)
+	if err != nil {
+		return fmt.Errorf("load stored connection for test: %w", err)
+	}
+	if draft.Password == "" {
+		draft.Password = existing.Password
+	}
+	if draft.Certificate == "" {
+		draft.Certificate = existing.Certificate
+	}
+	return nil
 }
 
 // maskedConnection returns the hydrated connection with secrets mid-masked so
@@ -136,7 +160,7 @@ func testConnection(ctx dbcontext.Context, c *models.Connection) testResult {
 	_ = conn.Close()
 
 	if scheme == "http" || scheme == "https" {
-		return httpProbe(c, displayURL)
+		return httpProbe(ctx, c, displayURL)
 	}
 	return testResult{OK: true, Message: fmt.Sprintf("TCP connect to %s succeeded", host), URL: displayURL}
 }
@@ -210,48 +234,43 @@ func splitServerValue(v string) (host, port string) {
 	return strings.TrimSpace(host), port
 }
 
-func httpProbe(c *models.Connection, displayURL string) testResult {
+func httpProbe(ctx dbcontext.Context, c *models.Connection, displayURL string) testResult {
 	target, err := validatedHTTPProbeTarget(c.URL)
 	if err != nil {
 		return testResult{OK: false, Message: err.Error(), URL: displayURL}
 	}
-	conn, err := (&net.Dialer{Timeout: 8 * time.Second}).Dial("tcp", target.hostPort)
+	probeConnection := *c
+	if !isHTTPAuthConnectionType(probeConnection.Type) {
+		probeConnection.Type = models.ConnectionTypeHTTP
+	}
+	httpConnection, err := dbconnection.NewHTTPConnection(ctx, probeConnection)
 	if err != nil {
-		return testResult{OK: false, Message: fmt.Sprintf("HTTP connect failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
+		return testResult{OK: false, Message: fmt.Sprintf("HTTP authentication setup failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
 	}
-	defer func() { _ = conn.Close() }()
-
-	if target.url.Scheme == "https" {
-		tlsConn := tls.Client(conn, &tls.Config{
-			ServerName:         target.url.Hostname(),
-			InsecureSkipVerify: c.InsecureTLS, //nolint:gosec // operator opt-in via insecure_tls
-		})
-		if err := tlsConn.Handshake(); err != nil {
-			return testResult{OK: false, Message: fmt.Sprintf("TLS handshake failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
-		}
-		conn = tlsConn
+	client := &http.Client{
+		Transport: httpConnection.Transport(),
+		Timeout:   8 * time.Second,
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
 	}
-
-	deadline := time.Now().Add(8 * time.Second)
-	_ = conn.SetDeadline(deadline)
-	req := &http.Request{
-		Method:     http.MethodGet,
-		URL:        target.url,
-		Host:       target.hostHeader,
-		Header:     http.Header{"Connection": []string{"close"}},
-		Proto:      "HTTP/1.1",
-		ProtoMajor: 1,
-		ProtoMinor: 1,
-		Body:       http.NoBody,
+	req, err := http.NewRequest(http.MethodGet, target.url.String(), nil)
+	if err != nil {
+		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", err), URL: displayURL}
 	}
-	if err := req.Write(conn); err != nil {
-		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
-	}
-	resp, err := http.ReadResponse(bufio.NewReader(conn), req)
+	req.Host = target.hostHeader
+	resp, err := client.Do(req)
 	if err != nil {
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return testResult{
+			OK:      false,
+			Message: fmt.Sprintf("HTTP %s: authentication failed", resp.Status),
+			URL:     displayURL,
+		}
+	}
 	return testResult{
 		OK:      resp.StatusCode < 500,
 		Message: fmt.Sprintf("HTTP %s", resp.Status),

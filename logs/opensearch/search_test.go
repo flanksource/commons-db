@@ -9,6 +9,7 @@ import (
 
 	dutyContext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
+	"github.com/flanksource/commons-db/types"
 )
 
 func TestSearchRawPreservesNativeEnvelope(t *testing.T) {
@@ -43,6 +44,40 @@ func TestSearchRawPreservesNativeEnvelope(t *testing.T) {
 	}
 	if result.Aggregations["levels"] == nil {
 		t.Fatalf("raw response lost aggregations: %#v", result.Aggregations)
+	}
+}
+
+func TestNewHonorsInsecureTLS(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "reader" || password != "secret" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"took":0,"timed_out":false,"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+	}))
+	defer server.Close()
+
+	ctx := dutyContext.New()
+	credentials := Backend{
+		Address: server.URL, Username: &types.EnvVar{ValueStatic: "reader"},
+		Password: &types.EnvVar{ValueStatic: "secret"},
+	}
+	if _, err := New(ctx, credentials, nil); err == nil {
+		t.Fatal("self-signed TLS must fail without explicit insecure TLS")
+	}
+	credentials.InsecureTLS = true
+	searcher, err := New(ctx, credentials, nil)
+	if err != nil {
+		t.Fatalf("insecure TLS connection failed: %v", err)
+	}
+	if _, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`}); err != nil {
+		t.Fatalf("search over insecure TLS failed: %v", err)
 	}
 }
 
