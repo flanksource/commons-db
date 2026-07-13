@@ -27,7 +27,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 
-type BrowserDescriptor = {
+export type BrowserDescriptor = {
   kind: "query" | "cache";
   provider?: string;
   language?: "sql" | "json" | "text";
@@ -70,7 +70,7 @@ type ConnectionInfo = {
   discoveredAt: string;
 };
 
-type CatalogNode = {
+export type CatalogNode = {
   id: string;
   label: string;
   kind: string;
@@ -88,7 +88,7 @@ type InspectionField = {
   conflicting?: boolean;
 };
 
-type BrowserInspection = {
+export type BrowserInspection = {
   kind: "sql" | "opensearch";
   dialect?: "postgresql" | "mysql" | "mssql" | "standard";
   database?: string;
@@ -149,7 +149,7 @@ export function completionForInspection(
   return undefined;
 }
 
-async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
+export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
     const body = await response.text();

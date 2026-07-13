@@ -54,7 +54,8 @@
         "type": "object"
       },
       "title": "Columns",
-      "type": "array"
+      "type": "array",
+      "x-layout": "table"
     },
     "namespace": {
       "title": "Namespace",
@@ -398,7 +399,8 @@
       "description": "Provider-native query; may reference {{.params.\u003cname\u003e}}",
       "format": "textarea",
       "title": "Query",
-      "type": "string"
+      "type": "string",
+      "x-clicky-component": "profile-query-builder"
     },
     "render": {
       "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)",

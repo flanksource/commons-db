@@ -53,8 +53,10 @@ func providerOptions(typ string) Schema {
 			"x-enum-display": "combobox",
 		}
 		props["url"] = inlineURLProp("URL / DSN", "Inline database URL used instead of a saved connection")
+		props["database"] = strProp("Database", "Database override for this query")
 	case "postgres", "mysql", "sqlserver", "clickhouse":
 		props["url"] = inlineURLProp("URL / DSN", "Inline database URL used instead of a saved connection")
+		props["database"] = strProp("Database", "Database override for this query")
 	case "http":
 		props["url"] = inlineURLProp("Base URL", "Inline HTTP base URL used instead of a saved connection")
 		props["method"] = Schema{"type": "string", "title": "Method", "enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE"}}

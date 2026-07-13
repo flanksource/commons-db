@@ -15,11 +15,16 @@ import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
 import { getMonacoWorker } from "./monacoWorkers";
 import { ChatWidget } from "./chatWidget";
+import { profileBuilderFormExtensions } from "./profileBuilder";
 
 // Compose the form extensions: the namespace picker, plus the secret/workload
 // url selector (which reads the selected namespace from the form's root value).
 const formExtensions = {
-  post: [...namespaceFormExtensions.post, ...secretFormExtensions.post],
+  post: [
+    ...namespaceFormExtensions.post,
+    ...secretFormExtensions.post,
+    ...profileBuilderFormExtensions.post,
+  ],
 };
 
 // The Go server (query serve) exposes:

@@ -57,6 +57,11 @@
         },
         "options": {
           "properties": {
+            "database": {
+              "description": "Database override for this query",
+              "title": "Database",
+              "type": "string"
+            },
             "url": {
               "description": "Inline database URL used instead of a saved connection",
               "title": "URL / DSN",
@@ -462,6 +467,11 @@
         },
         "options": {
           "properties": {
+            "database": {
+              "description": "Database override for this query",
+              "title": "Database",
+              "type": "string"
+            },
             "url": {
               "description": "Inline database URL used instead of a saved connection",
               "title": "URL / DSN",
@@ -632,6 +642,11 @@
         },
         "options": {
           "properties": {
+            "database": {
+              "description": "Database override for this query",
+              "title": "Database",
+              "type": "string"
+            },
             "url": {
               "description": "Inline database URL used instead of a saved connection",
               "title": "URL / DSN",
@@ -905,6 +920,11 @@
         },
         "options": {
           "properties": {
+            "database": {
+              "description": "Database override for this query",
+              "title": "Database",
+              "type": "string"
+            },
             "type": {
               "enum": [
                 "postgres",
@@ -1002,6 +1022,11 @@
         },
         "options": {
           "properties": {
+            "database": {
+              "description": "Database override for this query",
+              "title": "Database",
+              "type": "string"
+            },
             "url": {
               "description": "Inline database URL used instead of a saved connection",
               "title": "URL / DSN",
@@ -1081,7 +1106,8 @@
         "type": "object"
       },
       "title": "Columns",
-      "type": "array"
+      "type": "array",
+      "x-layout": "table"
     },
     "namespace": {
       "title": "Namespace",
@@ -1425,7 +1451,8 @@
       "description": "Provider-native query; may reference {{.params.\u003cname\u003e}}",
       "format": "textarea",
       "title": "Query",
-      "type": "string"
+      "type": "string",
+      "x-clicky-component": "profile-query-builder"
     },
     "render": {
       "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)",
