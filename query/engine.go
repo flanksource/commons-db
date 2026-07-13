@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/flanksource/gomplate/v3"
@@ -17,6 +18,12 @@ import (
 // (omit when there are none). They are validated/coerced against the
 // declarations and exposed to the query template as `params`.
 func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result, error) {
+	if err := p.ValidateKind(); err != nil {
+		return nil, err
+	}
+	if p.Kind() == KindTrace {
+		return nil, fmt.Errorf("profile %q is a trace; use ExecuteStream", p.Name)
+	}
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
@@ -28,7 +35,13 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	return executeResolved(ctx, p, resolved)
+}
 
+// executeResolved runs the post-param pipeline: render → provider → columns →
+// context sub-queries → processors (→ top sort/limit). Shared by Execute and
+// each top-session tick.
+func executeResolved(ctx context.Context, p Profile, resolved map[string]any) (*Result, error) {
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return nil, err
@@ -70,7 +83,59 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 
+	if p.Top != nil {
+		result.Rows = sortAndLimit(result.Rows, p.Top.SortBy, p.Top.Limit)
+	}
 	return result, nil
+}
+
+// sortAndLimit orders rows descending by the named column, then truncates to
+// limit. Zero values leave the rows untouched.
+func sortAndLimit(rows []Row, sortBy string, limit int) []Row {
+	if sortBy != "" {
+		sort.SliceStable(rows, func(i, j int) bool {
+			return compareRowValues(rows[i][sortBy], rows[j][sortBy]) > 0
+		})
+	}
+	if limit > 0 && len(rows) > limit {
+		rows = rows[:limit]
+	}
+	return rows
+}
+
+// compareRowValues orders numbers numerically and everything else by its
+// string form.
+func compareRowValues(a, b any) int {
+	af, aok := toFloat(a)
+	bf, bok := toFloat(b)
+	if aok && bok {
+		switch {
+		case af < bf:
+			return -1
+		case af > bf:
+			return 1
+		default:
+			return 0
+		}
+	}
+	return strings.Compare(fmt.Sprint(a), fmt.Sprint(b))
+}
+
+func toFloat(v any) (float64, bool) {
+	switch n := v.(type) {
+	case int:
+		return float64(n), true
+	case int32:
+		return float64(n), true
+	case int64:
+		return float64(n), true
+	case float32:
+		return float64(n), true
+	case float64:
+		return n, true
+	default:
+		return 0, false
+	}
 }
 
 func executeSubQuery(ctx context.Context, sub SubQuery, params map[string]any) ([]Row, error) {
