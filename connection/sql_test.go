@@ -2,6 +2,7 @@ package connection
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/commons-db/models"
@@ -96,5 +97,51 @@ func assertURLUser(t *testing.T, parsed *url.URL) {
 	password, ok := parsed.User.Password()
 	if !ok || password != "p@ss/word" {
 		t.Fatalf("password not applied: password-set=%t", ok)
+	}
+}
+
+func TestSQLConnectionUseDatabase(t *testing.T) {
+	tests := []struct {
+		connType string
+		dsn      string
+		assert   func(*testing.T, string)
+	}{
+		{models.ConnectionTypePostgres, "postgres://localhost:5432/postgres?sslmode=disable", func(t *testing.T, got string) {
+			parsed, _ := url.Parse(got)
+			if parsed.Path != "/app" {
+				t.Fatalf("postgres path = %q", parsed.Path)
+			}
+		}},
+		{models.ConnectionTypePostgres, "host=localhost dbname=postgres sslmode=disable", func(t *testing.T, got string) {
+			if !strings.HasSuffix(got, " dbname='app'") {
+				t.Fatalf("postgres DSN = %q", got)
+			}
+		}},
+		{models.ConnectionTypeMySQL, "tcp(localhost:3306)/mysql", func(t *testing.T, got string) {
+			cfg, _ := mysql.ParseDSN(got)
+			if cfg.DBName != "app" {
+				t.Fatalf("mysql database = %q", cfg.DBName)
+			}
+		}},
+		{models.ConnectionTypeSQLServer, "server=localhost;database=master;encrypt=disable", func(t *testing.T, got string) {
+			cfg, _ := msdsn.Parse(got)
+			if cfg.Database != "app" {
+				t.Fatalf("sqlserver database = %q", cfg.Database)
+			}
+		}},
+		{models.ConnectionTypeClickHouse, "clickhouse://localhost:9000/default", func(t *testing.T, got string) {
+			parsed, _ := url.Parse(got)
+			if parsed.Path != "/app" {
+				t.Fatalf("clickhouse path = %q", parsed.Path)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		connection := SQLConnection{Type: tt.connType, URL: types.EnvVar{ValueStatic: tt.dsn}}
+		updated, err := connection.UseDatabase("app")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tt.assert(t, updated.URL.ValueStatic)
 	}
 }

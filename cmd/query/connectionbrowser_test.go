@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	sqlinspect "github.com/flanksource/commons-db/inspect/sql"
 	"github.com/flanksource/commons-db/models"
 	queryschema "github.com/flanksource/commons-db/query/schema"
 	"github.com/glebarez/sqlite"
@@ -100,6 +101,80 @@ func TestConnectionBrowserDescriptorAndHTTPScoping(t *testing.T) {
 	}
 }
 
+func TestConnectionBrowserOpenSearchInspection(t *testing.T) {
+	openSearch := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/":
+			w.WriteHeader(http.StatusOK)
+		case "/_resolve/index/*":
+			_, _ = w.Write([]byte(`{
+				"indices":[{"name":"logs-000001","aliases":["logs"],"attributes":[]}],
+				"aliases":[{"name":"logs","indices":["logs-000001"]}],
+				"data_streams":[]
+			}`))
+		case "/logs/_field_caps":
+			_, _ = w.Write([]byte(`{
+				"fields":{
+					"service.name":{"keyword":{"searchable":true,"aggregatable":true}},
+					"message":{"text":{"searchable":true,"aggregatable":false}}
+				}
+			}`))
+		default:
+			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
+		}
+	}))
+	defer openSearch.Close()
+
+	gdb, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.Exec(`CREATE TABLE connections (
+        id TEXT PRIMARY KEY, name TEXT, namespace TEXT, source TEXT, type TEXT,
+        url TEXT, username TEXT, password TEXT, properties TEXT, certificate TEXT,
+        insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
+    )`).Error; err != nil {
+		t.Fatal(err)
+	}
+	conn := models.Connection{
+		ID: uuid.New(), Name: "logs", Type: models.ConnectionTypeOpenSearch,
+		URL: openSearch.URL, InsecureTLS: true,
+	}
+	if err := gdb.Create(&conn).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx := dbcontext.NewContext(context.Background()).WithDB(gdb, nil)
+	handler := newConnectionBrowserHandler("/api/v1", ctx, http.NotFoundHandler())
+	baseURL := "/api/v1/connection/" + conn.ID.String() + "/browser/inspect"
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, baseURL, nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("inspection status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var targets browserInspection
+	if err := json.Unmarshal(recorder.Body.Bytes(), &targets); err != nil {
+		t.Fatal(err)
+	}
+	if targets.Kind != "opensearch" || len(targets.Targets) != 2 {
+		t.Fatalf("inspection = %#v", targets)
+	}
+
+	recorder = httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, baseURL+"?target=logs&targetKind=alias", nil))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("field inspection status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var selected browserInspection
+	if err := json.Unmarshal(recorder.Body.Bytes(), &selected); err != nil {
+		t.Fatal(err)
+	}
+	if selected.Selected == nil || selected.Selected.Target.Name != "logs" || len(selected.Selected.Fields) != 2 {
+		t.Fatalf("selected inspection = %#v", selected)
+	}
+}
+
 func TestSQLReturnsRows(t *testing.T) {
 	for _, statement := range []string{"SELECT 1", " with x as (select 1) select * from x", "SHOW TABLES", "EXPLAIN SELECT 1"} {
 		if !sqlReturnsRows(statement) {
@@ -122,5 +197,27 @@ func TestSQLIdentifier(t *testing.T) {
 	}
 	if got := sqlIdentifier(models.ConnectionTypeSQLServer, "dbo", "events"); got != "[dbo].[events]" {
 		t.Fatalf("sqlserver identifier = %s", got)
+	}
+}
+
+func TestCatalogNodesForSQLPreservesRelationKinds(t *testing.T) {
+	nodes := catalogNodesForSQL(models.ConnectionTypePostgres, sqlinspect.Catalog{
+		Schemas: []sqlinspect.Schema{{
+			Name: "public",
+			Relations: []sqlinspect.Relation{
+				{Name: "events", Type: "table", Columns: []sqlinspect.Column{{Name: "id", DataType: "uuid"}}},
+				{Name: "latest_events", Type: "view", Columns: []sqlinspect.Column{{Name: "id", DataType: "uuid"}}},
+			},
+		}},
+	})
+	if len(nodes) != 1 || len(nodes[0].Children) != 2 {
+		t.Fatalf("nodes = %#v", nodes)
+	}
+	kinds := map[string]string{}
+	for _, relation := range nodes[0].Children {
+		kinds[relation.Label] = relation.Kind
+	}
+	if kinds["events"] != "table" || kinds["latest_events"] != "view" {
+		t.Fatalf("relation kinds = %#v", kinds)
 	}
 }

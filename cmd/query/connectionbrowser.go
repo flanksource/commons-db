@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -16,11 +19,12 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/db"
+	opensearchinspect "github.com/flanksource/commons-db/inspect/opensearch"
+	sqlinspect "github.com/flanksource/commons-db/inspect/sql"
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	queryschema "github.com/flanksource/commons-db/query/schema"
-	"github.com/flanksource/commons-db/types"
 )
 
 type connectionBrowserHandler struct {
@@ -66,6 +70,20 @@ type browserColumn struct {
 
 type browserCatalog struct {
 	Nodes []browserCatalogNode `json:"nodes"`
+}
+
+type browserInspection struct {
+	Kind           string                          `json:"kind"`
+	Dialect        string                          `json:"dialect,omitempty"`
+	Database       string                          `json:"database,omitempty"`
+	Databases      []string                        `json:"databases,omitempty"`
+	DefaultSchema  string                          `json:"defaultSchema,omitempty"`
+	Nodes          []browserCatalogNode            `json:"nodes,omitempty"`
+	Schemas        []sqlinspect.Schema             `json:"schemas,omitempty"`
+	Targets        []opensearchinspect.Target      `json:"targets,omitempty"`
+	Selected       *opensearchinspect.FieldCatalog `json:"selected,omitempty"`
+	Truncated      bool                            `json:"truncated,omitempty"`
+	TruncateReason string                          `json:"truncateReason,omitempty"`
 }
 
 type browserCatalogNode struct {
@@ -122,6 +140,8 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		h.serveQuery(w, r, conn)
 	case tail == "/catalog" && r.Method == http.MethodGet:
 		h.serveCatalog(w, r, conn)
+	case tail == "/inspect" && r.Method == http.MethodGet:
+		h.serveInspection(w, r, conn)
 	case strings.HasPrefix(tail, "/cache/"):
 		h.serveCache(w, r, conn, h.prefix+"/connection/"+idPart+"/browser")
 	default:
@@ -207,9 +227,10 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 	var err error
 	switch descriptor.Provider {
 	case "postgres", "mysql", "sqlserver", "clickhouse":
-		result, err = h.executeSQL(r, conn, request.Query)
+		database, _ := request.Options["database"].(string)
+		result, err = h.executeSQL(r, conn, request.Query, database)
 	case "opensearch":
-		result, err = h.executeOpenSearch(conn, request)
+		result, err = h.executeOpenSearch(r, conn, request)
 	default:
 		var provider query.Provider
 		provider, err = query.GetProvider(descriptor.Provider)
@@ -227,12 +248,8 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 	writeK8sJSON(w, result)
 }
 
-func (h *connectionBrowserHandler) executeSQL(r *http.Request, conn *models.Connection, statement string) (browserQueryResult, error) {
-	var sqlConn dbconnection.SQLConnection
-	if err := sqlConn.FromModel(*conn); err != nil {
-		return browserQueryResult{}, err
-	}
-	client, err := sqlConn.Client(h.ctx)
+func (h *connectionBrowserHandler) executeSQL(r *http.Request, conn *models.Connection, statement, database string) (browserQueryResult, error) {
+	client, err := h.sqlClient(r.Context(), conn, database)
 	if err != nil {
 		return browserQueryResult{}, err
 	}
@@ -277,7 +294,7 @@ func sqlReturnsRows(statement string) bool {
 	return false
 }
 
-func (h *connectionBrowserHandler) executeOpenSearch(conn *models.Connection, request browserQueryRequest) (browserQueryResult, error) {
+func (h *connectionBrowserHandler) executeOpenSearch(r *http.Request, conn *models.Connection, request browserQueryRequest) (browserQueryResult, error) {
 	index, _ := request.Options["index"].(string)
 	limit := ""
 	if value := request.Options["limit"]; value != nil {
@@ -286,18 +303,12 @@ func (h *connectionBrowserHandler) executeOpenSearch(conn *models.Connection, re
 	if index == "" {
 		return browserQueryResult{}, fmt.Errorf("OpenSearch index is required")
 	}
-	backend := opensearch.Backend{Address: conn.URL}
-	if conn.Username != "" {
-		backend.Username = &types.EnvVar{ValueStatic: conn.Username}
-	}
-	if conn.Password != "" {
-		backend.Password = &types.EnvVar{ValueStatic: conn.Password}
-	}
-	searcher, err := opensearch.New(h.ctx, backend, nil)
+	requestCtx := h.ctx.Wrap(r.Context())
+	searcher, err := h.openSearchSearcher(requestCtx, conn)
 	if err != nil {
 		return browserQueryResult{}, err
 	}
-	raw, err := searcher.SearchRaw(h.ctx, opensearch.Request{Index: index, Query: request.Query, Limit: limit})
+	raw, err := searcher.SearchRaw(requestCtx, opensearch.Request{Index: index, Query: request.Query, Limit: limit})
 	if err != nil {
 		return browserQueryResult{}, err
 	}
@@ -313,6 +324,128 @@ func (h *connectionBrowserHandler) executeOpenSearch(conn *models.Connection, re
 		"total": raw.Hits.Total.Value, "relation": raw.Hits.Total.Relation,
 		"took": raw.Took, "timedOut": raw.TimedOut, "aggregations": raw.Aggregations,
 	}}, nil
+}
+
+func (h *connectionBrowserHandler) openSearchSearcher(ctx dbcontext.Context, conn *models.Connection) (*opensearch.Searcher, error) {
+	httpConnection, err := dbconnection.NewHTTPConnection(ctx, *conn)
+	if err != nil {
+		return nil, err
+	}
+	return opensearch.NewWithTransport(ctx, opensearch.Backend{Address: conn.URL}, nil, httpConnection.Transport())
+}
+
+func (h *connectionBrowserHandler) serveInspection(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	inspection, err := h.inspectConnection(ctx, conn, r.URL.Query().Get("database"), r.URL.Query().Get("target"), r.URL.Query().Get("targetKind"))
+	if err != nil {
+		http.Error(w, sanitizeConnectionError(err, conn), http.StatusUnprocessableEntity)
+		return
+	}
+	writeK8sJSON(w, inspection)
+}
+
+func (h *connectionBrowserHandler) inspectConnection(ctx context.Context, conn *models.Connection, database, targetName, targetKind string) (browserInspection, error) {
+	switch conn.Type {
+	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse:
+		catalog, err := h.inspectSQL(ctx, conn, database)
+		if err != nil {
+			return browserInspection{}, err
+		}
+		return browserInspection{
+			Kind: "sql", Dialect: sqlDialect(conn.Type), Database: catalog.Database, Databases: catalog.Databases,
+			DefaultSchema: catalog.DefaultSchema, Schemas: catalog.Schemas, Nodes: catalogNodesForSQL(conn.Type, catalog),
+			Truncated: catalog.Truncated, TruncateReason: catalog.TruncateReason,
+		}, nil
+	case models.ConnectionTypeOpenSearch:
+		requestCtx := h.ctx.Wrap(ctx)
+		searcher, err := h.openSearchSearcher(requestCtx, conn)
+		if err != nil {
+			return browserInspection{}, err
+		}
+		inspector, err := opensearchinspect.New(searcher.GetRawClient(), opensearchinspect.Options{})
+		if err != nil {
+			return browserInspection{}, err
+		}
+		targets, err := inspector.Targets(ctx)
+		if err != nil {
+			return browserInspection{}, err
+		}
+		inspection := browserInspection{Kind: "opensearch", Targets: targets.Targets, Nodes: catalogNodesForOpenSearch(targets.Targets), Truncated: targets.Truncated, TruncateReason: targets.TruncateReason}
+		if targetName == "" {
+			return inspection, nil
+		}
+		var selected *opensearchinspect.Target
+		for i := range targets.Targets {
+			if targets.Targets[i].Name == targetName && targets.Targets[i].Kind == targetKind {
+				selected = &targets.Targets[i]
+				break
+			}
+		}
+		if selected == nil {
+			return browserInspection{}, fmt.Errorf("OpenSearch target %q (%s) was not discovered", targetName, targetKind)
+		}
+		fields, err := inspector.Fields(ctx, *selected)
+		if err != nil {
+			return browserInspection{}, err
+		}
+		inspection.Selected = &fields
+		return inspection, nil
+	default:
+		return browserInspection{}, fmt.Errorf("connection type %q does not support inspection", conn.Type)
+	}
+}
+
+func (h *connectionBrowserHandler) inspectSQL(ctx context.Context, conn *models.Connection, database string) (sqlinspect.Catalog, error) {
+	client, err := h.sqlClient(ctx, conn, database)
+	if err != nil {
+		return sqlinspect.Catalog{}, err
+	}
+	defer client.Close()
+	return sqlinspect.Inspect(ctx, client, conn.Type, sqlinspect.Limits{})
+}
+
+func (h *connectionBrowserHandler) sqlClient(ctx context.Context, conn *models.Connection, database string) (*sql.DB, error) {
+	var sqlConn dbconnection.SQLConnection
+	if err := sqlConn.FromModel(*conn); err != nil {
+		return nil, err
+	}
+	client, err := sqlConn.Client(h.ctx.Wrap(ctx))
+	if err != nil {
+		return nil, err
+	}
+	database = strings.TrimSpace(database)
+	if database == "" {
+		return client, nil
+	}
+	databases, err := sqlinspect.ListDatabases(ctx, client, conn.Type)
+	if err != nil {
+		client.Close()
+		return nil, err
+	}
+	if !slices.Contains(databases, database) {
+		client.Close()
+		return nil, fmt.Errorf("SQL database %q was not discovered", database)
+	}
+	client.Close()
+	sqlConn, err = sqlConn.UseDatabase(database)
+	if err != nil {
+		return nil, err
+	}
+	return sqlConn.Client(h.ctx.Wrap(ctx))
+}
+
+func sqlDialect(connType string) string {
+	switch connType {
+	case models.ConnectionTypePostgres:
+		return "postgresql"
+	case models.ConnectionTypeMySQL:
+		return "mysql"
+	case models.ConnectionTypeSQLServer:
+		return "mssql"
+	default:
+		return "standard"
+	}
 }
 
 func (h *connectionBrowserHandler) serveCatalog(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
@@ -337,51 +470,41 @@ func (h *connectionBrowserHandler) serveCatalog(w http.ResponseWriter, r *http.R
 }
 
 func (h *connectionBrowserHandler) sqlCatalog(r *http.Request, conn *models.Connection) (browserCatalog, error) {
-	var sqlConn dbconnection.SQLConnection
-	if err := sqlConn.FromModel(*conn); err != nil {
-		return browserCatalog{}, err
-	}
-	client, err := sqlConn.Client(h.ctx)
+	inspected, err := h.inspectSQL(r.Context(), conn, "")
 	if err != nil {
 		return browserCatalog{}, err
 	}
-	defer client.Close()
-	statement := `SELECT table_schema, table_name, column_name, data_type FROM information_schema.columns WHERE table_schema NOT IN ('information_schema','pg_catalog','sys') ORDER BY table_schema, table_name, ordinal_position`
-	if conn.Type == models.ConnectionTypeClickHouse {
-		statement = `SELECT database AS table_schema, table AS table_name, name AS column_name, type AS data_type FROM system.columns WHERE database NOT IN ('system','information_schema') ORDER BY database, table, position`
+	return browserCatalog{Nodes: catalogNodesForSQL(conn.Type, inspected)}, nil
+}
+
+func catalogNodesForSQL(connType string, inspected sqlinspect.Catalog) []browserCatalogNode {
+	type relationCatalog struct {
+		kind     string
+		children []browserCatalogNode
 	}
-	rows, err := client.QueryContext(r.Context(), statement)
-	if err != nil {
-		return browserCatalog{}, err
-	}
-	defer rows.Close()
-	type column struct{ schema, table, name, dataType string }
-	var columns []column
-	for rows.Next() {
-		var item column
-		if err := rows.Scan(&item.schema, &item.table, &item.name, &item.dataType); err != nil {
-			return browserCatalog{}, err
+	groups := map[string]map[string]relationCatalog{}
+	for _, schema := range inspected.Schemas {
+		groups[schema.Name] = map[string]relationCatalog{}
+		for _, relation := range schema.Relations {
+			kind := relation.Type
+			if kind != "view" {
+				kind = "table"
+			}
+			entry := relationCatalog{kind: kind}
+			for _, column := range relation.Columns {
+				entry.children = append(entry.children, browserCatalogNode{
+					ID: schema.Name + "." + relation.Name + "." + column.Name, Label: column.Name + " · " + column.DataType, Kind: "column",
+				})
+			}
+			groups[schema.Name][relation.Name] = entry
 		}
-		columns = append(columns, item)
-	}
-	if err := rows.Err(); err != nil {
-		return browserCatalog{}, err
-	}
-	groups := map[string]map[string][]browserCatalogNode{}
-	for _, item := range columns {
-		if groups[item.schema] == nil {
-			groups[item.schema] = map[string][]browserCatalogNode{}
-		}
-		groups[item.schema][item.table] = append(groups[item.schema][item.table], browserCatalogNode{
-			ID: item.schema + "." + item.table + "." + item.name, Label: item.name + " · " + item.dataType, Kind: "column",
-		})
 	}
 	schemas := make([]string, 0, len(groups))
 	for name := range groups {
 		schemas = append(schemas, name)
 	}
 	sort.Strings(schemas)
-	catalog := browserCatalog{}
+	var nodes []browserCatalogNode
 	for _, schemaName := range schemas {
 		tables := make([]string, 0, len(groups[schemaName]))
 		for name := range groups[schemaName] {
@@ -390,19 +513,20 @@ func (h *connectionBrowserHandler) sqlCatalog(r *http.Request, conn *models.Conn
 		sort.Strings(tables)
 		schemaNode := browserCatalogNode{ID: schemaName, Label: schemaName, Kind: "schema"}
 		for _, tableName := range tables {
-			identifier := sqlIdentifier(conn.Type, schemaName, tableName)
+			relation := groups[schemaName][tableName]
+			identifier := sqlIdentifier(connType, schemaName, tableName)
 			queryText := "SELECT * FROM " + identifier + " LIMIT 100"
-			if conn.Type == models.ConnectionTypeSQLServer {
+			if connType == models.ConnectionTypeSQLServer {
 				queryText = "SELECT TOP 100 * FROM " + identifier
 			}
 			schemaNode.Children = append(schemaNode.Children, browserCatalogNode{
-				ID: schemaName + "." + tableName, Label: tableName, Kind: "table", Query: queryText,
-				Children: groups[schemaName][tableName],
+				ID: schemaName + "." + tableName, Label: tableName, Kind: relation.kind, Query: queryText,
+				Children: relation.children,
 			})
 		}
-		catalog.Nodes = append(catalog.Nodes, schemaNode)
+		nodes = append(nodes, schemaNode)
 	}
-	return catalog, nil
+	return nodes
 }
 
 func sqlIdentifier(connType, schema, table string) string {
@@ -416,37 +540,22 @@ func sqlIdentifier(connType, schema, table string) string {
 }
 
 func (h *connectionBrowserHandler) openSearchCatalog(r *http.Request, conn *models.Connection) (browserCatalog, error) {
-	httpConn := dbconnection.HTTPConnection{}
-	if err := httpConn.FromModel(*conn); err != nil {
-		return browserCatalog{}, err
-	}
-	client, err := dbconnection.CreateHTTPClient(h.ctx, httpConn)
+	inspection, err := h.inspectConnection(r.Context(), conn, "", "", "")
 	if err != nil {
 		return browserCatalog{}, err
 	}
-	endpoint := strings.TrimRight(conn.URL, "/") + "/_cat/indices?format=json&h=index,health,status,docs.count,store.size"
-	resp, err := client.R(r.Context()).Get(endpoint)
-	if err != nil {
-		return browserCatalog{}, err
-	}
-	defer resp.Body.Close()
-	if !resp.IsOK() {
-		return browserCatalog{}, fmt.Errorf("OpenSearch index catalog failed with status %d", resp.StatusCode)
-	}
-	var items []map[string]string
-	if err := json.NewDecoder(resp.Body).Decode(&items); err != nil {
-		return browserCatalog{}, err
-	}
-	sort.Slice(items, func(i, j int) bool { return items[i]["index"] < items[j]["index"] })
-	catalog := browserCatalog{}
-	for _, item := range items {
-		index := item["index"]
-		catalog.Nodes = append(catalog.Nodes, browserCatalogNode{
-			ID: index, Label: index, Kind: "index", Query: `{"query":{"match_all":{}}}`,
-			Options: map[string]any{"index": index, "limit": "200"},
+	return browserCatalog{Nodes: inspection.Nodes}, nil
+}
+
+func catalogNodesForOpenSearch(targets []opensearchinspect.Target) []browserCatalogNode {
+	nodes := make([]browserCatalogNode, 0, len(targets))
+	for _, target := range targets {
+		nodes = append(nodes, browserCatalogNode{
+			ID: target.Kind + ":" + target.Name, Label: target.Name, Kind: target.Kind, Query: `{"query":{"match_all":{}}}`,
+			Options: map[string]any{"index": target.Name, "targetKind": target.Kind, "limit": "200"},
 		})
 	}
-	return catalog, nil
+	return nodes
 }
 
 func (h *connectionBrowserHandler) serveCache(w http.ResponseWriter, r *http.Request, conn *models.Connection, prefix string) {

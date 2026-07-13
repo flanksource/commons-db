@@ -1,15 +1,29 @@
 import {
   CacheBrowser,
+  Icon,
   LogsTable,
   QueryBrowser,
   TimeseriesPanel,
+  TreeNode,
   type EntityDetailBodyRenderContext,
   type EntityDetailHeaderRenderContext,
   type JsonSchemaObject,
+  type QueryBrowserCompletion,
   type QueryBrowserResult,
   type TimeseriesResponse,
   type TimeseriesSeries,
 } from "@flanksource/clicky-ui";
+import {
+  UiActivity,
+  UiDatabase,
+  UiLink,
+  UiNamespace,
+  UiSqlColumn,
+  UiSqlDatabase,
+  UiSqlIndex,
+  UiSqlView,
+  UiTable,
+} from "@flanksource/clicky-ui/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 
@@ -65,6 +79,76 @@ type CatalogNode = {
   children?: CatalogNode[];
 };
 
+type InspectionField = {
+  name: string;
+  dataType?: string;
+  types?: string[];
+  searchable?: boolean;
+  aggregatable?: boolean;
+  conflicting?: boolean;
+};
+
+type BrowserInspection = {
+  kind: "sql" | "opensearch";
+  dialect?: "postgresql" | "mysql" | "mssql" | "standard";
+  database?: string;
+  databases?: string[];
+  defaultSchema?: string;
+  schemas?: {
+    name: string;
+    relations: {
+      name: string;
+      type?: "table" | "view";
+      columns: InspectionField[];
+    }[];
+  }[];
+  targets?: { name: string; kind: "index" | "alias" | "data_stream" }[];
+  nodes?: CatalogNode[];
+  selected?: {
+    target: { name: string; kind: "index" | "alias" | "data_stream" };
+    fields: InspectionField[];
+  };
+  truncated?: boolean;
+  truncateReason?: string;
+};
+
+export function completionForInspection(
+  inspection?: BrowserInspection,
+  selectedInspection?: BrowserInspection,
+): QueryBrowserCompletion | undefined {
+  if (inspection?.kind === "sql" && inspection.dialect) {
+    return {
+      kind: "sql",
+      dialect: inspection.dialect,
+      ...(inspection.defaultSchema
+        ? { defaultSchema: inspection.defaultSchema }
+        : {}),
+      schemas: (inspection.schemas ?? []).map((schema) => ({
+        name: schema.name,
+        relations: schema.relations.map((relation) => ({
+          name: relation.name,
+          ...(relation.type ? { type: relation.type } : {}),
+          columns: relation.columns.map((column) => ({
+            name: column.name,
+            types: column.dataType ? [column.dataType] : [],
+          })),
+        })),
+      })),
+    };
+  }
+  if (
+    selectedInspection?.kind === "opensearch" &&
+    selectedInspection.selected
+  ) {
+    return {
+      kind: "json-fields",
+      vocabulary: "opensearch",
+      fields: selectedInspection.selected.fields,
+    };
+  }
+  return undefined;
+}
+
 async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
   if (!response.ok) {
@@ -74,31 +158,49 @@ async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function connectionDetailBodyRenderer(context: EntityDetailBodyRenderContext): ReactNode {
+export function connectionDetailBodyRenderer(
+  context: EntityDetailBodyRenderContext,
+): ReactNode {
   if (context.surfaceKey !== "connection") return context.defaultView;
   return <ConnectionBrowser id={context.id} fallback={context.defaultView} />;
 }
 
-function ConnectionBrowser({ id, fallback }: { id: string; fallback: ReactNode }) {
+function ConnectionBrowser({
+  id,
+  fallback,
+}: {
+  id: string;
+  fallback: ReactNode;
+}) {
   const baseUrl = `/api/v1/connection/${encodeURIComponent(id)}/browser`;
   const descriptor = useQuery({
     queryKey: ["connection-browser", id],
     queryFn: async () => {
       const response = await fetch(baseUrl);
       if (response.status === 404) return null;
-      if (!response.ok) throw new Error((await response.text()).trim() || `request failed: ${response.status}`);
+      if (!response.ok)
+        throw new Error(
+          (await response.text()).trim() ||
+            `request failed: ${response.status}`,
+        );
       return response.json() as Promise<BrowserDescriptor>;
     },
     retry: 0,
   });
 
   if (descriptor.isLoading) {
-    return <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">Loading connection browser…</div>;
+    return (
+      <div className="rounded-xl border bg-card p-6 text-sm text-muted-foreground">
+        Loading connection browser…
+      </div>
+    );
   }
   if (descriptor.isError) {
     return (
       <div className="rounded-xl border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
-        {descriptor.error instanceof Error ? descriptor.error.message : "Failed to load connection browser"}
+        {descriptor.error instanceof Error
+          ? descriptor.error.message
+          : "Failed to load connection browser"}
       </div>
     );
   }
@@ -114,36 +216,64 @@ function ConnectionBrowser({ id, fallback }: { id: string; fallback: ReactNode }
   }
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      <ConnectionQueryBrowser id={id} baseUrl={baseUrl} descriptor={descriptor.data} />
+      <ConnectionQueryBrowser
+        id={id}
+        baseUrl={baseUrl}
+        descriptor={descriptor.data}
+      />
     </div>
   );
 }
 
-export function connectionDetailHeaderRenderer(context: EntityDetailHeaderRenderContext): ReactNode {
+export function connectionDetailHeaderRenderer(
+  context: EntityDetailHeaderRenderContext,
+): ReactNode {
   if (context.surfaceKey !== "connection") return context.defaultHeader;
-  return <ConnectionInfoHeader id={context.id} icon={context.icon} fallbackName={context.title} />;
+  return (
+    <ConnectionInfoHeader
+      id={context.id}
+      icon={context.icon}
+      fallbackName={context.title}
+    />
+  );
 }
 
 // ConnectionInfoHeader renders the connection's identity and resolved server on
 // a single line for the explorer heading: [icon] name · endpoint · product ·
 // status. It shares the ["connection-info", id] query cache with the browser.
-function ConnectionInfoHeader({ id, icon, fallbackName }: { id: string; icon?: ReactNode; fallbackName: string }) {
+function ConnectionInfoHeader({
+  id,
+  icon,
+  fallbackName,
+}: {
+  id: string;
+  icon?: ReactNode;
+  fallbackName: string;
+}) {
   const info = useQuery({
     queryKey: ["connection-info", id],
-    queryFn: () => fetchJSON<ConnectionInfo>(`/api/v1/connection/${encodeURIComponent(id)}/info`),
+    queryFn: () =>
+      fetchJSON<ConnectionInfo>(
+        `/api/v1/connection/${encodeURIComponent(id)}/info`,
+      ),
     retry: 0,
     staleTime: 30_000,
   });
   const data = info.data;
   const name = data?.connection.name ?? fallbackName;
-  const endpoint = data?.connection.resolvedEndpoint ?? data?.connection.configuredEndpoint;
-  const product = data ? [data.server.product, data.server.version].filter(Boolean).join(" ") : "";
+  const endpoint =
+    data?.connection.resolvedEndpoint ?? data?.connection.configuredEndpoint;
+  const product = data
+    ? [data.server.product, data.server.version].filter(Boolean).join(" ")
+    : "";
   return (
     <h1 className="flex min-w-0 items-center gap-2 text-2xl font-semibold tracking-tight">
       {icon}
       <span className="shrink-0">{name}</span>
       {info.isLoading ? (
-        <span className="text-sm font-normal text-muted-foreground">resolving…</span>
+        <span className="text-sm font-normal text-muted-foreground">
+          resolving…
+        </span>
       ) : info.isError ? (
         <span
           className="truncate text-sm font-normal text-destructive"
@@ -184,9 +314,17 @@ function ServerStatus({ server }: { server: ConnectionInfo["server"] }) {
       : server.status === "error"
         ? "text-destructive"
         : "text-muted-foreground";
-  const label = server.status === "available" ? "available" : server.status === "error" ? "unreachable" : "unavailable";
+  const label =
+    server.status === "available"
+      ? "available"
+      : server.status === "error"
+        ? "unreachable"
+        : "unavailable";
   return (
-    <span className={`inline-flex shrink-0 items-center gap-1 ${tone}`} title={server.message ?? undefined}>
+    <span
+      className={`inline-flex shrink-0 items-center gap-1 ${tone}`}
+      title={server.message ?? undefined}
+    >
       <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
       {label}
     </span>
@@ -202,20 +340,87 @@ function ConnectionQueryBrowser({
   baseUrl: string;
   descriptor: BrowserDescriptor;
 }) {
-  const catalog = useQuery({
-    queryKey: ["connection-browser-catalog", id],
-    queryFn: () => fetchJSON<{ nodes: CatalogNode[] }>(`${baseUrl}/catalog`),
+  const baseInspection = useQuery({
+    queryKey: ["connection-browser-inspection", id],
+    queryFn: () => fetchJSON<BrowserInspection>(`${baseUrl}/inspect`),
     enabled: descriptor.catalog === true,
     retry: 0,
+    staleTime: 5 * 60_000,
   });
   const [selection, setSelection] = useState<{
     query?: string;
     options?: Record<string, unknown>;
   }>({});
+  const [liveOptions, setLiveOptions] = useState<Record<string, unknown>>({});
+  const [selectedDatabase, setSelectedDatabase] = useState("");
+  const databaseInspection = useQuery({
+    queryKey: ["connection-browser-inspection", id, selectedDatabase],
+    queryFn: () => {
+      const params = new URLSearchParams({ database: selectedDatabase });
+      return fetchJSON<BrowserInspection>(`${baseUrl}/inspect?${params}`);
+    },
+    enabled:
+      baseInspection.data?.kind === "sql" &&
+      selectedDatabase !== "" &&
+      selectedDatabase !== baseInspection.data.database,
+    retry: 0,
+    staleTime: 5 * 60_000,
+  });
+  const inspection =
+    selectedDatabase !== "" &&
+    selectedDatabase !== baseInspection.data?.database
+      ? databaseInspection
+      : baseInspection;
+  const inspectionData = inspection.data ?? baseInspection.data;
+  const activeDatabase = selectedDatabase || inspectionData?.database || "";
   const options = useMemo(
-    () => ({ ...(descriptor.initialOptions ?? {}), ...(selection.options ?? {}) }),
+    () => ({
+      ...(descriptor.initialOptions ?? {}),
+      ...(selection.options ?? {}),
+    }),
     [descriptor.initialOptions, selection.options],
   );
+  const selectedTargetName = String(
+    liveOptions.index ?? selection.options?.index ?? "",
+  );
+  const selectedTargetKind = useMemo(() => {
+    const explicit = liveOptions.targetKind ?? selection.options?.targetKind;
+    if (typeof explicit === "string") return explicit;
+    return (
+      inspectionData?.targets?.find(
+        (target) => target.name === selectedTargetName,
+      )?.kind ?? ""
+    );
+  }, [
+    inspectionData?.targets,
+    liveOptions.targetKind,
+    selectedTargetName,
+    selection.options?.targetKind,
+  ]);
+  const selectedInspection = useQuery({
+    queryKey: [
+      "connection-browser-inspection",
+      id,
+      selectedTargetKind,
+      selectedTargetName,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        target: selectedTargetName,
+        targetKind: selectedTargetKind,
+      });
+      return fetchJSON<BrowserInspection>(`${baseUrl}/inspect?${params}`);
+    },
+    enabled:
+      inspectionData?.kind === "opensearch" &&
+      selectedTargetName !== "" &&
+      selectedTargetKind !== "",
+    retry: 0,
+    staleTime: 5 * 60_000,
+  });
+  const completion = useMemo<QueryBrowserCompletion | undefined>(() => {
+    return completionForInspection(inspectionData, selectedInspection.data);
+  }, [inspectionData, selectedInspection.data]);
 
   return (
     <QueryBrowser
@@ -226,84 +431,207 @@ function ConnectionQueryBrowser({
       initialQuery={selection.query ?? descriptor.defaultQuery ?? ""}
       optionsSchema={descriptor.optionsSchema}
       initialOptions={options}
+      completion={completion}
+      onOptionsChange={setLiveOptions}
       navigator={
         descriptor.catalog ? (
           <CatalogTree
-            nodes={catalog.data?.nodes ?? []}
-            loading={catalog.isLoading}
-            error={catalog.error}
-            onSelect={(node) => setSelection({ query: node.query, options: node.options })}
+            nodes={inspectionData?.nodes ?? []}
+            loading={inspection.isLoading}
+            error={inspection.error}
+            databases={baseInspection.data?.databases ?? []}
+            database={activeDatabase}
+            onDatabaseChange={setSelectedDatabase}
+            onSelect={(node) => {
+              setSelection({ query: node.query, options: node.options });
+              setLiveOptions(node.options ?? {});
+            }}
           />
         ) : undefined
       }
-      execute={(request) =>
-        fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
+      execute={(request) => {
+        const options =
+          descriptor.language === "sql" && activeDatabase
+            ? { ...request.options, database: activeDatabase }
+            : request.options;
+        return fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
-        })
-      }
+          body: JSON.stringify({ ...request, options }),
+        });
+      }}
       renderResults={
         descriptor.resultView === "logs"
           ? ({ result, defaultView }) =>
               result.rows?.length ? (
-                <LogsTable logs={result.rows} autoFilter={false} fullscreenTitle="Logs" />
+                <LogsTable
+                  logs={result.rows}
+                  autoFilter={false}
+                  fullscreenTitle="Logs"
+                />
               ) : (
                 defaultView
               )
           : descriptor.resultView === "timeseries"
-            ? ({ result, defaultView }) => <PrometheusResults result={result} fallback={defaultView} />
+            ? ({ result, defaultView }) => (
+                <PrometheusResults result={result} fallback={defaultView} />
+              )
             : undefined
       }
     />
   );
 }
 
-function CatalogTree({
+export function CatalogTree({
   nodes,
   loading,
   error,
+  databases,
+  database,
+  onDatabaseChange,
   onSelect,
 }: {
   nodes: CatalogNode[];
   loading: boolean;
   error: unknown;
+  databases: string[];
+  database: string;
+  onDatabaseChange: (database: string) => void;
   onSelect: (node: CatalogNode) => void;
 }) {
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto border-r bg-card p-2">
-      <h3 className="px-2 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Catalog</h3>
-      {loading && <div className="p-2 text-xs text-muted-foreground">Loading catalog…</div>}
-      {error ? <div className="p-2 text-xs text-destructive">Catalog unavailable</div> : null}
-      <CatalogNodes nodes={nodes} depth={0} onSelect={onSelect} />
+      <h3 className="flex items-center gap-1.5 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        <Icon icon={UiSqlDatabase} className="size-3.5" />
+        <span>Catalog</span>
+      </h3>
+      {databases.length > 0 ? (
+        <label className="mb-2 block px-2 text-xs text-muted-foreground">
+          Database
+          <select
+            aria-label="Database"
+            value={database}
+            onChange={(event) => onDatabaseChange(event.target.value)}
+            className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-xs text-foreground"
+          >
+            {databases.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
+      {loading && (
+        <div className="p-2 text-xs text-muted-foreground">
+          Loading catalog…
+        </div>
+      )}
+      {error ? (
+        <div
+          role="alert"
+          className="m-2 rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
+        >
+          <p className="font-medium">Unable to load catalog</p>
+          <p className="mt-1 break-words">{catalogErrorMessage(error)}</p>
+        </div>
+      ) : null}
+      {!loading && !error && nodes.length === 0 ? (
+        <div className="p-2 text-xs text-muted-foreground">
+          No catalog objects found.
+        </div>
+      ) : null}
+      <CatalogNodes
+        key={database || "catalog"}
+        nodes={nodes}
+        onSelect={onSelect}
+      />
     </div>
   );
 }
 
-function CatalogNodes({ nodes, depth, onSelect }: { nodes: CatalogNode[]; depth: number; onSelect: (node: CatalogNode) => void }) {
+function catalogErrorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  if (typeof error === "string" && error.trim()) {
+    return error.trim();
+  }
+  return "The catalog request failed. Check the connection settings and try again.";
+}
+
+function CatalogNodes({
+  nodes,
+  onSelect,
+}: {
+  nodes: CatalogNode[];
+  onSelect: (node: CatalogNode) => void;
+}) {
   return (
-    <div>
+    <div role="tree" className="min-w-0">
       {nodes.map((node) => (
-        <div key={node.id}>
-          <button
-            type="button"
-            disabled={!node.query}
-            onClick={() => onSelect(node)}
-            className="flex w-full items-center rounded px-2 py-1 text-left text-xs hover:bg-accent disabled:cursor-default disabled:text-muted-foreground"
-            style={{ paddingLeft: `${8 + depth * 14}px` }}
-            title={node.query ? `Load ${node.kind}` : node.kind}
-          >
-            <span className="truncate">{node.label}</span>
-          </button>
-          {node.children?.length ? <CatalogNodes nodes={node.children} depth={depth + 1} onSelect={onSelect} /> : null}
-        </div>
+        <TreeNode
+          key={node.id}
+          node={node}
+          getKey={(item) => item.id}
+          getChildren={(item) => item.children}
+          defaultOpen={(item) => item.kind === "schema"}
+          isSecondary={(item) => item.kind === "column"}
+          onSelect={(item) => {
+            if (item.query) onSelect(item);
+          }}
+          indentPx={14}
+          basePaddingPx={8}
+          renderRow={({ node: item }) => (
+            <div
+              className="flex min-w-0 flex-1 items-center gap-1.5 text-xs"
+              title={item.query ? `Load ${item.kind}` : item.kind}
+            >
+              <Icon
+                icon={catalogIcon(item.kind)}
+                className="size-3.5 shrink-0 text-muted-foreground"
+              />
+              <span className="truncate">{item.label}</span>
+            </div>
+          )}
+        />
       ))}
     </div>
   );
 }
 
-function PrometheusResults({ result, fallback }: { result: QueryBrowserResult; fallback: ReactNode }) {
-  const chart = useMemo(() => prometheusSeries(result.rows ?? []), [result.rows]);
+function catalogIcon(kind: string) {
+  switch (kind) {
+    case "schema":
+      return UiNamespace;
+    case "table":
+      return UiTable;
+    case "view":
+      return UiSqlView;
+    case "column":
+      return UiSqlColumn;
+    case "index":
+      return UiSqlIndex;
+    case "alias":
+      return UiLink;
+    case "data_stream":
+      return UiActivity;
+    default:
+      return UiDatabase;
+  }
+}
+
+function PrometheusResults({
+  result,
+  fallback,
+}: {
+  result: QueryBrowserResult;
+  fallback: ReactNode;
+}) {
+  const chart = useMemo(
+    () => prometheusSeries(result.rows ?? []),
+    [result.rows],
+  );
   if (!chart) return fallback;
   return (
     <div className="space-y-3">
@@ -327,16 +655,26 @@ function prometheusSeries(rows: Record<string, unknown>[]): {
   series: TimeseriesSeries[];
   responses: Record<string, TimeseriesResponse>;
 } | null {
-  const withTime = rows.filter((row) => row.timestamp != null && typeof row.value === "number");
+  const withTime = rows.filter(
+    (row) => row.timestamp != null && typeof row.value === "number",
+  );
   if (withTime.length < 2) return null;
-  const groups = new Map<string, { label: string; points: { at: string; value: number }[] }>();
+  const groups = new Map<
+    string,
+    { label: string; points: { at: string; value: number }[] }
+  >();
   for (const row of withTime) {
     const labels = Object.entries(row)
       .filter(([key]) => key !== "timestamp" && key !== "value")
       .sort(([a], [b]) => a.localeCompare(b));
-    const label = labels.map(([key, value]) => `${key}=${String(value)}`).join(", ") || "value";
+    const label =
+      labels.map(([key, value]) => `${key}=${String(value)}`).join(", ") ||
+      "value";
     const group = groups.get(label) ?? { label, points: [] };
-    group.points.push({ at: new Date(String(row.timestamp)).toISOString(), value: Number(row.value) });
+    group.points.push({
+      at: new Date(String(row.timestamp)).toISOString(),
+      value: Number(row.value),
+    });
     groups.set(label, group);
   }
   const series: TimeseriesSeries[] = [];
