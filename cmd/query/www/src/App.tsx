@@ -6,6 +6,7 @@ import {
   useBrowserRouter,
 } from "@flanksource/clicky-ui";
 import { MonacoProvider } from "@flanksource/clicky-ui/monaco";
+import { ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { secretFormExtensions } from "./secretKeySelector";
 import { namespaceFormExtensions } from "./namespacePicker";
@@ -13,6 +14,7 @@ import { connectionFormActions } from "./connectionActions";
 import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
 import { getMonacoWorker } from "./monacoWorkers";
+import { ChatWidget } from "./chatWidget";
 
 // Compose the form extensions: the namespace picker, plus the secret/workload
 // url selector (which reads the selected namespace from the form's root value).
@@ -68,7 +70,10 @@ export function App() {
       <ThemeProvider>
         <MonacoProvider getWorker={getMonacoWorker}>
           <RouterProvider adapter={router}>
-            <Explorer />
+            <ChatWindowManagerProvider storageId="query-chat">
+              <Explorer />
+              <ChatWidget client={client} />
+            </ChatWindowManagerProvider>
           </RouterProvider>
         </MonacoProvider>
       </ThemeProvider>
