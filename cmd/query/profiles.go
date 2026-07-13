@@ -186,9 +186,10 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		"x-clicky-title":  p.Name,
 	}
 	// x-clicky-render lets the frontend pick a presentation (e.g. the LogsTable
-	// view for trace/log profiles) instead of the default data table.
-	if p.Render != "" {
-		doc["x-clicky-render"] = p.Render
+	// view for trace/log profiles, the session-backed trace/top views) instead
+	// of the default data table.
+	if render := p.RenderMode(); render != "" {
+		doc["x-clicky-render"] = render
 	}
 	return json.Marshal(doc)
 }

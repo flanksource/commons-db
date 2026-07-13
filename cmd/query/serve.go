@@ -13,15 +13,19 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/db"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
+	"github.com/flanksource/commons-db/query"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
 )
 
 type serveOptions struct {
-	host    string
-	port    int
-	dataDir string
-	dev     bool
+	host               string
+	port               int
+	dataDir            string
+	dev                bool
+	maxSessions        int
+	maxSessionDuration time.Duration
+	sessionRetention   time.Duration
 }
 
 func newServeCmd() *cobra.Command {
@@ -38,6 +42,9 @@ func newServeCmd() *cobra.Command {
 	f.IntVarP(&o.port, "port", "p", o.port, "Port to bind")
 	f.StringVar(&o.dataDir, "data-dir", o.dataDir, "Embedded postgres data directory (default: <config-dir>/postgres)")
 	f.BoolVar(&o.dev, "dev", o.dev, "Spawn a Vite dev server (cmd/query/www) and proxy the UI to it")
+	f.IntVar(&o.maxSessions, "max-sessions", 5, "Maximum concurrently running trace/top sessions")
+	f.DurationVar(&o.maxSessionDuration, "max-session-duration", 15*time.Minute, "Upper bound on any trace/top session; profiles can only lower it")
+	f.DurationVar(&o.sessionRetention, "session-retention", 7*24*time.Hour, "How long finished sessions and their events are kept in PostgreSQL")
 	return cmd
 }
 
@@ -87,6 +94,26 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 		return fmt.Errorf("register database profiles: %w", err)
 	}
 
+	// Trace/top sessions: durable record in PostgreSQL, live registry in
+	// memory. Sessions orphaned by the previous process are finalized as
+	// interrupted, and expired ones pruned, before new ones start.
+	sessionStore := NewSessionStore(gdb, o.sessionRetention)
+	defer func() { _ = sessionStore.Close() }()
+	if err := sessionStore.MarkInterrupted(); err != nil {
+		return err
+	}
+	if err := sessionStore.Prune(); err != nil {
+		return err
+	}
+	sessionRegistry := query.NewSessionRegistry(query.RegistryOptions{
+		MaxSessions:  o.maxSessions,
+		MaxDuration:  o.maxSessionDuration,
+		OnEvent:      sessionStore.OnEvent,
+		OnTransition: sessionStore.OnTransition,
+	})
+	sessionStore.BindResolver(sessionRegistry.Get)
+	defer sessionRegistry.StopAll()
+
 	server := rpc.NewSwaggerServer(
 		&rpc.ServeConfig{
 			Host:       o.host,
@@ -104,6 +131,10 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 	server.RegisterRoutes(serverMux)
 	mux := http.NewServeMux()
 	mux.Handle("/api/openapi.json", newProfileOpenAPIHandler(cmd.Root(), server.ConverterConfig(), store))
+	chat := newQueryChatServer(cmd.Root())
+	defer func() { _ = chat.Close() }()
+	mux.Handle("/api/chat", chat.Handler())
+	mux.Handle("/api/chat/", chat.Handler())
 	mux.Handle("/api/", serverMux)
 	mux.Handle("/health", serverMux)
 
@@ -136,18 +167,27 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 		}
 		return c, nil
 	}
-	handler := newExecHandler("/api/v1", appCtx, store,
-		newConnectionBrowserHandler("/api/v1", appCtx,
-			newConnectionActionsHandler("/api/v1", appCtx,
-				newSecretsHandler("/api/v1", appCtx, kube,
-					newSchemaHandler("/api/v1", store, mux)))))
+	handler := newSessionHandler(sessionHandlerOptions{
+		Prefix:   "/api/v1",
+		Ctx:      appCtx,
+		Store:    store,
+		Registry: sessionRegistry,
+		Sessions: sessionStore,
+		Next: newExecHandler("/api/v1", appCtx, store,
+			newConnectionBrowserHandler("/api/v1", appCtx,
+				newConnectionActionsHandler("/api/v1", appCtx,
+					newSecretsHandler("/api/v1", appCtx, kube,
+						newSchemaHandler("/api/v1", store, mux))))),
+	})
 
 	addr := fmt.Sprintf("%s:%d", o.host, o.port)
 	httpSrv := &http.Server{
-		Addr:         addr,
-		Handler:      handler,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 60 * time.Second,
+		Addr:        addr,
+		Handler:     handler,
+		ReadTimeout: 30 * time.Second,
+		// Chat responses use a long-lived AI SDK stream. A server-wide write
+		// timeout would truncate otherwise healthy assistant turns.
+		WriteTimeout: 0,
 		IdleTimeout:  90 * time.Second,
 	}
 
@@ -160,6 +200,7 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 
 	fmt.Printf("🚀 query serve on http://%s\n", addr)
 	fmt.Printf("📄 OpenAPI: http://%s/api/openapi.json\n", addr)
+	fmt.Printf("🤖 AI Chat: http://%s/api/chat\n", addr)
 	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("server: %w", err)
 	}

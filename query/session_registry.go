@@ -1,10 +1,14 @@
 package query
 
 import (
+	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
+
+// ErrMaxSessions is returned by Add when the active-session cap is reached.
+var ErrMaxSessions = errors.New("max sessions reached")
 
 // RegistryOptions bounds a SessionRegistry. Zero values take the defaults;
 // profile-declared limits are clamped to these server caps, never raised.
@@ -65,7 +69,7 @@ func (r *SessionRegistry) Add(s *Session) error {
 		}
 	}
 	if !s.Snapshot().State.Terminal() && active >= r.opts.MaxSessions {
-		return fmt.Errorf("max sessions reached (%d active); stop one first", active)
+		return fmt.Errorf("%w (%d active); stop one first", ErrMaxSessions, active)
 	}
 	r.sessions[s.ID()] = s
 	r.order = append(r.order, s.ID())
