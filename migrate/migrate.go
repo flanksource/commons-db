@@ -141,6 +141,18 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 	if len(changes) == 0 {
 		logger.GetLogger("migrate").Debugf("No schema changes detected")
 	} else {
+		invalidated, err := invalidateDependentViews(ctx, db, cfg.name, changes, scripts)
+		if err != nil {
+			return err
+		}
+		if len(invalidated) > 0 {
+			if selected, err = selectScripts(ctx, db, cfg.name, scripts); err != nil {
+				return err
+			}
+			if ordered, err = topologicalScripts(scripts, selected); err != nil {
+				return err
+			}
+		}
 		plan, err := client.PlanChanges(ctx, "", changes)
 		if err != nil {
 			return fmt.Errorf("plan %d schema changes: %w", len(changes), err)
