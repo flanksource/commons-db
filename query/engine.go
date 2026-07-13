@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/flanksource/gomplate/v3"
@@ -133,6 +134,10 @@ func toFloat(v any) (float64, bool) {
 		return float64(n), true
 	case float64:
 		return n, true
+	case string:
+		// SQL drivers surface numeric/decimal columns as strings.
+		f, err := strconv.ParseFloat(n, 64)
+		return f, err == nil
 	default:
 		return 0, false
 	}

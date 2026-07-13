@@ -140,6 +140,18 @@ var _ = Describe("Session", func() {
 	})
 })
 
+var _ = Describe("sortAndLimit", func() {
+	It("orders numeric strings numerically, not lexicographically", func() {
+		rows := []Row{{"d": "96.8"}, {"d": "136.4"}, {"d": "7"}}
+		Expect(sortAndLimit(rows, "d", 2)).To(Equal([]Row{{"d": "136.4"}, {"d": "96.8"}}))
+	})
+
+	It("leaves rows untouched without sortBy or limit", func() {
+		rows := []Row{{"d": 2}, {"d": 1}}
+		Expect(sortAndLimit(rows, "", 0)).To(Equal([]Row{{"d": 2}, {"d": 1}}))
+	})
+})
+
 var _ = Describe("SessionRegistry", func() {
 	newRunning := func(id string) *Session {
 		s := newTestSession(id, 10)

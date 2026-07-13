@@ -26,6 +26,8 @@ func main() {
 	root.PersistentFlags().String("profiles-dir", "", "Directory of profile YAML files (default: <config-dir>/profiles)")
 	root.AddCommand(newServeCmd())
 	root.AddCommand(newSchemaCmd())
+	root.AddCommand(newTraceCmd())
+	root.AddCommand(newTopCmd())
 
 	if err := shadowInit(root); err != nil {
 		fmt.Fprintln(os.Stderr, err)
