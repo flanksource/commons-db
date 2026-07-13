@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/flanksource/commons-db/models"
 	"github.com/google/uuid"
 )
 
@@ -65,5 +66,18 @@ func TestRedactConnection(t *testing.T) {
 	redactConnection(c)
 	if c.Password != "" || c.Certificate != "" {
 		t.Fatalf("secrets not redacted: %+v", c)
+	}
+}
+
+func TestRedactConnectionInfersLegacyHTTPAuthentication(t *testing.T) {
+	c := &models.Connection{
+		Type: models.ConnectionTypeOpenSearch, Username: "admin", Password: "secret",
+	}
+	redactConnection(c)
+	if c.Properties["authType"] != "basic" {
+		t.Fatalf("authType = %q, want basic", c.Properties["authType"])
+	}
+	if c.Password != "" {
+		t.Fatal("password was not redacted")
 	}
 }

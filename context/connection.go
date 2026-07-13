@@ -156,8 +156,11 @@ func FindConnection(ctx Context, name, namespace string) (*models.Connection, er
 		return nil, fmt.Errorf("db is not configured")
 	}
 
-	if err := db.Where("name = ? AND namespace = ?", name, namespace).
-		First(&connection).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+	lookup := db.Where("name = ?", name)
+	if namespace != "" {
+		lookup = lookup.Where("namespace = ?", namespace)
+	}
+	if err := lookup.First(&connection).Error; err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, err
 	}
 

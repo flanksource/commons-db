@@ -20,25 +20,13 @@ type secretCreds struct {
 	Password types.EnvVar `json:"password" clicky:"type=k8s-secret-selector,title=Password,format=password,source=secret,order=5"`
 }
 
-// oauthCreds is the bearer/OAuth credential set HTTP-style backends store under
-// the connection Properties map.
-type oauthCreds struct {
-	Bearer       types.EnvVar `json:"bearer"       clicky:"type=k8s-secret-selector,title=Bearer Token,format=password,property=bearer,order=8"`
-	ClientID     types.EnvVar `json:"clientID"     clicky:"type=k8s-secret-selector,title=OAuth Client ID,source=value,property=clientID,order=9"`
-	ClientSecret types.EnvVar `json:"clientSecret" clicky:"type=k8s-secret-selector,title=OAuth Client Secret,format=password,property=clientSecret,order=10"`
-	TokenURL     string       `json:"tokenURL"     clicky:"title=OAuth Token URL,property=tokenURL,order=11"`
-	Scopes       string       `json:"scopes"       clicky:"title=OAuth Scopes,property=scopes,order=12"`
-}
-
-// httpConnection is the rich HTTP form — URL, TLS, basic-auth, certificate and
-// OAuth. The HTTP-family backends (OpenSearch, Prometheus, Loki, Jaeger) extend
-// it by embedding, so they share the same field shape.
+// httpConnection contains the transport fields shared by HTTP-family backends.
+// Authentication is added as a conditional nested schema by tailoredBranch so
+// the form can switch between None, Basic, OAuth and mTLS without showing every
+// credential field at once.
 type httpConnection struct {
 	URL         types.EnvVar `json:"url"          clicky:"type=k8s-url-selector,title=URL,source=value,required,order=2,desc=Base URL of the HTTP endpoint"`
 	InsecureTLS bool         `json:"insecure_tls" clicky:"title=Insecure TLS,order=3"`
-	secretCreds
-	Certificate types.EnvVar `json:"certificate"  clicky:"type=k8s-secret-selector,title=Certificate,source=secret,order=6"`
-	oauthCreds
 }
 
 // HTTPProvider models a generic HTTP endpoint.

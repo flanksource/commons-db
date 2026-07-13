@@ -43,6 +43,9 @@ type sqlOptions struct {
 
 	// URL is an inline DSN used when no stored connection is referenced.
 	URL string `json:"url,omitempty"`
+
+	// Database overrides the database from the hydrated connection URL.
+	Database string `json:"database,omitempty"`
 }
 
 func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
@@ -78,6 +81,12 @@ func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]
 
 	if err := conn.HydrateConnection(ctx); err != nil {
 		return nil, fmt.Errorf("failed to hydrate sql connection: %w", err)
+	}
+	if opts.Database != "" {
+		conn, err = conn.UseDatabase(opts.Database)
+		if err != nil {
+			return nil, fmt.Errorf("failed to select sql database: %w", err)
+		}
 	}
 
 	client, err := conn.Client(ctx)

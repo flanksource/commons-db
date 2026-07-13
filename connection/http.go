@@ -1,6 +1,8 @@
 package connection
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	netHTTP "net/http"
@@ -31,7 +33,7 @@ type TLSConfig struct {
 }
 
 func (t TLSConfig) IsEmpty() bool {
-	return t.CA.IsEmpty() || t.Cert.IsEmpty() || t.Key.IsEmpty()
+	return !t.InsecureSkipVerify && t.HandshakeTimeout == 0 && t.CA.IsEmpty() && t.Cert.IsEmpty() && t.Key.IsEmpty()
 }
 
 // +kubebuilder:object:generate=true
@@ -47,28 +49,81 @@ type HTTPConnection struct {
 func (t *HTTPConnection) FromModel(connection models.Connection) error {
 	t.URL = connection.URL
 	t.TLS.InsecureSkipVerify = connection.InsecureTLS
+	return t.applyModelAuthentication(connection)
+}
 
-	if err := t.HTTPBasicAuth.Username.Scan(connection.Username); err != nil {
-		return fmt.Errorf("error scanning username: %w", err)
-	}
-	if err := t.HTTPBasicAuth.Password.Scan(connection.Password); err != nil {
-		return fmt.Errorf("error scanning password: %w", err)
-	}
+func (t *HTTPConnection) applyModelAuthentication(connection models.Connection) error {
+	authType := strings.ToLower(strings.TrimSpace(connection.Properties["authType"]))
+	loadBasic := authType == "basic" || authType == ""
+	loadOAuth := authType == "oauth" || authType == ""
+	loadMTLS := authType == "mtls" || authType == ""
 
-	if bearer := connection.Properties["bearer"]; bearer != "" {
-		if err := t.Bearer.Scan(bearer); err != nil {
-			return fmt.Errorf("error scanning bearer: %w", err)
+	if loadBasic {
+		username := connection.Properties["username"]
+		if username == "" {
+			username = connection.Username
+		}
+		password := connection.Properties["password"]
+		if password == "" {
+			password = connection.Password
+		}
+		if err := t.HTTPBasicAuth.Username.Scan(username); err != nil {
+			return fmt.Errorf("error scanning username: %w", err)
+		}
+		if err := t.HTTPBasicAuth.Password.Scan(password); err != nil {
+			return fmt.Errorf("error scanning password: %w", err)
 		}
 	}
 
-	if clientID := connection.Properties["clientID"]; clientID != "" {
-		if err := t.OAuth.ClientID.Scan(clientID); err != nil {
-			return fmt.Errorf("error scanning oauth client_id: %w", err)
+	if authType == "" {
+		if bearer := connection.Properties["bearer"]; bearer != "" {
+			if err := t.Bearer.Scan(bearer); err != nil {
+				return fmt.Errorf("error scanning bearer: %w", err)
+			}
 		}
 	}
-	if clientSecret := connection.Properties["clientSecret"]; clientSecret != "" {
-		if err := t.OAuth.ClientSecret.Scan(clientSecret); err != nil {
-			return fmt.Errorf("error scanning oauth client_secret: %w", err)
+
+	if loadOAuth {
+		if clientID := connection.Properties["clientID"]; clientID != "" {
+			if err := t.OAuth.ClientID.Scan(clientID); err != nil {
+				return fmt.Errorf("error scanning oauth client_id: %w", err)
+			}
+		}
+		if clientSecret := connection.Properties["clientSecret"]; clientSecret != "" {
+			if err := t.OAuth.ClientSecret.Scan(clientSecret); err != nil {
+				return fmt.Errorf("error scanning oauth client_secret: %w", err)
+			}
+		}
+		t.OAuth.TokenURL = connection.Properties["tokenURL"]
+		if oauthParams := connection.Properties["params"]; oauthParams != "" {
+			if err := json.Unmarshal([]byte(oauthParams), &t.OAuth.Params); err != nil {
+				return fmt.Errorf("error unmarshaling params:%s in oauth: %w", oauthParams, err)
+			}
+		}
+		if scopes := connection.Properties["scopes"]; scopes != "" {
+			t.OAuth.Scopes = strings.Split(scopes, ",")
+		}
+	}
+
+	if loadMTLS {
+		if ca := connection.Properties["ca"]; ca != "" {
+			if err := t.TLS.CA.Scan(ca); err != nil {
+				return fmt.Errorf("error scanning TLS CA: %w", err)
+			}
+		} else if authType == "" && connection.Certificate != "" {
+			if err := t.TLS.CA.Scan(connection.Certificate); err != nil {
+				return fmt.Errorf("error scanning TLS certificate: %w", err)
+			}
+		}
+		if cert := connection.Properties["cert"]; cert != "" {
+			if err := t.TLS.Cert.Scan(cert); err != nil {
+				return fmt.Errorf("error scanning TLS client certificate: %w", err)
+			}
+		}
+		if key := connection.Properties["key"]; key != "" {
+			if err := t.TLS.Key.Scan(key); err != nil {
+				return fmt.Errorf("error scanning TLS client private key: %w", err)
+			}
 		}
 	}
 
@@ -159,6 +214,21 @@ type httpConnectionRoundTripper struct {
 
 func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.Response, error) {
 	conn := rt.HTTPConnection
+	base := rt.Base
+	if !conn.TLS.IsEmpty() {
+		transport, ok := base.(*netHTTP.Transport)
+		if !ok {
+			return nil, fmt.Errorf("cannot configure TLS on transport %T", base)
+		}
+		tlsConfig, err := conn.TLS.transportConfig()
+		if err != nil {
+			return nil, err
+		}
+		transport = transport.Clone()
+		transport.TLSClientConfig = tlsConfig
+		transport.TLSHandshakeTimeout = conn.TLS.HandshakeTimeout
+		base = transport
+	}
 	if !conn.HTTPBasicAuth.IsEmpty() {
 		req.SetBasicAuth(conn.HTTPBasicAuth.GetUsername(), conn.HTTPBasicAuth.GetPassword())
 	} else if !conn.Bearer.IsEmpty() {
@@ -171,14 +241,35 @@ func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.
 			Params:       conn.OAuth.Params,
 			Scopes:       conn.OAuth.Scopes,
 		})
-		rt.Base = oauthTransport.RoundTripper(rt.Base)
+		base = oauthTransport.RoundTripper(base)
 	}
 
-	if !conn.TLS.IsEmpty() {
-		rt.TLS = conn.TLS
-	}
+	return base.RoundTrip(req)
+}
 
-	return rt.Base.RoundTrip(req)
+func (t TLSConfig) transportConfig() (*tls.Config, error) {
+	config := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify} //nolint:gosec // explicit per-connection opt-in
+	if !t.CA.IsEmpty() {
+		roots, err := x509.SystemCertPool()
+		if err != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM([]byte(t.CA.ValueStatic)) {
+			return nil, fmt.Errorf("invalid TLS CA certificate")
+		}
+		config.RootCAs = roots
+	}
+	if t.Cert.IsEmpty() != t.Key.IsEmpty() {
+		return nil, fmt.Errorf("mTLS requires both a client certificate and private key")
+	}
+	if !t.Cert.IsEmpty() {
+		certificate, err := tls.X509KeyPair([]byte(t.Cert.ValueStatic), []byte(t.Key.ValueStatic))
+		if err != nil {
+			return nil, fmt.Errorf("invalid mTLS client certificate or private key: %w", err)
+		}
+		config.Certificates = []tls.Certificate{certificate}
+	}
+	return config, nil
 }
 
 // CreateHTTPClient requires a hydrated connection
@@ -222,40 +313,8 @@ func NewHTTPConnection(ctx ConnectionContext, conn models.Connection) (HTTPConne
 	switch conn.Type {
 	case models.ConnectionTypeHTTP, models.ConnectionTypePrometheus,
 		models.ConnectionTypeOpenSearch, models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
-		httpConn.URL = conn.URL
-		if err := httpConn.Username.Scan(conn.Username); err != nil {
-			return httpConn, fmt.Errorf("error scanning username: %w", err)
-		}
-		if err := httpConn.Password.Scan(conn.Password); err != nil {
-			return httpConn, fmt.Errorf("error scanning password: %w", err)
-		}
-
-		if bearer := conn.Properties["bearer"]; bearer != "" {
-			if err := httpConn.Bearer.Scan(bearer); err != nil {
-				return httpConn, fmt.Errorf("error scanning bearer: %w", err)
-			}
-		}
-
-		if oauthClientID := conn.Properties["clientID"]; oauthClientID != "" {
-			if err := httpConn.OAuth.ClientID.Scan(oauthClientID); err != nil {
-				return httpConn, fmt.Errorf("error scanning oauth_client_id: %w", err)
-			}
-		}
-		if oauthClientSecret := conn.Properties["clientSecret"]; oauthClientSecret != "" {
-			if err := httpConn.OAuth.ClientSecret.Scan(oauthClientSecret); err != nil {
-				return httpConn, fmt.Errorf("error scanning oauth_client_secret: %w", err)
-			}
-		}
-		if oauthTokenURL := conn.Properties["tokenURL"]; oauthTokenURL != "" {
-			httpConn.OAuth.TokenURL = oauthTokenURL
-		}
-		if oauthParams := conn.Properties["params"]; oauthParams != "" {
-			if err := json.Unmarshal([]byte(oauthParams), &httpConn.OAuth.Params); err != nil {
-				return httpConn, fmt.Errorf("error unmarshaling params:%s in oauth: %w", oauthParams, err)
-			}
-		}
-		if oauthScopes := conn.Properties["scopes"]; oauthScopes != "" {
-			httpConn.OAuth.Scopes = strings.Split(oauthScopes, ",")
+		if err := httpConn.FromModel(conn); err != nil {
+			return httpConn, err
 		}
 
 		if _, err := httpConn.Hydrate(ctx, conn.Namespace); err != nil {
