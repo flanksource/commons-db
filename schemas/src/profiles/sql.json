@@ -57,6 +57,11 @@
     },
     "options": {
       "properties": {
+        "database": {
+          "description": "Database override for this query",
+          "title": "Database",
+          "type": "string"
+        },
         "type": {
           "enum": [
             "postgres",

@@ -57,6 +57,11 @@
     },
     "options": {
       "properties": {
+        "database": {
+          "description": "Database override for this query",
+          "title": "Database",
+          "type": "string"
+        },
         "url": {
           "description": "Inline database URL used instead of a saved connection",
           "title": "URL / DSN",

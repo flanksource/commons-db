@@ -174,10 +174,11 @@ func runServe(cmd *cobra.Command, o serveOptions) error {
 		Registry: sessionRegistry,
 		Sessions: sessionStore,
 		Next: newExecHandler("/api/v1", appCtx, store,
-			newConnectionBrowserHandler("/api/v1", appCtx,
-				newConnectionActionsHandler("/api/v1", appCtx,
-					newSecretsHandler("/api/v1", appCtx, kube,
-						newSchemaHandler("/api/v1", store, mux))))),
+			newProfileSampleHandler("/api/v1", appCtx,
+				newConnectionBrowserHandler("/api/v1", appCtx,
+					newConnectionActionsHandler("/api/v1", appCtx,
+						newSecretsHandler("/api/v1", appCtx, kube,
+							newSchemaHandler("/api/v1", store, mux)))))),
 	})
 
 	addr := fmt.Sprintf("%s:%d", o.host, o.port)
