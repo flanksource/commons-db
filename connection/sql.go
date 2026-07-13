@@ -96,6 +96,64 @@ func (s *SQLConnection) Client(ctx context.Context) (*databasesql.DB, error) {
 	return client, nil
 }
 
+// UseDatabase returns a copy of the connection scoped to database. Credentials
+// remain in their existing EnvVar fields and are applied when Client is opened.
+func (s SQLConnection) UseDatabase(database string) (SQLConnection, error) {
+	database = strings.TrimSpace(database)
+	if database == "" {
+		return SQLConnection{}, fmt.Errorf("sql database cannot be empty")
+	}
+	raw := s.URL.ValueStatic
+	switch s.Type {
+	case "", models.ConnectionTypePostgres:
+		if strings.Contains(raw, "://") {
+			updated, err := setURLDatabase(raw, database)
+			if err != nil {
+				return SQLConnection{}, err
+			}
+			s.URL.ValueStatic = updated
+		} else {
+			s.URL.ValueStatic = strings.TrimSpace(raw) + " dbname=" + quotePostgresDSNValue(database)
+		}
+	case models.ConnectionTypeMySQL:
+		cfg, err := mysql.ParseDSN(raw)
+		if err != nil {
+			return SQLConnection{}, fmt.Errorf("invalid mysql connection string: %w", err)
+		}
+		cfg.DBName = database
+		s.URL.ValueStatic = cfg.FormatDSN()
+	case models.ConnectionTypeSQLServer:
+		cfg, err := msdsn.Parse(raw)
+		if err != nil {
+			return SQLConnection{}, fmt.Errorf("invalid sqlserver connection string: %w", err)
+		}
+		cfg.Database = database
+		s.URL.ValueStatic = cfg.URL().String()
+	case models.ConnectionTypeClickHouse:
+		updated, err := setURLDatabase(raw, database)
+		if err != nil {
+			return SQLConnection{}, err
+		}
+		s.URL.ValueStatic = updated
+	default:
+		return SQLConnection{}, fmt.Errorf("unsupported sql connection type: %s", s.Type)
+	}
+	return s, nil
+}
+
+func setURLDatabase(raw, database string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid sql connection URL: %w", err)
+	}
+	if parsed.Scheme == "" {
+		return "", fmt.Errorf("sql connection URL must include a scheme")
+	}
+	parsed.Path = "/" + database
+	parsed.RawPath = ""
+	return parsed.String(), nil
+}
+
 // connectionString applies credentials resolved from EnvVar-backed username and
 // password fields to the driver DSN. Keeping credentials outside URL is useful
 // for secret:// references, but database/sql drivers only receive the DSN passed
