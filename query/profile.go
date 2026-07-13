@@ -47,6 +47,16 @@ type Profile struct {
 	// optional duration column) for trace/log profiles. Filtering stays server-side
 	// via Params regardless of render mode.
 	Render string `json:"render,omitempty" yaml:"render,omitempty"`
+
+	// Trace declares the Profile as a long-running streaming session with
+	// explicit setup/teardown; the provider must implement StreamProvider.
+	// Mutually exclusive with Top.
+	Trace *TraceSpec `json:"trace,omitempty" yaml:"trace,omitempty"`
+
+	// Top declares the Profile as interval-sampled: the engine re-executes the
+	// query per tick and each snapshot replaces the last. Mutually exclusive
+	// with Trace.
+	Top *TopSpec `json:"top,omitempty" yaml:"top,omitempty"`
 }
 
 // RenderLogs is the Render value that selects the canonical LogsTable presentation.
