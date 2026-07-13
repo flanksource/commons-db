@@ -78,7 +78,7 @@ func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name stri
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	if p, err = applySessionOverrides(p, r); err != nil {
+	if p, err = applySessionSpecOverrides(p, r.URL.Query().Get("interval"), r.URL.Query().Get("duration")); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -103,11 +103,11 @@ func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name stri
 	writeSessionJSON(w, http.StatusCreated, session.Snapshot())
 }
 
-// applySessionOverrides maps the transport params onto the profile: ?interval
-// samples any plain profile as top (or overrides a declared interval), and
-// ?duration lowers the session bound (the registry still clamps it).
-func applySessionOverrides(p query.Profile, r *http.Request) (query.Profile, error) {
-	interval, duration := r.URL.Query().Get("interval"), r.URL.Query().Get("duration")
+// applySessionSpecOverrides maps the transport inputs (HTTP query params or CLI
+// flags) onto the profile: interval samples any plain profile as top (or
+// overrides a declared interval), and duration lowers the session bound (the
+// registry still clamps it).
+func applySessionSpecOverrides(p query.Profile, interval, duration string) (query.Profile, error) {
 	if interval != "" {
 		d, err := time.ParseDuration(interval)
 		if err != nil {
@@ -227,9 +227,11 @@ func (h *sessionHandler) events(w http.ResponseWriter, r *http.Request, id strin
 	// Persisted sessions are terminal: replay then done.
 	flusher := beginSSE(w)
 	for _, e := range events {
-		writeSSEEvent(w, "event", e)
+		if writeSSEEvent(w, "event", e) != nil {
+			return
+		}
 	}
-	writeSSEEvent(w, "done", info)
+	_ = writeSSEEvent(w, "done", info)
 	flusher.Flush()
 }
 
@@ -241,7 +243,9 @@ func (h *sessionHandler) streamSSE(w http.ResponseWriter, r *http.Request, sessi
 
 	flusher := beginSSE(w)
 	for _, e := range replay {
-		writeSSEEvent(w, "event", e)
+		if writeSSEEvent(w, "event", e) != nil {
+			return
+		}
 	}
 	flusher.Flush()
 
@@ -251,11 +255,13 @@ func (h *sessionHandler) streamSSE(w http.ResponseWriter, r *http.Request, sessi
 			return
 		case e, open := <-live:
 			if !open {
-				writeSSEEvent(w, "done", session.Snapshot())
+				_ = writeSSEEvent(w, "done", session.Snapshot())
 				flusher.Flush()
 				return
 			}
-			writeSSEEvent(w, "event", e)
+			if writeSSEEvent(w, "event", e) != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
@@ -322,12 +328,15 @@ func beginSSE(w http.ResponseWriter) http.Flusher {
 	return flusher
 }
 
-func writeSSEEvent(w http.ResponseWriter, event string, v any) {
+// writeSSEEvent writes one SSE frame; an error means the client disconnected
+// and the stream should stop.
+func writeSSEEvent(w http.ResponseWriter, event string, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		data = []byte(fmt.Sprintf(`{"error":%q}`, err.Error()))
 	}
-	fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	return err
 }
 
 func writeNDJSON(w http.ResponseWriter, id string, events []query.Event) {
