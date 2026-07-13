@@ -87,6 +87,22 @@ var _ = Describe("Session", func() {
 		Expect(snap.Error).To(ContainSubstring("stream broke"))
 	})
 
+	It("Abort fails an active session and closes subscribers", func() {
+		s := newTestSession("abort", 10)
+		s.markRunning()
+		_, live, cancel := s.Subscribe()
+		defer cancel()
+
+		s.Abort(errors.New("event log unwritable"))
+		snap := s.Snapshot()
+		Expect(snap.State).To(Equal(SessionFailed))
+		Expect(snap.Error).To(ContainSubstring("event log unwritable"))
+		Eventually(live).Should(BeClosed())
+
+		s.markDone(nil)
+		Expect(s.Snapshot().State).To(Equal(SessionFailed), "a later markDone never resurrects an aborted session")
+	})
+
 	It("Stop wins over a later markDone", func() {
 		s := newTestSession("stop", 10)
 		s.markRunning()

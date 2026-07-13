@@ -261,6 +261,31 @@ func (s *Session) Stop() {
 	}
 }
 
+// Abort forces an active session into the failed state (e.g. when its durable
+// event log cannot be written), cancelling the run and closing subscribers.
+func (s *Session) Abort(err error) {
+	s.mu.Lock()
+	if s.state.Terminal() {
+		s.mu.Unlock()
+		return
+	}
+	s.transitionLocked(SessionFailed, err.Error())
+	for id, ch := range s.subscribers {
+		delete(s.subscribers, id)
+		close(ch)
+	}
+	cancel := s.cancel
+	info, hook := s.snapshotLocked(), s.onTransition
+	s.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
+	if hook != nil {
+		hook(info)
+	}
+}
+
 func (s *Session) setCancel(cancel stdcontext.CancelFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
