@@ -1,8 +1,10 @@
 package opensearch
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"io"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -32,10 +34,25 @@ func (t *Searcher) GetRawClient() *opensearch.Client {
 }
 
 func New(ctx context.Context, backend Backend, mappingConfig *logs.FieldMappingConfig) (*Searcher, error) {
+	return NewWithTransport(ctx, backend, mappingConfig, nil)
+}
+
+// NewWithTransport creates an OpenSearch client using a caller-provided HTTP
+// transport. Connection-backed callers use this to share Basic, OAuth and mTLS
+// behavior with the generic HTTP connection layer; direct log backends retain
+// the legacy username/password configuration through New.
+func NewWithTransport(ctx context.Context, backend Backend, mappingConfig *logs.FieldMappingConfig, base http.RoundTripper) (*Searcher, error) {
+	if base == nil {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		if backend.InsecureTLS {
+			transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit per-connection opt-in
+		}
+		base = transport
+	}
 	cfg := opensearch.Config{
 		Addresses: []string{backend.Address},
 		// Maintain HAR capture / HTTP logging for the "opensearch" feature.
-		Transport: connection.ApplyHTTPObservability(ctx, "opensearch", nil, nil),
+		Transport: connection.ApplyHTTPObservability(ctx, "opensearch", base, nil),
 	}
 
 	if ctx.Logger.V(3).Enabled() {

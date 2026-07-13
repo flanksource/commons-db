@@ -2,11 +2,12 @@ package providers
 
 import (
 	"fmt"
+	"net/http"
 
+	dbconnection "github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/query"
-	"github.com/flanksource/commons-db/types"
 )
 
 func init() {
@@ -43,6 +44,7 @@ func (opensearchProvider) Execute(ctx context.Context, req query.ProviderRequest
 		return nil, err
 	}
 	backend := opensearch.Backend{Address: address}
+	var transport http.RoundTripper
 	if req.Connection != "" {
 		conn, err := ctx.HydrateConnectionByURL(req.Connection)
 		if err != nil {
@@ -54,18 +56,17 @@ func (opensearchProvider) Execute(ctx context.Context, req query.ProviderRequest
 		if backend.Address == "" {
 			backend.Address = conn.URL
 		}
-		if conn.Username != "" {
-			backend.Username = &types.EnvVar{ValueStatic: conn.Username}
+		httpConnection, err := dbconnection.NewHTTPConnection(ctx, *conn)
+		if err != nil {
+			return nil, err
 		}
-		if conn.Password != "" {
-			backend.Password = &types.EnvVar{ValueStatic: conn.Password}
-		}
+		transport = httpConnection.Transport()
 	}
 	if backend.Address == "" {
 		return nil, fmt.Errorf("opensearch address is required")
 	}
 
-	searcher, err := opensearch.New(ctx, backend, nil)
+	searcher, err := opensearch.NewWithTransport(ctx, backend, nil, transport)
 	if err != nil {
 		return nil, err
 	}

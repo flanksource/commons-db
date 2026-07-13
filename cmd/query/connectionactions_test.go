@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
+
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 )
@@ -185,6 +187,87 @@ func TestTestConnectionHTTPSReachableWithInsecureTLS(t *testing.T) {
 	}
 	if res.Message != "HTTP 204 No Content" {
 		t.Errorf("message = %q, want HTTP 204 No Content", res.Message)
+	}
+}
+
+func TestTestConnectionHTTPBasicAuth(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		username, password, ok := r.BasicAuth()
+		if !ok || username != "opensearch" || password != "correct-password" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	ctx := dbcontext.NewContext(context.Background())
+	res := testConnection(ctx, &models.Connection{
+		Type: models.ConnectionTypeOpenSearch,
+		URL:  ts.URL,
+		Properties: map[string]string{
+			"authType": "basic",
+			"username": "opensearch",
+			"password": "correct-password",
+		},
+	})
+	if !res.OK {
+		t.Fatalf("expected authenticated probe to succeed, got %+v", res)
+	}
+	if res.Message != "HTTP 204 No Content" {
+		t.Errorf("message = %q, want HTTP 204 No Content", res.Message)
+	}
+}
+
+func TestTestConnectionHTTPAuthenticationFailure(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer ts.Close()
+
+	ctx := dbcontext.NewContext(context.Background())
+	res := testConnection(ctx, &models.Connection{
+		Type: models.ConnectionTypeOpenSearch,
+		URL:  ts.URL,
+		Properties: map[string]string{
+			"authType": "basic",
+			"username": "opensearch",
+			"password": "wrong-password",
+		},
+	})
+	if res.OK {
+		t.Fatalf("expected authentication failure, got %+v", res)
+	}
+	if res.Message != "HTTP 401 Unauthorized: authentication failed" {
+		t.Errorf("message = %q", res.Message)
+	}
+}
+
+func TestMergeStoredDraftSecrets(t *testing.T) {
+	gdb := connectionInfoTestDB(t)
+	existing := models.Connection{
+		ID:          uuid.New(),
+		Name:        "search",
+		Type:        models.ConnectionTypeOpenSearch,
+		URL:         "https://search.example.com",
+		Username:    "admin",
+		Password:    "stored-password",
+		Certificate: "stored-certificate",
+	}
+	if err := gdb.Create(&existing).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	handler := connectionActionsHandler{ctx: dbcontext.NewContext(context.Background()).WithDB(gdb, nil)}
+	draft := &models.Connection{Password: "replacement-password"}
+	if err := handler.mergeStoredDraftSecrets(existing.ID.String(), draft); err != nil {
+		t.Fatal(err)
+	}
+	if draft.Password != "replacement-password" {
+		t.Errorf("explicit draft password was replaced: %q", draft.Password)
+	}
+	if draft.Certificate != "stored-certificate" {
+		t.Errorf("certificate = %q, want stored certificate", draft.Certificate)
 	}
 }
 

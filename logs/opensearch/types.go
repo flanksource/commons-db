@@ -11,9 +11,10 @@ import (
 
 // +kubebuilder:object:generate=true
 type Backend struct {
-	Address  string        `json:"address"`
-	Username *types.EnvVar `json:"username,omitempty"`
-	Password *types.EnvVar `json:"password,omitempty"`
+	Address     string        `json:"address"`
+	Username    *types.EnvVar `json:"username,omitempty"`
+	Password    *types.EnvVar `json:"password,omitempty"`
+	InsecureTLS bool          `json:"insecureTLS,omitempty"`
 }
 
 // +kubebuilder:object:generate=true
