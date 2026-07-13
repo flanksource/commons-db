@@ -157,6 +157,25 @@ func TestHydrateConnectionByURLDoesNotCacheResolvedConnection(t *testing.T) {
 	}
 }
 
+func TestHydrateConnectionByNameWithoutContextNamespace(t *testing.T) {
+	db := connectionCacheTestDB(t)
+	connection := models.Connection{
+		ID: uuid.New(), Name: "database", Namespace: "default",
+		Type: models.ConnectionTypePostgres, URL: "postgres://localhost/app",
+	}
+	if err := db.Create(&connection).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx := Context{Context: commons.NewContext(context.Background())}.WithDB(db, nil)
+	resolved, err := HydrateConnectionByURL(ctx, "connection://database")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ID != connection.ID {
+		t.Fatalf("resolved connection ID = %s, want %s", resolved.ID, connection.ID)
+	}
+}
+
 func TestKubernetesClientRefreshIsCoalescedAndRaceSafe(t *testing.T) {
 	connection := &refreshingKubernetesConnection{}
 	ctx := Context{Context: commons.NewContext(context.Background())}

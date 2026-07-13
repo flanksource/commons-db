@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/flanksource/clicky"
@@ -216,6 +217,41 @@ func redactConnection(c *models.Connection) {
 	if c == nil {
 		return
 	}
+	if isHTTPAuthConnectionType(c.Type) {
+		c.Properties = maps.Clone(c.Properties)
+		if c.Properties == nil {
+			c.Properties = map[string]string{}
+		}
+		if c.Properties["authType"] == "" {
+			c.Properties["authType"] = inferHTTPAuthType(c)
+		}
+	}
 	c.Password = ""
 	c.Certificate = ""
+}
+
+func isHTTPAuthConnectionType(connectionType string) bool {
+	switch connectionType {
+	case models.ConnectionTypeHTTP, models.ConnectionTypeOpenSearch, models.ConnectionTypePrometheus,
+		models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
+		return true
+	default:
+		return false
+	}
+}
+
+func inferHTTPAuthType(c *models.Connection) string {
+	if c.Properties["authType"] != "" {
+		return c.Properties["authType"]
+	}
+	if c.Properties["cert"] != "" || c.Properties["key"] != "" {
+		return "mtls"
+	}
+	if c.Properties["clientID"] != "" || c.Properties["clientSecret"] != "" || c.Properties["tokenURL"] != "" {
+		return "oauth"
+	}
+	if c.Username != "" || c.Password != "" || c.Properties["username"] != "" || c.Properties["password"] != "" {
+		return "basic"
+	}
+	return "none"
 }

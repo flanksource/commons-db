@@ -34,6 +34,17 @@ func branchFor(s schema.Schema, typ string) map[string]any {
 	return nil
 }
 
+func authBranchFor(authentication schema.Schema, authType string) schema.Schema {
+	for _, raw := range authentication["allOf"].([]any) {
+		branch := raw.(schema.Schema)
+		condition := branch["if"].(schema.Schema)["properties"].(schema.Schema)
+		if condition["authType"].(schema.Schema)["const"] == authType {
+			return branch["then"].(schema.Schema)
+		}
+	}
+	return nil
+}
+
 var _ = Describe("Connection schema", func() {
 	s := schema.Connection()
 
@@ -98,27 +109,41 @@ var _ = Describe("Connection schema", func() {
 		Expect(props["url"].(schema.Schema)["x-clicky-order"]).To(BeNumerically("==", 2))
 	})
 
-	It("gives the HTTP branch the rich form with certificate + nested oauth", func() {
+	It("gives HTTP connections a segmented conditional authentication form", func() {
 		then := branchFor(s, models.ConnectionTypeHTTP)
 		props := then["properties"].(schema.Schema)
-		for _, key := range []string{"url", "insecure_tls", "username", "password", "certificate"} {
+		for _, key := range []string{"url", "insecure_tls", "properties"} {
 			Expect(props).To(HaveKey(key))
 		}
-		Expect(props["password"].(schema.Schema)["x-clicky-component"]).To(Equal("k8s-secret-selector"))
-		Expect(props["password"].(schema.Schema)["x-clicky-default-source"]).To(Equal("secret"))
-		// bearer/oauth credentials nest under the connection properties map
-		oauth := props["properties"].(schema.Schema)["properties"].(schema.Schema)
-		Expect(oauth).To(HaveKey("bearer"))
-		Expect(oauth).To(HaveKey("clientID"))
-		Expect(oauth["bearer"].(schema.Schema)["x-clicky-component"]).To(Equal("k8s-secret-selector"))
+		Expect(props).ToNot(HaveKey("username"))
+		Expect(props).ToNot(HaveKey("password"))
+		Expect(props).ToNot(HaveKey("certificate"))
+
+		authentication := props["properties"].(schema.Schema)
+		selector := authentication["properties"].(schema.Schema)["authType"].(schema.Schema)
+		Expect(selector["enum"]).To(Equal([]string{"none", "basic", "oauth", "mtls"}))
+		Expect(selector["default"]).To(Equal("none"))
+		Expect(selector["x-enum-display"]).To(Equal("segmented"))
+
+		basic := authBranchFor(authentication, "basic")
+		Expect(basic["required"]).To(ConsistOf("username", "password"))
+		Expect(basic["properties"].(schema.Schema)["password"].(schema.Schema)["x-clicky-component"]).To(Equal("k8s-secret-selector"))
+
+		oauth := authBranchFor(authentication, "oauth")
+		Expect(oauth["required"]).To(ConsistOf("clientID", "clientSecret", "tokenURL"))
+		Expect(oauth["properties"].(schema.Schema)).To(HaveKey("scopes"))
+
+		mtls := authBranchFor(authentication, "mtls")
+		Expect(mtls["required"]).To(ConsistOf("cert", "key"))
+		Expect(mtls["properties"].(schema.Schema)).To(HaveKey("ca"))
 	})
 
 	It("extends the HTTP form for OpenSearch", func() {
 		then := branchFor(s, models.ConnectionTypeOpenSearch)
 		props := then["properties"].(schema.Schema)
 		Expect(props).To(HaveKey("url"))
-		Expect(props).To(HaveKey("certificate"))
 		Expect(props).To(HaveKey("insecure_tls"))
+		Expect(props["properties"].(schema.Schema)["properties"].(schema.Schema)).To(HaveKey("authType"))
 	})
 
 	It("surfaces certificate per type: optional for kubernetes, required for GCP", func() {

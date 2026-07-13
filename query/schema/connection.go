@@ -143,6 +143,9 @@ func tailoredBranch(typ string, cfg any) Schema {
 	if len(propProps) > 0 {
 		props["properties"] = Schema{"type": "object", "title": "Properties", "properties": propProps}
 	}
+	if isHTTPConnectionType(typ) {
+		props["properties"] = httpAuthenticationSchema()
+	}
 
 	then := Schema{}
 	if len(props) > 0 {
@@ -158,6 +161,84 @@ func tailoredBranch(typ string, cfg any) Schema {
 			"required":   []string{"type"},
 		},
 		"then": then,
+	}
+}
+
+func isHTTPConnectionType(typ string) bool {
+	switch typ {
+	case "http", "opensearch", "prometheus", "loki", "jaeger":
+		return true
+	default:
+		return false
+	}
+}
+
+// httpAuthenticationSchema stores the selected mode and its credentials in the
+// connection Properties map. Keeping the discriminator inside this object lets
+// JsonSchemaForm evaluate ordinary nested allOf/if/then clauses while the Go
+// model continues to persist the values in its existing JSON column.
+func httpAuthenticationSchema() Schema {
+	secret := func(title string, order int, source string) Schema {
+		field := Schema{
+			"type":               "string",
+			"title":              title,
+			"format":             "password",
+			"x-clicky-component": "k8s-secret-selector",
+			"x-clicky-order":     order,
+		}
+		if source != "" {
+			field["x-clicky-default-source"] = source
+		}
+		return field
+	}
+
+	authType := Schema{
+		"type":           "string",
+		"title":          "Authentication",
+		"enum":           []string{"none", "basic", "oauth", "mtls"},
+		"default":        "none",
+		"x-enum-display": "segmented",
+		"x-enum-labels":  map[string]string{"none": "None", "basic": "Basic", "oauth": "OAuth", "mtls": "mTLS"},
+		"x-clicky-order": 0,
+	}
+
+	condition := func(authType string, properties Schema, required ...string) Schema {
+		then := Schema{"properties": properties}
+		if len(required) > 0 {
+			then["required"] = required
+		}
+		return Schema{
+			"if": Schema{
+				"properties": Schema{"authType": Schema{"const": authType}},
+				"required":   []string{"authType"},
+			},
+			"then": then,
+		}
+	}
+
+	return Schema{
+		"type":           "object",
+		"title":          "Authentication",
+		"x-clicky-order": 4,
+		"properties":     Schema{"authType": authType},
+		"required":       []string{"authType"},
+		"allOf": []any{
+			condition("basic", Schema{
+				"username": secret("Username", 1, "value"),
+				"password": secret("Password", 2, "secret"),
+			}, "username", "password"),
+			condition("oauth", Schema{
+				"clientID":     secret("Client ID", 1, "value"),
+				"clientSecret": secret("Client Secret", 2, "secret"),
+				"tokenURL":     Schema{"type": "string", "title": "Token URL", "x-clicky-order": 3},
+				"scopes":       Schema{"type": "string", "title": "Scopes", "description": "Comma-separated OAuth scopes", "x-clicky-order": 4},
+			}, "clientID", "clientSecret", "tokenURL"),
+			condition("mtls", Schema{
+				"ca":   secret("CA Certificate", 1, "secret"),
+				"cert": secret("Client Certificate", 2, "secret"),
+				"key":  secret("Client Private Key", 3, "secret"),
+			}, "cert", "key"),
+		},
 	}
 }
 
