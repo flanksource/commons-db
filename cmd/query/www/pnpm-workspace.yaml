@@ -8,6 +8,7 @@ packages:
 # Mirror of clicky-ui/pnpm-workspace.yaml catalog so pnpm can resolve the
 # `catalog:` specifiers declared by @flanksource/clicky-ui when it is linked.
 catalog:
+  "@codemirror/autocomplete": ^6.20.3
   "@codemirror/commands": ^6.10.4
   "@codemirror/lang-json": ^6.0.2
   "@codemirror/lang-sql": ^6.10.0
@@ -78,6 +79,8 @@ catalog:
   vitest: ^3.0.5
   yaml: ^2.8.3
 catalogMode: prefer
+
+confirmModulesPurge: false
 
 linkWorkspacePackages: true
 preferWorkspacePackages: true
