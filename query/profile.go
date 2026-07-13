@@ -59,8 +59,32 @@ type Profile struct {
 	Top *TopSpec `json:"top,omitempty" yaml:"top,omitempty"`
 }
 
-// RenderLogs is the Render value that selects the canonical LogsTable presentation.
-const RenderLogs = "logs"
+// Render values the frontend keys presentation off (x-clicky-render):
+// RenderLogs selects the canonical LogsTable; RenderTrace and RenderTop select
+// the session-backed live views and are derived from the profile kind when
+// Render is not set explicitly.
+const (
+	RenderLogs  = "logs"
+	RenderTrace = "trace"
+	RenderTop   = "top"
+)
+
+// RenderMode returns the effective render value: the explicit Render when set,
+// otherwise the profile kind for trace/top profiles, otherwise empty (generic
+// table).
+func (p Profile) RenderMode() string {
+	if p.Render != "" {
+		return p.Render
+	}
+	switch p.Kind() {
+	case KindTrace:
+		return RenderTrace
+	case KindTop:
+		return RenderTop
+	default:
+		return ""
+	}
+}
 
 // ProviderConfig selects a registered Provider and supplies the connection and
 // provider-specific options.

@@ -200,8 +200,8 @@ func ProfileInstance(p query.Profile) Schema {
 		"properties":       props,
 		"x-clicky-columns": columns,
 	}
-	if p.Render != "" {
-		s["x-clicky-render"] = p.Render
+	if render := p.RenderMode(); render != "" {
+		s["x-clicky-render"] = render
 	}
 	if len(required) > 0 {
 		s["required"] = required

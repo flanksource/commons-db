@@ -231,13 +231,29 @@ func (s *Session) Result(ctx context.Context) (*Result, error) {
 		}
 		return nil, fmt.Errorf("session %s: no snapshot yet", s.id)
 	}
+	return MaterializeEvents(ctx, s.profile, s.Events())
+}
+
+// MaterializeEvents turns a session's event log into a Result: the last
+// snapshot for a top profile, or the streamed rows run through the profile's
+// processors for a trace. It also serves persisted events after the live
+// session is gone.
+func MaterializeEvents(ctx context.Context, p Profile, events []Event) (*Result, error) {
+	if p.Kind() == KindTop {
+		for i := len(events) - 1; i >= 0; i-- {
+			if events[i].Rows != nil {
+				return &Result{Profile: p.Name, Rows: events[i].Rows}, nil
+			}
+		}
+		return nil, fmt.Errorf("profile %q: no snapshot recorded", p.Name)
+	}
 	var rows []Row
-	for _, e := range s.Events() {
+	for _, e := range events {
 		if e.Row != nil {
 			rows = append(rows, e.Row)
 		}
 	}
-	return applyProcessors(ctx, s.profile.Processors, &Result{Profile: s.profile.Name, Rows: rows})
+	return applyProcessors(ctx, p.Processors, &Result{Profile: p.Name, Rows: rows})
 }
 
 // Stop transitions an active session to stopped and cancels its run context.

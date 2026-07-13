@@ -123,6 +123,18 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
 			Scope:   "collection",
 		},
 	}}
+
+	if profile.Kind() != query.KindQuery {
+		spec.Paths[path+"/sessions"] = rpc.OpenAPIPath{"post": {
+			Summary:     "Start a " + string(profile.Kind()) + " session for " + profile.Name,
+			Description: "Start a live session; follow it via GET /api/v1/sessions/{id}/events (SSE) and stop it via DELETE /api/v1/sessions/{id}",
+			OperationID: "start-" + entityName + "-session",
+			Parameters:  parameters,
+			Responses: map[string]rpc.OpenAPIResponse{
+				"201": {Description: "Session started"},
+			},
+		}}
+	}
 }
 
 func profileParameter(param query.ParamDef) rpc.OpenAPIParameter {
@@ -178,8 +190,8 @@ func profileResponseSchema(profile query.Profile) *rpc.OpenAPISchema {
 		}
 	}
 	item := &rpc.OpenAPISchema{Type: "object", Properties: properties}
-	if profile.Render != "" {
-		item.Extensions = map[string]any{"x-clicky-render": profile.Render}
+	if render := profile.RenderMode(); render != "" {
+		item.Extensions = map[string]any{"x-clicky-render": render}
 	}
 	return &rpc.OpenAPISchema{Type: "array", Items: item}
 }
