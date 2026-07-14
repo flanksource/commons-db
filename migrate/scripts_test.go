@@ -1,13 +1,38 @@
 package migrate
 
 import (
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"testing/fstest"
 
+	"github.com/lib/pq"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestIsRetryableMigrationErr(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"deadlock", &pq.Error{Code: "40P01"}, true},
+		{"lock_timeout", &pq.Error{Code: "55P03"}, true},
+		{"serialization_failure", &pq.Error{Code: "40001"}, true},
+		{"wrapped deadlock", fmt.Errorf("execute SQL migration x: %w", &pq.Error{Code: "40P01"}), true},
+		{"undefined_table", &pq.Error{Code: "42P01"}, false},
+		{"syntax_error", &pq.Error{Code: "42601"}, false},
+		{"non-pq error", errors.New("connection refused"), false},
+		{"nil", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isRetryableMigrationErr(tc.err))
+		})
+	}
+}
 
 func TestLoadScriptsDefaultsToPostAndOrdersTransitively(t *testing.T) {
 	filesystem := fstest.MapFS{

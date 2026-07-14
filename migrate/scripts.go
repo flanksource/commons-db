@@ -5,11 +5,30 @@ import (
 	"context"
 	"crypto/sha256"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io/fs"
 	"path"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/flanksource/commons/logger"
+	"github.com/lib/pq"
+)
+
+const (
+	// migrationLockTimeout bounds how long a transactional migration waits for a
+	// table lock before Postgres cancels it (55P03). This turns an indefinite
+	// block behind a live reader (e.g. a running server SELECT-ing the same
+	// captain_* tables) into a retryable timeout instead of a hang or deadlock.
+	migrationLockTimeout = "15s"
+	// migrationMaxAttempts is the total number of times a transactional migration
+	// is tried before giving up when it keeps hitting lock contention.
+	migrationMaxAttempts = 6
+	// migrationRetryBackoff is the base delay between retries; it grows linearly
+	// with the attempt number so a busy server gets progressively longer gaps.
+	migrationRetryBackoff = 250 * time.Millisecond
 )
 
 type scriptPhase string
@@ -254,20 +273,8 @@ func runScriptPhase(ctx context.Context, db *sql.DB, scope string, ordered []*sc
 			continue
 		}
 		if s.transactional {
-			tx, err := db.BeginTx(ctx, nil)
-			if err != nil {
-				return fmt.Errorf("begin SQL migration %s: %w", s.path, err)
-			}
-			if _, err := tx.ExecContext(ctx, s.content); err != nil {
-				_ = tx.Rollback()
-				return fmt.Errorf("execute SQL migration %s: %w", s.path, err)
-			}
-			if err := recordScript(ctx, tx, scope, s); err != nil {
-				_ = tx.Rollback()
+			if err := runTransactionalScript(ctx, db, scope, s); err != nil {
 				return err
-			}
-			if err := tx.Commit(); err != nil {
-				return fmt.Errorf("commit SQL migration %s: %w", s.path, err)
 			}
 			continue
 		}
@@ -279,6 +286,78 @@ func runScriptPhase(ctx context.Context, db *sql.DB, scope string, ordered []*sc
 		}
 	}
 	return nil
+}
+
+// runTransactionalScript applies one transactional migration, retrying on lock
+// contention. A transactional DDL script (e.g. 50_views_and_triggers.sql) takes
+// ACCESS EXCLUSIVE on tables a concurrently-running process may be reading; the
+// bounded lock_timeout converts the resulting hang into a retryable 55P03, and a
+// deadlock (40P01) aborts one party — either way retrying lets the migration win
+// once the reader's short query completes, instead of failing the whole run.
+func runTransactionalScript(ctx context.Context, db *sql.DB, scope string, s *script) error {
+	var lastErr error
+	for attempt := 1; attempt <= migrationMaxAttempts; attempt++ {
+		err := applyTransactionalScript(ctx, db, scope, s)
+		if err == nil {
+			return nil
+		}
+		if !isRetryableMigrationErr(err) {
+			return err
+		}
+		lastErr = err
+		if attempt < migrationMaxAttempts {
+			logger.Debugf("migration %s hit lock contention (attempt %d/%d): %v", s.path, attempt, migrationMaxAttempts, err)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * migrationRetryBackoff):
+			}
+		}
+	}
+	return fmt.Errorf("execute SQL migration %s: gave up after %d attempts under lock contention: %w", s.path, migrationMaxAttempts, lastErr)
+}
+
+// applyTransactionalScript runs the script (and records it) in a single
+// transaction with a bounded lock_timeout so it never blocks indefinitely.
+func applyTransactionalScript(ctx context.Context, db *sql.DB, scope string, s *script) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin SQL migration %s: %w", s.path, err)
+	}
+	if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '"+migrationLockTimeout+"'"); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("set lock_timeout for SQL migration %s: %w", s.path, err)
+	}
+	if _, err := tx.ExecContext(ctx, s.content); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("execute SQL migration %s: %w", s.path, err)
+	}
+	if err := recordScript(ctx, tx, scope, s); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit SQL migration %s: %w", s.path, err)
+	}
+	return nil
+}
+
+// isRetryableMigrationErr reports whether err is transient lock contention that a
+// retry can clear: a detected deadlock, a lock_timeout, or a serialization
+// failure. A wrapped *pq.Error carries the SQLSTATE that classifies it.
+func isRetryableMigrationErr(err error) bool {
+	var pqErr *pq.Error
+	if !errors.As(err, &pqErr) {
+		return false
+	}
+	switch pqErr.Code {
+	case "40P01", // deadlock_detected
+		"55P03", // lock_not_available (lock_timeout fired)
+		"40001": // serialization_failure
+		return true
+	default:
+		return false
+	}
 }
 
 type execer interface {
