@@ -43,9 +43,17 @@ representation:
 | `GET /api/v1/profile` + `Accept: application/schema+json` | profile-setup schema |
 | `POST/PUT/DELETE /api/v1/profile[/{name}]` | create / update / delete |
 | `GET /api/v1/profile/{name}?<params>` | **execute** the profile → rows |
+| `GET /api/v1/profile/{name}?format=csv&scope=page` | export the current page |
+| `GET /api/v1/profile/{name}?format=ndjson&scope=all` | stream every SQL/OpenSearch row |
 | `GET /api/v1/profile/{name}` + `Accept: application/schema+json` | per-profile schema: `properties` = FilterBar inputs, `x-clicky-columns` = DataTable columns |
 
 (`?__schema` is accepted as an alias for the schema Accept header.)
+
+Profile results export as JSON, NDJSON, CSV, YAML, Markdown, HTML, XLSX, or
+PDF. SQL and OpenSearch all-row exports keep bounded memory by consuming a
+backend cursor directly; processors and top/global sorting retain the buffered
+compatibility path. PDF is capped at 1,000 rows. Schema-less all-row results can
+use JSON, NDJSON, or YAML; table-oriented formats require declared columns.
 
 ## Architecture
 

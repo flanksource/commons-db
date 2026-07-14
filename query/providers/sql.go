@@ -6,6 +6,7 @@
 package providers
 
 import (
+	"database/sql"
 	"fmt"
 
 	"github.com/flanksource/commons-db/connection"
@@ -49,6 +50,22 @@ type sqlOptions struct {
 }
 
 func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
+	iterator, err := p.OpenRows(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	defer iterator.Close()
+	var result []query.Row
+	for iterator.Next() {
+		result = append(result, iterator.Row())
+	}
+	if err := iterator.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func (p sqlProvider) OpenRows(ctx context.Context, req query.ProviderRequest) (query.RowIterator, error) {
 	if req.Query == "" {
 		return nil, fmt.Errorf("sql query is required")
 	}
@@ -93,26 +110,40 @@ func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]
 	if err != nil {
 		return nil, fmt.Errorf("failed to create sql client: %w", err)
 	}
-	defer func() {
-		if err := client.Close(); err != nil {
-			ctx.Warnf("failed to close sql connection: %v", err)
-		}
-	}()
 
 	rows, err := client.QueryContext(ctx, req.Query)
 	if err != nil {
+		client.Close()
 		return nil, fmt.Errorf("failed to execute sql query: %w", err)
 	}
-	defer func() {
-		if err := rows.Close(); err != nil {
-			ctx.Warnf("failed to close sql rows: %v", err)
-		}
-	}()
-
-	scanned, err := db.ScanRows[query.Row](rows)
+	scanner, err := db.NewRowScanner(rows)
 	if err != nil {
-		return nil, fmt.Errorf("failed to scan sql rows: %w", err)
+		rows.Close()
+		client.Close()
+		return nil, fmt.Errorf("failed to prepare sql rows: %w", err)
 	}
+	return &sqlRowIterator{rows: rows, client: client, scanner: scanner}, nil
+}
 
-	return scanned, nil
+type sqlRowIterator struct {
+	rows    *sql.Rows
+	client  *sql.DB
+	scanner *db.RowScanner
+	closed  bool
+}
+
+func (i *sqlRowIterator) Next() bool     { return i.scanner.Next() }
+func (i *sqlRowIterator) Row() query.Row { return query.Row(i.scanner.Row()) }
+func (i *sqlRowIterator) Err() error     { return i.scanner.Err() }
+func (i *sqlRowIterator) Close() error {
+	if i.closed {
+		return nil
+	}
+	i.closed = true
+	rowErr := i.rows.Close()
+	clientErr := i.client.Close()
+	if rowErr != nil {
+		return rowErr
+	}
+	return clientErr
 }

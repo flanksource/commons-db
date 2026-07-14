@@ -40,6 +40,12 @@ func (r *Result) Render(columns []ColumnDef, format string) (string, error) {
 	return clicky.Format(r.Table(columns), clicky.FormatOptions{Format: format})
 }
 
+// ClickyColumns maps declared profile columns to the shared Clicky column
+// contract. Schema-less callers may pass nil and let a formatter derive fields.
+func ClickyColumns(columns []ColumnDef) []api.ColumnDef {
+	return clickyColumns(columns, nil)
+}
+
 // clickyColumns maps profile columns to clicky column definitions, deriving the
 // schema from row keys when no columns are declared.
 func clickyColumns(columns []ColumnDef, rows []Row) []api.ColumnDef {
@@ -52,6 +58,7 @@ func clickyColumns(columns []ColumnDef, rows []Row) []api.ColumnDef {
 		out = append(out, api.ColumnDef{
 			Name:     c.Name,
 			Label:    c.Label,
+			Kind:     string(c.Kind),
 			Type:     string(c.Type),
 			Format:   c.clickyFormat(),
 			MaxWidth: c.Width,
@@ -79,6 +86,7 @@ func emptyTable(cols []api.ColumnDef) api.TextTable {
 		t.Columns = append(t.Columns, api.PrettyField{
 			Name:          col.Name,
 			Label:         col.DisplayLabel(),
+			Kind:          col.Kind,
 			Style:         style,
 			LabelStyle:    col.HeaderStyle,
 			Type:          col.Type,

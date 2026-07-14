@@ -161,7 +161,10 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		if c.Hidden {
 			continue
 		}
-		prop := map[string]any{"type": columnJSONType(c.Type)}
+		prop := columnJSONSchema(c.Type)
+		if c.Type != "" {
+			prop["x-clicky-type"] = string(c.Type)
+		}
 		if c.Label != "" {
 			prop["x-clicky-label"] = c.Label
 		}
@@ -194,15 +197,38 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 	return json.Marshal(doc)
 }
 
-// columnJSONType maps a profile ColumnType to a JSON Schema scalar type.
-func columnJSONType(t query.ColumnType) string {
+// columnJSONSchema maps a profile ColumnType to its preferred JSON shape.
+func columnJSONSchema(t query.ColumnType) map[string]any {
 	switch t {
 	case query.ColumnTypeNumber:
-		return "number"
+		return map[string]any{"type": "number"}
 	case query.ColumnTypeBoolean:
-		return "boolean"
+		return map[string]any{"type": "boolean"}
+	case query.ColumnTypeKeyValue:
+		return map[string]any{"type": "object", "additionalProperties": map[string]any{}}
+	case query.ColumnTypeKeyValues:
+		return map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"key":   map[string]any{"type": "string"},
+					"value": map[string]any{},
+				},
+				"required": []string{"key", "value"},
+			},
+		}
+	case query.ColumnTypeJSON:
+		return map[string]any{"oneOf": []any{
+			map[string]any{"type": "object"},
+			map[string]any{"type": "array"},
+			map[string]any{"type": "string"},
+			map[string]any{"type": "number"},
+			map[string]any{"type": "boolean"},
+			map[string]any{"type": "null"},
+		}}
 	default:
-		return "string"
+		return map[string]any{"type": "string"}
 	}
 }
 

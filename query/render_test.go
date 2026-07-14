@@ -78,4 +78,25 @@ var _ = Describe("Result.Render", func() {
 		Expect(out).To(ContainSubstring("<"))
 		Expect(out).To(ContainSubstring("alpha"))
 	})
+
+	It("preserves timestamp column behavior in clicky JSON", func() {
+		out, err := result.Render([]query.ColumnDef{{Name: "name", Kind: query.ColumnKindTimestamp}}, "clicky-json")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out).To(ContainSubstring(`"kind": "timestamp"`))
+	})
+
+	It("preserves structured column types and nodes in clicky JSON", func() {
+		structured := &query.Result{Rows: []query.Row{{
+			"labels":   map[string]any{"env": "prod"},
+			"metadata": map[string]any{"enabled": true},
+		}}}
+		out, err := structured.Render([]query.ColumnDef{
+			{Name: "labels", Type: query.ColumnTypeKeyValue},
+			{Name: "metadata", Type: query.ColumnTypeJSON},
+		}, "clicky-json")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out).To(ContainSubstring(`"type": "key_value"`))
+		Expect(out).To(ContainSubstring(`"kind": "map"`))
+		Expect(out).To(ContainSubstring(`"language": "json"`))
+	})
 })

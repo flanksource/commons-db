@@ -17,6 +17,16 @@
             "title": "Hidden",
             "type": "boolean"
           },
+          "kind": {
+            "description": "Timestamp marks the column used by table date ranges",
+            "enum": [
+              "timestamp",
+              "tags",
+              "status"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
           "label": {
             "title": "Label",
             "type": "string"
@@ -34,10 +44,18 @@
               "duration",
               "bytes",
               "status",
-              "health"
+              "health",
+              "key_value",
+              "key_values",
+              "json"
             ],
             "title": "Type",
-            "type": "string"
+            "type": "string",
+            "x-enum-labels": {
+              "json": "JSON",
+              "key_value": "KeyValue{}",
+              "key_values": "[]KeyValue"
+            }
           },
           "unit": {
             "title": "Unit",
@@ -99,6 +117,18 @@
           "required": {
             "title": "Required",
             "type": "boolean"
+          },
+          "role": {
+            "description": "Map this parameter to filtering, paging, or a date-range edge",
+            "enum": [
+              "filter",
+              "limit",
+              "offset",
+              "time-from",
+              "time-to"
+            ],
+            "title": "Role",
+            "type": "string"
           },
           "template": {
             "description": "Value rewrite; {value} is the supplied value",

@@ -8,14 +8,26 @@ package query
 type ColumnType string
 
 const (
-	ColumnTypeString   ColumnType = "string"
-	ColumnTypeNumber   ColumnType = "number"
-	ColumnTypeBoolean  ColumnType = "boolean"
-	ColumnTypeDateTime ColumnType = "datetime"
-	ColumnTypeDuration ColumnType = "duration"
-	ColumnTypeBytes    ColumnType = "bytes"
-	ColumnTypeStatus   ColumnType = "status"
-	ColumnTypeHealth   ColumnType = "health"
+	ColumnTypeString    ColumnType = "string"
+	ColumnTypeNumber    ColumnType = "number"
+	ColumnTypeBoolean   ColumnType = "boolean"
+	ColumnTypeDateTime  ColumnType = "datetime"
+	ColumnTypeDuration  ColumnType = "duration"
+	ColumnTypeBytes     ColumnType = "bytes"
+	ColumnTypeStatus    ColumnType = "status"
+	ColumnTypeHealth    ColumnType = "health"
+	ColumnTypeKeyValue  ColumnType = "key_value"
+	ColumnTypeKeyValues ColumnType = "key_values"
+	ColumnTypeJSON      ColumnType = "json"
+)
+
+// ColumnKind enables semantic table behavior beyond value formatting.
+type ColumnKind string
+
+const (
+	ColumnKindTimestamp ColumnKind = "timestamp"
+	ColumnKindTags      ColumnKind = "tags"
+	ColumnKindStatus    ColumnKind = "status"
 )
 
 // ColumnDef declares one output column of a Profile.
@@ -28,6 +40,10 @@ type ColumnDef struct {
 
 	// Type is the semantic type used for formatting. Defaults to string.
 	Type ColumnType `json:"type,omitempty" yaml:"type,omitempty"`
+
+	// Kind enables specialized table behavior. In particular, timestamp marks
+	// the column used by the table's date-range control.
+	Kind ColumnKind `json:"kind,omitempty" yaml:"kind,omitempty"`
 
 	// Format overrides the clicky format string (e.g. "date", "bytes",
 	// "duration", "currency"). When empty it is derived from Type.

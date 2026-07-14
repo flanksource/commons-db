@@ -199,6 +199,15 @@ var _ = Describe("Profile schema", func() {
 		s := schema.Profile()
 		Expect(s["required"]).To(ConsistOf("profile", "provider"))
 		Expect(s["properties"].(schema.Schema)).To(HaveKey("params"))
+		props := s["properties"].(schema.Schema)
+		param := props["params"].(schema.Schema)["items"].(schema.Schema)
+		Expect(param["properties"].(schema.Schema)["role"].(schema.Schema)["enum"]).To(ContainElements("limit", "offset", "time-from", "time-to"))
+		column := props["columns"].(schema.Schema)["items"].(schema.Schema)
+		columnProps := column["properties"].(schema.Schema)
+		Expect(columnProps["kind"].(schema.Schema)["enum"]).To(ContainElement("timestamp"))
+		typeSchema := columnProps["type"].(schema.Schema)
+		Expect(typeSchema["enum"]).To(ContainElements("key_value", "key_values", "json"))
+		Expect(typeSchema["x-enum-labels"].(map[string]string)).To(HaveKeyWithValue("key_values", "[]KeyValue"))
 	})
 
 	It("uses a nested provider discriminator with icon combobox options", func() {
@@ -257,7 +266,7 @@ var _ = Describe("ProfileInstance schema", func() {
 			{Name: "limit", Type: query.ParamTypeNumber, Default: 50},
 		},
 		Columns: []query.ColumnDef{
-			{Name: "id", Type: query.ColumnTypeString},
+			{Name: "id", Type: query.ColumnTypeString, Kind: query.ColumnKindTimestamp},
 			{Name: "secret", Hidden: true},
 		},
 	}
@@ -275,6 +284,7 @@ var _ = Describe("ProfileInstance schema", func() {
 		cols := s["x-clicky-columns"].([]any)
 		Expect(cols).To(HaveLen(1))
 		Expect(cols[0].(schema.Schema)["name"]).To(Equal("id"))
+		Expect(cols[0].(schema.Schema)["kind"]).To(Equal("timestamp"))
 	})
 
 	It("omits x-clicky-render when the profile has no render mode", func() {

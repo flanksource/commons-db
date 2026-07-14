@@ -1,14 +1,80 @@
 package providers_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+var _ = Describe("opensearch provider", func() {
+	It("uses a regular size-limited search for bounded page reads", func() {
+		var usedScroll bool
+		var requestedSize string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			usedScroll = r.URL.Query().Has("scroll")
+			requestedSize = r.URL.Query().Get("size")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"took":1,"timed_out":false,"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_index":"logs","_id":"one","_source":{"message":"hello"}}]}}`)
+		}))
+		defer srv.Close()
+
+		rows, err := query.ExecuteRowsBounded(context.New(), query.Profile{
+			Name: "bounded-opensearch",
+			Provider: query.ProviderConfig{
+				Type:    "opensearch",
+				Options: map[string]any{"address": srv.URL, "index": "logs"},
+			},
+			Query: `{"query":{"match_all":{}}}`,
+		}, 101)
+		Expect(err).ToNot(HaveOccurred())
+		defer rows.Close()
+		Expect(rows.Next()).To(BeTrue())
+		Expect(rows.Row()).To(HaveKeyWithValue("message", "hello"))
+		Expect(usedScroll).To(BeFalse())
+		Expect(requestedSize).To(Equal("101"))
+	})
+
+	It("clears an unbounded scroll when iteration stops early", func() {
+		var clearedScroll bool
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(r.URL.Path, "/_search/scroll") {
+				clearedScroll = true
+				_, _ = fmt.Fprint(w, `{"succeeded":true,"num_freed":1}`)
+				return
+			}
+			_, _ = fmt.Fprint(w, `{"_scroll_id":"scroll-1","took":1,"timed_out":false,"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_index":"logs","_id":"one","_source":{"message":"hello"}}]}}`)
+		}))
+		defer srv.Close()
+
+		rows, err := query.ExecuteRows(context.New(), query.Profile{
+			Name: "scrolling-opensearch",
+			Provider: query.ProviderConfig{
+				Type:    "opensearch",
+				Options: map[string]any{"address": srv.URL, "index": "logs"},
+			},
+			Query: `{"query":{"match_all":{}}}`,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rows.Next()).To(BeTrue())
+		Expect(rows.Close()).To(Succeed())
+		Expect(clearedScroll).To(BeTrue())
+	})
+})
 
 func jsonServer(status int, body string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

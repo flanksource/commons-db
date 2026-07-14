@@ -18,8 +18,8 @@ func (p sampleTestProvider) Execute(_ dbcontext.Context, _ ProviderRequest) ([]R
 func TestSampleRendersCapsAndInfersRawRows(t *testing.T) {
 	original := providerRegistry["postgres"]
 	providerRegistry["postgres"] = sampleTestProvider{rows: []Row{
-		{"active": true, "count": 1, "duration": time.Second, "nested": map[string]any{"x": 1}, "started": time.Unix(0, 0)},
-		{"active": false, "count": 2.5, "duration": 2 * time.Second, "nested": []any{1}, "started": time.Unix(1, 0)},
+		{"active": true, "count": 1, "duration": time.Second, "nested": map[string]any{"x": 1}, "occurred": "2026-07-13T12:00:00.123Z", "started": time.Unix(0, 0)},
+		{"active": false, "count": 2.5, "duration": 2 * time.Second, "nested": []any{1}, "occurred": "2026-07-13T12:01:00Z", "started": time.Unix(1, 0)},
 	}}
 	t.Cleanup(func() { providerRegistry["postgres"] = original })
 
@@ -40,7 +40,8 @@ func TestSampleRendersCapsAndInfersRawRows(t *testing.T) {
 	}
 	want := []ColumnDef{
 		{Name: "active", Type: ColumnTypeBoolean}, {Name: "count", Type: ColumnTypeNumber},
-		{Name: "duration", Type: ColumnTypeDuration}, {Name: "nested", Type: ColumnTypeString},
+		{Name: "duration", Type: ColumnTypeDuration}, {Name: "nested", Type: ColumnTypeKeyValue},
+		{Name: "occurred", Type: ColumnTypeDateTime},
 		{Name: "started", Type: ColumnTypeDateTime},
 	}
 	if len(result.Columns) != len(want) {
@@ -49,6 +50,29 @@ func TestSampleRendersCapsAndInfersRawRows(t *testing.T) {
 	for i := range want {
 		if result.Columns[i] != want[i] {
 			t.Fatalf("column %d = %#v, want %#v", i, result.Columns[i], want[i])
+		}
+	}
+}
+
+func TestInferSampleColumnsStructuredTypes(t *testing.T) {
+	columns := InferSampleColumns([]Row{
+		{
+			"labels": map[string]any{"env": "prod", "retries": 3},
+			"pairs":  []any{map[string]any{"key": "team", "value": "core"}},
+			"config": map[string]any{"nested": map[string]any{"enabled": true}},
+		},
+	})
+	want := []ColumnDef{
+		{Name: "config", Type: ColumnTypeJSON},
+		{Name: "labels", Type: ColumnTypeKeyValue},
+		{Name: "pairs", Type: ColumnTypeKeyValues},
+	}
+	if len(columns) != len(want) {
+		t.Fatalf("columns = %#v", columns)
+	}
+	for i := range want {
+		if columns[i] != want[i] {
+			t.Fatalf("column %d = %#v, want %#v", i, columns[i], want[i])
 		}
 	}
 }

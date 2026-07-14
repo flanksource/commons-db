@@ -43,6 +43,7 @@ func ProfileSource() Schema {
 			"name":        strProp("Name", "Parameter key, referenced as {{.params.<name>}}"),
 			"label":       strProp("Label", ""),
 			"type":        Schema{"type": "string", "title": "Type", "enum": []string{"string", "number", "boolean", "date", "enum"}},
+			"role":        Schema{"type": "string", "title": "Role", "enum": []string{"filter", "limit", "offset", "time-from", "time-to"}, "description": "Map this parameter to filtering, paging, or a date-range edge"},
 			"default":     Schema{"title": "Default"},
 			"options":     Schema{"type": "array", "title": "Options", "items": Schema{"type": "string"}},
 			"required":    Schema{"type": "boolean", "title": "Required"},
@@ -55,9 +56,19 @@ func ProfileSource() Schema {
 		"type":     "object",
 		"required": []string{"name"},
 		"properties": Schema{
-			"name":   strProp("Name", ""),
-			"label":  strProp("Label", ""),
-			"type":   Schema{"type": "string", "title": "Type", "enum": []string{"string", "number", "boolean", "datetime", "duration", "bytes", "status", "health"}},
+			"name":  strProp("Name", ""),
+			"label": strProp("Label", ""),
+			"type": Schema{
+				"type":  "string",
+				"title": "Type",
+				"enum":  []string{"string", "number", "boolean", "datetime", "duration", "bytes", "status", "health", "key_value", "key_values", "json"},
+				"x-enum-labels": map[string]string{
+					"key_value":  "KeyValue{}",
+					"key_values": "[]KeyValue",
+					"json":       "JSON",
+				},
+			},
+			"kind":   Schema{"type": "string", "title": "Kind", "enum": []string{"timestamp", "tags", "status"}, "description": "Timestamp marks the column used by table date ranges"},
 			"format": strProp("Format", ""),
 			"unit":   strProp("Unit", ""),
 			"width":  Schema{"type": "integer", "title": "Width"},
@@ -187,6 +198,9 @@ func ProfileInstance(p query.Profile) Schema {
 		}
 		if c.Type != "" {
 			col["type"] = string(c.Type)
+		}
+		if c.Kind != "" {
+			col["kind"] = string(c.Kind)
 		}
 		if c.Format != "" {
 			col["format"] = c.Format
