@@ -1,6 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CatalogTree, completionForInspection } from "./connectionBrowser";
+import {
+  CatalogTree,
+  completionForInspection,
+  openSearchIndexOptions,
+  queryBrowserOptionsSchema,
+} from "./connectionBrowser";
 
 describe("connection browser inspection completion", () => {
   it("maps SQL inspection data to shared QueryBrowser completion", () => {
@@ -58,6 +63,42 @@ describe("connection browser inspection completion", () => {
         expect.objectContaining({ name: "service.name", types: ["keyword"] }),
       ],
     });
+  });
+});
+
+describe("OpenSearch index picker", () => {
+  it("maps inspected targets into grouped searchable options", () => {
+    expect(
+      openSearchIndexOptions({
+        kind: "opensearch",
+        targets: [
+          { name: "logs-2026.07.13", kind: "index" },
+          { name: "logs-current", kind: "alias" },
+          { name: "logs", kind: "data_stream" },
+        ],
+      }),
+    ).toEqual([
+      expect.objectContaining({ value: "logs-2026.07.13", group: "Indexes" }),
+      expect.objectContaining({ value: "logs-current", group: "Aliases" }),
+      expect.objectContaining({ value: "logs", group: "Data streams" }),
+    ]);
+  });
+
+  it("removes the duplicate free-text index option from OpenSearch", () => {
+    const schema = queryBrowserOptionsSchema({
+      kind: "query",
+      provider: "opensearch",
+      optionsSchema: {
+        type: "object",
+        properties: {
+          index: { type: "string", title: "Index" },
+          limit: { type: "string", title: "Limit" },
+        },
+      },
+    });
+
+    expect(schema?.properties).not.toHaveProperty("index");
+    expect(schema?.properties).toHaveProperty("limit");
   });
 });
 

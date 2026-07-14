@@ -1,5 +1,6 @@
 import {
   CacheBrowser,
+  Combobox,
   Icon,
   LogsTable,
   QueryBrowser,
@@ -8,6 +9,7 @@ import {
   type EntityDetailBodyRenderContext,
   type EntityDetailHeaderRenderContext,
   type JsonSchemaObject,
+  type ComboboxOption,
   type QueryBrowserCompletion,
   type QueryBrowserResult,
   type TimeseriesResponse,
@@ -25,7 +27,7 @@ import {
   UiTable,
 } from "@flanksource/clicky-ui/icons";
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 export type BrowserDescriptor = {
   kind: "query" | "cache";
@@ -112,6 +114,40 @@ export type BrowserInspection = {
   truncateReason?: string;
 };
 
+export type ConnectionProfileActionRenderer = (context: {
+  connectionName: string;
+  providerType: string;
+  providerOptions?: Record<string, unknown>;
+}) => ReactNode;
+
+export function openSearchIndexOptions(
+  inspection?: BrowserInspection,
+): ComboboxOption[] {
+  if (inspection?.kind !== "opensearch") return [];
+  return (inspection.targets ?? []).map((target) => ({
+    value: target.name,
+    label: target.name,
+    group:
+      target.kind === "data_stream"
+        ? "Data streams"
+        : target.kind === "alias"
+          ? "Aliases"
+          : "Indexes",
+    title: `${target.name} · ${target.kind.replace("_", " ")}`,
+  }));
+}
+
+export function queryBrowserOptionsSchema(
+  descriptor: BrowserDescriptor,
+): JsonSchemaObject | undefined {
+  if (descriptor.provider !== "opensearch" || !descriptor.optionsSchema) {
+    return descriptor.optionsSchema;
+  }
+  const properties = { ...(descriptor.optionsSchema.properties ?? {}) };
+  delete properties.index;
+  return { ...descriptor.optionsSchema, properties };
+}
+
 export function completionForInspection(
   inspection?: BrowserInspection,
   selectedInspection?: BrowserInspection,
@@ -160,17 +196,31 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
 
 export function connectionDetailBodyRenderer(
   context: EntityDetailBodyRenderContext,
+  renderProfileAction?: ConnectionProfileActionRenderer,
 ): ReactNode {
   if (context.surfaceKey !== "connection") return context.defaultView;
-  return <ConnectionBrowser id={context.id} fallback={context.defaultView} />;
+  const connectionName =
+    typeof context.entity?.name === "string" ? context.entity.name : context.id;
+  return (
+    <ConnectionBrowser
+      id={context.id}
+      connectionName={connectionName}
+      fallback={context.defaultView}
+      renderProfileAction={renderProfileAction}
+    />
+  );
 }
 
 function ConnectionBrowser({
   id,
+  connectionName,
   fallback,
+  renderProfileAction,
 }: {
   id: string;
+  connectionName: string;
   fallback: ReactNode;
+  renderProfileAction?: ConnectionProfileActionRenderer;
 }) {
   const baseUrl = `/api/v1/connection/${encodeURIComponent(id)}/browser`;
   const descriptor = useQuery({
@@ -187,6 +237,23 @@ function ConnectionBrowser({
     },
     retry: 0,
   });
+  const inspection = useQuery({
+    queryKey: ["connection-browser-inspection", id],
+    queryFn: () => fetchJSON<BrowserInspection>(`${baseUrl}/inspect`),
+    enabled:
+      descriptor.data?.provider === "opensearch" &&
+      descriptor.data.catalog === true,
+    retry: 0,
+    staleTime: 5 * 60_000,
+  });
+  const [selectedOpenSearchIndex, setSelectedOpenSearchIndex] = useState("");
+  const profileOptions = useMemo(
+    () =>
+      selectedOpenSearchIndex
+        ? { index: selectedOpenSearchIndex }
+        : undefined,
+    [selectedOpenSearchIndex],
+  );
 
   if (descriptor.isLoading) {
     return (
@@ -214,12 +281,43 @@ function ConnectionBrowser({
       </div>
     );
   }
+  const profileAction =
+    descriptor.data.provider && renderProfileAction
+      ? renderProfileAction({
+          connectionName,
+          providerType: descriptor.data.provider,
+          ...(profileOptions ? { providerOptions: profileOptions } : {}),
+        })
+      : null;
   return (
     <div className="flex min-w-0 flex-col gap-3">
+      {profileAction || descriptor.data.provider === "opensearch" ? (
+        <div className="flex flex-wrap items-center gap-2">
+          {descriptor.data.provider === "opensearch" ? (
+            <Combobox
+              ariaLabel="OpenSearch index"
+              label="Index"
+              value={selectedOpenSearchIndex}
+              onChange={setSelectedOpenSearchIndex}
+              options={openSearchIndexOptions(inspection.data)}
+              placeholder={
+                inspection.isError ? "Unable to load indexes" : "Select index…"
+              }
+              loading={inspection.isLoading}
+              invalid={inspection.isError}
+              allowCustomValue={false}
+              className="min-w-72 flex-1 sm:max-w-xl"
+            />
+          ) : null}
+          {profileAction}
+        </div>
+      ) : null}
       <ConnectionQueryBrowser
         id={id}
         baseUrl={baseUrl}
         descriptor={descriptor.data}
+        selectedOpenSearchIndex={selectedOpenSearchIndex}
+        onOpenSearchIndexChange={setSelectedOpenSearchIndex}
       />
     </div>
   );
@@ -335,10 +433,14 @@ function ConnectionQueryBrowser({
   id,
   baseUrl,
   descriptor,
+  selectedOpenSearchIndex,
+  onOpenSearchIndexChange,
 }: {
   id: string;
   baseUrl: string;
   descriptor: BrowserDescriptor;
+  selectedOpenSearchIndex: string;
+  onOpenSearchIndexChange: (index: string) => void;
 }) {
   const baseInspection = useQuery({
     queryKey: ["connection-browser-inspection", id],
@@ -397,6 +499,29 @@ function ConnectionQueryBrowser({
     selectedTargetName,
     selection.options?.targetKind,
   ]);
+  useEffect(() => {
+    if (descriptor.provider !== "opensearch") return;
+    const currentIndex = String(
+      liveOptions.index ?? selection.options?.index ?? "",
+    );
+    if (currentIndex === selectedOpenSearchIndex) return;
+    const target = inspectionData?.targets?.find(
+      (candidate) => candidate.name === selectedOpenSearchIndex,
+    );
+    const nextOptions = { ...liveOptions };
+    if (selectedOpenSearchIndex) nextOptions.index = selectedOpenSearchIndex;
+    else delete nextOptions.index;
+    if (target?.kind) nextOptions.targetKind = target.kind;
+    else delete nextOptions.targetKind;
+    setSelection((current) => ({ ...current, options: nextOptions }));
+    setLiveOptions(nextOptions);
+  }, [
+    descriptor.provider,
+    inspectionData?.targets,
+    liveOptions,
+    selectedOpenSearchIndex,
+    selection.options?.index,
+  ]);
   const selectedInspection = useQuery({
     queryKey: [
       "connection-browser-inspection",
@@ -429,7 +554,7 @@ function ConnectionQueryBrowser({
       language={descriptor.language ?? "text"}
       queryLabel={descriptor.queryLabel ?? "Query"}
       initialQuery={selection.query ?? descriptor.defaultQuery ?? ""}
-      optionsSchema={descriptor.optionsSchema}
+      optionsSchema={queryBrowserOptionsSchema(descriptor)}
       initialOptions={options}
       completion={completion}
       onOptionsChange={setLiveOptions}
@@ -445,6 +570,9 @@ function ConnectionQueryBrowser({
             onSelect={(node) => {
               setSelection({ query: node.query, options: node.options });
               setLiveOptions(node.options ?? {});
+              if (descriptor.provider === "opensearch") {
+                onOpenSearchIndexChange(String(node.options?.index ?? ""));
+              }
             }}
           />
         ) : undefined

@@ -1,0 +1,11 @@
+.profile-builder-workspace-dialog > [data-slot="modal-body"] {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.profile-builder-workspace-dialog > [data-slot="modal-body"] > * {
+  flex: 1 1 0;
+  height: auto;
+  min-height: 0;
+}
