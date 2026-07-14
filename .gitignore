@@ -9,3 +9,4 @@ go.work.sum
 .tmp/
 .grite/
 hack/
+.pnpm-store/
