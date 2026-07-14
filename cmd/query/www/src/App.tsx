@@ -4,6 +4,7 @@ import {
   ThemeProvider,
   createOperationsApiClient,
   useBrowserRouter,
+  type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { MonacoProvider } from "@flanksource/clicky-ui/monaco";
 import { ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
@@ -16,6 +17,7 @@ import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./
 import { getMonacoWorker } from "./monacoWorkers";
 import { ChatWidget } from "./chatWidget";
 import { profileBuilderFormExtensions } from "./profileBuilder";
+import { BuildProfileButton } from "./buildProfileAction";
 
 // Compose the form extensions: the namespace picker, plus the secret/workload
 // url selector (which reads the selected namespace from the form's root value).
@@ -52,6 +54,19 @@ const queryClient = new QueryClient();
 // the result renderer so `render: logs` profiles present via clicky-ui LogsTable.
 function Explorer() {
   const logsEntityNames = useLogsEntityNames();
+  const renderLogsResult = logsResultRenderer(logsEntityNames);
+  const renderResult = (context: ResultRenderContext) => {
+    const result = renderLogsResult(context);
+    if (context.surfaceKey !== "profiles") return result;
+    return (
+      <div className="flex h-full min-h-0 flex-col gap-4">
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <BuildProfileButton client={client} />
+        </div>
+        <div className="min-h-0 flex-1">{result}</div>
+      </div>
+    );
+  };
   return (
     <EntityExplorerApp
       client={client}
@@ -61,8 +76,20 @@ function Explorer() {
         connection: { create: "Add Connection", update: "Edit" },
         profiles: { create: "Add Profile" },
       }}
-      resultRenderer={logsResultRenderer(logsEntityNames)}
-      entityDetailBodyRenderer={connectionDetailBodyRenderer}
+      resultRenderer={renderResult}
+      entityDetailBodyRenderer={(context) =>
+        connectionDetailBodyRenderer(
+          context,
+          ({ connectionName, providerType, providerOptions }) => (
+            <BuildProfileButton
+              client={client}
+              connectionName={connectionName}
+              providerType={providerType}
+              providerOptions={providerOptions}
+            />
+          ),
+        )
+      }
       entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
     />
   );
@@ -76,8 +103,10 @@ export function App() {
         <MonacoProvider getWorker={getMonacoWorker}>
           <RouterProvider adapter={router}>
             <ChatWindowManagerProvider storageId="query-chat">
-              <Explorer />
-              <ChatWidget client={client} />
+              <div className="min-h-0 overflow-hidden" style={{ height: "100dvh" }}>
+                <Explorer />
+                <ChatWidget client={client} />
+              </div>
             </ChatWindowManagerProvider>
           </RouterProvider>
         </MonacoProvider>

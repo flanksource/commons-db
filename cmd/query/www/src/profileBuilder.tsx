@@ -19,8 +19,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import {
   useCallback,
+  createContext,
   useEffect,
+  useContext,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -32,18 +35,31 @@ import {
   type BrowserInspection,
   type CatalogNode,
 } from "./connectionBrowser";
+import "./profileBuilder.css";
 
 type ProfileColumn = {
   name: string;
   type?: string;
+  kind?: string;
   [key: string]: unknown;
 };
 
 type ProfileProvider = {
   type?: string;
+  role?: string;
   connection?: string;
   options?: Record<string, unknown>;
 };
+
+const PROFILE_COLUMN_TYPE_LABELS: Record<string, string> = {
+  key_value: "KeyValue{}",
+  key_values: "[]KeyValue",
+  json: "JSON",
+};
+
+export function profileColumnTypeLabel(type?: string) {
+  return type ? (PROFILE_COLUMN_TYPE_LABELS[type] ?? type) : "string";
+}
 
 type ProfileDraft = Record<string, unknown> & {
   profile?: string;
@@ -88,6 +104,22 @@ export const profileBuilderFormExtensions = {
   post: [profileQueryBuilderPost],
 };
 
+const ProfileBuilderAutoOpenContext = createContext(false);
+
+// Modal's body is a flex child. It must be allowed to shrink and must not own
+// scrolling, otherwise QueryBrowser's intrinsic minimum height expands the
+// whole workspace and pushes the editor/results below the dialog viewport.
+export const profileBuilderModalClassName =
+  "profile-builder-workspace-dialog h-[calc(100dvh-2rem)]";
+
+export function ProfileBuilderAutoOpen({ children }: { children: ReactNode }) {
+  return (
+    <ProfileBuilderAutoOpenContext.Provider value>
+      {children}
+    </ProfileBuilderAutoOpenContext.Provider>
+  );
+}
+
 function ProfileQueryBuilderField({
   input,
   rootValue,
@@ -98,8 +130,19 @@ function ProfileQueryBuilderField({
   onRootChange?: (next: Record<string, unknown>) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const autoOpen = useContext(ProfileBuilderAutoOpenContext);
+  const autoOpened = useRef(false);
   const connection = rootValue.provider?.connection ?? "";
   const connectionID = savedConnectionID(connection);
+
+  useEffect(() => {
+    if (!autoOpen || autoOpened.current || !connectionID || !onRootChange) {
+      return;
+    }
+    autoOpened.current = true;
+    setOpen(true);
+  }, [autoOpen, connectionID, onRootChange]);
+
   return (
     <div className="min-w-0 space-y-2">
       {input}
@@ -170,15 +213,20 @@ function ProfileBuilderWorkspace({
   const [liveOptions, setLiveOptions] = useState<Record<string, unknown>>(
     initialProviderOptions,
   );
-  const [catalogOptions, setCatalogOptions] = useState<
-    Record<string, unknown>
-  >({});
+  const [catalogOptions, setCatalogOptions] = useState<Record<string, unknown>>(
+    {},
+  );
   const [sampleParams, setSampleParams] = useState<Record<string, unknown>>(
     () => defaultParamValues(rootValue.params ?? []),
   );
   const [sampleColumns, setSampleColumns] = useState<ProfileColumn[]>([]);
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(
     () => new Set(),
+  );
+  const [timestampColumn, setTimestampColumn] = useState(
+    () =>
+      rootValue.columns?.find((column) => column.kind === "timestamp")?.name ??
+      "",
   );
   const [selectedDatabase, setSelectedDatabase] = useState("");
 
@@ -189,11 +237,7 @@ function ProfileBuilderWorkspace({
   }, [descriptor.data?.defaultQuery, query]);
 
   const databaseInspection = useQuery({
-    queryKey: [
-      "profile-builder-inspection",
-      connectionID,
-      selectedDatabase,
-    ],
+    queryKey: ["profile-builder-inspection", connectionID, selectedDatabase],
     queryFn: () => {
       const params = new URLSearchParams({ database: selectedDatabase });
       return fetchJSON<BrowserInspection>(`${baseUrl}/inspect?${params}`);
@@ -297,7 +341,8 @@ function ProfileBuilderWorkspace({
       };
       delete next.targetKind;
       return next;
-    }, [
+    },
+    [
       activeDatabase,
       catalogOptions,
       initialProviderOptions,
@@ -306,15 +351,19 @@ function ProfileBuilderWorkspace({
   );
 
   const applyDraft = (mode: "query" | "merge" | "replace") => {
-    const chosen = sampleColumns.filter((column) =>
-      selectedColumns.has(column.name),
+    const chosen = mapTimestampColumn(
+      sampleColumns.filter((column) => selectedColumns.has(column.name)),
+      timestampColumn,
     );
     let columns = existingColumns;
     if (mode === "merge") {
-      columns = [
-        ...existingColumns,
-        ...chosen.filter((column) => !existingNames.has(column.name)),
-      ];
+      columns = mapTimestampColumn(
+        [
+          ...existingColumns,
+          ...chosen.filter((column) => !existingNames.has(column.name)),
+        ],
+        timestampColumn,
+      );
     } else if (mode === "replace") {
       if (
         existingColumns.length > 0 &&
@@ -378,7 +427,7 @@ function ProfileBuilderWorkspace({
       onClose={onClose}
       title={`Build profile from ${connectionID}`}
       size="full"
-      className="h-[calc(100dvh-2rem)]"
+      className={profileBuilderModalClassName}
       footer={footer}
     >
       <div className="flex h-full min-h-0 flex-col gap-3">
@@ -402,7 +451,10 @@ function ProfileBuilderWorkspace({
           <WorkspaceMessage>Loading connection browser…</WorkspaceMessage>
         ) : descriptor.isError ? (
           <WorkspaceMessage error>
-            {errorMessage(descriptor.error, "Unable to load this connection browser")}
+            {errorMessage(
+              descriptor.error,
+              "Unable to load this connection browser",
+            )}
           </WorkspaceMessage>
         ) : descriptor.data ? (
           <QueryBrowser
@@ -469,6 +521,8 @@ function ProfileBuilderWorkspace({
                     selected={selectedColumns}
                     existing={existingNames}
                     onChange={setSelectedColumns}
+                    timestampColumn={timestampColumn}
+                    onTimestampColumnChange={setTimestampColumn}
                   />
                 ) : null}
               </div>
@@ -489,11 +543,15 @@ function ColumnPicker({
   selected,
   existing,
   onChange,
+  timestampColumn,
+  onTimestampColumnChange,
 }: {
   columns: ProfileColumn[];
   selected: Set<string>;
   existing: Set<string>;
   onChange: (next: Set<string>) => void;
+  timestampColumn: string;
+  onTimestampColumnChange: (next: string) => void;
 }) {
   return (
     <div className="shrink-0 rounded-md border bg-card p-3">
@@ -503,34 +561,65 @@ function ColumnPicker({
       </div>
       <div className="flex max-h-32 flex-wrap gap-2 overflow-auto">
         {columns.map((column) => (
-          <label
+          <div
             key={column.name}
             className="flex cursor-pointer items-center gap-2 rounded-md border bg-background px-2 py-1.5 text-xs"
           >
-            <input
-              type="checkbox"
-              checked={selected.has(column.name)}
-              onChange={(event) => {
-                const next = new Set(selected);
-                if (event.target.checked) next.add(column.name);
-                else next.delete(column.name);
-                onChange(next);
-              }}
-            />
-            <span className="font-medium">{column.name}</span>
-            <span className="text-muted-foreground">
-              {column.type ?? "string"}
-            </span>
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={selected.has(column.name)}
+                onChange={(event) => {
+                  const next = new Set(selected);
+                  if (event.target.checked) next.add(column.name);
+                  else {
+                    next.delete(column.name);
+                    if (timestampColumn === column.name)
+                      onTimestampColumnChange("");
+                  }
+                  onChange(next);
+                }}
+              />
+              <span className="font-medium">{column.name}</span>
+              <span className="text-muted-foreground">
+                {profileColumnTypeLabel(column.type)}
+              </span>
+            </label>
+            <label className="ml-1 flex cursor-pointer items-center gap-1 border-l pl-2 text-muted-foreground">
+              <input
+                type="radio"
+                name="profile-timestamp-column"
+                aria-label={`Use ${column.name} for time ranges`}
+                checked={timestampColumn === column.name}
+                disabled={!selected.has(column.name)}
+                onChange={() => onTimestampColumnChange(column.name)}
+              />
+              time range
+            </label>
             {existing.has(column.name) ? (
               <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 configured
               </span>
             ) : null}
-          </label>
+          </div>
         ))}
       </div>
     </div>
   );
+}
+
+export function mapTimestampColumn(
+  columns: ProfileColumn[],
+  timestampColumn: string,
+): ProfileColumn[] {
+  return columns.map((column) => {
+    if (column.name === timestampColumn) {
+      return { ...column, type: "datetime", kind: "timestamp" };
+    }
+    if (column.kind !== "timestamp") return column;
+    const { kind: _kind, ...rest } = column;
+    return rest;
+  });
 }
 
 function WorkspaceMessage({
