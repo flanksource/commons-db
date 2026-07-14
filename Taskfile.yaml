@@ -59,21 +59,30 @@ tasks:
 
   query:schema:
     desc: Generate per-type/provider source schemas and bundled Clicky UI schemas into schemas/
+    dir: cmd/query
     cmds:
-      - go run ./cmd/query schema --out schemas
+      - go run . --profiles-dir ../../.tmp/query-profiles schema --out ../../schemas
 
   query:build:
     desc: Build the query binary with the embedded web UI
-    deps: [www:build]
     cmds:
-      - mkdir -p {{.LOCALBIN}}
-      - go build -o {{.LOCALBIN}}/query ./cmd/query
+      - make -C cmd/query build
+
+  query:lint:
+    desc: Lint the query Go module and web UI
+    cmds:
+      - make -C cmd/query lint
+
+  query:test:
+    desc: Test the query Go module and web UI
+    cmds:
+      - make -C cmd/query test
 
   query:dev:
     desc: Run the query app in dev mode — serve spawns a Vite dev server and proxies it (single command)
     deps: [www:install]
     cmds:
-      - go run ./cmd/query serve --dev {{.CLI_ARGS}}
+      - go -C cmd/query run . serve --dev {{.CLI_ARGS}}
 
   controller-gen:
     desc: Download controller-gen locally if necessary
