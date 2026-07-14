@@ -9,6 +9,9 @@ catalogs:
     '@ai-sdk/react':
       specifier: ^3.0.201
       version: 3.0.210
+    '@codemirror/autocomplete':
+      specifier: ^6.20.3
+      version: 6.20.3
     '@codemirror/commands':
       specifier: ^6.10.4
       version: 6.10.4
@@ -114,6 +117,9 @@ importers:
 
   ../../../../clicky-ui/packages/ui:
     dependencies:
+      '@codemirror/autocomplete':
+        specifier: 'catalog:'
+        version: 6.20.3
       '@codemirror/commands':
         specifier: 'catalog:'
         version: 6.10.4
@@ -2819,7 +2825,7 @@ packages:
     engines: {node: '>=12'}
 
   dagre-d3-es@7.0.14:
-    resolution: {integrity: sha512-P4rFMVq9ESWqmOgK+dlXvOtLwYg0i7u0HBGJER0LZDJT2VHIPAMZ/riPxqJceWMStH5+E61QxFra9kIS3AqdMg==}
+    resolution: {integrity: sha512-P4rFMVq9ESWqmOgK+dlXvOtLwYg0i7u0HBGJER0LZDJT2VHIPAMZ/riPxqJceWMStH5+E61QxFra9kIS3AqdMg==} # betterleaks:allow
 
   data-urls@5.0.0:
     resolution: {integrity: sha512-ZYP5VBHshaDAiVZxjbRVcFJpc+4xGgT0bK3vzy1HLN8jTO975HEbuYzZJcHoQEY5K1a0z8YayJkyVETa08eNTg==}
