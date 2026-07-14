@@ -14,6 +14,33 @@ var postgresTypes = pgtype.NewMap()
 // keyed by column name. Ported from duty/db so SQL data providers can return
 // generic rows without a typed model.
 func ScanRows[T ~map[string]any](rows *sql.Rows) ([]T, error) {
+	scanner, err := NewRowScanner(rows)
+	if err != nil {
+		return nil, err
+	}
+	var result []T
+	for scanner.Next() {
+		result = append(result, T(scanner.Row()))
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// RowScanner scans the current database/sql row into a JSON-friendly map while
+// retaining only one decoded row in memory.
+type RowScanner struct {
+	rows        *sql.Rows
+	columnTypes []*sql.ColumnType
+	columnNames []string
+	values      []any
+	valuePtrs   []any
+	row         map[string]any
+	err         error
+}
+
+func NewRowScanner(rows *sql.Rows) (*RowScanner, error) {
 	columnTypes, err := rows.ColumnTypes()
 	if err != nil {
 		return nil, fmt.Errorf("failed to get column types: %w", err)
@@ -24,35 +51,49 @@ func ScanRows[T ~map[string]any](rows *sql.Rows) ([]T, error) {
 		columnNames[i] = columnType.Name()
 	}
 
-	values := make([]any, len(columnNames))
-	valuePtrs := make([]any, len(columnNames))
-	for i := range values {
-		valuePtrs[i] = &values[i]
+	scanner := &RowScanner{
+		rows:        rows,
+		columnTypes: columnTypes,
+		columnNames: columnNames,
+		values:      make([]any, len(columnNames)),
+		valuePtrs:   make([]any, len(columnNames)),
 	}
+	for i := range scanner.values {
+		scanner.valuePtrs[i] = &scanner.values[i]
+	}
+	return scanner, nil
+}
 
-	var result []T
-	for rows.Next() {
-		if err := rows.Scan(valuePtrs...); err != nil {
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+func (s *RowScanner) Next() bool {
+	if s.err != nil || !s.rows.Next() {
+		return false
+	}
+	if err := s.rows.Scan(s.valuePtrs...); err != nil {
+		s.err = fmt.Errorf("failed to scan row: %w", err)
+		return false
+	}
+	s.row = make(map[string]any, len(s.columnNames))
+	for i, column := range s.columnNames {
+		value, err := normalizeSQLValue(s.columnTypes[i].DatabaseTypeName(), s.values[i])
+		if err != nil {
+			s.err = fmt.Errorf("failed to decode column %q as %s: %w", column, s.columnTypes[i].DatabaseTypeName(), err)
+			return false
 		}
-
-		row := make(T, len(columnNames))
-		for i, column := range columnNames {
-			value, err := normalizeSQLValue(columnTypes[i].DatabaseTypeName(), values[i])
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode column %q as %s: %w", column, columnTypes[i].DatabaseTypeName(), err)
-			}
-			row[column] = value
-		}
-
-		result = append(result, row)
+		s.row[column] = value
 	}
+	return true
+}
 
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("row iteration error: %w", err)
+func (s *RowScanner) Row() map[string]any { return s.row }
+
+func (s *RowScanner) Err() error {
+	if s.err != nil {
+		return s.err
 	}
-
-	return result, nil
+	if err := s.rows.Err(); err != nil {
+		return fmt.Errorf("row iteration error: %w", err)
+	}
+	return nil
 }
 
 // normalizeSQLValue converts structured PostgreSQL values returned through

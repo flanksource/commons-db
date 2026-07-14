@@ -176,6 +176,25 @@ func TestHydrateConnectionByNameWithoutContextNamespace(t *testing.T) {
 	}
 }
 
+func TestHydrateUnqualifiedConnectionNameIgnoresContextNamespace(t *testing.T) {
+	db := connectionCacheTestDB(t)
+	connection := models.Connection{
+		ID: uuid.New(), Name: "OS", Namespace: "opensearch",
+		Type: models.ConnectionTypeOpenSearch, URL: "https://opensearch.example.com",
+	}
+	if err := db.Create(&connection).Error; err != nil {
+		t.Fatal(err)
+	}
+	ctx := Context{Context: commons.NewContext(context.Background())}.WithDB(db, nil).WithNamespace("default")
+	resolved, err := HydrateConnectionByURL(ctx, "connection://OS")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.ID != connection.ID {
+		t.Fatalf("resolved connection ID = %s, want %s", resolved.ID, connection.ID)
+	}
+}
+
 func TestKubernetesClientRefreshIsCoalescedAndRaceSafe(t *testing.T) {
 	connection := &refreshingKubernetesConnection{}
 	ctx := Context{Context: commons.NewContext(context.Background())}

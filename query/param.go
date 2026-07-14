@@ -20,6 +20,19 @@ const (
 	ParamTypeEnum    ParamType = "enum"
 )
 
+// ParamRole assigns a profile parameter to a first-class table control. Filter
+// is the default; limit/offset drive the pager and time-from/time-to are paired
+// into the table's date-range control.
+type ParamRole string
+
+const (
+	ParamRoleFilter   ParamRole = "filter"
+	ParamRoleLimit    ParamRole = "limit"
+	ParamRoleOffset   ParamRole = "offset"
+	ParamRoleTimeFrom ParamRole = "time-from"
+	ParamRoleTimeTo   ParamRole = "time-to"
+)
+
 // ParamDef declares one server-side filter parameter of a Profile. Supplied
 // values are validated and coerced against the declaration, then exposed to the
 // query template under `params.<Name>` before the provider runs. This mirrors
@@ -33,6 +46,11 @@ type ParamDef struct {
 
 	// Type drives validation/coercion. Defaults to string.
 	Type ParamType `json:"type,omitempty" yaml:"type,omitempty"`
+
+	// Role maps the parameter to a first-class table control. Empty defaults to
+	// filter. A profile can rename the pager parameters by assigning limit and
+	// offset roles; time-from/time-to form one server-backed date-range picker.
+	Role ParamRole `json:"role,omitempty" yaml:"role,omitempty"`
 
 	// Default is used when no value is supplied.
 	Default any `json:"default,omitempty" yaml:"default,omitempty"`

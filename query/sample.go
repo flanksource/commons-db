@@ -3,6 +3,7 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -283,6 +284,10 @@ func InferSampleColumns(rows []Row) []ColumnDef {
 			if kind == "" {
 				kind = next
 			} else if kind != next {
+				if isStructuredSampleType(kind) || isStructuredSampleType(next) {
+					kind = ColumnTypeJSON
+					continue
+				}
 				kind = ColumnTypeString
 				break
 			}
@@ -296,9 +301,14 @@ func InferSampleColumns(rows []Row) []ColumnDef {
 }
 
 func sampleColumnType(value any) ColumnType {
-	switch value.(type) {
+	switch value := value.(type) {
 	case time.Time, *time.Time:
 		return ColumnTypeDateTime
+	case string:
+		if _, err := time.Parse(time.RFC3339Nano, value); err == nil {
+			return ColumnTypeDateTime
+		}
+		return ColumnTypeString
 	case time.Duration:
 		return ColumnTypeDuration
 	case bool:
@@ -306,6 +316,97 @@ func sampleColumnType(value any) ColumnType {
 	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64, float32, float64, json.Number:
 		return ColumnTypeNumber
 	default:
+		valueOf := reflect.ValueOf(value)
+		if valueOf.IsValid() {
+			switch valueOf.Kind() {
+			case reflect.Map:
+				if isFlatSampleMap(valueOf) {
+					return ColumnTypeKeyValue
+				}
+				return ColumnTypeJSON
+			case reflect.Slice, reflect.Array:
+				if isSampleKeyValueList(valueOf) {
+					return ColumnTypeKeyValues
+				}
+				return ColumnTypeJSON
+			}
+		}
 		return ColumnTypeString
 	}
+}
+
+func isStructuredSampleType(kind ColumnType) bool {
+	switch kind {
+	case ColumnTypeKeyValue, ColumnTypeKeyValues, ColumnTypeJSON:
+		return true
+	default:
+		return false
+	}
+}
+
+func isFlatSampleMap(value reflect.Value) bool {
+	if value.Type().Key().Kind() != reflect.String {
+		return false
+	}
+	iterator := value.MapRange()
+	for iterator.Next() {
+		if !isSampleScalar(iterator.Value()) {
+			return false
+		}
+	}
+	return true
+}
+
+func isSampleKeyValueList(value reflect.Value) bool {
+	if value.Len() == 0 {
+		return false
+	}
+	for i := 0; i < value.Len(); i++ {
+		item := unwrapSampleValue(value.Index(i))
+		if !item.IsValid() || item.Kind() != reflect.Map || item.Type().Key().Kind() != reflect.String {
+			return false
+		}
+		hasKey, hasValue := false, false
+		iterator := item.MapRange()
+		for iterator.Next() {
+			name := strings.ToLower(iterator.Key().String())
+			switch name {
+			case "key", "name":
+				entry := unwrapSampleValue(iterator.Value())
+				hasKey = entry.IsValid() && entry.Kind() == reflect.String
+			case "value":
+				hasValue = true
+			}
+		}
+		if !hasKey || !hasValue {
+			return false
+		}
+	}
+	return true
+}
+
+func isSampleScalar(value reflect.Value) bool {
+	value = unwrapSampleValue(value)
+	if !value.IsValid() {
+		return true
+	}
+	switch value.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	default:
+		return false
+	}
+}
+
+func unwrapSampleValue(value reflect.Value) reflect.Value {
+	for value.IsValid() && (value.Kind() == reflect.Interface || value.Kind() == reflect.Pointer) {
+		if value.IsNil() {
+			return reflect.Value{}
+		}
+		value = value.Elem()
+	}
+	return value
 }

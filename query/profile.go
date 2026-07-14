@@ -86,6 +86,23 @@ func (p Profile) RenderMode() string {
 	}
 }
 
+// ParamNameForRole returns the first parameter assigned to role, or fallback
+// when the profile uses the built-in transport parameter.
+func (p Profile) ParamNameForRole(role ParamRole, fallback string) string {
+	for _, param := range p.Params {
+		if param.Role == role && param.Name != "" {
+			return param.Name
+		}
+	}
+	return fallback
+}
+
+// HasParamRoleName reports whether name is a profile-declared transport
+// parameter for role.
+func (p Profile) HasParamRoleName(role ParamRole, name string) bool {
+	return p.ParamNameForRole(role, "") == name && name != ""
+}
+
 // ProviderConfig selects a registered Provider and supplies the connection and
 // provider-specific options.
 type ProviderConfig struct {

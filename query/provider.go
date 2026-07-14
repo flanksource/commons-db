@@ -30,6 +30,11 @@ type ProviderRequest struct {
 
 	// Options carries provider-specific knobs from ProviderConfig.Options.
 	Options map[string]any
+
+	// MaxRows is an execution hint for bounded callers such as an interactive
+	// page. Streaming providers may use it to avoid opening a backend cursor
+	// when one finite request can satisfy the caller. Zero means unbounded.
+	MaxRows int
 }
 
 var providerRegistry = map[string]Provider{}

@@ -134,12 +134,36 @@ func FindConnectionByURL(ctx Context, connectionString string) (*models.Connecti
 		return nil, fmt.Errorf("invalid connection string: %q. Must be in connection://<namespace>/<name> format", connectionString)
 	}
 
-	connection, err := FindConnection(ctx, name, namespace)
+	var connection *models.Connection
+	var err error
+	if namespace == "" {
+		connection, err = findConnectionByName(ctx, name)
+	} else {
+		connection, err = FindConnection(ctx, name, namespace)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to find connection (name=%s, namespace=%s): %w", name, namespace, err)
 	}
 
 	return connection, nil
+}
+
+// findConnectionByName resolves an unqualified connection://<name> reference.
+// Connection names are unique in the persisted schema, so an omitted namespace
+// means lookup by that stable name rather than inheriting the caller's namespace.
+func findConnectionByName(ctx Context, name string) (*models.Connection, error) {
+	var connection models.Connection
+	db := ctx.DB()
+	if db == nil {
+		return nil, fmt.Errorf("db is not configured")
+	}
+	if err := db.Where("name = ?", name).First(&connection).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &connection, nil
 }
 
 // FindConnection returns the connection with the given type and name

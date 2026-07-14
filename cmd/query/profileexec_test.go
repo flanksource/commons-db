@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/csv"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -102,6 +105,169 @@ func TestExecHandlerMissingProfile(t *testing.T) {
 	rec := get(h, "/api/v1/profile/nope", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+type execStreamMock struct {
+	rows []query.Row
+	last query.ProviderRequest
+}
+
+func (m *execStreamMock) Type() string { return "exec-stream" }
+func (m *execStreamMock) Execute(_ dbcontext.Context, _ query.ProviderRequest) ([]query.Row, error) {
+	return m.rows, nil
+}
+func (m *execStreamMock) OpenRows(_ dbcontext.Context, req query.ProviderRequest) (query.RowIterator, error) {
+	m.last = req
+	return query.SliceRows(m.rows), nil
+}
+
+func newExecStreamTest(t *testing.T, rows []query.Row, columns []query.ColumnDef) *execHandler {
+	t.Helper()
+	query.RegisterProvider(&execStreamMock{rows: rows})
+	store, err := NewProfileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(query.Profile{Name: "export", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows", Columns: columns}); err != nil {
+		t.Fatal(err)
+	}
+	return newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+}
+
+func TestExecHandlerExportsCurrentPageCSV(t *testing.T) {
+	h := newExecStreamTest(t,
+		[]query.Row{{"id": 1, "name": "one"}, {"id": 2, "name": "two"}, {"id": 3, "name": "three"}},
+		[]query.ColumnDef{{Name: "id", Label: "ID"}, {Name: "name"}},
+	)
+	rec := get(h, "/api/v1/profile/export?format=csv&limit=1&offset=1", "")
+	if rec.Code != http.StatusOK || rec.Header().Get("Content-Type") != "text/csv; charset=utf-8" {
+		t.Fatalf("status=%d content-type=%q body=%s", rec.Code, rec.Header().Get("Content-Type"), rec.Body.String())
+	}
+	if rec.Header().Get("X-Page-Limit") != "1" || rec.Header().Get("X-Page-Offset") != "1" {
+		t.Fatalf("missing page headers: %v", rec.Header())
+	}
+	if got := rec.Body.String(); got != "ID,Name\n2,two\n" {
+		t.Fatalf("unexpected csv: %q", got)
+	}
+}
+
+func TestExecHandlerExportsStructuredColumns(t *testing.T) {
+	columns := []query.ColumnDef{
+		{Name: "labels", Type: query.ColumnTypeKeyValue},
+		{Name: "metadata", Type: query.ColumnTypeJSON},
+	}
+	rows := []query.Row{{
+		"labels":   map[string]any{"team": "core", "env": "prod"},
+		"metadata": map[string]any{"enabled": true, "retries": 3},
+	}}
+	h := newExecStreamTest(t, rows, columns)
+
+	jsonResponse := get(h, "/api/v1/profile/export?format=json", "")
+	if jsonResponse.Code != http.StatusOK {
+		t.Fatalf("json status=%d body=%s", jsonResponse.Code, jsonResponse.Body.String())
+	}
+	var decoded []map[string]any
+	if err := json.Unmarshal(jsonResponse.Body.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := decoded[0]["labels"].(map[string]any); !ok {
+		t.Fatalf("labels were flattened in JSON: %#v", decoded[0]["labels"])
+	}
+
+	csvResponse := get(h, "/api/v1/profile/export?format=csv", "")
+	records, err := csv.NewReader(strings.NewReader(csvResponse.Body.String())).ReadAll()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if records[1][0] != "env=prod, team=core" || records[1][1] != `{"enabled":true,"retries":3}` {
+		t.Fatalf("unexpected CSV: %#v", records)
+	}
+
+	clickyResponse := get(h, "/api/v1/profile/export?format=clicky-json", "")
+	if got := clickyResponse.Body.String(); !strings.Contains(got, `"type": "key_value"`) || !strings.Contains(got, `"language": "json"`) {
+		t.Fatalf("unexpected Clicky JSON: %s", got)
+	}
+}
+
+func TestExecHandlerBoundsInteractiveStreamingRequest(t *testing.T) {
+	mock := &execStreamMock{rows: make([]query.Row, 100)}
+	for i := range mock.rows {
+		mock.rows[i] = query.Row{"id": i}
+	}
+	query.RegisterProvider(mock)
+	store, err := NewProfileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(query.Profile{Name: "bounded", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows"}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+	rec := get(h, "/api/v1/profile/bounded?limit=25&offset=50", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if mock.last.MaxRows != 76 {
+		t.Fatalf("provider max rows = %d, want offset + limit + lookahead = 76", mock.last.MaxRows)
+	}
+}
+
+func TestParseExportRequestUsesMappedPagerNames(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/profile/mapped?page_size=25&skip=50", nil)
+	profile := query.Profile{Params: []query.ParamDef{
+		{Name: "page_size", Role: query.ParamRoleLimit},
+		{Name: "skip", Role: query.ParamRoleOffset},
+	}}
+	got, err := parseExportRequest(req, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.limit != 25 || got.offset != 50 {
+		t.Fatalf("mapped page = limit %d offset %d", got.limit, got.offset)
+	}
+}
+
+func TestExecHandlerStreamsAllRowsAsNDJSON(t *testing.T) {
+	rows := make([]query.Row, 2500)
+	for i := range rows {
+		rows[i] = query.Row{"id": i}
+	}
+	h := newExecStreamTest(t, rows, []query.ColumnDef{{Name: "id"}})
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/profile/export?format=ndjson&scope=all&filename=rows.ndjson&_download=1", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("X-Export-Mode") != "streaming" {
+		t.Fatalf("status=%d headers=%v body=%s", rec.Code, rec.Header(), rec.Body.String())
+	}
+	if count := strings.Count(strings.TrimSpace(rec.Body.String()), "\n") + 1; count != 2500 {
+		t.Fatalf("expected 2500 ndjson rows, got %d", count)
+	}
+	if disposition := rec.Header().Get("Content-Disposition"); !strings.Contains(disposition, "rows.ndjson") {
+		t.Fatalf("missing attachment filename: %q", disposition)
+	}
+}
+
+func TestExecHandlerSchemaLessAllRowsRules(t *testing.T) {
+	h := newExecStreamTest(t, []query.Row{{"id": 1}, {"id": 2, "late": true}}, nil)
+	if rec := get(h, "/api/v1/profile/export?scope=all&format=csv", ""); rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("schema-less CSV status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec := get(h, "/api/v1/profile/export?scope=all&format=json", "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"late":true`) {
+		t.Fatalf("schema-less JSON status=%d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestExecHandlerRejectsOversizedPDFBeforeWriting(t *testing.T) {
+	rows := make([]query.Row, maxPDFRows+1)
+	for i := range rows {
+		rows[i] = query.Row{"id": i}
+	}
+	h := newExecStreamTest(t, rows, []query.ColumnDef{{Name: "id"}})
+	rec := get(h, "/api/v1/profile/export?scope=all&format=pdf", "")
+	if rec.Code != http.StatusUnprocessableEntity || !strings.Contains(rec.Body.String(), "maximum 1000") {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
 }
 

@@ -98,9 +98,27 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
 		Icon:        providerIcon(profile.Provider.Type),
 	})
 
-	parameters := make([]rpc.OpenAPIParameter, 0, len(profile.Params))
+	parameters := make([]rpc.OpenAPIParameter, 0, len(profile.Params)+2)
+	roles := map[query.ParamRole]bool{}
 	for _, param := range profile.Params {
 		parameters = append(parameters, profileParameter(param))
+		roles[param.Role] = true
+	}
+	if !roles[query.ParamRoleLimit] {
+		parameters = append(parameters,
+			rpc.OpenAPIParameter{
+				Name: "limit", In: "query", Description: "Rows per page (maximum 1000)",
+				Schema: &rpc.OpenAPISchema{Type: "integer", Default: defaultPageLimit},
+				Clicky: &rpc.ClickyParameterMeta{Role: "limit"},
+			})
+	}
+	if !roles[query.ParamRoleOffset] {
+		parameters = append(parameters,
+			rpc.OpenAPIParameter{
+				Name: "offset", In: "query", Description: "Rows to skip",
+				Schema: &rpc.OpenAPISchema{Type: "integer", Default: 0},
+				Clicky: &rpc.ClickyParameterMeta{Role: "offset"},
+			})
 	}
 	path := "/api/v1/profile/" + entityName
 	spec.Paths[path] = rpc.OpenAPIPath{"get": {
@@ -121,6 +139,7 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
 			Surface: entityName,
 			Verb:    "list",
 			Scope:   "collection",
+			Export:  profileExportMeta(profile),
 		},
 	}}
 
@@ -135,6 +154,23 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
 			},
 		}}
 	}
+}
+
+func profileExportMeta(profile query.Profile) *rpc.ExportMeta {
+	meta := &rpc.ExportMeta{
+		Formats:       []string{"json", "ndjson", "csv", "yaml", "markdown", "html", "excel", "pdf"},
+		Scopes:        []string{"page"},
+		FormatMaxRows: map[string]int{"pdf": maxPDFRows},
+	}
+	if supportsAllRows(profile.Provider.Type) {
+		meta.Scopes = append(meta.Scopes, "all")
+		if len(profile.Processors) > 0 || profile.Top != nil {
+			meta.AllRowsMode = "buffered"
+		} else {
+			meta.AllRowsMode = "streaming"
+		}
+	}
+	return meta
 }
 
 func profileParameter(param query.ParamDef) rpc.OpenAPIParameter {
@@ -153,13 +189,17 @@ func profileParameter(param query.ParamDef) rpc.OpenAPIParameter {
 	if param.Default != nil {
 		schema.Default = param.Default
 	}
+	role := string(param.Role)
+	if role == "" {
+		role = string(query.ParamRoleFilter)
+	}
 	return rpc.OpenAPIParameter{
 		Name:        param.Name,
 		In:          "query",
 		Description: param.Description,
 		Required:    param.Required,
 		Schema:      schema,
-		Clicky:      &rpc.ClickyParameterMeta{Role: "filter"},
+		Clicky:      &rpc.ClickyParameterMeta{Role: role},
 	}
 }
 
@@ -170,12 +210,19 @@ func profileResponseSchema(profile query.Profile) *rpc.OpenAPISchema {
 		if column.Hidden {
 			continue
 		}
-		property := &rpc.OpenAPISchema{Type: columnJSONType(column.Type), Extensions: map[string]any{}}
+		property := columnOpenAPISchema(column.Type)
+		property.Extensions = map[string]any{}
+		if column.Type != "" {
+			property.Extensions["x-clicky-type"] = string(column.Type)
+		}
 		if column.Label != "" {
 			property.Extensions["x-clicky-label"] = column.Label
 		}
 		if column.Format != "" {
 			property.Extensions["x-clicky-format"] = column.Format
+		}
+		if column.Kind != "" {
+			property.Extensions["x-clicky-kind"] = string(column.Kind)
 		}
 		if !idAssigned {
 			property.Extensions["x-clicky-id"] = true
@@ -194,4 +241,40 @@ func profileResponseSchema(profile query.Profile) *rpc.OpenAPISchema {
 		item.Extensions = map[string]any{"x-clicky-render": render}
 	}
 	return &rpc.OpenAPISchema{Type: "array", Items: item}
+}
+
+func columnOpenAPISchema(columnType query.ColumnType) *rpc.OpenAPISchema {
+	switch columnType {
+	case query.ColumnTypeNumber:
+		return &rpc.OpenAPISchema{Type: "number"}
+	case query.ColumnTypeBoolean:
+		return &rpc.OpenAPISchema{Type: "boolean"}
+	case query.ColumnTypeKeyValue:
+		return &rpc.OpenAPISchema{Type: "object", AdditionalProperties: &rpc.OpenAPISchema{}}
+	case query.ColumnTypeKeyValues:
+		return &rpc.OpenAPISchema{
+			Type: "array",
+			Items: &rpc.OpenAPISchema{
+				Type: "object",
+				Properties: map[string]*rpc.OpenAPISchema{
+					"key":   {Type: "string"},
+					"value": {},
+				},
+				Required: []string{"key", "value"},
+			},
+		}
+	case query.ColumnTypeJSON:
+		return &rpc.OpenAPISchema{
+			Nullable: true,
+			OneOf: []*rpc.OpenAPISchema{
+				{Type: "object"},
+				{Type: "array"},
+				{Type: "string"},
+				{Type: "number"},
+				{Type: "boolean"},
+			},
+		}
+	default:
+		return &rpc.OpenAPISchema{Type: "string"}
+	}
 }

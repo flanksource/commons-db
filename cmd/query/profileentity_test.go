@@ -104,6 +104,36 @@ func TestProfileEntitySchemaEmitsRenderMode(t *testing.T) {
 	}
 }
 
+func TestProfileEntitySchemaStructuredColumnShapes(t *testing.T) {
+	p := sampleProfile("Structured")
+	p.Columns = []query.ColumnDef{
+		{Name: "labels", Type: query.ColumnTypeKeyValue},
+		{Name: "pairs", Type: query.ColumnTypeKeyValues},
+		{Name: "metadata", Type: query.ColumnTypeJSON},
+	}
+	raw, err := profileEntitySchema(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	props := doc["properties"].(map[string]any)
+	labels := props["labels"].(map[string]any)
+	if labels["type"] != "object" || labels["x-clicky-type"] != "key_value" {
+		t.Fatalf("labels schema = %#v", labels)
+	}
+	pairs := props["pairs"].(map[string]any)
+	if pairs["type"] != "array" || pairs["x-clicky-type"] != "key_values" {
+		t.Fatalf("pairs schema = %#v", pairs)
+	}
+	metadata := props["metadata"].(map[string]any)
+	if _, ok := metadata["oneOf"].([]any); !ok || metadata["x-clicky-type"] != "json" {
+		t.Fatalf("metadata schema = %#v", metadata)
+	}
+}
+
 func TestProfileEntitySchemaSynthesizesIDWhenNoColumns(t *testing.T) {
 	p := query.Profile{Name: "No Cols", Provider: query.ProviderConfig{Type: "http"}}
 	raw, err := profileEntitySchema(p)
