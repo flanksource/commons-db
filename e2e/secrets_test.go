@@ -36,7 +36,7 @@ var _ = Describe("Secret Management", func() {
 			})
 
 			It("should redact API keys", func() {
-				apiKey := "sk_live_51234567890abcdefghijk"
+				apiKey := "sk_live_<REDACTED_FOR_TEST>"
 				Expect(apiKey).NotTo(BeEmpty())
 			})
 
