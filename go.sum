@@ -305,8 +305,8 @@ github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeO
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/fergusstrange/embedded-postgres v1.34.0 h1:c6RKhPKFsLVU+Tdxsx8q0UxCHsvZZ/iShAnljRBXs6s=
 github.com/fergusstrange/embedded-postgres v1.34.0/go.mod h1:w0YvnCgf19o6tskInrOOACtnqfVlOvluz3hlNLY7tRk=
-github.com/flanksource/clicky v1.21.36 h1:elxJKV42YQw+4P90+FxvPgX1kDIgUJMRuxTOvppj91s=
-github.com/flanksource/clicky v1.21.36/go.mod h1:832IbjMZgsqGYF2fwskgUZ6zrvf7qfxpFv3mfLO2DWg=
+github.com/flanksource/clicky v1.21.37-0.20260715094201-d847a9108f43 h1:8SNaLRmA64xea5//NrSobiFKXr7cq4yz6NGvt9xl3JE=
+github.com/flanksource/clicky v1.21.37-0.20260715094201-d847a9108f43/go.mod h1:832IbjMZgsqGYF2fwskgUZ6zrvf7qfxpFv3mfLO2DWg=
 github.com/flanksource/commons v1.53.1 h1:WiMvY9XGG//L4ndYKTcmp0NjWXg4B7Wbn4hYWkITUmY=
 github.com/flanksource/commons v1.53.1/go.mod h1:ZII22jIDJ3fd/Mz7l0SzLFEv8aoSUg+xwfJAAVf8up4=
 github.com/flanksource/deps v1.0.26 h1:nudwNXjXU1utu9eNqZ5hy+sWA+cNkVdjwT51C1YXYzs=

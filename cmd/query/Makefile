@@ -7,11 +7,11 @@ build: ui-build
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/query .
 
-lint:
+lint: ui-build
 	go vet ./...
 	pnpm --dir www typecheck
 
-test:
+test: ui-build
 	go test ./...
 	pnpm --dir www test
 

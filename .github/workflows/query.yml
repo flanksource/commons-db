@@ -41,7 +41,9 @@ jobs:
           node-version: "22"
 
       - name: Enable pnpm
-        run: corepack prepare pnpm@10.20.0 --activate
+        run: |
+          corepack enable pnpm
+          corepack prepare pnpm@10.20.0 --activate
 
       - name: Wire the unreleased parent module
         run: go work init . ./cmd/query

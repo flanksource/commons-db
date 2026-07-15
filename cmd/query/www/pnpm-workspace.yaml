@@ -1,12 +1,6 @@
-# Link the sibling @flanksource/clicky-ui checkout as a workspace package so local
-# clicky-ui edits are picked up without publishing. When the sibling is absent (CI),
-# pnpm resolves @flanksource/clicky-ui from npm via the ^0.2.20 range in package.json.
 packages:
   - "."
-  - "../../../../clicky-ui/packages/ui"
 
-# Mirror of clicky-ui/pnpm-workspace.yaml catalog so pnpm can resolve the
-# `catalog:` specifiers declared by @flanksource/clicky-ui when it is linked.
 catalog:
   "@codemirror/autocomplete": ^6.20.3
   "@codemirror/commands": ^6.10.4
