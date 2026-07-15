@@ -2,6 +2,8 @@ package context
 
 import (
 	"bytes"
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
@@ -17,6 +19,11 @@ const onePasswordTokenProperty = "1password.service-account-token"
 // opReadFunc resolves a 1Password secret reference to its plaintext value. It is
 // a package var so tests can substitute a fake for the `op` CLI.
 var opReadFunc = opRead
+
+// onePasswordFingerprintKey makes token fingerprints process-local. The cache
+// is also process-local, so fingerprints only need to remain stable for the
+// lifetime of this process.
+var onePasswordFingerprintKey = []byte(rand.Text())
 
 // GetOnePasswordValueFromCache resolves a 1Password secret reference of the form
 // op://<vault>/<item>/<field> to its value. A service-account token (the
@@ -61,8 +68,9 @@ func tokenFingerprint(token string) string {
 	if token == "" {
 		return "session"
 	}
-	sum := sha256.Sum256([]byte(token))
-	return hex.EncodeToString(sum[:8])
+	digest := hmac.New(sha256.New, onePasswordFingerprintKey)
+	_, _ = digest.Write([]byte(token))
+	return hex.EncodeToString(digest.Sum(nil)[:8])
 }
 
 // opRead invokes `op read` for a single reference. When a token is supplied it
