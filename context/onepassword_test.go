@@ -64,15 +64,28 @@ func TestOnePasswordTokenPrefersProperty(t *testing.T) {
 }
 
 func TestTokenFingerprintIsolatesCache(t *testing.T) {
+	const (
+		tokenA                       = "a"
+		tokenB                       = "b"
+		unkeyedFingerprintForTokenA = "ca978112ca1bbdca"
+	)
+
 	// Different tokens must not collide in the cache key; the empty (session)
 	// token has its own stable fingerprint.
 	if tokenFingerprint("") != "session" {
 		t.Fatalf("empty token should fingerprint to session, got %q", tokenFingerprint(""))
 	}
-	if tokenFingerprint("a") == tokenFingerprint("b") {
+	fingerprintA := tokenFingerprint(tokenA)
+	if fingerprintA != tokenFingerprint(tokenA) {
+		t.Fatal("a token fingerprint must remain stable for the process lifetime")
+	}
+	if fingerprintA == tokenFingerprint(tokenB) {
 		t.Fatal("distinct tokens must produce distinct fingerprints")
 	}
-	if tokenFingerprint("a") == "" {
+	if fingerprintA == "" {
 		t.Fatal("a non-empty token must produce a non-empty fingerprint")
+	}
+	if fingerprintA == unkeyedFingerprintForTokenA {
+		t.Fatal("token fingerprint must not be an unkeyed digest of the sensitive token")
 	}
 }
