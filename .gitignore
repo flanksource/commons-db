@@ -10,3 +10,4 @@ go.work.sum
 .grite/
 hack/
 .pnpm-store/
+specs/
