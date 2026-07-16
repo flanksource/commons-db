@@ -157,6 +157,24 @@ func TestTestConnectionHTTPReachable(t *testing.T) {
 	}
 }
 
+func TestTestConnectionHTTPProbesRootOnly(t *testing.T) {
+	var requestURI string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestURI = r.RequestURI
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer ts.Close()
+
+	ctx := dbcontext.NewContext(context.Background())
+	res := testConnection(ctx, &models.Connection{Type: "http", URL: ts.URL + "/admin?token=secret"})
+	if !res.OK {
+		t.Fatalf("expected reachable, got %+v", res)
+	}
+	if requestURI != "/" {
+		t.Fatalf("probe request URI = %q, want root only", requestURI)
+	}
+}
+
 func TestTestConnectionHTTPRedactsURL(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

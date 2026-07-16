@@ -76,10 +76,13 @@ func tokenFingerprint(token string) string {
 // opRead invokes `op read` for a single reference. When a token is supplied it
 // is injected via OP_SERVICE_ACCOUNT_TOKEN for non-interactive resolution.
 func opRead(ctx Context, ref, token string) (string, error) {
+	if !strings.HasPrefix(ref, "op://") {
+		return "", fmt.Errorf("invalid 1password reference")
+	}
 	if _, err := exec.LookPath("op"); err != nil {
 		return "", fmt.Errorf("1password CLI (op) not found in PATH: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "op", "read", "--no-newline", ref)
+	cmd := exec.CommandContext(ctx, "op", "read", "--no-newline", "--", ref)
 	cmd.Env = os.Environ()
 	if token != "" {
 		cmd.Env = append(cmd.Env, "OP_SERVICE_ACCOUNT_TOKEN="+token)

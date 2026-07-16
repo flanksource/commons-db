@@ -44,6 +44,12 @@ func TestGetOnePasswordValueFromCache(t *testing.T) {
 	}
 }
 
+func TestOpReadRejectsNonSecretReferences(t *testing.T) {
+	if _, err := opRead(newOnePasswordTestContext(), "--help", ""); err == nil {
+		t.Fatal("expected a non-op reference to be rejected")
+	}
+}
+
 func TestOnePasswordTokenPrefersProperty(t *testing.T) {
 	t.Setenv("OP_SERVICE_ACCOUNT_TOKEN", "env-token")
 
@@ -65,8 +71,8 @@ func TestOnePasswordTokenPrefersProperty(t *testing.T) {
 
 func TestTokenFingerprintIsolatesCache(t *testing.T) {
 	const (
-		tokenA                       = "a"
-		tokenB                       = "b"
+		tokenA                      = "a"
+		tokenB                      = "b"
 		unkeyedFingerprintForTokenA = "ca978112ca1bbdca"
 	)
 
