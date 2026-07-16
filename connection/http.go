@@ -200,11 +200,19 @@ func (h *HTTPConnection) Hydrate(ctx ConnectionContext, namespace string) (*HTTP
 }
 
 func (h HTTPConnection) Transport() netHTTP.RoundTripper {
-	rt := &httpConnectionRoundTripper{
-		HTTPConnection: h,
-		Base:           &netHTTP.Transport{},
+	return h.TransportWithBase(&netHTTP.Transport{})
+}
+
+// TransportWithBase applies the connection's authentication and TLS settings
+// while preserving caller-owned network policy on base.
+func (h HTTPConnection) TransportWithBase(base netHTTP.RoundTripper) netHTTP.RoundTripper {
+	if base == nil {
+		base = &netHTTP.Transport{}
 	}
-	return rt
+	return &httpConnectionRoundTripper{
+		HTTPConnection: h,
+		Base:           base,
+	}
 }
 
 type httpConnectionRoundTripper struct {
@@ -240,6 +248,9 @@ func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.
 			TokenURL:     conn.OAuth.TokenURL,
 			Params:       conn.OAuth.Params,
 			Scopes:       conn.OAuth.Scopes,
+			TokenTransport: func(netHTTP.RoundTripper) netHTTP.RoundTripper {
+				return base
+			},
 		})
 		base = oauthTransport.RoundTripper(base)
 	}

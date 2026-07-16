@@ -84,7 +84,7 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 func validateSampleReadOnly(providerType, query string, options map[string]any) error {
 	switch providerType {
 	case "sql", "postgres", "mysql", "sqlserver", "clickhouse":
-		return validateReadOnlySQL(query)
+		return ValidateReadOnlySQL(query)
 	case "http":
 		method := "GET"
 		if raw, ok := options["method"]; ok && strings.TrimSpace(fmt.Sprint(raw)) != "" {
@@ -110,14 +110,19 @@ var forbiddenSQLTokens = map[string]struct{}{
 	"set": {}, "use": {}, "begin": {}, "commit": {}, "rollback": {},
 }
 
-func validateReadOnlySQL(sql string) error {
-	tokens, statements, pragmaAssignment := scanSQL(sql)
+// ValidateReadOnlySQL accepts one row-producing statement and rejects SQL
+// tokens that can mutate data, schema, permissions, sessions, or transactions.
+func ValidateReadOnlySQL(sql string) error {
+	tokens, statements, pragmaAssignment, executableComment := scanSQL(sql)
+	if executableComment {
+		return fmt.Errorf("SQL execution rejects executable comments because only read-only statements are allowed")
+	}
 	if statements != 1 || len(tokens) == 0 {
-		return fmt.Errorf("sampling requires exactly one read-only SQL statement")
+		return fmt.Errorf("SQL execution requires exactly one read-only statement")
 	}
 	for _, token := range tokens {
 		if _, forbidden := forbiddenSQLTokens[token]; forbidden {
-			return fmt.Errorf("sampling rejected SQL keyword %q because only read-only statements are allowed", strings.ToUpper(token))
+			return fmt.Errorf("SQL execution rejected keyword %q because only read-only statements are allowed", strings.ToUpper(token))
 		}
 	}
 	allowed := map[string]bool{
@@ -125,7 +130,7 @@ func validateReadOnlySQL(sql string) error {
 		"explain": true, "pragma": true, "values": true, "with": true,
 	}
 	if !allowed[tokens[0]] {
-		return fmt.Errorf("sampling only allows SELECT, WITH, VALUES, SHOW, DESCRIBE, EXPLAIN, or read-only PRAGMA statements")
+		return fmt.Errorf("SQL execution only allows SELECT, WITH, VALUES, SHOW, DESCRIBE, EXPLAIN, or read-only PRAGMA statements")
 	}
 	if tokens[0] == "with" {
 		hasResult := false
@@ -136,24 +141,26 @@ func validateReadOnlySQL(sql string) error {
 			}
 		}
 		if !hasResult {
-			return fmt.Errorf("sampling requires a read-only WITH statement that returns rows")
+			return fmt.Errorf("SQL execution requires a read-only WITH statement that returns rows")
 		}
 	}
 	if tokens[0] == "pragma" && pragmaAssignment {
-		return fmt.Errorf("sampling rejects PRAGMA assignments because only read-only statements are allowed")
+		return fmt.Errorf("SQL execution rejects PRAGMA assignments because only read-only statements are allowed")
 	}
 	return nil
 }
 
 // scanSQL returns unquoted identifier tokens, the count of non-empty
-// semicolon-delimited statements, and whether a PRAGMA-like assignment appears.
-// Comments and quoted strings/identifiers are ignored so embedded keywords and
-// semicolons do not affect the safety decision.
-func scanSQL(input string) ([]string, int, bool) {
+// semicolon-delimited statements, whether a PRAGMA-like assignment appears, and
+// whether a MySQL executable comment appears. Ordinary comments and quoted
+// strings/identifiers are ignored so embedded keywords and semicolons do not
+// affect the safety decision.
+func scanSQL(input string) ([]string, int, bool, bool) {
 	var tokens []string
 	statements := 0
 	hasToken := false
 	hasAssignment := false
+	hasExecutableComment := false
 	for i := 0; i < len(input); {
 		c := input[i]
 		if unicode.IsSpace(rune(c)) {
@@ -168,6 +175,9 @@ func scanSQL(input string) ([]string, int, bool) {
 			continue
 		}
 		if c == '/' && i+1 < len(input) && input[i+1] == '*' {
+			if i+2 < len(input) && input[i+2] == '!' {
+				hasExecutableComment = true
+			}
 			i += 2
 			for i+1 < len(input) && !(input[i] == '*' && input[i+1] == '/') {
 				i++
@@ -256,7 +266,7 @@ func scanSQL(input string) ([]string, int, bool) {
 	if hasToken {
 		statements++
 	}
-	return tokens, statements, hasAssignment
+	return tokens, statements, hasAssignment, hasExecutableComment
 }
 
 // InferSampleColumns infers stable, compact ColumnDefs from top-level row keys.

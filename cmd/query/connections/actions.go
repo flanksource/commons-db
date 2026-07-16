@@ -1,10 +1,12 @@
 package connections
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"strings"
 	"time"
@@ -52,6 +54,8 @@ type testResult struct {
 	Message string `json:"message"`
 	URL     string `json:"url,omitempty"`
 }
+
+const allowPrivateConnectionProbeProperty = "connection.test.allow-private-addresses"
 
 func (h *connectionActionsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), h.prefix), "/")
@@ -153,7 +157,12 @@ func testConnection(ctx dbcontext.Context, c *models.Connection) testResult {
 
 	dialCtx, cancel := ctx.WithTimeout(5 * time.Second)
 	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", host)
+	allowPrivate := ctx.Properties().On(false, allowPrivateConnectionProbeProperty)
+	dialAddress, err := validatedProbeAddress(dialCtx, host, allowPrivate)
+	if err != nil {
+		return testResult{OK: false, Message: fmt.Sprintf("TCP connect to %s rejected: %v", host, err), URL: displayURL}
+	}
+	conn, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", dialAddress)
 	if err != nil {
 		return testResult{OK: false, Message: fmt.Sprintf("TCP connect to %s failed: %v", host, err), URL: displayURL}
 	}
@@ -248,7 +257,7 @@ func httpProbe(ctx dbcontext.Context, c *models.Connection, displayURL string) t
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP authentication setup failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
 	}
 	client := &http.Client{
-		Transport: httpConnection.Transport(),
+		Transport: httpConnection.TransportWithBase(newHTTPProbeTransport(ctx.Properties().On(false, allowPrivateConnectionProbeProperty))),
 		Timeout:   8 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
@@ -259,6 +268,10 @@ func httpProbe(ctx dbcontext.Context, c *models.Connection, displayURL string) t
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", err), URL: displayURL}
 	}
 	req.Host = target.hostHeader
+	// Every HTTP and OAuth-token dial passes through the address policy above,
+	// which resolves once, rejects non-public destinations by default, and dials
+	// the vetted IP directly. Redirects are disabled as a second boundary.
+	// codeql[go/request-forgery]
 	resp, err := client.Do(req)
 	if err != nil {
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
@@ -280,7 +293,6 @@ func httpProbe(ctx dbcontext.Context, c *models.Connection, displayURL string) t
 
 type httpProbeTarget struct {
 	url        *url.URL
-	hostPort   string
 	hostHeader string
 }
 
@@ -307,9 +319,65 @@ func validatedHTTPProbeTarget(rawURL string) (*httpProbeTarget, error) {
 	probeURL.User = nil
 	return &httpProbeTarget{
 		url:        &probeURL,
-		hostPort:   net.JoinHostPort(u.Hostname(), port),
 		hostHeader: u.Host,
 	}, nil
+}
+
+func newHTTPProbeTransport(allowPrivate bool) *http.Transport {
+	dialer := &net.Dialer{}
+	return &http.Transport{
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			dialAddress, err := validatedProbeAddress(ctx, address, allowPrivate)
+			if err != nil {
+				return nil, err
+			}
+			return dialer.DialContext(ctx, network, dialAddress)
+		},
+		TLSHandshakeTimeout: 5 * time.Second,
+	}
+}
+
+func validatedProbeAddress(ctx context.Context, address string, allowPrivate bool) (string, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || port == "" {
+		return "", fmt.Errorf("invalid network address")
+	}
+
+	var addresses []netip.Addr
+	if ip, parseErr := netip.ParseAddr(host); parseErr == nil {
+		addresses = []netip.Addr{ip}
+	} else {
+		addresses, err = net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+		if err != nil {
+			return "", fmt.Errorf("resolve host: %w", err)
+		}
+	}
+	if len(addresses) == 0 {
+		return "", fmt.Errorf("host has no IP addresses")
+	}
+	for _, ip := range addresses {
+		if err := validateProbeIP(ip, allowPrivate); err != nil {
+			return "", fmt.Errorf("host resolves to a prohibited address: %w", err)
+		}
+	}
+	return net.JoinHostPort(addresses[0].String(), port), nil
+}
+
+func validateProbeIP(ip netip.Addr, allowPrivate bool) error {
+	ip = ip.Unmap()
+	if !ip.IsValid() || ip.IsUnspecified() || ip.IsMulticast() {
+		return fmt.Errorf("unspecified or multicast IP")
+	}
+	if allowPrivate {
+		return nil
+	}
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("non-public IP")
+	}
+	if netip.MustParsePrefix("100.64.0.0/10").Contains(ip) {
+		return fmt.Errorf("shared address space")
+	}
+	return nil
 }
 
 func redactConnectionURL(rawURL string) string {

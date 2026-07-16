@@ -235,24 +235,18 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 }
 
 func (h *connectionBrowserHandler) executeSQL(r *http.Request, conn *models.Connection, statement, database string) (browserQueryResult, error) {
+	if err := query.ValidateReadOnlySQL(statement); err != nil {
+		return browserQueryResult{}, err
+	}
 	client, err := h.sqlClient(r.Context(), conn, database)
 	if err != nil {
 		return browserQueryResult{}, err
 	}
 	defer client.Close()
 
-	if !sqlReturnsRows(statement) {
-		res, err := client.ExecContext(r.Context(), statement)
-		if err != nil {
-			return browserQueryResult{}, err
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return browserQueryResult{Message: "Statement executed successfully"}, nil
-		}
-		return browserQueryResult{AffectedRows: &affected, Message: "Statement executed successfully"}, nil
-	}
-
+	// The browser accepts a complete query and enforces the shared single-statement
+	// read-only policy before opening the database connection.
+	// codeql[go/sql-injection]
 	rows, err := client.QueryContext(r.Context(), statement)
 	if err != nil {
 		return browserQueryResult{}, err
@@ -268,16 +262,6 @@ func (h *connectionBrowserHandler) executeSQL(r *http.Request, conn *models.Conn
 	}
 	values, err := db.ScanRows[query.Row](rows)
 	return browserQueryResult{Rows: values, Columns: columns}, err
-}
-
-func sqlReturnsRows(statement string) bool {
-	statement = strings.ToLower(strings.TrimSpace(statement))
-	for _, prefix := range []string{"select", "with", "show", "describe", "desc", "explain", "pragma", "values"} {
-		if strings.HasPrefix(statement, prefix) {
-			return true
-		}
-	}
-	return false
 }
 
 func (h *connectionBrowserHandler) executeOpenSearch(r *http.Request, conn *models.Connection, request browserQueryRequest) (browserQueryResult, error) {

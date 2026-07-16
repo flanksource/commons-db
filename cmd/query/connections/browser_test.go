@@ -175,19 +175,6 @@ func TestConnectionBrowserOpenSearchInspection(t *testing.T) {
 	}
 }
 
-func TestSQLReturnsRows(t *testing.T) {
-	for _, statement := range []string{"SELECT 1", " with x as (select 1) select * from x", "SHOW TABLES", "EXPLAIN SELECT 1"} {
-		if !sqlReturnsRows(statement) {
-			t.Errorf("expected row-producing statement: %q", statement)
-		}
-	}
-	for _, statement := range []string{"INSERT INTO t VALUES (1)", "UPDATE t SET a=1", "DELETE FROM t", "CREATE TABLE t(a int)", "EXEC p"} {
-		if sqlReturnsRows(statement) {
-			t.Errorf("expected non-row statement: %q", statement)
-		}
-	}
-}
-
 func TestSQLIdentifier(t *testing.T) {
 	if got := sqlIdentifier(models.ConnectionTypePostgres, "public", "events"); got != `"public"."events"` {
 		t.Fatalf("postgres identifier = %s", got)

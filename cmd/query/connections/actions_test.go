@@ -8,11 +8,24 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/commons/properties"
 	"github.com/google/uuid"
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 )
+
+func privateProbeTestContext(t *testing.T) dbcontext.Context {
+	t.Helper()
+	properties.Set(allowPrivateConnectionProbeProperty, "true")
+	ctx := dbcontext.NewContext(context.Background())
+	ctx.ClearCache()
+	t.Cleanup(func() {
+		properties.Set(allowPrivateConnectionProbeProperty, "")
+		ctx.ClearCache()
+	})
+	return ctx
+}
 
 func TestMaskedConnection(t *testing.T) {
 	got := maskedConnection(&models.Connection{
@@ -133,7 +146,7 @@ func TestTestConnectionADOReachable(t *testing.T) {
 		t.Fatalf("split host port: %v", err)
 	}
 
-	ctx := dbcontext.NewContext(context.Background())
+	ctx := privateProbeTestContext(t)
 	dsn := "server=" + host + ";port=" + port + ";database=x;trustServerCertificate=true"
 	res := testConnection(ctx, &models.Connection{Type: "sql_server", URL: dsn})
 	if !res.OK {
@@ -147,7 +160,7 @@ func TestTestConnectionHTTPReachable(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	ctx := dbcontext.NewContext(context.Background())
+	ctx := privateProbeTestContext(t)
 	res := testConnection(ctx, &models.Connection{Type: "http", URL: ts.URL})
 	if !res.OK {
 		t.Fatalf("expected reachable, got %+v", res)
@@ -164,7 +177,7 @@ func TestTestConnectionHTTPRedactsURL(t *testing.T) {
 	defer ts.Close()
 
 	u := strings.Replace(ts.URL, "http://", "http://user:pass@", 1) + "?token=secret-token"
-	ctx := dbcontext.NewContext(context.Background())
+	ctx := privateProbeTestContext(t)
 	res := testConnection(ctx, &models.Connection{Type: "http", URL: u})
 	if !res.OK {
 		t.Fatalf("expected reachable, got %+v", res)
@@ -180,7 +193,7 @@ func TestTestConnectionHTTPSReachableWithInsecureTLS(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	ctx := dbcontext.NewContext(context.Background())
+	ctx := privateProbeTestContext(t)
 	res := testConnection(ctx, &models.Connection{Type: "https", URL: ts.URL, InsecureTLS: true})
 	if !res.OK {
 		t.Fatalf("expected reachable, got %+v", res)
@@ -201,7 +214,7 @@ func TestTestConnectionHTTPBasicAuth(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	ctx := dbcontext.NewContext(context.Background())
+	ctx := privateProbeTestContext(t)
 	res := testConnection(ctx, &models.Connection{
 		Type: models.ConnectionTypeOpenSearch,
 		URL:  ts.URL,
@@ -225,7 +238,7 @@ func TestTestConnectionHTTPAuthenticationFailure(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	ctx := dbcontext.NewContext(context.Background())
+	ctx := privateProbeTestContext(t)
 	res := testConnection(ctx, &models.Connection{
 		Type: models.ConnectionTypeOpenSearch,
 		URL:  ts.URL,
@@ -268,6 +281,15 @@ func TestMergeStoredDraftSecrets(t *testing.T) {
 	}
 	if draft.Certificate != "stored-certificate" {
 		t.Errorf("certificate = %q, want stored certificate", draft.Certificate)
+	}
+}
+
+func TestTestConnectionRejectsPrivateAddressByDefault(t *testing.T) {
+	ctx := dbcontext.NewContext(context.Background())
+	ctx.ClearCache()
+	res := testConnection(ctx, &models.Connection{Type: "http", URL: "http://127.0.0.1:8080"})
+	if res.OK || !strings.Contains(res.Message, "prohibited address") {
+		t.Fatalf("expected private address rejection, got %+v", res)
 	}
 }
 

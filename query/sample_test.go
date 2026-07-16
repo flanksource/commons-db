@@ -86,6 +86,7 @@ func TestSampleRejectsUnsafeRequests(t *testing.T) {
 		{"postgres", "SELECT 1; SELECT 2", nil},
 		{"postgres", "WITH removed AS (DELETE FROM jobs RETURNING *) SELECT * FROM removed", nil},
 		{"postgres", "PRAGMA journal_mode = WAL", nil},
+		{"mysql", "SELECT 1 /*!; DELETE FROM jobs */", nil},
 		{"http", "/jobs", map[string]any{"method": "POST"}},
 		{"custom", "anything", nil},
 	}
@@ -105,8 +106,40 @@ func TestReadOnlySQLIgnoresQuotedKeywordsAndTrailingSemicolon(t *testing.T) {
 		"/* UPDATE jobs */ WITH rows AS (SELECT 1) SELECT * FROM rows",
 		"EXPLAIN SELECT * FROM [delete]",
 	} {
-		if err := validateReadOnlySQL(statement); err != nil {
+		if err := ValidateReadOnlySQL(statement); err != nil {
 			t.Errorf("%q: %v", statement, err)
 		}
 	}
+}
+
+func FuzzValidateReadOnlySQL(f *testing.F) {
+	for _, seed := range []string{
+		"SELECT 1",
+		"WITH rows AS (SELECT 1) SELECT * FROM rows",
+		"SELECT 'DELETE; DROP' AS message;",
+		"DELETE FROM jobs",
+		"SELECT 1; DROP TABLE jobs",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, statement string) {
+		if err := ValidateReadOnlySQL(statement); err != nil {
+			return
+		}
+		tokens, statements, pragmaAssignment, executableComment := scanSQL(statement)
+		if statements != 1 || len(tokens) == 0 {
+			t.Fatalf("accepted invalid statement framing: %q", statement)
+		}
+		for _, token := range tokens {
+			if _, forbidden := forbiddenSQLTokens[token]; forbidden {
+				t.Fatalf("accepted forbidden token %q in %q", token, statement)
+			}
+		}
+		if tokens[0] == "pragma" && pragmaAssignment {
+			t.Fatalf("accepted mutating PRAGMA: %q", statement)
+		}
+		if executableComment {
+			t.Fatalf("accepted executable comment: %q", statement)
+		}
+	})
 }

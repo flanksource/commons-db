@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"strings"
@@ -76,10 +77,16 @@ func tokenFingerprint(token string) string {
 // opRead invokes `op read` for a single reference. When a token is supplied it
 // is injected via OP_SERVICE_ACCOUNT_TOKEN for non-interactive resolution.
 func opRead(ctx Context, ref, token string) (string, error) {
+	if err := validateOnePasswordReference(ref); err != nil {
+		return "", err
+	}
 	if _, err := exec.LookPath("op"); err != nil {
 		return "", fmt.Errorf("1password CLI (op) not found in PATH: %w", err)
 	}
-	cmd := exec.CommandContext(ctx, "op", "read", "--no-newline", ref)
+	// The reference is a validated op:// URI and follows `--`, so the CLI cannot
+	// reinterpret any part of it as an option.
+	// codeql[go/command-injection]
+	cmd := exec.CommandContext(ctx, "op", "read", "--no-newline", "--", ref)
 	cmd.Env = os.Environ()
 	if token != "" {
 		cmd.Env = append(cmd.Env, "OP_SERVICE_ACCOUNT_TOKEN="+token)
@@ -91,4 +98,19 @@ func opRead(ctx Context, ref, token string) (string, error) {
 		return "", fmt.Errorf("op read %q failed: %w: %s", ref, err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.String(), nil
+}
+
+func validateOnePasswordReference(ref string) error {
+	if strings.ContainsAny(ref, "\x00\r\n") {
+		return fmt.Errorf("invalid 1password reference: control characters are not allowed")
+	}
+	u, err := url.Parse(ref)
+	if err != nil || u.Scheme != "op" || u.Host == "" || u.Fragment != "" {
+		return fmt.Errorf("invalid 1password reference: expected op://<vault>/<item>/<field>")
+	}
+	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	if len(parts) < 2 || parts[0] == "" || parts[len(parts)-1] == "" {
+		return fmt.Errorf("invalid 1password reference: expected op://<vault>/<item>/<field>")
+	}
+	return nil
 }

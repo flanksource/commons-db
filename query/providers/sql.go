@@ -69,6 +69,9 @@ func (p sqlProvider) OpenRows(ctx context.Context, req query.ProviderRequest) (q
 	if req.Query == "" {
 		return nil, fmt.Errorf("sql query is required")
 	}
+	if err := query.ValidateReadOnlySQL(req.Query); err != nil {
+		return nil, err
+	}
 
 	opts, err := query.DecodeOptions[sqlOptions](req.Options)
 	if err != nil {
@@ -111,6 +114,9 @@ func (p sqlProvider) OpenRows(ctx context.Context, req query.ProviderRequest) (q
 		return nil, fmt.Errorf("failed to create sql client: %w", err)
 	}
 
+	// Query is the complete provider statement and has passed the single-statement
+	// read-only policy above; no request value is interpolated into another query.
+	// codeql[go/sql-injection]
 	rows, err := client.QueryContext(ctx, req.Query)
 	if err != nil {
 		client.Close()

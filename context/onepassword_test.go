@@ -44,6 +44,27 @@ func TestGetOnePasswordValueFromCache(t *testing.T) {
 	}
 }
 
+func TestValidateOnePasswordReference(t *testing.T) {
+	for _, ref := range []string{
+		"op://prod/postgres/password",
+		"op://Private/API%20Key/credential?attribute=otp",
+	} {
+		if err := validateOnePasswordReference(ref); err != nil {
+			t.Errorf("valid reference %q rejected: %v", ref, err)
+		}
+	}
+	for _, ref := range []string{
+		"--help",
+		"https://example.com/secret",
+		"op://vault/item",
+		"op://vault/item/field\n--format=json",
+	} {
+		if err := validateOnePasswordReference(ref); err == nil {
+			t.Errorf("invalid reference %q accepted", ref)
+		}
+	}
+}
+
 func TestOnePasswordTokenPrefersProperty(t *testing.T) {
 	t.Setenv("OP_SERVICE_ACCOUNT_TOKEN", "env-token")
 
@@ -65,8 +86,8 @@ func TestOnePasswordTokenPrefersProperty(t *testing.T) {
 
 func TestTokenFingerprintIsolatesCache(t *testing.T) {
 	const (
-		tokenA                       = "a"
-		tokenB                       = "b"
+		tokenA                      = "a"
+		tokenB                      = "b"
 		unkeyedFingerprintForTokenA = "ca978112ca1bbdca"
 	)
 
