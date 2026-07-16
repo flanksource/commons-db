@@ -33,6 +33,9 @@ type EmbeddedConfig struct {
 	// to os.Stderr (the library default is os.Stdout, which would corrupt callers
 	// that write binary or structured data to stdout).
 	Logger io.Writer
+	// PerformanceDiagnostics preloads pg_stat_statements, enables I/O timing,
+	// installs the extension, and fails startup if any part is unavailable.
+	PerformanceDiagnostics bool
 }
 
 // StartEmbedded launches a fergusstrange/embedded-postgres under cfg.DataDir
@@ -87,7 +90,7 @@ func StartEmbedded(cfg EmbeddedConfig) (dsn string, stop func() error, err error
 	if pgLog == nil {
 		pgLog = os.Stderr
 	}
-	server := embeddedpostgres.NewDatabase(embeddedpostgres.DefaultConfig().
+	serverConfig := embeddedpostgres.DefaultConfig().
 		Port(port).
 		DataPath(dataPath).
 		RuntimePath(filepath.Join(cfg.DataDir, "runtime")).
@@ -95,7 +98,11 @@ func StartEmbedded(cfg EmbeddedConfig) (dsn string, stop func() error, err error
 		Version(pgVersion).
 		Username(cfg.Username).Password(cfg.Password).
 		Database(cfg.Database).
-		Logger(pgLog))
+		Logger(pgLog)
+	if parameters := performanceDiagnosticStartParameters(cfg.PerformanceDiagnostics); len(parameters) > 0 {
+		serverConfig = serverConfig.StartParameters(parameters)
+	}
+	server := embeddedpostgres.NewDatabase(serverConfig)
 
 	ownedByUs := true
 	if err := server.Start(); err != nil {
@@ -125,7 +132,68 @@ func StartEmbedded(cfg EmbeddedConfig) (dsn string, stop func() error, err error
 		_ = stop()
 		return "", nil, fmt.Errorf("embedded postgres never became ready: %w", err)
 	}
+	if cfg.PerformanceDiagnostics {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := EnsurePerformanceDiagnostics(ctx, dsn); err != nil {
+			_ = stop()
+			return "", nil, err
+		}
+	}
 	return dsn, stop, nil
+}
+
+func performanceDiagnosticStartParameters(enabled bool) map[string]string {
+	if !enabled {
+		return nil
+	}
+	return map[string]string{
+		"shared_preload_libraries": "pg_stat_statements",
+		"track_io_timing":          "on",
+	}
+}
+
+func validatePerformanceDiagnosticSettings(preloadedLibraries, trackIOTiming string) error {
+	foundStatementStats := false
+	for _, library := range strings.Split(preloadedLibraries, ",") {
+		if strings.TrimSpace(library) == "pg_stat_statements" {
+			foundStatementStats = true
+			break
+		}
+	}
+	if !foundStatementStats {
+		return errors.New("PostgreSQL performance diagnostics require shared_preload_libraries=pg_stat_statements; update the server configuration and restart PostgreSQL")
+	}
+	if trackIOTiming != "on" {
+		return errors.New("PostgreSQL performance diagnostics require track_io_timing=on; update the server configuration and restart PostgreSQL")
+	}
+	return nil
+}
+
+// EnsurePerformanceDiagnostics validates server-level settings before
+// installing pg_stat_statements in the selected database. Server settings are
+// checked first so an externally managed instance fails without partial DDL.
+func EnsurePerformanceDiagnostics(ctx context.Context, dsn string) error {
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		return fmt.Errorf("connect for PostgreSQL performance diagnostics: %w", err)
+	}
+	defer conn.Close(context.Background()) //nolint:errcheck
+
+	var preloadedLibraries, trackIOTiming string
+	if err := conn.QueryRow(ctx, "SHOW shared_preload_libraries").Scan(&preloadedLibraries); err != nil {
+		return fmt.Errorf("read shared_preload_libraries: %w", err)
+	}
+	if err := conn.QueryRow(ctx, "SHOW track_io_timing").Scan(&trackIOTiming); err != nil {
+		return fmt.Errorf("read track_io_timing: %w", err)
+	}
+	if err := validatePerformanceDiagnosticSettings(preloadedLibraries, trackIOTiming); err != nil {
+		return err
+	}
+	if _, err := conn.Exec(ctx, "CREATE EXTENSION IF NOT EXISTS pg_stat_statements"); err != nil {
+		return fmt.Errorf("install pg_stat_statements: %w", err)
+	}
+	return nil
 }
 
 // FreePort binds :0 to discover a free TCP port. Public so callers can reuse
