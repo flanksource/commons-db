@@ -22,3 +22,32 @@ func TestApplyValidatesInputsBeforeConnecting(t *testing.T) {
 	assert.EqualError(t, Apply(t.Context(), "", fstest.MapFS{}), "connection string is empty")
 	assert.EqualError(t, Apply(t.Context(), "postgres://unused", nil), "schema filesystem is nil")
 }
+
+func TestConnectionWithLockTimeout(t *testing.T) {
+	tests := []struct {
+		name       string
+		connection string
+		want       string
+	}{
+		{
+			name:       "url without query gains a bounded lock_timeout",
+			connection: "postgres://user@localhost/app?sslmode=disable",
+			want:       "postgres://user@localhost/app?options=-c+lock_timeout%3D" + migrationLockTimeout + "&sslmode=disable",
+		},
+		{
+			name:       "existing options are preserved",
+			connection: "postgres://user@localhost/app?options=-c+statement_timeout%3D5s",
+			want:       "postgres://user@localhost/app?options=-c+statement_timeout%3D5s",
+		},
+		{
+			name:       "keyword dsn is left untouched",
+			connection: "host=localhost user=app dbname=app sslmode=disable",
+			want:       "host=localhost user=app dbname=app sslmode=disable",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, connectionWithLockTimeout(tt.connection))
+		})
+	}
+}
