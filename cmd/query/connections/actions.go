@@ -1,6 +1,9 @@
 package connections
 
 import (
+	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -12,6 +15,7 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons/http/middlewares"
 )
 
 // connectionActionsHandler powers the connection form's "Test" split-button:
@@ -247,14 +251,22 @@ func httpProbe(ctx dbcontext.Context, c *models.Connection, displayURL string) t
 	if err != nil {
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP authentication setup failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
 	}
+	transport, err := newHTTPProbeTransport(httpConnection, target)
+	if err != nil {
+		return testResult{OK: false, Message: fmt.Sprintf("HTTP authentication setup failed: %v", redactError(err, c.URL, displayURL)), URL: displayURL}
+	}
 	client := &http.Client{
-		Transport: httpConnection.Transport(),
+		Transport: transport,
 		Timeout:   8 * time.Second,
 		CheckRedirect: func(_ *http.Request, _ []*http.Request) error {
 			return http.ErrUseLastResponse
 		},
 	}
-	req, err := http.NewRequest(http.MethodGet, target.url.String(), nil)
+	probeURL := "http://connection-probe.invalid/"
+	if target.url.Scheme == "https" {
+		probeURL = "https://connection-probe.invalid/"
+	}
+	req, err := http.NewRequest(http.MethodGet, probeURL, nil)
 	if err != nil {
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", err), URL: displayURL}
 	}
@@ -282,6 +294,71 @@ type httpProbeTarget struct {
 	url        *url.URL
 	hostPort   string
 	hostHeader string
+}
+
+// newHTTPProbeTransport preserves configured authentication and TLS while
+// pinning the request to the validated connection target.
+func newHTTPProbeTransport(conn dbconnection.HTTPConnection, target *httpProbeTarget) (http.RoundTripper, error) {
+	tlsConfig := &tls.Config{
+		ServerName:         target.url.Hostname(),
+		InsecureSkipVerify: conn.TLS.InsecureSkipVerify, //nolint:gosec // explicit per-connection opt-in
+	}
+	if !conn.TLS.CA.IsEmpty() {
+		roots, err := x509.SystemCertPool()
+		if err != nil || roots == nil {
+			roots = x509.NewCertPool()
+		}
+		if !roots.AppendCertsFromPEM([]byte(conn.TLS.CA.ValueStatic)) {
+			return nil, fmt.Errorf("invalid TLS CA certificate")
+		}
+		tlsConfig.RootCAs = roots
+	}
+	if conn.TLS.Cert.IsEmpty() != conn.TLS.Key.IsEmpty() {
+		return nil, fmt.Errorf("mTLS requires both a client certificate and private key")
+	}
+	if !conn.TLS.Cert.IsEmpty() {
+		certificate, err := tls.X509KeyPair([]byte(conn.TLS.Cert.ValueStatic), []byte(conn.TLS.Key.ValueStatic))
+		if err != nil {
+			return nil, fmt.Errorf("invalid mTLS client certificate or private key: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{certificate}
+	}
+
+	base := &http.Transport{
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, target.hostPort)
+		},
+		TLSClientConfig:     tlsConfig,
+		TLSHandshakeTimeout: conn.TLS.HandshakeTimeout,
+	}
+	if !conn.HTTPBasicAuth.IsEmpty() {
+		return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			req.SetBasicAuth(conn.GetUsername(), conn.GetPassword())
+			return base.RoundTrip(req)
+		}), nil
+	}
+	if !conn.Bearer.IsEmpty() {
+		return roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			req.Header.Set("Authorization", "Bearer "+conn.Bearer.ValueStatic)
+			return base.RoundTrip(req)
+		}), nil
+	}
+	if !conn.OAuth.IsEmpty() {
+		return middlewares.NewOauthTransport(middlewares.OauthConfig{
+			ClientID:     conn.OAuth.ClientID.String(),
+			ClientSecret: conn.OAuth.ClientSecret.String(),
+			TokenURL:     conn.OAuth.TokenURL,
+			Params:       conn.OAuth.Params,
+			Scopes:       conn.OAuth.Scopes,
+		}).RoundTripper(base), nil
+	}
+	return base, nil
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func validatedHTTPProbeTarget(rawURL string) (*httpProbeTarget, error) {
