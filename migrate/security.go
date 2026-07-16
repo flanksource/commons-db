@@ -88,6 +88,12 @@ func reconcileSecurity(ctx context.Context, db *sql.DB, scope string, spec secur
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	// GRANT/REVOKE take strong locks on the targeted objects; bound the wait so
+	// reconciliation cannot camp against live traffic (the caller retries).
+	if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '"+migrationLockTimeout+"'"); err != nil {
+		return fmt.Errorf("set lock_timeout for security reconciliation: %w", err)
+	}
+
 	previous, err := readSecurityState(ctx, tx, scope)
 	if err != nil {
 		return err

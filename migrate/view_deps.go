@@ -228,9 +228,32 @@ func dropDependentView(ctx context.Context, db *sql.DB, v viewRef) error {
 	}
 	stmt := fmt.Sprintf("DROP %s IF EXISTS %s.%s CASCADE", kind,
 		pq.QuoteIdentifier(v.schemaName), pq.QuoteIdentifier(v.name))
-	if _, err := db.ExecContext(ctx, stmt); err != nil {
+	// DROP takes ACCESS EXCLUSIVE on the view; bound the wait and retry so a
+	// live reader cannot deadlock the reconciliation indefinitely. The DROP is
+	// idempotent (IF EXISTS), so re-running the transaction is safe.
+	if err := retryOnLockContention(ctx, "drop dependent view "+v.qualified(), func() error {
+		return execWithLockTimeout(ctx, db, stmt)
+	}); err != nil {
 		return fmt.Errorf("drop dependent view %s: %w", v.qualified(), err)
 	}
 	logger.GetLogger("migrate").V(1).Infof("dropped dependent view %s for table reconciliation", v.qualified())
 	return nil
+}
+
+// execWithLockTimeout runs a single statement in a transaction that first bounds
+// its lock waits, so DDL cannot camp on an ACCESS EXCLUSIVE lock against live
+// traffic.
+func execWithLockTimeout(ctx context.Context, db *sql.DB, stmt string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '"+migrationLockTimeout+"'"); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
