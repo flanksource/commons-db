@@ -57,6 +57,7 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 		Connection: p.Provider.Connection,
 		Query:      rendered,
 		Options:    p.Provider.Options,
+		Params:     resolved,
 	})
 	duration := time.Since(started)
 	if err != nil {

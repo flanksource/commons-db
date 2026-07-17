@@ -1,5 +1,5 @@
 {
-  "$id": "sql.json",
+  "$id": "opentelemetry.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "connection": {
@@ -60,41 +60,73 @@
     },
     "options": {
       "properties": {
-        "database": {
-          "description": "Database override for this query",
-          "title": "Database",
+        "dateField": {
+          "title": "date Field",
           "type": "string"
         },
-        "type": {
-          "enum": [
-            "postgres",
-            "mysql",
-            "sql_server",
-            "clickhouse"
-          ],
-          "title": "Driver",
-          "type": "string",
-          "x-enum-display": "combobox",
-          "x-enum-icons": {
-            "clickhouse": "clickhouse",
-            "mysql": "mysql",
-            "postgres": "postgres",
-            "sql_server": "sqlserver"
-          }
+        "format": {
+          "title": "Format",
+          "type": "string"
         },
-        "url": {
-          "description": "Inline database URL used instead of a saved connection",
-          "title": "URL / DSN",
-          "type": "string",
-          "x-clicky-component": "k8s-url-selector",
-          "x-clicky-default-source": "value"
+        "index": {
+          "title": "Index",
+          "type": "string"
+        },
+        "operationField": {
+          "title": "operation Field",
+          "type": "string"
+        },
+        "params": {
+          "title": "Provider Params",
+          "type": "object"
+        },
+        "parentIdField": {
+          "title": "parent IdField",
+          "type": "string"
+        },
+        "parentRefType": {
+          "title": "parent RefType",
+          "type": "string"
+        },
+        "selectFields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "select Fields",
+          "type": "array"
+        },
+        "serviceField": {
+          "title": "service Field",
+          "type": "string"
+        },
+        "sourceExcludes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "source Excludes",
+          "type": "array"
+        },
+        "spanIdField": {
+          "title": "span IdField",
+          "type": "string"
+        },
+        "statusFields": {
+          "items": {
+            "type": "string"
+          },
+          "title": "status Fields",
+          "type": "array"
+        },
+        "traceIdField": {
+          "title": "trace IdField",
+          "type": "string"
         }
       },
       "title": "Options",
       "type": "object"
     },
     "type": {
-      "const": "sql",
+      "const": "opentelemetry",
       "title": "Type",
       "type": "string"
     }
@@ -102,6 +134,6 @@
   "required": [
     "type"
   ],
-  "title": "Query provider: sql",
+  "title": "Query provider: opentelemetry",
   "type": "object"
 }

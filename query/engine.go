@@ -57,12 +57,13 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any) (*
 		Connection: p.Provider.Connection,
 		Query:      query,
 		Options:    p.Provider.Options,
+		Params:     resolved,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
 	}
 
-	if err := applyColumns(ctx, p.Columns, rows); err != nil {
+	if err := applyRowTransforms(ctx, p, rows); err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 
@@ -156,6 +157,7 @@ func executeSubQuery(ctx context.Context, sub SubQuery, params map[string]any) (
 		Connection: sub.Provider.Connection,
 		Query:      query,
 		Options:    sub.Provider.Options,
+		Params:     params,
 	})
 }
 

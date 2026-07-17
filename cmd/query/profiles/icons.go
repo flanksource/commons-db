@@ -16,6 +16,8 @@ func providerIcon(providerType string) string {
 		return "activity"
 	case "opensearch":
 		return "globe"
+	case "opentelemetry":
+		return "activity"
 	default:
 		return "table"
 	}

@@ -62,7 +62,8 @@ var _ = Describe("Connection schema", func() {
 			models.ConnectionTypeKubernetes, models.ConnectionTypeZulipChat,
 		))
 		// guards against drift from the models.ConnectionType* constant set
-		Expect(enum).To(HaveLen(55))
+		Expect(enum).To(ContainElement(models.ConnectionTypeOpenTelemetry))
+		Expect(enum).To(HaveLen(56))
 	})
 
 	It("keeps the base form to name/namespace/type/properties", func() {
@@ -84,7 +85,7 @@ var _ = Describe("Connection schema", func() {
 		typeProp := s["properties"].(schema.Schema)["type"].(schema.Schema)
 		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
 		icons := typeProp["x-enum-icons"].(map[string]string)
-		Expect(icons).To(HaveLen(55))
+		Expect(icons).To(HaveLen(56))
 		Expect(icons[models.ConnectionTypePostgres]).To(Equal("postgres"))
 	})
 
@@ -146,6 +147,16 @@ var _ = Describe("Connection schema", func() {
 		Expect(props["properties"].(schema.Schema)["properties"].(schema.Schema)).To(HaveKey("authType"))
 	})
 
+	It("scopes OpenTelemetry to a required nested OpenSearch connection", func() {
+		then := branchFor(s, models.ConnectionTypeOpenTelemetry)
+		properties := then["properties"].(schema.Schema)["properties"].(schema.Schema)
+		Expect(properties["required"]).To(ContainElement("connection"))
+		connection := properties["properties"].(schema.Schema)["connection"].(schema.Schema)
+		lookup := connection["x-clicky-lookup"].(schema.Schema)
+		scope := lookup["scope"].(schema.Schema)
+		Expect(scope["map"].(map[string][]string)[models.ConnectionTypeOpenTelemetry]).To(Equal([]string{models.ConnectionTypeOpenSearch}))
+	})
+
 	It("surfaces certificate per type: optional for kubernetes, required for GCP", func() {
 		k8s := branchFor(s, models.ConnectionTypeKubernetes)
 		Expect(k8s["properties"].(schema.Schema)).To(HaveKey("certificate"))
@@ -171,14 +182,14 @@ var _ = Describe("Connection schema", func() {
 		}
 	})
 
-	It("emits external source refs and a local-ref bundle for all 55 components", func() {
-		Expect(schema.ConnectionComponents()).To(HaveLen(55))
+	It("emits external source refs and a local-ref bundle for all 56 components", func() {
+		Expect(schema.ConnectionComponents()).To(HaveLen(56))
 		source := schema.ConnectionSource()
 		firstSourceBranch := source["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("connections/"))
 
 		bundled := schema.Connection()
-		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(55))
+		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(56))
 		firstBundledBranch := bundled["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstBundledBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("#/$defs/"))
 	})
@@ -218,18 +229,18 @@ var _ = Describe("Profile schema", func() {
 		Expect(provider["x-discriminator"]).To(Equal("type"))
 		typeProp := provider["properties"].(schema.Schema)["type"].(schema.Schema)
 		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
-		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(11))
+		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(12))
 	})
 
 	It("bundles every provider component and enriches inline URLs", func() {
-		Expect(schema.ProfileComponents()).To(HaveLen(11))
+		Expect(schema.ProfileComponents()).To(HaveLen(12))
 		source := schema.ProfileSource()
 		provider := source["properties"].(schema.Schema)["provider"].(schema.Schema)
 		firstSourceBranch := provider["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("profiles/"))
 
 		bundled := schema.Profile()
-		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(11))
+		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(12))
 		http := bundled["$defs"].(schema.Schema)["http"].(schema.Schema)
 		options := http["properties"].(schema.Schema)["options"].(schema.Schema)
 		url := options["properties"].(schema.Schema)["url"].(schema.Schema)

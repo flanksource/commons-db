@@ -8,6 +8,7 @@ import (
 
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/task"
+	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/query"
 	commonsContext "github.com/flanksource/commons/context"
 )
@@ -23,10 +24,11 @@ func (r *Runner) RunTop(ctx context.Context, name string, options TopOptions) er
 	if err != nil {
 		return err
 	}
-	p, err := store.Get(ctx, name)
+	resolved, err := profiles.Resolve(ctx, store, name)
 	if err != nil {
 		return err
 	}
+	p := resolved.Profile
 	if p.Kind() == query.KindTrace {
 		return fmt.Errorf("profile %q is a trace; use `query trace` to stream it", p.Name)
 	}

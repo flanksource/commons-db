@@ -83,7 +83,11 @@ func mergeStoredProfiles(spec *rpc.OpenAPISpec, store Store) error {
 		return fmt.Errorf("load profile surfaces: %w", err)
 	}
 	for _, profile := range profiles {
-		addProfileToSpec(spec, profile)
+		resolved, err := Resolve(context.Background(), store, profile.Name)
+		if err != nil {
+			return fmt.Errorf("resolve profile surface %q: %w", profile.Name, err)
+		}
+		addProfileToSpec(spec, resolved.Profile)
 	}
 	return nil
 }

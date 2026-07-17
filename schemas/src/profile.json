@@ -1,6 +1,30 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "aliases": {
+      "items": {
+        "properties": {
+          "cel": {
+            "description": "Ordered row projection",
+            "title": "CEL",
+            "type": "string"
+          },
+          "name": {
+            "description": "Dotted output path",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "cel"
+        ],
+        "type": "object"
+      },
+      "title": "Aliases",
+      "type": "array",
+      "x-layout": "table"
+    },
     "columns": {
       "items": {
         "properties": {
@@ -74,6 +98,20 @@
       "title": "Columns",
       "type": "array",
       "x-layout": "table"
+    },
+    "ignore": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Ignore",
+      "type": "array"
+    },
+    "imports": {
+      "items": {
+        "type": "string"
+      },
+      "title": "Imports",
+      "type": "array"
     },
     "namespace": {
       "title": "Namespace",
@@ -326,6 +364,21 @@
           "then": {
             "$ref": "profiles/jaeger.json"
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "opentelemetry"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/opentelemetry.json"
+          }
         }
       ],
       "properties": {
@@ -356,6 +409,9 @@
                 ],
                 "opensearch": [
                   "opensearch"
+                ],
+                "opentelemetry": [
+                  "opentelemetry"
                 ],
                 "postgres": [
                   "postgres"
@@ -398,7 +454,8 @@
             "postgrest",
             "loki",
             "opensearch",
-            "jaeger"
+            "jaeger",
+            "opentelemetry"
           ],
           "title": "Type",
           "type": "string",
@@ -410,6 +467,7 @@
             "loki": "grafana",
             "mysql": "mysql",
             "opensearch": "opensearch",
+            "opentelemetry": "opentelemetry",
             "postgres": "postgres",
             "postgrest": "globe",
             "prometheus": "prometheus",
