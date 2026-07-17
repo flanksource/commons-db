@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 )
 
@@ -38,6 +39,25 @@ func TestConnectionFromBodyRequiresNameAndType(t *testing.T) {
 	}
 	if _, err := connectionFromBody(map[string]any{"name": "db"}); err == nil {
 		t.Fatal("expected error when type is missing")
+	}
+}
+
+func TestValidateOpenTelemetryRequiresNestedOpenSearchConnection(t *testing.T) {
+	database := connectionInfoTestDB(t)
+	search := models.Connection{ID: uuid.New(), Name: "OS", Type: models.ConnectionTypeOpenSearch}
+	if err := database.Create(&search).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidate := &models.Connection{
+		Name: "traces", Type: models.ConnectionTypeOpenTelemetry,
+		Properties: types.JSONStringMap{"connection": "connection://OS"},
+	}
+	if err := validateNestedConnection(database, candidate); err != nil {
+		t.Fatal(err)
+	}
+	candidate.Properties["connection"] = "connection://traces"
+	if err := validateNestedConnection(database, candidate); err == nil {
+		t.Fatal("expected self-referencing OpenTelemetry connection to fail")
 	}
 }
 

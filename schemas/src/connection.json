@@ -530,6 +530,21 @@
       "if": {
         "properties": {
           "type": {
+            "const": "opentelemetry"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/opentelemetry.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
             "const": "opensearch"
           }
         },
@@ -884,6 +899,7 @@
         "ntfy",
         "ollama",
         "openai",
+        "opentelemetry",
         "opensearch",
         "opsgenie",
         "postgres",
@@ -945,6 +961,7 @@
         "ollama": "ollama",
         "openai": "openai",
         "opensearch": "opensearch",
+        "opentelemetry": "opentelemetry",
         "opsgenie": "opsgenie",
         "postgres": "postgres",
         "prometheus": "prometheus",

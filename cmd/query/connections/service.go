@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky"
+	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/google/uuid"
@@ -191,6 +192,9 @@ func createConnection(db *gorm.DB, body map[string]any) (*models.Connection, err
 	if err != nil {
 		return nil, err
 	}
+	if err := validateNestedConnection(db, c); err != nil {
+		return nil, err
+	}
 	c.ID = uuid.Nil // let the DB assign the id
 	if err := db.Create(c).Error; err != nil {
 		return nil, fmt.Errorf("create connection: %w", err)
@@ -209,12 +213,38 @@ func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Conn
 	if err != nil {
 		return nil, err
 	}
+	if err := validateNestedConnection(db, incoming); err != nil {
+		return nil, err
+	}
 	applyConnectionUpdate(existing, incoming)
 	if err := db.Save(existing).Error; err != nil {
 		return nil, fmt.Errorf("update connection: %w", err)
 	}
 	redactConnection(existing)
 	return existing, nil
+}
+
+func validateNestedConnection(db *gorm.DB, candidate *models.Connection) error {
+	if candidate.Type != models.ConnectionTypeOpenTelemetry {
+		return nil
+	}
+	openTelemetry, err := dbconnection.NewOpenTelemetry(candidate)
+	if err != nil {
+		return err
+	}
+	name := strings.TrimPrefix(openTelemetry.Connection, "connection://")
+	if strings.Contains(name, "/") {
+		parts := strings.Split(name, "/")
+		name = parts[len(parts)-1]
+	}
+	nested, err := findConnection(db, name)
+	if err != nil {
+		return fmt.Errorf("resolve nested OpenSearch connection: %w", err)
+	}
+	if nested.Type != models.ConnectionTypeOpenSearch {
+		return fmt.Errorf("nested connection %q has type %q, expected %q", nested.Name, nested.Type, models.ConnectionTypeOpenSearch)
+	}
+	return nil
 }
 
 // deleteConnection removes a connection by id, erroring when absent.

@@ -10,6 +10,7 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -138,6 +139,17 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (*opensear
 		return nil, opts, err
 	}
 	return searcher, opts, nil
+}
+
+func openSearchClientForConnection(ctx context.Context, conn *models.Connection) (*opensearch.Searcher, error) {
+	if conn == nil || conn.URL == "" {
+		return nil, fmt.Errorf("OpenSearch connection URL is required")
+	}
+	httpConnection, err := dbconnection.NewHTTPConnection(ctx, *conn)
+	if err != nil {
+		return nil, err
+	}
+	return opensearch.NewWithTransport(ctx, opensearch.Backend{Address: conn.URL}, nil, httpConnection.Transport())
 }
 
 type openSearchRowIterator struct {

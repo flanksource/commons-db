@@ -112,6 +112,18 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	if conn.Type == models.ConnectionTypeOpenTelemetry {
+		openTelemetry, resolveErr := dbconnection.NewOpenTelemetry(conn)
+		if resolveErr != nil {
+			http.Error(w, resolveErr.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		conn, resolveErr = openTelemetry.ResolveOpenSearch(h.ctx)
+		if resolveErr != nil {
+			http.Error(w, resolveErr.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+	}
 	tail = strings.TrimSuffix(tail, "/")
 
 	switch {
