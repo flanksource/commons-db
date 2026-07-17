@@ -3,6 +3,7 @@ package schema
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/types"
@@ -130,18 +131,35 @@ func tailoredBranch(typ string, cfg any) Schema {
 
 	props := Schema{}
 	propProps := Schema{}
+	propertyRequired := []string{}
+	required := stringSlice(flat["required"])
 	for name, raw := range flat["properties"].(map[string]any) {
 		fs := Schema(raw.(map[string]any))
 		if key, ok := fs["x-clicky-property"].(string); ok {
 			delete(fs, "x-clicky-property")
+			if typ == "opentelemetry" && key == "connection" {
+				fs["x-clicky-lookup"] = Schema{
+					"url": "/api/v1/connection", "filter": "connection", "searchParam": "__lookup_q", "multi": false,
+					"scope": Schema{"param": "types", "from": "type", "map": map[string][]string{"opentelemetry": {"opensearch"}}},
+				}
+			}
 			propProps[key] = fs
+			if slices.Contains(required, name) {
+				propertyRequired = append(propertyRequired, key)
+				required = slices.DeleteFunc(required, func(value string) bool { return value == name })
+			}
 			continue
 		}
 		props[name] = fs
 	}
 
 	if len(propProps) > 0 {
-		props["properties"] = Schema{"type": "object", "title": "Properties", "properties": propProps}
+		properties := Schema{"type": "object", "title": "Properties", "properties": propProps}
+		if len(propertyRequired) > 0 {
+			properties["required"] = propertyRequired
+			required = append(required, "properties")
+		}
+		props["properties"] = properties
 	}
 	if isHTTPConnectionType(typ) {
 		props["properties"] = httpAuthenticationSchema()
@@ -151,8 +169,8 @@ func tailoredBranch(typ string, cfg any) Schema {
 	if len(props) > 0 {
 		then["properties"] = props
 	}
-	if req := stringSlice(flat["required"]); len(req) > 0 {
-		then["required"] = req
+	if len(required) > 0 {
+		then["required"] = required
 	}
 
 	return Schema{

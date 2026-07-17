@@ -146,6 +146,17 @@ func maskedConnection(c *models.Connection) resolvedConnection {
 // testConnection probes the resolved URL: a TCP connect proves the host:port is
 // reachable, and http/https URLs additionally report the response status.
 func testConnection(ctx dbcontext.Context, c *models.Connection) testResult {
+	if c.Type == models.ConnectionTypeOpenTelemetry {
+		openTelemetry, err := dbconnection.NewOpenTelemetry(c)
+		if err != nil {
+			return testResult{OK: false, Message: err.Error()}
+		}
+		nested, err := openTelemetry.ResolveOpenSearch(ctx)
+		if err != nil {
+			return testResult{OK: false, Message: err.Error()}
+		}
+		return testConnection(ctx, nested)
+	}
 	if c.URL == "" {
 		return testResult{OK: false, Message: "connection has no URL to test"}
 	}
