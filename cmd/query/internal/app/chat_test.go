@@ -6,20 +6,21 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/flanksource/clicky/aichat"
+	captools "github.com/flanksource/captain/pkg/ai/tools"
+	"github.com/flanksource/captain/pkg/api"
 	"github.com/spf13/cobra"
 )
 
 func TestIsQueryChatTool(t *testing.T) {
 	tests := []struct {
 		name string
-		tool aichat.ToolInfo
+		tool captools.ToolInfo
 		want bool
 	}{
-		{name: "connection list", tool: aichat.ToolInfo{OperationName: "connection"}, want: true},
-		{name: "dynamic profile", tool: aichat.ToolInfo{Name: "profile-orders"}, want: true},
-		{name: "serve", tool: aichat.ToolInfo{OperationName: "serve"}, want: false},
-		{name: "schema fallback name", tool: aichat.ToolInfo{Name: "schema"}, want: false},
+		{name: "connection list", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/operation": "connection"}}, want: true},
+		{name: "dynamic profile", tool: captools.ToolInfo{Name: "profile-orders"}, want: true},
+		{name: "serve", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/operation": "serve"}}, want: false},
+		{name: "schema fallback name", tool: captools.ToolInfo{Name: "schema"}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -30,22 +31,22 @@ func TestIsQueryChatTool(t *testing.T) {
 	}
 }
 
-func TestQueryToolRequiresApproval(t *testing.T) {
+func TestQueryToolPermission(t *testing.T) {
 	tests := []struct {
 		name string
-		tool aichat.ToolInfo
-		want bool
+		tool captools.ToolInfo
+		want api.ToolMode
 	}{
-		{name: "get method", tool: aichat.ToolInfo{Method: "GET"}, want: false},
-		{name: "head method", tool: aichat.ToolInfo{Method: "head"}, want: false},
-		{name: "list verb", tool: aichat.ToolInfo{ClickyVerb: "list"}, want: false},
-		{name: "post method", tool: aichat.ToolInfo{Method: "POST"}, want: true},
-		{name: "unknown defaults safe", tool: aichat.ToolInfo{}, want: true},
+		{name: "get method", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/method": "GET"}}, want: api.ToolModeOn},
+		{name: "head method", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/method": "head"}}, want: api.ToolModeOn},
+		{name: "list verb", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/verb": "list"}}, want: api.ToolModeOn},
+		{name: "post method", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/method": "POST"}}, want: api.ToolModeAsk},
+		{name: "unknown defaults safe", tool: captools.ToolInfo{}, want: api.ToolModeAsk},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := queryToolRequiresApproval(tt.tool, nil); got != tt.want {
-				t.Fatalf("queryToolRequiresApproval(%+v) = %v, want %v", tt.tool, got, tt.want)
+			if got := queryToolPermission(tt.tool); got != tt.want {
+				t.Fatalf("queryToolPermission(%+v) = %v, want %v", tt.tool, got, tt.want)
 			}
 		})
 	}
@@ -63,8 +64,10 @@ func TestQueryChatServerCatalogFiltersProcessCommands(t *testing.T) {
 		&cobra.Command{Use: "serve", Run: func(*cobra.Command, []string) {}},
 		&cobra.Command{Use: "schema", Run: func(*cobra.Command, []string) {}},
 	)
-	chat := newQueryChatServer(root)
-	t.Cleanup(func() { _ = chat.Close() })
+	chat, err := newQueryChatServer(root)
+	if err != nil {
+		t.Fatalf("newQueryChatServer: %v", err)
+	}
 
 	req := httptest.NewRequest(http.MethodGet, "/api/chat/tools", nil)
 	res := httptest.NewRecorder()
