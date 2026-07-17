@@ -3,6 +3,7 @@ package profiles
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -51,7 +52,11 @@ func NewFileStore(dir string) (*FileStore, error) {
 	if err := ensurePrivateDir(abs); err != nil {
 		return nil, fmt.Errorf("create profiles dir %q: %w", abs, err)
 	}
-	return &FileStore{Dir: abs}, nil
+	store := &FileStore{Dir: abs}
+	if err := store.migrateLegacyTraceProfiles(); err != nil {
+		return nil, err
+	}
+	return store, nil
 }
 
 func NewDBStore(db *gorm.DB) (*DBStore, error) {
@@ -73,7 +78,24 @@ func Import(ctx context.Context, source Store, target *DBStore) error {
 		return err
 	}
 	for _, profile := range items {
-		if err := target.save(ctx, profile, false); err != nil {
+		update := false
+		var existing profileRecord
+		err := target.db.WithContext(ctx).Where("name = ?", profile.Name).First(&existing).Error
+		if err == nil {
+			stored, decodeErr := existing.profile()
+			if decodeErr != nil {
+				return decodeErr
+			}
+			if stored.Provider.Type == legacyTraceProvider && profile.Provider.Type != legacyTraceProvider {
+				if stored.Provider.Connection != "" {
+					profile.Provider.Connection = stored.Provider.Connection
+				}
+				update = true
+			}
+		} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("inspect imported profile %q: %w", profile.Name, err)
+		}
+		if err := target.save(ctx, profile, update); err != nil {
 			return fmt.Errorf("import YAML profile %q: %w", profile.Name, err)
 		}
 	}

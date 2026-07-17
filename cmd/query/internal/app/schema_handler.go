@@ -77,11 +77,11 @@ func (h *schemaHandler) resolve(path string) (schema.Schema, bool, error) {
 		if name == "" || strings.Contains(name, "/") {
 			return nil, false, nil
 		}
-		p, err := h.store.Get(context.Background(), name)
+		resolved, err := profiles.Resolve(context.Background(), h.store, name)
 		if err != nil {
 			return nil, true, err
 		}
-		return schema.ProfileInstance(p), true, nil
+		return schema.ProfileInstance(resolved.Profile), true, nil
 	default:
 		return nil, false, nil
 	}

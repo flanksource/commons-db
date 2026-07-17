@@ -31,6 +31,10 @@ type ProviderRequest struct {
 	// Options carries provider-specific knobs from ProviderConfig.Options.
 	Options map[string]any
 
+	// Params contains the validated profile parameters. Providers use this for
+	// native query builders that cannot be expressed as a query template.
+	Params map[string]any
+
 	// MaxRows is an execution hint for bounded callers such as an interactive
 	// page. Streaming providers may use it to avoid opening a backend cursor
 	// when one finite request can satisfy the caller. Zero means unbounded.
