@@ -58,6 +58,7 @@ const (
 	ConnectionTypeNtfy           = "ntfy"
 	ConnectionTypeOllama         = "ollama"
 	ConnectionTypeOpenAI         = "openai"
+	ConnectionTypeOpenTelemetry  = "opentelemetry"
 	ConnectionTypeOpenSearch     = "opensearch"
 	ConnectionTypeOpsGenie       = "opsgenie"
 	ConnectionTypePostgres       = "postgres"

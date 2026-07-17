@@ -35,6 +35,12 @@ type HTTPProvider struct{ httpConnection }
 // OpenSearchProvider extends the HTTP form for an OpenSearch endpoint.
 type OpenSearchProvider struct{ httpConnection }
 
+// OpenTelemetryProvider delegates trace storage to a nested OpenSearch
+// connection while retaining its own first-class connection identity.
+type OpenTelemetryProvider struct {
+	Connection string `json:"connection" clicky:"property=connection,title=OpenSearch Connection,required,order=2"`
+}
+
 // PrometheusProvider extends the HTTP form for a Prometheus endpoint.
 type PrometheusProvider struct{ httpConnection }
 
@@ -115,21 +121,22 @@ type GitProvider struct {
 // (HTTP-family, SQL, cert/cloud). Kept in sync with allConnectionTypes by the
 // drift-guard test.
 var tailoredProviders = map[string]any{
-	models.ConnectionTypeHTTP:       HTTPProvider{},
-	models.ConnectionTypeOpenSearch: OpenSearchProvider{},
-	models.ConnectionTypePrometheus: PrometheusProvider{},
-	models.ConnectionTypeLoki:       LokiProvider{},
-	models.ConnectionTypeJaeger:     JaegerProvider{},
-	models.ConnectionTypePostgres:   PostgresProvider{},
-	models.ConnectionTypeMySQL:      MySQLProvider{},
-	models.ConnectionTypeSQLServer:  SQLServerProvider{},
-	models.ConnectionTypeClickHouse: ClickHouseProvider{},
-	models.ConnectionTypeRedis:      RedisProvider{},
-	models.ConnectionTypeKubernetes: KubernetesProvider{},
-	models.ConnectionTypeGCP:        GCPProvider{},
-	models.ConnectionTypeGCS:        GCSProvider{},
-	models.ConnectionTypeGCPKMS:     GCPKMSProvider{},
-	models.ConnectionTypeGit:        GitProvider{},
+	models.ConnectionTypeHTTP:          HTTPProvider{},
+	models.ConnectionTypeOpenSearch:    OpenSearchProvider{},
+	models.ConnectionTypeOpenTelemetry: OpenTelemetryProvider{},
+	models.ConnectionTypePrometheus:    PrometheusProvider{},
+	models.ConnectionTypeLoki:          LokiProvider{},
+	models.ConnectionTypeJaeger:        JaegerProvider{},
+	models.ConnectionTypePostgres:      PostgresProvider{},
+	models.ConnectionTypeMySQL:         MySQLProvider{},
+	models.ConnectionTypeSQLServer:     SQLServerProvider{},
+	models.ConnectionTypeClickHouse:    ClickHouseProvider{},
+	models.ConnectionTypeRedis:         RedisProvider{},
+	models.ConnectionTypeKubernetes:    KubernetesProvider{},
+	models.ConnectionTypeGCP:           GCPProvider{},
+	models.ConnectionTypeGCS:           GCSProvider{},
+	models.ConnectionTypeGCPKMS:        GCPKMSProvider{},
+	models.ConnectionTypeGit:           GitProvider{},
 }
 
 // TailoredProviderTypes returns the set of connection types that get a tailored
