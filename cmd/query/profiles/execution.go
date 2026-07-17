@@ -3,6 +3,7 @@ package profiles
 import (
 	"bytes"
 	stdcontext "context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -12,6 +13,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/formatters"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -36,6 +38,12 @@ func newExecHandler(prefix string, ctx dbcontext.Context, store Store, next http
 }
 
 func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodPut {
+		if name, ok := h.connectionProfileName(r.URL.Path); ok {
+			h.mapConnection(w, r, name)
+			return
+		}
+	}
 	if r.Method == http.MethodGet && !wantsSchema(r) {
 		if name, ok := h.profileName(r.URL.Path); ok {
 			h.execute(w, r, name)
@@ -43,6 +51,15 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	h.next.ServeHTTP(w, r)
+}
+
+func (h *execHandler) connectionProfileName(path string) (string, bool) {
+	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(path, "/"), h.prefix), "/")
+	parts := strings.Split(rel, "/")
+	if len(parts) != 3 || parts[0] != "profile" || parts[1] == "" || parts[2] != "connection" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 // profileName returns the {name} segment of {prefix}/profile/{name}, or false.
@@ -68,11 +85,16 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		case <-base.Done():
 		}
 	}()
-	execCtx := dbcontext.NewContext(base)
+	execCtx := h.ctx.Wrap(base)
 
-	p, err := h.store.Get(r.Context(), name)
+	resolved, err := Resolve(r.Context(), h.store, name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	p := resolved.Profile
+	if p.Provider.Type == "opentelemetry" && p.Provider.Connection == "" {
+		h.writeConnectionRequired(w, name, resolved.ConnectionProfile)
 		return
 	}
 
@@ -142,6 +164,66 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		// backend cursor errors therefore terminate the response at that point.
 		execCtx.Warnf("profile %q export failed after streaming began: %v", p.Name, err)
 	}
+}
+
+type connectionMappingRequest struct {
+	Connection string `json:"connection"`
+}
+
+func (h *execHandler) mapConnection(w http.ResponseWriter, r *http.Request, name string) {
+	resolved, err := Resolve(r.Context(), h.store, name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	var request connectionMappingRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, fmt.Sprintf("decode connection mapping: %v", err), http.StatusBadRequest)
+		return
+	}
+	request.Connection = strings.TrimSpace(request.Connection)
+	if request.Connection == "" {
+		http.Error(w, "connection is required", http.StatusBadRequest)
+		return
+	}
+	selected, err := dbcontext.FindConnectionByURL(h.ctx, request.Connection)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if selected == nil {
+		http.Error(w, fmt.Sprintf("connection %q not found", request.Connection), http.StatusBadRequest)
+		return
+	}
+	if selected.Type != models.ConnectionTypeOpenTelemetry {
+		http.Error(w, fmt.Sprintf("connection %q has type %q, expected %q", selected.Name, selected.Type, models.ConnectionTypeOpenTelemetry), http.StatusBadRequest)
+		return
+	}
+	owner, err := h.store.Get(r.Context(), resolved.ConnectionProfile)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	owner.Provider.Connection = request.Connection
+	if err := h.store.Save(r.Context(), owner); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"profile": name, "mappingProfile": resolved.ConnectionProfile, "connection": request.Connection,
+	})
+}
+
+func (h *execHandler) writeConnectionRequired(w http.ResponseWriter, profile, mappingProfile string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusConflict)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"code": "profile_connection_required", "profile": profile,
+		"mappingProfile": mappingProfile, "connectionType": models.ConnectionTypeOpenTelemetry,
+		"mappingUrl": h.prefix + "/profile/" + profile + "/connection",
+	})
 }
 
 type exportRequest struct {

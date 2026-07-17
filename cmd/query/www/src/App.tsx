@@ -18,6 +18,10 @@ import { getMonacoWorker } from "./monacoWorkers";
 import { ChatWidget } from "./chatWidget";
 import { profileBuilderFormExtensions } from "./profileBuilder";
 import { BuildProfileButton } from "./buildProfileAction";
+import {
+  configureProfileConnectionForm,
+  useProfileConnectionMapping,
+} from "./profileConnectionMapping";
 
 // Compose the form extensions: the namespace picker, plus the secret/workload
 // url selector (which reads the selected namespace from the form's root value).
@@ -28,6 +32,11 @@ const formExtensions = {
     ...profileBuilderFormExtensions.post,
   ],
 };
+
+configureProfileConnectionForm({
+  formPost: formExtensions.post,
+  footerActions: connectionFormActions,
+});
 
 // The Go server (query serve) exposes:
 //   - the OpenAPI spec + executor under /api (entity discovery, list/get),
@@ -40,7 +49,7 @@ const formExtensions = {
 // The EntityExplorerApp drives list/detail/filter UI from the OpenAPI spec. The
 // schema-by-convention endpoints power the create/edit forms and the per-profile
 // FilterBar; see cmd/query/README.md for the contract.
-const client = createOperationsApiClient({
+const baseClient = createOperationsApiClient({
   baseUrl: "",
   openApiPath: "/api/openapi.json",
 });
@@ -53,6 +62,7 @@ const queryClient = new QueryClient();
 // Explorer reads the logs-surface set (needs the QueryClient context) and wires
 // the result renderer so `render: logs` profiles present via clicky-ui LogsTable.
 function Explorer() {
+	const { client, dialog } = useProfileConnectionMapping(baseClient);
   const logsEntityNames = useLogsEntityNames();
   const renderLogsResult = logsResultRenderer(logsEntityNames);
   const renderResult = (context: ResultRenderContext) => {
@@ -68,8 +78,9 @@ function Explorer() {
     );
   };
   return (
-    <EntityExplorerApp
-      client={client}
+    <>
+      <EntityExplorerApp
+        client={client}
       formExtensions={formExtensions}
       formActions={connectionFormActions}
       surfaceActionLabels={{
@@ -90,8 +101,11 @@ function Explorer() {
           ),
         )
       }
-      entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
-    />
+        entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
+      />
+      <ChatWidget client={client} />
+      {dialog}
+    </>
   );
 }
 
@@ -105,7 +119,6 @@ export function App() {
             <ChatWindowManagerProvider storageId="query-chat">
               <div className="min-h-0 overflow-hidden" style={{ height: "100dvh" }}>
                 <Explorer />
-                <ChatWidget client={client} />
               </div>
             </ChatWindowManagerProvider>
           </RouterProvider>

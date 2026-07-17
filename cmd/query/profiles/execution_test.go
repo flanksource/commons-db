@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
@@ -11,7 +12,11 @@ import (
 	"testing"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/google/uuid"
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
 )
 
 type nextMarker struct{ hit bool }
@@ -120,6 +125,83 @@ func TestExecHandlerMissingProfile(t *testing.T) {
 	rec := get(h, "/api/v1/profile/nope", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestExecHandlerRequestsOpenTelemetryMappingForImportRoot(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []query.Profile{
+		{Name: "jaeger", Provider: query.ProviderConfig{Type: "opentelemetry"}},
+		{Name: "jms", Imports: []string{"jaeger"}, Provider: query.ProviderConfig{Type: "opentelemetry"}},
+	} {
+		if err := store.Save(context.Background(), profile); err != nil {
+			t.Fatal(err)
+		}
+	}
+	handler := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+	response := get(handler, "/api/v1/profile/jms", "")
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["code"] != "profile_connection_required" || body["mappingProfile"] != "jaeger" || body["connectionType"] != "opentelemetry" {
+		t.Fatalf("unexpected mapping response: %#v", body)
+	}
+}
+
+func TestExecHandlerPersistsOpenTelemetryMappingOnImportRoot(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, profile := range []query.Profile{
+		{Name: "jaeger", Provider: query.ProviderConfig{Type: "opentelemetry"}},
+		{Name: "jms", Imports: []string{"jaeger"}, Provider: query.ProviderConfig{Type: "opentelemetry"}},
+	} {
+		if err := store.Save(context.Background(), profile); err != nil {
+			t.Fatal(err)
+		}
+	}
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Exec(`CREATE TABLE connections (
+id TEXT PRIMARY KEY, name TEXT, namespace TEXT, source TEXT, type TEXT,
+url TEXT, username TEXT, password TEXT, properties TEXT, certificate TEXT,
+insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
+)`).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Create(&models.Connection{ID: uuid.New(), Name: "traces", Type: models.ConnectionTypeOpenTelemetry}).Error; err != nil {
+		t.Fatal(err)
+	}
+	handler := newExecHandler("/api/v1", dbcontext.New().WithDB(database, nil), store, &nextMarker{})
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/profile/jms/connection", bytes.NewBufferString(`{"connection":"connection://traces"}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	jaeger, err := store.Get(context.Background(), "jaeger")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jaeger.Provider.Connection != "connection://traces" {
+		t.Fatalf("mapping persisted to %q", jaeger.Provider.Connection)
+	}
+	jms, err := store.Get(context.Background(), "jms")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if jms.Provider.Connection != "" {
+		t.Fatalf("child profile was modified: %+v", jms.Provider)
 	}
 }
 
