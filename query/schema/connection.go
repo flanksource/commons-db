@@ -109,7 +109,7 @@ func SchemaRefs(dir string, components map[string]Schema) map[string]Schema {
 }
 
 func appendUnique(base []string, values ...string) []string {
-	seen := make(map[string]bool, len(base)+len(values))
+	seen := make(map[string]bool)
 	for _, value := range base {
 		seen[value] = true
 	}

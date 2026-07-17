@@ -50,6 +50,32 @@ func TestOpReadRejectsNonSecretReferences(t *testing.T) {
 	}
 }
 
+func TestValidateOnePasswordReference(t *testing.T) {
+	for _, ref := range []string{
+		"op://prod/postgres/password",
+		"op://Private/API%20Key/credential?attribute=otp",
+		"op://vault/item/section/field",
+		"op://vault/item/field/extra/path",
+	} {
+		if err := validateOnePasswordReference(ref); err != nil {
+			t.Errorf("valid reference %q rejected: %v", ref, err)
+		}
+	}
+	for _, ref := range []string{
+		"--help",
+		"https://example.com/secret",
+		"op://vault/item",
+		"op://vault/item//field",
+		"op://vault/item/field/",
+		"op://vault/item/field#fragment",
+		"op://vault/item/field\n--format=json",
+	} {
+		if err := validateOnePasswordReference(ref); err == nil {
+			t.Errorf("invalid reference %q accepted", ref)
+		}
+	}
+}
+
 func TestOnePasswordTokenPrefersProperty(t *testing.T) {
 	t.Setenv("OP_SERVICE_ACCOUNT_TOKEN", "env-token")
 
