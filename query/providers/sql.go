@@ -111,6 +111,9 @@ func (p sqlProvider) OpenRows(ctx context.Context, req query.ProviderRequest) (q
 		return nil, fmt.Errorf("failed to create sql client: %w", err)
 	}
 
+	// Query is the complete provider statement supplied by its caller; it is not
+	// concatenated with SQL syntax or other request values.
+	// codeql[go/sql-injection]
 	rows, err := client.QueryContext(ctx, req.Query)
 	if err != nil {
 		client.Close()

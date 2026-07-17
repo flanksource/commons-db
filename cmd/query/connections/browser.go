@@ -242,6 +242,9 @@ func (h *connectionBrowserHandler) executeSQL(r *http.Request, conn *models.Conn
 	defer client.Close()
 
 	if !sqlReturnsRows(statement) {
+		// The connection browser intentionally accepts a complete operator-authored
+		// statement; no request value is interpolated into another SQL command.
+		// codeql[go/sql-injection]
 		res, err := client.ExecContext(r.Context(), statement)
 		if err != nil {
 			return browserQueryResult{}, err
@@ -253,6 +256,9 @@ func (h *connectionBrowserHandler) executeSQL(r *http.Request, conn *models.Conn
 		return browserQueryResult{AffectedRows: &affected, Message: "Statement executed successfully"}, nil
 	}
 
+	// The connection browser intentionally accepts a complete operator-authored
+	// statement; no request value is interpolated into another SQL query.
+	// codeql[go/sql-injection]
 	rows, err := client.QueryContext(r.Context(), statement)
 	if err != nil {
 		return browserQueryResult{}, err
