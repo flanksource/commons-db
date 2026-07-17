@@ -191,7 +191,11 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 	}
 	for _, p := range profiles {
 		name := p.Name
-		schemaJSON, err := profileEntitySchema(p)
+		resolved, err := Resolve(ctx, store, name)
+		if err != nil {
+			return err
+		}
+		schemaJSON, err := profileEntitySchema(resolved.Profile)
 		if err != nil {
 			return fmt.Errorf("build entity schema for profile %q: %w", name, err)
 		}
@@ -204,14 +208,14 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 				if err != nil {
 					return nil, err
 				}
-				live, err := store.Get(context.Background(), name)
+				live, err := Resolve(context.Background(), store, name)
 				if err != nil {
 					return nil, err
 				}
 				// The base profile flow needs no database; only postgres/sqlite
 				// processors do. The context provider supplies the DB-backed
 				// context under `serve` and a DB-less one on the CLI.
-				res, err := query.Execute(s.context(), live, toParams(opts))
+				res, err := query.Execute(s.context(), live.Profile, toParams(opts))
 				if err != nil {
 					return nil, err
 				}

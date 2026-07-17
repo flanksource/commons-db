@@ -115,11 +115,12 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name string) {
-	p, err := h.store.Get(r.Context(), name)
+	resolved, err := profiles.Resolve(r.Context(), h.store, name)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	p := resolved.Profile
 	if p, err = applySessionSpecOverrides(p, r.URL.Query().Get("interval"), r.URL.Query().Get("duration")); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -322,7 +323,7 @@ func (h *sessionHandler) result(w http.ResponseWriter, r *http.Request, id strin
 		if !ok {
 			return
 		}
-		p, err := h.store.Get(r.Context(), info.Profile)
+		resolved, err := profiles.Resolve(r.Context(), h.store, info.Profile)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("session %q: %v", id, err), http.StatusNotFound)
 			return
@@ -332,7 +333,7 @@ func (h *sessionHandler) result(w http.ResponseWriter, r *http.Request, id strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		if result, err = query.MaterializeEvents(h.ctx, p, events); err != nil {
+		if result, err = query.MaterializeEvents(h.ctx, resolved.Profile, events); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

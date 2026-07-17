@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -54,10 +55,11 @@ func (r *Runner) RunTrace(ctx context.Context, name string, options TraceOptions
 	if err != nil {
 		return err
 	}
-	p, err := store.Get(ctx, name)
+	resolved, err := profiles.Resolve(ctx, store, name)
 	if err != nil {
 		return err
 	}
+	p := resolved.Profile
 	if p.Kind() != query.KindTrace {
 		return fmt.Errorf("profile %q is not a trace; use `query top` to sample it", p.Name)
 	}

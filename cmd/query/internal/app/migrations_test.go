@@ -36,7 +36,7 @@ func TestMigrateSchemaAndProfileStore(t *testing.T) {
 	require.NoError(t, migrateSchema(t.Context(), dsn))
 	require.NoError(t, migrateSchema(t.Context(), dsn), "migration must be idempotent")
 
-	for _, table := range []string{"connections", "profiles", "migration_api_unmanaged"} {
+	for _, table := range []string{"connections", "profiles", "properties", "migration_api_unmanaged"} {
 		var exists bool
 		require.NoError(t, gdb.Raw(`SELECT EXISTS (
 			SELECT 1 FROM information_schema.tables
@@ -47,6 +47,10 @@ func TestMigrateSchemaAndProfileStore(t *testing.T) {
 	var existing models.Connection
 	require.NoError(t, gdb.Where("name = ?", "existing").First(&existing).Error)
 	require.Equal(t, models.ConnectionTypePostgres, existing.Type)
+	require.NoError(t, gdb.Create(&models.AppProperty{Name: "query.page-size", Value: "100"}).Error)
+	var property models.AppProperty
+	require.NoError(t, gdb.First(&property, "name = ?", "query.page-size").Error)
+	require.Equal(t, "100", property.Value)
 
 	dir := t.TempDir()
 	files, err := profiles.NewFileStore(dir)
