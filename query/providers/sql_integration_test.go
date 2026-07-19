@@ -1,41 +1,21 @@
 package providers_test
 
 import (
-	"os"
-
 	context "github.com/flanksource/commons-db/context"
-	"github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-// The SQL provider is exercised against a real engine via embedded postgres.
-// Gated behind COMMONS_DB_EMBEDDED_TEST=1 (matches db/embedded_test.go) because
-// it downloads a postgres tarball on first run.
-var _ = Describe("sql provider (embedded postgres)", Ordered, func() {
-	var (
-		dsn  string
-		stop func() error
-	)
+// The SQL provider is exercised against a real engine: COMMONS_DB_URL when one
+// is configured, otherwise embedded postgres under COMMONS_DB_EMBEDDED_TEST=1,
+// which downloads a postgres tarball on first run.
+var _ = Describe("sql provider (postgres)", Ordered, func() {
+	var dsn string
 
 	BeforeAll(func() {
-		if os.Getenv("COMMONS_DB_EMBEDDED_TEST") == "" {
-			Skip("set COMMONS_DB_EMBEDDED_TEST=1 to run embedded-postgres integration tests")
-		}
-
-		var err error
-		dsn, stop, err = db.StartEmbedded(db.EmbeddedConfig{
-			DataDir:  GinkgoT().TempDir(),
-			Database: "test",
-		})
-		Expect(err).ToNot(HaveOccurred())
-	})
-
-	AfterAll(func() {
-		if stop != nil {
-			_ = stop()
-		}
+		dsn = dbtest.ForGinkgo(dbtest.Options{Name: "sql_provider"}).DSN()
 	})
 
 	It("executes SQL via an inline postgres URL and returns typed rows", func() {
