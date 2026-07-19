@@ -55,6 +55,39 @@ go mod download
 go install github.com/onsi/ginkgo/v2/ginkgo@latest
 ```
 
+## Database Configuration
+
+Every DB-touching test in this repository — the e2e suite and the integration
+tests under `migrate/`, `query/`, and `cmd/query/` — resolves its database
+through the `dbtest` package, driven by three environment variables:
+
+| Variable | Effect |
+|---|---|
+| `COMMONS_DB_URL` | Connect to this PostgreSQL server instead of embedding one. Points at a **maintenance** database (conventionally `postgres`). |
+| `COMMONS_DB_CREATE` | `false` uses `COMMONS_DB_URL` as-is. Anything else, **including unset**, carves out a fresh database per test and drops it afterwards. |
+| `COMMONS_DB_EMBEDDED_TEST` | `1` permits starting an embedded server. Only consulted when `COMMONS_DB_URL` is unset. |
+
+If neither `COMMONS_DB_URL` nor `COMMONS_DB_EMBEDDED_TEST` is set, DB tests
+**skip**. This is why `go test ./...` alone reports no DB coverage.
+
+```bash
+# External server — preferred. Embedded postgres needs a SysV shared-memory
+# segment, which a busy machine (or a sandbox) can fail to provide.
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres --name commonsdb-test postgres:16
+export COMMONS_DB_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable'
+
+# Embedded fallback — downloads a ~50MB postgres tarball on first run.
+export COMMONS_DB_EMBEDDED_TEST=1
+```
+
+`COMMONS_DB_CREATE=false` makes every test share one database, so it is only
+valid when running a single suite. Suites that need a fresh or un-migrated
+database (`cmd/query/internal/app`, `migrate`) will conflict under it.
+
+Cluster-global objects are not isolated by a per-test database. Tests that
+`CREATE ROLE` suffix the role name with `dbtest.DB.Unique()` so concurrent runs
+against one server do not collide.
+
 ## Running Tests
 
 ### Quick Start - Run All E2E Tests
@@ -65,6 +98,9 @@ go test -v ./e2e -timeout=10m
 
 # Using Ginkgo CLI (recommended, with better output)
 ginkgo -v ./e2e --timeout=10m
+
+# All tests including DB integration tests
+task test:integration
 ```
 
 ### Run Specific Test Suites
@@ -116,6 +152,7 @@ ginkgo -v ./e2e --timeout=10m --poll-progress-after=1m
 ```
 e2e/
 ├── e2e_suite_test.go       # Main suite setup and teardown
+├── postgres_test.go        # Database round-trip smoke tests
 ├── logs_test.go            # Log backend tests
 ├── connections_test.go     # Connection tests
 ├── secrets_test.go         # Secret management tests

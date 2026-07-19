@@ -1,12 +1,10 @@
 package sessions
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/stretchr/testify/require"
 	"gorm.io/gorm"
@@ -14,19 +12,7 @@ import (
 
 func startSessionStoreDB(t *testing.T) *gorm.DB {
 	t.Helper()
-	if os.Getenv("COMMONS_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set COMMONS_DB_EMBEDDED_TEST=1 to run embedded-postgres integration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "query_sessions",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
-
-	gdb, pool, err := commonsdb.SetupDB(dsn, "query-sessions-test")
-	require.NoError(t, err)
-	t.Cleanup(pool.Close)
+	gdb := dbtest.ForT(t, dbtest.Options{Name: "query_sessions", LogName: "query-sessions-test"}).Gorm()
 	require.NoError(t, gdb.WithContext(t.Context()).AutoMigrate(&sessionRecord{}, &sessionEventRecord{}))
 	return gdb
 }
