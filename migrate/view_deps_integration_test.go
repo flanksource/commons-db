@@ -2,13 +2,10 @@ package migrate
 
 import (
 	"database/sql"
-	"os"
-	"path/filepath"
 	"testing"
 	"testing/fstest"
 
-	commonsdb "github.com/flanksource/commons-db/db"
-	_ "github.com/lib/pq"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -31,21 +28,12 @@ table "t" {
 `
 }
 
+// startViewDepsDB gives one test its own database, so the unqualified
+// schema_migration_* metadata tables cannot collide between tests.
 func startViewDepsDB(t *testing.T) (string, *sql.DB) {
 	t.Helper()
-	if os.Getenv("COMMONS_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set COMMONS_DB_EMBEDDED_TEST=1 to run embedded-postgres integration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "view_deps_runner",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
-	db, err := sql.Open("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	return dsn, db
+	handle := dbtest.ForT(t, dbtest.Options{Name: "view_deps_runner"})
+	return handle.DSN(), handle.SQL()
 }
 
 func viewExists(t *testing.T, db *sql.DB, name string) bool {
@@ -88,9 +76,10 @@ func TestApplyInvalidatesDependentViews(t *testing.T) {
 	assert.Equal(t, 1, recorded, "invalidated view script should be re-recorded after rerun")
 }
 
-// TestApplyRejectsUnmanagedDependentView proves the fail-loud guard: when an un-owned view
-// depends on a column being altered, apply aborts naming it and leaves every view intact.
-func TestApplyRejectsUnmanagedDependentView(t *testing.T) {
+// TestApplyRestoresUnmanagedDependentView proves that a view no migration owns does not
+// block a schema change and is not lost to it: apply captures its definition, drops it,
+// applies the change, and recreates it from the capture.
+func TestApplyRestoresUnmanagedDependentView(t *testing.T) {
 	dsn, db := startViewDepsDB(t)
 	ctx := t.Context()
 
@@ -104,10 +93,43 @@ func TestApplyRejectsUnmanagedDependentView(t *testing.T) {
 	require.NoError(t, err)
 
 	fs["migrations/schema.hcl"] = &fstest.MapFile{Data: []byte(viewDepsTableHCL("text"))}
+	require.NoError(t, Apply(ctx, dsn, fs, WithDir("migrations"), WithName("views")))
+
+	var dataType string
+	require.NoError(t, db.QueryRow(
+		`SELECT data_type FROM information_schema.columns WHERE table_name='t' AND column_name='c'`).Scan(&dataType))
+	assert.Equal(t, "text", dataType)
+	assert.True(t, viewExists(t, db, "v"), "managed view should be recreated by the post phase")
+	assert.True(t, viewExists(t, db, "ext"), "unmanaged view should be restored from its capture")
+}
+
+// TestApplyReportsUnrestorableView proves the loud-failure path: when the schema change makes
+// an unmanaged view impossible to recreate, apply fails naming the view and printing its DDL.
+func TestApplyReportsUnrestorableView(t *testing.T) {
+	dsn, db := startViewDepsDB(t)
+	ctx := t.Context()
+
+	fs := fstest.MapFS{
+		"migrations/schema.hcl": {Data: []byte(viewDepsTableHCL("bigint"))},
+	}
+	require.NoError(t, Apply(ctx, dsn, fs, WithDir("migrations"), WithName("views")))
+
+	// ext reads column c, which the next apply drops entirely.
+	_, err := db.ExecContext(ctx, "CREATE VIEW public.ext AS SELECT c FROM public.t")
+	require.NoError(t, err)
+
+	fs["migrations/schema.hcl"] = &fstest.MapFile{Data: []byte(`
+schema "public" {}
+table "t" {
+  schema = schema.public
+  column "id" {
+    null = false
+    type = text
+  }
+}
+`)}
 	err = Apply(ctx, dsn, fs, WithDir("migrations"), WithName("views"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "public.ext")
-
-	assert.True(t, viewExists(t, db, "v"), "managed view must not be dropped when the guard aborts")
-	assert.True(t, viewExists(t, db, "ext"), "unmanaged view must be left untouched")
+	assert.Contains(t, err.Error(), "CREATE VIEW", "error must carry replayable DDL")
 }
