@@ -32,6 +32,16 @@ tasks:
     cmds:
       - go test -v ./...
 
+  test:integration:
+    desc: Run tests including DB integration tests (needs COMMONS_DB_URL, or set COMMONS_DB_EMBEDDED_TEST=1)
+    cmds:
+      - |
+        if [ -z "$COMMONS_DB_URL" ] && [ -z "$COMMONS_DB_EMBEDDED_TEST" ]; then
+          echo "set COMMONS_DB_URL to an external postgres, or COMMONS_DB_EMBEDDED_TEST=1 to embed one" >&2
+          exit 1
+        fi
+      - go test ./... -timeout 15m
+
   tidy:
     desc: Tidy go modules
     cmds:
