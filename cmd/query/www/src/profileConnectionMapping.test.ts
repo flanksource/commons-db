@@ -4,6 +4,7 @@ import {
   findConnectionCreateOperation,
   isProfileConnectionRequired,
   profileConnectionOptions,
+  rejectPendingMapping,
 } from "./profileConnectionMapping";
 
 describe("profile connection mapping", () => {
@@ -33,5 +34,12 @@ describe("profile connection mapping", () => {
     expect(profileConnectionOptions({ options: { "connection://traces": {} } })).toEqual([
       { value: "connection://traces", label: "traces" },
     ]);
+  });
+
+  it("rejects an existing mapping request before replacing it", () => {
+    const error = new Error("mapping conflict");
+    let rejectedWith: unknown;
+    rejectPendingMapping({ error, reject: (value) => { rejectedWith = value; } });
+    expect(rejectedWith).toBe(error);
   });
 });

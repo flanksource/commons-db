@@ -75,4 +75,32 @@ var _ = Describe("Resolve", func() {
 		_, err := Resolve(context.Background(), store, "a")
 		Expect(err).To(MatchError(ContainSubstring("a -> b -> a")))
 	})
+
+	It("keeps the first connection owner when a later import has no connection", func() {
+		store := resolverStore{
+			"owner":   {Name: "owner", Provider: query.ProviderConfig{Type: "opentelemetry", Connection: "connection://traces"}},
+			"overlay": {Name: "overlay", Provider: query.ProviderConfig{Type: "opentelemetry"}},
+			"profile": {Name: "profile", Imports: []string{"owner", "overlay"}},
+		}
+
+		resolved, err := Resolve(context.Background(), store, "profile")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(resolved.ConnectionProfile).To(Equal("owner"))
+	})
+
+	It("clears the inherited session kind when an overlay selects the other kind", func() {
+		merged := mergeProfile(
+			query.Profile{Trace: &query.TraceSpec{}},
+			query.Profile{Top: &query.TopSpec{}},
+		)
+		Expect(merged.Trace).To(BeNil())
+		Expect(merged.Top).ToNot(BeNil())
+
+		merged = mergeProfile(
+			query.Profile{Top: &query.TopSpec{}},
+			query.Profile{Trace: &query.TraceSpec{}},
+		)
+		Expect(merged.Top).To(BeNil())
+		Expect(merged.Trace).ToNot(BeNil())
+	})
 })

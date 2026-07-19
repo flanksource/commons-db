@@ -92,7 +92,14 @@ func (openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequ
 	}
 	rows := make([]query.Row, 0, len(result.Hits.Hits))
 	for _, hit := range result.Hits.Hits {
-		rows = append(rows, openTelemetryRow(hit.Source, options))
+		document := make(map[string]any, len(hit.Fields)+len(hit.Source))
+		for name, value := range hit.Fields {
+			document[name] = unwrapTraceValue(value)
+		}
+		for name, value := range hit.Source {
+			document[name] = value
+		}
+		rows = append(rows, openTelemetryRow(document, options))
 	}
 	return rows, nil
 }

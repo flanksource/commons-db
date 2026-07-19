@@ -89,6 +89,7 @@ type SearchHit struct {
 	Score  float64        `json:"_score"`
 	Sort   []any          `json:"sort"`
 	Source map[string]any `json:"_source"`
+	Fields map[string]any `json:"fields,omitempty"`
 }
 
 type SearchResults struct {

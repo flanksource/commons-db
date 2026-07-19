@@ -155,6 +155,29 @@ func TestExecHandlerRequestsOpenTelemetryMappingForImportRoot(t *testing.T) {
 	}
 }
 
+func TestExecHandlerRejectsMappingForNonOpenTelemetryProfile(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name:     "sql",
+		Provider: query.ProviderConfig{Type: "postgres"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	handler := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+	request := httptest.NewRequest(http.MethodPut, "/api/v1/profile/sql/connection", bytes.NewBufferString(`{"connection":"connection://traces"}`))
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `expected "opentelemetry"`) {
+		t.Fatalf("unexpected response: %s", response.Body.String())
+	}
+}
+
 func TestExecHandlerPersistsOpenTelemetryMappingOnImportRoot(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
 	if err != nil {

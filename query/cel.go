@@ -14,7 +14,11 @@ var celIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) error {
 	for index, row := range rows {
-		aliasRoots := map[string]bool{}
+		projected := make([]struct {
+			name  string
+			value any
+		}, 0, len(profile.Aliases))
+		ignoredNames := make(map[string]struct{}, len(profile.Ignore))
 		for _, alias := range profile.Aliases {
 			if alias.Name == "" || alias.CEL == "" {
 				return fmt.Errorf("row %d: alias name and cel are required", index)
@@ -24,16 +28,21 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) error 
 				return fmt.Errorf("row %d: alias %q: %w", index, alias.Name, err)
 			}
 			setRowPath(row, alias.Name, value)
-			if strings.Contains(alias.Name, ".") {
-				aliasRoots[strings.Split(alias.Name, ".")[0]] = true
-			}
+			projected = append(projected, struct {
+				name  string
+				value any
+			}{name: alias.Name, value: value})
 		}
 		for _, ignored := range profile.Ignore {
-			if aliasRoots[ignored] {
-				continue
-			}
+			ignoredNames[ignored] = struct{}{}
 			delete(row, ignored)
 			deleteRowPath(row, ignored)
+		}
+		for _, alias := range projected {
+			if _, ignored := ignoredNames[alias.name]; ignored {
+				continue
+			}
+			setRowPath(row, alias.name, alias.value)
 		}
 		for _, column := range profile.Columns {
 			if column.CEL == "" {
@@ -60,7 +69,7 @@ func evalRowCEL(ctx context.Context, expression string, row Row) (any, error) {
 	}
 	environment := map[string]any{"row": row, "span": row}
 	for name, value := range row {
-		if celIdentifier.MatchString(name) {
+		if name != "row" && name != "span" && celIdentifier.MatchString(name) {
 			environment[name] = value
 		}
 	}

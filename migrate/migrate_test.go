@@ -30,7 +30,7 @@ func TestConnectionWithLockTimeout(t *testing.T) {
 		want       string
 	}{
 		{
-			name:       "url without query gains a bounded lock_timeout",
+			name:       "url with sslmode but no options gains a bounded lock_timeout",
 			connection: "postgres://user@localhost/app?sslmode=disable",
 			want:       "postgres://user@localhost/app?options=-c+lock_timeout%3D" + migrationLockTimeout + "&sslmode=disable",
 		},

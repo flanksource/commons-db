@@ -24,9 +24,9 @@ type SampleResult struct {
 	DurationMS    float64     `json:"durationMs"`
 }
 
-// Sample renders and executes a profile through its provider while deliberately
-// bypassing configured columns, context queries and processors. Only providers
-// whose request can be proven read-only are allowed.
+// Sample renders and executes a profile through its provider while bypassing
+// context queries and processors. Configured row transforms still shape the
+// preview, and only providers whose request can be proven read-only are allowed.
 func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*SampleResult, error) {
 	if err := p.ValidateKind(); err != nil {
 		return nil, err
@@ -72,6 +72,9 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	}
 	if rows == nil {
 		rows = []Row{}
+	}
+	if err := applyRowTransforms(ctx, p, rows); err != nil {
+		return nil, fmt.Errorf("profile %q: apply row transforms: %w", p.Name, err)
 	}
 	return &SampleResult{
 		Rows:          rows,

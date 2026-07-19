@@ -232,14 +232,12 @@ func validateNestedConnection(db *gorm.DB, candidate *models.Connection) error {
 	if err != nil {
 		return err
 	}
-	name := strings.TrimPrefix(openTelemetry.Connection, "connection://")
-	if strings.Contains(name, "/") {
-		parts := strings.Split(name, "/")
-		name = parts[len(parts)-1]
-	}
-	nested, err := findConnection(db, name)
+	nested, err := dbcontext.HydrateConnectionByURL(dbcontext.New().WithDB(db, nil), openTelemetry.Connection)
 	if err != nil {
 		return fmt.Errorf("resolve nested OpenSearch connection: %w", err)
+	}
+	if nested == nil {
+		return fmt.Errorf("nested OpenSearch connection %q not found", openTelemetry.Connection)
 	}
 	if nested.Type != models.ConnectionTypeOpenSearch {
 		return fmt.Errorf("nested connection %q has type %q, expected %q", nested.Name, nested.Type, models.ConnectionTypeOpenSearch)
