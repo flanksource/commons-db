@@ -36,8 +36,11 @@ func resolve(ctx context.Context, store Store, name string, path []string) (Reso
 		if err != nil {
 			return ResolvedProfile{}, fmt.Errorf("profile %q imports %q: %w", current.Name, importedName, err)
 		}
+		previousType := result.Profile.Provider.Type
+		previousConnection := result.Profile.Provider.Connection
 		result.Profile = mergeProfile(result.Profile, imported.Profile)
-		if imported.Profile.Provider.Type != "" {
+		if imported.Profile.Provider.Type != "" &&
+			(result.ConnectionProfile == "" || result.Profile.Provider.Type != previousType || result.Profile.Provider.Connection != previousConnection) {
 			result.ConnectionProfile = imported.ConnectionProfile
 		}
 	}
@@ -101,9 +104,11 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 		merged.Render = overlay.Render
 	}
 	if overlay.Trace != nil {
+		merged.Top = nil
 		merged.Trace = overlay.Trace
 	}
 	if overlay.Top != nil {
+		merged.Trace = nil
 		merged.Top = overlay.Top
 	}
 	return merged

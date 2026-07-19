@@ -64,6 +64,10 @@ export function profileConnectionOptions(filter: {
   }));
 }
 
+export function rejectPendingMapping(current: Pick<PendingMapping, "reject" | "error"> | null): void {
+  current?.reject(current.error);
+}
+
 export function useProfileConnectionMapping(base: SharedOperationsApiClient): {
   client: SharedOperationsApiClient;
   dialog: ReactNode;
@@ -73,7 +77,10 @@ export function useProfileConnectionMapping(base: SharedOperationsApiClient): {
   const waitForMapping = useCallback(
     (required: ProfileConnectionRequired, retry: () => Promise<ExecutionResponse>, error: unknown) =>
       new Promise<ExecutionResponse>((resolve, reject) => {
-        setPending({ required, retry, resolve, reject, error });
+        setPending((current) => {
+          rejectPendingMapping(current);
+          return { required, retry, resolve, reject, error };
+        });
       }),
     [],
   );
@@ -197,7 +204,9 @@ function ProfileConnectionMappingDialogs({
             <Button variant="ghost" disabled={saving} onClick={onClose}>
               Cancel
             </Button>
-            {options.length === 0 && !connections.isLoading ? (
+            {connections.isError ? (
+              <Button onClick={() => void connections.refetch()}>Retry</Button>
+            ) : options.length === 0 && !connections.isLoading ? (
               <Button disabled={!createAction} onClick={onCreate}>
                 Add OpenTelemetry Connection
               </Button>
@@ -211,6 +220,11 @@ function ProfileConnectionMappingDialogs({
       >
         {connections.isLoading ? (
           <div className="text-sm text-muted-foreground">Loading OpenTelemetry connections…</div>
+        ) : connections.isError ? (
+          <div className="text-sm text-red-600">
+            Unable to load OpenTelemetry connections:{" "}
+            {connections.error instanceof Error ? connections.error.message : String(connections.error)}
+          </div>
         ) : options.length > 0 ? (
           <Select
             value={selected}
