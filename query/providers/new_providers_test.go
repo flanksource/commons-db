@@ -27,7 +27,7 @@ var _ = Describe("opentelemetry provider", func() {
 			}
 			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_id":"one","_source":{"traceID":"trace-1","spanID":"span-1","operationName":"process message","startTimeMillis":1710000000000,"duration":123000,"process":{"serviceName":"prod-api"},"tags":[{"key":"otel@status_code","value":"ERROR"},{"key":"input@xml","value":"<request/>"}]}}]}}`)
+			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_id":"one","_source":{"traceID":"trace-1","spanID":"span-1","operationName":"process message","startTimeMillis":1710000000000,"duration":123000,"process":{"serviceName":"prod-api"},"tags":[{"key":"otel@status_code","value":"ERROR"},{"key":"input@xml","value":"<request/>"}]},"fields":{"custom_field":["from-fields"]}}]}}`)
 		}))
 		defer server.Close()
 
@@ -53,7 +53,7 @@ insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
 				Options: map[string]any{
 					"format": "jaeger", "index": "jaeger-span*", "dateField": "startTimeMillis",
 					"traceIdField": "traceID", "spanIdField": "spanID", "serviceField": "process.serviceName",
-					"operationField": "operationName", "statusFields": []string{"tag.otel@status_code"},
+					"operationField": "operationName", "statusFields": []string{"tag.otel@status_code"}, "selectFields": []string{"custom_field"},
 					"params": map[string]any{"namespace": map[string]any{"field": "process.serviceName", "operator": "term"}},
 				},
 			},
@@ -65,6 +65,7 @@ insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
 		Expect(result.Rows[0]).To(HaveKeyWithValue("service", "prod-api"))
 		Expect(result.Rows[0]).To(HaveKeyWithValue("input.xml", "<request/>"))
 		Expect(result.Rows[0]).To(HaveKeyWithValue("duration_ms", float64(123)))
+		Expect(result.Rows[0]).To(HaveKeyWithValue("custom_field", "from-fields"))
 
 		boolQuery := requestBody["query"].(map[string]any)["bool"].(map[string]any)
 		filter := boolQuery["filter"].([]any)

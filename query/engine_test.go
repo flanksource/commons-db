@@ -106,6 +106,7 @@ var _ = Describe("Execute", func() {
 		provider := &mockProvider{typ: "exec-row-pipeline", rows: []query.Row{{
 			"input.xml": "<Policy><Number>P-7</Number></Policy>",
 			"obsolete":  "remove-me",
+			"request":   map[string]any{"unrelated": "remove-me"},
 		}}}
 		query.RegisterProvider(provider)
 
@@ -118,7 +119,7 @@ var _ = Describe("Execute", func() {
 				{Name: "request.copy", CEL: `request.xml`},
 				{Name: "ignoredAlias", CEL: `request.copy`},
 			},
-			Ignore:  []string{"input.xml", "obsolete", "ignoredAlias"},
+			Ignore:  []string{"input.xml", "obsolete", "ignoredAlias", "request"},
 			Columns: []query.ColumnDef{{Name: "Copied", CEL: `request.copy`}},
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -129,6 +130,32 @@ var _ = Describe("Execute", func() {
 				"copy": "<Policy><Number>P-7</Number></Policy>",
 			},
 			"Copied": "<Policy><Number>P-7</Number></Policy>",
+		}}))
+	})
+
+	It("keeps row and span as reserved CEL bindings", func() {
+		provider := &mockProvider{typ: "exec-reserved-bindings", rows: []query.Row{{
+			"row":     "field value",
+			"span":    "field value",
+			"traceId": "trace-1",
+		}}}
+		query.RegisterProvider(provider)
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "reserved bindings",
+			Provider: query.ProviderConfig{Type: provider.typ},
+			Columns: []query.ColumnDef{
+				{Name: "from_row", CEL: `row.traceId`},
+				{Name: "from_span", CEL: `span.traceId`},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(Equal([]query.Row{{
+			"row":       "field value",
+			"span":      "field value",
+			"traceId":   "trace-1",
+			"from_row":  "trace-1",
+			"from_span": "trace-1",
 		}}))
 	})
 

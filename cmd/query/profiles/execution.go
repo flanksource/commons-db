@@ -176,6 +176,10 @@ func (h *execHandler) mapConnection(w http.ResponseWriter, r *http.Request, name
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	if resolved.Profile.Provider.Type != models.ConnectionTypeOpenTelemetry {
+		http.Error(w, fmt.Sprintf("profile %q has provider type %q, expected %q", name, resolved.Profile.Provider.Type, models.ConnectionTypeOpenTelemetry), http.StatusBadRequest)
+		return
+	}
 	var request connectionMappingRequest
 	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 		http.Error(w, fmt.Sprintf("decode connection mapping: %v", err), http.StatusBadRequest)

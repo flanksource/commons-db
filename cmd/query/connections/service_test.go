@@ -44,13 +44,17 @@ func TestConnectionFromBodyRequiresNameAndType(t *testing.T) {
 
 func TestValidateOpenTelemetryRequiresNestedOpenSearchConnection(t *testing.T) {
 	database := connectionInfoTestDB(t)
-	search := models.Connection{ID: uuid.New(), Name: "OS", Type: models.ConnectionTypeOpenSearch}
+	wrong := models.Connection{ID: uuid.New(), Name: "OS", Type: models.ConnectionTypeHTTP}
+	search := models.Connection{ID: uuid.New(), Name: "OS", Namespace: "team", Type: models.ConnectionTypeOpenSearch}
+	if err := database.Create(&wrong).Error; err != nil {
+		t.Fatal(err)
+	}
 	if err := database.Create(&search).Error; err != nil {
 		t.Fatal(err)
 	}
 	candidate := &models.Connection{
 		Name: "traces", Type: models.ConnectionTypeOpenTelemetry,
-		Properties: types.JSONStringMap{"connection": "connection://OS"},
+		Properties: types.JSONStringMap{"connection": "connection://team/OS"},
 	}
 	if err := validateNestedConnection(database, candidate); err != nil {
 		t.Fatal(err)
@@ -58,6 +62,10 @@ func TestValidateOpenTelemetryRequiresNestedOpenSearchConnection(t *testing.T) {
 	candidate.Properties["connection"] = "connection://traces"
 	if err := validateNestedConnection(database, candidate); err == nil {
 		t.Fatal("expected self-referencing OpenTelemetry connection to fail")
+	}
+	candidate.Properties["connection"] = "https://example.test/OS"
+	if err := validateNestedConnection(database, candidate); err == nil {
+		t.Fatal("expected an HTTP URL ending in the unrelated connection name to fail")
 	}
 }
 

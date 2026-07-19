@@ -13,6 +13,7 @@ import (
 
 func openTelemetryRow(document map[string]any, options openTelemetryOptions) query.Row {
 	attributes := flattenTraceDocument(document)
+	duration, durationField := firstTracePathWithName(document, "duration_ms", "duration", "durationNano", "duration_nano")
 	row := query.Row{
 		"timestamp":   normalizeTraceTimestamp(stringTraceValue(firstTracePath(document, options.DateField, "@timestamp", "timestamp", "startTimeMillis"))),
 		"trace_id":    stringTraceValue(firstTracePath(document, options.TraceIDField, "trace_id", "traceID")),
@@ -21,7 +22,7 @@ func openTelemetryRow(document map[string]any, options openTelemetryOptions) que
 		"service":     stringTraceValue(firstTracePath(document, options.ServiceField, "service_name", "process.serviceName")),
 		"operation":   stringTraceValue(firstTracePath(document, options.OperationField, "operation_name", "operationName")),
 		"status":      traceStatus(document, attributes, options),
-		"duration_ms": traceDurationMillis(firstTracePath(document, "duration_ms", "duration", "durationNano", "duration_nano"), options.Format),
+		"duration_ms": traceDurationMillis(duration, durationField, options.Format),
 		"_attributes": attributes,
 	}
 	row["id"] = row["span_id"]
@@ -118,12 +119,17 @@ func isJaegerTagList(prefix string, values []any) bool {
 }
 
 func firstTracePath(document map[string]any, paths ...string) any {
+	value, _ := firstTracePathWithName(document, paths...)
+	return value
+}
+
+func firstTracePathWithName(document map[string]any, paths ...string) (any, string) {
 	for _, path := range paths {
 		if value := lookupTracePath(document, path); value != nil {
-			return value
+			return value, path
 		}
 	}
-	return nil
+	return nil, ""
 }
 
 func lookupTracePath(document map[string]any, path string) any {
@@ -174,7 +180,7 @@ func stringTraceValue(value any) string {
 	}
 }
 
-func traceDurationMillis(value any, format string) float64 {
+func traceDurationMillis(value any, field, format string) float64 {
 	var number float64
 	switch typed := unwrapTraceValue(value).(type) {
 	case float64:
@@ -189,10 +195,10 @@ func traceDurationMillis(value any, format string) float64 {
 	if format == "jaeger" {
 		return math.Round(number/10) / 100
 	}
-	if number > 1_000_000 {
-		return math.Round(number/10_000) / 100
+	if field == "duration_ms" {
+		return number
 	}
-	return number
+	return number / 1_000_000
 }
 
 func normalizeTraceTimestamp(raw string) string {

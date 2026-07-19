@@ -316,7 +316,7 @@ func retryOnLockContention(ctx context.Context, desc string, fn func() error) er
 			}
 		}
 	}
-	return fmt.Errorf("%s: gave up after %d attempts under lock contention: %w", desc, migrationMaxAttempts, lastErr)
+	return fmt.Errorf("gave up after %d attempts under lock contention: %w", migrationMaxAttempts, lastErr)
 }
 
 // runTransactionalScript applies one transactional migration under a bounded
