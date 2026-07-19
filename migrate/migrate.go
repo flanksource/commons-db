@@ -139,13 +139,15 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 	if !cfg.allowTableDrops {
 		changes = withoutTableDrops(changes)
 	}
+	restoreViews := noRestore
 	if len(changes) == 0 {
 		logger.GetLogger("migrate").Debugf("No schema changes detected")
 	} else {
-		invalidated, err := invalidateDependentViews(ctx, db, cfg.name, changes, scripts)
+		invalidated, restore, err := invalidateDependentViews(ctx, db, cfg.name, changes, scripts)
 		if err != nil {
 			return err
 		}
+		restoreViews = restore
 		if len(invalidated) > 0 {
 			if selected, err = selectScripts(ctx, db, cfg.name, scripts); err != nil {
 				return err
@@ -168,6 +170,11 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 		log.V(1).Infof("Applied %d schema changes", len(changes))
 	}
 	if err := runScriptPhase(ctx, db, cfg.name, ordered, phasePost); err != nil {
+		return err
+	}
+	// Restore after the post phase: a view this scope does not own may be built
+	// on top of one the post phase just recreated.
+	if err := restoreViews(ctx); err != nil {
 		return err
 	}
 	if err := retryOnLockContention(ctx, "reconcile database security", func() error {
