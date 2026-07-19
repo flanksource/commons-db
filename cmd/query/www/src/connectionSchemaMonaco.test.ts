@@ -10,10 +10,10 @@ describe("connection schema Monaco compatibility", () => {
     expect(result.schema).toBeDefined();
 
     const definitions = result.schema?.definitions as Record<string, unknown>;
-    expect(Object.keys(definitions)).toHaveLength(55);
+    expect(Object.keys(definitions)).toHaveLength(56);
 
     const serialized = JSON.stringify(result.schema);
     expect(serialized).not.toContain("#/$defs/");
-    expect(serialized.match(/#\/definitions\//g)).toHaveLength(55);
+    expect(serialized.match(/#\/definitions\//g)).toHaveLength(56);
   });
 });

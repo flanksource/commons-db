@@ -288,16 +288,18 @@ func runScriptPhase(ctx context.Context, db *sql.DB, scope string, ordered []*sc
 	return nil
 }
 
-// runTransactionalScript applies one transactional migration, retrying on lock
-// contention. A transactional DDL script (e.g. 50_views_and_triggers.sql) takes
-// ACCESS EXCLUSIVE on tables a concurrently-running process may be reading; the
-// bounded lock_timeout converts the resulting hang into a retryable 55P03, and a
-// deadlock (40P01) aborts one party — either way retrying lets the migration win
-// once the reader's short query completes, instead of failing the whole run.
-func runTransactionalScript(ctx context.Context, db *sql.DB, scope string, s *script) error {
+// retryOnLockContention runs fn, retrying on transient lock contention (a
+// detected deadlock, a lock_timeout, or a serialization failure) with linear
+// backoff. A DDL statement (a transactional script, a dependent-view DROP, or a
+// security reconciliation) takes ACCESS EXCLUSIVE on tables a concurrently
+// running process may be reading; the bounded lock_timeout converts the
+// resulting hang into a retryable 55P03, and a deadlock (40P01) aborts one party
+// — either way retrying lets the migration win once the reader's short query
+// completes, instead of failing the whole run. fn MUST be idempotent.
+func retryOnLockContention(ctx context.Context, desc string, fn func() error) error {
 	var lastErr error
 	for attempt := 1; attempt <= migrationMaxAttempts; attempt++ {
-		err := applyTransactionalScript(ctx, db, scope, s)
+		err := fn()
 		if err == nil {
 			return nil
 		}
@@ -306,7 +308,7 @@ func runTransactionalScript(ctx context.Context, db *sql.DB, scope string, s *sc
 		}
 		lastErr = err
 		if attempt < migrationMaxAttempts {
-			logger.Debugf("migration %s hit lock contention (attempt %d/%d): %v", s.path, attempt, migrationMaxAttempts, err)
+			logger.Debugf("%s hit lock contention (attempt %d/%d): %v", desc, attempt, migrationMaxAttempts, err)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -314,7 +316,17 @@ func runTransactionalScript(ctx context.Context, db *sql.DB, scope string, s *sc
 			}
 		}
 	}
-	return fmt.Errorf("execute SQL migration %s: gave up after %d attempts under lock contention: %w", s.path, migrationMaxAttempts, lastErr)
+	return fmt.Errorf("gave up after %d attempts under lock contention: %w", migrationMaxAttempts, lastErr)
+}
+
+// runTransactionalScript applies one transactional migration under a bounded
+// lock_timeout, retrying on lock contention. The view/trigger scripts split out
+// of the historical 50_views_and_triggers monolith are the canonical DDL that
+// contends with live readers.
+func runTransactionalScript(ctx context.Context, db *sql.DB, scope string, s *script) error {
+	return retryOnLockContention(ctx, "execute SQL migration "+s.path, func() error {
+		return applyTransactionalScript(ctx, db, scope, s)
+	})
 }
 
 // applyTransactionalScript runs the script (and records it) in a single

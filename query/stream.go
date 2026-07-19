@@ -75,6 +75,7 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 		Connection: p.Provider.Connection,
 		Query:      rendered,
 		Options:    p.Provider.Options,
+		Params:     resolved,
 	})
 	return session, nil
 }
@@ -87,7 +88,7 @@ func runTrace(ctx context.Context, cancel stdcontext.CancelFunc, sp StreamProvid
 	var once sync.Once
 	err := sp.Stream(ctx, req, func(row Row) {
 		rows := []Row{row}
-		if cerr := applyColumns(ctx, p.Columns, rows); cerr != nil {
+		if cerr := applyRowTransforms(ctx, p, rows); cerr != nil {
 			once.Do(func() {
 				emitErr = fmt.Errorf("profile %q: %w", p.Name, cerr)
 				cancel()

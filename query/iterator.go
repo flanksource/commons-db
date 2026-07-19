@@ -82,18 +82,18 @@ func executeRows(ctx context.Context, p Profile, maxRows int, params ...map[stri
 		Connection: p.Provider.Connection,
 		Query:      rendered,
 		Options:    p.Provider.Options,
+		Params:     resolved,
 		MaxRows:    maxRows,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
 	}
-	return &columnRowIterator{ctx: ctx, profile: p.Name, columns: p.Columns, rows: rows}, nil
+	return &columnRowIterator{ctx: ctx, profile: p, rows: rows}, nil
 }
 
 type columnRowIterator struct {
 	ctx     context.Context
-	profile string
-	columns []ColumnDef
+	profile Profile
 	rows    RowIterator
 	row     Row
 	err     error
@@ -105,8 +105,8 @@ func (i *columnRowIterator) Next() bool {
 		return false
 	}
 	i.row = i.rows.Row()
-	if err := applyColumns(i.ctx, i.columns, []Row{i.row}); err != nil {
-		i.err = fmt.Errorf("profile %q: row %d: %w", i.profile, i.index, err)
+	if err := applyRowTransforms(i.ctx, i.profile, []Row{i.row}); err != nil {
+		i.err = fmt.Errorf("profile %q: row %d: %w", i.profile.Name, i.index, err)
 		return false
 	}
 	i.index++

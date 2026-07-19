@@ -2,26 +2,25 @@ package helpers
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
-	"net"
-	"net/url"
 	"os"
-	"strconv"
-	"time"
 
-	"github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
+	_ "github.com/lib/pq"
 )
 
 // ServiceManager starts the native services the e2e suite depends on.
 //
-// Only Postgres is started for real (via db.StartEmbedded). The other
-// services (Redis, OpenSearch, Loki, LocalStack) are not yet implemented;
-// the current e2e specs only assert on their connection-URL strings and on
-// locally-generated fixture data, so no live instance is required. Their
-// URL/port accessors remain so those specs keep compiling.
+// Only Postgres is started for real (via dbtest, so COMMONS_DB_URL points the
+// suite at an external server). The other services (Redis, OpenSearch, Loki,
+// LocalStack) are not yet implemented; the current e2e specs only assert on
+// their connection-URL strings and on locally-generated fixture data, so no
+// live instance is required. Their URL/port accessors remain so those specs
+// keep compiling.
 type ServiceManager struct {
 	postgresDSN  string
-	postgresPort int
 	postgresStop func() error
 
 	redisPort      int
@@ -83,52 +82,40 @@ func (sm *ServiceManager) AllHealthy() bool {
 	return sm.isPostgresHealthy()
 }
 
+// startPostgres resolves the suite's database from the environment. When
+// neither COMMONS_DB_URL nor COMMONS_DB_EMBEDDED_TEST is set there is no
+// database to start; that is not an error, but PostgresURL then reports the
+// empty string and PostgresEnabled reports false, so a spec that needs one
+// must skip rather than silently connect to nothing.
 func (sm *ServiceManager) startPostgres() error {
-	dsn, stop, err := db.StartEmbedded(db.EmbeddedConfig{
-		DataDir:  sm.tmpDir,
-		Database: "test",
-		Port:     0,
-	})
+	handle, stop, err := dbtest.Open(dbtest.Options{Name: "e2e", DataDir: sm.tmpDir})
+	if errors.Is(err, dbtest.ErrSkip) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 
-	port, err := portFromDSN(dsn)
-	if err != nil {
-		_ = stop()
-		return err
-	}
-
-	sm.postgresDSN = dsn
-	sm.postgresPort = port
+	sm.postgresDSN = handle.DSN()
 	sm.postgresStop = stop
 	return nil
 }
 
-func (sm *ServiceManager) isPostgresHealthy() bool {
-	return sm.postgresPort != 0 && isPortHealthy(sm.postgresPort)
-}
+// PostgresEnabled reports whether a database was resolved for this suite.
+func (sm *ServiceManager) PostgresEnabled() bool { return sm.postgresDSN != "" }
 
-func isPortHealthy(port int) bool {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 1*time.Second)
+// isPostgresHealthy connects rather than dialling a port: COMMONS_DB_URL may
+// point at any host, and a DSN that omits the port still resolves to 5432.
+func (sm *ServiceManager) isPostgresHealthy() bool {
+	if !sm.PostgresEnabled() {
+		return true // nothing was started, so nothing can be unhealthy
+	}
+	conn, err := sql.Open("postgres", sm.postgresDSN)
 	if err != nil {
 		return false
 	}
-	defer conn.Close()
-	return true
-}
-
-// portFromDSN extracts the TCP port from a postgres:// DSN.
-func portFromDSN(dsn string) (int, error) {
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return 0, fmt.Errorf("parse dsn: %w", err)
-	}
-	p, err := strconv.Atoi(u.Port())
-	if err != nil {
-		return 0, fmt.Errorf("dsn port %q: %w", u.Port(), err)
-	}
-	return p, nil
+	defer conn.Close() //nolint:errcheck
+	return conn.Ping() == nil
 }
 
 func (sm *ServiceManager) PostgresURL() string {

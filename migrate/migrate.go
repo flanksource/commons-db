@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"path"
 	"strings"
 
@@ -116,7 +117,7 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 		return err
 	}
 
-	client, err := sqlclient.Open(ctx, connection)
+	client, err := sqlclient.Open(ctx, connectionWithLockTimeout(connection))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
@@ -138,13 +139,15 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 	if !cfg.allowTableDrops {
 		changes = withoutTableDrops(changes)
 	}
+	restoreViews := noRestore
 	if len(changes) == 0 {
 		logger.GetLogger("migrate").Debugf("No schema changes detected")
 	} else {
-		invalidated, err := invalidateDependentViews(ctx, db, cfg.name, changes, scripts)
+		invalidated, restore, err := invalidateDependentViews(ctx, db, cfg.name, changes, scripts)
 		if err != nil {
 			return err
 		}
+		restoreViews = restore
 		if len(invalidated) > 0 {
 			if selected, err = selectScripts(ctx, db, cfg.name, scripts); err != nil {
 				return err
@@ -169,7 +172,14 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 	if err := runScriptPhase(ctx, db, cfg.name, ordered, phasePost); err != nil {
 		return err
 	}
-	if err := reconcileSecurity(ctx, db, cfg.name, security); err != nil {
+	// Restore after the post phase: a view this scope does not own may be built
+	// on top of one the post phase just recreated.
+	if err := restoreViews(ctx); err != nil {
+		return err
+	}
+	if err := retryOnLockContention(ctx, "reconcile database security", func() error {
+		return reconcileSecurity(ctx, db, cfg.name, security)
+	}); err != nil {
 		return fmt.Errorf("reconcile database security: %w", err)
 	}
 	return nil
@@ -185,4 +195,24 @@ func withoutTableDrops(changes []schema.Change) []schema.Change {
 		filtered = append(filtered, change)
 	}
 	return filtered
+}
+
+// connectionWithLockTimeout appends a libpq `options` runtime parameter so every
+// connection Atlas opens bounds how long its ALTER TABLE DDL waits for a lock. A
+// migration that would otherwise block indefinitely against a live reader fails
+// fast (55P03) and the next apply re-plans from a fresh inspect, instead of
+// camping on an ACCESS EXCLUSIVE lock and starving concurrent traffic. The value
+// is returned unchanged when it is not a URL-form DSN or already sets options.
+func connectionWithLockTimeout(connection string) string {
+	u, err := url.Parse(connection)
+	if err != nil || u.Scheme == "" {
+		return connection
+	}
+	q := u.Query()
+	if q.Get("options") != "" {
+		return connection
+	}
+	q.Set("options", "-c lock_timeout="+migrationLockTimeout)
+	u.RawQuery = q.Encode()
+	return u.String()
 }

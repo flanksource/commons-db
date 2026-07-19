@@ -119,8 +119,10 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		return err
 	}
 	mux.Handle("/api/openapi.json", openAPI)
-	chat := newQueryChatServer(root)
-	defer func() { _ = chat.Close() }()
+	chat, err := newQueryChatServer(root)
+	if err != nil {
+		return err
+	}
 	mux.Handle("/api/chat", chat.Handler())
 	mux.Handle("/api/chat/", chat.Handler())
 	mux.Handle("/api/", serverMux)

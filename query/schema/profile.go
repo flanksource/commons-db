@@ -10,6 +10,7 @@ import (
 var providerTypes = []string{
 	"sql", "postgres", "mysql", "sqlserver", "clickhouse",
 	"http", "prometheus", "postgrest", "loki", "opensearch", "jaeger",
+	"opentelemetry",
 }
 
 // providerConnectionTypes maps each profile provider type to the connection
@@ -20,17 +21,18 @@ var providerTypes = []string{
 // the eligible types as a scope filter. Note ConnectionTypeSQLServer is
 // "sql_server" — the value the connection list filters on.
 var providerConnectionTypes = map[string][]string{
-	"sql":        {models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse},
-	"postgres":   {models.ConnectionTypePostgres},
-	"mysql":      {models.ConnectionTypeMySQL},
-	"sqlserver":  {models.ConnectionTypeSQLServer},
-	"clickhouse": {models.ConnectionTypeClickHouse},
-	"http":       {models.ConnectionTypeHTTP},
-	"postgrest":  {models.ConnectionTypeHTTP},
-	"prometheus": {models.ConnectionTypePrometheus},
-	"loki":       {models.ConnectionTypeLoki},
-	"opensearch": {models.ConnectionTypeOpenSearch},
-	"jaeger":     {models.ConnectionTypeJaeger},
+	"sql":           {models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse},
+	"postgres":      {models.ConnectionTypePostgres},
+	"mysql":         {models.ConnectionTypeMySQL},
+	"sqlserver":     {models.ConnectionTypeSQLServer},
+	"clickhouse":    {models.ConnectionTypeClickHouse},
+	"http":          {models.ConnectionTypeHTTP},
+	"postgrest":     {models.ConnectionTypeHTTP},
+	"prometheus":    {models.ConnectionTypePrometheus},
+	"loki":          {models.ConnectionTypeLoki},
+	"opensearch":    {models.ConnectionTypeOpenSearch},
+	"opentelemetry": {models.ConnectionTypeOpenTelemetry},
+	"jaeger":        {models.ConnectionTypeJaeger},
 }
 
 // ProfileSource returns the externally referenced profile form schema. Each
@@ -76,6 +78,10 @@ func ProfileSource() Schema {
 			"hidden": Schema{"type": "boolean", "title": "Hidden"},
 		},
 	}
+	aliasDef := Schema{
+		"type": "object", "required": []string{"name", "cel"},
+		"properties": Schema{"name": strProp("Name", "Dotted output path"), "cel": strProp("CEL", "Ordered row projection")},
+	}
 
 	provider := Schema{
 		"type":            "object",
@@ -111,6 +117,7 @@ func ProfileSource() Schema {
 		"required": []string{"profile", "provider"},
 		"properties": Schema{
 			"profile": strProp("Name", "Profile name"),
+			"imports": Schema{"type": "array", "title": "Imports", "items": Schema{"type": "string"}},
 			"namespace": Schema{
 				"type":               "string",
 				"title":              "Namespace",
@@ -127,6 +134,8 @@ func ProfileSource() Schema {
 			},
 			"params":  Schema{"type": "array", "title": "Params", "items": paramDef},
 			"columns": Schema{"type": "array", "title": "Columns", "x-layout": "table", "items": columnDef},
+			"aliases": Schema{"type": "array", "title": "Aliases", "x-layout": "table", "items": aliasDef},
+			"ignore":  Schema{"type": "array", "title": "Ignore", "items": Schema{"type": "string"}},
 			"output":  Schema{"type": "array", "title": "Output", "items": Schema{"type": "string"}},
 			"render":  Schema{"type": "string", "title": "Render", "enum": []string{"table", "logs"}, "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)"},
 		},

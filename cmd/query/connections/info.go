@@ -135,6 +135,16 @@ func discoverServer(ctx context.Context, connectionContext dbcontext.Context, co
 		info, err = discoverSQLServer(ctx, connectionContext, connection)
 	case models.ConnectionTypeOpenSearch:
 		info, err = discoverOpenSearch(ctx, connectionContext, connection)
+	case models.ConnectionTypeOpenTelemetry:
+		var openTelemetry dbconnection.OpenTelemetry
+		openTelemetry, err = dbconnection.NewOpenTelemetry(connection)
+		if err == nil {
+			var nested *models.Connection
+			nested, err = openTelemetry.ResolveOpenSearch(connectionContext)
+			if err == nil {
+				info, err = discoverOpenSearch(ctx, connectionContext, nested)
+			}
+		}
 	case models.ConnectionTypePrometheus:
 		info, err = discoverPrometheus(ctx, connectionContext, connection)
 	case models.ConnectionTypeRedis:

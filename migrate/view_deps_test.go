@@ -107,7 +107,7 @@ func TestRiskyModifiedTables(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []string
 			for _, ref := range riskyModifiedTables(tc.changes) {
-				got = append(got, ref.qualified())
+				got = append(got, ref.Qualified())
 			}
 			assert.Equal(t, tc.want, got)
 		})

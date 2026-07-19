@@ -37,7 +37,6 @@ export function ChatWidget({ client }: { client: OperationsApiClient }) {
         chat={{
           api: "/api/chat",
           modelsApi: "/api/chat/models",
-          toolApproval: "manual",
           suggestions: [
             "List configured connections",
             "Show available query profiles",

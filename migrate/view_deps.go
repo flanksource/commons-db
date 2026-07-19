@@ -4,54 +4,32 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
-	"strings"
 
 	"ariga.io/atlas/sql/schema"
+	"github.com/flanksource/commons-db/migrate/viewdeps"
 	"github.com/flanksource/commons/logger"
-	"github.com/lib/pq"
 	pgnodes "github.com/pgplex/pgparser/nodes"
 	pgparser "github.com/pgplex/pgparser/parser"
 )
 
-// tableRef identifies a table Atlas is about to reshape.
-type tableRef struct {
-	schemaName string
-	name       string
-}
-
-func (t tableRef) qualified() string {
-	s := t.schemaName
-	if s == "" {
-		s = "public"
-	}
-	return s + "." + t.name
-}
-
-// viewRef identifies a live view (relkind 'v') or materialized view ('m').
-type viewRef struct {
-	schemaName string
-	name       string
-	relkind    string
-}
-
-func (v viewRef) qualified() string { return v.schemaName + "." + v.name }
-
 // riskyModifiedTables returns the tables whose pending diff drops the table or drops/alters
 // a column — the operations PostgreSQL refuses while a view depends on them. Pure additions
 // never block a dependent view, so they are ignored.
-func riskyModifiedTables(changes []schema.Change) []tableRef {
-	var refs []tableRef
+func riskyModifiedTables(changes []schema.Change) []viewdeps.Table {
+	var refs []viewdeps.Table
 	seen := map[string]bool{}
 	add := func(t *schema.Table) {
 		if t == nil {
 			return
 		}
-		ref := tableRef{name: t.Name}
-		if t.Schema != nil {
-			ref.schemaName = t.Schema.Name
+		// Atlas always reports a schema; default to public so a table it left
+		// unqualified resolves the same way the diff did rather than through
+		// whatever search_path this connection happens to carry.
+		ref := viewdeps.Table{Schema: "public", Name: t.Name}
+		if t.Schema != nil && t.Schema.Name != "" {
+			ref.Schema = t.Schema.Name
 		}
-		if key := ref.qualified(); !seen[key] {
+		if key := ref.Qualified(); !seen[key] {
 			seen[key] = true
 			refs = append(refs, ref)
 		}
@@ -123,114 +101,73 @@ func qualifyRangeVar(rv *pgnodes.RangeVar) string {
 	return schemaName + "." + rv.Relname
 }
 
-// dependentViewsQuery returns every view/matview that transitively depends on any of the
-// given tables, walking pg_rewrite rules through pg_depend.
-const dependentViewsQuery = `
-WITH RECURSIVE targets(oid) AS (
-  SELECT to_regclass(t)::oid
-  FROM unnest($1::text[]) AS t
-  WHERE to_regclass(t) IS NOT NULL
-),
-deps(view_oid) AS (
-  SELECT r.ev_class
-  FROM pg_depend d
-  JOIN pg_rewrite r ON r.oid = d.objid AND d.classid = 'pg_rewrite'::regclass
-  JOIN targets t ON t.oid = d.refobjid
-  WHERE r.ev_class <> d.refobjid
-  UNION
-  SELECT r.ev_class
-  FROM deps
-  JOIN pg_depend d ON d.refobjid = deps.view_oid AND d.refclassid = 'pg_class'::regclass
-  JOIN pg_rewrite r ON r.oid = d.objid AND d.classid = 'pg_rewrite'::regclass
-  WHERE r.ev_class <> d.refobjid
-)
-SELECT DISTINCT n.nspname, c.relname, c.relkind::text
-FROM deps
-JOIN pg_class c ON c.oid = deps.view_oid
-JOIN pg_namespace n ON n.oid = c.relnamespace
-WHERE c.relkind IN ('v', 'm')`
-
-func dependentViews(ctx context.Context, db *sql.DB, tables []tableRef) ([]viewRef, error) {
-	names := make([]string, len(tables))
-	for i, t := range tables {
-		names[i] = t.qualified()
-	}
-	rows, err := db.QueryContext(ctx, dependentViewsQuery, pq.Array(names))
-	if err != nil {
-		return nil, fmt.Errorf("inspect view dependencies: %w", err)
-	}
-	defer rows.Close()
-	var refs []viewRef
-	for rows.Next() {
-		var v viewRef
-		if err := rows.Scan(&v.schemaName, &v.name, &v.relkind); err != nil {
-			return nil, fmt.Errorf("read view dependency: %w", err)
-		}
-		refs = append(refs, v)
-	}
-	return refs, rows.Err()
-}
-
-// invalidateDependentViews drops every commons-db-managed view that depends on a table the
-// pending diff drops or alters, and deletes the recorded hash of the script that creates it
-// so the post phase recreates the view in the same apply. If any dependent view is owned by
-// no migration it aborts before dropping anything — leaving the database untouched — and
-// returns a loud error naming the view, since reconciliation would otherwise fail with the
-// managed views already gone. The returned set of invalidated script paths is empty when
-// nothing needed changing.
-func invalidateDependentViews(ctx context.Context, db *sql.DB, scope string, changes []schema.Change, scripts map[string]*script) (map[string]bool, error) {
+// invalidateDependentViews clears every view that depends on a table the pending diff drops
+// or alters, and returns a func that restores the ones this scope does not own.
+//
+// A view created by a post-phase script is dropped and its recorded hash deleted, so the post
+// phase recreates it from source in the same apply. A view no script owns — an operator's
+// ad-hoc reporting view, or one left by an older binary — is captured from the catalog first
+// and rebuilt by the returned func, so a schema change neither fails on it nor destroys it.
+//
+// The returned set of invalidated script paths is empty when nothing needed changing. The
+// restore func is never nil.
+func invalidateDependentViews(ctx context.Context, db *sql.DB, scope string, changes []schema.Change, scripts map[string]*script) (map[string]bool, func(context.Context) error, error) {
 	risky := riskyModifiedTables(changes)
 	if len(risky) == 0 {
-		return nil, nil
-	}
-	dependents, err := dependentViews(ctx, db, risky)
-	if err != nil {
-		return nil, err
-	}
-	if len(dependents) == 0 {
-		return nil, nil
+		return nil, noRestore, nil
 	}
 	owners := managedViews(scripts)
-	var managed []viewRef
-	var unmanaged []string
-	for _, v := range dependents {
-		if _, ok := owners[v.qualified()]; ok {
-			managed = append(managed, v)
-		} else {
-			unmanaged = append(unmanaged, v.qualified())
-		}
+	log := logger.GetLogger("migrate")
+
+	dropped, restore, err := viewdeps.Sweep(ctx, viewdeps.DropOptions{
+		Tables: risky,
+		Query:  db,
+		Exec: func(ctx context.Context, stmt string) error {
+			// DDL takes ACCESS EXCLUSIVE; bound the wait and retry so a live
+			// reader cannot deadlock reconciliation indefinitely. Drops are
+			// idempotent (IF EXISTS) and restores run once, so retry is safe.
+			return retryOnLockContention(ctx, "reconcile dependent view", func() error {
+				return execWithLockTimeout(ctx, db, stmt)
+			})
+		},
+		Owned: func(v viewdeps.View) bool { _, ok := owners[v.Qualified()]; return ok },
+		Logf:  func(format string, args ...any) { log.V(1).Infof(format, args...) },
+	})
+	if err != nil {
+		return nil, nil, err
 	}
-	if len(unmanaged) > 0 {
-		sort.Strings(unmanaged)
-		return nil, fmt.Errorf("cannot reconcile tables: dependent view(s) %s are not managed by any %q migration; add a post-phase script that (re)creates them or drop them manually",
-			strings.Join(unmanaged, ", "), scope)
-	}
+
 	invalidated := map[string]bool{}
-	for _, v := range managed {
-		if err := dropDependentView(ctx, db, v); err != nil {
-			return nil, err
+	for _, v := range dropped {
+		if path, ok := owners[v.Qualified()]; ok {
+			invalidated[path] = true
 		}
-		invalidated[owners[v.qualified()]] = true
 	}
 	for path := range invalidated {
 		if _, err := db.ExecContext(ctx,
 			`DELETE FROM schema_migration_scripts WHERE scope = $1 AND path = $2`, scope, path); err != nil {
-			return nil, fmt.Errorf("invalidate SQL migration %s: %w", path, err)
+			return nil, nil, fmt.Errorf("invalidate SQL migration %s: %w", path, err)
 		}
 	}
-	return invalidated, nil
+	return invalidated, restore, nil
 }
 
-func dropDependentView(ctx context.Context, db *sql.DB, v viewRef) error {
-	kind := "VIEW"
-	if v.relkind == "m" {
-		kind = "MATERIALIZED VIEW"
+func noRestore(context.Context) error { return nil }
+
+// execWithLockTimeout runs a single statement in a transaction that first bounds
+// its lock waits, so DDL cannot camp on an ACCESS EXCLUSIVE lock against live
+// traffic.
+func execWithLockTimeout(ctx context.Context, db *sql.DB, stmt string) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
 	}
-	stmt := fmt.Sprintf("DROP %s IF EXISTS %s.%s CASCADE", kind,
-		pq.QuoteIdentifier(v.schemaName), pq.QuoteIdentifier(v.name))
-	if _, err := db.ExecContext(ctx, stmt); err != nil {
-		return fmt.Errorf("drop dependent view %s: %w", v.qualified(), err)
+	defer tx.Rollback() //nolint:errcheck
+	if _, err := tx.ExecContext(ctx, "SET LOCAL lock_timeout = '"+migrationLockTimeout+"'"); err != nil {
+		return err
 	}
-	logger.GetLogger("migrate").V(1).Infof("dropped dependent view %s for table reconciliation", v.qualified())
-	return nil
+	if _, err := tx.ExecContext(ctx, stmt); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

@@ -1,0 +1,58 @@
+{
+  "$id": "opentelemetry.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "name": {
+      "title": "Name",
+      "type": "string",
+      "x-clicky-order": 0
+    },
+    "namespace": {
+      "title": "Namespace",
+      "type": "string",
+      "x-clicky-component": "k8s-namespace-selector",
+      "x-clicky-order": 1
+    },
+    "properties": {
+      "properties": {
+        "connection": {
+          "title": "OpenSearch Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "type",
+              "map": {
+                "opentelemetry": [
+                  "opensearch"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          },
+          "x-clicky-order": 2
+        }
+      },
+      "required": [
+        "connection"
+      ],
+      "title": "Properties",
+      "type": "object"
+    },
+    "type": {
+      "const": "opentelemetry",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "name",
+    "type",
+    "properties"
+  ],
+  "title": "Connection: opentelemetry",
+  "type": "object"
+}

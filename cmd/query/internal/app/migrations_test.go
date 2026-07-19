@@ -2,31 +2,21 @@ package app
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
-	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/stretchr/testify/require"
 )
 
 func TestMigrateSchemaAndProfileStore(t *testing.T) {
-	if os.Getenv("COMMONS_DB_EMBEDDED_TEST") == "" {
-		t.Skip("set COMMONS_DB_EMBEDDED_TEST=1 to run embedded-postgres integration tests")
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  filepath.Join(t.TempDir(), "postgres"),
-		Database: "query_migrate",
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, stop()) })
+	// A fresh, un-migrated database is the premise of this test: it fabricates a
+	// pre-HCL schema and asserts the migrator upgrades it in place.
+	handle := dbtest.ForT(t, dbtest.Options{Name: "query_migrate", LogName: "query-migrate-test"})
+	dsn, gdb := handle.DSN(), handle.Gorm()
 
-	gdb, pool, err := commonsdb.SetupDB(dsn, "query-migrate-test")
-	require.NoError(t, err)
-	t.Cleanup(pool.Close)
 	pgulidSQL, err := querySchema.ReadFile("migrations/001_generate_ulid.sql")
 	require.NoError(t, err)
 	require.NoError(t, gdb.Exec(string(pgulidSQL)).Error)
@@ -36,7 +26,7 @@ func TestMigrateSchemaAndProfileStore(t *testing.T) {
 	require.NoError(t, migrateSchema(t.Context(), dsn))
 	require.NoError(t, migrateSchema(t.Context(), dsn), "migration must be idempotent")
 
-	for _, table := range []string{"connections", "profiles", "migration_api_unmanaged"} {
+	for _, table := range []string{"connections", "profiles", "properties", "migration_api_unmanaged"} {
 		var exists bool
 		require.NoError(t, gdb.Raw(`SELECT EXISTS (
 			SELECT 1 FROM information_schema.tables
@@ -47,6 +37,10 @@ func TestMigrateSchemaAndProfileStore(t *testing.T) {
 	var existing models.Connection
 	require.NoError(t, gdb.Where("name = ?", "existing").First(&existing).Error)
 	require.Equal(t, models.ConnectionTypePostgres, existing.Type)
+	require.NoError(t, gdb.Create(&models.AppProperty{Name: "query.page-size", Value: "100"}).Error)
+	var property models.AppProperty
+	require.NoError(t, gdb.First(&property, "name = ?", "query.page-size").Error)
+	require.Equal(t, "100", property.Value)
 
 	dir := t.TempDir()
 	files, err := profiles.NewFileStore(dir)

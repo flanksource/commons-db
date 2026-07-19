@@ -27,7 +27,9 @@ func TestSampleRendersCapsAndInfersRawRows(t *testing.T) {
 		Name: "sample", Provider: ProviderConfig{Type: "postgres"},
 		Query:   "SELECT * FROM jobs WHERE owner = '{{.params.owner}}'",
 		Params:  []ParamDef{{Name: "owner", Required: true}},
-		Columns: []ColumnDef{{Name: "ignored", CEL: "row.nope"}},
+		Aliases: []AliasDef{{Name: "active_copy", CEL: "row.active"}},
+		Ignore:  []string{"started"},
+		Columns: []ColumnDef{{Name: "computed", CEL: "row.count + 1"}},
 	}, map[string]any{"owner": "alice"}, 1)
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
@@ -39,10 +41,9 @@ func TestSampleRendersCapsAndInfersRawRows(t *testing.T) {
 		t.Fatalf("expected one truncated row, got %#v", result)
 	}
 	want := []ColumnDef{
-		{Name: "active", Type: ColumnTypeBoolean}, {Name: "count", Type: ColumnTypeNumber},
+		{Name: "active", Type: ColumnTypeBoolean}, {Name: "active_copy", Type: ColumnTypeBoolean}, {Name: "computed", Type: ColumnTypeNumber}, {Name: "count", Type: ColumnTypeNumber},
 		{Name: "duration", Type: ColumnTypeDuration}, {Name: "nested", Type: ColumnTypeKeyValue},
 		{Name: "occurred", Type: ColumnTypeDateTime},
-		{Name: "started", Type: ColumnTypeDateTime},
 	}
 	if len(result.Columns) != len(want) {
 		t.Fatalf("columns = %#v", result.Columns)
@@ -51,6 +52,15 @@ func TestSampleRendersCapsAndInfersRawRows(t *testing.T) {
 		if result.Columns[i] != want[i] {
 			t.Fatalf("column %d = %#v, want %#v", i, result.Columns[i], want[i])
 		}
+	}
+	if result.Rows[0]["active_copy"] != true {
+		t.Fatalf("sample alias transform not applied: %#v", result.Rows[0])
+	}
+	if got := result.Rows[0]["computed"]; got != int64(2) {
+		t.Fatalf("sample computed transform not applied: value=%v type=%T row=%#v", got, got, result.Rows[0])
+	}
+	if _, ok := result.Rows[0]["started"]; ok {
+		t.Fatalf("ignored sample field survived: %#v", result.Rows[0])
 	}
 }
 

@@ -1,9 +1,13 @@
 package app
 
 import (
+	"context"
 	"strings"
 
-	"github.com/flanksource/clicky/aichat"
+	captools "github.com/flanksource/captain/pkg/ai/tools"
+	capchat "github.com/flanksource/captain/pkg/aichat"
+	"github.com/flanksource/captain/pkg/api"
+	clickyaichat "github.com/flanksource/clicky/aichat"
 	"github.com/spf13/cobra"
 )
 
@@ -11,16 +15,24 @@ import (
 // explorer as in-process AI tools. Provider initialization remains lazy: the
 // server can start without an API key and reports the configuration error only
 // when chat is used.
-func newQueryChatServer(root *cobra.Command) *aichat.Server {
-	return aichat.NewServer(aichat.Options{
-		RootCmd: root,
-		System: "You are a database operations assistant. Use the available tools " +
-			"to inspect connections, query profiles, and profile results. Prefer tools " +
-			"over guessing, never invent connection details, and summarize results clearly.",
-		Threads:            aichat.NewMemThreadStore(),
-		ToolFilter:         isQueryChatTool,
-		ToolApprovalPolicy: queryToolRequiresApproval,
+func newQueryChatServer(root *cobra.Command) (*capchat.Service, error) {
+	provider, err := clickyaichat.NewCobraToolProvider(clickyaichat.CobraToolProviderOptions{
+		Root: root, Filter: isQueryChatTool, Permission: queryToolPermission,
 	})
+	if err != nil {
+		return nil, err
+	}
+	return capchat.NewService(capchat.ServiceOptions{
+		Settings: capchat.RuntimeSettingsProviderFunc(func(context.Context) (capchat.RuntimeSettings, error) {
+			return capchat.RuntimeSettings{
+				Spec: api.Spec{Model: api.Model{Name: "api:sonnet-5"}},
+				System: "You are a database operations assistant. Use the available tools " +
+					"to inspect connections, query profiles, and profile results. Prefer tools " +
+					"over guessing, never invent connection details, and summarize results clearly.",
+			}, nil
+		}),
+		Tools: provider, Threads: capchat.NewMemoryThreadStore(),
+	}), nil
 }
 
 // isQueryChatTool removes query's process-management and long-running
@@ -28,8 +40,8 @@ func newQueryChatServer(root *cobra.Command) *aichat.Server {
 // printing schemas, or blocking on a live trace/top stream is useful on the
 // CLI but is not a meaningful operation for the in-app assistant (sessions are
 // managed via the REST API instead).
-func isQueryChatTool(tool aichat.ToolInfo) bool {
-	name := strings.ToLower(strings.TrimSpace(tool.OperationName))
+func isQueryChatTool(tool captools.ToolInfo) bool {
+	name := strings.ToLower(strings.TrimSpace(tool.Annotation("clicky/operation")))
 	if name == "" {
 		name = strings.ToLower(strings.TrimSpace(tool.Name))
 	}
@@ -44,15 +56,15 @@ func isQueryChatTool(tool aichat.ToolInfo) bool {
 // queryToolRequiresApproval auto-runs safe HTTP/read verbs and gates everything
 // else. The UI may still make a deliberate per-tool On/Ask/Off choice for an
 // individual request.
-func queryToolRequiresApproval(tool aichat.ToolInfo, _ any) bool {
-	switch strings.ToUpper(strings.TrimSpace(tool.Method)) {
+func queryToolPermission(tool captools.ToolInfo) api.ToolMode {
+	switch strings.ToUpper(strings.TrimSpace(tool.Annotation("clicky/method"))) {
 	case "GET", "HEAD", "OPTIONS":
-		return false
+		return api.ToolModeOn
 	}
-	switch strings.ToLower(strings.TrimSpace(tool.ClickyVerb)) {
+	switch strings.ToLower(strings.TrimSpace(tool.Annotation("clicky/verb"))) {
 	case "get", "list":
-		return false
+		return api.ToolModeOn
 	default:
-		return true
+		return api.ToolModeAsk
 	}
 }

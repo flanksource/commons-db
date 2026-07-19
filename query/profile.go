@@ -10,6 +10,10 @@ type Profile struct {
 	// Name identifies the Profile (e.g. "SQL Server trace").
 	Name string `json:"profile" yaml:"profile"`
 
+	// Imports names profiles to merge from left to right before this profile is
+	// executed. The authored profile remains unchanged in the profile store.
+	Imports []string `json:"imports,omitempty" yaml:"imports,omitempty"`
+
 	// Namespace scopes Kubernetes secret/configmap lookups and workload URLs used
 	// by inline provider connections. When empty, the caller's namespace is used.
 	Namespace string `json:"namespace,omitempty" yaml:"namespace,omitempty"`
@@ -30,6 +34,13 @@ type Profile struct {
 	// Columns declares the output columns in display order. When empty, the
 	// provider's raw row keys are used.
 	Columns []ColumnDef `json:"columns,omitempty" yaml:"columns,omitempty"`
+
+	// Aliases are ordered CEL projections applied to each provider row. Later
+	// aliases can reference values produced by earlier aliases.
+	Aliases []AliasDef `json:"aliases,omitempty" yaml:"aliases,omitempty"`
+
+	// Ignore removes provider fields after aliases have been evaluated.
+	Ignore []string `json:"ignore,omitempty" yaml:"ignore,omitempty"`
 
 	// Processors are post-query steps (e.g. sqlite merge/recon) applied in order.
 	Processors []ProcessorSpec `json:"processors,omitempty" yaml:"processors,omitempty"`
@@ -57,6 +68,12 @@ type Profile struct {
 	// query per tick and each snapshot replaces the last. Mutually exclusive
 	// with Trace.
 	Top *TopSpec `json:"top,omitempty" yaml:"top,omitempty"`
+}
+
+// AliasDef is an ordered, named CEL projection over a provider row.
+type AliasDef struct {
+	Name string `json:"name" yaml:"name"`
+	CEL  string `json:"cel" yaml:"cel"`
 }
 
 // Render values the frontend keys presentation off (x-clicky-render):

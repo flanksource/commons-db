@@ -102,6 +102,63 @@ output: [table, html]
 })
 
 var _ = Describe("Execute", func() {
+	It("passes resolved params to providers and applies ordered aliases before ignore and columns", func() {
+		provider := &mockProvider{typ: "exec-row-pipeline", rows: []query.Row{{
+			"input.xml": "<Policy><Number>P-7</Number></Policy>",
+			"obsolete":  "remove-me",
+			"request":   map[string]any{"unrelated": "remove-me"},
+		}}}
+		query.RegisterProvider(provider)
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "ordered aliases",
+			Provider: query.ProviderConfig{Type: provider.typ},
+			Params:   []query.ParamDef{{Name: "namespace", Default: "prod"}},
+			Aliases: []query.AliasDef{
+				{Name: "request.xml", CEL: `span["input.xml"]`},
+				{Name: "request.copy", CEL: `request.xml`},
+				{Name: "ignoredAlias", CEL: `request.copy`},
+			},
+			Ignore:  []string{"input.xml", "obsolete", "ignoredAlias", "request"},
+			Columns: []query.ColumnDef{{Name: "Copied", CEL: `request.copy`}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(provider.last.Params).To(HaveKeyWithValue("namespace", "prod"))
+		Expect(result.Rows).To(Equal([]query.Row{{
+			"request": map[string]any{
+				"xml":  "<Policy><Number>P-7</Number></Policy>",
+				"copy": "<Policy><Number>P-7</Number></Policy>",
+			},
+			"Copied": "<Policy><Number>P-7</Number></Policy>",
+		}}))
+	})
+
+	It("keeps row and span as reserved CEL bindings", func() {
+		provider := &mockProvider{typ: "exec-reserved-bindings", rows: []query.Row{{
+			"row":     "field value",
+			"span":    "field value",
+			"traceId": "trace-1",
+		}}}
+		query.RegisterProvider(provider)
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "reserved bindings",
+			Provider: query.ProviderConfig{Type: provider.typ},
+			Columns: []query.ColumnDef{
+				{Name: "from_row", CEL: `row.traceId`},
+				{Name: "from_span", CEL: `span.traceId`},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(Equal([]query.Row{{
+			"row":       "field value",
+			"span":      "field value",
+			"traceId":   "trace-1",
+			"from_row":  "trace-1",
+			"from_span": "trace-1",
+		}}))
+	})
+
 	It("dispatches to the provider and returns its rows", func() {
 		rows := []query.Row{{"id": 1}, {"id": 2}}
 		query.RegisterProvider(&mockProvider{typ: "exec-primary", rows: rows})
