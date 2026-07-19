@@ -1,8 +1,6 @@
 import {
   Button,
   Icon,
-  Modal,
-  SchemaActionForm,
   useOperations,
   type OperationsApiClient,
   type ResolvedOperation,
@@ -10,10 +8,7 @@ import {
 import { UiMagicWand } from "@flanksource/clicky-ui/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import {
-  ProfileBuilderAutoOpen,
-  profileBuilderFormExtensions,
-} from "./profileBuilder";
+import { ProfileWizard } from "./profileWizard";
 
 type BuildProfileButtonProps = {
   client: OperationsApiClient;
@@ -86,43 +81,20 @@ export function BuildProfileButton({
       </Button>
 
       {open && createAction ? (
-        <ProfileBuilderAutoOpen>
-          <SchemaActionForm
-            client={client}
-            action={createAction}
-            initialValue={initialValue}
-            submitLabel="Save Profile"
-            formPost={profileBuilderFormExtensions.post}
-            onSuccess={async () => {
-              setOpen(false);
-              await Promise.all([
-                queryClient.invalidateQueries({ queryKey: ["openapi-spec"] }),
-                queryClient.invalidateQueries({
-                  queryKey: ["operation-list"],
-                }),
-                queryClient.invalidateQueries({
-                  queryKey: ["logs-entity-names"],
-                }),
-              ]);
-            }}
-            renderLayout={({ body, footer }) => (
-              <Modal
-                open
-                onClose={() => setOpen(false)}
-                title="Build Profile"
-                size="lg"
-                {...(footer ? { footer } : {})}
-              >
-                {body}
-              </Modal>
-            )}
-            fallback={
-              <div className="text-sm text-muted-foreground">
-                The profile form is unavailable.
-              </div>
-            }
-          />
-        </ProfileBuilderAutoOpen>
+        <ProfileWizard
+          client={client}
+          action={createAction}
+          initialValue={initialValue}
+          onClose={() => setOpen(false)}
+          onSuccess={async () => {
+            setOpen(false);
+            await Promise.all([
+              queryClient.invalidateQueries({ queryKey: ["openapi-spec"] }),
+              queryClient.invalidateQueries({ queryKey: ["operation-list"] }),
+              queryClient.invalidateQueries({ queryKey: ["logs-entity-names"] }),
+            ]);
+          }}
+        />
       ) : null}
     </>
   );
