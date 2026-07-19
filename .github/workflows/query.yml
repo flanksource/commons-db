@@ -23,6 +23,25 @@ permissions: read-all
 jobs:
   test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    # Without this the module's DB integration tests skip silently.
+    # COMMONS_DB_CREATE defaults to true, so each test gets its own database.
+    env:
+      COMMONS_DB_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
