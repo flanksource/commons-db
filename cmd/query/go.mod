@@ -3,8 +3,8 @@ module github.com/flanksource/commons-db/cmd/query
 go 1.26.1
 
 require (
-	github.com/flanksource/clicky v1.21.37-0.20260715094201-d847a9108f43
-	github.com/flanksource/clicky/aichat v1.21.36
+	github.com/flanksource/clicky v1.21.40
+	github.com/flanksource/clicky/aichat v1.21.40
 	github.com/flanksource/clicky/valkey v1.21.34
 	github.com/flanksource/commons v1.53.1
 	github.com/flanksource/commons-db v0.1.15
@@ -127,8 +127,8 @@ require (
 	github.com/fatih/color v1.18.0 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
-	github.com/firebase/genkit/go v1.8.0 // indirect
-	github.com/flanksource/captain v0.0.9 // indirect
+	github.com/firebase/genkit/go v1.10.0 // indirect
+	github.com/flanksource/captain v0.0.12-0.20260715131932-f441c766f3fd // indirect
 	github.com/flanksource/gomplate/v3 v3.24.82 // indirect
 	github.com/flanksource/is-healthy v1.0.88 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
@@ -197,6 +197,7 @@ require (
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/jmespath/go-jmespath v0.4.1-0.20220621161143-b0104c826a24 // indirect
+	github.com/joho/godotenv v1.5.1 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
@@ -272,6 +273,7 @@ require (
 	github.com/samber/lo v1.53.0 // indirect
 	github.com/samber/oops v1.21.0 // indirect
 	github.com/segmentio/asm v1.2.1 // indirect
+	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
 	github.com/shoenig/go-m1cpu v0.1.7 // indirect
