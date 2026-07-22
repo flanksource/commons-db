@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@flanksource/clicky-ui": "^0.3.11",
-    "@flanksource/icons": "1.0.60",
+    "@flanksource/icons": "1.0.63",
     "@tanstack/react-query": "catalog:",
     "monaco-editor": "0.48.0",
     "monaco-yaml": "5.1.1",
