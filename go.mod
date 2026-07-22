@@ -32,7 +32,7 @@ require (
 	github.com/eko/gocache/store/go_cache/v4 v4.2.2
 	github.com/exaring/otelpgx v0.9.3
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.37-0.20260715094201-d847a9108f43
+	github.com/flanksource/clicky v1.21.40
 	github.com/flanksource/commons v1.53.1
 	github.com/flanksource/deps v1.0.26
 	github.com/flanksource/gomplate/v3 v3.24.82
