@@ -7,7 +7,7 @@ require (
 	github.com/flanksource/clicky/aichat v1.21.36
 	github.com/flanksource/clicky/valkey v1.21.34
 	github.com/flanksource/commons v1.53.1
-	github.com/flanksource/commons-db v0.1.15
+	github.com/flanksource/commons-db v0.1.19
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/onsi/ginkgo/v2 v2.28.1
