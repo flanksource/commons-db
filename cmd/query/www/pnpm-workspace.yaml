@@ -48,7 +48,7 @@ catalog:
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
   cmdk: ^1.0.4
-  dompurify: ^3.4.7
+  dompurify: ^3.4.12
   jsdom: ^26.0.0
   jotai: ^2.20.1
   marked: ^15.0.0
