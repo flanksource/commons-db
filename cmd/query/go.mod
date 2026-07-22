@@ -5,7 +5,7 @@ go 1.26.1
 require (
 	github.com/flanksource/clicky v1.21.40
 	github.com/flanksource/clicky/aichat v1.21.40
-	github.com/flanksource/clicky/valkey v1.21.34
+	github.com/flanksource/clicky/valkey v1.21.40
 	github.com/flanksource/commons v1.53.1
 	github.com/flanksource/commons-db v0.1.15
 	github.com/glebarez/sqlite v1.11.0
