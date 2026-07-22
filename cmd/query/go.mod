@@ -129,7 +129,7 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.10.0 // indirect
 	github.com/flanksource/captain v0.0.12-0.20260715131932-f441c766f3fd // indirect
-	github.com/flanksource/gomplate/v3 v3.24.82 // indirect
+	github.com/flanksource/gomplate/v3 v3.24.84 // indirect
 	github.com/flanksource/is-healthy v1.0.88 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
