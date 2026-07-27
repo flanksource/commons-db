@@ -31,11 +31,17 @@ func NewGorm(connection string, config *gorm.Config) (*gorm.DB, error) {
 	return gormDB, nil
 }
 
-// NewDB creates a new sql.DB connection
+// NewDB creates a new sql.DB connection with a bounded pool. Callers that need
+// different bounds apply their own PoolConfig to the returned handle.
 func NewDB(connection string) (*sql.DB, error) {
 	conn, err := getConnection(connection)
 	if err != nil {
 		return nil, err
 	}
-	return sql.Open("pgx", conn)
+	db, err := sql.Open("pgx", conn)
+	if err != nil {
+		return nil, err
+	}
+	DefaultPoolConfig().Apply(db)
+	return db, nil
 }
