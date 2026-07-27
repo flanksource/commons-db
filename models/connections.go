@@ -50,6 +50,7 @@ const (
 	ConnectionTypeJMeter         = "jmeter"
 	ConnectionTypeKubernetes     = "kubernetes"
 	ConnectionTypeLDAP           = "ldap"
+	ConnectionTypeLocalKMS       = "local_kms"
 	ConnectionTypeLoki           = "loki"
 	ConnectionTypeMatrix         = "matrix"
 	ConnectionTypeMattermost     = "mattermost"

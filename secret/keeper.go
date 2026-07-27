@@ -12,6 +12,7 @@ import (
 	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"gocloud.dev/secrets"
+	"gocloud.dev/secrets/localsecrets"
 )
 
 const defaultKeeperTTL = time.Minute * 10
@@ -32,6 +33,7 @@ var (
 		models.ConnectionTypeAWSKMS,
 		models.ConnectionTypeGCPKMS,
 		models.ConnectionTypeAzureKeyVault,
+		models.ConnectionTypeLocalKMS,
 		// Vault not supported yet
 	}
 )
@@ -98,6 +100,15 @@ func KeeperFromConnection(ctx context.Context, connectionString string) (*secret
 		var kmsConn connection.GCPKMS
 		kmsConn.FromModel(*conn)
 		return kmsConn.SecretKeeper(ctx)
+
+	case models.ConnectionTypeLocalKMS:
+		if conn.Password == "" {
+			return nil, fmt.Errorf("local_kms connection key is not set")
+		}
+		if _, err := localsecrets.Base64Key(conn.Password); err != nil {
+			return nil, fmt.Errorf("invalid local_kms connection key: %w", err)
+		}
+		return secrets.OpenKeeper(ctx, fmt.Sprintf("%s://%s", localsecrets.Scheme, conn.Password))
 	}
 
 	return nil, nil
