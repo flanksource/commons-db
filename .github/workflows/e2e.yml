@@ -35,7 +35,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         go-version: ["1.26"]
-    timeout-minutes: 30
+    # Ginkgo e2e (10m) + embedded pool tests (10m) + helper unit tests (5m) +
+    # a full coverage re-run of the e2e suite, on a slower macOS runner.
+    timeout-minutes: 45
 
     # Exercises the default embedded-postgres path on both platforms. The
     # external-DB path is covered by e2e-external, which needs a Linux-only

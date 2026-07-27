@@ -47,12 +47,12 @@ var _ = Describe("embedded PostgreSQL lifecycle", Label("integration"), func() {
 		defer conn.Close(context.Background()) //nolint:errcheck
 
 		var dataDirectory, fsync, synchronousCommit, fullPageWrites string
-		var maxConnections int
 		Expect(conn.QueryRow(ctx, "SHOW data_directory").Scan(&dataDirectory)).To(Succeed())
 		Expect(conn.QueryRow(ctx, "SHOW fsync").Scan(&fsync)).To(Succeed())
 		Expect(conn.QueryRow(ctx, "SHOW synchronous_commit").Scan(&synchronousCommit)).To(Succeed())
 		Expect(conn.QueryRow(ctx, "SHOW full_page_writes").Scan(&fullPageWrites)).To(Succeed())
-		Expect(conn.QueryRow(ctx, "SHOW max_connections").Scan(&maxConnections)).To(Succeed())
+		maxConnections, err := showInt(ctx, conn, "max_connections")
+		Expect(err).NotTo(HaveOccurred())
 
 		expectedDataDirectory, err := filepath.EvalSymlinks(filepath.Join(config.DataDir, "data"))
 		Expect(err).NotTo(HaveOccurred())

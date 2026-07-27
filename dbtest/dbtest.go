@@ -35,6 +35,10 @@ const (
 	EnvCreate = "COMMONS_DB_CREATE"
 )
 
+// connectTimeout bounds the blocking Postgres calls made while resolving a test
+// database, so an unreachable server fails the test instead of hanging it.
+const connectTimeout = 30 * time.Second
+
 // Options configures how a test database is resolved.
 type Options struct {
 	// Name seeds the database name. Required.
@@ -84,7 +88,9 @@ func (d *DB) SQL() *sql.DB {
 		d.fail(fmt.Errorf("open %s: %w", redact(d.dsn), err))
 		return nil
 	}
-	if err := handle.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+	if err := handle.PingContext(ctx); err != nil {
 		_ = handle.Close()
 		d.fail(fmt.Errorf("ping %s: %w", redact(d.dsn), err))
 		return nil
@@ -164,7 +170,7 @@ func Open(opts Options) (*DB, func() error, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
 		defer cancel()
 		dsn, drop, err := acquirePooledScratch(ctx, adminURL, opts.Name, db.unique, time.Now())
 		if err != nil {
