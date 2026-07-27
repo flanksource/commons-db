@@ -9,8 +9,7 @@ import (
 )
 
 // The SQL provider is exercised against a real engine: COMMONS_DB_URL when one
-// is configured, otherwise embedded postgres under COMMONS_DB_EMBEDDED_TEST=1,
-// which downloads a postgres tarball on first run.
+// is configured, otherwise the persistent embedded PostgreSQL test pool.
 var _ = Describe("sql provider (postgres)", Ordered, func() {
 	var dsn string
 
