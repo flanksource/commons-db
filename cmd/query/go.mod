@@ -3,6 +3,7 @@ module github.com/flanksource/commons-db/cmd/query
 go 1.26.1
 
 require (
+	github.com/flanksource/captain v0.0.19
 	github.com/flanksource/clicky v1.21.47
 	github.com/flanksource/clicky/aichat v1.21.47
 	github.com/flanksource/clicky/valkey v1.21.47
@@ -129,7 +130,6 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.10.0 // indirect
-	github.com/flanksource/captain v0.0.18 // indirect
 	github.com/flanksource/gomplate/v3 v3.24.84 // indirect
 	github.com/flanksource/is-healthy v1.0.88 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
