@@ -37,10 +37,9 @@ jobs:
         go-version: ["1.26"]
     timeout-minutes: 30
 
-    # Exercises the embedded-postgres path on both platforms. The external-DB
-    # path is covered by e2e-external, which needs a Linux-only service container.
-    env:
-      COMMONS_DB_EMBEDDED_TEST: "1"
+    # Exercises the default embedded-postgres path on both platforms. The
+    # external-DB path is covered by e2e-external, which needs a Linux-only
+    # service container.
 
     steps:
       - name: Checkout code
@@ -83,6 +82,9 @@ jobs:
         env:
           CGO_ENABLED: 1
         continue-on-error: false
+
+      - name: Run embedded database pool tests
+        run: go test ./dbtest -timeout 10m
 
       - name: Run unit tests for helpers
         run: |
@@ -161,7 +163,7 @@ jobs:
           go run github.com/onsi/ginkgo/v2/ginkgo@v2.28.0 run -v -r --timeout=10m --poll-progress-after=1m ./e2e
 
       - name: Run DB integration tests
-        run: go test ./migrate/... ./query/... ./db/... -timeout 15m
+        run: go test ./migrate/... ./query/... ./db/... ./dbtest/... -timeout 15m
 
       - name: Assert no scratch databases leaked
         run: |

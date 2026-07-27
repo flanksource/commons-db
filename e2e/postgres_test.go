@@ -17,9 +17,6 @@ var _ = Describe("Postgres", func() {
 	var db *sql.DB
 
 	BeforeEach(func() {
-		if !serviceManager.PostgresEnabled() {
-			Skip("no database configured: set COMMONS_DB_URL or COMMONS_DB_EMBEDDED_TEST=1")
-		}
 		var err error
 		db, err = sql.Open("postgres", serviceManager.PostgresURL())
 		Expect(err).ToNot(HaveOccurred())

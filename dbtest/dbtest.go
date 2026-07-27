@@ -8,20 +8,20 @@
 //	COMMONS_DB_URL            connect to this server instead of embedding one
 //	COMMONS_DB_CREATE         "false" uses COMMONS_DB_URL as-is; anything else
 //	                          (including unset) carves out a fresh database
-//	COMMONS_DB_EMBEDDED_TEST  "1" permits starting an embedded server when
-//	                          COMMONS_DB_URL is unset
 //
-// Embedded PostgreSQL needs a SysV shared-memory segment, which a machine
-// already running several instances can exhaust — hence the opt-in gate on the
-// embedded path, and hence COMMONS_DB_URL overriding it entirely.
+// When COMMONS_DB_URL is unset, dbtest starts or reuses the persistent embedded
+// PostgreSQL server under ~/.config/commons-db and checks out an isolated
+// database from its cross-process pool.
 package dbtest
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"os"
 	"sync"
+	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	commonsdb "github.com/flanksource/commons-db/db"
@@ -31,20 +31,16 @@ import (
 )
 
 const (
-	EnvURL      = "COMMONS_DB_URL"
-	EnvCreate   = "COMMONS_DB_CREATE"
-	EnvEmbedded = "COMMONS_DB_EMBEDDED_TEST"
+	EnvURL    = "COMMONS_DB_URL"
+	EnvCreate = "COMMONS_DB_CREATE"
 )
-
-// ErrSkip reports that no database is configured and none may be started.
-var ErrSkip = errors.New("no test database: set " + EnvURL + " or " + EnvEmbedded + "=1")
 
 // Options configures how a test database is resolved.
 type Options struct {
 	// Name seeds the database name. Required.
 	Name string
 	// DataDir overrides where an embedded server keeps its cluster. Ignored
-	// when COMMONS_DB_URL is set. Defaults to a temp directory.
+	// when COMMONS_DB_URL is set. Defaults to ~/.config/commons-db.
 	DataDir string
 	// LogName labels the gorm SQL logger. Defaults to Name.
 	LogName string
@@ -137,7 +133,7 @@ func (d *DB) connect() {
 
 // Open resolves a database according to the environment. The returned cleanup
 // closes every handle the DB produced and drops the database if Open created
-// one; callers own it. Returns ErrSkip when nothing is configured.
+// one; callers own it.
 //
 // Handle accessors on the returned DB panic on failure. ForT and ForGinkgo
 // install their framework's failure handler instead.
@@ -163,15 +159,19 @@ func Open(opts Options) (*DB, func() error, error) {
 		}
 		db.dsn = dsn
 		db.closers = append(db.closers, drop)
-	case os.Getenv(EnvEmbedded) == "":
-		return nil, nil, ErrSkip
 	default:
-		dsn, stop, err := startEmbedded(opts)
+		adminURL, err := startSharedEmbedded(opts.DataDir)
 		if err != nil {
 			return nil, nil, err
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		dsn, drop, err := acquirePooledScratch(ctx, adminURL, opts.Name, db.unique, time.Now())
+		if err != nil {
+			return nil, nil, fmt.Errorf("check out ephemeral database: %w", err)
+		}
 		db.dsn = dsn
-		db.closers = append(db.closers, stop)
+		db.closers = append(db.closers, drop)
 	}
 
 	return db, db.close, nil
@@ -192,31 +192,4 @@ func (d *DB) close() error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func startEmbedded(opts Options) (string, func() error, error) {
-	dataDir := opts.DataDir
-	if dataDir == "" {
-		dir, err := os.MkdirTemp("", "dbtest-")
-		if err != nil {
-			return "", nil, fmt.Errorf("create embedded data dir: %w", err)
-		}
-		dataDir = dir
-	}
-	dsn, stop, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:  dataDir,
-		Database: sanitize(opts.Name),
-	})
-	if err != nil {
-		return "", nil, fmt.Errorf("start embedded postgres: %w", err)
-	}
-	return dsn, func() error {
-		if err := stop(); err != nil {
-			return err
-		}
-		if opts.DataDir == "" {
-			return os.RemoveAll(dataDir)
-		}
-		return nil
-	}, nil
 }

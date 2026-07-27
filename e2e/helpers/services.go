@@ -3,7 +3,6 @@ package helpers
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"os"
 
@@ -82,16 +81,10 @@ func (sm *ServiceManager) AllHealthy() bool {
 	return sm.isPostgresHealthy()
 }
 
-// startPostgres resolves the suite's database from the environment. When
-// neither COMMONS_DB_URL nor COMMONS_DB_EMBEDDED_TEST is set there is no
-// database to start; that is not an error, but PostgresURL then reports the
-// empty string and PostgresEnabled reports false, so a spec that needs one
-// must skip rather than silently connect to nothing.
+// startPostgres resolves an external database from COMMONS_DB_URL or checks out
+// an isolated database from the persistent local embedded pool.
 func (sm *ServiceManager) startPostgres() error {
-	handle, stop, err := dbtest.Open(dbtest.Options{Name: "e2e", DataDir: sm.tmpDir})
-	if errors.Is(err, dbtest.ErrSkip) {
-		return nil
-	}
+	handle, stop, err := dbtest.Open(dbtest.Options{Name: "e2e"})
 	if err != nil {
 		return err
 	}

@@ -59,25 +59,26 @@ go install github.com/onsi/ginkgo/v2/ginkgo@latest
 
 Every DB-touching test in this repository — the e2e suite and the integration
 tests under `migrate/`, `query/`, and `cmd/query/` — resolves its database
-through the `dbtest` package, driven by three environment variables:
+through the `dbtest` package:
 
 | Variable | Effect |
 |---|---|
 | `COMMONS_DB_URL` | Connect to this PostgreSQL server instead of embedding one. Points at a **maintenance** database (conventionally `postgres`). |
 | `COMMONS_DB_CREATE` | `false` uses `COMMONS_DB_URL` as-is. Anything else, **including unset**, carves out a fresh database per test and drops it afterwards. |
-| `COMMONS_DB_EMBEDDED_TEST` | `1` permits starting an embedded server. Only consulted when `COMMONS_DB_URL` is unset. |
 
-If neither `COMMONS_DB_URL` nor `COMMONS_DB_EMBEDDED_TEST` is set, DB tests
-**skip**. This is why `go test ./...` alone reports no DB coverage.
+When `COMMONS_DB_URL` is unset, `dbtest` automatically starts or reuses embedded PostgreSQL on `localhost:7432`. The cluster survives the initiating process and stores its PostgreSQL data at `~/.config/commons-db/data`.
+
+The embedded server disables `fsync`, synchronous commits, and full-page writes for test speed. It is for disposable local test data only and must not store production data.
+
+Tests check out isolated databases from a cross-process pool. When no free database remains, `dbtest` creates five. Used databases are dropped during cleanup rather than returned dirty. Managed databases abandoned for more than 24 hours are reclaimed only when they have no active lease or sessions.
 
 ```bash
-# External server — preferred. Embedded postgres needs a SysV shared-memory
-# segment, which a busy machine (or a sandbox) can fail to provide.
+# No configuration: use the persistent local embedded test pool.
+go test ./...
+
+# External server override.
 docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres --name commonsdb-test postgres:16
 export COMMONS_DB_URL='postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable'
-
-# Embedded fallback — downloads a ~50MB postgres tarball on first run.
-export COMMONS_DB_EMBEDDED_TEST=1
 ```
 
 `COMMONS_DB_CREATE=false` makes every test share one database, so it is only
@@ -229,7 +230,7 @@ Manages Docker containers:
 
 | Service | Port | Type |
 |---------|------|------|
-| PostgreSQL | 5432 | Native |
+| PostgreSQL | 7432 embedded, or the port in `COMMONS_DB_URL` | Native |
 | Redis | 6379 | Native |
 | OpenSearch | 9200 | Native |
 | Loki | 3100 | Native |
@@ -355,6 +356,7 @@ service docker restart
 - Close other applications
 - Increase available RAM
 - Run tests sequentially instead of parallel
+- If embedded PostgreSQL reports `shmget(...): Cannot allocate memory`, stop unused local PostgreSQL instances or ask the machine administrator to raise the macOS SysV `kern.sysv.shmall` limit before retrying.
 
 ## Performance
 
