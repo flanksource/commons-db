@@ -201,18 +201,33 @@ func traceDurationMillis(value any, field, format string) float64 {
 	return number / 1_000_000
 }
 
+// Epoch unit floors for normalizeTraceTimestamp. A timestamp in the supported
+// range (roughly 1973 onwards) exceeds the floor for its own unit and no other.
+const (
+	epochMillisecondFloor = 10_000_000_000
+	epochMicrosecondFloor = 10_000_000_000_000
+	epochNanosecondFloor  = 10_000_000_000_000_000
+)
+
 func normalizeTraceTimestamp(raw string) string {
 	if raw == "" {
 		return ""
 	}
 	if number, err := strconv.ParseInt(raw, 10, 64); err == nil {
-		if number > 10_000_000_000_000 {
+		// Each epoch unit occupies a distinct magnitude band for any plausible
+		// date, so the thresholds sit in the gaps between them. Microseconds
+		// need their own band: without it a microsecond epoch (~1e15) is read
+		// as nanoseconds and lands in the early 1970s.
+		switch {
+		case number > epochNanosecondFloor:
 			return time.Unix(0, number).Format(time.RFC3339Nano)
-		}
-		if number > 10_000_000_000 {
+		case number > epochMicrosecondFloor:
+			return time.UnixMicro(number).Format(time.RFC3339Nano)
+		case number > epochMillisecondFloor:
 			return time.UnixMilli(number).Format(time.RFC3339Nano)
+		default:
+			return time.Unix(number, 0).Format(time.RFC3339Nano)
 		}
-		return time.Unix(number, 0).Format(time.RFC3339Nano)
 	}
 	if timestamp, err := time.Parse(time.RFC3339Nano, raw); err == nil {
 		return timestamp.Format(time.RFC3339Nano)

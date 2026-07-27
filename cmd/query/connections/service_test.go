@@ -1,6 +1,7 @@
 package connections
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/flanksource/commons-db/models"
@@ -66,6 +67,23 @@ func TestValidateOpenTelemetryRequiresNestedOpenSearchConnection(t *testing.T) {
 	candidate.Properties["connection"] = "https://example.test/OS"
 	if err := validateNestedConnection(database, candidate); err == nil {
 		t.Fatal("expected an HTTP URL ending in the unrelated connection name to fail")
+	}
+	// Namespaced, so it resolves to exactly one real record and reaches the
+	// OpenSearch-only type check rather than failing earlier on self-reference
+	// or a missing connection.
+	relational := models.Connection{
+		ID: uuid.New(), Name: "warehouse", Namespace: "team", Type: models.ConnectionTypePostgres,
+	}
+	if err := database.Create(&relational).Error; err != nil {
+		t.Fatal(err)
+	}
+	candidate.Properties["connection"] = "connection://team/warehouse"
+	err := validateNestedConnection(database, candidate)
+	if err == nil {
+		t.Fatal("expected a nested PostgreSQL connection to fail the OpenSearch-only check")
+	}
+	if !strings.Contains(err.Error(), models.ConnectionTypeOpenSearch) {
+		t.Fatalf("expected the type mismatch to name the required type, got %v", err)
 	}
 }
 
