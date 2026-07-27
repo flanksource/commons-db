@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"time"
 
 	"github.com/exaring/otelpgx"
 	"github.com/flanksource/commons/logger"
@@ -9,6 +11,36 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
 )
+
+// PoolConfig bounds a database/sql pool. The zero value is deliberately not
+// useful: an unbounded pool turns a burst of goroutines into a burst of
+// backends contending for the same rows, and database/sql's default ceiling of
+// two idle connections then reconnects for every one of them.
+type PoolConfig struct {
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxIdleTime time.Duration
+	ConnMaxLifetime time.Duration
+}
+
+// DefaultPoolConfig mirrors the floor NewPgxPool already enforces. Idle equals
+// open so a bursty workload reuses connections rather than reconnecting, and
+// the lifetime cap keeps a long-lived process from pinning server-side state.
+func DefaultPoolConfig() PoolConfig {
+	return PoolConfig{
+		MaxOpenConns:    20,
+		MaxIdleConns:    20,
+		ConnMaxIdleTime: 5 * time.Minute,
+		ConnMaxLifetime: 30 * time.Minute,
+	}
+}
+
+func (c PoolConfig) Apply(db *sql.DB) {
+	db.SetMaxOpenConns(c.MaxOpenConns)
+	db.SetMaxIdleConns(c.MaxIdleConns)
+	db.SetConnMaxIdleTime(c.ConnMaxIdleTime)
+	db.SetConnMaxLifetime(c.ConnMaxLifetime)
+}
 
 // NewPgxPool creates a new pgx connection pool with OpenTelemetry tracing
 func NewPgxPool(connection string) (*pgxpool.Pool, error) {
