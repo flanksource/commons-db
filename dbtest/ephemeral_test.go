@@ -1,6 +1,7 @@
 package dbtest
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"time"
@@ -56,6 +57,23 @@ var _ = Describe("ephemeral database configuration", func() {
 
 		Expect(len(name)).To(BeNumerically("<=", maxIdentifier))
 		Expect(name).To(ContainSubstring(testUnique))
+	})
+
+	It("drops the description entirely when the identity fills the identifier", func() {
+		// prefix + unix seconds + "_" + unique consumes all 63 characters, so
+		// there is no room left for even a one-character description.
+		identity := fmt.Sprintf("%s%d_", testDatabasePrefix, created.Unix())
+		unique := strings.Repeat("u", maxIdentifier-len(identity))
+
+		name := managedDatabaseName(testDatabasePrefix, created, unique, testName)
+
+		Expect(len(name)).To(Equal(maxIdentifier))
+		Expect(name).To(Equal(identity + unique))
+		Expect(name).NotTo(ContainSubstring("migration_runner"))
+
+		parsed, err := managedDatabaseCreated(name)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed).To(Equal(created))
 	})
 
 	DescribeTable("rejects names outside the managed namespace",

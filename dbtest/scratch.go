@@ -1,6 +1,7 @@
 package dbtest
 
 import (
+	"context"
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
@@ -36,11 +37,14 @@ func createScratch(adminURL, name, unique string) (string, func() error, error) 
 	}
 	defer admin.Close() //nolint:errcheck
 
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+
 	quoted := pq.QuoteIdentifier(dbName)
-	if _, err := admin.Exec(`DROP DATABASE IF EXISTS ` + quoted + ` WITH (FORCE)`); err != nil {
+	if _, err := admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+quoted+` WITH (FORCE)`); err != nil {
 		return "", nil, fmt.Errorf("drop stale database %s: %w", dbName, err)
 	}
-	if _, err := admin.Exec(`CREATE DATABASE ` + quoted); err != nil {
+	if _, err := admin.ExecContext(ctx, `CREATE DATABASE `+quoted); err != nil {
 		return "", nil, fmt.Errorf("create database %s: %w", dbName, err)
 	}
 
@@ -55,7 +59,9 @@ func createScratch(adminURL, name, unique string) (string, func() error, error) 
 			return fmt.Errorf("open %s to drop %s: %w", redact(adminURL), dbName, err)
 		}
 		defer cleanup.Close() //nolint:errcheck
-		if _, err := cleanup.Exec(`DROP DATABASE IF EXISTS ` + quoted + ` WITH (FORCE)`); err != nil {
+		dropCtx, dropCancel := context.WithTimeout(context.Background(), connectTimeout)
+		defer dropCancel()
+		if _, err := cleanup.ExecContext(dropCtx, `DROP DATABASE IF EXISTS `+quoted+` WITH (FORCE)`); err != nil {
 			return fmt.Errorf("drop database %s: %w", dbName, err)
 		}
 		return nil

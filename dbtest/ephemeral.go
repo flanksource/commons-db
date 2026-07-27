@@ -49,8 +49,13 @@ func managedDatabaseName(prefix string, created time.Time, unique, name string) 
 	if name == "" {
 		return base
 	}
-	description := sanitize(name)
+	// The identity is what keeps concurrent runs apart, so when it fills the
+	// identifier there is no room left for a human-readable description.
 	room := maxIdentifier - len(base) - 1
+	if room <= 0 {
+		return base
+	}
+	description := sanitize(name)
 	if len(description) > room {
 		description = description[:room]
 	}

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/jackc/pgerrcode"
 	"github.com/lib/pq"
 )
@@ -217,16 +218,22 @@ func (p *ephemeralPool) cleanupStale(
 		return err
 	}
 	for _, name := range names {
+		// An unparseable or future-dated entry is skipped rather than fatal.
+		// cleanupStale runs under the pool-wide advisory lock, so aborting here
+		// would wedge every checkout for this prefix pair until someone cleaned
+		// up by hand - and a clock step-back is enough to produce one.
 		created, err := managedDatabaseCreatedWithPrefixes(
 			name,
 			p.config.PoolPrefix,
 			p.config.TestPrefix,
 		)
 		if err != nil {
-			return err
+			logger.Warnf("dbtest: skipping unrecognised managed database %q: %v", name, err)
+			continue
 		}
 		if created.After(now) {
-			return fmt.Errorf("managed database name %q has a future timestamp", name)
+			logger.Warnf("dbtest: skipping managed database %q with a future timestamp %s", name, created)
+			continue
 		}
 		if now.Sub(created) <= p.config.MaxAge {
 			continue

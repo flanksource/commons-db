@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 const (
 	embeddedStartupLockTimeout = 5 * time.Minute
 	embeddedStartupRetryDelay  = 100 * time.Millisecond
+	embeddedProbeTimeout       = 200 * time.Millisecond
 )
 
 var embeddedStartupMu sync.Mutex
@@ -123,8 +125,13 @@ func (r *embeddedRuntime) withStartupLock(
 
 	dsn, stop, startErr := fn()
 	unlockErr := lock.Unlock()
-	if startErr != nil || unlockErr != nil {
+	if startErr != nil {
 		return "", nil, errors.Join(startErr, unlockErr)
+	}
+	if unlockErr != nil {
+		// The server did start, so its stop closer must not be dropped on the
+		// floor: shut it back down rather than leaking an unmanaged cluster.
+		return "", nil, errors.Join(unlockErr, stop())
 	}
 	return dsn, stop, nil
 }
@@ -178,7 +185,9 @@ func (r *embeddedRuntime) resolveLockedConfig() error {
 }
 
 func (r *embeddedRuntime) reuseRunningServer(dsn string) (bool, error) {
-	if !portIsListening(r.port) {
+	ctx, cancel := context.WithTimeout(context.Background(), embeddedProbeTimeout)
+	defer cancel()
+	if !portIsListening(ctx, r.port) {
 		return false, nil
 	}
 	if err := r.validateServer(dsn); err != nil {
@@ -245,7 +254,6 @@ func validateEmbeddedDataDirectory(ctx context.Context, conn *pgx.Conn, expected
 
 func validateFastTestingServer(ctx context.Context, conn *pgx.Conn) error {
 	var fsync, synchronousCommit, fullPageWrites string
-	var maxConnections int
 	if err := conn.QueryRow(ctx, "SHOW fsync").Scan(&fsync); err != nil {
 		return fmt.Errorf("read fsync: %w", err)
 	}
@@ -255,10 +263,27 @@ func validateFastTestingServer(ctx context.Context, conn *pgx.Conn) error {
 	if err := conn.QueryRow(ctx, "SHOW full_page_writes").Scan(&fullPageWrites); err != nil {
 		return fmt.Errorf("read full_page_writes: %w", err)
 	}
-	if err := conn.QueryRow(ctx, "SHOW max_connections").Scan(&maxConnections); err != nil {
-		return fmt.Errorf("read max_connections: %w", err)
+	maxConnections, err := showInt(ctx, conn, "max_connections")
+	if err != nil {
+		return err
 	}
 	return validateFastTestingSettings(fsync, synchronousCommit, fullPageWrites, maxConnections)
+}
+
+// showInt reads a numeric server setting. SHOW always reports text (OID 25)
+// regardless of the underlying GUC type, so the value has to be parsed rather
+// than scanned straight into an int. setting is always a package-level literal;
+// SHOW takes no bind parameters.
+func showInt(ctx context.Context, conn *pgx.Conn, setting string) (int, error) {
+	var raw string
+	if err := conn.QueryRow(ctx, "SHOW "+setting).Scan(&raw); err != nil {
+		return 0, fmt.Errorf("read %s: %w", setting, err)
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, fmt.Errorf("parse %s %q: %w", setting, raw, err)
+	}
+	return value, nil
 }
 
 func (r *embeddedRuntime) serverConfig() embeddedpostgres.Config {
@@ -299,8 +324,9 @@ func (r *embeddedRuntime) dsn() string {
 	)
 }
 
-func portIsListening(port uint32) bool {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 200*time.Millisecond)
+func portIsListening(ctx context.Context, port uint32) bool {
+	var dialer net.Dialer
+	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("localhost:%d", port))
 	if err != nil {
 		return false
 	}
