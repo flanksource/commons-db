@@ -66,6 +66,101 @@ func TestPrepareDotEnvPrecedence(t *testing.T) {
 	assert.NotEmpty(t, setup.Cwd)
 }
 
+func TestSetupResolveMakesRelativePathsExplicitWithoutMutatingInput(t *testing.T) {
+	baseDir := t.TempDir()
+	setup := Setup{
+		Cwd:     "workspace",
+		BaseDir: ".runtime",
+		DotEnv:  []string{".env", "config/local.env"},
+		Checkout: &Checkout{
+			Mode: CheckoutLocal,
+			Path: "source",
+			Worktree: &Worktree{
+				Mode: WorktreeExisting,
+				Path: "worktrees/feature",
+			},
+		},
+	}
+
+	resolved, err := setup.Resolve(baseDir)
+	require.NoError(t, err)
+
+	assert.Equal(t, filepath.Join(baseDir, "workspace"), resolved.Cwd)
+	assert.Equal(t, filepath.Join(baseDir, ".runtime"), resolved.BaseDir)
+	assert.Equal(t, []string{
+		filepath.Join(baseDir, ".env"),
+		filepath.Join(baseDir, "config/local.env"),
+	}, resolved.DotEnv)
+	require.NotNil(t, resolved.Checkout)
+	assert.Equal(t, filepath.Join(baseDir, "source"), resolved.Checkout.Path)
+	require.NotNil(t, resolved.Checkout.Worktree)
+	assert.Equal(t, filepath.Join(baseDir, "worktrees/feature"), resolved.Checkout.Worktree.Path)
+
+	assert.Equal(t, "workspace", setup.Cwd)
+	assert.Equal(t, ".runtime", setup.BaseDir)
+	assert.Equal(t, []string{".env", "config/local.env"}, setup.DotEnv)
+	assert.Equal(t, "source", setup.Checkout.Path)
+	assert.Equal(t, "worktrees/feature", setup.Checkout.Worktree.Path)
+}
+
+// Resolve promises "an independent setup". A caller that edits the resolved copy
+// — the setup hook clears Checkout, a runner overrides one connection — must not
+// reach back into the config the setup was resolved from, which is typically
+// shared by every run in the process.
+func TestSetupResolveSharesNoMutableStateWithTheOriginal(t *testing.T) {
+	const (
+		originalConfigItem = "config-item-original"
+		originalRegion     = "eu-west-1"
+		originalSecretName = "secret-original"
+	)
+	configItem := originalConfigItem
+	depth := 3
+	setup := Setup{
+		EnvVars: []types.EnvVar{{
+			Name:      "TOKEN",
+			ValueFrom: &types.EnvVarSource{SecretKeyRef: &types.SecretKeySelector{Key: originalSecretName}},
+		}},
+		Connections: connection.ExecConnections{
+			FromConfigItem: &configItem,
+			AWS:            &connection.AWSConnection{Region: originalRegion},
+		},
+		Checkout: &Checkout{
+			Mode:     CheckoutLocal,
+			Path:     "source",
+			Depth:    &depth,
+			Dirty:    &Dirty{Stash: StashAll},
+			Worktree: &Worktree{Mode: WorktreeNew},
+		},
+	}
+
+	resolved, err := setup.Resolve(t.TempDir())
+	require.NoError(t, err)
+
+	*resolved.Connections.FromConfigItem = "config-item-mutated"
+	resolved.Connections.AWS.Region = "us-east-1"
+	resolved.EnvVars[0].ValueFrom.SecretKeyRef.Key = "secret-mutated"
+	*resolved.Checkout.Depth = depth + 1
+	resolved.Checkout.Dirty.Stash = StashNone
+	resolved.Checkout.Worktree.Mode = WorktreeExisting
+
+	assert.Equal(t, originalConfigItem, *setup.Connections.FromConfigItem)
+	assert.Equal(t, originalRegion, setup.Connections.AWS.Region)
+	assert.Equal(t, originalSecretName, setup.EnvVars[0].ValueFrom.SecretKeyRef.Key)
+	assert.Equal(t, depth, *setup.Checkout.Depth)
+	assert.Equal(t, StashAll, setup.Checkout.Dirty.Stash)
+	assert.Equal(t, WorktreeNew, setup.Checkout.Worktree.Mode)
+}
+
+func TestSetupResolveDefaultsWorkspaceAndRuntimeDirectory(t *testing.T) {
+	baseDir := t.TempDir()
+
+	resolved, err := (Setup{}).Resolve(baseDir)
+	require.NoError(t, err)
+
+	assert.Equal(t, baseDir, resolved.Cwd)
+	assert.Equal(t, filepath.Join(baseDir, ".shell"), resolved.BaseDir)
+}
+
 func TestSetupToExecCheckoutModes(t *testing.T) {
 	depth := 3
 	exec := Setup{
