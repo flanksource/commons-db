@@ -13,17 +13,17 @@ import (
 
 var _ = Describe("ephemeral database configuration", func() {
 	const (
-		testHome   = "/home/tester"
-		testUnique = "7_a1b2c3d4"
-		testName   = "Migration Runner"
+		testTempDir = "/var/tmp"
+		testUnique  = "7_a1b2c3d4"
+		testName    = "Migration Runner"
 	)
 	created := time.Date(2026, time.July, 27, 10, 30, 0, 0, time.UTC)
 
-	It("places the PostgreSQL data directory below the requested config root", func() {
-		root := embeddedRoot(testHome)
-		Expect(root).To(Equal(filepath.Join(testHome, ".config", "commons-db")))
+	It("places the shared PostgreSQL cluster in a fixed directory below TMPDIR", func() {
+		root := embeddedRoot(testTempDir)
+		Expect(root).To(Equal(filepath.Join(testTempDir, "commons-db")))
 		Expect(filepath.Join(root, "data")).To(Equal(
-			filepath.Join(testHome, ".config", "commons-db", "data"),
+			filepath.Join(testTempDir, "commons-db", "data"),
 		))
 		Expect(embeddedPort).To(Equal(7432))
 	})

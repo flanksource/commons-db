@@ -66,7 +66,7 @@ through the `dbtest` package:
 | `COMMONS_DB_URL` | Connect to this PostgreSQL server instead of embedding one. Points at a **maintenance** database (conventionally `postgres`). |
 | `COMMONS_DB_CREATE` | `false` uses `COMMONS_DB_URL` as-is. Anything else, **including unset**, carves out a fresh database per test and drops it afterwards. |
 
-When `COMMONS_DB_URL` is unset, `dbtest` automatically starts or reuses embedded PostgreSQL on `localhost:7432`. The cluster survives the initiating process and stores its PostgreSQL data at `~/.config/commons-db/data`.
+When `COMMONS_DB_URL` is unset, `dbtest` automatically starts or reuses embedded PostgreSQL on `localhost:7432`. The cluster survives the initiating process and stores its PostgreSQL data at `$TMPDIR/commons-db/data`.
 
 The embedded server disables `fsync`, synchronous commits, and full-page writes for test speed. It is for disposable local test data only and must not store production data.
 
