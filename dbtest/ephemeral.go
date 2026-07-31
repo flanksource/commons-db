@@ -37,8 +37,8 @@ type ephemeralPool struct {
 	config ephemeralPoolConfig
 }
 
-func embeddedRoot(home string) string {
-	return filepath.Join(home, ".config", "commons-db")
+func embeddedRoot(tempDir string) string {
+	return filepath.Join(tempDir, "commons-db")
 }
 
 func managedDatabaseName(prefix string, created time.Time, unique, name string) string {
@@ -162,11 +162,7 @@ func acquirePooledScratch(
 
 func startSharedEmbedded(dataDir string) (string, error) {
 	if dataDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("resolve home directory for embedded PostgreSQL: %w", err)
-		}
-		dataDir = embeddedRoot(home)
+		dataDir = embeddedRoot(os.TempDir())
 	}
 	dsn, _, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
 		DataDir:     dataDir,

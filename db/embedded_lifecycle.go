@@ -82,12 +82,12 @@ func createEmbeddedDirectories(root string) error {
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		return fmt.Errorf("create embedded PostgreSQL root %s: %w", root, err)
 	}
-	if err := os.Chmod(root, 0o750); err != nil {
-		return fmt.Errorf("set embedded PostgreSQL root permissions on %s: %w", root, err)
-	}
 	dataPath := filepath.Join(root, "data")
-	if err := os.MkdirAll(dataPath, 0o750); err != nil {
+	if err := os.MkdirAll(dataPath, 0o700); err != nil {
 		return fmt.Errorf("create embedded PostgreSQL data directory %s: %w", dataPath, err)
+	}
+	if err := os.Chmod(dataPath, 0o700); err != nil {
+		return fmt.Errorf("set embedded PostgreSQL data directory permissions on %s: %w", dataPath, err)
 	}
 	return nil
 }

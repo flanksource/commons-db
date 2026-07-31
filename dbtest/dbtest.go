@@ -10,7 +10,7 @@
 //	                          (including unset) carves out a fresh database
 //
 // When COMMONS_DB_URL is unset, dbtest starts or reuses the persistent embedded
-// PostgreSQL server under ~/.config/commons-db and checks out an isolated
+// PostgreSQL server under $TMPDIR/commons-db and checks out an isolated
 // database from its cross-process pool.
 package dbtest
 
@@ -44,7 +44,7 @@ type Options struct {
 	// Name seeds the database name. Required.
 	Name string
 	// DataDir overrides where an embedded server keeps its cluster. Ignored
-	// when COMMONS_DB_URL is set. Defaults to ~/.config/commons-db.
+	// when COMMONS_DB_URL is set. Defaults to $TMPDIR/commons-db.
 	DataDir string
 	// LogName labels the gorm SQL logger. Defaults to Name.
 	LogName string
