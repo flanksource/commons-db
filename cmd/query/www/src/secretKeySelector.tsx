@@ -1,8 +1,10 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
+  EndpointSelector,
   SecretKeySelector,
   serializeSecretRef,
   parseSecretRef,
+  type EndpointSelectorValue,
   type FieldControl,
   type KeyPreview,
   type PostExtension,
@@ -10,21 +12,18 @@ import {
   type SecretKind,
   type SecretResource,
   type SecretValueSource,
+  type WorkloadKind,
+  type WorkloadResource,
 } from "@flanksource/clicky-ui";
-import { WorkloadUrlField, isWorkloadUrl } from "./workloadUrlField";
-import { SegmentedControl } from "./segmentedControl";
-
-type UrlMode = "reference" | "workload";
-
-const URL_MODE_OPTIONS: { value: UrlMode; label: string }[] = [
-  { value: "reference", label: "Reference" },
-  { value: "workload", label: "Workload" },
-];
+import {
+  parseEndpointValue,
+  serializeEndpointValue,
+} from "./endpointSelectorAdapter";
 
 // The connection schema tags credential fields (password/certificate/username)
 // with k8s-secret-selector so the form renders a SecretKeySelector instead of a
-// plain text input. URL fields use k8s-url-selector, which adds a Workload source
-// (see WorkloadUrlField) on top of the reference/literal pickers.
+// plain text input. URL fields use k8s-url-selector, which adds Kubernetes
+// endpoint access modes on top of the reference/literal picker.
 const SECRET_WIDGET = "k8s-secret-selector";
 const URL_WIDGET = "k8s-url-selector";
 
@@ -57,9 +56,8 @@ async function fetchJSON<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
-// SecretField renders the SecretKeySelector with loaders scoped to the
-// connection's selected namespace (so the operator only sees resources in that
-// namespace). For the url field it adds a Reference/Workload mode toggle.
+// SecretField renders the shared selectors with loaders scoped to the
+// connection's selected namespace.
 function SecretField({
   field,
   namespace,
@@ -69,8 +67,6 @@ function SecretField({
   namespace: string;
   allowWorkload: boolean;
 }) {
-  const [workloadMode, setWorkloadMode] = useState(() => allowWorkload && isWorkloadUrl(field.value));
-
   // Loaders are memoised by namespace so their identity is stable across renders
   // (SecretKeySelector refetches when it changes) but tracks the namespace.
   const nsQuery = namespace ? `&namespace=${encodeURIComponent(namespace)}` : "";
@@ -91,22 +87,55 @@ function SecretField({
       fetchJSON<SecretResource[]>(`/api/v1/secrets?kind=serviceaccount${nsQuery}`),
     [nsQuery],
   );
-
-  const modeToggle = (
-    <SegmentedControl
-      value={workloadMode ? "workload" : "reference"}
-      options={URL_MODE_OPTIONS}
-      onChange={(m) => setWorkloadMode(m === "workload")}
-      ariaLabel="URL source"
-    />
+  const loadWorkloads = useMemo(
+    () => async (kinds: WorkloadKind[]) => {
+      if (!namespace) {
+        return {
+          service: [],
+          ingress: [],
+          deployment: [],
+          statefulset: [],
+        } satisfies Record<WorkloadKind, WorkloadResource[]>;
+      }
+      return fetchJSON<Record<WorkloadKind, WorkloadResource[]>>(
+        `/api/v1/workloads?namespace=${encodeURIComponent(namespace)}&kinds=${kinds.join(",")}`,
+      );
+    },
+    [namespace],
   );
 
-  if (allowWorkload && workloadMode) {
+  if (allowWorkload) {
+    const current = parseEndpointValue(field.value);
+    const defaultSource = field.schema["x-clicky-default-source"];
+    const value: EndpointSelectorValue | undefined =
+      current ??
+      (defaultSource === "value"
+        ? { mode: "url", source: { kind: "value", value: "" } }
+        : undefined);
     return (
-      <div className="space-y-2">
-        {modeToggle}
-        <WorkloadUrlField value={field.value} namespace={namespace} onChange={field.onChange} />
-      </div>
+      <EndpointSelector
+        value={value}
+        onChange={(next) => field.onChange(serializeEndpointValue(next))}
+        namespace={namespace}
+        modes={[
+          "url",
+          "service",
+          "cluster-ip",
+          "api-proxy",
+          "ingress",
+          "port-forward",
+        ]}
+        loadWorkloads={loadWorkloads}
+        urlSelector={{
+          loadResources,
+          loadKeyPreview,
+          loadServiceAccounts,
+          sources: URL_SOURCES,
+        }}
+        showPath
+        showIngressPort
+        allowCustomPort
+      />
     );
   }
 
@@ -127,13 +156,7 @@ function SecretField({
     />
   );
 
-  if (!allowWorkload) return selector;
-  return (
-    <div className="space-y-2">
-      {modeToggle}
-      {selector}
-    </div>
-  );
+  return selector;
 }
 
 // secretKeySelectorPost replaces the default text input of any field tagged
