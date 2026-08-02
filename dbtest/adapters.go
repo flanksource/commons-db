@@ -11,7 +11,7 @@ import (
 func ForT(t *testing.T, opts Options) *DB {
 	t.Helper()
 
-	db, cleanup, err := Open(opts)
+	db, cleanup, err := open(t.Context(), opts)
 	if err != nil {
 		t.Fatalf("dbtest: %v", err)
 	}
@@ -34,7 +34,7 @@ func ForT(t *testing.T, opts Options) *DB {
 func ForGinkgo(opts Options) *DB {
 	ginkgo.GinkgoHelper()
 
-	db, cleanup, err := Open(opts)
+	db, cleanup, err := open(ginkgo.GinkgoT().Context(), opts)
 	if err != nil {
 		ginkgo.Fail("dbtest: " + err.Error())
 	}

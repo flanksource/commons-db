@@ -65,12 +65,10 @@ func WithTableDrops() Option {
 // absent from a partial schema bundle are never dropped unless WithTableDrops is
 // supplied.
 func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Option) error {
-	if strings.TrimSpace(connection) == "" {
-		return errors.New("connection string is empty")
-	}
-	if schemaFS == nil {
-		return errors.New("schema filesystem is nil")
-	}
+	return apply(ctx, connection, schemaFS, resolveOptions(opts))
+}
+
+func resolveOptions(opts []Option) options {
 	cfg := options{dir: "."}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -83,6 +81,29 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 		if cfg.name == "." {
 			cfg.name = "default"
 		}
+	}
+	cfg.exclude = append([]string(nil), cfg.exclude...)
+	cfg.input = cloneVariables(cfg.input)
+	return cfg
+}
+
+func cloneVariables(input map[string]cty.Value) map[string]cty.Value {
+	if input == nil {
+		return nil
+	}
+	cloned := make(map[string]cty.Value, len(input))
+	for name, value := range input {
+		cloned[name] = value
+	}
+	return cloned
+}
+
+func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) error {
+	if strings.TrimSpace(connection) == "" {
+		return errors.New("connection string is empty")
+	}
+	if schemaFS == nil {
+		return errors.New("schema filesystem is nil")
 	}
 
 	scripts, err := loadScripts(schemaFS, cfg.dir)
