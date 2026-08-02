@@ -17,11 +17,12 @@ import (
 // ones added after this was written. Anchoring the paths is the only thing left
 // for this function to do.
 func (s Setup) Resolve(baseDir string) (Setup, error) {
-	baseDir, err := filepath.Abs(strings.TrimSpace(baseDir))
+	trimmedBaseDir := strings.TrimSpace(baseDir)
+	absBaseDir, err := filepath.Abs(trimmedBaseDir)
 	if err != nil {
-		return Setup{}, fmt.Errorf("resolve setup base directory %q: %w", baseDir, err)
+		return Setup{}, fmt.Errorf("resolve setup base directory %q: %w", trimmedBaseDir, err)
 	}
-	baseDir = filepath.Clean(baseDir)
+	baseDir = filepath.Clean(absBaseDir)
 
 	resolved := merge.Clone(s, merge.Policy{})
 	resolved.Cwd = resolveSetupPath(baseDir, s.Cwd, baseDir)

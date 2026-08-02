@@ -17,7 +17,7 @@ var _ = Describe("migration provisioner fingerprint", func() {
 		}
 	}
 
-	It("is deterministic across filesystem and variable map order", func(ctx SpecContext) {
+	It("is deterministic across variable and option order", func(ctx SpecContext) {
 		first := NewProvisioner(baseFS(),
 			WithDir("migrations"),
 			WithName("query"),

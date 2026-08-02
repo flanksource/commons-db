@@ -45,7 +45,10 @@ const (
 
 // connectTimeout bounds the blocking Postgres calls made while resolving a test
 // database, so an unreachable server fails the test instead of hanging it.
-const connectTimeout = 30 * time.Second
+const (
+	connectTimeout      = 30 * time.Second
+	provisioningTimeout = 10 * time.Minute
+)
 
 // Options configures how a test database is resolved.
 type Options struct {
@@ -67,8 +70,8 @@ type Options struct {
 // template, and PrepareInstance reconciles every isolated clone.
 type Provisioner interface {
 	Fingerprint(context.Context) (string, error)
-	PrepareTemplate(context.Context, string) error
-	PrepareInstance(context.Context, string) error
+	PrepareTemplate(ctx context.Context, connection string) error
+	PrepareInstance(ctx context.Context, connection string) error
 }
 
 // DB is a resolved test database. The handle accessors are lazy and memoised,
@@ -219,7 +222,7 @@ func createConfiguredScratch(
 	unique string,
 ) (string, func() error, error) {
 	if opts.Provisioner != nil {
-		return acquireProvisionedScratch(ctx, adminURL, opts.Name, unique, opts.Provisioner, time.Now())
+		return acquireProvisionedScratchWithTimeout(ctx, adminURL, opts, unique)
 	}
 	return createScratch(adminURL, opts.Name, unique)
 }
@@ -231,11 +234,29 @@ func createEmbeddedScratch(
 	unique string,
 ) (string, func() error, error) {
 	if opts.Provisioner != nil {
-		return acquireProvisionedScratch(ctx, adminURL, opts.Name, unique, opts.Provisioner, time.Now())
+		return acquireProvisionedScratchWithTimeout(ctx, adminURL, opts, unique)
 	}
 	resolutionContext, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
 	return acquirePooledScratch(resolutionContext, adminURL, opts.Name, unique, time.Now())
+}
+
+func acquireProvisionedScratchWithTimeout(
+	ctx context.Context,
+	adminURL string,
+	opts Options,
+	unique string,
+) (string, func() error, error) {
+	provisioningContext, cancel := context.WithTimeout(ctx, provisioningTimeout)
+	defer cancel()
+	return acquireProvisionedScratch(
+		provisioningContext,
+		adminURL,
+		opts.Name,
+		unique,
+		opts.Provisioner,
+		time.Now(),
+	)
 }
 
 // close runs every closer in reverse order, so handles are released before the

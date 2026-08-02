@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/lib/pq"
 )
 
@@ -90,7 +91,9 @@ func (m templateManager) acquire(
 	}
 	templateName, err := m.ensureTemplate(ctx, session)
 	if err == nil {
-		err = m.cleanupStaleTemplates(ctx, session, templateName)
+		if cleanupErr := m.cleanupStaleTemplates(ctx, session, templateName); cleanupErr != nil {
+			logger.Warnf("dbtest: stale database template cleanup failed: %v", cleanupErr)
+		}
 	}
 	instanceName := managedDatabaseName(testDatabasePrefix, m.now, unique, name)
 	instanceCreated := false
@@ -135,17 +138,34 @@ func (m templateManager) ensureTemplate(ctx context.Context, session *poolSessio
 			matching = append(matching, database)
 		}
 	}
-	if len(matching) > 1 {
-		return "", fmt.Errorf("multiple database templates have identity %s", m.identity.key)
+	newest := -1
+	var newestCreated time.Time
+	for index, database := range matching {
+		if !database.isTemplate || database.allowsConnections {
+			continue
+		}
+		created, err := managedDatabaseCreatedWithPrefixes(
+			database.name,
+			templateDatabasePrefix,
+			templateDatabasePrefix,
+		)
+		if err != nil {
+			return "", err
+		}
+		if newest < 0 || created.After(newestCreated) {
+			newest, newestCreated = index, created
+		}
 	}
-	if len(matching) == 1 {
-		database := matching[0]
-		if database.isTemplate && !database.allowsConnections {
-			return database.name, nil
+	for index, database := range matching {
+		if index == newest {
+			continue
 		}
 		if err := dropTemplateDatabase(ctx, session, database); err != nil {
-			return "", fmt.Errorf("remove incomplete database template %s: %w", database.name, err)
+			return "", fmt.Errorf("remove duplicate database template %s: %w", database.name, err)
 		}
+	}
+	if newest >= 0 {
+		return matching[newest].name, nil
 	}
 	return m.createTemplate(ctx, session)
 }

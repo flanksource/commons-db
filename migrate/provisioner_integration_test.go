@@ -25,16 +25,12 @@ INSERT INTO public.clone_events(value) VALUES ('reconciled')`)},
 		}
 		provisioner := NewProvisioner(filesystem, WithName("provisioner-integration"))
 
-		first, firstCleanup, err := dbtest.Open(dbtest.Options{
+		first := dbtest.ForGinkgo(dbtest.Options{
 			Name: "migrate_provisioner_first", Provisioner: provisioner,
 		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(firstCleanup()).To(Succeed()) })
-		second, secondCleanup, err := dbtest.Open(dbtest.Options{
+		second := dbtest.ForGinkgo(dbtest.Options{
 			Name: "migrate_provisioner_second", Provisioner: provisioner,
 		})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(secondCleanup()).To(Succeed()) })
 
 		Expect(cloneEventCount(ctx, first.SQL())).To(Equal(2))
 		Expect(cloneEventCount(ctx, second.SQL())).To(Equal(2))
@@ -42,6 +38,7 @@ INSERT INTO public.clone_events(value) VALUES ('reconciled')`)},
 })
 
 func cloneEventCount(ctx context.Context, database *sql.DB) int {
+	GinkgoHelper()
 	var count int
 	Expect(database.QueryRowContext(ctx, "SELECT count(*) FROM public.clone_events").Scan(&count)).To(Succeed())
 	return count

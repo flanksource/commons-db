@@ -210,6 +210,54 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		Expect(cleanup()).To(Succeed())
 		Expect(databaseExists(ctx, adminURL, oldTemplate.name)).To(BeFalse())
 	})
+
+	It("reaps stale template databases left without metadata", func(ctx SpecContext) {
+		now := time.Now().UTC().Truncate(time.Second)
+		identity, err := newTemplateIdentity(fmt.Sprintf("orphan-%d", time.Now().UnixNano()))
+		Expect(err).NotTo(HaveOccurred())
+		orphanName := templateDatabaseName(identity, now.Add(-staleDatabaseAge-time.Hour))
+		createSealedTemplate(ctx, adminURL, "template0", orphanName, "")
+		DeferCleanup(dropTemplateIfPresent, adminURL, orphanName)
+		trigger := &integrationProvisioner{fingerprint: fmt.Sprintf("orphan-trigger-%d", time.Now().UnixNano())}
+		DeferCleanup(dropProvisionerTemplates, adminURL, trigger.fingerprint)
+
+		_, cleanup, err := acquireProvisionedScratch(
+			ctx, adminURL, "orphan-trigger", uniqueSuffix(), trigger, now,
+		)
+
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(expectProvisionerCleanup, cleanup)
+		Expect(cleanup()).To(Succeed())
+		Expect(databaseExists(ctx, adminURL, orphanName)).To(BeFalse())
+	})
+
+	It("keeps the newest sealed template when an identity has duplicates", func(ctx SpecContext) {
+		now := time.Now().UTC().Truncate(time.Second)
+		provisioner := &integrationProvisioner{fingerprint: fmt.Sprintf("duplicate-%d", time.Now().UnixNano())}
+		DeferCleanup(dropProvisionerTemplates, adminURL, provisioner.fingerprint)
+		_, cleanup, err := acquireProvisionedScratch(
+			ctx, adminURL, "original", uniqueSuffix(), provisioner, now,
+		)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(expectProvisionerCleanup, cleanup)
+		Expect(cleanup()).To(Succeed())
+		original := provisionerTemplate(adminURL, provisioner.fingerprint)
+		identity, err := newTemplateIdentity(provisioner.fingerprint)
+		Expect(err).NotTo(HaveOccurred())
+		duplicateName := templateDatabaseName(identity, now.Add(time.Second))
+		createSealedTemplate(ctx, adminURL, original.name, duplicateName, identity.metadata)
+		DeferCleanup(dropTemplateIfPresent, adminURL, duplicateName)
+
+		_, cleanup, err = acquireProvisionedScratch(
+			ctx, adminURL, "duplicate", uniqueSuffix(), provisioner, now.Add(2*time.Second),
+		)
+
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(expectProvisionerCleanup, cleanup)
+		Expect(cleanup()).To(Succeed())
+		Expect(databaseExists(ctx, adminURL, original.name)).To(BeFalse())
+		Expect(provisionerTemplate(adminURL, provisioner.fingerprint).name).To(Equal(duplicateName))
+	})
 })
 
 func executeProvisionerSQL(ctx context.Context, dsn, statement string) error {
@@ -223,10 +271,12 @@ func executeProvisionerSQL(ctx context.Context, dsn, statement string) error {
 }
 
 func expectProvisionerCleanup(cleanup func() error) {
+	GinkgoHelper()
 	Expect(cleanup()).To(Succeed())
 }
 
 func provisionerEventCount(ctx context.Context, dsn string) int {
+	GinkgoHelper()
 	database, err := sql.Open("postgres", dsn)
 	Expect(err).NotTo(HaveOccurred())
 	defer database.Close() //nolint:errcheck
@@ -236,6 +286,7 @@ func provisionerEventCount(ctx context.Context, dsn string) int {
 }
 
 func provisionerTemplate(adminURL, fingerprint string) templateDatabase {
+	GinkgoHelper()
 	identity, err := newTemplateIdentity(fingerprint)
 	Expect(err).NotTo(HaveOccurred())
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
@@ -255,6 +306,7 @@ func provisionerTemplate(adminURL, fingerprint string) templateDatabase {
 }
 
 func dropProvisionerTemplates(adminURL, fingerprint string) {
+	GinkgoHelper()
 	identity, err := newTemplateIdentity(fingerprint)
 	Expect(err).NotTo(HaveOccurred())
 	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
@@ -275,5 +327,43 @@ func dropProvisionerTemplates(adminURL, fingerprint string) {
 			}
 			Expect(session.dropDatabase(ctx, database.name, true)).To(Succeed())
 		}
+	}
+}
+
+func createSealedTemplate(ctx context.Context, adminURL, source, name, metadata string) {
+	GinkgoHelper()
+	session, err := openPoolSession(ctx, adminURL)
+	Expect(err).NotTo(HaveOccurred())
+	defer session.close() //nolint:errcheck
+	_, err = session.conn.ExecContext(
+		ctx,
+		"CREATE DATABASE "+pq.QuoteIdentifier(name)+" WITH TEMPLATE "+pq.QuoteIdentifier(source),
+	)
+	Expect(err).NotTo(HaveOccurred())
+	if metadata != "" {
+		_, err = session.conn.ExecContext(
+			ctx,
+			"COMMENT ON DATABASE "+pq.QuoteIdentifier(name)+" IS "+pq.QuoteLiteral(metadata),
+		)
+		Expect(err).NotTo(HaveOccurred())
+	}
+	_, err = session.conn.ExecContext(
+		ctx,
+		"ALTER DATABASE "+pq.QuoteIdentifier(name)+" WITH ALLOW_CONNECTIONS false IS_TEMPLATE true",
+	)
+	Expect(err).NotTo(HaveOccurred())
+}
+
+func dropTemplateIfPresent(adminURL, name string) {
+	GinkgoHelper()
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+	session, err := openPoolSession(ctx, adminURL)
+	Expect(err).NotTo(HaveOccurred())
+	defer session.close() //nolint:errcheck
+	database, err := databaseByName(ctx, session, name)
+	Expect(err).NotTo(HaveOccurred())
+	if database != nil {
+		Expect(dropTemplateDatabase(ctx, session, *database)).To(Succeed())
 	}
 }

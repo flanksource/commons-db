@@ -80,14 +80,18 @@ func (m templateManager) cleanupStaleTemplates(
 	if err != nil {
 		return err
 	}
+	var failures error
 	for _, database := range databases {
 		if database.name == currentName {
 			continue
 		}
 		key, ok := managedTemplateKey(database)
 		if !ok {
-			logger.Warnf("dbtest: skipping database template %q with unknown metadata", database.name)
-			continue
+			if database.metadata.Valid {
+				logger.Warnf("dbtest: skipping database template %q with unknown metadata", database.name)
+				continue
+			}
+			key = database.name
 		}
 		created, err := managedDatabaseCreatedWithPrefixes(
 			database.name,
@@ -104,7 +108,8 @@ func (m templateManager) cleanupStaleTemplates(
 		lockName := templateLockNamespace + key
 		locked, err := session.tryLock(ctx, lockName)
 		if err != nil {
-			return err
+			failures = errors.Join(failures, err)
+			continue
 		}
 		if !locked {
 			continue
@@ -112,10 +117,10 @@ func (m templateManager) cleanupStaleTemplates(
 		err = m.dropStaleTemplate(ctx, session, database)
 		err = errors.Join(err, session.unlock(ctx, lockName))
 		if err != nil {
-			return err
+			failures = errors.Join(failures, err)
 		}
 	}
-	return nil
+	return failures
 }
 
 func (m templateManager) dropStaleTemplate(

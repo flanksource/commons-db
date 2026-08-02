@@ -3,6 +3,7 @@ package migrate
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -76,7 +77,54 @@ func (p *SchemaProvisioner) PrepareTemplate(ctx context.Context, connection stri
 // PrepareInstance reconciles instance-specific and always-run migrations after
 // cloning a prepared template.
 func (p *SchemaProvisioner) PrepareInstance(ctx context.Context, connection string) error {
-	return p.prepare(ctx, connection)
+	if p == nil {
+		return errors.New("migration provisioner is nil")
+	}
+	if strings.TrimSpace(connection) == "" {
+		return errors.New("connection string is empty")
+	}
+	if p.schemaFS == nil {
+		return errors.New("schema filesystem is nil")
+	}
+	scripts, err := loadScripts(p.schemaFS, p.config.dir)
+	if err != nil {
+		return err
+	}
+	_, security, err := loadHCL(p.schemaFS, p.config.dir, p.config.input)
+	if err != nil {
+		return err
+	}
+	database, err := sql.Open("postgres", connection)
+	if err != nil {
+		return fmt.Errorf("open SQL migration database: %w", err)
+	}
+	defer database.Close() //nolint:errcheck
+	if err := database.PingContext(ctx); err != nil {
+		return fmt.Errorf("connect SQL migration database: %w", err)
+	}
+	if err := ensureMetadataTables(ctx, database); err != nil {
+		return err
+	}
+	selected, err := selectScripts(ctx, database, p.config.name, scripts)
+	if err != nil {
+		return err
+	}
+	ordered, err := topologicalScripts(scripts, selected)
+	if err != nil {
+		return err
+	}
+	if err := runScriptPhase(ctx, database, p.config.name, ordered, phasePre); err != nil {
+		return err
+	}
+	if err := runScriptPhase(ctx, database, p.config.name, ordered, phasePost); err != nil {
+		return err
+	}
+	if err := retryOnLockContention(ctx, "reconcile database security", func() error {
+		return reconcileSecurity(ctx, database, p.config.name, security)
+	}); err != nil {
+		return fmt.Errorf("reconcile database security: %w", err)
+	}
+	return nil
 }
 
 func (p *SchemaProvisioner) prepare(ctx context.Context, connection string) error {
