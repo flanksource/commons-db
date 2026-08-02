@@ -128,8 +128,7 @@ func TestSetupResolveSharesNoMutableStateWithTheOriginal(t *testing.T) {
 			Mode:     CheckoutLocal,
 			Path:     "source",
 			Depth:    &depth,
-			Dirty:    &Dirty{Stash: StashAll},
-			Worktree: &Worktree{Mode: WorktreeNew},
+			Worktree: &Worktree{Mode: WorktreeNew, Uncommitted: CloneClone},
 		},
 	}
 
@@ -140,14 +139,14 @@ func TestSetupResolveSharesNoMutableStateWithTheOriginal(t *testing.T) {
 	resolved.Connections.AWS.Region = "us-east-1"
 	resolved.EnvVars[0].ValueFrom.SecretKeyRef.Key = "secret-mutated"
 	*resolved.Checkout.Depth = depth + 1
-	resolved.Checkout.Dirty.Stash = StashNone
+	resolved.Checkout.Worktree.Uncommitted = CloneSkip
 	resolved.Checkout.Worktree.Mode = WorktreeExisting
 
 	assert.Equal(t, originalConfigItem, *setup.Connections.FromConfigItem)
 	assert.Equal(t, originalRegion, setup.Connections.AWS.Region)
 	assert.Equal(t, originalSecretName, setup.EnvVars[0].ValueFrom.SecretKeyRef.Key)
 	assert.Equal(t, depth, *setup.Checkout.Depth)
-	assert.Equal(t, StashAll, setup.Checkout.Dirty.Stash)
+	assert.Equal(t, CloneClone, setup.Checkout.Worktree.Uncommitted)
 	assert.Equal(t, WorktreeNew, setup.Checkout.Worktree.Mode)
 }
 
@@ -170,12 +169,14 @@ func TestSetupToExecCheckoutModes(t *testing.T) {
 			Path:  "/repo",
 			Ref:   "feature",
 			Depth: &depth,
-			Dirty: &Dirty{Stash: StashAll, Since: "main"},
+			Since: "main",
 			Worktree: &Worktree{
-				Mode:   WorktreeNew,
-				Prefix: "captain",
-				Base:   "main",
-				Keep:   true,
+				Mode:        WorktreeNew,
+				Prefix:      "captain",
+				Base:        "main",
+				Keep:        true,
+				Uncommitted: CloneClone,
+				Ignored:     CloneSkip,
 			},
 		},
 	}.ToExec()
@@ -184,15 +185,58 @@ func TestSetupToExecCheckoutModes(t *testing.T) {
 	assert.Equal(t, "/repo", exec.Checkout.Path)
 	assert.Equal(t, "feature", exec.Checkout.Branch)
 	assert.Equal(t, &depth, exec.Checkout.Depth)
-	require.NotNil(t, exec.Checkout.Dirty)
-	assert.True(t, exec.Checkout.Dirty.Staged)
-	assert.True(t, exec.Checkout.Dirty.Unstaged)
-	assert.True(t, exec.Checkout.Dirty.Untracked)
-	assert.Equal(t, "main", exec.Checkout.Dirty.Since)
+	assert.Equal(t, "main", exec.Checkout.Since)
 	require.NotNil(t, exec.Checkout.Worktree)
 	assert.Equal(t, "captain", exec.Checkout.Worktree.Prefix)
 	assert.Equal(t, "main", exec.Checkout.Worktree.Base)
 	assert.True(t, exec.Checkout.Worktree.Keep)
+	assert.True(t, exec.Checkout.Worktree.Uncommitted)
+	assert.False(t, exec.Checkout.Worktree.Ignored)
+}
+
+func TestWorktreeApplyDefaults(t *testing.T) {
+	tests := []struct {
+		name        string
+		worktree    Worktree
+		want        Worktree
+		wantWarning bool
+	}{
+		{
+			name:     "bare new worktree carries everything from HEAD",
+			worktree: Worktree{Mode: WorktreeNew},
+			want:     Worktree{Mode: WorktreeNew, Base: "HEAD", Uncommitted: CloneClone, Ignored: CloneClone},
+		},
+		{
+			name:        "non-HEAD base degrades uncommitted to skip",
+			worktree:    Worktree{Mode: WorktreeNew, Base: "main"},
+			want:        Worktree{Mode: WorktreeNew, Base: "main", Uncommitted: CloneSkip, Ignored: CloneClone},
+			wantWarning: true,
+		},
+		{
+			name:     "explicit uncommitted survives a non-HEAD base",
+			worktree: Worktree{Mode: WorktreeNew, Base: "main", Uncommitted: CloneClone},
+			want:     Worktree{Mode: WorktreeNew, Base: "main", Uncommitted: CloneClone, Ignored: CloneClone},
+		},
+		{
+			name:     "explicit values are never overwritten",
+			worktree: Worktree{Mode: WorktreeNew, Base: "v1.2.3", Prefix: "custom", Uncommitted: CloneSkip, Ignored: CloneSkip},
+			want:     Worktree{Mode: WorktreeNew, Base: "v1.2.3", Prefix: "custom", Uncommitted: CloneSkip, Ignored: CloneSkip},
+		},
+		{
+			name:     "mode none is left untouched",
+			worktree: Worktree{Mode: WorktreeNone},
+			want:     Worktree{Mode: WorktreeNone},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.worktree
+			warnings := got.ApplyDefaults()
+			assert.Equal(t, tt.want, got)
+			assert.Equal(t, tt.wantWarning, len(warnings) > 0, "warnings: %v", warnings)
+		})
+	}
 }
 
 func TestSetupToExecExistingWorktree(t *testing.T) {
@@ -233,40 +277,103 @@ func TestSetupEnvLocalGitPath(t *testing.T) {
 	assert.NotEmpty(t, setup.Extra["commit"])
 }
 
-func TestSetupEnvLocalWorktreeAppliesDirtyState(t *testing.T) {
-	ctx := context.New()
+// dirtyShellGitRepo seeds a repo with one staged edit, one unstaged edit, one
+// untracked file and one gitignored file — the four categories a worktree can
+// carry or leave behind.
+func dirtyShellGitRepo(t *testing.T) string {
+	t.Helper()
 	repo := initShellGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("ignored.txt\nvendor/\n"), 0644))
+	runShellGit(t, repo, "add", ".gitignore")
+	runShellGit(t, repo, "commit", "-q", "-m", "gitignore")
+
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "staged.txt"), []byte("staged\n"), 0644))
 	runShellGit(t, repo, "add", "staged.txt")
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "seed.txt"), []byte("seed\nunstaged\n"), 0644))
 	require.NoError(t, os.WriteFile(filepath.Join(repo, "untracked.txt"), []byte("untracked\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "ignored.txt"), []byte("ignored\n"), 0644))
+	require.NoError(t, os.MkdirAll(filepath.Join(repo, "vendor", "nested"), 0755))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "vendor", "nested", "dep.txt"), []byte("dep\n"), 0644))
+	return repo
+}
 
-	setup, err := SetupEnv(ctx, &Exec{
-		BaseDir: t.TempDir(),
-		Checkout: &connection.GitConnection{
-			Path: repo,
-			Worktree: &connection.GitWorktree{
-				Enabled: true,
-			},
-			Dirty: &connection.GitDirty{
-				Staged:    true,
-				Unstaged:  true,
-				Untracked: true,
-			},
-		},
+func worktreeSetup(t *testing.T, repo string, wt *connection.GitWorktree) *SetupResult {
+	t.Helper()
+	setup, err := SetupEnv(context.New(), &Exec{
+		BaseDir:  t.TempDir(),
+		Checkout: &connection.GitConnection{Path: repo, Worktree: wt},
 	})
 	require.NoError(t, err)
-	defer setup.Cleanup()
-
+	t.Cleanup(func() { _ = setup.Cleanup() })
 	require.NotEqual(t, repo, setup.Cwd)
+	return setup
+}
+
+func TestSetupEnvWorktreeCarriesUncommittedAndIgnored(t *testing.T) {
+	repo := dirtyShellGitRepo(t)
+	before := gitLinesForTest(t, repo, "status", "--porcelain")
+
+	setup := worktreeSetup(t, repo, &connection.GitWorktree{
+		Enabled: true, Uncommitted: true, Ignored: true,
+	})
+
 	assert.FileExists(t, filepath.Join(setup.Cwd, "staged.txt"))
 	assert.FileExists(t, filepath.Join(setup.Cwd, "untracked.txt"))
+	assert.FileExists(t, filepath.Join(setup.Cwd, "ignored.txt"))
+	assert.FileExists(t, filepath.Join(setup.Cwd, "vendor", "nested", "dep.txt"))
 	assert.Contains(t, string(readFile(t, filepath.Join(setup.Cwd, "seed.txt"))), "unstaged")
 
 	assert.Contains(t, gitLinesForTest(t, setup.Cwd, "diff", "--cached", "--name-only"), "staged.txt")
 	assert.Contains(t, gitLinesForTest(t, setup.Cwd, "diff", "--name-only"), "seed.txt")
 	assert.Contains(t, gitLinesForTest(t, setup.Cwd, "ls-files", "--others", "--exclude-standard"), "untracked.txt")
 	assert.ElementsMatch(t, []string{"seed.txt", "staged.txt", "untracked.txt"}, setup.Extra["dirtyFiles"])
+
+	// The source repo is read-only throughout: nothing is stashed, so a crashed
+	// run can never strand the developer's work.
+	assert.Equal(t, before, gitLinesForTest(t, repo, "status", "--porcelain"))
+}
+
+func TestSetupEnvWorktreeSkipsUncommittedAndIgnored(t *testing.T) {
+	repo := dirtyShellGitRepo(t)
+
+	setup := worktreeSetup(t, repo, &connection.GitWorktree{Enabled: true})
+
+	assert.NoFileExists(t, filepath.Join(setup.Cwd, "staged.txt"))
+	assert.NoFileExists(t, filepath.Join(setup.Cwd, "untracked.txt"))
+	assert.NoFileExists(t, filepath.Join(setup.Cwd, "ignored.txt"))
+	assert.NoFileExists(t, filepath.Join(setup.Cwd, "vendor", "nested", "dep.txt"))
+	assert.NotContains(t, string(readFile(t, filepath.Join(setup.Cwd, "seed.txt"))), "unstaged")
+	assert.Empty(t, gitLinesForTest(t, setup.Cwd, "status", "--porcelain"))
+}
+
+func TestSetupEnvWorktreeIgnoredOnlySkipsUncommitted(t *testing.T) {
+	repo := dirtyShellGitRepo(t)
+
+	setup := worktreeSetup(t, repo, &connection.GitWorktree{Enabled: true, Ignored: true})
+
+	assert.FileExists(t, filepath.Join(setup.Cwd, "ignored.txt"))
+	assert.FileExists(t, filepath.Join(setup.Cwd, "vendor", "nested", "dep.txt"))
+	assert.NoFileExists(t, filepath.Join(setup.Cwd, "staged.txt"))
+	assert.NoFileExists(t, filepath.Join(setup.Cwd, "untracked.txt"))
+	// .git/ is never copied — the worktree has its own gitdir pointer file.
+	assert.NoDirExists(t, filepath.Join(setup.Cwd, ".git", "refs"))
+}
+
+// Copies must be independent of the source: a copy-on-write clone is fine, a
+// hardlink is not — editing the worktree copy would corrupt the source repo.
+func TestSetupEnvWorktreeCopiesAreIndependentOfSource(t *testing.T) {
+	repo := dirtyShellGitRepo(t)
+
+	setup := worktreeSetup(t, repo, &connection.GitWorktree{
+		Enabled: true, Uncommitted: true, Ignored: true,
+	})
+
+	for _, name := range []string{"untracked.txt", "ignored.txt"} {
+		copied := filepath.Join(setup.Cwd, name)
+		require.NoError(t, os.WriteFile(copied, []byte("rewritten by the worktree\n"), 0644))
+		assert.NotContains(t, string(readFile(t, filepath.Join(repo, name))), "rewritten",
+			"%s in the source repo was modified through its worktree copy", name)
+	}
 }
 
 func initShellGitRepo(t *testing.T) string {

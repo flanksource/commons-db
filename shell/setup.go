@@ -48,9 +48,34 @@ type Checkout struct {
 	Connection string       `json:"connection,omitempty" yaml:"connection,omitempty"`
 	Ref        string       `json:"ref,omitempty" yaml:"ref,omitempty"`
 	Depth      *int         `json:"depth,omitempty" yaml:"depth,omitempty"`
-	Dirty      *Dirty       `json:"dirty,omitempty" yaml:"dirty,omitempty"`
-	Worktree   *Worktree    `json:"worktree,omitempty" yaml:"worktree,omitempty"`
+	// Since is a commit-ish. When set, the merge-base diff against HEAD is
+	// folded into the reported `dirtyFiles`. Purely informational — it has no
+	// bearing on what the worktree contains.
+	Since string `json:"since,omitempty" yaml:"since,omitempty"`
+	// Deprecated: no-op, retained so existing configs keep parsing. What a new
+	// worktree contains is controlled by Worktree.Uncommitted and
+	// Worktree.Ignored; dirtyFiles reporting is controlled by Since.
+	Dirty    *Dirty    `json:"dirty,omitempty" yaml:"dirty,omitempty"`
+	Worktree *Worktree `json:"worktree,omitempty" yaml:"worktree,omitempty"`
 }
+
+// Deprecated: no-op. See Checkout.Dirty.
+type Dirty struct {
+	Stash StashMode `json:"stash,omitempty" yaml:"stash,omitempty"`
+	Since string    `json:"since,omitempty" yaml:"since,omitempty"`
+}
+
+// Deprecated: no-op. See Checkout.Dirty.
+type StashMode string
+
+// Deprecated: no-op. See Checkout.Dirty.
+const (
+	StashNone      StashMode = "none"
+	StashUntracked StashMode = "untracked"
+	StashUnstaged  StashMode = "unstaged"
+	StashStaged    StashMode = "staged"
+	StashAll       StashMode = "all"
+)
 
 type CheckoutMode string
 
@@ -60,28 +85,33 @@ const (
 	CheckoutRemote CheckoutMode = "remote"
 )
 
-type Dirty struct {
-	Stash StashMode `json:"stash,omitempty" yaml:"stash,omitempty"`
-	Since string    `json:"since,omitempty" yaml:"since,omitempty"`
-}
-
-type StashMode string
-
-const (
-	StashNone      StashMode = "none"
-	StashUntracked StashMode = "untracked"
-	StashUnstaged  StashMode = "unstaged"
-	StashStaged    StashMode = "staged"
-	StashAll       StashMode = "all"
-)
-
 type Worktree struct {
 	Mode   WorktreeMode `json:"mode,omitempty" yaml:"mode,omitempty"`
 	Prefix string       `json:"prefix,omitempty" yaml:"prefix,omitempty"`
 	Base   string       `json:"base,omitempty" yaml:"base,omitempty"`
 	Path   string       `json:"path,omitempty" yaml:"path,omitempty"`
 	Keep   bool         `json:"keep,omitempty" yaml:"keep,omitempty"`
+
+	// Uncommitted controls whether staged, unstaged and untracked changes are
+	// carried from the source repo into the new worktree. Nothing is ever
+	// stashed — the source repo is never mutated.
+	Uncommitted CloneMode `json:"uncommitted,omitempty" yaml:"uncommitted,omitempty"`
+	// Ignored controls whether gitignored content (node_modules/, .env, build
+	// caches) is copied into the new worktree. `git worktree add` never brings
+	// it, so without this the worktree is missing everything .gitignore hides.
+	Ignored CloneMode `json:"ignored,omitempty" yaml:"ignored,omitempty"`
 }
+
+// CloneMode says what a new worktree ends up containing. It describes the
+// destination, not a mechanism applied to the source.
+type CloneMode string
+
+const (
+	CloneClone CloneMode = "clone"
+	CloneSkip  CloneMode = "skip"
+)
+
+func (c CloneMode) IsClone() bool { return c == CloneClone }
 
 type WorktreeMode string
 
@@ -90,6 +120,38 @@ const (
 	WorktreeNew      WorktreeMode = "new"
 	WorktreeExisting WorktreeMode = "existing"
 )
+
+// ApplyDefaults fills in the worktree defaults and returns any downgrade
+// warnings the caller should surface. Callers opt in explicitly — Prepare does
+// not call it, so an unset Worktree keeps git's own fallbacks.
+//
+// Defaults: base=HEAD, ignored=clone, uncommitted=clone when base is HEAD.
+// Uncommitted work is a diff against *your* HEAD; replaying it onto a worktree
+// branched elsewhere applies to the wrong context, so a non-HEAD base degrades
+// uncommitted to skip unless it was set explicitly.
+func (w *Worktree) ApplyDefaults() []string {
+	if w == nil || w.Mode == "" || w.Mode == WorktreeNone {
+		return nil
+	}
+
+	var warnings []string
+	if strings.TrimSpace(w.Base) == "" {
+		w.Base = "HEAD"
+	}
+	if w.Ignored == "" {
+		w.Ignored = CloneClone
+	}
+	if w.Uncommitted == "" {
+		if w.Base == "HEAD" {
+			w.Uncommitted = CloneClone
+		} else {
+			w.Uncommitted = CloneSkip
+			warnings = append(warnings, fmt.Sprintf(
+				"worktree.base=%s is not HEAD; defaulting uncommitted: skip — set uncommitted: clone to force", w.Base))
+		}
+	}
+	return warnings
+}
 
 func Prepare(ctx context.Context, setup *Setup) (*SetupResult, error) {
 	if setup == nil {
@@ -132,7 +194,7 @@ func (c *Checkout) toGitConnection(cwd string) *connection.GitConnection {
 		Connection: c.Connection,
 		Branch:     c.Ref,
 		Depth:      c.Depth,
-		Dirty:      c.Dirty.toGitDirty(),
+		Since:      c.Since,
 	}
 	switch mode {
 	case CheckoutRemote:
@@ -157,29 +219,6 @@ func (c *Checkout) toGitConnection(cwd string) *connection.GitConnection {
 	return git
 }
 
-func (d *Dirty) toGitDirty() *connection.GitDirty {
-	if d == nil {
-		return nil
-	}
-	out := &connection.GitDirty{Since: d.Since}
-	switch d.Stash {
-	case StashUntracked:
-		out.Untracked = true
-	case StashUnstaged:
-		out.Unstaged = true
-	case StashStaged:
-		out.Staged = true
-	case StashAll:
-		out.Staged = true
-		out.Unstaged = true
-		out.Untracked = true
-	}
-	if out.IsEmpty() {
-		return nil
-	}
-	return out
-}
-
 func (w *Worktree) toGitWorktree() *connection.GitWorktree {
 	if w == nil || w.Mode == "" || w.Mode == WorktreeNone {
 		return nil
@@ -191,10 +230,12 @@ func (w *Worktree) toGitWorktree() *connection.GitWorktree {
 		return &connection.GitWorktree{Path: w.Path}
 	}
 	return &connection.GitWorktree{
-		Enabled: true,
-		Prefix:  w.Prefix,
-		Base:    w.Base,
-		Keep:    w.Keep,
+		Enabled:     true,
+		Prefix:      w.Prefix,
+		Base:        w.Base,
+		Keep:        w.Keep,
+		Uncommitted: w.Uncommitted.IsClone(),
+		Ignored:     w.Ignored.IsClone(),
 	}
 }
 
