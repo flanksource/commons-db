@@ -12,6 +12,14 @@
 // When COMMONS_DB_URL is unset, dbtest starts or reuses the persistent embedded
 // PostgreSQL server under $TMPDIR/commons-db and checks out an isolated
 // database from its cross-process pool.
+//
+// Supplying Options.Provisioner replaces the empty-database pool with a
+// content-addressed PostgreSQL template. The first matching request prepares
+// and seals the template; every request clones it, runs instance preparation,
+// and drops only the clone during cleanup. Templates are retained for reuse and
+// superseded templates older than 24 hours are removed when they are unlocked.
+// Provisioners require database creation and are rejected when
+// COMMONS_DB_CREATE=false.
 package dbtest
 
 import (
@@ -48,6 +56,19 @@ type Options struct {
 	DataDir string
 	// LogName labels the gorm SQL logger. Defaults to Name.
 	LogName string
+	// Provisioner prepares a reusable schema template and reconciles each
+	// isolated database cloned from it. It cannot be used when
+	// COMMONS_DB_CREATE=false.
+	Provisioner Provisioner
+}
+
+// Provisioner describes the database content required by a test. Fingerprint
+// identifies reusable template content, PrepareTemplate builds a missing
+// template, and PrepareInstance reconciles every isolated clone.
+type Provisioner interface {
+	Fingerprint(context.Context) (string, error)
+	PrepareTemplate(context.Context, string) error
+	PrepareInstance(context.Context, string) error
 }
 
 // DB is a resolved test database. The handle accessors are lazy and memoised,
@@ -144,8 +165,15 @@ func (d *DB) connect() {
 // Handle accessors on the returned DB panic on failure. ForT and ForGinkgo
 // install their framework's failure handler instead.
 func Open(opts Options) (*DB, func() error, error) {
+	return open(context.Background(), opts)
+}
+
+func open(ctx context.Context, opts Options) (*DB, func() error, error) {
 	if opts.Name == "" {
 		return nil, nil, errors.New("dbtest.Options.Name is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
 	}
 
 	db := &DB{
@@ -157,9 +185,12 @@ func Open(opts Options) (*DB, func() error, error) {
 	url := os.Getenv(EnvURL)
 	switch {
 	case url != "" && os.Getenv(EnvCreate) == "false":
+		if opts.Provisioner != nil {
+			return nil, nil, errors.New("dbtest: Provisioner cannot be used with COMMONS_DB_CREATE=false")
+		}
 		db.dsn = url
 	case url != "":
-		dsn, drop, err := createScratch(url, opts.Name, db.unique)
+		dsn, drop, err := createConfiguredScratch(ctx, url, opts, db.unique)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -170,9 +201,7 @@ func Open(opts Options) (*DB, func() error, error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-		defer cancel()
-		dsn, drop, err := acquirePooledScratch(ctx, adminURL, opts.Name, db.unique, time.Now())
+		dsn, drop, err := createEmbeddedScratch(ctx, adminURL, opts, db.unique)
 		if err != nil {
 			return nil, nil, fmt.Errorf("check out ephemeral database: %w", err)
 		}
@@ -181,6 +210,32 @@ func Open(opts Options) (*DB, func() error, error) {
 	}
 
 	return db, db.close, nil
+}
+
+func createConfiguredScratch(
+	ctx context.Context,
+	adminURL string,
+	opts Options,
+	unique string,
+) (string, func() error, error) {
+	if opts.Provisioner != nil {
+		return acquireProvisionedScratch(ctx, adminURL, opts.Name, unique, opts.Provisioner, time.Now())
+	}
+	return createScratch(adminURL, opts.Name, unique)
+}
+
+func createEmbeddedScratch(
+	ctx context.Context,
+	adminURL string,
+	opts Options,
+	unique string,
+) (string, func() error, error) {
+	if opts.Provisioner != nil {
+		return acquireProvisionedScratch(ctx, adminURL, opts.Name, unique, opts.Provisioner, time.Now())
+	}
+	resolutionContext, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	return acquirePooledScratch(resolutionContext, adminURL, opts.Name, unique, time.Now())
 }
 
 // close runs every closer in reverse order, so handles are released before the

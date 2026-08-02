@@ -4,6 +4,26 @@
 SQL migrations. Every bundle should use a stable `WithName` when more than one
 bundle can share a database.
 
+## Reusable test database templates
+
+`migrate.NewProvisioner` adapts the same HCL and SQL bundle to `dbtest.Options.Provisioner`:
+
+```go
+handle := dbtest.ForT(t, dbtest.Options{
+    Name:    "query_sessions",
+    LogName: "query-sessions-test",
+    Provisioner: migrate.NewProvisioner(
+        querySchema,
+        migrate.WithDir("migrations"),
+        migrate.WithName("query"),
+    ),
+})
+```
+
+The provisioner fingerprints the migration name, directory, Atlas options, variables, and every HCL and SQL file. `dbtest` prepares one sealed PostgreSQL template for that fingerprint, clones an isolated database for each call, and keeps the template for later tests. Normal hash-gated SQL is already present in the clone; `runs: always` scripts and security reconciliation still run for every instance.
+
+This option requires database creation. `dbtest` fails before invoking the provisioner when `COMMONS_DB_CREATE=false` because that mode targets the configured database directly.
+
 SQL files default to the post-Atlas phase. Directives are read from the leading
 comment header:
 
