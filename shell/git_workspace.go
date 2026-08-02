@@ -2,6 +2,7 @@ package shell
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -59,15 +60,16 @@ func prepareLocalCheckout(ctx context.Context, baseDir string, checkout *connect
 	extra["git"] = "local"
 	extra["path"] = source
 
-	if checkout.Dirty != nil && !checkout.Dirty.IsEmpty() {
-		files, err := dirtyFiles(ctx, source, checkout.Dirty)
+	wt := checkout.Worktree
+	if checkout.Since != "" || (wt.IsEnabled() && wt.Uncommitted) {
+		files, err := dirtyFiles(ctx, source, checkout.Since)
 		if err != nil {
 			return "", nil, nil, err
 		}
 		extra["dirtyFiles"] = files
 	}
 
-	if checkout.Worktree == nil || !checkout.Worktree.IsEnabled() {
+	if !wt.IsEnabled() {
 		return source, extra, nil, nil
 	}
 
@@ -75,11 +77,9 @@ func prepareLocalCheckout(ctx context.Context, baseDir string, checkout *connect
 	if err != nil {
 		return "", nil, nil, err
 	}
-	if checkout.Dirty != nil && !checkout.Dirty.IsEmpty() {
-		if err := applyDirtyState(ctx, source, worktree, checkout.Dirty); err != nil {
-			_ = cleanup()
-			return "", nil, nil, err
-		}
+	if err := populateWorktree(ctx, source, worktree, wt); err != nil {
+		_ = cleanup()
+		return "", nil, nil, err
 	}
 	extra["worktree"] = worktree
 	return worktree, extra, cleanup, nil
@@ -140,12 +140,11 @@ func addNativeWorktree(ctx context.Context, repo, baseDir string, checkout *conn
 	return target, cleanup, nil
 }
 
-func applyDirtyState(ctx context.Context, source, target string, dirty *connection.GitDirty) error {
-	if dirty == nil || dirty.IsEmpty() {
-		return nil
-	}
-
-	if dirty.Staged {
+// populateWorktree carries content the freshly-created worktree does not have:
+// uncommitted work (staged + unstaged + untracked) and gitignored content.
+// Both are read-only against the source — nothing is ever stashed there.
+func populateWorktree(ctx context.Context, source, target string, wt *connection.GitWorktree) error {
+	if wt.Uncommitted {
 		patch, err := gitOutput(ctx, source, "diff", "--cached", "--binary")
 		if err != nil {
 			return fmt.Errorf("read staged patch: %w", err)
@@ -155,15 +154,8 @@ func applyDirtyState(ctx context.Context, source, target string, dirty *connecti
 				return fmt.Errorf("apply staged patch: %w", err)
 			}
 		}
-	}
 
-	if dirty.Unstaged {
-		args := []string{"diff", "--binary"}
-		if !dirty.Staged {
-			args = []string{"diff", "--binary", "HEAD"}
-		}
-		patch, err := gitOutput(ctx, source, args...)
-		if err != nil {
+		if patch, err = gitOutput(ctx, source, "diff", "--binary"); err != nil {
 			return fmt.Errorf("read unstaged patch: %w", err)
 		}
 		if len(bytes.TrimSpace(patch)) > 0 {
@@ -171,10 +163,18 @@ func applyDirtyState(ctx context.Context, source, target string, dirty *connecti
 				return fmt.Errorf("apply unstaged patch: %w", err)
 			}
 		}
+
+		if err := copyListedFiles(ctx, source, target, "untracked",
+			"ls-files", "--others", "--exclude-standard", "-z"); err != nil {
+			return err
+		}
 	}
 
-	if dirty.Untracked {
-		if err := copyUntrackedFiles(ctx, source, target); err != nil {
+	if wt.Ignored {
+		// --others --ignored --exclude-standard is the exact complement of the
+		// untracked listing above: `git worktree add` brings neither.
+		if err := copyListedFiles(ctx, source, target, "ignored",
+			"ls-files", "--others", "--ignored", "--exclude-standard", "-z"); err != nil {
 			return err
 		}
 	}
@@ -182,7 +182,7 @@ func applyDirtyState(ctx context.Context, source, target string, dirty *connecti
 	return nil
 }
 
-func dirtyFiles(ctx context.Context, source string, dirty *connection.GitDirty) ([]string, error) {
+func dirtyFiles(ctx context.Context, source, since string) ([]string, error) {
 	seen := map[string]struct{}{}
 	add := func(files []string) {
 		for _, file := range files {
@@ -193,10 +193,10 @@ func dirtyFiles(ctx context.Context, source string, dirty *connection.GitDirty) 
 		}
 	}
 
-	if dirty.Since != "" {
-		base, err := gitString(ctx, source, "merge-base", "HEAD", dirty.Since)
+	if since != "" {
+		base, err := gitString(ctx, source, "merge-base", "HEAD", since)
 		if err != nil {
-			return nil, fmt.Errorf("git merge-base HEAD %s: %w", dirty.Since, err)
+			return nil, fmt.Errorf("git merge-base HEAD %s: %w", since, err)
 		}
 		files, err := gitLines(ctx, source, "diff", "--name-only", base+"...HEAD")
 		if err != nil {
@@ -204,24 +204,15 @@ func dirtyFiles(ctx context.Context, source string, dirty *connection.GitDirty) 
 		}
 		add(files)
 	}
-	if dirty.Staged {
-		files, err := gitLines(ctx, source, "diff", "--cached", "--name-only")
+
+	for _, args := range [][]string{
+		{"diff", "--cached", "--name-only"},
+		{"diff", "--name-only"},
+		{"ls-files", "--others", "--exclude-standard"},
+	} {
+		files, err := gitLines(ctx, source, args...)
 		if err != nil {
-			return nil, fmt.Errorf("git diff --cached --name-only: %w", err)
-		}
-		add(files)
-	}
-	if dirty.Unstaged {
-		files, err := gitLines(ctx, source, "diff", "--name-only")
-		if err != nil {
-			return nil, fmt.Errorf("git diff --name-only: %w", err)
-		}
-		add(files)
-	}
-	if dirty.Untracked {
-		files, err := gitLines(ctx, source, "ls-files", "--others", "--exclude-standard")
-		if err != nil {
-			return nil, fmt.Errorf("git ls-files --others: %w", err)
+			return nil, fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 		}
 		add(files)
 	}
@@ -234,58 +225,88 @@ func dirtyFiles(ctx context.Context, source string, dirty *connection.GitDirty) 
 	return out, nil
 }
 
-func copyUntrackedFiles(ctx context.Context, source, target string) error {
-	out, err := gitOutput(ctx, source, "ls-files", "--others", "--exclude-standard", "-z")
+// copyListedFiles copies every path emitted by a NUL-separated `git ls-files`
+// invocation from source into target.
+func copyListedFiles(ctx context.Context, source, target, kind string, args ...string) error {
+	out, err := gitOutput(ctx, source, args...)
 	if err != nil {
-		return fmt.Errorf("git ls-files --others: %w", err)
+		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
 	}
+
+	var copied, cloned, bytesCopied int64
 	for _, name := range strings.Split(string(out), "\x00") {
 		name = strings.TrimSpace(name)
-		if name == "" {
+		if name == "" || name == ".git" || strings.HasPrefix(name, ".git/") {
 			continue
 		}
 		src := filepath.Join(source, name)
 		dst := filepath.Join(target, name)
-		if err := copyPath(src, dst); err != nil {
-			return fmt.Errorf("copy untracked %s: %w", name, err)
+		n, cow, err := copyPath(src, dst)
+		if err != nil {
+			return fmt.Errorf("copy %s %s: %w", kind, name, err)
 		}
+		copied++
+		bytesCopied += n
+		if cow {
+			cloned++
+		}
+	}
+
+	if copied > 0 {
+		// A byte copy of a large ignored tree (node_modules) is the difference
+		// between a fixture that starts instantly and one that doesn't, so make
+		// the fallback visible rather than mysterious.
+		ctx.Logger.V(3).Infof("copied %d %s files (%d bytes) into %s, %d via copy-on-write",
+			copied, kind, bytesCopied, target, cloned)
 	}
 	return nil
 }
 
-func copyPath(src, dst string) error {
+// copyPath copies a single path, preferring a copy-on-write clone
+// (clonefile(2) on APFS, FICLONE on btrfs/XFS) over a byte copy. It reports the
+// bytes involved and whether the clone path was taken.
+//
+// It deliberately never hardlinks: a hardlinked file edited inside the worktree
+// would corrupt the source repo.
+func copyPath(src, dst string) (int64, bool, error) {
 	info, err := os.Lstat(src)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return err
+		return 0, false, err
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		target, err := os.Readlink(src)
 		if err != nil {
-			return err
+			return 0, false, err
 		}
 		_ = os.RemoveAll(dst)
-		return os.Symlink(target, dst)
+		return 0, false, os.Symlink(target, dst)
 	}
 	if !info.Mode().IsRegular() {
-		return nil
+		return 0, false, nil
+	}
+
+	if err := cloneFile(src, dst); err == nil {
+		return info.Size(), true, nil
+	} else if !errors.Is(err, errCloneUnsupported) {
+		return 0, false, err
 	}
 
 	in, err := os.Open(src)
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	defer in.Close()
 
 	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
 	if err != nil {
-		return err
+		return 0, false, err
 	}
 	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	n, err := io.Copy(out, in)
+	return n, false, err
 }
 
 func gitRoot(ctx context.Context, dir string) (string, error) {

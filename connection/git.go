@@ -248,8 +248,11 @@ type GitConnection struct {
 	Depth  *int   `yaml:"depth,omitempty" json:"depth,omitempty"`
 	// Worktree creates a native git worktree for the checkout before running.
 	Worktree *GitWorktree `yaml:"worktree,omitempty" json:"worktree,omitempty"`
-	// Dirty selects local staged/unstaged/untracked changes to copy into a
-	// temporary worktree when Path is used.
+	// Since is a commit-ish whose merge-base diff against HEAD is folded into
+	// the reported dirtyFiles. Informational only.
+	Since string `yaml:"since,omitempty" json:"since,omitempty"`
+	// Deprecated: no-op, retained so existing configs keep parsing. Use
+	// GitWorktree.Uncommitted / GitWorktree.Ignored and Since instead.
 	Dirty *GitDirty `yaml:"dirty,omitempty" json:"dirty,omitempty"`
 	// Destination is the full path to where the contents of the URL should be downloaded to.
 	// If left empty, the sha256 hash of the URL will be used as the dir name.
@@ -264,12 +267,19 @@ type GitWorktree struct {
 	Base    string `yaml:"base,omitempty" json:"base,omitempty"`
 	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
 	Keep    bool   `yaml:"keep,omitempty" json:"keep,omitempty"`
+	// Uncommitted carries staged, unstaged and untracked changes from the
+	// source repo into the worktree. The source is never mutated.
+	Uncommitted bool `yaml:"uncommitted,omitempty" json:"uncommitted,omitempty"`
+	// Ignored copies gitignored content into the worktree.
+	Ignored bool `yaml:"ignored,omitempty" json:"ignored,omitempty"`
 }
 
 func (w *GitWorktree) IsEnabled() bool {
-	return w != nil && (w.Enabled || w.Prefix != "" || w.Branch != "" || w.Base != "" || w.Path != "" || w.Keep)
+	return w != nil && (w.Enabled || w.Prefix != "" || w.Branch != "" || w.Base != "" || w.Path != "" || w.Keep ||
+		w.Uncommitted || w.Ignored)
 }
 
+// Deprecated: no-op. See GitConnection.Dirty.
 // +kubebuilder:object:generate=true
 type GitDirty struct {
 	Staged    bool   `yaml:"staged,omitempty" json:"staged,omitempty"`
