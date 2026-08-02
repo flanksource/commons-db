@@ -2,6 +2,7 @@ package dbtest
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -19,12 +20,13 @@ var _ = Describe("ephemeral database configuration", func() {
 	)
 	created := time.Date(2026, time.July, 27, 10, 30, 0, 0, time.UTC)
 
-	It("places the shared PostgreSQL cluster in a fixed directory below TMPDIR", func() {
-		root := embeddedRoot(testTempDir)
-		Expect(root).To(Equal(filepath.Join(testTempDir, "commons-db")))
+	It("defaults the shared PostgreSQL cluster to a fixed directory below the system temp directory", func() {
+		root := embeddedDataDir("")
+		Expect(root).To(Equal(filepath.Join(os.TempDir(), "commons-db")))
 		Expect(filepath.Join(root, "data")).To(Equal(
-			filepath.Join(testTempDir, "commons-db", "data"),
+			filepath.Join(os.TempDir(), "commons-db", "data"),
 		))
+		Expect(embeddedDataDir(testTempDir)).To(Equal(testTempDir))
 		Expect(embeddedPort).To(Equal(7432))
 	})
 

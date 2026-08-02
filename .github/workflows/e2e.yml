@@ -170,7 +170,9 @@ jobs:
       - name: Assert no scratch databases leaked
         run: |
           leaked=$(psql "$COMMONS_DB_URL" -tAc \
-            "SELECT count(*) FROM pg_database WHERE datname LIKE '%\_%\_%' AND datname NOT IN ('postgres','template0','template1')")
+            "SELECT count(*) FROM pg_database
+             WHERE left(datname, length('commons_db_test_')) = 'commons_db_test_'
+                OR left(datname, length('commons_db_pool_')) = 'commons_db_pool_'")
           echo "leftover databases: $leaked"
           test "$leaked" -eq 0
 

@@ -21,8 +21,8 @@ importers:
   .:
     dependencies:
       '@flanksource/clicky-ui':
-        specifier: ^0.3.11
-        version: 0.3.15(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react-rnd@10.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(recharts@3.8.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.7)(react@18.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tailwindcss@4.3.1)
+        specifier: ^0.3.16
+        version: 0.3.17(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react-rnd@10.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(recharts@3.8.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.7)(react@18.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tailwindcss@4.3.1)
       '@flanksource/icons':
         specifier: 1.0.63
         version: 1.0.63(react@18.3.1)
@@ -544,8 +544,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@flanksource/clicky-ui@0.3.15':
-    resolution: {integrity: sha512-fGlvREEaizzSkFwHVqppnlF/s/upFzooR2WHp2KsdK/b8zgtkbB/3FTQuREhsuMika2jw2PtJty1l99jI1D1Cw==}
+  '@flanksource/clicky-ui@0.3.17':
+    resolution: {integrity: sha512-kWkaIRgGJyzHFpEdBpslFMytHDu+4sWCLb0FW2Bif/mfI3ZheZT1TJmd1kyHjOQE1N+/fFpn74xH01HZFzR3LA==}
     peerDependencies:
       '@ai-sdk/react': ^3.0.0
       '@mdxeditor/editor': ^4.0.4
@@ -583,11 +583,6 @@ packages:
         optional: true
       streamdown:
         optional: true
-
-  '@flanksource/icons@1.0.60':
-    resolution: {integrity: sha512-PH/0IFJJlyr9bNMUI2abCpiTP6pmYvwXklkw2OsoSIZHjnBvmb9ogZ0Xxd4J7QElT54T6gPZqQEQjTuAz7DISA==}
-    peerDependencies:
-      react: '*'
 
   '@flanksource/icons@1.0.63':
     resolution: {integrity: sha512-QJ3N49jltwT4xJVvajr/6V++LqTEYKGamjtLA+2NNECDG8I/guhgH3l984rIoE4+dkYTrUPwvoUh4SiKLic8FQ==}
@@ -2932,7 +2927,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@flanksource/clicky-ui@0.3.15(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react-rnd@10.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(recharts@3.8.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.7)(react@18.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tailwindcss@4.3.1)':
+  '@flanksource/clicky-ui@0.3.17(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react-rnd@10.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(recharts@3.8.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.7)(react@18.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tailwindcss@4.3.1)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4
@@ -2940,7 +2935,7 @@ snapshots:
       '@codemirror/lang-sql': 6.10.0
       '@codemirror/state': 6.7.1
       '@codemirror/view': 6.43.6
-      '@flanksource/icons': 1.0.60(react@18.3.1)
+      '@flanksource/icons': 1.0.63(react@18.3.1)
       '@floating-ui/react': 0.27.20(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@monaco-editor/react': 4.7.0(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@radix-ui/react-compose-refs': 1.1.3(@types/react@18.3.31)(react@18.3.1)
@@ -2972,10 +2967,6 @@ snapshots:
       - '@babel/core'
       - '@babel/template'
       - '@types/react'
-
-  '@flanksource/icons@1.0.60(react@18.3.1)':
-    dependencies:
-      react: 18.3.1
 
   '@flanksource/icons@1.0.63(react@18.3.1)':
     dependencies:

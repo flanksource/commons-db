@@ -56,6 +56,19 @@ var _ = Describe("fast embedded PostgreSQL settings", func() {
 		Expect(dataInfo.Mode().Perm()).To(Equal(os.FileMode(0o700)))
 	})
 
+	It("creates a fresh root with group access and a private data directory", func() {
+		root := filepath.Join(GinkgoT().TempDir(), "postgres")
+
+		Expect(createEmbeddedDirectories(root)).To(Succeed())
+
+		rootInfo, err := os.Stat(root)
+		Expect(err).NotTo(HaveOccurred())
+		dataInfo, err := os.Stat(filepath.Join(root, "data"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rootInfo.Mode().Perm()).To(Equal(os.FileMode(0o750)))
+		Expect(dataInfo.Mode().Perm()).To(Equal(os.FileMode(0o700)))
+	})
+
 	It("rejects an unsupported persistent cluster version", func() {
 		dataPath := GinkgoT().TempDir()
 		Expect(os.WriteFile(filepath.Join(dataPath, "PG_VERSION"), []byte("19\n"), 0o600)).To(Succeed())

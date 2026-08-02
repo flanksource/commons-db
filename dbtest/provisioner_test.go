@@ -3,6 +3,7 @@ package dbtest
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -25,7 +26,35 @@ func (*recordingProvisioner) PrepareTemplate(context.Context, string) error { re
 
 func (*recordingProvisioner) PrepareInstance(context.Context, string) error { return nil }
 
+type deadlineProvisioner struct {
+	deadline time.Time
+}
+
+func (p *deadlineProvisioner) Fingerprint(ctx context.Context) (string, error) {
+	p.deadline, _ = ctx.Deadline()
+	return "", errors.New("stop after observing provisioning deadline")
+}
+
+func (*deadlineProvisioner) PrepareTemplate(context.Context, string) error { return nil }
+
+func (*deadlineProvisioner) PrepareInstance(context.Context, string) error { return nil }
+
 var _ = Describe("provisioned database configuration", func() {
+	It("bounds provisioned acquisition independently of connection setup", func(ctx SpecContext) {
+		provisioner := &deadlineProvisioner{}
+		started := time.Now()
+
+		_, _, err := createConfiguredScratch(
+			ctx,
+			"postgres://unused.example/postgres",
+			Options{Name: "deadline", Provisioner: provisioner},
+			"unique",
+		)
+
+		Expect(err).To(MatchError(ContainSubstring("stop after observing provisioning deadline")))
+		Expect(provisioner.deadline).NotTo(BeZero())
+		Expect(provisioner.deadline).To(BeTemporally("~", started.Add(10*time.Minute), time.Second))
+	})
 	It("derives a stable managed template identity from the provisioner fingerprint", func() {
 		first, err := newTemplateIdentity("schema-v1")
 		Expect(err).NotTo(HaveOccurred())

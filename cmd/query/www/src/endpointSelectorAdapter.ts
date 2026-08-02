@@ -22,6 +22,10 @@ const MODE_TO_SCHEME = Object.fromEntries(
 const WORKLOAD_URL =
   /^([a-z]+):\/\/([^/:?#]*)(?::(\d+))?([^?#]*)(?:\?(.+))?$/;
 
+function validPort(port: string) {
+  return /^\d+$/.test(port) && Number(port) >= 1 && Number(port) <= 65535;
+}
+
 function parseTarget(
   mode: Exclude<EndpointMode, "url">,
   host: string,
@@ -52,6 +56,7 @@ function parseWorkloadValue(raw: string): EndpointWorkloadValue | undefined {
   const [, scheme = "", host = "", port = "", path = "", query = ""] = match;
   const mode = SCHEME_TO_MODE[scheme as keyof typeof SCHEME_TO_MODE];
   if (!mode) return undefined;
+  if (port && !validPort(port)) return undefined;
   if (
     mode === "port-forward" &&
     (new URLSearchParams(query).has("selector") ||
@@ -112,9 +117,7 @@ function validateWorkloadValue(value: EndpointWorkloadValue) {
   }
   if (
     value.port &&
-    (!/^\d+$/.test(value.port) ||
-      Number(value.port) < 1 ||
-      Number(value.port) > 65535)
+    !validPort(value.port)
   ) {
     throw new Error(`Endpoint port "${value.port}" must be between 1 and 65535`);
   }

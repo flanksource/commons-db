@@ -79,6 +79,17 @@ describe("endpoint selector persistence adapter", () => {
     });
   });
 
+  it.each(["0", "65536"])(
+    "preserves workload URLs with out-of-range port %s as URL literals",
+    (port) => {
+      const stored = `svc://db.prod:${port}`;
+      expect(parseEndpointValue(stored)).toEqual({
+        mode: "url",
+        source: { kind: "value", value: stored },
+      });
+    },
+  );
+
   it("rejects incomplete workload values instead of serializing an invalid URL", () => {
     expect(() =>
       serializeEndpointValue({
@@ -87,4 +98,54 @@ describe("endpoint selector persistence adapter", () => {
       }),
     ).toThrow("requires a workload name");
   });
+
+  it.each([
+    [
+      "ingress mode with a service target",
+      {
+        mode: "ingress",
+        target: { kind: "service", name: "web" },
+      },
+      "Ingress endpoint mode requires an ingress target",
+    ],
+    [
+      "cluster-IP mode with a deployment target",
+      {
+        mode: "cluster-ip",
+        target: { kind: "deployment", name: "web" },
+      },
+      "cluster-ip endpoint mode requires a service target",
+    ],
+    [
+      "port-forward mode with an ingress target",
+      {
+        mode: "port-forward",
+        target: { kind: "ingress", name: "web" },
+      },
+      "Port-forward endpoint mode requires a service or deployment target",
+    ],
+    [
+      "an out-of-range port",
+      {
+        mode: "service",
+        target: { kind: "service", name: "web" },
+        port: "65536",
+      },
+      'Endpoint port "65536" must be between 1 and 65535',
+    ],
+    [
+      "a path without a leading slash",
+      {
+        mode: "service",
+        target: { kind: "service", name: "web" },
+        path: "api",
+      },
+      'Endpoint path "api" must start with /',
+    ],
+  ] satisfies [string, EndpointSelectorValue, string][])(
+    "rejects %s",
+    (_, selectorValue, expectedError) => {
+      expect(() => serializeEndpointValue(selectorValue)).toThrow(expectedError);
+    },
+  );
 });
