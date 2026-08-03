@@ -1,6 +1,7 @@
 import path from "node:path";
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 // The Go server (query serve) runs on :8080 by default. In `vite` dev mode the
 // API is proxied there; in production the built dist/ is embedded and served by
@@ -13,7 +14,7 @@ const apiTarget = process.env.QUERY_API_URL || "http://localhost:8080";
 const clickyUI = path.resolve(__dirname, "../../../../clicky-ui/packages/ui");
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), tailwindcss()],
   resolve: {
     dedupe: ["react", "react-dom", "react/jsx-runtime", "@tanstack/react-query", "monaco-editor"],
   },
