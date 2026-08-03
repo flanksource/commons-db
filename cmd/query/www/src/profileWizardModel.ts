@@ -32,6 +32,27 @@ export type ProfileFieldFilter = {
   selection: "all" | "selected" | "unselected";
 };
 
+export const PROFILE_COLUMN_FORMAT_OPTIONS = [
+  { value: "date", label: "Date/time" },
+  { value: "float", label: "Number" },
+  { value: "duration", label: "Duration" },
+  { value: "bytes", label: "Bytes" },
+  { value: "currency", label: "Currency" },
+] as const;
+
+export const PROFILE_COLUMN_UNIT_OPTIONS = [
+  { value: "none", label: "Compact count" },
+  { value: "short", label: "Short number" },
+  { value: "percent", label: "Percent (0-100)" },
+  { value: "percentunit", label: "Percent (0-1)" },
+  { value: "bytes", label: "Bytes (IEC)" },
+  { value: "decbytes", label: "Bytes (SI)" },
+  { value: "Bps", label: "Bytes/sec" },
+  { value: "binBps", label: "Binary bytes/sec" },
+  { value: "ms", label: "Milliseconds" },
+  { value: "s", label: "Seconds" },
+] as const;
+
 export const profileWizardSteps = [
   { id: "source", label: "Choose source", description: "Connection" },
   { id: "query", label: "Explore & sample", description: "Query" },
@@ -83,7 +104,9 @@ export function patchProfileField(
   patch: Partial<ProfileColumn>,
 ): ProfileColumn {
   return Object.fromEntries(
-    Object.entries({ ...field, ...patch }).filter(([, value]) => value !== undefined),
+    Object.entries({ ...field, ...patch }).filter(
+      ([, value]) => value !== undefined,
+    ),
   ) as ProfileColumn;
 }
 
@@ -107,6 +130,17 @@ export function profileWizardErrorMessage(
     : fallback;
 }
 
+/**
+ * A profile says what to fetch either as a raw query or as a structured search
+ * specification — never both, which is why this is an either/or rather than a
+ * check on `query` alone.
+ */
+export function profileWizardHasQuery(draft: ProfileWizardDraft): boolean {
+  return Boolean(
+    draft.query?.trim() || draft.provider?.options?.search !== undefined,
+  );
+}
+
 export function profileWizardStepReady(
   step: (typeof profileWizardSteps)[number]["id"],
   draft: ProfileWizardDraft,
@@ -116,7 +150,7 @@ export function profileWizardStepReady(
     return Boolean(draft.provider?.connection && draft.provider.type);
   }
   if (step === "query") {
-    return Boolean(draft.query?.trim() && discovered.length > 0);
+    return Boolean(profileWizardHasQuery(draft) && discovered.length > 0);
   }
   if (step === "fields") {
     return Boolean(draft.profile?.trim() && draft.columns?.length);

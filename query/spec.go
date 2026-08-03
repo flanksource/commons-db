@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/flanksource/commons-db/types"
@@ -109,6 +110,47 @@ func (p Profile) Kind() ProfileKind {
 func (p Profile) ValidateKind() error {
 	if p.Trace != nil && p.Top != nil {
 		return fmt.Errorf("profile %q declares both trace and top; pick one", p.Name)
+	}
+	return nil
+}
+
+// ValidateQuerySource rejects a Profile that carries both a raw query and a
+// structured search specification. The provider refuses the pair too, but that
+// happens at execution — by then the profile is already stored, and the author
+// who introduced the conflict is long gone.
+func (p Profile) ValidateQuerySource() error {
+	if strings.TrimSpace(p.Query) == "" || p.Provider.Options["search"] == nil {
+		return nil
+	}
+	return fmt.Errorf(
+		"profile %q sets both query and provider.options.search; they are mutually exclusive, keep the structured search or the raw query, not both", p.Name)
+}
+
+// Validate rejects invalid execution and column presentation metadata.
+func (p Profile) Validate() error {
+	if err := p.ValidateKind(); err != nil {
+		return err
+	}
+	if err := p.ValidateQuerySource(); err != nil {
+		return err
+	}
+	for _, column := range p.Columns {
+		if err := column.Validate(); err != nil {
+			return fmt.Errorf("profile %q %w", p.Name, err)
+		}
+	}
+	bindings, err := p.ColumnFilterBindings()
+	if err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	params := make(map[string]bool, len(p.Params))
+	for _, parameter := range p.Params {
+		params[parameter.Name] = true
+	}
+	for _, binding := range bindings {
+		if params[binding.Key] {
+			return fmt.Errorf("profile %q parameter %q conflicts with native column filter", p.Name, binding.Key)
+		}
 	}
 	return nil
 }

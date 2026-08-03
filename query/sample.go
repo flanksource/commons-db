@@ -28,7 +28,7 @@ type SampleResult struct {
 // context queries and processors. Configured row transforms still shape the
 // preview, and only providers whose request can be proven read-only are allowed.
 func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*SampleResult, error) {
-	if err := p.ValidateKind(); err != nil {
+	if err := p.Validate(); err != nil {
 		return nil, err
 	}
 	if p.Kind() != KindQuery {
@@ -58,6 +58,7 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 		Query:      rendered,
 		Options:    p.Provider.Options,
 		Params:     resolved,
+		ParamRoles: paramRoles(p.Params),
 	})
 	duration := time.Since(started)
 	if err != nil {

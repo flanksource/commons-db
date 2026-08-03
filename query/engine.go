@@ -19,7 +19,7 @@ import (
 // (omit when there are none). They are validated/coerced against the
 // declarations and exposed to the query template as `params`.
 func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result, error) {
-	if err := p.ValidateKind(); err != nil {
+	if err := p.Validate(); err != nil {
 		return nil, err
 	}
 	if p.Kind() == KindTrace {
@@ -32,17 +32,21 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 	if len(params) > 0 {
 		supplied = params[0]
 	}
-	resolved, err := resolveParams(p.Params, supplied)
+	profileParams, filters, err := partitionProfileInput(p, supplied)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	return executeResolved(ctx, p, resolved)
+	resolved, err := resolveParams(p.Params, profileParams)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	return executeResolved(ctx, p, resolved, filters)
 }
 
 // executeResolved runs the post-param pipeline: render → provider → columns →
 // context sub-queries → processors (→ top sort/limit). Shared by Execute and
 // each top-session tick.
-func executeResolved(ctx context.Context, p Profile, resolved map[string]any) (*Result, error) {
+func executeResolved(ctx context.Context, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Result, error) {
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return nil, err
@@ -58,6 +62,8 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any) (*
 		Query:      query,
 		Options:    p.Provider.Options,
 		Params:     resolved,
+		ParamRoles: paramRoles(p.Params),
+		Filters:    filters,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
@@ -70,7 +76,7 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any) (*
 	result := &Result{Profile: p.Name, Rows: rows}
 
 	for name, sub := range p.Context {
-		subRows, err := executeSubQuery(ctx, sub, resolved)
+		subRows, err := executeSubQuery(ctx, sub, resolved, paramRoles(p.Params))
 		if err != nil {
 			return nil, fmt.Errorf("profile %q: context %q failed: %w", p.Name, name, err)
 		}
@@ -87,6 +93,10 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any) (*
 
 	if p.Top != nil {
 		result.Rows = sortAndLimit(result.Rows, p.Top.SortBy, p.Top.Limit)
+	}
+	result.ColumnFilterKeys, err = p.ColumnFilterKeys()
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	return result, nil
 }
@@ -144,7 +154,9 @@ func toFloat(v any) (float64, bool) {
 	}
 }
 
-func executeSubQuery(ctx context.Context, sub SubQuery, params map[string]any) ([]Row, error) {
+// executeSubQuery runs a context sub-query against the parent profile's already
+// resolved params, which carry the parent's roles with them.
+func executeSubQuery(ctx context.Context, sub SubQuery, params map[string]any, roles map[string]ParamRole) ([]Row, error) {
 	provider, err := GetProvider(sub.Provider.Type)
 	if err != nil {
 		return nil, err
@@ -158,6 +170,7 @@ func executeSubQuery(ctx context.Context, sub SubQuery, params map[string]any) (
 		Query:      query,
 		Options:    sub.Provider.Options,
 		Params:     params,
+		ParamRoles: roles,
 	})
 }
 

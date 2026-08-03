@@ -5,6 +5,9 @@ import {
   applyVisibleFieldSelection,
   filterProfileFields,
   patchProfileField,
+  PROFILE_COLUMN_FORMAT_OPTIONS,
+  PROFILE_COLUMN_UNIT_OPTIONS,
+  profileWizardStepReady,
   profileWizardSteps,
   type ProfileColumn,
 } from "./profileWizardModel";
@@ -25,6 +28,38 @@ describe("profile wizard flow", () => {
       { id: "fields", label: "Name & shape", description: "Fields" },
       { id: "review", label: "Review", description: "Save" },
     ]);
+  });
+});
+
+describe("advancing past the query step", () => {
+  const sampled: ProfileColumn[] = [{ name: "@timestamp", type: "datetime" }];
+
+  it("accepts a raw query once fields have been sampled", () => {
+    expect(
+      profileWizardStepReady("query", { query: "select 1" }, sampled),
+    ).toBe(true);
+  });
+
+  it("accepts a structured search, which stores no raw query at all", () => {
+    expect(
+      profileWizardStepReady(
+        "query",
+        { query: "", provider: { options: { search: { query: { op: "bool" } } } } },
+        sampled,
+      ),
+    ).toBe(true);
+  });
+
+  it("blocks a draft that says neither", () => {
+    expect(
+      profileWizardStepReady("query", { query: "  ", provider: {} }, sampled),
+    ).toBe(false);
+  });
+
+  it("blocks a query that has never been sampled", () => {
+    expect(profileWizardStepReady("query", { query: "select 1" }, [])).toBe(
+      false,
+    );
   });
 });
 
@@ -76,7 +111,7 @@ describe("large profile field sets", () => {
         {
           name: "duration_ms",
           type: "number",
-          format: "0,0",
+          format: "float",
           vendor: { source: "sample" },
         },
         { label: "Duration", width: 140, hidden: true },
@@ -85,7 +120,7 @@ describe("large profile field sets", () => {
       name: "duration_ms",
       type: "number",
       label: "Duration",
-      format: "0,0",
+      format: "float",
       width: 140,
       hidden: true,
       vendor: { source: "sample" },
@@ -109,5 +144,25 @@ describe("large profile field sets", () => {
     expect(html).toContain("Display label");
     expect(html).toContain("CEL expression");
     expect(html).toContain("@timestamp");
+  });
+
+  it("uses canonical Format and Unit dropdowns with explanatory help", () => {
+    const html = renderToStaticMarkup(
+      <ProfileFieldManager
+        discovered={discoveredFields}
+        configured={discoveredFields.slice(0, 1)}
+        activeName="@timestamp"
+        onConfiguredChange={vi.fn()}
+        onActiveNameChange={vi.fn()}
+      />,
+    );
+    for (const option of [
+      ...PROFILE_COLUMN_FORMAT_OPTIONS,
+      ...PROFILE_COLUMN_UNIT_OPTIONS,
+    ]) {
+      expect(html).toContain(`value="${option.value}"`);
+    }
+    expect(html).toContain("independent of Type");
+    expect(html).toContain("Max width (characters)");
   });
 });

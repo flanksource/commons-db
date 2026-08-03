@@ -49,7 +49,7 @@ func ExecuteRowsBounded(ctx context.Context, p Profile, maxRows int, params ...m
 }
 
 func executeRows(ctx context.Context, p Profile, maxRows int, params ...map[string]any) (RowIterator, error) {
-	if err := p.ValidateKind(); err != nil {
+	if err := p.Validate(); err != nil {
 		return nil, err
 	}
 	if p.Kind() == KindTrace {
@@ -62,7 +62,11 @@ func executeRows(ctx context.Context, p Profile, maxRows int, params ...map[stri
 	if len(params) > 0 {
 		supplied = params[0]
 	}
-	resolved, err := resolveParams(p.Params, supplied)
+	profileParams, filters, err := partitionProfileInput(p, supplied)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	resolved, err := resolveParams(p.Params, profileParams)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
@@ -83,6 +87,8 @@ func executeRows(ctx context.Context, p Profile, maxRows int, params ...map[stri
 		Query:      rendered,
 		Options:    p.Provider.Options,
 		Params:     resolved,
+		ParamRoles: paramRoles(p.Params),
+		Filters:    filters,
 		MaxRows:    maxRows,
 	})
 	if err != nil {

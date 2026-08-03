@@ -88,6 +88,7 @@ func providerOptions(typ string) Schema {
 		props["address"] = inlineURLProp("Address", "Inline OpenSearch address used instead of a saved connection")
 		props["index"] = strProp("Index", "Index or index pattern")
 		props["limit"] = strProp("Limit", "Maximum number of hits")
+		props["search"] = searchSpecProp()
 	case "opentelemetry":
 		for _, field := range []string{"format", "index", "dateField", "traceIdField", "spanIdField", "parentIdField", "parentRefType", "serviceField", "operationField"} {
 			props[field] = strProp(titleCase(field), "")
@@ -95,7 +96,7 @@ func providerOptions(typ string) Schema {
 		for _, field := range []string{"statusFields", "selectFields", "sourceExcludes"} {
 			props[field] = Schema{"type": "array", "title": titleCase(field), "items": Schema{"type": "string"}}
 		}
-		props["params"] = Schema{"type": "object", "title": "Provider Params"}
+		props["search"] = searchSpecProp()
 	case "jaeger":
 		props["url"] = inlineURLProp("URL", "Inline Jaeger query URL used instead of a saved connection")
 		for _, field := range []string{"service", "operation", "lookback", "start", "end", "limit", "minDuration", "maxDuration", "tags"} {

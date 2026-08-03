@@ -1,45 +1,25 @@
 import {
   CacheBrowser,
   Combobox,
-  Icon,
-  LogsTable,
-  QueryBrowser,
-  TimeseriesPanel,
-  TreeNode,
   type EntityDetailBodyRenderContext,
   type EntityDetailHeaderRenderContext,
-  type JsonSchemaObject,
-  type ComboboxOption,
-  type QueryBrowserCompletion,
   type QueryBrowserResult,
-  type TimeseriesResponse,
-  type TimeseriesSeries,
 } from "@flanksource/clicky-ui";
-import {
-  UiActivity,
-  UiDatabase,
-  UiLink,
-  UiNamespace,
-  UiSqlColumn,
-  UiSqlDatabase,
-  UiSqlIndex,
-  UiSqlView,
-  UiTable,
-} from "@flanksource/clicky-ui/icons";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-
-export type BrowserDescriptor = {
-  kind: "query" | "cache";
-  provider?: string;
-  language?: "sql" | "json" | "text";
-  queryLabel?: string;
-  defaultQuery?: string;
-  resultView?: "table" | "logs" | "timeseries";
-  optionsSchema?: JsonSchemaObject;
-  initialOptions?: Record<string, unknown>;
-  catalog?: boolean;
-};
+import {
+  browserBaseUrl,
+  fetchJSON,
+  mergeProviderOptions,
+  openSearchIndexOptions,
+  queryBrowserOptionsSchema,
+  useInspection,
+  type BrowserDescriptor,
+  type BrowserInspection,
+  type ConnectionProfileActionRenderer,
+} from "./connectionBrowserModel";
+import { ConnectionQueryWorkspace } from "./connectionQueryWorkspace";
+import type { EsSearch } from "./esQueryBuilderModel";
 
 type ConnectionPresence = {
   configured: boolean;
@@ -72,128 +52,6 @@ type ConnectionInfo = {
   discoveredAt: string;
 };
 
-export type CatalogNode = {
-  id: string;
-  label: string;
-  kind: string;
-  query?: string;
-  options?: Record<string, unknown>;
-  children?: CatalogNode[];
-};
-
-type InspectionField = {
-  name: string;
-  dataType?: string;
-  types?: string[];
-  searchable?: boolean;
-  aggregatable?: boolean;
-  conflicting?: boolean;
-};
-
-export type BrowserInspection = {
-  kind: "sql" | "opensearch";
-  dialect?: "postgresql" | "mysql" | "mssql" | "standard";
-  database?: string;
-  databases?: string[];
-  defaultSchema?: string;
-  schemas?: {
-    name: string;
-    relations: {
-      name: string;
-      type?: "table" | "view";
-      columns: InspectionField[];
-    }[];
-  }[];
-  targets?: { name: string; kind: "index" | "alias" | "data_stream" }[];
-  nodes?: CatalogNode[];
-  selected?: {
-    target: { name: string; kind: "index" | "alias" | "data_stream" };
-    fields: InspectionField[];
-  };
-  truncated?: boolean;
-  truncateReason?: string;
-};
-
-export type ConnectionProfileActionRenderer = (context: {
-  connectionName: string;
-  providerType: string;
-  providerOptions?: Record<string, unknown>;
-}) => ReactNode;
-
-export function openSearchIndexOptions(
-  inspection?: BrowserInspection,
-): ComboboxOption[] {
-  if (inspection?.kind !== "opensearch") return [];
-  return (inspection.targets ?? []).map((target) => ({
-    value: target.name,
-    label: target.name,
-    group:
-      target.kind === "data_stream"
-        ? "Data streams"
-        : target.kind === "alias"
-          ? "Aliases"
-          : "Indexes",
-    title: `${target.name} · ${target.kind.replace("_", " ")}`,
-  }));
-}
-
-export function queryBrowserOptionsSchema(
-  descriptor: BrowserDescriptor,
-): JsonSchemaObject | undefined {
-  if (descriptor.provider !== "opensearch" || !descriptor.optionsSchema) {
-    return descriptor.optionsSchema;
-  }
-  const properties = { ...(descriptor.optionsSchema.properties ?? {}) };
-  delete properties.index;
-  return { ...descriptor.optionsSchema, properties };
-}
-
-export function completionForInspection(
-  inspection?: BrowserInspection,
-  selectedInspection?: BrowserInspection,
-): QueryBrowserCompletion | undefined {
-  if (inspection?.kind === "sql" && inspection.dialect) {
-    return {
-      kind: "sql",
-      dialect: inspection.dialect,
-      ...(inspection.defaultSchema
-        ? { defaultSchema: inspection.defaultSchema }
-        : {}),
-      schemas: (inspection.schemas ?? []).map((schema) => ({
-        name: schema.name,
-        relations: schema.relations.map((relation) => ({
-          name: relation.name,
-          ...(relation.type ? { type: relation.type } : {}),
-          columns: relation.columns.map((column) => ({
-            name: column.name,
-            types: column.dataType ? [column.dataType] : [],
-          })),
-        })),
-      })),
-    };
-  }
-  if (
-    selectedInspection?.kind === "opensearch" &&
-    selectedInspection.selected
-  ) {
-    return {
-      kind: "json-fields",
-      vocabulary: "opensearch",
-      fields: selectedInspection.selected.fields,
-    };
-  }
-  return undefined;
-}
-
-export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init);
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(body.trim() || `request failed: ${response.status}`);
-  }
-  return response.json() as Promise<T>;
-}
-
 export function connectionDetailBodyRenderer(
   context: EntityDetailBodyRenderContext,
   renderProfileAction?: ConnectionProfileActionRenderer,
@@ -222,7 +80,7 @@ function ConnectionBrowser({
   fallback: ReactNode;
   renderProfileAction?: ConnectionProfileActionRenderer;
 }) {
-  const baseUrl = `/api/v1/connection/${encodeURIComponent(id)}/browser`;
+  const baseUrl = browserBaseUrl(id);
   const descriptor = useQuery({
     queryKey: ["connection-browser", id],
     queryFn: async () => {
@@ -237,6 +95,8 @@ function ConnectionBrowser({
     },
     retry: 0,
   });
+  // Shares the browser's inspection cache entry, so selecting an index here
+  // costs no extra request.
   const inspection = useQuery({
     queryKey: ["connection-browser-inspection", id],
     queryFn: () => fetchJSON<BrowserInspection>(`${baseUrl}/inspect`),
@@ -320,6 +180,121 @@ function ConnectionBrowser({
         onOpenSearchIndexChange={setSelectedOpenSearchIndex}
       />
     </div>
+  );
+}
+
+function ConnectionQueryBrowser({
+  id,
+  baseUrl,
+  descriptor,
+  selectedOpenSearchIndex,
+  onOpenSearchIndexChange,
+}: {
+  id: string;
+  baseUrl: string;
+  descriptor: BrowserDescriptor;
+  selectedOpenSearchIndex: string;
+  onOpenSearchIndexChange: (index: string) => void;
+}) {
+  const [selection, setSelection] = useState<{
+    query?: string;
+    options?: Record<string, unknown>;
+  }>({});
+  const [liveOptions, setLiveOptions] = useState<Record<string, unknown>>({});
+  const [selectedDatabase, setSelectedDatabase] = useState("");
+  // Exploration is not saved anywhere, so the specification lives here for as
+  // long as the browser is open. "Build profile" carries the options forward.
+  const [search, setSearch] = useState<EsSearch | undefined>(undefined);
+  const explicitTargetKind =
+    liveOptions.targetKind ?? selection.options?.targetKind;
+  const inspection = useInspection({
+    cacheKey: "connection-browser-inspection",
+    id,
+    baseUrl,
+    enabled: descriptor.catalog === true,
+    database: selectedDatabase,
+    target: String(liveOptions.index ?? selection.options?.index ?? ""),
+    ...(typeof explicitTargetKind === "string"
+      ? { targetKind: explicitTargetKind }
+      : {}),
+  });
+  const options = useMemo(
+    () =>
+      mergeProviderOptions({
+        layers: [descriptor.initialOptions, selection.options],
+        keepTargetKind: true,
+      }),
+    [descriptor.initialOptions, selection.options],
+  );
+
+  // The index combobox lives above the browser, so a change there has to reach
+  // the options the browser runs with.
+  useEffect(() => {
+    if (descriptor.provider !== "opensearch") return;
+    const currentIndex = String(
+      liveOptions.index ?? selection.options?.index ?? "",
+    );
+    if (currentIndex === selectedOpenSearchIndex) return;
+    const target = inspection.data?.targets?.find(
+      (candidate) => candidate.name === selectedOpenSearchIndex,
+    );
+    const nextOptions = { ...liveOptions };
+    if (selectedOpenSearchIndex) nextOptions.index = selectedOpenSearchIndex;
+    else delete nextOptions.index;
+    if (target?.kind) nextOptions.targetKind = target.kind;
+    else delete nextOptions.targetKind;
+    setSelection((current) => ({ ...current, options: nextOptions }));
+    setLiveOptions(nextOptions);
+  }, [
+    descriptor.provider,
+    inspection.data?.targets,
+    liveOptions,
+    selectedOpenSearchIndex,
+    selection.options?.index,
+  ]);
+
+  return (
+    <ConnectionQueryWorkspace
+      id={`${descriptor.provider ?? "query"}:${id}`}
+      title={`${descriptor.queryLabel ?? "Query"} browser`}
+      descriptor={descriptor}
+      inspection={inspection}
+      onDatabaseChange={setSelectedDatabase}
+      query={selection.query ?? descriptor.defaultQuery ?? ""}
+      onQueryChange={(next) =>
+        setSelection((current) => ({ ...current, query: next }))
+      }
+      options={options}
+      onOptionsChange={setLiveOptions}
+      optionsSchema={queryBrowserOptionsSchema(descriptor)}
+      search={search}
+      onSearchChange={(transition) => {
+        setSearch(transition.search);
+        setSelection((current) => ({ ...current, query: transition.query }));
+      }}
+      compileBaseUrl={baseUrl}
+      onCatalogSelect={(node) => {
+        setSelection({ query: node.query, options: node.options });
+        setLiveOptions(node.options ?? {});
+        if (descriptor.provider === "opensearch") {
+          onOpenSearchIndexChange(String(node.options?.index ?? ""));
+        }
+      }}
+      execute={(request) =>
+        fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...request,
+            options: mergeProviderOptions({
+              layers: [request.options],
+              database: inspection.sqlDatabase,
+              keepTargetKind: true,
+            }),
+          }),
+        })
+      }
+    />
   );
 }
 
@@ -427,390 +402,4 @@ function ServerStatus({ server }: { server: ConnectionInfo["server"] }) {
       {label}
     </span>
   );
-}
-
-function ConnectionQueryBrowser({
-  id,
-  baseUrl,
-  descriptor,
-  selectedOpenSearchIndex,
-  onOpenSearchIndexChange,
-}: {
-  id: string;
-  baseUrl: string;
-  descriptor: BrowserDescriptor;
-  selectedOpenSearchIndex: string;
-  onOpenSearchIndexChange: (index: string) => void;
-}) {
-  const baseInspection = useQuery({
-    queryKey: ["connection-browser-inspection", id],
-    queryFn: () => fetchJSON<BrowserInspection>(`${baseUrl}/inspect`),
-    enabled: descriptor.catalog === true,
-    retry: 0,
-    staleTime: 5 * 60_000,
-  });
-  const [selection, setSelection] = useState<{
-    query?: string;
-    options?: Record<string, unknown>;
-  }>({});
-  const [liveOptions, setLiveOptions] = useState<Record<string, unknown>>({});
-  const [selectedDatabase, setSelectedDatabase] = useState("");
-  const databaseInspection = useQuery({
-    queryKey: ["connection-browser-inspection", id, selectedDatabase],
-    queryFn: () => {
-      const params = new URLSearchParams({ database: selectedDatabase });
-      return fetchJSON<BrowserInspection>(`${baseUrl}/inspect?${params}`);
-    },
-    enabled:
-      baseInspection.data?.kind === "sql" &&
-      selectedDatabase !== "" &&
-      selectedDatabase !== baseInspection.data.database,
-    retry: 0,
-    staleTime: 5 * 60_000,
-  });
-  const inspection =
-    selectedDatabase !== "" &&
-    selectedDatabase !== baseInspection.data?.database
-      ? databaseInspection
-      : baseInspection;
-  const inspectionData = inspection.data ?? baseInspection.data;
-  const activeDatabase = selectedDatabase || inspectionData?.database || "";
-  const options = useMemo(
-    () => ({
-      ...(descriptor.initialOptions ?? {}),
-      ...(selection.options ?? {}),
-    }),
-    [descriptor.initialOptions, selection.options],
-  );
-  const selectedTargetName = String(
-    liveOptions.index ?? selection.options?.index ?? "",
-  );
-  const selectedTargetKind = useMemo(() => {
-    const explicit = liveOptions.targetKind ?? selection.options?.targetKind;
-    if (typeof explicit === "string") return explicit;
-    return (
-      inspectionData?.targets?.find(
-        (target) => target.name === selectedTargetName,
-      )?.kind ?? ""
-    );
-  }, [
-    inspectionData?.targets,
-    liveOptions.targetKind,
-    selectedTargetName,
-    selection.options?.targetKind,
-  ]);
-  useEffect(() => {
-    if (descriptor.provider !== "opensearch") return;
-    const currentIndex = String(
-      liveOptions.index ?? selection.options?.index ?? "",
-    );
-    if (currentIndex === selectedOpenSearchIndex) return;
-    const target = inspectionData?.targets?.find(
-      (candidate) => candidate.name === selectedOpenSearchIndex,
-    );
-    const nextOptions = { ...liveOptions };
-    if (selectedOpenSearchIndex) nextOptions.index = selectedOpenSearchIndex;
-    else delete nextOptions.index;
-    if (target?.kind) nextOptions.targetKind = target.kind;
-    else delete nextOptions.targetKind;
-    setSelection((current) => ({ ...current, options: nextOptions }));
-    setLiveOptions(nextOptions);
-  }, [
-    descriptor.provider,
-    inspectionData?.targets,
-    liveOptions,
-    selectedOpenSearchIndex,
-    selection.options?.index,
-  ]);
-  const selectedInspection = useQuery({
-    queryKey: [
-      "connection-browser-inspection",
-      id,
-      selectedTargetKind,
-      selectedTargetName,
-    ],
-    queryFn: () => {
-      const params = new URLSearchParams({
-        target: selectedTargetName,
-        targetKind: selectedTargetKind,
-      });
-      return fetchJSON<BrowserInspection>(`${baseUrl}/inspect?${params}`);
-    },
-    enabled:
-      inspectionData?.kind === "opensearch" &&
-      selectedTargetName !== "" &&
-      selectedTargetKind !== "",
-    retry: 0,
-    staleTime: 5 * 60_000,
-  });
-  const completion = useMemo<QueryBrowserCompletion | undefined>(() => {
-    return completionForInspection(inspectionData, selectedInspection.data);
-  }, [inspectionData, selectedInspection.data]);
-
-  return (
-    <QueryBrowser
-      id={`${descriptor.provider ?? "query"}:${id}`}
-      title={`${descriptor.queryLabel ?? "Query"} browser`}
-      language={descriptor.language ?? "text"}
-      queryLabel={descriptor.queryLabel ?? "Query"}
-      initialQuery={selection.query ?? descriptor.defaultQuery ?? ""}
-      optionsSchema={queryBrowserOptionsSchema(descriptor)}
-      initialOptions={options}
-      completion={completion}
-      onOptionsChange={setLiveOptions}
-      navigator={
-        descriptor.catalog ? (
-          <CatalogTree
-            nodes={inspectionData?.nodes ?? []}
-            loading={inspection.isLoading}
-            error={inspection.error}
-            databases={baseInspection.data?.databases ?? []}
-            database={activeDatabase}
-            onDatabaseChange={setSelectedDatabase}
-            onSelect={(node) => {
-              setSelection({ query: node.query, options: node.options });
-              setLiveOptions(node.options ?? {});
-              if (descriptor.provider === "opensearch") {
-                onOpenSearchIndexChange(String(node.options?.index ?? ""));
-              }
-            }}
-          />
-        ) : undefined
-      }
-      execute={(request) => {
-        const options =
-          descriptor.language === "sql" && activeDatabase
-            ? { ...request.options, database: activeDatabase }
-            : request.options;
-        return fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...request, options }),
-        });
-      }}
-      renderResults={
-        descriptor.resultView === "logs"
-          ? ({ result, defaultView }) =>
-              result.rows?.length ? (
-                <LogsTable
-                  logs={result.rows}
-                  autoFilter={false}
-                  fullscreenTitle="Logs"
-                />
-              ) : (
-                defaultView
-              )
-          : descriptor.resultView === "timeseries"
-            ? ({ result, defaultView }) => (
-                <PrometheusResults result={result} fallback={defaultView} />
-              )
-            : undefined
-      }
-    />
-  );
-}
-
-export function CatalogTree({
-  nodes,
-  loading,
-  error,
-  databases,
-  database,
-  onDatabaseChange,
-  onSelect,
-}: {
-  nodes: CatalogNode[];
-  loading: boolean;
-  error: unknown;
-  databases: string[];
-  database: string;
-  onDatabaseChange: (database: string) => void;
-  onSelect: (node: CatalogNode) => void;
-}) {
-  return (
-    <div className="flex h-full min-h-0 flex-col overflow-auto border-r bg-card p-2">
-      <h3 className="flex items-center gap-1.5 px-2 py-1 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-        <Icon icon={UiSqlDatabase} className="size-3.5" />
-        <span>Catalog</span>
-      </h3>
-      {databases.length > 0 ? (
-        <label className="mb-2 block px-2 text-xs text-muted-foreground">
-          Database
-          <select
-            aria-label="Database"
-            value={database}
-            onChange={(event) => onDatabaseChange(event.target.value)}
-            className="mt-1 h-8 w-full rounded-md border bg-background px-2 text-xs text-foreground"
-          >
-            {databases.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
-      ) : null}
-      {loading && (
-        <div className="p-2 text-xs text-muted-foreground">
-          Loading catalog…
-        </div>
-      )}
-      {error ? (
-        <div
-          role="alert"
-          className="m-2 rounded-md border border-destructive/30 bg-destructive/5 p-2 text-xs text-destructive"
-        >
-          <p className="font-medium">Unable to load catalog</p>
-          <p className="mt-1 break-words">{catalogErrorMessage(error)}</p>
-        </div>
-      ) : null}
-      {!loading && !error && nodes.length === 0 ? (
-        <div className="p-2 text-xs text-muted-foreground">
-          No catalog objects found.
-        </div>
-      ) : null}
-      <CatalogNodes
-        key={database || "catalog"}
-        nodes={nodes}
-        onSelect={onSelect}
-      />
-    </div>
-  );
-}
-
-function catalogErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim()) {
-    return error.message.trim();
-  }
-  if (typeof error === "string" && error.trim()) {
-    return error.trim();
-  }
-  return "The catalog request failed. Check the connection settings and try again.";
-}
-
-function CatalogNodes({
-  nodes,
-  onSelect,
-}: {
-  nodes: CatalogNode[];
-  onSelect: (node: CatalogNode) => void;
-}) {
-  return (
-    <div role="tree" className="min-w-0">
-      {nodes.map((node) => (
-        <TreeNode
-          key={node.id}
-          node={node}
-          getKey={(item) => item.id}
-          getChildren={(item) => item.children}
-          defaultOpen={(item) => item.kind === "schema"}
-          isSecondary={(item) => item.kind === "column"}
-          onSelect={(item) => {
-            if (item.query) onSelect(item);
-          }}
-          indentPx={14}
-          basePaddingPx={8}
-          renderRow={({ node: item }) => (
-            <div
-              className="flex min-w-0 flex-1 items-center gap-1.5 text-xs"
-              title={item.query ? `Load ${item.kind}` : item.kind}
-            >
-              <Icon
-                icon={catalogIcon(item.kind)}
-                className="size-3.5 shrink-0 text-muted-foreground"
-              />
-              <span className="truncate">{item.label}</span>
-            </div>
-          )}
-        />
-      ))}
-    </div>
-  );
-}
-
-function catalogIcon(kind: string) {
-  switch (kind) {
-    case "schema":
-      return UiNamespace;
-    case "table":
-      return UiTable;
-    case "view":
-      return UiSqlView;
-    case "column":
-      return UiSqlColumn;
-    case "index":
-      return UiSqlIndex;
-    case "alias":
-      return UiLink;
-    case "data_stream":
-      return UiActivity;
-    default:
-      return UiDatabase;
-  }
-}
-
-function PrometheusResults({
-  result,
-  fallback,
-}: {
-  result: QueryBrowserResult;
-  fallback: ReactNode;
-}) {
-  const chart = useMemo(
-    () => prometheusSeries(result.rows ?? []),
-    [result.rows],
-  );
-  if (!chart) return fallback;
-  return (
-    <div className="space-y-3">
-      <TimeseriesPanel
-        title="Prometheus query"
-        baseUrl="/query-browser/"
-        series={chart.series}
-        refreshMs={0}
-        height={240}
-        fetcher={async (url) => {
-          const id = url.split("?")[0]?.split("/").filter(Boolean).pop() ?? "";
-          return chart.responses[id] ?? { id, points: [] };
-        }}
-      />
-      {fallback}
-    </div>
-  );
-}
-
-function prometheusSeries(rows: Record<string, unknown>[]): {
-  series: TimeseriesSeries[];
-  responses: Record<string, TimeseriesResponse>;
-} | null {
-  const withTime = rows.filter(
-    (row) => row.timestamp != null && typeof row.value === "number",
-  );
-  if (withTime.length < 2) return null;
-  const groups = new Map<
-    string,
-    { label: string; points: { at: string; value: number }[] }
-  >();
-  for (const row of withTime) {
-    const labels = Object.entries(row)
-      .filter(([key]) => key !== "timestamp" && key !== "value")
-      .sort(([a], [b]) => a.localeCompare(b));
-    const label =
-      labels.map(([key, value]) => `${key}=${String(value)}`).join(", ") ||
-      "value";
-    const group = groups.get(label) ?? { label, points: [] };
-    group.points.push({
-      at: new Date(String(row.timestamp)).toISOString(),
-      value: Number(row.value),
-    });
-    groups.set(label, group);
-  }
-  const series: TimeseriesSeries[] = [];
-  const responses: Record<string, TimeseriesResponse> = {};
-  [...groups.values()].forEach((group, index) => {
-    const id = `series-${index}`;
-    series.push({ id, label: group.label });
-    responses[id] = { id, points: group.points };
-  });
-  return { series, responses };
 }

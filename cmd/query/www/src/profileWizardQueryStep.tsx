@@ -1,25 +1,16 @@
-import {
-  QueryBrowser,
-  type QueryBrowserCompletion,
-  type QueryBrowserResult,
-} from "@flanksource/clicky-ui";
+import type { QueryBrowserResult } from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useState,
-  type ReactNode,
-} from "react";
-import {
-  CatalogTree,
-  completionForInspection,
+  browserBaseUrl,
   fetchJSON,
+  mergeProviderOptions,
   queryBrowserOptionsSchema,
+  useInspection,
   type BrowserDescriptor,
-  type BrowserInspection,
-  type CatalogNode,
-} from "./connectionBrowser";
+} from "./connectionBrowserModel";
+import { ConnectionQueryWorkspace } from "./connectionQueryWorkspace";
+import type { EsSearch } from "./esQueryBuilderModel";
 import {
   profileWizardErrorMessage,
   type ProfileColumn,
@@ -31,12 +22,19 @@ type SampleResult = QueryBrowserResult & {
   renderedQuery: string;
 };
 
+/** What a sample yields: the discovered column shape plus the rows it came
+ *  from, so the editor can preview the configured columns against real data. */
+export type ProfileSample = {
+  columns: ProfileColumn[];
+  rows: Record<string, unknown>[];
+};
+
 type ProfileWizardQueryStepProps = {
   connectionID: string;
   draft: ProfileWizardDraft;
   discovered: ProfileColumn[];
   onDraftChange: (draft: ProfileWizardDraft) => void;
-  onSample: (columns: ProfileColumn[]) => void;
+  onSample: (sample: ProfileSample) => void;
 };
 
 export function ProfileWizardQueryStep({
@@ -46,18 +44,11 @@ export function ProfileWizardQueryStep({
   onDraftChange,
   onSample,
 }: ProfileWizardQueryStepProps) {
-  const baseUrl = `/api/v1/connection/${encodeURIComponent(connectionID)}/browser`;
+  const baseUrl = browserBaseUrl(connectionID);
   const descriptor = useQuery({
     queryKey: ["profile-wizard-descriptor", connectionID],
     queryFn: () => fetchJSON<BrowserDescriptor>(baseUrl),
     retry: 0,
-  });
-  const baseInspection = useQuery({
-    queryKey: ["profile-wizard-inspection", connectionID],
-    queryFn: () => fetchJSON<BrowserInspection>(`${baseUrl}/inspect`),
-    enabled: descriptor.data?.catalog === true,
-    retry: 0,
-    staleTime: 5 * 60_000,
   });
   const providerOptions = useMemo(
     () => ({ ...(draft.provider?.options ?? {}) }),
@@ -77,101 +68,44 @@ export function ProfileWizardQueryStep({
     }
   }, [descriptor.data?.defaultQuery, draft, onDraftChange, query]);
 
-  const databaseInspection = useQuery({
-    queryKey: ["profile-wizard-inspection", connectionID, selectedDatabase],
-    queryFn: () => {
-      const params = new URLSearchParams({ database: selectedDatabase });
-      return fetchJSON<BrowserInspection>(`${baseUrl}/inspect?${params}`);
-    },
-    enabled:
-      baseInspection.data?.kind === "sql" &&
-      selectedDatabase !== "" &&
-      selectedDatabase !== baseInspection.data.database,
-    retry: 0,
-    staleTime: 5 * 60_000,
+  const explicitTargetKind = liveOptions.targetKind ?? providerOptions.targetKind;
+  const inspection = useInspection({
+    cacheKey: "profile-wizard-inspection",
+    id: connectionID,
+    baseUrl,
+    enabled: descriptor.data?.catalog === true,
+    database: selectedDatabase,
+    fallbackDatabase: String(providerOptions.database ?? ""),
+    target: String(liveOptions.index ?? providerOptions.index ?? ""),
+    ...(typeof explicitTargetKind === "string"
+      ? { targetKind: explicitTargetKind }
+      : {}),
   });
-  const inspection =
-    selectedDatabase && selectedDatabase !== baseInspection.data?.database
-      ? databaseInspection
-      : baseInspection;
-  const inspectionData = inspection.data ?? baseInspection.data;
-  const activeDatabase =
-    selectedDatabase ||
-    String(providerOptions.database ?? "") ||
-    inspectionData?.database ||
-    "";
-  const browserOptions = useMemo<Record<string, unknown>>(
-    () => ({
-      ...(descriptor.data?.initialOptions ?? {}),
-      ...providerOptions,
-      ...catalogOptions,
-      ...(activeDatabase && inspectionData?.kind === "sql"
-        ? { database: activeDatabase }
-        : {}),
-    }),
+  const browserOptions = useMemo(
+    () =>
+      mergeProviderOptions({
+        layers: [
+          descriptor.data?.initialOptions,
+          providerOptions,
+          catalogOptions,
+        ],
+        database: inspection.sqlDatabase,
+        keepTargetKind: true,
+      }),
     [
-      activeDatabase,
       catalogOptions,
       descriptor.data?.initialOptions,
-      inspectionData?.kind,
+      inspection.sqlDatabase,
       providerOptions,
     ],
   );
-  const selectedTargetName = String(
-    liveOptions.index ?? browserOptions.index ?? "",
-  );
-  const selectedTargetKind = useMemo(() => {
-    const explicit = liveOptions.targetKind ?? browserOptions.targetKind;
-    if (typeof explicit === "string") return explicit;
-    return (
-      inspectionData?.targets?.find(
-        (target) => target.name === selectedTargetName,
-      )?.kind ?? ""
-    );
-  }, [
-    browserOptions.targetKind,
-    inspectionData?.targets,
-    liveOptions.targetKind,
-    selectedTargetName,
-  ]);
-  const selectedInspection = useQuery({
-    queryKey: [
-      "profile-wizard-inspection",
-      connectionID,
-      selectedTargetKind,
-      selectedTargetName,
-    ],
-    queryFn: () => {
-      const params = new URLSearchParams({
-        target: selectedTargetName,
-        targetKind: selectedTargetKind,
-      });
-      return fetchJSON<BrowserInspection>(`${baseUrl}/inspect?${params}`);
-    },
-    enabled:
-      inspectionData?.kind === "opensearch" &&
-      selectedTargetName !== "" &&
-      selectedTargetKind !== "",
-    retry: 0,
-    staleTime: 5 * 60_000,
-  });
-  const completion = useMemo<QueryBrowserCompletion | undefined>(
-    () => completionForInspection(inspectionData, selectedInspection.data),
-    [inspectionData, selectedInspection.data],
-  );
   const effectiveOptions = useCallback(
-    (options: Record<string, unknown>) => {
-      const next: Record<string, unknown> = {
-        ...providerOptions,
-        ...catalogOptions,
-        ...options,
-        ...(activeDatabase && inspectionData?.kind === "sql"
-          ? { database: activeDatabase }
-          : {}),
-      };
-      delete next.targetKind;
-      return next;
-    }, [activeDatabase, catalogOptions, inspectionData?.kind, providerOptions],
+    (options: Record<string, unknown>) =>
+      mergeProviderOptions({
+        layers: [providerOptions, catalogOptions, options],
+        database: inspection.sqlDatabase,
+      }),
+    [catalogOptions, inspection.sqlDatabase, providerOptions],
   );
 
   if (descriptor.isLoading) {
@@ -210,15 +144,31 @@ export function ProfileWizardQueryStep({
             : "No sample yet"}
         </span>
       </div>
-      <QueryBrowser
+      <ConnectionQueryWorkspace
         id={`profile-wizard:${connectionID}`}
         title="Profile query"
-        language={descriptor.data.language ?? "text"}
-        queryLabel={descriptor.data.queryLabel ?? "Query"}
-        initialQuery={query}
+        descriptor={descriptor.data}
+        inspection={inspection}
+        onDatabaseChange={setSelectedDatabase}
+        query={query}
+        options={browserOptions}
         optionsSchema={queryBrowserOptionsSchema(descriptor.data)}
-        initialOptions={browserOptions}
-        completion={completion}
+        search={providerOptions.search as EsSearch | undefined}
+        onSearchChange={(transition) => {
+          // Built from the merged options so a delete actually removes the key
+          // rather than being reinstated by a lower layer on the next merge.
+          const options = effectiveOptions(liveOptions);
+          if (transition.search) options.search = transition.search;
+          else delete options.search;
+          setQuery(transition.query);
+          onDraftChange({
+            ...draft,
+            query: transition.query,
+            provider: { ...(draft.provider ?? {}), options },
+          });
+        }}
+        compileBaseUrl={baseUrl}
+        className="min-h-0 flex-1"
         onQueryChange={(nextQuery) => {
           setQuery(nextQuery);
           onDraftChange({ ...draft, query: nextQuery });
@@ -233,43 +183,29 @@ export function ProfileWizardQueryStep({
             },
           });
         }}
-        className="min-h-0 flex-1"
-        navigator={
-          descriptor.data.catalog ? (
-            <CatalogTree
-              nodes={inspectionData?.nodes ?? []}
-              loading={inspection.isLoading}
-              error={inspection.error}
-              databases={baseInspection.data?.databases ?? []}
-              database={activeDatabase}
-              onDatabaseChange={setSelectedDatabase}
-              onSelect={(node: CatalogNode) => {
-                const nextQuery = node.query ?? query;
-                const nextOptions = node.options ?? {};
-                setQuery(nextQuery);
-                setCatalogOptions(nextOptions);
-                setLiveOptions({ ...browserOptions, ...nextOptions });
-                onDraftChange({
-                  ...draft,
-                  query: nextQuery,
-                  provider: {
-                    ...(draft.provider ?? {}),
-                    options: effectiveOptions({
-                      ...browserOptions,
-                      ...nextOptions,
-                    }),
-                  },
-                });
-              }}
-            />
-          ) : undefined
-        }
+        onCatalogSelect={(node) => {
+          const nextQuery = node.query ?? query;
+          const nextOptions = node.options ?? {};
+          setQuery(nextQuery);
+          setCatalogOptions(nextOptions);
+          setLiveOptions({ ...browserOptions, ...nextOptions });
+          onDraftChange({
+            ...draft,
+            query: nextQuery,
+            provider: {
+              ...(draft.provider ?? {}),
+              options: effectiveOptions({ ...browserOptions, ...nextOptions }),
+            },
+          });
+        }}
         execute={async (request) => {
-          const options = effectiveOptions(request.options);
           const nextDraft = {
             ...draft,
             query: request.query,
-            provider: { ...(draft.provider ?? {}), options },
+            provider: {
+              ...(draft.provider ?? {}),
+              options: effectiveOptions(request.options),
+            },
           };
           onDraftChange(nextDraft);
           const result = await fetchJSON<SampleResult>("/api/v1/profile/sample", {
@@ -283,7 +219,7 @@ export function ProfileWizardQueryStep({
               params: {},
             }),
           });
-          onSample(result.columns ?? []);
+          onSample({ columns: result.columns ?? [], rows: result.rows ?? [] });
           return result;
         }}
       />

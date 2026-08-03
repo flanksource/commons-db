@@ -4,7 +4,6 @@ import (
 	stdcontext "context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	dbconnection "github.com/flanksource/commons-db/connection"
@@ -12,6 +11,7 @@ import (
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 func init() {
@@ -35,6 +35,10 @@ type opensearchOptions struct {
 
 	// Limit is the maximum number of hits to return.
 	Limit string `json:"limit,omitempty"`
+
+	// Search is the structured search specification. It is mutually exclusive
+	// with the profile's raw query.
+	Search *esdsl.Search `json:"search,omitempty"`
 }
 
 func (opensearchProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
@@ -42,10 +46,18 @@ func (opensearchProvider) Execute(ctx context.Context, req query.ProviderRequest
 	if err != nil {
 		return nil, err
 	}
+	search, err := buildOpenSearchRequest(req, opts, false)
+	if err != nil {
+		return nil, err
+	}
+	body, err := search.encode()
+	if err != nil {
+		return nil, err
+	}
 	result, err := searcher.Search(ctx, opensearch.Request{
 		Index: opts.Index,
-		Query: req.Query,
-		Limit: opts.Limit,
+		Query: body,
+		Limit: search.limitParam(),
 	})
 	if err != nil {
 		return nil, err
@@ -58,35 +70,29 @@ func (opensearchProvider) OpenRows(ctx context.Context, req query.ProviderReques
 	if err != nil {
 		return nil, err
 	}
-	limit := 0
-	if opts.Limit != "" {
-		limit, err = strconv.Atoi(opts.Limit)
-		if err != nil || limit < 0 {
-			return nil, fmt.Errorf("invalid opensearch limit %q", opts.Limit)
-		}
+	scroll := req.MaxRows <= 0
+	search, err := buildOpenSearchRequest(req, opts, scroll)
+	if err != nil {
+		return nil, err
 	}
-	if req.MaxRows > 0 {
-		boundedLimit := req.MaxRows
-		if limit > 0 && limit < boundedLimit {
-			boundedLimit = limit
-		}
+	body, err := search.encode()
+	if err != nil {
+		return nil, err
+	}
+	if !scroll {
 		result, err := searcher.Search(ctx, opensearch.Request{
 			Index: opts.Index,
-			Query: req.Query,
-			Limit: strconv.Itoa(boundedLimit),
+			Query: body,
+			Limit: search.limitParam(),
 		})
 		if err != nil {
 			return nil, err
 		}
 		return query.SliceRows(logResultToRows(result)), nil
 	}
-	batchSize := 1000
-	if limit > 0 && limit < batchSize {
-		batchSize = limit
-	}
 	result, scrollID, err := searcher.SearchWithScroll(ctx, opensearch.ScrollRequest{
-		Request: opensearch.Request{Index: opts.Index, Query: req.Query},
-		Scroll:  opensearch.ScrollOptions{Enabled: true, Size: batchSize, Timeout: time.Minute},
+		Request: opensearch.Request{Index: opts.Index, Query: body},
+		Scroll:  opensearch.ScrollOptions{Enabled: true, Size: search.scrollBatch(), Timeout: time.Minute},
 	})
 	if err != nil {
 		return nil, err
@@ -97,7 +103,7 @@ func (opensearchProvider) OpenRows(ctx context.Context, req query.ProviderReques
 		searcher:   searcher,
 		scrollID:   scrollID,
 		rows:       logResultToRows(result),
-		limit:      limit,
+		limit:      search.limit,
 	}, nil
 }
 
