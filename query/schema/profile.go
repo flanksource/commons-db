@@ -1,6 +1,7 @@
 package schema
 
 import (
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 )
@@ -58,24 +59,51 @@ func ProfileSource() Schema {
 		"type":     "object",
 		"required": []string{"name"},
 		"properties": Schema{
-			"name":  strProp("Name", ""),
-			"label": strProp("Label", ""),
+			"label": Schema{"type": "string", "title": "Label", "description": "Optional column header; blank uses Name", "x-clicky-order": 0},
+			"name":  Schema{"type": "string", "title": "Name", "description": "Exact key read from each query result row", "x-clicky-order": 1},
 			"type": Schema{
-				"type":  "string",
-				"title": "Type",
-				"enum":  []string{"string", "number", "boolean", "datetime", "duration", "bytes", "status", "health", "key_value", "key_values", "json"},
+				"type":           "string",
+				"title":          "Type",
+				"enum":           []string{"string", "number", "boolean", "datetime", "duration", "bytes", "status", "health", "key_value", "key_values", "json"},
+				"description":    "Value shape and default formatting; independent of Role",
+				"x-clicky-order": 2,
 				"x-enum-labels": map[string]string{
 					"key_value":  "KeyValue{}",
 					"key_values": "[]KeyValue",
 					"json":       "JSON",
 				},
 			},
-			"kind":   Schema{"type": "string", "title": "Kind", "enum": []string{"timestamp", "tags", "status"}, "description": "Timestamp marks the column used by table date ranges"},
-			"format": strProp("Format", ""),
-			"unit":   strProp("Unit", ""),
-			"width":  Schema{"type": "integer", "title": "Width"},
-			"cel":    strProp("CEL", "Expression computing the cell value from `row`"),
-			"hidden": Schema{"type": "boolean", "title": "Hidden"},
+			"kind": Schema{
+				"type": "string", "title": "Role", "enum": []string{"timestamp", "tags", "status"},
+				"description":    "Optional table behavior, independent of Type: timestamp adds the date-range control, tags renders filterable chips, and status applies status styling",
+				"x-clicky-order": 3,
+			},
+			"format": Schema{
+				"type": "string", "title": "Format", "enum": api.ColumnFormatValues(),
+				"description":    "Optional display formatter; blank derives from Type and Unit takes precedence",
+				"x-clicky-order": 4,
+				"x-enum-labels":  map[string]string{"date": "Date/time", "float": "Number", "duration": "Duration", "bytes": "Bytes", "currency": "Currency"},
+			},
+			"unit": Schema{
+				"type": "string", "title": "Unit", "enum": api.ColumnUnitValues(),
+				"description":    "Numeric scaling and display unit; requires Type number, duration, or bytes and takes precedence over Format",
+				"x-clicky-order": 5,
+				"x-enum-labels": map[string]string{
+					"none": "Compact count", "short": "Short number", "percent": "Percent (0-100)", "percentunit": "Percent (0-1)",
+					"bytes": "Bytes (IEC)", "decbytes": "Bytes (SI)", "Bps": "Bytes/sec", "binBps": "Binary bytes/sec", "ms": "Milliseconds", "s": "Seconds",
+				},
+			},
+			"width": Schema{"type": "integer", "title": "Width", "description": "Maximum rendered width in characters", "x-clicky-order": 6},
+			"cel":   Schema{"type": "string", "title": "CEL", "description": "Expression computing the cell value from `row`", "x-clicky-order": 7},
+			"filter": Schema{
+				"type": "object", "title": "Filter", "x-clicky-order": 8,
+				"description": "Backend mapping for native include/exclude filters; direct columns and simple CEL infer this automatically",
+				"required":    []string{"field"},
+				"properties": Schema{
+					"field": Schema{"type": "string", "title": "OpenSearch field", "description": "Exact OpenSearch field used for term filters and value lookup"},
+				},
+			},
+			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for CEL and processors", "x-clicky-order": 9},
 		},
 	}
 	aliasDef := Schema{
@@ -213,6 +241,9 @@ func ProfileInstance(p query.Profile) Schema {
 		}
 		if c.Format != "" {
 			col["format"] = c.Format
+		}
+		if c.Unit != "" {
+			col["unit"] = c.Unit
 		}
 		columns = append(columns, col)
 	}

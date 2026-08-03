@@ -38,6 +38,48 @@ var _ = Describe("CEL columns", func() {
 		})
 		Expect(err).To(HaveOccurred())
 	})
+
+	It("extracts promoted fields from encoded and native JSON objects", func() {
+		query.RegisterProvider(&mockProvider{typ: "cel-json-object", rows: []query.Row{
+			{"metadata": `{"user":{"email":"alice@example.com"}}`},
+			{"metadata": map[string]any{"user": map[string]any{"email": "bob@example.com"}}},
+			{"message": "metadata omitted"},
+		}})
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "cel-json-object",
+			Provider: query.ProviderConfig{Type: "cel-json-object"},
+			Columns: []query.ColumnDef{{
+				Name: "user.email",
+				CEL:  `'metadata' in row ? jsonpath("$['user']['email']", type(row['metadata']) == string ? row['metadata'].JSON() : row['metadata']) : ''`,
+			}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows[0]).To(HaveKeyWithValue("user.email", "alice@example.com"))
+		Expect(result.Rows[1]).To(HaveKeyWithValue("user.email", "bob@example.com"))
+		Expect(result.Rows[2]).To(HaveKeyWithValue("user.email", ""))
+	})
+
+	It("extracts promoted fields from encoded and native key-value arrays", func() {
+		query.RegisterProvider(&mockProvider{typ: "cel-json-key-values", rows: []query.Row{
+			{"tags": `[{"key":"http.response.status_code","type":"int64","value":200}]`},
+			{"tags": []any{map[string]any{"key": "http.response.status_code", "type": "int64", "value": 503}}},
+			{"tags": `[{"key":"other","value":"ignored"}]`},
+		}})
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "cel-json-key-values",
+			Provider: query.ProviderConfig{Type: "cel-json-key-values"},
+			Columns: []query.ColumnDef{{
+				Name: "http.response.status_code",
+				CEL:  `'tags' in row ? jsonpath("$[?(@.key == 'http.response.status_code')].value", type(row['tags']) == string ? row['tags'].JSONArray() : row['tags']) : ''`,
+			}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows[0]["http.response.status_code"]).To(BeNumerically("==", 200))
+		Expect(result.Rows[1]["http.response.status_code"]).To(BeNumerically("==", 503))
+		Expect(result.Rows[2]).To(HaveKeyWithValue("http.response.status_code", ""))
+	})
 })
 
 var _ = Describe("Result.Render", func() {
@@ -83,6 +125,27 @@ var _ = Describe("Result.Render", func() {
 		out, err := result.Render([]query.ColumnDef{{Name: "name", Kind: query.ColumnKindTimestamp}}, "clicky-json")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(out).To(ContainSubstring(`"kind": "timestamp"`))
+	})
+
+	It("preserves native server filter keys in clicky JSON", func() {
+		filtered := &query.Result{
+			Rows:             []query.Row{{"name": "alpha"}},
+			ColumnFilterKeys: map[string]string{"name": "filter.name"},
+		}
+		out, err := filtered.Render([]query.ColumnDef{{Name: "name"}}, "clicky-json")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out).To(ContainSubstring(`"filterKey": "filter.name"`))
+	})
+
+	It("renders Unit after Format and preserves both in clicky JSON", func() {
+		formatted := &query.Result{Rows: []query.Row{{"ratio": 0.42}}}
+		out, err := formatted.Render([]query.ColumnDef{{
+			Name: "ratio", Type: query.ColumnTypeNumber, Format: "currency", Unit: "percentunit",
+		}}, "clicky-json")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(out).To(ContainSubstring(`"format": "currency"`))
+		Expect(out).To(ContainSubstring(`"unit": "percentunit"`))
+		Expect(out).To(ContainSubstring(`"plain": "42%"`))
 	})
 
 	It("preserves structured column types and nodes in clicky JSON", func() {

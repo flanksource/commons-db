@@ -17,4 +17,7 @@ type Result struct {
 
 	// Context holds named side objects keyed by SubQuery name.
 	Context map[string]any `json:"context,omitempty" yaml:"context,omitempty"`
+
+	// ColumnFilterKeys binds rendered columns to native server filter params.
+	ColumnFilterKeys map[string]string `json:"-" yaml:"-"`
 }
