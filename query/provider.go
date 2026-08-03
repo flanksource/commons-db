@@ -20,6 +20,16 @@ type Provider interface {
 	Execute(ctx context.Context, req ProviderRequest) ([]Row, error)
 }
 
+type FilterOption struct {
+	Value string
+	Count int64
+}
+
+// FilterLookupProvider resolves distinct backend values for one bound column.
+type FilterLookupProvider interface {
+	LookupFilterValues(ctx context.Context, req ProviderRequest, binding ColumnFilterBinding, search string, limit int) ([]FilterOption, int, error)
+}
+
 // ProviderRequest is the resolved input handed to a Provider by the engine.
 type ProviderRequest struct {
 	// Connection references a connection (connection://name) or an inline DSN/URL.
@@ -34,6 +44,14 @@ type ProviderRequest struct {
 	// Params contains the validated profile parameters. Providers use this for
 	// native query builders that cannot be expressed as a query template.
 	Params map[string]any
+
+	// ParamRoles maps each declared param name to its ParamRole, so a structural
+	// query builder can fold role-carrying params (time-from, limit, …) into the
+	// backend's native constructs instead of treating them as plain filters.
+	ParamRoles map[string]ParamRole
+
+	// Filters contains native include/exclude clauses bound to profile columns.
+	Filters []ColumnFilterValue
 
 	// MaxRows is an execution hint for bounded callers such as an interactive
 	// page. Streaming providers may use it to avoid opening a backend cursor

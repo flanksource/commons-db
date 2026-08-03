@@ -114,6 +114,20 @@ func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, er
 	return resolved, nil
 }
 
+// paramRoles indexes the declared params by name, defaulting an unset role to
+// filter so a provider never has to re-apply that default.
+func paramRoles(defs []ParamDef) map[string]ParamRole {
+	roles := make(map[string]ParamRole, len(defs))
+	for _, def := range defs {
+		if def.Role == "" {
+			roles[def.Name] = ParamRoleFilter
+			continue
+		}
+		roles[def.Name] = def.Role
+	}
+	return roles
+}
+
 // coerce converts a raw value to the param's declared type and validates it
 // against Options, failing fast on a type mismatch or a value outside the enum.
 func (d ParamDef) coerce(raw any) (any, error) {

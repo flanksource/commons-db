@@ -1,11 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { CatalogTree } from "./catalogTree";
 import {
-  CatalogTree,
   completionForInspection,
   openSearchIndexOptions,
   queryBrowserOptionsSchema,
-} from "./connectionBrowser";
+} from "./connectionBrowserModel";
 
 describe("connection browser inspection completion", () => {
   it("maps SQL inspection data to shared QueryBrowser completion", () => {

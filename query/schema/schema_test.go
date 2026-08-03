@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/flanksource/commons-db/query/schema"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -269,6 +270,106 @@ var _ = Describe("Profile schema", func() {
 	})
 })
 
+var _ = Describe("Search specification schema", func() {
+	searchProp := func(providerType string) schema.Schema {
+		options := schema.ProfileComponents()[providerType]["properties"].(schema.Schema)["options"].(schema.Schema)
+		return options["properties"].(schema.Schema)["search"].(schema.Schema)
+	}
+
+	DescribeTable("delegates the search specification to the query builder",
+		func(providerType string) {
+			search := searchProp(providerType)
+			Expect(search["x-clicky-component"]).To(Equal("es-query-builder"))
+			Expect(search["properties"].(schema.Schema)).To(HaveKey("query"))
+		},
+		Entry("opensearch", "opensearch"),
+		Entry("opentelemetry", "opentelemetry"),
+	)
+
+	It("no longer offers the ad-hoc opentelemetry params object", func() {
+		options := schema.ProfileComponents()["opentelemetry"]["properties"].(schema.Schema)["options"].(schema.Schema)
+		Expect(options["properties"].(schema.Schema)).ToNot(HaveKey("params"))
+	})
+
+	// The builder reads its operator vocabulary off the schema, so a new operator
+	// that does not reach x-es-operators would be invisible in the UI.
+	It("carries the whole operator catalog, keyed exactly as esdsl emits it", func() {
+		operators := searchProp("opensearch")["x-es-operators"].([]any)
+		Expect(operators).To(HaveLen(len(esdsl.Catalog())))
+
+		emitted := map[string]map[string]any{}
+		for _, entry := range operators {
+			info := entry.(map[string]any)
+			emitted[info["op"].(string)] = info
+		}
+		for _, info := range esdsl.Catalog() {
+			Expect(emitted).To(HaveKey(string(info.Op)))
+			Expect(emitted[string(info.Op)]).To(HaveKeyWithValue("label", info.Label))
+			Expect(emitted[string(info.Op)]).To(HaveKeyWithValue("arity", string(info.Arity)))
+		}
+		Expect(emitted["terms"]).To(HaveKeyWithValue("needsField", true))
+		Expect(emitted["bool"]).To(HaveKeyWithValue("group", true))
+		Expect(emitted["match"]).To(HaveKeyWithValue("analyzed", true))
+		Expect(emitted["match"]["fieldTypes"]).To(ConsistOf("text", "keyword"))
+	})
+
+	It("carries the occur list and the qualifier-to-operator table", func() {
+		search := searchProp("opensearch")
+		Expect(search["x-es-occurs"]).To(Equal([]string{"filter", "must", "should", "must_not"}))
+
+		qualifiers := search["x-es-qualifiers"].(map[string][]string)
+		Expect(qualifiers).To(HaveLen(len(esdsl.QualifierNames())))
+		Expect(qualifiers["scoreMode"]).To(Equal([]string{"nested"}))
+		Expect(qualifiers["caseInsensitive"]).To(ConsistOf("term", "terms", "prefix", "wildcard", "regexp"))
+	})
+
+	// Every enum the form offers must be one the compiler accepts, or the form
+	// would hand the author a value that fails on save.
+	It("offers only qualifier values the compiler accepts", func() {
+		condition := searchProp("opensearch")["properties"].(schema.Schema)["query"].(schema.Schema)
+		props := condition["properties"].(schema.Schema)
+		Expect(props["op"].(schema.Schema)["enum"]).To(HaveLen(len(esdsl.Catalog())))
+		Expect(props["matchOperator"].(schema.Schema)["enum"]).To(Equal(esdsl.MatchOperators()))
+		Expect(props["multiMatchType"].(schema.Schema)["enum"]).To(Equal(esdsl.MultiMatchTypes()))
+		Expect(props["scoreMode"].(schema.Schema)["enum"]).To(Equal(esdsl.ScoreModes()))
+		Expect(props["sort"]).To(BeNil())
+
+		for _, value := range esdsl.MultiMatchTypes() {
+			Expect(esdsl.Condition{
+				Op: esdsl.OpMultiMatch, Fields: []string{"message"},
+				Value: esdsl.Literal("boom"), MultiMatchType: value,
+			}.Validate("query")).To(Succeed())
+		}
+	})
+
+	// A schema-driven form materialises declared defaults onto the object it is
+	// editing. A qualifier only some operators accept would then be injected onto
+	// operators that reject it, and the condition would fail to compile the moment
+	// a saved profile is reopened.
+	It("declares no default on a qualifier only some operators accept", func() {
+		props := searchProp("opensearch")["properties"].(schema.Schema)["query"].(schema.Schema)["properties"].(schema.Schema)
+		for name := range esdsl.Qualifiers() {
+			Expect(props[name].(schema.Schema)).ToNot(HaveKey("default"),
+				"qualifier %q is operator-specific, so a default would be injected onto operators that reject it", name)
+		}
+	})
+
+	// The tree is expanded rather than $ref'd, so the innermost level must stop.
+	It("expands the condition tree to a bounded depth", func() {
+		condition := searchProp("opensearch")["properties"].(schema.Schema)["query"].(schema.Schema)
+		depth := 0
+		for {
+			depth++
+			children, nested := condition["properties"].(schema.Schema)["conditions"]
+			if !nested {
+				break
+			}
+			condition = children.(schema.Schema)["items"].(schema.Schema)
+		}
+		Expect(depth).To(Equal(3))
+	})
+})
+
 var _ = Describe("ProfileInstance schema", func() {
 	p := query.Profile{
 		Name: "activities",
@@ -277,7 +378,7 @@ var _ = Describe("ProfileInstance schema", func() {
 			{Name: "limit", Type: query.ParamTypeNumber, Default: 50},
 		},
 		Columns: []query.ColumnDef{
-			{Name: "id", Type: query.ColumnTypeString, Kind: query.ColumnKindTimestamp},
+			{Name: "id", Type: query.ColumnTypeNumber, Kind: query.ColumnKindTimestamp, Format: "float", Unit: "short"},
 			{Name: "secret", Hidden: true},
 		},
 	}
@@ -296,6 +397,8 @@ var _ = Describe("ProfileInstance schema", func() {
 		Expect(cols).To(HaveLen(1))
 		Expect(cols[0].(schema.Schema)["name"]).To(Equal("id"))
 		Expect(cols[0].(schema.Schema)["kind"]).To(Equal("timestamp"))
+		Expect(cols[0].(schema.Schema)["format"]).To(Equal("float"))
+		Expect(cols[0].(schema.Schema)["unit"]).To(Equal("short"))
 	})
 
 	It("omits x-clicky-render when the profile has no render mode", func() {
@@ -317,6 +420,28 @@ var _ = Describe("ProfileInstance schema", func() {
 			Expect(col).ToNot(HaveKey("sortable"))
 			Expect(col).ToNot(HaveKey("filterable"))
 		}
+	})
+})
+
+var _ = Describe("Profile column editor schema", func() {
+	It("defines the requested order, strict enums, and Type versus Role help", func() {
+		profile := schema.ProfileSource()
+		columns := profile["properties"].(schema.Schema)["columns"].(schema.Schema)
+		items := columns["items"].(schema.Schema)
+		props := items["properties"].(schema.Schema)
+
+		Expect(props["label"].(schema.Schema)["x-clicky-order"]).To(Equal(0))
+		Expect(props["name"].(schema.Schema)["x-clicky-order"]).To(Equal(1))
+		Expect(props["type"].(schema.Schema)["x-clicky-order"]).To(Equal(2))
+		filter := props["filter"].(schema.Schema)
+		Expect(filter["x-clicky-order"]).To(Equal(8))
+		Expect(filter["properties"].(schema.Schema)["field"].(schema.Schema)["description"]).To(ContainSubstring("OpenSearch"))
+		Expect(props["kind"].(schema.Schema)["title"]).To(Equal("Role"))
+		Expect(props["kind"].(schema.Schema)["description"]).To(ContainSubstring("independent of Type"))
+		Expect(props["format"].(schema.Schema)["enum"]).To(Equal([]string{"date", "float", "duration", "bytes", "currency"}))
+		Expect(props["unit"].(schema.Schema)["enum"]).To(Equal([]string{
+			"none", "short", "percent", "percentunit", "bytes", "decbytes", "Bps", "binBps", "ms", "s",
+		}))
 	})
 })
 

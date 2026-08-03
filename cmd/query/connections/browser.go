@@ -20,7 +20,6 @@ import (
 	"github.com/flanksource/commons-db/db"
 	opensearchinspect "github.com/flanksource/commons-db/inspect/opensearch"
 	sqlinspect "github.com/flanksource/commons-db/inspect/sql"
-	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	queryschema "github.com/flanksource/commons-db/query/schema"
@@ -136,6 +135,8 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		writeJSON(w, descriptor)
 	case tail == "/query" && r.Method == http.MethodPost:
 		h.serveQuery(w, r, conn)
+	case tail == "/compile" && r.Method == http.MethodPost:
+		h.serveCompile(w, r, conn)
 	case tail == "/catalog" && r.Method == http.MethodGet:
 		h.serveCatalog(w, r, conn)
 	case tail == "/inspect" && r.Method == http.MethodGet:
@@ -205,7 +206,10 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 		http.Error(w, "decode browser query: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(request.Query) == "" && descriptor.Provider != "jaeger" {
+	// A structured OpenSearch search stands in for the query text: the builder
+	// sends the specification and lets the server compile it.
+	structured := descriptor.Provider == "opensearch" && request.Options["search"] != nil
+	if strings.TrimSpace(request.Query) == "" && descriptor.Provider != "jaeger" && !structured {
 		http.Error(w, "query is required", http.StatusBadRequest)
 		return
 	}
@@ -296,46 +300,6 @@ func sqlReturnsRows(statement string) bool {
 		}
 	}
 	return false
-}
-
-func (h *connectionBrowserHandler) executeOpenSearch(r *http.Request, conn *models.Connection, request browserQueryRequest) (browserQueryResult, error) {
-	index, _ := request.Options["index"].(string)
-	limit := ""
-	if value := request.Options["limit"]; value != nil {
-		limit = fmt.Sprint(value)
-	}
-	if index == "" {
-		return browserQueryResult{}, fmt.Errorf("OpenSearch index is required")
-	}
-	requestCtx := h.ctx.Wrap(r.Context())
-	searcher, err := h.openSearchSearcher(requestCtx, conn)
-	if err != nil {
-		return browserQueryResult{}, err
-	}
-	raw, err := searcher.SearchRaw(requestCtx, opensearch.Request{Index: index, Query: request.Query, Limit: limit})
-	if err != nil {
-		return browserQueryResult{}, err
-	}
-	rows := make([]query.Row, 0, len(raw.Hits.Hits))
-	for _, hit := range raw.Hits.Hits {
-		row := query.Row{"_index": hit.Index, "_id": hit.ID, "_score": hit.Score}
-		for key, value := range hit.Source {
-			row[key] = value
-		}
-		rows = append(rows, row)
-	}
-	return browserQueryResult{Rows: rows, Metadata: map[string]any{
-		"total": raw.Hits.Total.Value, "relation": raw.Hits.Total.Relation,
-		"took": raw.Took, "timedOut": raw.TimedOut, "aggregations": raw.Aggregations,
-	}}, nil
-}
-
-func (h *connectionBrowserHandler) openSearchSearcher(ctx dbcontext.Context, conn *models.Connection) (*opensearch.Searcher, error) {
-	httpConnection, err := dbconnection.NewHTTPConnection(ctx, *conn)
-	if err != nil {
-		return nil, err
-	}
-	return opensearch.NewWithTransport(ctx, opensearch.Backend{Address: conn.URL}, nil, httpConnection.Transport())
 }
 
 func (h *connectionBrowserHandler) serveInspection(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
