@@ -22,7 +22,7 @@ func (r rowProvider) Row() map[string]any      { return r.row }
 // Table builds a clicky TextTable from the Result. When columns is empty, the
 // columns are derived from the union of row keys (sorted for determinism).
 func (r *Result) Table(columns []ColumnDef) api.TextTable {
-	cols := clickyColumns(columns, r.Rows)
+	cols := clickyColumns(columns, r.Rows, r.ColumnFilterKeys)
 	if len(r.Rows) == 0 {
 		return emptyTable(cols)
 	}
@@ -40,15 +40,18 @@ func (r *Result) Render(columns []ColumnDef, format string) (string, error) {
 	return clicky.Format(r.Table(columns), clicky.FormatOptions{Format: format})
 }
 
-// ClickyColumns maps declared profile columns to the shared Clicky column
-// contract. Schema-less callers may pass nil and let a formatter derive fields.
-func ClickyColumns(columns []ColumnDef) []api.ColumnDef {
-	return clickyColumns(columns, nil)
+// ClickyColumns maps a profile's declared columns to the shared Clicky contract.
+func ClickyColumns(profile Profile) ([]api.ColumnDef, error) {
+	keys, err := profile.ColumnFilterKeys()
+	if err != nil {
+		return nil, err
+	}
+	return clickyColumns(profile.Columns, nil, keys), nil
 }
 
 // clickyColumns maps profile columns to clicky column definitions, deriving the
 // schema from row keys when no columns are declared.
-func clickyColumns(columns []ColumnDef, rows []Row) []api.ColumnDef {
+func clickyColumns(columns []ColumnDef, rows []Row, filterKeys map[string]string) []api.ColumnDef {
 	if len(columns) == 0 {
 		columns = deriveColumns(rows)
 	}
@@ -56,13 +59,15 @@ func clickyColumns(columns []ColumnDef, rows []Row) []api.ColumnDef {
 	out := make([]api.ColumnDef, 0, len(columns))
 	for _, c := range columns {
 		out = append(out, api.ColumnDef{
-			Name:     c.Name,
-			Label:    c.Label,
-			Kind:     string(c.Kind),
-			Type:     string(c.Type),
-			Format:   c.clickyFormat(),
-			MaxWidth: c.Width,
-			Hidden:   c.Hidden,
+			Name:      c.Name,
+			Label:     c.Label,
+			Kind:      string(c.Kind),
+			Type:      string(c.Type),
+			Format:    c.clickyFormat(),
+			Unit:      c.Unit,
+			MaxWidth:  c.Width,
+			Hidden:    c.Hidden,
+			FilterKey: filterKeys[c.Name],
 		})
 	}
 	return out
@@ -91,7 +96,9 @@ func emptyTable(cols []api.ColumnDef) api.TextTable {
 			LabelStyle:    col.HeaderStyle,
 			Type:          col.Type,
 			Format:        col.Format,
+			Unit:          col.Unit,
 			FormatOptions: col.FormatOptions,
+			FilterKey:     col.FilterKey,
 		})
 	}
 	return t

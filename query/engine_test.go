@@ -102,6 +102,27 @@ output: [table, html]
 })
 
 var _ = Describe("Execute", func() {
+	It("separates native column filters from declared template parameters", func() {
+		provider := &mockProvider{typ: "opensearch"}
+		query.RegisterProvider(provider)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "filtered logs",
+			Provider: query.ProviderConfig{Type: provider.typ},
+			Params:   []query.ParamDef{{Name: "namespace"}},
+			Columns:  []query.ColumnDef{{Name: "service"}},
+		}, map[string]any{
+			"namespace":      "prod",
+			"filter.service": "payments,!worker",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(provider.last.Params).To(Equal(map[string]any{"namespace": "prod"}))
+		Expect(provider.last.Filters).To(Equal([]query.ColumnFilterValue{{
+			Column: "service", Key: "filter.service", Field: "service",
+			Include: []string{"payments"}, Exclude: []string{"worker"},
+		}}))
+	})
+
 	It("passes resolved params to providers and applies ordered aliases before ignore and columns", func() {
 		provider := &mockProvider{typ: "exec-row-pipeline", rows: []query.Row{{
 			"input.xml": "<Policy><Number>P-7</Number></Policy>",

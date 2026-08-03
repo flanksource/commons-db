@@ -1,5 +1,13 @@
 package query
 
+import (
+	"fmt"
+	"slices"
+	"strings"
+
+	"github.com/flanksource/clicky/api"
+)
+
 // ColumnType is the semantic type of a column. It drives default formatting in
 // the render layer (see render.go) and the clicky-ui contract.
 //
@@ -49,7 +57,7 @@ type ColumnDef struct {
 	// "duration", "currency"). When empty it is derived from Type.
 	Format string `json:"format,omitempty" yaml:"format,omitempty"`
 
-	// Unit is an optional display unit (e.g. "ms", "MiB").
+	// Unit is an optional display unit (e.g. "ms", "bytes", "percentunit").
 	Unit string `json:"unit,omitempty" yaml:"unit,omitempty"`
 
 	// Width is an optional max display width in characters.
@@ -58,6 +66,11 @@ type ColumnDef struct {
 	// CEL is an optional expression computing the cell value from the row.
 	// The row is exposed as `row` in the CEL environment.
 	CEL string `json:"cel,omitempty" yaml:"cel,omitempty"`
+
+	// Filter overrides the backend field used by native OpenSearch filtering.
+	// Direct columns and simple row/span CEL lookups infer this automatically;
+	// computed CEL and JSONPath columns require an explicit field.
+	Filter *ColumnFilterDef `json:"filter,omitempty" yaml:"filter,omitempty"`
 
 	// Hidden excludes the column from rendered output while keeping it available
 	// to CEL and processors.
@@ -81,5 +94,27 @@ func (c ColumnDef) clickyFormat() string {
 		return "float"
 	default:
 		return ""
+	}
+}
+
+// Validate rejects unsupported display metadata before a profile executes.
+func (c ColumnDef) Validate() error {
+	if c.Filter != nil && strings.TrimSpace(c.Filter.Field) == "" {
+		return fmt.Errorf("column %q filter field is required", c.Name)
+	}
+	if c.Format != "" && !slices.Contains(api.ColumnFormatValues(), c.Format) {
+		return fmt.Errorf("column %q format %q is unsupported", c.Name, c.Format)
+	}
+	if c.Unit == "" {
+		return nil
+	}
+	if !slices.Contains(api.ColumnUnitValues(), c.Unit) {
+		return fmt.Errorf("column %q unit %q is unsupported", c.Name, c.Unit)
+	}
+	switch c.Type {
+	case ColumnTypeNumber, ColumnTypeDuration, ColumnTypeBytes:
+		return nil
+	default:
+		return fmt.Errorf("column %q unit requires type number, duration, or bytes", c.Name)
 	}
 }
