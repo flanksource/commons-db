@@ -16,7 +16,7 @@ func TestMergeStoredProfilesTracksStoreImmediately(t *testing.T) {
 	profile := sampleProfile("Live Sales")
 	profile.Provider.Type = "postgres"
 	profile.Params = []query.ParamDef{{Name: "region", Type: query.ParamTypeEnum, Options: []string{"US", "EU"}, Required: true}}
-	profile.Columns = []query.ColumnDef{{Name: "id", Label: "ID", Type: query.ColumnTypeString, Kind: query.ColumnKindTimestamp}}
+	profile.Columns = []query.ColumnDef{{Name: "id", Label: "ID", Type: query.ColumnTypeNumber, Kind: query.ColumnKindTimestamp, Format: "float", Unit: "short"}}
 	if err := store.Save(context.Background(), profile); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +59,9 @@ func TestMergeStoredProfilesTracksStoreImmediately(t *testing.T) {
 	if item.Properties["id"].Extensions["x-clicky-kind"] != "timestamp" {
 		t.Fatalf("response timestamp metadata missing: %+v", item.Properties["id"])
 	}
+	if item.Properties["id"].Extensions["x-clicky-format"] != "float" || item.Properties["id"].Extensions["x-clicky-unit"] != "short" {
+		t.Fatalf("response display metadata missing: %+v", item.Properties["id"])
+	}
 	if op.Clicky.Export == nil || len(op.Clicky.Export.Formats) != 8 || len(op.Clicky.Export.Scopes) != 2 || op.Clicky.Export.AllRowsMode != "streaming" || op.Clicky.Export.FormatMaxRows["pdf"] != 1000 {
 		t.Fatalf("profile export metadata missing: %+v", op.Clicky.Export)
 	}
@@ -76,7 +79,7 @@ func TestMergeStoredProfilesTracksStoreImmediately(t *testing.T) {
 
 func TestProfileOpenAPIPreservesMappedPagingAndTimeRoles(t *testing.T) {
 	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
-	addProfileToSpec(spec, query.Profile{
+	if err := addProfileToSpec(spec, query.Profile{
 		Name: "mapped",
 		Params: []query.ParamDef{
 			{Name: "page_size", Type: query.ParamTypeNumber, Role: query.ParamRoleLimit},
@@ -84,7 +87,9 @@ func TestProfileOpenAPIPreservesMappedPagingAndTimeRoles(t *testing.T) {
 			{Name: "from", Type: query.ParamTypeDate, Role: query.ParamRoleTimeFrom},
 			{Name: "to", Type: query.ParamTypeDate, Role: query.ParamRoleTimeTo},
 		},
-	})
+	}); err != nil {
+		t.Fatal(err)
+	}
 	op := spec.Paths["/api/v1/profile/profile-mapped"]["get"]
 	if len(op.Parameters) != 4 {
 		t.Fatalf("mapped parameters should replace built-in pager names: %+v", op.Parameters)
@@ -102,7 +107,7 @@ func TestProfileOpenAPIAdvertisesStructuredColumnShapes(t *testing.T) {
 		{Name: "labels", Type: query.ColumnTypeKeyValue},
 		{Name: "pairs", Type: query.ColumnTypeKeyValues},
 		{Name: "metadata", Type: query.ColumnTypeJSON},
-	}}).Items
+	}}, nil).Items
 
 	labels := schema.Properties["labels"]
 	if labels.Type != "object" || labels.AdditionalProperties == nil || labels.Extensions["x-clicky-type"] != "key_value" {
@@ -115,5 +120,37 @@ func TestProfileOpenAPIAdvertisesStructuredColumnShapes(t *testing.T) {
 	metadata := schema.Properties["metadata"]
 	if len(metadata.OneOf) != 5 || !metadata.Nullable || metadata.Extensions["x-clicky-type"] != "json" {
 		t.Fatalf("metadata schema = %#v", metadata)
+	}
+}
+
+func TestProfileOpenAPIAdvertisesNativeColumnFilters(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "logs",
+		Provider: query.ProviderConfig{Type: "opensearch"},
+		Columns: []query.ColumnDef{
+			{Name: "service", Label: "Service"},
+			{Name: "payload.user", CEL: `jsonpath("$.user", row.payload)`, Filter: &query.ColumnFilterDef{Field: "payload.user.keyword"}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	op := spec.Paths["/api/v1/profile/profile-logs"]["get"]
+	if len(op.Parameters) != 4 {
+		t.Fatalf("column filters plus pagination missing: %+v", op.Parameters)
+	}
+	for i, key := range []string{"filter.service", "filter.payload.user"} {
+		parameter := op.Parameters[i]
+		if parameter.Name != key || parameter.Clicky == nil || parameter.Clicky.Role != "filter" || parameter.Lookup == nil || parameter.Lookup.Filter != key || !parameter.Lookup.Multi {
+			t.Fatalf("parameter %q = %+v", key, parameter)
+		}
+		if spec.Components == nil || spec.Components.ClickyFilters == nil {
+			t.Fatalf("filter component for %q is missing", key)
+		}
+	}
+	item := op.Responses["200"].Content["application/json"].Schema.Items
+	if item.Properties["service"].Extensions["x-clicky-filter-key"] != "filter.service" {
+		t.Fatalf("response filter key missing: %+v", item.Properties["service"])
 	}
 }

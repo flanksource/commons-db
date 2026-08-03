@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/query"
 	"github.com/spf13/cobra"
@@ -87,13 +88,16 @@ func mergeStoredProfiles(spec *rpc.OpenAPISpec, store Store) error {
 		if err != nil {
 			return fmt.Errorf("resolve profile surface %q: %w", profile.Name, err)
 		}
-		addProfileToSpec(spec, resolved.Profile)
+		if err := addProfileToSpec(spec, resolved.Profile); err != nil {
+			return fmt.Errorf("add profile surface %q: %w", profile.Name, err)
+		}
 	}
 	return nil
 }
 
-func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
+func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	entityName := "profile-" + slugify(profile.Name)
+	path := "/api/v1/profile/" + entityName
 	spec.Clicky.Surfaces = append(spec.Clicky.Surfaces, rpc.ClickySurface{
 		Key:         entityName,
 		Entity:      entityName,
@@ -103,11 +107,32 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
 		Icon:        providerIcon(profile.Provider.Type),
 	})
 
-	parameters := make([]rpc.OpenAPIParameter, 0, len(profile.Params)+2)
+	bindings, err := profile.ColumnFilterBindings()
+	if err != nil {
+		return err
+	}
+	parameters := make([]rpc.OpenAPIParameter, 0, len(profile.Params)+len(bindings)+2)
+	filterKeys := make(map[string]string, len(bindings))
+	for _, binding := range bindings {
+		filterKeys[binding.Column] = binding.Key
+	}
 	roles := map[query.ParamRole]bool{}
 	for _, param := range profile.Params {
 		parameters = append(parameters, profileParameter(param))
 		roles[param.Role] = true
+	}
+	for _, binding := range bindings {
+		filterName := profileFilterName(profile.Name, binding.Column)
+		ensureProfileFilterComponent(spec, filterName, binding.Label)
+		parameters = append(parameters, rpc.OpenAPIParameter{
+			Name: binding.Key, In: "query", Description: "Include or exclude " + binding.Label + " values",
+			Schema: &rpc.OpenAPISchema{Type: "string", Title: binding.Label},
+			Clicky: &rpc.ClickyParameterMeta{Role: "filter"},
+			Lookup: &rpc.ClickyLookupMeta{
+				Ref: "#/components/x-clicky-filters/" + filterName, URL: path,
+				Filter: binding.Key, SearchParam: "__lookup_q", Multi: true,
+			},
+		})
 	}
 	if !roles[query.ParamRoleLimit] {
 		parameters = append(parameters,
@@ -125,7 +150,6 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
 				Clicky: &rpc.ClickyParameterMeta{Role: "offset"},
 			})
 	}
-	path := "/api/v1/profile/" + entityName
 	spec.Paths[path] = rpc.OpenAPIPath{"get": {
 		Summary:     "Run " + profile.Name,
 		Description: "Execute the stored query profile",
@@ -135,7 +159,7 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
 			"200": {
 				Description: "Profile rows",
 				Content: map[string]rpc.OpenAPIMediaType{
-					"application/json": {Schema: profileResponseSchema(profile)},
+					"application/json": {Schema: profileResponseSchema(profile, filterKeys)},
 				},
 			},
 		},
@@ -158,6 +182,20 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) {
 				"201": {Description: "Session started"},
 			},
 		}}
+	}
+	return nil
+}
+
+func ensureProfileFilterComponent(spec *rpc.OpenAPISpec, name, label string) {
+	if spec.Components == nil {
+		spec.Components = &rpc.OpenAPIComponents{}
+	}
+	if spec.Components.ClickyFilters == nil {
+		spec.Components.ClickyFilters = map[string]entity.FilterSpec{}
+	}
+	spec.Components.ClickyFilters[name] = entity.FilterSpec{
+		Name: name, Label: label, Type: "multi-filter", Multi: true,
+		Source: entity.FilterSourceSpec{Kind: entity.SourceCustom},
 	}
 }
 
@@ -208,7 +246,7 @@ func profileParameter(param query.ParamDef) rpc.OpenAPIParameter {
 	}
 }
 
-func profileResponseSchema(profile query.Profile) *rpc.OpenAPISchema {
+func profileResponseSchema(profile query.Profile, filterKeys map[string]string) *rpc.OpenAPISchema {
 	properties := map[string]*rpc.OpenAPISchema{}
 	idAssigned := false
 	for _, column := range profile.Columns {
@@ -226,8 +264,14 @@ func profileResponseSchema(profile query.Profile) *rpc.OpenAPISchema {
 		if column.Format != "" {
 			property.Extensions["x-clicky-format"] = column.Format
 		}
+		if column.Unit != "" {
+			property.Extensions["x-clicky-unit"] = column.Unit
+		}
 		if column.Kind != "" {
 			property.Extensions["x-clicky-kind"] = string(column.Kind)
+		}
+		if key := filterKeys[column.Name]; key != "" {
+			property.Extensions["x-clicky-filter-key"] = key
 		}
 		if !idAssigned {
 			property.Extensions["x-clicky-id"] = true

@@ -2,9 +2,11 @@ package profiles
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/flanksource/clicky"
@@ -140,6 +142,14 @@ func (s *Service) Save(ctx context.Context, body map[string]any, id string) (que
 	if err != nil {
 		return query.Profile{}, err
 	}
+	b = cloneBody(b)
+	replaceExisting, err := updateReplaceExisting(b)
+	if err != nil {
+		return query.Profile{}, err
+	}
+	if id == "" && replaceExisting {
+		return query.Profile{}, fmt.Errorf("replaceExisting is only valid when updating a profile")
+	}
 	p, err := profileFromBody(b)
 	if err != nil && id != "" {
 		b["profile"] = id
@@ -152,10 +162,36 @@ func (s *Service) Save(ctx context.Context, body map[string]any, id string) (que
 	if err != nil {
 		return query.Profile{}, err
 	}
-	if err := store.Save(ctx, p); err != nil {
+	if id != "" {
+		err = store.Update(ctx, id, p, UpdateOptions{ReplaceExisting: replaceExisting})
+	} else {
+		err = store.Save(ctx, p)
+	}
+	if err != nil {
 		return query.Profile{}, err
 	}
 	return p, nil
+}
+
+func cloneBody(body map[string]any) map[string]any {
+	cloned := make(map[string]any, len(body))
+	for key, value := range body {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func updateReplaceExisting(body map[string]any) (bool, error) {
+	raw, exists := body["replaceExisting"]
+	delete(body, "replaceExisting")
+	if !exists {
+		return false, nil
+	}
+	replace, ok := raw.(bool)
+	if !ok {
+		return false, fmt.Errorf("replaceExisting must be a boolean")
+	}
+	return replace, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]query.Profile, error) {
@@ -195,12 +231,30 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		bindings, err := resolved.Profile.ColumnFilterBindings()
+		if err != nil {
+			return fmt.Errorf("build filters for profile %q: %w", name, err)
+		}
 		schemaJSON, err := profileEntitySchema(resolved.Profile)
 		if err != nil {
 			return fmt.Errorf("build entity schema for profile %q: %w", name, err)
 		}
 		if !s.markRegistered(name) {
 			continue
+		}
+		for _, binding := range bindings {
+			filterName := profileFilterName(resolved.Profile.Name, binding.Column)
+			if _, exists := entity.GetFilter(filterName); exists {
+				s.unmarkRegistered(name)
+				return fmt.Errorf("profile filter %q is already registered", filterName)
+			}
+		}
+		for _, binding := range bindings {
+			filterName := profileFilterName(resolved.Profile.Name, binding.Column)
+			entity.RegisterFilter(entity.NamedFilter{
+				Name: filterName, Label: binding.Label, Type: "multi-filter", Multi: true,
+				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
+			})
 		}
 		entity.NewDynamicEntity("profile-"+slugify(name), schemaJSON).
 			List(func(_ context.Context, opts map[string]string) ([]map[string]any, error) {
@@ -237,6 +291,12 @@ func (s *Service) markRegistered(name string) bool {
 	return true
 }
 
+func (s *Service) unmarkRegistered(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.registered, slugify(name))
+}
+
 func (s *Service) Get(ctx context.Context, name string) (query.Profile, error) {
 	store, err := s.store()
 	if err != nil {
@@ -267,6 +327,14 @@ func (s *Service) OpenAPIHandler(root *cobra.Command, config *rpc.Config) (http.
 // column-less profile gets a synthesized id property so the schema is valid;
 // rows still render via the map-backed dynamic item.
 func profileEntitySchema(p query.Profile) ([]byte, error) {
+	bindings, err := p.ColumnFilterBindings()
+	if err != nil {
+		return nil, err
+	}
+	filterByColumn := make(map[string]query.ColumnFilterBinding, len(bindings))
+	for _, binding := range bindings {
+		filterByColumn[binding.Column] = binding
+	}
 	props := map[string]any{}
 	idAssigned := false
 	for _, c := range p.Columns {
@@ -282,6 +350,13 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		}
 		if c.Format != "" {
 			prop["x-clicky-format"] = c.Format
+		}
+		if c.Unit != "" {
+			prop["x-clicky-unit"] = c.Unit
+		}
+		if binding, ok := filterByColumn[c.Name]; ok {
+			prop["x-clicky-filter"] = profileFilterName(p.Name, c.Name)
+			prop["x-clicky-filter-key"] = binding.Key
 		}
 		if !idAssigned {
 			prop["x-clicky-id"] = true
@@ -307,6 +382,61 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		doc["x-clicky-render"] = render
 	}
 	return json.Marshal(doc)
+}
+
+func profileFilterName(profileName, columnName string) string {
+	digest := sha256.Sum256([]byte(columnName))
+	return fmt.Sprintf("profile-%s-column-%x", slugify(profileName), digest[:6])
+}
+
+type profileFilterSource struct {
+	service     *Service
+	profileName string
+	key         string
+}
+
+func (source profileFilterSource) Options(fc entity.FilterContext, search string, limit int) (map[string]api.Textable, int, error) {
+	store, err := source.service.store()
+	if err != nil {
+		return nil, 0, err
+	}
+	resolved, err := Resolve(fc.Ctx(), store, source.profileName)
+	if err != nil {
+		return nil, 0, err
+	}
+	options, total, err := query.LookupFilterValues(
+		source.service.context().Wrap(fc.Ctx()), resolved.Profile, filterLookupParams(resolved.Profile, fc.Params), source.key, search, limit,
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	result := make(map[string]api.Textable, len(options))
+	for _, option := range options {
+		result[option.Value] = api.Text{Content: option.Value}
+	}
+	return result, total, nil
+}
+
+func filterLookupParams(profile query.Profile, values map[string]string) map[string]any {
+	allowed := make(map[string]bool, len(profile.Params))
+	for _, parameter := range profile.Params {
+		allowed[parameter.Name] = true
+	}
+	params := make(map[string]any, len(values))
+	for key, value := range values {
+		if allowed[key] || strings.HasPrefix(key, "filter.") {
+			params[key] = value
+		}
+	}
+	return params
+}
+
+func (source profileFilterSource) Resolve(_ entity.FilterContext, values []string) (map[string]api.Textable, error) {
+	resolved := make(map[string]api.Textable, len(values))
+	for _, value := range values {
+		resolved[value] = api.Text{Content: value}
+	}
+	return resolved, nil
 }
 
 // columnJSONSchema maps a profile ColumnType to its preferred JSON shape.

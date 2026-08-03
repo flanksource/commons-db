@@ -44,7 +44,7 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.Method == http.MethodGet && !wantsSchema(r) {
+	if r.Method == http.MethodGet && !wantsSchema(r) && !wantsLookup(r) {
 		if name, ok := h.profileName(r.URL.Path); ok {
 			h.execute(w, r, name)
 			return
@@ -134,7 +134,12 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		output, err := (&query.Result{Profile: p.Name, Rows: page}).Render(p.Columns, "clicky-json")
+		filterKeys, err := p.ColumnFilterKeys()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		output, err := (&query.Result{Profile: p.Name, Rows: page, ColumnFilterKeys: filterKeys}).Render(p.Columns, "clicky-json")
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -144,7 +149,12 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 
-	clickyRows := &profileClickyRows{rows: rows, columns: query.ClickyColumns(p.Columns)}
+	columns, err := query.ClickyColumns(p)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	clickyRows := &profileClickyRows{rows: rows, columns: columns}
 	opts := formatters.StreamOptions{Format: export.format}
 	if export.format == "pdf" {
 		opts.MaxRows = maxPDFRows
@@ -502,3 +512,7 @@ func IsReservedParam(key string) bool {
 }
 
 func reservedParam(key string) bool { return IsReservedParam(key) }
+
+func wantsLookup(r *http.Request) bool {
+	return r.URL.Query().Get("__lookup") == "filters"
+}

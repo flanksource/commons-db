@@ -27,6 +27,12 @@ func (s resolverStore) Save(_ context.Context, profile query.Profile) error {
 	return nil
 }
 
+func (s resolverStore) Update(_ context.Context, original string, profile query.Profile, _ UpdateOptions) error {
+	delete(s, original)
+	s[profile.Name] = profile
+	return nil
+}
+
 func (s resolverStore) Delete(_ context.Context, name string) error {
 	delete(s, name)
 	return nil
