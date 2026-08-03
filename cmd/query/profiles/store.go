@@ -23,6 +23,7 @@ type Store interface {
 	List(context.Context) ([]query.Profile, error)
 	Get(context.Context, string) (query.Profile, error)
 	Save(context.Context, query.Profile) error
+	Update(context.Context, string, query.Profile, UpdateOptions) error
 	Delete(context.Context, string) error
 }
 
@@ -197,9 +198,6 @@ func (s *DBStore) Get(ctx context.Context, name string) (query.Profile, error) {
 }
 
 func (s *DBStore) Save(ctx context.Context, profile query.Profile) error {
-	if _, _, err := validateProfile(profile); err != nil {
-		return err
-	}
 	return s.save(ctx, profile, true)
 }
 
@@ -219,6 +217,9 @@ func (s *DBStore) Delete(ctx context.Context, name string) error {
 }
 
 func (s *DBStore) save(ctx context.Context, profile query.Profile, update bool) error {
+	if _, _, err := validateProfile(profile); err != nil {
+		return err
+	}
 	data, err := json.Marshal(profile)
 	if err != nil {
 		return fmt.Errorf("marshal profile %q: %w", profile.Name, err)
@@ -270,6 +271,9 @@ func validateProfile(profile query.Profile) (string, string, error) {
 	slug := slugify(name)
 	if slug == "" {
 		return "", "", fmt.Errorf("profile name %q has no usable filename", name)
+	}
+	if err := profile.Validate(); err != nil {
+		return "", "", err
 	}
 	return name, slug, nil
 }

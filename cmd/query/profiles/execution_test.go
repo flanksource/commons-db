@@ -110,6 +110,14 @@ func TestExecHandlerDelegatesSchemaRequest(t *testing.T) {
 	}
 }
 
+func TestExecHandlerDelegatesNativeLookupRequest(t *testing.T) {
+	h, next, _ := newExecTest(t, execProfile("activities"))
+	_ = get(h, "/api/v1/profile/activities?__lookup=filters", "")
+	if !next.hit {
+		t.Fatal("expected native Clicky lookup request to be delegated to next")
+	}
+}
+
 func TestExecHandlerDelegatesListAndOtherPaths(t *testing.T) {
 	for _, path := range []string{"/api/v1/profile", "/api/v1/connection", "/api/v1/profile/a/b"} {
 		h, next, _ := newExecTest(t, execProfile("activities"))

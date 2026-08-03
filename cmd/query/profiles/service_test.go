@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -103,6 +104,60 @@ func TestProfileEntitySchemaEmitsRenderMode(t *testing.T) {
 	}
 	if doc["x-clicky-render"] != "logs" {
 		t.Errorf("x-clicky-render = %v, want logs", doc["x-clicky-render"])
+	}
+}
+
+func TestProfileEntitySchemaEmitsColumnUnit(t *testing.T) {
+	p := sampleProfile("Metrics")
+	p.Columns = []query.ColumnDef{{Name: "ratio", Type: query.ColumnTypeNumber, Format: "float", Unit: "percentunit"}}
+	raw, err := profileEntitySchema(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	ratio := doc["properties"].(map[string]any)["ratio"].(map[string]any)
+	if ratio["x-clicky-format"] != "float" || ratio["x-clicky-unit"] != "percentunit" {
+		t.Fatalf("ratio display metadata = %#v", ratio)
+	}
+}
+
+func TestProfileEntitySchemaBindsFilterableOpenSearchColumns(t *testing.T) {
+	p := sampleProfile("Searchable")
+	p.Provider.Type = "opensearch"
+	p.Columns = []query.ColumnDef{
+		{Name: "service"},
+		{Name: "status", CEL: `jsonpath("$.status", row.payload)`, Filter: &query.ColumnFilterDef{Field: "payload.status"}},
+		{Name: "unmapped", CEL: `jsonpath("$.name", row.payload)`},
+	}
+	raw, err := profileEntitySchema(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	props := doc["properties"].(map[string]any)
+	for _, name := range []string{"service", "status"} {
+		property := props[name].(map[string]any)
+		if property["x-clicky-filter"] == nil || property["x-clicky-filter-key"] != "filter."+name {
+			t.Fatalf("column %q filter metadata = %#v", name, property)
+		}
+	}
+	if _, exists := props["unmapped"].(map[string]any)["x-clicky-filter"]; exists {
+		t.Fatalf("complex CEL without an override must not be filterable: %#v", props["unmapped"])
+	}
+}
+
+func TestFilterLookupParamsKeepProfileAndColumnFiltersOnly(t *testing.T) {
+	got := filterLookupParams(query.Profile{Params: []query.ParamDef{{Name: "region"}}}, map[string]string{
+		"region": "prod", "filter.service": "api", "__lookup_q": "pay", "offset": "100",
+	})
+	if len(got) != 2 || got["region"] != "prod" || got["filter.service"] != "api" {
+		t.Fatalf("lookup params = %#v", got)
 	}
 }
 
@@ -211,5 +266,36 @@ func TestRegisterProfileEntitiesEmitsSurfaceWithIcon(t *testing.T) {
 	}
 	if found.Title != profileName {
 		t.Errorf("surface title = %q, want %q", found.Title, profileName)
+	}
+}
+
+func TestRegisterProfileEntityColumnFiltersIdempotently(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewProfileStore: %v", err)
+	}
+	profile := sampleProfile("Filter Registration Probe")
+	profile.Provider.Type = "opensearch"
+	profile.Columns = []query.ColumnDef{{Name: "service"}}
+	if err := store.Save(context.Background(), profile); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	service, err := New(Options{
+		Store:      func() (Store, error) { return store, nil },
+		Context:    func() dbcontext.Context { return dbcontext.New() },
+		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for range 2 {
+		if err := service.RegisterDynamic(context.Background()); err != nil {
+			t.Fatalf("RegisterDynamic: %v", err)
+		}
+	}
+
+	if filter, ok := entity.GetFilter(profileFilterName(profile.Name, "service")); !ok || filter.Source == nil {
+		t.Fatalf("registered profile filter = %#v, exists = %v", filter, ok)
 	}
 }
