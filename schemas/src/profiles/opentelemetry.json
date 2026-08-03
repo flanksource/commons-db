@@ -76,10 +76,6 @@
           "title": "operation Field",
           "type": "string"
         },
-        "params": {
-          "title": "Provider Params",
-          "type": "object"
-        },
         "parentIdField": {
           "title": "parent IdField",
           "type": "string"
@@ -87,6 +83,935 @@
         "parentRefType": {
           "title": "parent RefType",
           "type": "string"
+        },
+        "search": {
+          "description": "Structured OpenSearch query. Mutually exclusive with the profile query: set one or the other, never both.",
+          "properties": {
+            "aggregations": {
+              "description": "Preserved verbatim; the query builder does not edit them",
+              "title": "Aggregations",
+              "type": "object"
+            },
+            "fields": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Fields",
+              "type": "array"
+            },
+            "from": {
+              "description": "Hits to skip. Not available while scrolling.",
+              "minimum": 0,
+              "title": "From",
+              "type": "integer"
+            },
+            "query": {
+              "properties": {
+                "analyzer": {
+                  "description": "Override the search analyzer",
+                  "title": "Analyzer",
+                  "type": "string"
+                },
+                "boost": {
+                  "minimum": 0,
+                  "title": "Boost",
+                  "type": "number"
+                },
+                "caseInsensitive": {
+                  "title": "Case insensitive",
+                  "type": "boolean"
+                },
+                "conditions": {
+                  "items": {
+                    "properties": {
+                      "analyzer": {
+                        "description": "Override the search analyzer",
+                        "title": "Analyzer",
+                        "type": "string"
+                      },
+                      "boost": {
+                        "minimum": 0,
+                        "title": "Boost",
+                        "type": "number"
+                      },
+                      "caseInsensitive": {
+                        "title": "Case insensitive",
+                        "type": "boolean"
+                      },
+                      "conditions": {
+                        "items": {
+                          "properties": {
+                            "analyzer": {
+                              "description": "Override the search analyzer",
+                              "title": "Analyzer",
+                              "type": "string"
+                            },
+                            "boost": {
+                              "minimum": 0,
+                              "title": "Boost",
+                              "type": "number"
+                            },
+                            "caseInsensitive": {
+                              "title": "Case insensitive",
+                              "type": "boolean"
+                            },
+                            "escape": {
+                              "description": "Lucene-escape a param-sourced query string; on unless set. Turning it off trusts the param's author.",
+                              "title": "Escape",
+                              "type": "boolean"
+                            },
+                            "field": {
+                              "description": "Target field",
+                              "title": "Field",
+                              "type": "string"
+                            },
+                            "fields": {
+                              "items": {
+                                "type": "string"
+                              },
+                              "title": "Fields",
+                              "type": "array"
+                            },
+                            "format": {
+                              "description": "Date format for a range over a date field",
+                              "title": "Format",
+                              "type": "string"
+                            },
+                            "fuzziness": {
+                              "description": "Edit distance, or AUTO",
+                              "title": "Fuzziness",
+                              "type": "string"
+                            },
+                            "gt": {
+                              "description": "Exclusive lower bound; a date field accepts date math",
+                              "title": "Greater than",
+                              "x-es-value": true
+                            },
+                            "gte": {
+                              "description": "Inclusive lower bound; a date field accepts date math",
+                              "title": "Greater or equal",
+                              "x-es-value": true
+                            },
+                            "lt": {
+                              "description": "Exclusive upper bound; a date field accepts date math",
+                              "title": "Less than",
+                              "x-es-value": true
+                            },
+                            "lte": {
+                              "description": "Inclusive upper bound; a date field accepts date math",
+                              "title": "Less or equal",
+                              "x-es-value": true
+                            },
+                            "matchOperator": {
+                              "enum": [
+                                "and",
+                                "or"
+                              ],
+                              "title": "Match operator",
+                              "type": "string"
+                            },
+                            "minimumShouldMatch": {
+                              "description": "How many should clauses a hit must satisfy",
+                              "title": "Minimum should match",
+                              "type": "string"
+                            },
+                            "multiMatchType": {
+                              "enum": [
+                                "best_fields",
+                                "most_fields",
+                                "cross_fields",
+                                "phrase",
+                                "phrase_prefix",
+                                "bool_prefix"
+                              ],
+                              "title": "Multi-match type",
+                              "type": "string"
+                            },
+                            "occur": {
+                              "default": "filter",
+                              "enum": [
+                                "filter",
+                                "must",
+                                "should",
+                                "must_not"
+                              ],
+                              "title": "Clause",
+                              "type": "string"
+                            },
+                            "op": {
+                              "enum": [
+                                "term",
+                                "terms",
+                                "match",
+                                "match_phrase",
+                                "match_phrase_prefix",
+                                "multi_match",
+                                "prefix",
+                                "wildcard",
+                                "regexp",
+                                "fuzzy",
+                                "range",
+                                "exists",
+                                "ids",
+                                "query_string",
+                                "simple_query_string",
+                                "nested",
+                                "bool",
+                                "match_all"
+                              ],
+                              "title": "Operator",
+                              "type": "string"
+                            },
+                            "optional": {
+                              "description": "Drop this condition when its param resolves to nothing, instead of failing",
+                              "title": "Optional",
+                              "type": "boolean"
+                            },
+                            "path": {
+                              "description": "Nested object path",
+                              "title": "Path",
+                              "type": "string"
+                            },
+                            "scoreMode": {
+                              "enum": [
+                                "avg",
+                                "sum",
+                                "min",
+                                "max",
+                                "none"
+                              ],
+                              "title": "Score mode",
+                              "type": "string"
+                            },
+                            "slop": {
+                              "minimum": 0,
+                              "title": "Slop",
+                              "type": "integer"
+                            },
+                            "timeZone": {
+                              "description": "Time zone for a range over a date field",
+                              "title": "Time zone",
+                              "type": "string"
+                            },
+                            "value": {
+                              "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                              "title": "Value",
+                              "x-es-value": true
+                            },
+                            "values": {
+                              "items": {
+                                "x-es-value": true
+                              },
+                              "title": "Values",
+                              "type": "array"
+                            },
+                            "when": {
+                              "description": "Emit this condition only while the named param has a value",
+                              "title": "When",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "op"
+                          ],
+                          "title": "Condition",
+                          "type": "object"
+                        },
+                        "title": "Conditions",
+                        "type": "array"
+                      },
+                      "escape": {
+                        "description": "Lucene-escape a param-sourced query string; on unless set. Turning it off trusts the param's author.",
+                        "title": "Escape",
+                        "type": "boolean"
+                      },
+                      "field": {
+                        "description": "Target field",
+                        "title": "Field",
+                        "type": "string"
+                      },
+                      "fields": {
+                        "items": {
+                          "type": "string"
+                        },
+                        "title": "Fields",
+                        "type": "array"
+                      },
+                      "format": {
+                        "description": "Date format for a range over a date field",
+                        "title": "Format",
+                        "type": "string"
+                      },
+                      "fuzziness": {
+                        "description": "Edit distance, or AUTO",
+                        "title": "Fuzziness",
+                        "type": "string"
+                      },
+                      "gt": {
+                        "description": "Exclusive lower bound; a date field accepts date math",
+                        "title": "Greater than",
+                        "x-es-value": true
+                      },
+                      "gte": {
+                        "description": "Inclusive lower bound; a date field accepts date math",
+                        "title": "Greater or equal",
+                        "x-es-value": true
+                      },
+                      "lt": {
+                        "description": "Exclusive upper bound; a date field accepts date math",
+                        "title": "Less than",
+                        "x-es-value": true
+                      },
+                      "lte": {
+                        "description": "Inclusive upper bound; a date field accepts date math",
+                        "title": "Less or equal",
+                        "x-es-value": true
+                      },
+                      "matchOperator": {
+                        "enum": [
+                          "and",
+                          "or"
+                        ],
+                        "title": "Match operator",
+                        "type": "string"
+                      },
+                      "minimumShouldMatch": {
+                        "description": "How many should clauses a hit must satisfy",
+                        "title": "Minimum should match",
+                        "type": "string"
+                      },
+                      "multiMatchType": {
+                        "enum": [
+                          "best_fields",
+                          "most_fields",
+                          "cross_fields",
+                          "phrase",
+                          "phrase_prefix",
+                          "bool_prefix"
+                        ],
+                        "title": "Multi-match type",
+                        "type": "string"
+                      },
+                      "occur": {
+                        "default": "filter",
+                        "enum": [
+                          "filter",
+                          "must",
+                          "should",
+                          "must_not"
+                        ],
+                        "title": "Clause",
+                        "type": "string"
+                      },
+                      "op": {
+                        "enum": [
+                          "term",
+                          "terms",
+                          "match",
+                          "match_phrase",
+                          "match_phrase_prefix",
+                          "multi_match",
+                          "prefix",
+                          "wildcard",
+                          "regexp",
+                          "fuzzy",
+                          "range",
+                          "exists",
+                          "ids",
+                          "query_string",
+                          "simple_query_string",
+                          "nested",
+                          "bool",
+                          "match_all"
+                        ],
+                        "title": "Operator",
+                        "type": "string"
+                      },
+                      "optional": {
+                        "description": "Drop this condition when its param resolves to nothing, instead of failing",
+                        "title": "Optional",
+                        "type": "boolean"
+                      },
+                      "path": {
+                        "description": "Nested object path",
+                        "title": "Path",
+                        "type": "string"
+                      },
+                      "scoreMode": {
+                        "enum": [
+                          "avg",
+                          "sum",
+                          "min",
+                          "max",
+                          "none"
+                        ],
+                        "title": "Score mode",
+                        "type": "string"
+                      },
+                      "slop": {
+                        "minimum": 0,
+                        "title": "Slop",
+                        "type": "integer"
+                      },
+                      "timeZone": {
+                        "description": "Time zone for a range over a date field",
+                        "title": "Time zone",
+                        "type": "string"
+                      },
+                      "value": {
+                        "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                        "title": "Value",
+                        "x-es-value": true
+                      },
+                      "values": {
+                        "items": {
+                          "x-es-value": true
+                        },
+                        "title": "Values",
+                        "type": "array"
+                      },
+                      "when": {
+                        "description": "Emit this condition only while the named param has a value",
+                        "title": "When",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "op"
+                    ],
+                    "title": "Condition",
+                    "type": "object"
+                  },
+                  "title": "Conditions",
+                  "type": "array"
+                },
+                "escape": {
+                  "description": "Lucene-escape a param-sourced query string; on unless set. Turning it off trusts the param's author.",
+                  "title": "Escape",
+                  "type": "boolean"
+                },
+                "field": {
+                  "description": "Target field",
+                  "title": "Field",
+                  "type": "string"
+                },
+                "fields": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Fields",
+                  "type": "array"
+                },
+                "format": {
+                  "description": "Date format for a range over a date field",
+                  "title": "Format",
+                  "type": "string"
+                },
+                "fuzziness": {
+                  "description": "Edit distance, or AUTO",
+                  "title": "Fuzziness",
+                  "type": "string"
+                },
+                "gt": {
+                  "description": "Exclusive lower bound; a date field accepts date math",
+                  "title": "Greater than",
+                  "x-es-value": true
+                },
+                "gte": {
+                  "description": "Inclusive lower bound; a date field accepts date math",
+                  "title": "Greater or equal",
+                  "x-es-value": true
+                },
+                "lt": {
+                  "description": "Exclusive upper bound; a date field accepts date math",
+                  "title": "Less than",
+                  "x-es-value": true
+                },
+                "lte": {
+                  "description": "Inclusive upper bound; a date field accepts date math",
+                  "title": "Less or equal",
+                  "x-es-value": true
+                },
+                "matchOperator": {
+                  "enum": [
+                    "and",
+                    "or"
+                  ],
+                  "title": "Match operator",
+                  "type": "string"
+                },
+                "minimumShouldMatch": {
+                  "description": "How many should clauses a hit must satisfy",
+                  "title": "Minimum should match",
+                  "type": "string"
+                },
+                "multiMatchType": {
+                  "enum": [
+                    "best_fields",
+                    "most_fields",
+                    "cross_fields",
+                    "phrase",
+                    "phrase_prefix",
+                    "bool_prefix"
+                  ],
+                  "title": "Multi-match type",
+                  "type": "string"
+                },
+                "occur": {
+                  "default": "filter",
+                  "enum": [
+                    "filter",
+                    "must",
+                    "should",
+                    "must_not"
+                  ],
+                  "title": "Clause",
+                  "type": "string"
+                },
+                "op": {
+                  "enum": [
+                    "term",
+                    "terms",
+                    "match",
+                    "match_phrase",
+                    "match_phrase_prefix",
+                    "multi_match",
+                    "prefix",
+                    "wildcard",
+                    "regexp",
+                    "fuzzy",
+                    "range",
+                    "exists",
+                    "ids",
+                    "query_string",
+                    "simple_query_string",
+                    "nested",
+                    "bool",
+                    "match_all"
+                  ],
+                  "title": "Operator",
+                  "type": "string"
+                },
+                "optional": {
+                  "description": "Drop this condition when its param resolves to nothing, instead of failing",
+                  "title": "Optional",
+                  "type": "boolean"
+                },
+                "path": {
+                  "description": "Nested object path",
+                  "title": "Path",
+                  "type": "string"
+                },
+                "scoreMode": {
+                  "enum": [
+                    "avg",
+                    "sum",
+                    "min",
+                    "max",
+                    "none"
+                  ],
+                  "title": "Score mode",
+                  "type": "string"
+                },
+                "slop": {
+                  "minimum": 0,
+                  "title": "Slop",
+                  "type": "integer"
+                },
+                "timeZone": {
+                  "description": "Time zone for a range over a date field",
+                  "title": "Time zone",
+                  "type": "string"
+                },
+                "value": {
+                  "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                  "title": "Value",
+                  "x-es-value": true
+                },
+                "values": {
+                  "items": {
+                    "x-es-value": true
+                  },
+                  "title": "Values",
+                  "type": "array"
+                },
+                "when": {
+                  "description": "Emit this condition only while the named param has a value",
+                  "title": "When",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "op"
+              ],
+              "title": "Condition",
+              "type": "object"
+            },
+            "size": {
+              "description": "Maximum hits returned. A limit-role param overrides it.",
+              "minimum": 0,
+              "title": "Size",
+              "type": "integer"
+            },
+            "sort": {
+              "items": {
+                "properties": {
+                  "field": {
+                    "description": "Field name, or _score / _doc",
+                    "title": "Field",
+                    "type": "string"
+                  },
+                  "missing": {
+                    "description": "Where documents without the field sort: _first, _last, or a substitute value",
+                    "title": "Missing",
+                    "type": "string"
+                  },
+                  "mode": {
+                    "description": "How a multi-valued field is reduced: min, max, sum, avg, median",
+                    "title": "Mode",
+                    "type": "string"
+                  },
+                  "order": {
+                    "enum": [
+                      "asc",
+                      "desc"
+                    ],
+                    "title": "Order",
+                    "type": "string"
+                  },
+                  "unmappedType": {
+                    "description": "Treat the field as this type where it is unmapped",
+                    "title": "Unmapped type",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "field"
+                ],
+                "type": "object"
+              },
+              "title": "Sort",
+              "type": "array",
+              "x-layout": "table"
+            },
+            "source": {
+              "description": "Which _source fields come back",
+              "properties": {
+                "enabled": {
+                  "description": "Set false to omit _source",
+                  "title": "Enabled",
+                  "type": "boolean"
+                },
+                "excludes": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Excludes",
+                  "type": "array"
+                },
+                "includes": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Includes",
+                  "type": "array"
+                }
+              },
+              "title": "Source",
+              "type": "object"
+            },
+            "storedFields": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Stored fields",
+              "type": "array"
+            },
+            "timeField": {
+              "description": "Date field that time-from and time-to params bind to",
+              "title": "Time field",
+              "type": "string"
+            },
+            "trackTotalHits": {
+              "description": "Whether the backend counts matches past its 10,000 default",
+              "properties": {
+                "enabled": {
+                  "title": "Enabled",
+                  "type": "boolean"
+                },
+                "threshold": {
+                  "minimum": 0,
+                  "title": "Threshold",
+                  "type": "integer"
+                }
+              },
+              "title": "Track total hits",
+              "type": "object"
+            }
+          },
+          "title": "Search",
+          "type": "object",
+          "x-clicky-component": "es-query-builder",
+          "x-es-occurs": [
+            "filter",
+            "must",
+            "should",
+            "must_not"
+          ],
+          "x-es-operators": [
+            {
+              "arity": "single",
+              "fieldTypes": [
+                "keyword",
+                "text",
+                "date",
+                "number",
+                "boolean",
+                "ip"
+              ],
+              "label": "is",
+              "needsField": true,
+              "op": "term"
+            },
+            {
+              "arity": "multiple",
+              "fieldTypes": [
+                "keyword",
+                "text",
+                "date",
+                "number",
+                "boolean",
+                "ip"
+              ],
+              "label": "is one of",
+              "needsField": true,
+              "op": "terms"
+            },
+            {
+              "analyzed": true,
+              "arity": "single",
+              "fieldTypes": [
+                "text",
+                "keyword"
+              ],
+              "label": "matches",
+              "needsField": true,
+              "op": "match"
+            },
+            {
+              "analyzed": true,
+              "arity": "single",
+              "fieldTypes": [
+                "text",
+                "keyword"
+              ],
+              "label": "matches phrase",
+              "needsField": true,
+              "op": "match_phrase"
+            },
+            {
+              "analyzed": true,
+              "arity": "single",
+              "fieldTypes": [
+                "text",
+                "keyword"
+              ],
+              "label": "matches phrase prefix",
+              "needsField": true,
+              "op": "match_phrase_prefix"
+            },
+            {
+              "acceptsFields": true,
+              "analyzed": true,
+              "arity": "single",
+              "fieldTypes": [
+                "text",
+                "keyword"
+              ],
+              "label": "matches any field",
+              "needsField": false,
+              "op": "multi_match"
+            },
+            {
+              "arity": "single",
+              "fieldTypes": [
+                "keyword",
+                "text"
+              ],
+              "label": "starts with",
+              "needsField": true,
+              "op": "prefix"
+            },
+            {
+              "arity": "single",
+              "fieldTypes": [
+                "keyword",
+                "text"
+              ],
+              "label": "matches wildcard",
+              "needsField": true,
+              "op": "wildcard"
+            },
+            {
+              "arity": "single",
+              "fieldTypes": [
+                "keyword",
+                "text"
+              ],
+              "label": "matches regexp",
+              "needsField": true,
+              "op": "regexp"
+            },
+            {
+              "arity": "single",
+              "fieldTypes": [
+                "keyword",
+                "text"
+              ],
+              "label": "is like",
+              "needsField": true,
+              "op": "fuzzy"
+            },
+            {
+              "arity": "range",
+              "fieldTypes": [
+                "date",
+                "number",
+                "ip",
+                "keyword"
+              ],
+              "label": "is between",
+              "needsField": true,
+              "op": "range"
+            },
+            {
+              "arity": "none",
+              "fieldTypes": [
+                "any"
+              ],
+              "label": "exists",
+              "needsField": true,
+              "op": "exists"
+            },
+            {
+              "arity": "multiple",
+              "fieldTypes": [
+                "any"
+              ],
+              "label": "has document id",
+              "needsField": false,
+              "op": "ids"
+            },
+            {
+              "acceptsFields": true,
+              "analyzed": true,
+              "arity": "single",
+              "fieldTypes": [
+                "any"
+              ],
+              "label": "query string",
+              "needsField": false,
+              "op": "query_string"
+            },
+            {
+              "acceptsFields": true,
+              "analyzed": true,
+              "arity": "single",
+              "fieldTypes": [
+                "any"
+              ],
+              "label": "simple query string",
+              "needsField": false,
+              "op": "simple_query_string"
+            },
+            {
+              "arity": "group",
+              "fieldTypes": [
+                "nested"
+              ],
+              "group": true,
+              "label": "nested",
+              "needsField": false,
+              "op": "nested"
+            },
+            {
+              "arity": "group",
+              "fieldTypes": [
+                "any"
+              ],
+              "group": true,
+              "label": "group",
+              "needsField": false,
+              "op": "bool"
+            },
+            {
+              "arity": "none",
+              "fieldTypes": [
+                "any"
+              ],
+              "label": "everything",
+              "needsField": false,
+              "op": "match_all"
+            }
+          ],
+          "x-es-qualifiers": {
+            "analyzer": [
+              "match",
+              "match_phrase",
+              "match_phrase_prefix",
+              "multi_match",
+              "query_string",
+              "simple_query_string"
+            ],
+            "caseInsensitive": [
+              "term",
+              "terms",
+              "prefix",
+              "wildcard",
+              "regexp"
+            ],
+            "escape": [
+              "query_string",
+              "simple_query_string"
+            ],
+            "format": [
+              "range"
+            ],
+            "fuzziness": [
+              "match",
+              "multi_match",
+              "fuzzy"
+            ],
+            "matchOperator": [
+              "match",
+              "multi_match",
+              "query_string",
+              "simple_query_string"
+            ],
+            "minimumShouldMatch": [
+              "bool",
+              "multi_match",
+              "query_string",
+              "simple_query_string"
+            ],
+            "multiMatchType": [
+              "multi_match"
+            ],
+            "path": [
+              "nested"
+            ],
+            "scoreMode": [
+              "nested"
+            ],
+            "slop": [
+              "match_phrase",
+              "match_phrase_prefix",
+              "multi_match"
+            ],
+            "timeZone": [
+              "range"
+            ]
+          }
         },
         "selectFields": {
           "items": {
