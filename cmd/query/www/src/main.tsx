@@ -13,6 +13,7 @@ if (import.meta.env.DEV) {
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { setFallbackIconProvider } from "@flanksource/clicky-ui";
+import "./styles.css";
 import "@flanksource/clicky-ui/styles.css";
 import { App } from "./App";
 import { FlanksourceIcon } from "./iconProvider";

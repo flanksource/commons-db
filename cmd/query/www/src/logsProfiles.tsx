@@ -1,4 +1,8 @@
-import { LogsTable, type ResultRenderContext } from "@flanksource/clicky-ui";
+import {
+  LogsTable,
+  type OperationResultFilterConfig,
+  type ResultRenderContext,
+} from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 
@@ -60,7 +64,15 @@ export function useLogsEntityNames(): Set<string> {
 // that produced the result (so the active server-side filters are preserved) and
 // renders them through clicky-ui's canonical LogsTable. Client-side filtering and
 // sorting are disabled — filtering stays server-side via the profile's params.
-function LogsResult({ requestUrl }: { requestUrl: string }): ReactNode {
+function LogsResult({
+  requestUrl,
+  filterConfig,
+  columnFilterKeys,
+}: {
+  requestUrl: string;
+  filterConfig?: OperationResultFilterConfig;
+  columnFilterKeys: Record<string, string>;
+}): ReactNode {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["logs-rows", requestUrl],
     queryFn: async () => {
@@ -73,7 +85,34 @@ function LogsResult({ requestUrl }: { requestUrl: string }): ReactNode {
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading logs…</div>;
   if (isError || !data) return null;
 
-  return <LogsTable logs={data} autoFilter={false} fullscreenTitle="Logs" />;
+  return (
+    <LogsTable
+      logs={data}
+      autoFilter={false}
+      fullscreenTitle="Logs"
+      columnFilterKeys={columnFilterKeys}
+      cellFilters={filterConfig?.cellFilters}
+      onCellFilterChange={filterConfig?.onCellFilterChange}
+    />
+  );
+}
+
+export function logsColumnFilterKeys(payload: unknown): Record<string, string> {
+  if (!payload || typeof payload !== "object") return {};
+  const node = (payload as { node?: unknown }).node;
+  if (!node || typeof node !== "object") return {};
+  const table = node as { kind?: unknown; columns?: unknown };
+  if (table.kind !== "table" || !Array.isArray(table.columns)) return {};
+
+  return Object.fromEntries(
+    table.columns.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const column = value as { name?: unknown; filterKey?: unknown };
+      return typeof column.name === "string" && typeof column.filterKey === "string"
+        ? [[column.name, column.filterKey]]
+        : [];
+    }),
+  );
 }
 
 // logsResultRenderer is the EntityExplorerApp result override: when the result's
@@ -82,9 +121,15 @@ function LogsResult({ requestUrl }: { requestUrl: string }): ReactNode {
 export function logsResultRenderer(
   logsEntityNames: Set<string>,
 ): (ctx: ResultRenderContext) => ReactNode {
-  return ({ response, defaultView }) => {
+  return ({ response, defaultView, filterConfig }) => {
     const requestUrl = response?.requestUrl;
     if (!requestUrl || !logsEntityNames.has(entitySegment(requestUrl))) return defaultView;
-    return <LogsResult requestUrl={requestUrl} />;
+    return (
+      <LogsResult
+        requestUrl={requestUrl}
+        filterConfig={filterConfig}
+        columnFilterKeys={logsColumnFilterKeys(response.parsed)}
+      />
+    );
   };
 }
