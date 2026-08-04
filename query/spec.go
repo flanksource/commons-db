@@ -134,6 +134,9 @@ func (p Profile) Validate() error {
 	if err := p.ValidateQuerySource(); err != nil {
 		return err
 	}
+	if err := p.Limits.Validate(); err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
 	for _, column := range p.Columns {
 		if err := column.Validate(); err != nil {
 			return fmt.Errorf("profile %q %w", p.Name, err)
@@ -147,10 +150,12 @@ func (p Profile) Validate() error {
 	for _, parameter := range p.Params {
 		params[parameter.Name] = true
 	}
+	// Checked before the general param rules so a name that shadows a real
+	// binding keeps naming the binding it shadows.
 	for _, binding := range bindings {
 		if params[binding.Key] {
 			return fmt.Errorf("profile %q parameter %q conflicts with native column filter", p.Name, binding.Key)
 		}
 	}
-	return nil
+	return p.validateParams()
 }

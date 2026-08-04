@@ -34,8 +34,26 @@ type ColumnFilterValue struct {
 	Exclude []string
 }
 
+// SupportsNativeFilters reports whether a provider type turns
+// ProviderRequest.Filters into backend query clauses. Column-filter bindings and
+// tri-state list params both gate on it, so a profile can never accept an
+// exclusion the provider would quietly drop.
+//
+// It is a declared list rather than a registry probe on purpose: the schema and
+// OpenAPI generators, and every test in the external query_test package, run
+// without linking query/providers, and a probe would report false there and
+// silently delete every binding.
+func SupportsNativeFilters(providerType string) bool {
+	switch providerType {
+	case "opensearch", "opentelemetry":
+		return true
+	default:
+		return false
+	}
+}
+
 func (p Profile) ColumnFilterBindings() ([]ColumnFilterBinding, error) {
-	if p.Provider.Type != "opensearch" && p.Provider.Type != "opentelemetry" {
+	if !SupportsNativeFilters(p.Provider.Type) {
 		return nil, nil
 	}
 	bindings := make([]ColumnFilterBinding, 0, len(p.Columns))
@@ -65,6 +83,40 @@ func (p Profile) ColumnFilterBindings() ([]ColumnFilterBinding, error) {
 		})
 	}
 	return bindings, nil
+}
+
+// ParamFilterBindings returns the bindings the profile's tri-state list params
+// contribute. They carry no Column — the value never comes from a result column
+// — but every consumer downstream reads only Field, so a param and a column ask
+// the backend for their distinct values through one path. The key is the bare
+// param name: the "filter." prefix is what routes a request key to the column
+// table, and a param's key must stay the name its query-string entry uses.
+func (p Profile) ParamFilterBindings() []ColumnFilterBinding {
+	bindings := make([]ColumnFilterBinding, 0, len(p.Params))
+	for _, param := range p.Params {
+		if param.Type != ParamTypeList || param.Field == "" {
+			continue
+		}
+		bindings = append(bindings, ColumnFilterBinding{
+			Key: param.Name, Field: param.Field, Label: param.DisplayLabel(),
+		})
+	}
+	return bindings
+}
+
+// filterBinding resolves a lookup key against the column and param bindings a
+// profile offers.
+func (p Profile) filterBinding(key string) (ColumnFilterBinding, error) {
+	columns, err := p.ColumnFilterBindings()
+	if err != nil {
+		return ColumnFilterBinding{}, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	for _, binding := range append(columns, p.ParamFilterBindings()...) {
+		if binding.Key == key {
+			return binding, nil
+		}
+	}
+	return ColumnFilterBinding{}, fmt.Errorf("filter %q is not supported by profile %q", key, p.Name)
 }
 
 func (p Profile) ColumnFilterKeys() (map[string]string, error) {
@@ -146,6 +198,24 @@ func openTelemetryFilterField(profile Profile, inferred string) string {
 	return defaults[inferred]
 }
 
+// resolveProfileInput turns one request's input into the values exposed to the
+// query template and the native include/exclude clauses the provider applies.
+// Column filters (filter.<column>) and tri-state list params both land in the
+// same []ColumnFilterValue, so an exclusion has exactly one transport whichever
+// end of the profile declared it. Column filters come first, then params in
+// declaration order, so a request builds the same body every time.
+func resolveProfileInput(profile Profile, input map[string]any) (map[string]any, []ColumnFilterValue, error) {
+	profileParams, filters, err := partitionProfileInput(profile, input)
+	if err != nil {
+		return nil, nil, err
+	}
+	resolved, paramFilters, err := resolveParams(profile.Params, profileParams)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resolved, append(filters, paramFilters...), nil
+}
+
 func partitionProfileInput(profile Profile, input map[string]any) (map[string]any, []ColumnFilterValue, error) {
 	bindings, err := profile.ColumnFilterBindings()
 	if err != nil {
@@ -194,33 +264,22 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 	if profile.Namespace != "" {
 		ctx = ctx.WithNamespace(profile.Namespace)
 	}
-	profileParams, filters, err := partitionProfileInput(profile, input)
+	resolved, filters, err := resolveProfileInput(profile, input)
 	if err != nil {
 		return nil, 0, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
-	bindings, err := profile.ColumnFilterBindings()
+	binding, err := profile.filterBinding(key)
 	if err != nil {
-		return nil, 0, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, 0, err
 	}
-	var binding *ColumnFilterBinding
-	for i := range bindings {
-		if bindings[i].Key == key {
-			binding = &bindings[i]
-			break
-		}
-	}
-	if binding == nil {
-		return nil, 0, fmt.Errorf("column filter %q is not supported by profile %q", key, profile.Name)
-	}
-	siblings := filters[:0]
+	// The filter being looked up must not narrow its own options, or a chosen
+	// value would hide every alternative. Every other active selection — column
+	// or param — still scopes the question.
+	siblings := make([]ColumnFilterValue, 0, len(filters))
 	for _, filter := range filters {
 		if filter.Key != key {
 			siblings = append(siblings, filter)
 		}
-	}
-	resolved, err := resolveParams(profile.Params, profileParams)
-	if err != nil {
-		return nil, 0, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
 	provider, err := GetProvider(profile.Provider.Type)
 	if err != nil {
@@ -235,7 +294,7 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 		return nil, 0, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
 	req.Filters = siblings
-	return lookup.LookupFilterValues(ctx, req, *binding, search, limit)
+	return lookup.LookupFilterValues(ctx, req, binding, search, limit)
 }
 
 func parseColumnFilterSelection(value any) ([]string, []string, error) {

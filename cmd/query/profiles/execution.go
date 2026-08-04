@@ -17,11 +17,11 @@ import (
 	"github.com/flanksource/commons-db/query"
 )
 
-const (
-	defaultPageLimit = 100
-	maxPageLimit     = 1000
-	maxPDFRows       = 1000
-)
+// maxPDFRows is a format ceiling, not a paging one: a PDF stops being readable
+// long before the export ceiling. The page and export ceilings belong to the
+// profile — query.RowLimits, resolved per request — which documents how the
+// three differ.
+const maxPDFRows = 1000
 
 // execHandler serves profile execution and negotiated page/all-row exports at
 // {prefix}/profile/{name}. Schema requests and every other path fall through to
@@ -47,6 +47,23 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && !wantsSchema(r) && !wantsLookup(r) {
 		if name, ok := h.profileName(r.URL.Path); ok {
 			h.execute(w, r, name)
+			return
+		}
+	}
+	// A selection too large for a query string is POSTed as a body. Ad-hoc
+	// sampling is a different POST on a sibling path, so it is excluded by name
+	// rather than swallowed here.
+	if r.Method == http.MethodPost {
+		if name, ok := h.profileName(r.URL.Path); ok && name != sampleProfileName {
+			h.execute(w, r, name)
+			return
+		}
+	}
+	if r.Method == http.MethodOptions {
+		if name, ok := h.profileName(r.URL.Path); ok && name != sampleProfileName {
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.WriteHeader(http.StatusNoContent)
 			return
 		}
 	}
@@ -98,12 +115,10 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 
-	params := map[string]any{}
-	for k, vs := range r.URL.Query() {
-		if reservedParam(k) || p.HasParamRoleName(query.ParamRoleLimit, k) || p.HasParamRoleName(query.ParamRoleOffset, k) || len(vs) == 0 {
-			continue
-		}
-		params[k] = vs[0]
+	params, err := executeParams(r, p)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
 
 	export, err := parseExportRequest(r, p)
@@ -245,10 +260,20 @@ type exportRequest struct {
 	scope  string
 	limit  int
 	offset int
+
+	// maxRows is the profile's export ceiling, resolved alongside the page so
+	// every response reports and enforces the same number.
+	maxRows int
 }
 
 func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, error) {
-	request := exportRequest{format: requestedFormat(r), scope: r.URL.Query().Get("scope"), limit: defaultPageLimit}
+	limits := profile.RowLimits()
+	request := exportRequest{
+		format:  requestedFormat(r),
+		scope:   r.URL.Query().Get("scope"),
+		limit:   limits.PageSize,
+		maxRows: limits.MaxExportRows,
+	}
 	if request.scope == "" {
 		request.scope = "page"
 	}
@@ -262,8 +287,8 @@ func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, 
 	offsetParam := profile.ParamNameForRole(query.ParamRoleOffset, "offset")
 	if value := r.URL.Query().Get(limitParam); value != "" {
 		limit, err := strconv.Atoi(value)
-		if err != nil || limit <= 0 || limit > maxPageLimit {
-			return request, fmt.Errorf("limit must be between 1 and %d", maxPageLimit)
+		if err != nil || limit <= 0 || limit > limits.MaxPageSize {
+			return request, fmt.Errorf("limit must be between 1 and %d; export more with scope=all", limits.MaxPageSize)
 		}
 		request.limit = limit
 	}
@@ -331,16 +356,23 @@ func (h *execHandler) exportRows(ctx dbcontext.Context, p query.Profile, params 
 		if !supportsAllRows(p.Provider.Type) {
 			return nil, nil, "", fmt.Errorf("provider %q does not support all-row export", p.Provider.Type)
 		}
+		ceiling := request.maxRows
 		if bufferedPipeline {
 			result, err := query.Execute(ctx, p, params)
 			if err != nil {
 				return nil, nil, "", err
 			}
+			if len(result.Rows) > ceiling {
+				result.Rows = result.Rows[:ceiling]
+			}
 			total := len(result.Rows)
 			return query.SliceRows(result.Rows), &total, "buffered", nil
 		}
-		rows, err := query.ExecuteRows(ctx, p, params)
-		return rows, nil, "streaming", err
+		rows, err := query.ExecuteRowsBounded(ctx, p, ceiling, params)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		return query.BoundRows(rows, ceiling), nil, "streaming", nil
 	}
 
 	if !bufferedPipeline && query.SupportsStreaming(p.Provider.Type) {
@@ -426,12 +458,14 @@ func isTabularExport(format string) bool {
 
 func setExportHeaders(w http.ResponseWriter, r *http.Request, profileName string, request exportRequest, mode string, total *int) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Export-Mode, X-Page-Limit, X-Page-Offset, X-Total-Count")
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Export-Mode, X-Page-Limit, X-Page-Offset, X-Total-Count, X-Max-Rows")
 	w.Header().Set("Content-Type", exportContentType(request.format))
 	w.Header().Set("X-Export-Mode", mode)
 	if request.scope == "page" {
 		w.Header().Set("X-Page-Limit", strconv.Itoa(request.limit))
 		w.Header().Set("X-Page-Offset", strconv.Itoa(request.offset))
+	} else {
+		w.Header().Set("X-Max-Rows", strconv.Itoa(request.maxRows))
 	}
 	if total != nil {
 		w.Header().Set("X-Total-Count", strconv.Itoa(*total))

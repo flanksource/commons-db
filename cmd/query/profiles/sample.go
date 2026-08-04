@@ -14,6 +14,11 @@ import (
 
 const profileSampleTimeout = 15 * time.Second
 
+// sampleProfileName is the {name} segment the ad-hoc sample handler owns. The
+// execute handler excludes it by name so a POST there is not read as a run of a
+// stored profile called "sample".
+const sampleProfileName = "sample"
+
 type profileSampleHandler struct {
 	prefix string
 	ctx    dbcontext.Context
@@ -30,7 +35,7 @@ func newProfileSampleHandler(prefix string, ctx dbcontext.Context, next http.Han
 }
 
 func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != h.prefix+"/profile/sample" {
+	if r.URL.Path != h.prefix+"/profile/"+sampleProfileName {
 		h.next.ServeHTTP(w, r)
 		return
 	}

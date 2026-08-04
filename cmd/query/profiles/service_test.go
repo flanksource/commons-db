@@ -299,3 +299,62 @@ func TestRegisterProfileEntityColumnFiltersIdempotently(t *testing.T) {
 		t.Fatalf("registered profile filter = %#v, exists = %v", filter, ok)
 	}
 }
+
+// A bound list param has no schema property, so it reaches the browser only if
+// the dynamic entity offers it by key.
+func TestRegisterProfileEntityOffersBoundListParamsAsFilters(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewProfileStore: %v", err)
+	}
+	profile := sampleProfile("Param Filter Probe")
+	profile.Provider.Type = "opensearch"
+	profile.Columns = []query.ColumnDef{{Name: "service"}}
+	profile.Params = []query.ParamDef{
+		{Name: "regions", Label: "Regions", Type: query.ParamTypeList, Field: "region.keyword"},
+		{Name: "plain", Type: query.ParamTypeList},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	service, err := New(Options{
+		Store:      func() (Store, error) { return store, nil },
+		Context:    func() dbcontext.Context { return dbcontext.New() },
+		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := service.RegisterDynamic(context.Background()); err != nil {
+		t.Fatalf("RegisterDynamic: %v", err)
+	}
+
+	filter, ok := entity.GetFilter(profileParamFilterName(profile.Name, "regions"))
+	if !ok || filter.Source == nil {
+		t.Fatalf("bound list param filter = %#v, exists = %v", filter, ok)
+	}
+	if filter.Label != "Regions" || filter.Type != "multi-filter" || !filter.Multi {
+		t.Fatalf("param filter should be a labelled multi-filter: %#v", filter)
+	}
+	// An unbound list can carry no exclusion, so it gets no filter at all.
+	if _, exists := entity.GetFilter(profileParamFilterName(profile.Name, "plain")); exists {
+		t.Fatal("an unbound list param should not register a filter")
+	}
+
+	// Registering the filter is not enough: the entity has to offer it, keyed by
+	// the param name the request actually sends.
+	info, ok := entity.GetEntity("profile-" + slugify(profile.Name))
+	if !ok {
+		t.Fatal("dynamic profile entity was not registered")
+	}
+	if got := info.FilterRefs["regions"]; got != profileParamFilterName(profile.Name, "regions") {
+		t.Fatalf("entity does not offer the param filter: FilterRefs = %#v", info.FilterRefs)
+	}
+	if _, offered := info.FilterRefs["plain"]; offered {
+		t.Fatalf("an unbound list param should not be offered: FilterRefs = %#v", info.FilterRefs)
+	}
+	if _, offered := info.FilterRefs["filter.service"]; !offered {
+		t.Fatalf("the column filter should still be offered: FilterRefs = %#v", info.FilterRefs)
+	}
+}

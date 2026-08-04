@@ -118,12 +118,15 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	}
 	roles := map[query.ParamRole]bool{}
 	for _, param := range profile.Params {
-		parameters = append(parameters, profileParameter(param))
+		parameters = append(parameters, profileParameter(spec, profile, param, path))
 		roles[param.Role] = true
 	}
 	for _, binding := range bindings {
 		filterName := profileFilterName(profile.Name, binding.Column)
-		ensureProfileFilterComponent(spec, filterName, binding.Label)
+		ensureProfileFilterComponent(spec, entity.FilterSpec{
+			Name: filterName, Label: binding.Label, Type: "multi-filter", Multi: true,
+			Source: entity.FilterSourceSpec{Kind: entity.SourceCustom},
+		})
 		parameters = append(parameters, rpc.OpenAPIParameter{
 			Name: binding.Key, In: "query", Description: "Include or exclude " + binding.Label + " values",
 			Schema: &rpc.OpenAPISchema{Type: "string", Title: binding.Label},
@@ -135,10 +138,12 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		})
 	}
 	if !roles[query.ParamRoleLimit] {
+		limits := profile.RowLimits()
 		parameters = append(parameters,
 			rpc.OpenAPIParameter{
-				Name: "limit", In: "query", Description: "Rows per page (maximum 1000)",
-				Schema: &rpc.OpenAPISchema{Type: "integer", Default: defaultPageLimit},
+				Name: "limit", In: "query",
+				Description: fmt.Sprintf("Rows per page (maximum %d); export up to %d rows with scope=all", limits.MaxPageSize, limits.MaxExportRows),
+				Schema:      &rpc.OpenAPISchema{Type: "integer", Default: limits.PageSize},
 				Clicky: &rpc.ClickyParameterMeta{Role: "limit"},
 			})
 	}
@@ -186,17 +191,16 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	return nil
 }
 
-func ensureProfileFilterComponent(spec *rpc.OpenAPISpec, name, label string) {
+// ensureProfileFilterComponent is the single writer of the spec's filter
+// components, so a column filter and a list param register through one path.
+func ensureProfileFilterComponent(spec *rpc.OpenAPISpec, filter entity.FilterSpec) {
 	if spec.Components == nil {
 		spec.Components = &rpc.OpenAPIComponents{}
 	}
 	if spec.Components.ClickyFilters == nil {
 		spec.Components.ClickyFilters = map[string]entity.FilterSpec{}
 	}
-	spec.Components.ClickyFilters[name] = entity.FilterSpec{
-		Name: name, Label: label, Type: "multi-filter", Multi: true,
-		Source: entity.FilterSourceSpec{Kind: entity.SourceCustom},
-	}
+	spec.Components.ClickyFilters[filter.Name] = filter
 }
 
 func profileExportMeta(profile query.Profile) *rpc.ExportMeta {
@@ -216,7 +220,7 @@ func profileExportMeta(profile query.Profile) *rpc.ExportMeta {
 	return meta
 }
 
-func profileParameter(param query.ParamDef) rpc.OpenAPIParameter {
+func profileParameter(spec *rpc.OpenAPISpec, profile query.Profile, param query.ParamDef, path string) rpc.OpenAPIParameter {
 	schema := &rpc.OpenAPISchema{Type: "string", Title: param.DisplayLabel(), Description: param.Description}
 	switch param.Type {
 	case query.ParamTypeNumber:
@@ -226,8 +230,12 @@ func profileParameter(param query.ParamDef) rpc.OpenAPIParameter {
 	case query.ParamTypeDate:
 		schema.Format = "date-time"
 	}
-	for _, option := range param.Options {
-		schema.Enum = append(schema.Enum, option)
+	// A list travels as one comma-joined string, so its schema stays a string;
+	// the allowed values live on the filter component the lookup points at.
+	if param.Type != query.ParamTypeList {
+		for _, option := range param.Options {
+			schema.Enum = append(schema.Enum, option)
+		}
 	}
 	if param.Default != nil {
 		schema.Default = param.Default
@@ -236,7 +244,7 @@ func profileParameter(param query.ParamDef) rpc.OpenAPIParameter {
 	if role == "" {
 		role = string(query.ParamRoleFilter)
 	}
-	return rpc.OpenAPIParameter{
+	parameter := rpc.OpenAPIParameter{
 		Name:        param.Name,
 		In:          "query",
 		Description: param.Description,
@@ -244,6 +252,35 @@ func profileParameter(param query.ParamDef) rpc.OpenAPIParameter {
 		Schema:      schema,
 		Clicky:      &rpc.ClickyParameterMeta{Role: role},
 	}
+	if param.Type != query.ParamTypeList || param.Field == "" {
+		return parameter
+	}
+
+	// A bound list is the same tri-state control a native column filter gets:
+	// static options are inlined so the browser needs no round trip, and an
+	// unenumerated one asks the provider for its distinct values.
+	filterName := profileParamFilterName(profile.Name, param.Name)
+	source := entity.FilterSourceSpec{Kind: entity.SourceCustom}
+	lookup := &rpc.ClickyLookupMeta{
+		Ref: "#/components/x-clicky-filters/" + filterName, URL: path,
+		Filter: param.Name, SearchParam: "__lookup_q", Multi: true,
+	}
+	if len(param.Options) > 0 {
+		options := make(map[string]string, len(param.Options))
+		for _, option := range param.Options {
+			options[option] = option
+		}
+		source = entity.FilterSourceSpec{Kind: entity.SourceStatic, Options: options}
+		lookup.URL, lookup.SearchParam = "", ""
+	}
+	ensureProfileFilterComponent(spec, entity.FilterSpec{
+		Name: filterName, Label: param.DisplayLabel(), Type: "multi-filter", Multi: true, Source: source,
+	})
+	parameter.Lookup = lookup
+	if parameter.Description == "" {
+		parameter.Description = "Include or exclude " + param.DisplayLabel() + " values"
+	}
+	return parameter
 }
 
 func profileResponseSchema(profile query.Profile, filterKeys map[string]string) *rpc.OpenAPISchema {

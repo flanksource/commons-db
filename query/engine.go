@@ -30,11 +30,7 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 	if len(params) > 0 {
 		supplied = params[0]
 	}
-	profileParams, filters, err := partitionProfileInput(p, supplied)
-	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
-	}
-	resolved, err := resolveParams(p.Params, profileParams)
+	resolved, filters, err := resolveProfileInput(p, supplied)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}

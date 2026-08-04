@@ -21,6 +21,11 @@ func decodeOpenSearchBody(raw string) (map[string]any, error) {
 	return body, nil
 }
 
+// applyOpenSearchFilters folds the resolved include/exclude selections into the
+// query as bool clauses. The values one field collects are alternatives, so they
+// become a single terms clause — one term clause per value would AND them and
+// match nothing. Distinct fields stay ANDed, and two filters bound to the same
+// backend field (a column filter and a list param, say) merge into one clause.
 func applyOpenSearchFilters(body map[string]any, filters []query.ColumnFilterValue) {
 	if len(filters) == 0 {
 		return
@@ -29,16 +34,11 @@ func applyOpenSearchFilters(body map[string]any, filters []query.ColumnFilterVal
 	if existing == nil {
 		existing = map[string]any{"match_all": map[string]any{}}
 	}
-	includes := []any{existing}
-	excludes := []any{}
-	for _, filter := range filters {
-		for _, value := range filter.Include {
-			includes = append(includes, openSearchTerm(filter.Field, value))
-		}
-		for _, value := range filter.Exclude {
-			excludes = append(excludes, openSearchTerm(filter.Field, value))
-		}
-	}
+	includes := append([]any{existing}, openSearchTermsByField(filters, func(f query.ColumnFilterValue) []string {
+		return f.Include
+	})...)
+	excludes := openSearchTermsByField(filters, func(f query.ColumnFilterValue) []string { return f.Exclude })
+
 	boolQuery := map[string]any{"filter": includes}
 	if len(excludes) > 0 {
 		boolQuery["must_not"] = excludes
@@ -46,6 +46,22 @@ func applyOpenSearchFilters(body map[string]any, filters []query.ColumnFilterVal
 	body["query"] = map[string]any{"bool": boolQuery}
 }
 
-func openSearchTerm(field, value string) map[string]any {
-	return map[string]any{"term": map[string]any{field: value}}
+// openSearchTermsByField groups the values select returns by backend field,
+// preserving first-seen field order so a body is byte-stable across runs.
+func openSearchTermsByField(filters []query.ColumnFilterValue, selectValues func(query.ColumnFilterValue) []string) []any {
+	fields := make([]string, 0, len(filters))
+	byField := make(map[string][]any, len(filters))
+	for _, filter := range filters {
+		for _, value := range selectValues(filter) {
+			if _, seen := byField[filter.Field]; !seen {
+				fields = append(fields, filter.Field)
+			}
+			byField[filter.Field] = append(byField[filter.Field], value)
+		}
+	}
+	clauses := make([]any, 0, len(fields))
+	for _, field := range fields {
+		clauses = append(clauses, map[string]any{"terms": map[string]any{field: byField[field]}})
+	}
+	return clauses
 }

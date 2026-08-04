@@ -21,17 +21,35 @@ export type ProfileProvider = {
   [key: string]: unknown;
 };
 
+/** The parameter types the profile schema accepts. */
+export type ParamDraftType = "string" | "number" | "boolean" | "date" | "enum" | "list";
+
+/** filter, limit, offset, time-from or time-to; empty behaves as filter. */
+export type ParamDraftRole = "filter" | "limit" | "offset" | "time-from" | "time-to";
+
 export type ParamDraft = {
   name?: string;
   label?: string;
-  type?: string;
-  /** filter, limit, offset, time-from or time-to; empty behaves as filter. */
-  role?: string;
+  type?: ParamDraftType;
+  role?: ParamDraftRole;
   default?: unknown;
   options?: string[];
   required?: boolean;
   description?: string;
+  /** Value rewrite; {value} is the supplied value. */
+  template?: string;
+  /** Backend field a list parameter filters on. Setting it lets a value be
+   *  excluded as well as included; it requires an OpenSearch-backed provider. */
+  field?: string;
 };
+
+/** PARAM_TYPES_WITH_OPTIONS are the types whose values come from a fixed set, so
+ *  the editor offers an options picker for them. */
+export const PARAM_TYPES_WITH_OPTIONS: ParamDraftType[] = ["enum", "list"];
+
+export function paramHasOptions(param: ParamDraft): boolean {
+  return param.type !== undefined && PARAM_TYPES_WITH_OPTIONS.includes(param.type);
+}
 
 export type ProfileWizardDraft = Record<string, unknown> & {
   namespace?: string;
