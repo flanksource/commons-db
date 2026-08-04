@@ -142,9 +142,12 @@ type ProviderConfig struct {
 	Type string `json:"type" yaml:"type"`
 
 	// Connection references a connection (connection://name) or an inline DSN/URL.
+	// It is templated with the resolved params before the provider runs.
 	Connection string `json:"connection,omitempty" yaml:"connection,omitempty"`
 
-	// Options carries provider-specific knobs.
+	// Options carries provider-specific knobs. Every string in it — however
+	// deeply nested — is templated with the resolved params before the provider
+	// runs, so `{{.params.x}}` and `$(.params.x)` work in any provider's options.
 	Options map[string]any `json:"options,omitempty" yaml:"options,omitempty"`
 }
 

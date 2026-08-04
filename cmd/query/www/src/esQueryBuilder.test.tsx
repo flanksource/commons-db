@@ -1,13 +1,30 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  defaultParamValues,
   EsQueryBuilder,
   esQueryBuilderFormExtensions,
   esQueryFields,
   paramNames,
   paramRoles,
 } from "./esQueryBuilder";
+import { compileRequestBody, type EsCompileRequest } from "./esQueryPreview";
 import type { EsSearch } from "./esQueryBuilderModel";
+
+// useCompiledSearch only issues its request once effects run, which server
+// rendering never does — so the wiring is asserted on what the hook was handed.
+const compileInputs = vi.hoisted(() => [] as EsCompileRequest[]);
+vi.mock("./esQueryPreview", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./esQueryPreview")>();
+  return {
+    ...original,
+    useCompiledSearch: (input: EsCompileRequest) => {
+      compileInputs.push(input);
+      return original.useCompiledSearch(input);
+    },
+  };
+});
 import type {
   EsBuilderVocabulary,
   EsFieldMapping,
@@ -95,7 +112,6 @@ describe("EsQueryBuilder", () => {
   it("renders the sort and output editors", () => {
     const html = render({ sort: [{ field: "@timestamp", order: "desc" }] });
     expect(html).toContain('aria-label="Sort field"');
-    expect(html).toContain('aria-label="Size"');
     expect(html).toContain('aria-label="From"');
   });
 
@@ -108,9 +124,87 @@ describe("EsQueryBuilder", () => {
     ).toContain("Compiled DSL");
   });
 
-  it("offers the raw-DSL escape hatch only when the host accepts one", () => {
+  // Raw DSL is the other tab, not a button inside this one: the builder edits a
+  // specification and knows nothing about where the host stores the alternative.
+  it("keeps the mode switch out of the builder", () => {
     expect(render({})).not.toContain("Edit raw DSL");
-    expect(render({}, { onEditRawDsl: () => {} })).toContain("Edit raw DSL");
+  });
+});
+
+describe("EsQueryBuilder value lookups", () => {
+  // An analyzed text field has no doc values of its own, so its keyword sibling
+  // is what a value list can be aggregated from.
+  const lookupFields: EsFieldMapping[] = [
+    ...fields,
+    { name: "message.keyword", dataType: "keyword", aggregatable: true },
+  ];
+
+  const twoConditions: EsSearch = {
+    query: {
+      op: "bool",
+      conditions: [
+        { op: "term", field: "service.name", value: "pay" },
+        { op: "term", field: "message", value: "timeout" },
+      ],
+    },
+  };
+
+  const renderWithLookup = (search: EsSearch) => {
+    const asked: { field: string; search?: EsSearch }[] = [];
+    const values = (request: { field: string; search?: EsSearch }) => {
+      asked.push(request);
+      return { key: request.field, fetch: async () => ({ values: [], total: 0, scoped: true }) };
+    };
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <EsQueryBuilder
+          search={search}
+          onChange={() => {}}
+          fields={lookupFields}
+          vocabulary={vocabulary}
+          values={values}
+        />
+      </QueryClientProvider>,
+    );
+    return { asked, html };
+  };
+
+  // The row being edited holds the value the list is meant to complete, so
+  // scoping by it would filter the suggestions down to what was already typed.
+  it("scopes a row's lookup to the query without that row", () => {
+    const { asked } = renderWithLookup(twoConditions);
+    expect(asked.map((entry) => entry.field)).toEqual([
+      "service.name",
+      "message.keyword",
+    ]);
+    expect(asked[0]?.search?.query?.conditions).toEqual([
+      { op: "term", field: "message", value: "timeout" },
+    ]);
+    expect(asked[1]?.search?.query?.conditions).toEqual([
+      { op: "term", field: "service.name", value: "pay" },
+    ]);
+  });
+
+  it("asks for no lookup on a field that cannot be aggregated", () => {
+    const { asked } = renderWithLookup({
+      query: { op: "bool", conditions: [{ op: "term", field: "@timestamp" }] },
+    });
+    expect(asked).toEqual([]);
+  });
+
+  it("picks the operand from the field's values when a lookup exists", () => {
+    const { html } = renderWithLookup({
+      query: { op: "bool", conditions: [{ op: "term", field: "service.name" }] },
+    });
+    expect(html).toMatch(/role="combobox"[^>]*aria-label="Value"/);
+  });
+
+  it("leaves the operand a plain input when the host has no connection", () => {
+    const html = render({
+      query: { op: "bool", conditions: [{ op: "term", field: "service.name" }] },
+    });
+    expect(html).toContain('aria-label="Value"');
+    expect(html).not.toMatch(/role="combobox"[^>]*aria-label="Value"/);
   });
 });
 
@@ -156,9 +250,80 @@ describe("param plumbing", () => {
     ).toEqual({ since: "time-from", rows: "limit" });
   });
 
+  it("takes the default of every named parameter that declares one", () => {
+    expect(
+      defaultParamValues([
+        { name: "country", default: "kenya" },
+        { name: "env" },
+        { name: "rows", default: 500 },
+        { default: "orphan" },
+      ]),
+    ).toEqual({ country: "kenya", rows: 500 });
+  });
+
   it("returns empty plumbing when the profile declares no parameters", () => {
     expect(paramNames(undefined)).toEqual([]);
     expect(paramRoles(undefined)).toEqual({});
+    expect(defaultParamValues(undefined)).toEqual({});
+  });
+});
+
+// The preview compiles server-side against the parameter values a run would
+// start with, so an operand that binds {param:…} or interpolates {{.params.…}}
+// resolves in the panel instead of showing template text.
+describe("EsQueryBuilderField compilation", () => {
+  const [post] = esQueryBuilderFormExtensions.post;
+
+  it("sends the declared parameter defaults and roles to /compile", () => {
+    compileInputs.length = 0;
+    renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        {
+          post(
+            {
+              key: "search",
+              kind: "object" as const,
+              label: "Search",
+              required: false,
+              schema: { "x-clicky-component": "es-query-builder" },
+              value: {
+                query: {
+                  op: "term",
+                  field: "process.serviceName",
+                  value: "{{.params.country}}-api",
+                },
+              },
+              onChange: () => {},
+            },
+            { label: "label", value: "input" },
+            {
+              rootValue: {
+                provider: {
+                  connection: "connection://11111111-2222-3333-4444-555555555555",
+                  options: { index: "jaeger-span*" },
+                },
+                params: [
+                  { name: "country", default: "kenya" },
+                  { name: "since", role: "time-from", default: "now-1h" },
+                  { name: "env" },
+                ],
+              },
+            },
+          ).value as React.ReactNode
+        }
+      </QueryClientProvider>,
+    );
+
+    expect(compileInputs).toHaveLength(1);
+    expect(compileInputs[0]?.params).toEqual({
+      country: "kenya",
+      since: "now-1h",
+    });
+    expect(compileInputs[0]?.roles).toEqual({ since: "time-from" });
+    expect(JSON.parse(compileRequestBody(compileInputs[0]!)).params).toEqual({
+      country: "kenya",
+      since: "now-1h",
+    });
   });
 });
 

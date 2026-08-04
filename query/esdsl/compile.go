@@ -14,6 +14,12 @@ type CompileRequest struct {
 	// Params are the resolved profile parameters, with their roles.
 	Params []ParamBinding
 
+	// Referenced names parameters already consumed outside the specification —
+	// a parameter the engine interpolated into the provider options, say. They
+	// count toward the all-parameters-referenced check without appearing as an
+	// operand of their own.
+	Referenced []string
+
 	// Scroll marks a scrolling read. from and aggregations are not supported by
 	// a scroll context, so they are rejected rather than silently dropped.
 	Scroll bool
@@ -59,7 +65,7 @@ func Compile(req CompileRequest) (Compiled, error) {
 	if err := req.Search.Validate(); err != nil {
 		return Compiled{}, err
 	}
-	root, size, from, err := bindSearch(req.Search, req.Params)
+	root, size, from, err := bindSearch(req.Search, req.Params, req.Referenced)
 	if err != nil {
 		return Compiled{}, err
 	}

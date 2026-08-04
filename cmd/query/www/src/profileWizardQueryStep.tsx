@@ -9,10 +9,15 @@ import {
   useInspection,
   type BrowserDescriptor,
 } from "./connectionBrowserModel";
-import { ConnectionQueryWorkspace } from "./connectionQueryWorkspace";
+import {
+  ConnectionQueryWorkspace,
+  supportsQueryBuilder,
+} from "./connectionQueryWorkspace";
+import { defaultParamValues, paramNames, paramRoles } from "./esQueryBuilder";
 import type { EsSearch } from "./esQueryBuilderModel";
 import {
   profileWizardErrorMessage,
+  withProfileLimits,
   type ProfileColumn,
   type ProfileWizardDraft,
 } from "./profileWizardModel";
@@ -27,6 +32,7 @@ type SampleResult = QueryBrowserResult & {
 export type ProfileSample = {
   columns: ProfileColumn[];
   rows: Record<string, unknown>[];
+  sourceDraft: ProfileWizardDraft;
 };
 
 type ProfileWizardQueryStepProps = {
@@ -61,12 +67,17 @@ export function ProfileWizardQueryStep({
   );
   const [selectedDatabase, setSelectedDatabase] = useState("");
 
+  // The starter query is for a source whose artifact is the query. Where the
+  // workspace builds filters instead, the specification is the artifact and a
+  // query seeded beside it would be the pair the server rejects.
+  const rawArtifact =
+    descriptor.data !== undefined && !supportsQueryBuilder(descriptor.data);
   useEffect(() => {
-    if (!query && descriptor.data?.defaultQuery) {
+    if (rawArtifact && !query && descriptor.data?.defaultQuery) {
       setQuery(descriptor.data.defaultQuery);
       onDraftChange({ ...draft, query: descriptor.data.defaultQuery });
     }
-  }, [descriptor.data?.defaultQuery, draft, onDraftChange, query]);
+  }, [descriptor.data?.defaultQuery, draft, onDraftChange, query, rawArtifact]);
 
   const explicitTargetKind = liveOptions.targetKind ?? providerOptions.targetKind;
   const inspection = useInspection({
@@ -167,6 +178,11 @@ export function ProfileWizardQueryStep({
             provider: { ...(draft.provider ?? {}), options },
           });
         }}
+        params={paramNames(draft.params)}
+        paramValues={defaultParamValues(draft.params)}
+        paramRoles={paramRoles(draft.params)}
+        {...(draft.limits ? { limits: draft.limits } : {})}
+        onLimitsChange={(limits) => onDraftChange(withProfileLimits(draft, limits))}
         compileBaseUrl={baseUrl}
         className="min-h-0 flex-1"
         onQueryChange={(nextQuery) => {
@@ -219,7 +235,11 @@ export function ProfileWizardQueryStep({
               params: {},
             }),
           });
-          onSample({ columns: result.columns ?? [], rows: result.rows ?? [] });
+          onSample({
+            columns: result.columns ?? [],
+            rows: result.rows ?? [],
+            sourceDraft: nextDraft,
+          });
           return result;
         }}
       />

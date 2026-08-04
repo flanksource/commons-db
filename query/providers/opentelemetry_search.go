@@ -9,9 +9,10 @@ import (
 // composes the runtime column filters onto it.
 func buildOpenTelemetryRequest(req query.ProviderRequest, options openTelemetryOptions) (openSearchRequest, error) {
 	compiled, err := esdsl.Compile(esdsl.CompileRequest{
-		Search:  openTelemetrySearch(options),
-		Params:  openSearchParamBindings(req),
-		MaxRows: req.MaxRows,
+		Search:     openTelemetrySearch(options),
+		Params:     openSearchParamBindings(req),
+		Referenced: req.TemplatedParams,
+		MaxRows:    req.MaxRows,
 	})
 	if err != nil {
 		return openSearchRequest{}, err

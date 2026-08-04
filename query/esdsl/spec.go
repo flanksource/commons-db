@@ -229,6 +229,17 @@ func (t *TrackTotalHits) value() any {
 // Value is an operand: either a literal or a reference to a profile parameter.
 // A parameter is substituted structurally — never concatenated into a query
 // string — which is what makes a compiled specification injection-proof.
+//
+// A profile parameter can also reach an operand the other way, as
+// `"{{.params.country}}-api"` in a string literal: the engine interpolates the
+// provider options before the specification is decoded, so the value arrives
+// here already substituted. The two forms are deliberately different, and an
+// author picks between them:
+//
+//	{"param": "country"}       substituted here, Lucene-escaped in query_string,
+//	                           and prunes an optional condition when empty
+//	"{{.params.country}}-api"  interpolated verbatim, exactly like a raw query,
+//	                           and fails when the parameter has no value
 type Value struct {
 	Literal any
 	Param   string

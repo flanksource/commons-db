@@ -34,11 +34,14 @@ const (
 )
 
 // ParamDef declares one server-side filter parameter of a Profile. Supplied
-// values are validated and coerced against the declaration, then exposed to the
-// query template under `params.<Name>` before the provider runs. This mirrors
-// legacy trace-profile params.
+// values are validated and coerced against the declaration, then exposed under
+// `params.<Name>` to everything the provider is handed — the query, the provider
+// options and the connection — before it runs. This mirrors legacy trace-profile
+// params.
 type ParamDef struct {
-	// Name is the parameter key, referenced in the query as `{{.params.<Name>}}`.
+	// Name is the parameter key, referenced as `{{.params.<Name>}}` (or
+	// `$(.params.<Name>)`) in the query, in any provider option, or in the
+	// connection.
 	Name string `json:"name" yaml:"name"`
 
 	// Label is the human-facing name for the FilterBar. Defaults to Name.

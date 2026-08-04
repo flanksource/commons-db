@@ -42,8 +42,12 @@ func ProfileSource() Schema {
 	paramDef := Schema{
 		"type":     "object",
 		"required": []string{"name"},
+		// An enum parameter's options are answerable from the index it filters,
+		// which the editor resolves through the condition that binds the parameter.
+		"x-clicky-component": "es-param",
 		"properties": Schema{
-			"name":        strProp("Name", "Parameter key, referenced as {{.params.<name>}}"),
+			"name": strProp("Name",
+				"Parameter key, referenced as {{.params.<name>}} in the query, in any provider option, or in the connection"),
 			"label":       strProp("Label", ""),
 			"type":        Schema{"type": "string", "title": "Type", "enum": []string{"string", "number", "boolean", "date", "enum"}},
 			"role":        Schema{"type": "string", "title": "Role", "enum": []string{"filter", "limit", "offset", "time-from", "time-to"}, "description": "Map this parameter to filtering, paging, or a date-range edge"},
