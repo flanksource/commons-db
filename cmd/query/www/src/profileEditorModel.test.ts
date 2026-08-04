@@ -4,11 +4,13 @@ import {
   mergeSampledProfileColumns,
   profileEditRoute,
   profileEditSurfaceKey,
+  profileColumnResetState,
   profileEditorSections,
   profileRoute,
   profileSampleSignature,
   profileSchemaProjection,
   profileUpdateConflictTarget,
+  resetProfileColumns,
   validateProfileEditorDraft,
 } from "./profileEditorModel";
 
@@ -62,6 +64,77 @@ describe("profile editor model", () => {
       { name: "legacy", type: "string" },
       { name: "duration", type: "duration" },
     ]);
+  });
+
+  it("resets configured columns to the latest sample order and metadata", () => {
+    const draft = {
+      profile: "OS",
+      provider: { type: "opensearch" },
+      columns: [
+        { name: "message", type: "string", label: "Message", cel: "message.trim()" },
+        { name: "manual", type: "boolean" },
+      ],
+      output: { unwrap: "hits" },
+    };
+    const sampled = [
+      { name: "duration", type: "number" },
+      { name: "message", type: "json" },
+    ];
+
+    const reset = resetProfileColumns(draft, sampled);
+
+    expect(reset).toEqual({
+      ...draft,
+      columns: sampled,
+    });
+    expect(reset.columns).not.toBe(sampled);
+    expect(reset.columns?.[0]).not.toBe(sampled[0]);
+    expect(() => resetProfileColumns(draft, [])).toThrow(
+      "Cannot reset profile columns without sampled columns",
+    );
+  });
+
+  it("offers reset only for OpenSearch with a current non-empty sample", () => {
+    expect(
+      profileColumnResetState({
+        providerType: "sql",
+        sampledColumnCount: 2,
+        sampleStale: false,
+      }),
+    ).toEqual({ visible: false, disabled: true, title: "" });
+    expect(
+      profileColumnResetState({
+        providerType: "opensearch",
+        sampledColumnCount: 0,
+        sampleStale: false,
+      }),
+    ).toEqual({
+      visible: true,
+      disabled: true,
+      title: "Run a sample before resetting columns",
+    });
+    expect(
+      profileColumnResetState({
+        providerType: "opensearch",
+        sampledColumnCount: 2,
+        sampleStale: true,
+      }),
+    ).toEqual({
+      visible: true,
+      disabled: true,
+      title: "Run another sample for the current source and query",
+    });
+    expect(
+      profileColumnResetState({
+        providerType: "opensearch",
+        sampledColumnCount: 2,
+        sampleStale: false,
+      }),
+    ).toEqual({
+      visible: true,
+      disabled: false,
+      title: "Replace configured columns with the latest sample",
+    });
   });
 
   it("tracks source changes and validates only editor-owned invariants", () => {
