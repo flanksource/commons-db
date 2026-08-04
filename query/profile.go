@@ -68,7 +68,22 @@ type Profile struct {
 	// query per tick and each snapshot replaces the last. Mutually exclusive
 	// with Trace.
 	Top *TopSpec `json:"top,omitempty" yaml:"top,omitempty"`
+
+	// Replay describes how a single result row is turned back into an outbound
+	// HTTP request, so a failed or dropped record can be re-sent to its
+	// destination without hand-assembling the call.
+	Replay *ReplaySpec `json:"replay,omitempty" yaml:"replay,omitempty"`
+
+	// Limits are the row caps this Profile sets for itself: the page it returns
+	// by default, the largest page a caller may ask for, and where an all-row
+	// export stops. Each unset cap takes its default. None of them is the
+	// query's own limit, which is a provider option.
+	Limits *RowLimits `json:"limits,omitempty" yaml:"limits,omitempty"`
 }
+
+// RowLimits resolves this Profile's row caps against the defaults, so callers
+// never reach for a default constant themselves.
+func (p Profile) RowLimits() RowLimits { return p.Limits.Resolve() }
 
 // AliasDef is an ordered, named CEL projection over a provider row.
 type AliasDef struct {
