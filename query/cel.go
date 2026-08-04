@@ -13,6 +13,10 @@ import (
 var celIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) error {
+	outputNames := make(map[string]struct{}, len(profile.Columns))
+	for _, column := range profile.Columns {
+		outputNames[column.Name] = struct{}{}
+	}
 	for index, row := range rows {
 		projected := make([]struct {
 			name  string
@@ -53,6 +57,28 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) error 
 				return fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
 			}
 			row[column.Name] = value
+		}
+		renamed := make(map[string]any, len(profile.Columns))
+		for _, column := range profile.Columns {
+			if column.Source == "" || column.Source == column.Name {
+				continue
+			}
+			if value, ok := row[column.Source]; ok {
+				renamed[column.Name] = value
+			} else if _, alreadyProjected := row[column.Name]; !alreadyProjected {
+				renamed[column.Name] = nil
+			}
+		}
+		for name, value := range renamed {
+			row[name] = value
+		}
+		for _, column := range profile.Columns {
+			if column.Source == "" || column.Source == column.Name {
+				continue
+			}
+			if _, retained := outputNames[column.Source]; !retained {
+				delete(row, column.Source)
+			}
 		}
 	}
 	return nil

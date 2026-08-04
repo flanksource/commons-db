@@ -60,13 +60,16 @@ func ProfileSource() Schema {
 		"required": []string{"name"},
 		"properties": Schema{
 			"label": Schema{"type": "string", "title": "Label", "description": "Optional column header; blank uses Name", "x-clicky-order": 0},
-			"name":  Schema{"type": "string", "title": "Name", "description": "Exact key read from each query result row", "x-clicky-order": 1},
+			"name":  Schema{"type": "string", "title": "Name", "description": "Public field name used by tables, filters, APIs, and exports", "x-clicky-order": 1},
+			"source": Schema{
+				"type": "string", "title": "Source", "description": "Original provider field copied into Name and removed from output", "x-clicky-order": 2,
+			},
 			"type": Schema{
 				"type":           "string",
 				"title":          "Type",
 				"enum":           []string{"string", "number", "boolean", "datetime", "duration", "bytes", "status", "health", "key_value", "key_values", "json"},
 				"description":    "Value shape and default formatting; independent of Role",
-				"x-clicky-order": 2,
+				"x-clicky-order": 3,
 				"x-enum-labels": map[string]string{
 					"key_value":  "KeyValue{}",
 					"key_values": "[]KeyValue",
@@ -76,34 +79,34 @@ func ProfileSource() Schema {
 			"kind": Schema{
 				"type": "string", "title": "Role", "enum": []string{"timestamp", "tags", "status"},
 				"description":    "Optional table behavior, independent of Type: timestamp adds the date-range control, tags renders filterable chips, and status applies status styling",
-				"x-clicky-order": 3,
+				"x-clicky-order": 4,
 			},
 			"format": Schema{
 				"type": "string", "title": "Format", "enum": api.ColumnFormatValues(),
 				"description":    "Optional display formatter; blank derives from Type and Unit takes precedence",
-				"x-clicky-order": 4,
+				"x-clicky-order": 5,
 				"x-enum-labels":  map[string]string{"date": "Date/time", "float": "Number", "duration": "Duration", "bytes": "Bytes", "currency": "Currency"},
 			},
 			"unit": Schema{
 				"type": "string", "title": "Unit", "enum": api.ColumnUnitValues(),
 				"description":    "Numeric scaling and display unit; requires Type number, duration, or bytes and takes precedence over Format",
-				"x-clicky-order": 5,
+				"x-clicky-order": 6,
 				"x-enum-labels": map[string]string{
 					"none": "Compact count", "short": "Short number", "percent": "Percent (0-100)", "percentunit": "Percent (0-1)",
 					"bytes": "Bytes (IEC)", "decbytes": "Bytes (SI)", "Bps": "Bytes/sec", "binBps": "Binary bytes/sec", "ms": "Milliseconds", "s": "Seconds",
 				},
 			},
-			"width": Schema{"type": "integer", "title": "Width", "description": "Maximum rendered width in characters", "x-clicky-order": 6},
-			"cel":   Schema{"type": "string", "title": "CEL", "description": "Expression computing the cell value from `row`", "x-clicky-order": 7},
+			"width": Schema{"type": "integer", "title": "Width", "description": "Maximum rendered width in characters", "x-clicky-order": 7},
+			"cel":   Schema{"type": "string", "title": "CEL", "description": "Expression computing the cell value from `row`", "x-clicky-order": 8},
 			"filter": Schema{
-				"type": "object", "title": "Filter", "x-clicky-order": 8,
+				"type": "object", "title": "Filter", "x-clicky-order": 9,
 				"description": "Backend mapping for native include/exclude filters; direct columns and simple CEL infer this automatically",
 				"required":    []string{"field"},
 				"properties": Schema{
 					"field": Schema{"type": "string", "title": "OpenSearch field", "description": "Exact OpenSearch field used for term filters and value lookup"},
 				},
 			},
-			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for CEL and processors", "x-clicky-order": 9},
+			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for CEL and processors", "x-clicky-order": 10},
 		},
 	}
 	aliasDef := Schema{
@@ -164,8 +167,46 @@ func ProfileSource() Schema {
 			"columns": Schema{"type": "array", "title": "Columns", "x-layout": "table", "items": columnDef},
 			"aliases": Schema{"type": "array", "title": "Aliases", "x-layout": "table", "items": aliasDef},
 			"ignore":  Schema{"type": "array", "title": "Ignore", "items": Schema{"type": "string"}},
+			"replay":  replaySpec(),
 			"output":  Schema{"type": "array", "title": "Output", "items": Schema{"type": "string"}},
 			"render":  Schema{"type": "string", "title": "Render", "enum": []string{"table", "logs"}, "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)"},
+		},
+	}
+}
+
+// replaySpec describes the profile's replay block. Every field except target
+// and kind is a CEL expression over the result row, so the form labels them as
+// such rather than as literal values.
+func replaySpec() Schema {
+	return Schema{
+		"type":        "object",
+		"title":       "Replay",
+		"description": "Turn one result row back into an outbound HTTP request",
+		"properties": Schema{
+			"kind": Schema{
+				"type": "string", "title": "Kind", "enum": []string{"http"}, "default": "http",
+				"x-clicky-order": 1,
+			},
+			"target": Schema{
+				"type":               "object",
+				"title":              "Target",
+				"description":        "Connection the request is sent to; required for a relative URL",
+				"properties":         Schema{"connection": connectionProp(), "url": strProp("URL", "Base URL")},
+				"x-clicky-order":     2,
+				"x-clicky-component": "connection-http",
+			},
+			"method": strProp("Method", `CEL expression yielding the HTTP method, e.g. "POST" (defaults to POST)`),
+			"url":    strProp("URL", "CEL expression yielding an absolute URL or a path relative to the target"),
+			"body": Schema{
+				"type": "string", "title": "Body", "format": "textarea",
+				"description": "CEL expression yielding the request body; non-string values are JSON encoded",
+			},
+			"headers": Schema{
+				"type":                 "object",
+				"title":                "Headers",
+				"description":          "Header name to CEL expression; an expression yielding blank omits the header",
+				"additionalProperties": Schema{"type": "string"},
+			},
 		},
 	}
 }
