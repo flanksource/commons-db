@@ -121,6 +121,32 @@ var _ = Describe("Bind pruning", func() {
 			Params: []ParamBinding{{Name: "level", Role: RoleFilter, Value: "error"}},
 		})
 		Expect(err).To(MatchError(ContainSubstring(`param "level" is not referenced by the search specification`)))
+		Expect(err).To(MatchError(ContainSubstring(`bind it as {"param":"level"}`)))
+		Expect(err).To(MatchError(ContainSubstring(`interpolate it as {{.params.level}}`)))
+	})
+
+	It("accepts a parameter the caller already consumed by interpolation", func() {
+		compiled, err := Compile(CompileRequest{
+			// The operand arrives already interpolated, so nothing here binds
+			// "country" structurally — only Referenced proves it was used.
+			Search:     Search{Query: &Condition{Op: OpTerm, Field: "service", Value: Literal("kenya-api")}},
+			Params:     []ParamBinding{{Name: "country", Role: RoleFilter, Value: "kenya"}},
+			Referenced: []string{"country"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compiled.Body["query"]).To(Equal(map[string]any{"term": map[string]any{"service": "kenya-api"}}))
+	})
+
+	It("still reports a parameter that neither binding nor interpolation reached", func() {
+		_, err := Compile(CompileRequest{
+			Search: Search{Query: &Condition{Op: OpTerm, Field: "service", Value: Literal("kenya-api")}},
+			Params: []ParamBinding{
+				{Name: "country", Role: RoleFilter, Value: "kenya"},
+				{Name: "level", Role: RoleFilter, Value: "error"},
+			},
+			Referenced: []string{"country"},
+		})
+		Expect(err).To(MatchError(ContainSubstring(`param "level" is not referenced`)))
 	})
 
 	It("rejects a duplicate parameter binding", func() {

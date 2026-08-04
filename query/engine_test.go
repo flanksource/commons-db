@@ -237,3 +237,93 @@ var _ = Describe("Execute", func() {
 		Expect(err).To(MatchError(ContainSubstring("no data provider registered")))
 	})
 })
+
+// Templating is a property of the execution config, not of one provider: the
+// query, every provider's options and the connection reference all interpolate
+// the resolved params.
+var _ = Describe("param templating", func() {
+	It("renders the query, the options and the connection for any provider type", func() {
+		provider := &mockProvider{typ: "template-breadth"}
+		query.RegisterProvider(provider)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name: "templated",
+			Provider: query.ProviderConfig{
+				Type:       provider.typ,
+				Connection: "connection://{{.params.env}}-warehouse",
+				Options: map[string]any{
+					"database": "{{.params.tenant}}_reporting",
+					"service":  "$(.params.tenant)-api",
+					"body":     `{"tenant":"{{.params.tenant}}"}`,
+					"start":    "now-1h",
+					"limit":    500,
+					"headers":  map[string]any{"x-tenant": "{{.params.tenant}}"},
+					"fields":   []any{"{{.params.tenant}}.id", "name"},
+				},
+			},
+			Query:  "select * from orders where tenant = '{{.params.tenant}}'",
+			Params: []query.ParamDef{{Name: "tenant"}, {Name: "env", Default: "prod"}},
+		}, map[string]any{"tenant": "kenya"})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(provider.last.Query).To(Equal("select * from orders where tenant = 'kenya'"))
+		Expect(provider.last.Connection).To(Equal("connection://prod-warehouse"))
+		Expect(provider.last.Options).To(Equal(map[string]any{
+			"database": "kenya_reporting",
+			"service":  "kenya-api",
+			"body":     `{"tenant":"kenya"}`,
+			"start":    "now-1h",
+			"limit":    500,
+			"headers":  map[string]any{"x-tenant": "kenya"},
+			"fields":   []any{"kenya.id", "name"},
+		}))
+		Expect(provider.last.TemplatedParams).To(Equal([]string{"env", "tenant"}))
+	})
+
+	It("reports no templated params when nothing is interpolated", func() {
+		provider := &mockProvider{typ: "template-none"}
+		query.RegisterProvider(provider)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "untemplated",
+			Provider: query.ProviderConfig{Type: provider.typ, Options: map[string]any{"database": "reporting"}},
+			Query:    "select 1",
+			Params:   []query.ParamDef{{Name: "tenant", Default: "kenya"}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(provider.last.TemplatedParams).To(BeEmpty())
+	})
+
+	It("fails naming the field and the param when an option references a param with no value", func() {
+		provider := &mockProvider{typ: "template-missing-param"}
+		query.RegisterProvider(provider)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "missing param",
+			Provider: query.ProviderConfig{Type: provider.typ, Options: map[string]any{"database": "{{.params.tenant}}_reporting"}},
+		})
+		Expect(err).To(MatchError(ContainSubstring("provider.options.database")))
+		Expect(err).To(MatchError(ContainSubstring(`param "tenant"`)))
+	})
+
+	It("renders a context SubQuery against the parent's params", func() {
+		query.RegisterProvider(&mockProvider{typ: "template-sub-main"})
+		secondary := &mockProvider{typ: "template-sub-context", rows: []query.Row{{"policy": "P-1"}}}
+		query.RegisterProvider(secondary)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "templated context",
+			Provider: query.ProviderConfig{Type: "template-sub-main"},
+			Params:   []query.ParamDef{{Name: "tenant", Default: "kenya"}},
+			Context: map[string]query.SubQuery{
+				"Policy": {
+					Provider: query.ProviderConfig{Type: secondary.typ, Options: map[string]any{"index": "{{.params.tenant}}-policies"}},
+					Query:    "select policy for {{.params.tenant}}",
+				},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(secondary.last.Query).To(Equal("select policy for kenya"))
+		Expect(secondary.last.Options).To(HaveKeyWithValue("index", "kenya-policies"))
+	})
+})

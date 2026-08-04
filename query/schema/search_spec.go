@@ -83,7 +83,9 @@ func conditionSchema(depth int) Schema {
 		"occur":  Schema{"type": "string", "title": "Clause", "enum": occurNames(), "default": string(esdsl.OccurFilter)},
 		"field":  strProp("Field", "Target field"),
 		"fields": Schema{"type": "array", "title": "Fields", "items": Schema{"type": "string"}},
-		"value":  valueSchema("Value", "Operand: a literal, or {\"param\": \"<name>\"} to bind a profile param"),
+		"value": valueSchema("Value",
+			"Operand: a literal, or {\"param\": \"<name>\"} to bind a profile param (escaped, and pruned when empty). "+
+				"A literal string may also interpolate one as {{.params.<name>}}, which substitutes verbatim and fails when the param has no value"),
 		"values": Schema{"type": "array", "title": "Values",
 			"items": valueSchema("", "")},
 		"gt":  valueSchema("Greater than", "Exclusive lower bound; a date field accepts date math"),

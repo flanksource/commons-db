@@ -100,6 +100,55 @@ func TestServeCompile(t *testing.T) {
 	}
 }
 
+// The preview must show the DSL an execution produces, so a templated operand
+// is interpolated before it compiles — and counts as a reference, exactly as it
+// does at runtime.
+func TestServeCompileInterpolatesParams(t *testing.T) {
+	handler, base := browserHandlerFor(t, models.ConnectionTypeOpenSearch, "https://opensearch.test")
+
+	recorder := postBrowser(t, handler, base+"/compile", `{
+		"search": {"query": {"op": "term", "field": "process.serviceName", "value": "{{.params.country}}-api"}},
+		"params": {"country": "kenya"}
+	}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("compile status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var result browserCompileResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(result.Query), &body); err != nil {
+		t.Fatalf("compiled query is not JSON: %v\n%s", err, result.Query)
+	}
+	assertJSONEqual(t, "query", body["query"], `{"term":{"process.serviceName":"kenya-api"}}`)
+}
+
+// Only the specification is previewed, while a profile also templates its params
+// into the provider options and the connection. A param the specification does
+// not mention may well be referenced there, so the preview compiles rather than
+// accusing it — execution, which sees the whole profile, makes that call.
+func TestServeCompileKeepsParamsTheSpecificationDoesNotUse(t *testing.T) {
+	handler, base := browserHandlerFor(t, models.ConnectionTypeOpenSearch, "https://opensearch.test")
+
+	recorder := postBrowser(t, handler, base+"/compile", `{
+		"search": {"query": {"op": "term", "field": "level", "value": "error"}},
+		"params": {"tenant": "kenya"}
+	}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("compile status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var result browserCompileResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(result.Query), &body); err != nil {
+		t.Fatalf("compiled query is not JSON: %v\n%s", err, result.Query)
+	}
+	assertJSONEqual(t, "query", body["query"], `{"term":{"level":"error"}}`)
+}
+
 func TestServeCompileRejections(t *testing.T) {
 	handler, base := browserHandlerFor(t, models.ConnectionTypeOpenSearch, "https://opensearch.test")
 	tests := []struct {

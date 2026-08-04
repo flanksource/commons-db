@@ -1,6 +1,7 @@
 package connections
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -17,9 +18,11 @@ import (
 
 // browserCompileRequest asks for the Query DSL a structured specification
 // compiles to. It is how the query builder shows an author the DSL their
-// filters produce before anything is run.
+// filters produce before anything is run. The specification stays raw until the
+// params have been interpolated into it, so the preview goes through the same
+// templating a profile does at execution time.
 type browserCompileRequest struct {
-	Search esdsl.Search      `json:"search"`
+	Search json.RawMessage   `json:"search"`
 	Params map[string]any    `json:"params,omitempty"`
 	Roles  map[string]string `json:"roles,omitempty"`
 }
@@ -45,9 +48,25 @@ func (h *connectionBrowserHandler) serveCompile(w http.ResponseWriter, r *http.R
 		http.Error(w, "decode search specification: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	rendered, _, err := query.RenderParamsJSON(h.ctx, request.Search, request.Params)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	search, err := decodeSearch(rendered)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	compiled, err := esdsl.Compile(esdsl.CompileRequest{
-		Search: request.Search,
+		Search: search,
 		Params: compileParamBindings(request.Params, request.Roles),
+		// A profile templates its params into the provider options and the
+		// connection as well as the specification, and only the specification is
+		// previewed here. Whether every declared param is referenced is therefore
+		// a question this route cannot answer — execution, which sees the whole
+		// profile, is where an unreferenced param is reported.
+		Referenced: suppliedParamNames(request.Params),
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
@@ -59,6 +78,123 @@ func (h *connectionBrowserHandler) serveCompile(w http.ResponseWriter, r *http.R
 		return
 	}
 	writeJSON(w, browserCompileResult{Query: dsl, Size: compiled.Size, From: compiled.From})
+}
+
+// browserValuesRequest asks what a field holds. Search scopes the answer to the
+// documents the rest of the query already narrows to — the builder sends its
+// specification with the condition being edited removed, so a half-typed value
+// never filters its own suggestions away. Absent, the whole index is asked.
+type browserValuesRequest struct {
+	Index  string            `json:"index"`
+	Field  string            `json:"field"`
+	Query  string            `json:"q,omitempty"`
+	Limit  int               `json:"limit,omitempty"`
+	Search json.RawMessage   `json:"search,omitempty"`
+	Params map[string]any    `json:"params,omitempty"`
+	Roles  map[string]string `json:"roles,omitempty"`
+}
+
+type browserValuesResult struct {
+	Values []opensearch.Value `json:"values"`
+	Total  int                `json:"total"`
+	Scoped bool               `json:"scoped"`
+}
+
+// serveValues answers a field's distinct values, so an author picks what the
+// index actually holds instead of typing a value from memory.
+func (h *connectionBrowserHandler) serveValues(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
+	if conn.Type != models.ConnectionTypeOpenSearch {
+		http.Error(w, fmt.Sprintf("connection type %q has no field values to look up", conn.Type), http.StatusBadRequest)
+		return
+	}
+	var request browserValuesRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "decode value lookup: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if request.Index == "" {
+		http.Error(w, "OpenSearch index is required", http.StatusBadRequest)
+		return
+	}
+	if request.Field == "" {
+		http.Error(w, "field is required", http.StatusBadRequest)
+		return
+	}
+
+	var body map[string]any
+	if len(request.Search) > 0 {
+		rendered, _, err := query.RenderParamsJSON(h.ctx, request.Search, request.Params)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		search, err := decodeSearch(rendered)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		compiled, err := esdsl.Compile(esdsl.CompileRequest{
+			Search: search,
+			Params: compileParamBindings(request.Params, request.Roles),
+			// The scope is the author's specification with the condition being
+			// edited removed, so a param bound only by that condition is absent
+			// from it by construction. Unused-param detection is a profile-level
+			// guardrail and would reject every lookup here — the params consumed
+			// while templating are a subset of these.
+			Referenced: suppliedParamNames(request.Params),
+		})
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		body = compiled.Body
+	}
+
+	requestCtx := h.ctx.Wrap(r.Context())
+	searcher, err := h.openSearchSearcher(requestCtx, conn)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	result, err := searcher.DistinctValues(requestCtx, opensearch.ValuesRequest{
+		Index:  request.Index,
+		Field:  request.Field,
+		Search: request.Query,
+		Limit:  request.Limit,
+		Body:   body,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, browserValuesResult{Values: result.Values, Total: result.Total, Scoped: body != nil})
+}
+
+// decodeSearch reads a specification strictly, so a misspelt key is reported
+// rather than silently dropped. It runs after the params have been interpolated
+// into the raw document, which is why the builder previews the DSL an execution
+// would produce rather than the template text.
+func decodeSearch(raw []byte) (esdsl.Search, error) {
+	var search esdsl.Search
+	if len(raw) == 0 {
+		return search, nil
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&search); err != nil {
+		return search, fmt.Errorf("decode search specification: %w", err)
+	}
+	return search, nil
+}
+
+func suppliedParamNames(params map[string]any) []string {
+	names := make([]string, 0, len(params))
+	for name := range params {
+		names = append(names, name)
+	}
+	return names
 }
 
 func compileParamBindings(params map[string]any, roles map[string]string) []esdsl.ParamBinding {

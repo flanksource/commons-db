@@ -6,12 +6,10 @@
  */
 
 import {
-  Button,
   Combobox,
   type JsonSchemaProperty,
   type PostExtension,
 } from "@flanksource/clicky-ui";
-import { UiCode2 } from "@flanksource/clicky-ui/icons";
 import {
   browserBaseUrl,
   savedConnectionID,
@@ -25,6 +23,11 @@ import {
   updateAt,
   type EsSearch,
 } from "./esQueryBuilderModel";
+import {
+  makeFieldValueLookup,
+  valueLookupField,
+  type FieldValuesSource,
+} from "./esFieldValues";
 import { EsQueryClauseGroup } from "./esQueryClauseGroup";
 import type {
   EsQueryContext,
@@ -43,7 +46,8 @@ import {
   type EsCompilation,
 } from "./esQueryPreview";
 import { EsQuerySortEditor } from "./esQuerySortEditor";
-import type { ParamDraft, ProfileDraft } from "./profileBuilderWorkspace";
+import type { ProfileDraft } from "./profileBuilderWorkspace";
+import type { ParamDraft } from "./profileWizardModel";
 
 export type EsQueryBuilderProps = {
   search: EsSearch;
@@ -52,9 +56,9 @@ export type EsQueryBuilderProps = {
   vocabulary: EsBuilderVocabulary;
   /** Declared profile parameters an operand can bind to. */
   params?: string[];
+  /** Where a field's own values come from; absent without a connection. */
+  values?: FieldValuesSource;
   compilation?: EsCompilation;
-  /** Offered only where the host can hold a raw query instead. */
-  onEditRawDsl?: () => void;
   className?: string;
 };
 
@@ -64,12 +68,29 @@ export function EsQueryBuilder({
   fields,
   vocabulary,
   params = [],
+  values,
   compilation,
-  onEditRawDsl,
   className,
 }: EsQueryBuilderProps) {
   const root = search.query ?? emptyGroup();
-  const context: EsQueryContext = { fields, vocabulary, params };
+  const context: EsQueryContext = {
+    fields,
+    vocabulary,
+    params,
+    // The builder owns the tree, so it — not the host — decides what a lookup is
+    // scoped by: the query without the row being edited. Leaving that row in
+    // would filter the suggestions by the half-typed value they are meant to
+    // complete.
+    ...(values
+      ? {
+          values: ({ path, field }) => {
+            const target = valueLookupField(fields, field);
+            if (!target) return undefined;
+            return values({ field: target, search: { ...search, query: removeAt(root, path) } });
+          },
+        }
+      : {}),
+  };
   const actions: EsQueryTreeActions = {
     update: (path, update) =>
       onChange({ ...search, query: updateAt(root, path, update) }),
@@ -123,13 +144,6 @@ export function EsQueryBuilder({
         onChange={(patch) => onChange({ ...search, ...patch })}
       />
       {compilation ? <EsQueryPreview compilation={compilation} /> : null}
-      {onEditRawDsl ? (
-        <div>
-          <Button type="button" variant="outline" size="sm" onClick={onEditRawDsl}>
-            <UiCode2 className="text-xs" /> Edit raw DSL
-          </Button>
-        </div>
-      ) : null}
     </div>
   );
 }
@@ -150,6 +164,21 @@ export function paramRoles(
     if (param.name && param.role) roles[param.name] = param.role;
   }
   return roles;
+}
+
+/**
+ * defaultParamValues is what the declared parameters resolve to before anyone
+ * filters. The compiler needs them to bind a {param:…} operand and to
+ * interpolate a {{.params.…}} one, so the preview shows the DSL a run produces.
+ */
+export function defaultParamValues(
+  params: ParamDraft[] | undefined,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    (params ?? [])
+      .filter((param) => param.name && param.default !== undefined)
+      .map((param) => [param.name as string, param.default]),
+  );
 }
 
 /**
@@ -205,12 +234,16 @@ function EsQueryBuilderField({
     database: "",
     target,
   });
+  const roles = paramRoles(rootValue.params);
+  const params = defaultParamValues(rootValue.params);
   const compilation = useCompiledSearch({
     baseUrl,
     search,
-    roles: paramRoles(rootValue.params),
+    params,
+    roles,
     enabled: baseUrl !== "",
   });
+  const values = makeFieldValueLookup({ baseUrl, index: target, params, roles });
 
   return (
     <EsQueryBuilder
@@ -219,6 +252,7 @@ function EsQueryBuilderField({
       fields={esQueryFields(inspection.completion)}
       vocabulary={esBuilderVocabulary({ properties: { search: schema } })}
       params={paramNames(rootValue.params)}
+      {...(values ? { values } : {})}
       compilation={compilation}
     />
   );

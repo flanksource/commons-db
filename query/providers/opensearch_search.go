@@ -13,6 +13,20 @@ import (
 // openSearchScrollBatch caps how many hits one scroll page fetches.
 const openSearchScrollBatch = 1000
 
+// openSearchResultWindow is index.max_result_window's default: the most hits a
+// single search may return before OpenSearch rejects it and points at the
+// scroll API. An index may raise it, so this is the safe assumption rather than
+// the truth about any one index.
+const openSearchResultWindow = 10000
+
+// openSearchScrolls decides how a bounded read is issued. A bound says how far
+// to read, not how to read it: a page fits in one search, while an export
+// ceiling is far past the result window and can only be reached by scrolling.
+// An unbounded read has no idea how far it goes, so it scrolls too.
+func openSearchScrolls(maxRows int) bool {
+	return maxRows <= 0 || maxRows > openSearchResultWindow
+}
+
 // openSearchRequest is a search body plus the hit cap that must travel beside
 // it. The searcher sends size as a URL parameter, so a body size would be
 // silently overridden — the two are kept apart all the way to the wire.
@@ -63,10 +77,11 @@ func compileOpenSearchSearch(req query.ProviderRequest, opts opensearchOptions, 
 		}
 	}
 	compiled, err := esdsl.Compile(esdsl.CompileRequest{
-		Search:  search,
-		Params:  openSearchParamBindings(req),
-		Scroll:  scroll,
-		MaxRows: req.MaxRows,
+		Search:     search,
+		Params:     openSearchParamBindings(req),
+		Referenced: req.TemplatedParams,
+		Scroll:     scroll,
+		MaxRows:    req.MaxRows,
 	})
 	if err != nil {
 		return openSearchRequest{}, err

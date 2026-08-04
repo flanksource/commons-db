@@ -6,8 +6,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/flanksource/gomplate/v3"
-
 	"github.com/flanksource/commons-db/context"
 )
 
@@ -52,19 +50,13 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 		return nil, err
 	}
 
-	query, err := renderQuery(ctx, p.Query, resolved)
+	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	req.Filters = filters
 
-	rows, err := provider.Execute(ctx, ProviderRequest{
-		Connection: p.Provider.Connection,
-		Query:      query,
-		Options:    p.Provider.Options,
-		Params:     resolved,
-		ParamRoles: paramRoles(p.Params),
-		Filters:    filters,
-	})
+	rows, err := provider.Execute(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
 	}
@@ -76,7 +68,7 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	result := &Result{Profile: p.Name, Rows: rows}
 
 	for name, sub := range p.Context {
-		subRows, err := executeSubQuery(ctx, sub, resolved, paramRoles(p.Params))
+		subRows, err := executeSubQuery(ctx, sub, p.Params, resolved)
 		if err != nil {
 			return nil, fmt.Errorf("profile %q: context %q failed: %w", p.Name, name, err)
 		}
@@ -155,31 +147,44 @@ func toFloat(v any) (float64, bool) {
 }
 
 // executeSubQuery runs a context sub-query against the parent profile's already
-// resolved params, which carry the parent's roles with them.
-func executeSubQuery(ctx context.Context, sub SubQuery, params map[string]any, roles map[string]ParamRole) ([]Row, error) {
+// resolved params, which carry the parent's declarations with them.
+func executeSubQuery(ctx context.Context, sub SubQuery, defs []ParamDef, params map[string]any) ([]Row, error) {
 	provider, err := GetProvider(sub.Provider.Type)
 	if err != nil {
 		return nil, err
 	}
-	query, err := renderQuery(ctx, sub.Query, params)
+	req, err := buildProviderRequest(ctx, sub.Provider, sub.Query, defs, params)
 	if err != nil {
 		return nil, err
 	}
-	return provider.Execute(ctx, ProviderRequest{
-		Connection: sub.Provider.Connection,
-		Query:      query,
-		Options:    sub.Provider.Options,
-		Params:     params,
-		ParamRoles: roles,
-	})
+	return provider.Execute(ctx, req)
 }
 
-// renderQuery templates the query with the resolved params under `params`. It is
-// a no-op when the query contains no template delimiters, so plain queries pass
-// through untouched.
-func renderQuery(ctx context.Context, query string, params map[string]any) (string, error) {
-	if !strings.Contains(query, "{{") && !strings.Contains(query, "$(") {
-		return query, nil
+// buildProviderRequest renders everything the provider is handed — the query,
+// the provider options and the connection — against the resolved params, so
+// every provider type supports the same `{{.params.x}}` / `$(.params.x)`
+// interpolation instead of only those driven by a query string. Callers set
+// Filters and MaxRows on the result.
+func buildProviderRequest(ctx context.Context, cfg ProviderConfig, rawQuery string, defs []ParamDef, resolved map[string]any) (ProviderRequest, error) {
+	template := newParamTemplate(ctx, resolved)
+	query, err := template.render("query", rawQuery)
+	if err != nil {
+		return ProviderRequest{}, err
 	}
-	return ctx.RunTemplate(gomplate.Template{Template: query}, map[string]any{"params": params})
+	options, err := template.renderOptions(cfg.Options)
+	if err != nil {
+		return ProviderRequest{}, err
+	}
+	connection, err := template.render("provider.connection", cfg.Connection)
+	if err != nil {
+		return ProviderRequest{}, err
+	}
+	return ProviderRequest{
+		Connection:      connection,
+		Query:           query,
+		Options:         options,
+		Params:          resolved,
+		ParamRoles:      paramRoles(defs),
+		TemplatedParams: template.usedParams(),
+	}, nil
 }

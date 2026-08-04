@@ -78,19 +78,14 @@ func executeRows(ctx context.Context, p Profile, maxRows int, params ...map[stri
 	if !ok {
 		return nil, fmt.Errorf("provider %q does not support streaming rows", p.Provider.Type)
 	}
-	rendered, err := renderQuery(ctx, p.Query, resolved)
+	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	rows, err := streaming.OpenRows(ctx, ProviderRequest{
-		Connection: p.Provider.Connection,
-		Query:      rendered,
-		Options:    p.Provider.Options,
-		Params:     resolved,
-		ParamRoles: paramRoles(p.Params),
-		Filters:    filters,
-		MaxRows:    maxRows,
-	})
+	req.Filters = filters
+	req.MaxRows = maxRows
+
+	rows, err := streaming.OpenRows(ctx, req)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
 	}

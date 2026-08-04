@@ -20,12 +20,25 @@ export type EsCompilation = {
   loading: boolean;
 };
 
-/** compileRequestBody is what POST /compile takes, with the empty parts left off. */
-export function compileRequestBody(input: {
+/**
+ * EsCompileInput is the specification together with the parameter values it
+ * compiles against: the server binds a {param:…} operand from them and
+ * interpolates a {{.params.…}} one, so both need real values to preview.
+ */
+export type EsCompileInput = {
   search: EsSearch;
   params?: Record<string, unknown>;
   roles?: Record<string, string>;
-}): string {
+};
+
+export type EsCompileRequest = EsCompileInput & {
+  baseUrl: string;
+  enabled?: boolean;
+  debounceMs?: number;
+};
+
+/** compileRequestBody is what POST /compile takes, with the empty parts left off. */
+export function compileRequestBody(input: EsCompileInput): string {
   const { search, params, roles } = input;
   return JSON.stringify({
     search,
@@ -44,14 +57,7 @@ export function errorMessage(error: unknown): string | undefined {
  * debounced rather than the request, so an edit that lands back on a body
  * already compiled costs nothing.
  */
-export function useCompiledSearch(input: {
-  baseUrl: string;
-  search: EsSearch;
-  params?: Record<string, unknown>;
-  roles?: Record<string, string>;
-  enabled?: boolean;
-  debounceMs?: number;
-}): EsCompilation {
+export function useCompiledSearch(input: EsCompileRequest): EsCompilation {
   const { baseUrl, enabled = true, debounceMs = 250 } = input;
   const body = compileRequestBody(input);
   const [settled, setSettled] = useState(body);

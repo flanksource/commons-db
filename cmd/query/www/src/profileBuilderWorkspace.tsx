@@ -16,15 +16,17 @@ import {
   mergeProviderOptions,
   useInspection,
   type BrowserDescriptor,
+  type ProfileRowLimits,
 } from "./connectionBrowserModel";
 import { ConnectionQueryWorkspace } from "./connectionQueryWorkspace";
-import { paramNames, paramRoles } from "./esQueryBuilder";
+import { defaultParamValues, paramNames, paramRoles } from "./esQueryBuilder";
 import type { EsSearch } from "./esQueryBuilderModel";
 import {
   ColumnPicker,
   mapTimestampColumn,
   type ProfileColumn,
 } from "./profileColumnPicker";
+import { withProfileLimits, type ParamDraft } from "./profileWizardModel";
 
 export type ProfileProvider = {
   type?: string;
@@ -33,24 +35,14 @@ export type ProfileProvider = {
   options?: Record<string, unknown>;
 };
 
-export type ParamDraft = {
-  name?: string;
-  label?: string;
-  type?: string;
-  /** filter, limit, offset, time-from or time-to; empty behaves as filter. */
-  role?: string;
-  default?: unknown;
-  options?: string[];
-  required?: boolean;
-  description?: string;
-};
-
 export type ProfileDraft = Record<string, unknown> & {
   profile?: string;
   query?: string;
   provider?: ProfileProvider;
   params?: ParamDraft[];
   columns?: ProfileColumn[];
+  /** The row caps this profile sets for itself; unset ones take their default. */
+  limits?: ProfileRowLimits;
 };
 
 type SampleResult = QueryBrowserResult & {
@@ -108,6 +100,9 @@ export function ProfileBuilderWorkspace({
       "",
   );
   const [selectedDatabase, setSelectedDatabase] = useState("");
+  const [limits, setLimits] = useState<ProfileRowLimits | undefined>(
+    () => rootValue.limits,
+  );
 
   useEffect(() => {
     if (!query && descriptor.data?.defaultQuery) {
@@ -198,15 +193,19 @@ export function ProfileBuilderWorkspace({
       }
       columns = chosen;
     }
-    onApply({
-      ...rootValue,
-      query,
-      provider: {
-        ...(rootValue.provider ?? {}),
-        options: effectiveOptions(liveOptions),
+    const next: ProfileDraft = withProfileLimits(
+      {
+        ...rootValue,
+        query,
+        provider: {
+          ...(rootValue.provider ?? {}),
+          options: effectiveOptions(liveOptions),
+        },
+        ...(mode === "query" ? {} : { columns }),
       },
-      ...(mode === "query" ? {} : { columns }),
-    });
+      limits,
+    );
+    onApply(next);
     onClose();
   };
 
@@ -295,7 +294,10 @@ export function ProfileBuilderWorkspace({
               setSearch(transition.search);
               setQuery(transition.query);
             }}
+            {...(limits ? { limits } : {})}
+            onLimitsChange={setLimits}
             params={paramNames(rootValue.params)}
+            paramValues={sampleParams}
             paramRoles={paramRoles(rootValue.params)}
             compileBaseUrl={baseUrl}
             className="h-full min-h-0"
@@ -407,14 +409,6 @@ function sampleParamSchema(params: ParamDraft[]): JsonSchemaObject {
     properties,
     ...(required.length ? { required } : {}),
   };
-}
-
-function defaultParamValues(params: ParamDraft[]): Record<string, unknown> {
-  return Object.fromEntries(
-    params
-      .filter((param) => param.name && param.default !== undefined)
-      .map((param) => [param.name as string, param.default]),
-  );
 }
 
 function errorMessage(error: unknown, fallback: string): string {

@@ -134,6 +134,39 @@ var _ = Describe("opentelemetry provider", func() {
 			}}},
 		}}))
 	})
+
+	It("counts a param interpolated into the specification as referenced", func() {
+		var requestBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+		}))
+		defer server.Close()
+
+		database := traceConnections(server.URL)
+		_, err := query.Execute(context.New().WithDB(database, nil), query.Profile{
+			Name: "jms",
+			Provider: query.ProviderConfig{
+				Type: "opentelemetry", Connection: "connection://traces",
+				Options: map[string]any{
+					"format": "jaeger", "index": "jaeger-span*", "dateField": "startTimeMillis",
+					"search": map[string]any{"query": map[string]any{
+						"op": "term", "field": "process.serviceName", "value": "{{.params.country}}-api",
+					}},
+				},
+			},
+			Params: []query.ParamDef{{Name: "country", Default: "kenya"}},
+		}, nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(requestBody["query"]).To(Equal(
+			map[string]any{"term": map[string]any{"process.serviceName": "kenya-api"}}))
+	})
 })
 
 var _ = Describe("opensearch column filtering", func() {

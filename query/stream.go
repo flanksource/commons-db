@@ -63,10 +63,11 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 	if !ok {
 		return nil, fmt.Errorf("profile %q: provider %q does not support streaming", p.Name, p.Provider.Type)
 	}
-	rendered, err := renderQuery(ctx, p.Query, resolved)
+	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	req.Filters = filters
 
 	session := newRegisteredSession(reg, p, resolved, reg.ClampEvents(p.Trace.EventLimit()))
 	if err := reg.Add(session); err != nil {
@@ -75,14 +76,7 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 	runCtx, cancel := ctx.WithTimeout(reg.ClampDuration(p.Trace.DurationLimit()))
 	session.setCancel(cancel)
 
-	go runTrace(runCtx, cancel, sp, session, p, ProviderRequest{
-		Connection: p.Provider.Connection,
-		Query:      rendered,
-		Options:    p.Provider.Options,
-		Params:     resolved,
-		ParamRoles: paramRoles(p.Params),
-		Filters:    filters,
-	})
+	go runTrace(runCtx, cancel, sp, session, p, req)
 	return session, nil
 }
 

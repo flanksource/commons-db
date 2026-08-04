@@ -12,8 +12,6 @@ import (
 	"github.com/flanksource/commons-db/context"
 )
 
-const DefaultSampleLimit = 100
-
 // SampleResult is the raw, pre-column/pre-processor output used by profile
 // authoring tools. Columns are inferred only from top-level row keys.
 type SampleResult struct {
@@ -41,11 +39,14 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	rendered, err := renderQuery(ctx, p.Query, resolved)
+	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	if err := validateSampleReadOnly(p.Provider.Type, rendered, p.Provider.Options); err != nil {
+	// The rendered query and options are what run, so they are what must be
+	// proven read-only — a templated options.method would otherwise slip a
+	// non-GET request past the check.
+	if err := validateSampleReadOnly(p.Provider.Type, req.Query, req.Options); err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	provider, err := GetProvider(p.Provider.Type)
@@ -53,13 +54,7 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 		return nil, err
 	}
 	started := time.Now()
-	rows, err := provider.Execute(ctx, ProviderRequest{
-		Connection: p.Provider.Connection,
-		Query:      rendered,
-		Options:    p.Provider.Options,
-		Params:     resolved,
-		ParamRoles: paramRoles(p.Params),
-	})
+	rows, err := provider.Execute(ctx, req)
 	duration := time.Since(started)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
@@ -80,7 +75,7 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	return &SampleResult{
 		Rows:          rows,
 		Columns:       InferSampleColumns(rows),
-		RenderedQuery: rendered,
+		RenderedQuery: req.Query,
 		Truncated:     truncated,
 		DurationMS:    float64(duration) / float64(time.Millisecond),
 	}, nil

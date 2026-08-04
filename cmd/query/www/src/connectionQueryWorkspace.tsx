@@ -15,13 +15,16 @@ import {
   type QueryBrowserResult,
   type QueryBrowserResultContext,
 } from "@flanksource/clicky-ui";
-import { useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { CatalogTree } from "./catalogTree";
-import type {
-  BrowserDescriptor,
-  CatalogNode,
-  Inspection,
+import {
+  withTarget,
+  type BrowserDescriptor,
+  type CatalogNode,
+  type Inspection,
+  type ProfileRowLimits,
 } from "./connectionBrowserModel";
+import { makeFieldValueLookup } from "./esFieldValues";
 import { EsQueryBuilder, esQueryFields } from "./esQueryBuilder";
 import {
   toBuilderMode,
@@ -35,8 +38,10 @@ import {
 } from "./esQueryOperators";
 import { useCompiledSearch } from "./esQueryPreview";
 import { PrometheusResults } from "./prometheusResults";
+import { QueryRowLimits } from "./queryRowLimits";
+import { QueryTargetPicker } from "./queryTargetPicker";
 
-export type NavigatorTab = { id: "catalog" | "filters"; label: string };
+export type NavigatorTab = { id: "catalog" | "form" | "json"; label: string };
 
 /**
  * A source supports the builder when the server described a structured search on
@@ -49,17 +54,47 @@ export function supportsQueryBuilder(descriptor: BrowserDescriptor): boolean {
 }
 
 /**
- * navigatorTabs is what the left pane offers. A source with neither a catalog
- * nor a structured search has no navigator at all.
+ * navigatorTabs is what the left pane offers. Where the source has a structured
+ * search, the two ways of authoring one — the form and the raw DSL — are tabs
+ * rather than a one-way door: they are the same query, and the tab says which
+ * of the two is stored. A source that picks one flat target has a combobox
+ * pinned above the tabs instead of a catalog tree — its targets are a list of
+ * index names, and a list is not worth navigating.
  */
 export function navigatorTabs(input: {
   descriptor: BrowserDescriptor;
   builder: boolean;
 }): NavigatorTab[] {
   const tabs: NavigatorTab[] = [];
-  if (input.descriptor.catalog) tabs.push({ id: "catalog", label: "Catalog" });
-  if (input.builder) tabs.push({ id: "filters", label: "Filters" });
+  if (input.descriptor.catalog && !input.descriptor.targetLabel) {
+    tabs.push({ id: "catalog", label: "Catalog" });
+  }
+  if (input.builder) {
+    tabs.push({ id: "form", label: "Form" }, { id: "json", label: "JSON" });
+  }
   return tabs;
+}
+
+/**
+ * initialNavigatorTab opens on the form: filters are what the builder is for,
+ * so it is where authoring starts rather than something to opt into. The one
+ * thing that overrides it is a raw query already worth preserving — and the
+ * starter query the descriptor supplies is not one, since nobody wrote it.
+ */
+export function initialNavigatorTab(input: {
+  tabs: NavigatorTab[];
+  search: EsSearch | undefined;
+  query: string;
+  defaultQuery?: string;
+}): string | undefined {
+  const has = (id: NavigatorTab["id"]) =>
+    input.tabs.some((tab) => tab.id === id);
+  if (!has("form")) return input.tabs[0]?.id;
+  if (input.search) return "form";
+  const authored = input.query.trim();
+  return authored && authored !== (input.defaultQuery ?? "").trim()
+    ? "json"
+    : "form";
 }
 
 export type ConnectionQueryWorkspaceProps = {
@@ -86,8 +121,22 @@ export type ConnectionQueryWorkspaceProps = {
    * server rejects.
    */
   onSearchChange?: (transition: QueryModeTransition) => void;
+  /**
+   * The row caps the edited profile sets for itself. They are profile settings,
+   * not provider options, so they are stored beside the query rather than
+   * through `onOptionsChange`. A host that edits no profile — the connection
+   * browser — passes neither, and the caps are then not offered at all.
+   */
+  limits?: ProfileRowLimits;
+  onLimitsChange?: (limits: ProfileRowLimits | undefined) => void;
   /** Declared profile parameter names an operand can bind to. */
   params?: string[];
+  /**
+   * What those parameters currently resolve to. The server binds a {param:…}
+   * operand from them and interpolates a {{.params.…}} one, so without values
+   * the preview shows template text — or the compiler's refusal to guess.
+   */
+  paramValues?: Record<string, unknown>;
   /** Those parameters' roles, so the compiled preview folds them as a run would. */
   paramRoles?: Record<string, string>;
   /** Where POST /compile lives. Empty leaves the preview unresolved. */
@@ -111,7 +160,10 @@ export function ConnectionQueryWorkspace({
   optionsSchema,
   search,
   onSearchChange,
+  limits,
+  onLimitsChange,
   params,
+  paramValues,
   paramRoles,
   compileBaseUrl = "",
   execute,
@@ -120,14 +172,45 @@ export function ConnectionQueryWorkspace({
 }: ConnectionQueryWorkspaceProps) {
   const builder = Boolean(onSearchChange) && supportsQueryBuilder(descriptor);
   const tabs = navigatorTabs({ descriptor, builder });
-  const [tab, setTab] = useState<string>(
-    search ? "filters" : (tabs[0]?.id ?? "catalog"),
+  const [tab, setTab] = useState<string | undefined>(() =>
+    initialNavigatorTab({
+      tabs,
+      search,
+      query,
+      ...(descriptor.defaultQuery ? { defaultQuery: descriptor.defaultQuery } : {}),
+    }),
   );
+  // Picking a target has to reach the browser, which only resyncs its options
+  // when `initialOptions` changes identity. The pick is layered here rather than
+  // round-tripped through the host, so an options-form keystroke — which the
+  // host also stores — cannot resync the browser out from under the author.
+  const [picked, setPicked] = useState<Record<string, unknown>>();
+  // What the browser last reported, so a pick keeps the author's other edits.
+  const edited = useRef(options);
+  const seed = useRef(options);
+  if (seed.current !== options) {
+    seed.current = options;
+    edited.current = options;
+    if (picked) setPicked(undefined);
+  }
+  const browserOptions = picked ?? options;
+  const applyOptions = (next: Record<string, unknown>) => {
+    edited.current = next;
+    setPicked(next);
+    onOptionsChange(next);
+  };
   const compilation = useCompiledSearch({
     baseUrl: compileBaseUrl,
     search: search ?? {},
+    ...(paramValues ? { params: paramValues } : {}),
     ...(paramRoles ? { roles: paramRoles } : {}),
     enabled: Boolean(search) && compileBaseUrl !== "",
+  });
+  const values = makeFieldValueLookup({
+    baseUrl: compileBaseUrl,
+    index: String(browserOptions.index ?? ""),
+    ...(paramValues ? { params: paramValues } : {}),
+    ...(paramRoles ? { roles: paramRoles } : {}),
   });
 
   // While a specification is active the editor mirrors what it compiles to. It
@@ -135,6 +218,25 @@ export function ConnectionQueryWorkspace({
   // there is no keystroke for a compile to overwrite.
   const specMode = search !== undefined;
   const active = tabs.some((entry) => entry.id === tab) ? tab : tabs[0]?.id;
+
+  // The form tab is the specification, so being on it means holding one. A tab
+  // that stores nothing would leave the builder rendering a query it cannot
+  // edit, and this is also what makes filters the default rather than an opt-in.
+  useEffect(() => {
+    if (active === "form" && onSearchChange && search === undefined) {
+      onSearchChange(toBuilderMode());
+    }
+  }, [active, onSearchChange, search]);
+
+  // Switching tabs is the mode switch. Each mode stores its own artifact and the
+  // server rejects holding both, so leaving the form hands the raw editor the
+  // DSL the specification last compiled to and drops the specification.
+  const selectTab = (next: string) => {
+    if (next === "json" && search && onSearchChange) {
+      onSearchChange(toRawMode(search, compilation.query, query));
+    }
+    setTab(next);
+  };
 
   return (
     <QueryBrowser
@@ -144,47 +246,60 @@ export function ConnectionQueryWorkspace({
       queryLabel={descriptor.queryLabel ?? "Query"}
       initialQuery={specMode ? compilation.query : query}
       optionsSchema={optionsSchema}
-      initialOptions={options}
+      initialOptions={browserOptions}
       completion={inspection.completion}
       {...(specMode ? {} : onQueryChange ? { onQueryChange } : {})}
-      onOptionsChange={onOptionsChange}
+      onOptionsChange={(next) => {
+        edited.current = next;
+        onOptionsChange(next);
+      }}
       className={className}
       navigator={
-        tabs.length === 0 ? undefined : (
+        tabs.length === 0 && !descriptor.targetLabel ? undefined : (
           <div className="flex min-h-0 flex-col gap-2">
-            {tabs.length > 1 ? (
-              <Tabs tabs={tabs} value={active ?? ""} onChange={setTab} />
+            {descriptor.targetLabel ? (
+              <QueryTargetPicker
+                label={descriptor.targetLabel}
+                inspection={inspection}
+                value={String(browserOptions.index ?? "")}
+                onChange={(index, targetKind) =>
+                  applyOptions(withTarget(edited.current, { index, targetKind }))
+                }
+              />
             ) : null}
-            {active === "filters" && onSearchChange ? (
-              search ? (
-                <EsQueryBuilder
-                  search={search}
-                  onChange={(next) => onSearchChange({ search: next, query: "" })}
-                  fields={esQueryFields(inspection.completion)}
-                  vocabulary={esBuilderVocabulary(descriptor.optionsSchema)}
-                  {...(params ? { params } : {})}
-                  compilation={compilation}
-                  onEditRawDsl={() =>
-                    confirmSwitch(
-                      "Discard these filters and edit the compiled DSL by hand?",
-                      () =>
-                        onSearchChange(
-                          toRawMode(search, compilation.query, query),
-                        ),
-                    )
-                  }
-                />
-              ) : (
-                <StartBuilding
-                  onStart={() =>
-                    confirmSwitch(
-                      "Discard the current query and build filters?",
-                      () => onSearchChange(toBuilderMode()),
-                    )
-                  }
-                />
-              )
-            ) : (
+            {builder ? (
+              <QueryRowLimits
+                value={String(browserOptions.limit ?? "")}
+                onChange={(limit) =>
+                  applyOptions({ ...edited.current, limit })
+                }
+                {...(descriptor.rowLimits
+                  ? { defaults: descriptor.rowLimits }
+                  : {})}
+                {...(limits ? { limits } : {})}
+                {...(onLimitsChange ? { onLimitsChange } : {})}
+              />
+            ) : null}
+            {tabs.length > 1 ? (
+              <Tabs tabs={tabs} value={active ?? ""} onChange={selectTab} />
+            ) : null}
+            {active === "form" && onSearchChange && search ? (
+              <EsQueryBuilder
+                search={search}
+                onChange={(next) => onSearchChange({ search: next, query: "" })}
+                fields={esQueryFields(inspection.completion)}
+                vocabulary={esBuilderVocabulary(descriptor.optionsSchema)}
+                {...(params ? { params } : {})}
+                {...(values ? { values } : {})}
+                compilation={compilation}
+              />
+            ) : active === "json" ? (
+              <p className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
+                The {descriptor.queryLabel ?? "query"} editor holds the query.
+                Switch back to Form to build it from filters — the raw query is
+                dropped then, since only one of the two is stored.
+              </p>
+            ) : active === "catalog" ? (
               <CatalogTree
                 nodes={inspection.nodes}
                 loading={inspection.loading}
@@ -194,7 +309,7 @@ export function ConnectionQueryWorkspace({
                 onDatabaseChange={onDatabaseChange}
                 onSelect={onCatalogSelect}
               />
-            )}
+            ) : null}
           </div>
         )
       }
@@ -207,34 +322,6 @@ export function ConnectionQueryWorkspace({
       }
       renderResults={renderResults ?? descriptorResultView(descriptor)}
     />
-  );
-}
-
-/** Switching authoring modes drops the other one's work, so it is confirmed. */
-function confirmSwitch(question: string, apply: () => void) {
-  if (window.confirm(question)) apply();
-}
-
-/**
- * Starting the builder discards the raw query rather than parsing it — the
- * specification is the artifact from here on, and holding both is an authoring
- * error the server rejects.
- */
-function StartBuilding({ onStart }: { onStart: () => void }) {
-  return (
-    <div className="rounded-md border border-dashed p-3 text-xs text-muted-foreground">
-      <p>
-        Build filters structurally instead of writing Query DSL. The query below
-        becomes a compiled preview and is no longer stored.
-      </p>
-      <button
-        type="button"
-        className="mt-2 rounded border px-2 py-1 font-medium text-foreground hover:bg-muted"
-        onClick={onStart}
-      >
-        Build filters
-      </button>
-    </div>
   );
 }
 

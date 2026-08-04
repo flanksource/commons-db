@@ -109,6 +109,45 @@ func TestSampleRejectsUnsafeRequests(t *testing.T) {
 	}
 }
 
+// The read-only check must run on the rendered request: a param that reaches
+// the query or the options through a template is otherwise invisible to it.
+func TestSampleRejectsUnsafeTemplatedRequests(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile Profile
+		params  map[string]any
+	}{
+		{
+			name: "http-method",
+			profile: Profile{
+				Name:     "templated-method",
+				Query:    "/jobs",
+				Provider: ProviderConfig{Type: "http", Options: map[string]any{"method": "{{.params.m}}"}},
+				Params:   []ParamDef{{Name: "m"}},
+			},
+			params: map[string]any{"m": "POST"},
+		},
+		{
+			name: "sql-statement",
+			profile: Profile{
+				Name:     "templated-sql",
+				Query:    "SELECT * FROM jobs; {{.params.tail}}",
+				Provider: ProviderConfig{Type: "postgres"},
+				Params:   []ParamDef{{Name: "tail"}},
+			},
+			params: map[string]any{"tail": "DELETE FROM jobs"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Sample(dbcontext.New(), tt.profile, tt.params, 100)
+			if err == nil || !strings.Contains(err.Error(), "read-only") {
+				t.Fatalf("expected read-only rejection, got %v", err)
+			}
+		})
+	}
+}
+
 func TestReadOnlySQLIgnoresQuotedKeywordsAndTrailingSemicolon(t *testing.T) {
 	for _, statement := range []string{
 		"SELECT 'DELETE; DROP' AS message;",

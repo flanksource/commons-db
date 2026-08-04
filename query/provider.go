@@ -50,6 +50,12 @@ type ProviderRequest struct {
 	// backend's native constructs instead of treating them as plain filters.
 	ParamRoles map[string]ParamRole
 
+	// TemplatedParams names the params consumed while templating Query, Options
+	// or Connection. A provider with its own structural param binding counts
+	// them as referenced, so a param interpolated into the options is not
+	// reported as unused.
+	TemplatedParams []string
+
 	// Filters contains native include/exclude clauses bound to profile columns.
 	Filters []ColumnFilterValue
 

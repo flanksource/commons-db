@@ -96,6 +96,9 @@ func columnFilterField(column ColumnDef) (string, bool, error) {
 		}
 		return field, true, nil
 	}
+	if column.Source != "" {
+		return column.Source, true, nil
+	}
 	expression := strings.TrimSpace(column.CEL)
 	if expression == "" {
 		return column.Name, column.Name != "", nil
@@ -227,18 +230,12 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 	if !ok {
 		return nil, 0, fmt.Errorf("provider %q does not support column filter lookups", profile.Provider.Type)
 	}
-	rendered, err := renderQuery(ctx, profile.Query, resolved)
+	req, err := buildProviderRequest(ctx, profile.Provider, profile.Query, profile.Params, resolved)
 	if err != nil {
 		return nil, 0, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
-	return lookup.LookupFilterValues(ctx, ProviderRequest{
-		Connection: profile.Provider.Connection,
-		Query:      rendered,
-		Options:    profile.Provider.Options,
-		Params:     resolved,
-		ParamRoles: paramRoles(profile.Params),
-		Filters:    siblings,
-	}, *binding, search, limit)
+	req.Filters = siblings
+	return lookup.LookupFilterValues(ctx, req, *binding, search, limit)
 }
 
 func parseColumnFilterSelection(value any) ([]string, []string, error) {

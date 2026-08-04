@@ -39,9 +39,13 @@ type binder struct {
 
 // bindSearch resolves every parameter reference in the specification, folds
 // role-carrying parameters into native constructs, and reports the resolved
-// size and from. A nil root means "match every document".
-func bindSearch(search Search, params []ParamBinding) (root *bound, size int, from int, err error) {
+// size and from. A nil root means "match every document". referenced names
+// parameters already consumed by the caller, which count as used here.
+func bindSearch(search Search, params []ParamBinding, referenced []string) (root *bound, size int, from int, err error) {
 	b := &binder{params: make(map[string]ParamBinding, len(params)), used: map[string]bool{}}
+	for _, name := range referenced {
+		b.used[name] = true
+	}
 	for _, param := range params {
 		if param.Name == "" {
 			return nil, 0, 0, fmt.Errorf("parameter binding is missing a name")
@@ -172,7 +176,9 @@ func (b *binder) assertAllUsed() error {
 		if param.Role != "" && param.Role != RoleFilter {
 			continue
 		}
-		return fmt.Errorf("param %q is not referenced by the search specification", name)
+		return fmt.Errorf(
+			"param %q is not referenced by the search specification: bind it as {\"param\":%q} or interpolate it as {{.params.%s}}",
+			name, name, name)
 	}
 	return nil
 }

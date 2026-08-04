@@ -1,5 +1,8 @@
+import type { ProfileRowLimits } from "./connectionBrowserModel";
+
 export type ProfileColumn = {
   name: string;
+  source?: string;
   label?: string;
   type?: string;
   kind?: string;
@@ -18,13 +21,45 @@ export type ProfileProvider = {
   [key: string]: unknown;
 };
 
+export type ParamDraft = {
+  name?: string;
+  label?: string;
+  type?: string;
+  /** filter, limit, offset, time-from or time-to; empty behaves as filter. */
+  role?: string;
+  default?: unknown;
+  options?: string[];
+  required?: boolean;
+  description?: string;
+};
+
 export type ProfileWizardDraft = Record<string, unknown> & {
   namespace?: string;
   profile?: string;
   provider?: ProfileProvider;
   query?: string;
   columns?: ProfileColumn[];
+  /** The inputs a run binds — by name in the query, the provider options or the
+   *  connection. The query workspace previews against their defaults. */
+  params?: ParamDraft[];
+  /** The row caps this profile sets for itself; unset ones take their default. */
+  limits?: ProfileRowLimits;
 };
+
+/**
+ * A profile that caps nothing carries no block at all, so the defaults are what
+ * it inherits rather than what it froze at the moment it was edited. Both draft
+ * hosts write the caps through this, so neither can leave an empty map behind.
+ */
+export function withProfileLimits<T extends ProfileWizardDraft>(
+  draft: T,
+  limits: ProfileRowLimits | undefined,
+): T {
+  const next = { ...draft };
+  if (limits) next.limits = limits;
+  else delete next.limits;
+  return next;
+}
 
 export type ProfileFieldFilter = {
   query: string;
@@ -76,6 +111,41 @@ export function filterProfileFields(
   });
 }
 
+/**
+ * Every field the editors can show, in discovered order but each in its
+ * configured form. A discovered field is a snapshot of what the source reported
+ * — the configured one carries the user's edits, so it is the only version safe
+ * to render into a control or to patch on top of. Fields that exist only in the
+ * configuration (hand-added, or gone from a later sample) follow.
+ */
+export function availableProfileFields(
+  discovered: ProfileColumn[],
+  configured: ProfileColumn[],
+): ProfileColumn[] {
+  const configuredByName = new Map(
+    configured.map((field) => [field.name, field]),
+  );
+  const configuredBySource = new Map(
+    configured
+      .filter((field) => field.source)
+      .map((field) => [field.source as string, field]),
+  );
+  const discoveredNames = new Set(discovered.map((field) => field.name));
+  return [
+    ...discovered.map(
+      (field) =>
+        configuredByName.get(field.name) ??
+        configuredBySource.get(field.name) ??
+        field,
+    ),
+    ...configured.filter(
+      (field) =>
+        !discoveredNames.has(field.name) &&
+        !discoveredNames.has(field.source ?? ""),
+    ),
+  ];
+}
+
 export function applyVisibleFieldSelection(
   discovered: ProfileColumn[],
   configured: ProfileColumn[],
@@ -108,6 +178,17 @@ export function patchProfileField(
       ([, value]) => value !== undefined,
     ),
   ) as ProfileColumn;
+}
+
+export function renameProfileField(
+  field: ProfileColumn,
+  name: string,
+): ProfileColumn {
+  const source = field.source ?? (field.cel ? undefined : field.name);
+  return patchProfileField(field, {
+    name,
+    source: source === name ? undefined : source,
+  });
 }
 
 export function providerTypeFromConnectionLabel(label: string): string | null {
