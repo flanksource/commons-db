@@ -48,11 +48,21 @@ func ProfileSource() Schema {
 		"properties": Schema{
 			"name": strProp("Name",
 				"Parameter key, referenced as {{.params.<name>}} in the query, in any provider option, or in the connection"),
-			"label":       strProp("Label", ""),
-			"type":        Schema{"type": "string", "title": "Type", "enum": []string{"string", "number", "boolean", "date", "enum"}},
+			"label": strProp("Label", ""),
+			"type": Schema{
+				"type": "string", "title": "Type",
+				"enum":          []string{"string", "number", "boolean", "date", "enum", "list"},
+				"x-enum-labels": map[string]string{"list": "List (multi-select)"},
+				"description":   "A list accepts several values at once; bind it to a field to allow excluding them",
+			},
 			"role":        Schema{"type": "string", "title": "Role", "enum": []string{"filter", "limit", "offset", "time-from", "time-to"}, "description": "Map this parameter to filtering, paging, or a date-range edge"},
 			"default":     Schema{"title": "Default"},
-			"options":     Schema{"type": "array", "title": "Options", "items": Schema{"type": "string"}},
+			"options": Schema{
+				"type": "array", "title": "Options", "items": Schema{"type": "string"},
+				"description": "Allowed values; leave empty on a bound list to offer the backend's own distinct values",
+			},
+			"field": strProp("Field",
+				"Backend field this parameter filters on; enables excluding a value and requires an OpenSearch or OpenTelemetry provider"),
 			"required":    Schema{"type": "boolean", "title": "Required"},
 			"description": strProp("Description", ""),
 			"template":    strProp("Template", "Value rewrite; {value} is the supplied value"),
@@ -320,11 +330,19 @@ func paramSchema(def query.ParamDef) Schema {
 	case query.ParamTypeDate:
 		s["type"] = "string"
 		s["format"] = "date-time"
+	case query.ParamTypeList:
+		s["type"] = "array"
+		s["items"] = Schema{"type": "string"}
 	default:
 		s["type"] = "string"
 	}
 	if len(def.Options) > 0 {
-		s["enum"] = def.Options
+		// A list constrains its elements, not the selection as a whole.
+		if def.Type == query.ParamTypeList {
+			s["items"] = Schema{"type": "string", "enum": def.Options}
+		} else {
+			s["enum"] = def.Options
+		}
 	}
 	if def.Default != nil {
 		s["default"] = def.Default

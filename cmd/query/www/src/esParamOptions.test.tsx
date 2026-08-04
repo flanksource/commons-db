@@ -89,15 +89,24 @@ describe("esParamOptionsFormExtensions", () => {
     expect(html).toMatch(/role="combobox"[^>]*aria-label="Options"/);
   });
 
-  it("offers no picker for a parameter no condition binds", () => {
-    expect(renderExtension({ name: "unbound", type: "enum" })).toBe("fields");
+  it("also offers the option list for a list parameter, not only an enum", () => {
+    const html = renderExtension({ name: "service", type: "list" });
+    expect(html).toContain("Options from service.name");
   });
 
-  it("offers no picker without a saved connection to ask", () => {
-    expect(
-      renderExtension({ name: "service", type: "enum" }, {
-        provider: { options: rootValue.provider.options },
-      }),
-    ).toBe("fields");
+  // Reading options off the index needs something to ask; loading them from a
+  // file does not, so it stays available either way.
+  it("offers no index picker for a parameter no condition binds", () => {
+    const html = renderExtension({ name: "unbound", type: "enum" });
+    expect(html).not.toContain("Options from");
+    expect(html).toContain("Load from file");
+  });
+
+  it("offers no index picker without a saved connection to ask", () => {
+    const html = renderExtension({ name: "service", type: "enum" }, {
+      provider: { options: rootValue.provider.options },
+    });
+    expect(html).not.toContain("Options from");
+    expect(html).toContain("Load from file");
   });
 });

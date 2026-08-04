@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/paramfile"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/query"
 )
@@ -126,16 +127,11 @@ func (r *Runner) finishCLISession(session *query.Session) error {
 	return nil
 }
 
+// parseSessionParams reads the repeatable --param flag. trace and top are
+// plain cobra commands, so the value always came from the operator's own shell
+// — which is what makes expanding an @file reference safe here.
 func parseSessionParams(pairs []string) (map[string]any, error) {
-	params := map[string]any{}
-	for _, pair := range pairs {
-		k, v, ok := strings.Cut(pair, "=")
-		if !ok || k == "" {
-			return nil, fmt.Errorf("invalid --param %q: expected key=value", pair)
-		}
-		params[k] = v
-	}
-	return params, nil
+	return paramfile.Parse(pairs)
 }
 
 func (r *Runner) printTraceEvent(e query.Event, format string) {

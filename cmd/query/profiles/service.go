@@ -132,6 +132,27 @@ func (s *Service) RegisterClicky() {
 		DeleteWithContext(func(ctx context.Context, id string) error {
 			return s.Delete(ctx, id)
 		}).
+		WithAction(entity.ActionWithFlagsAndContext("replay", ReplayFlags{},
+			func(ctx context.Context, id string, flagMap map[string]string) (ReplayResult, error) {
+				options, err := decodeActionFlags[ReplayFlags](flagMap)
+				if err != nil {
+					return ReplayResult{}, err
+				}
+				return s.Replay(ctx, id, options)
+			}).
+			WithShort("Turn one result row back into its outbound HTTP request and preview or send it").
+			// Replaying drives a real side effect into a real system, so the
+			// action asks even where the app's default policy would not.
+			WithToolPermission(entity.ToolPermissionAsk)).
+		WithAction(entity.ActionWithFlagsAndContext("reconcile", ReconcileFlags{},
+			func(ctx context.Context, id string, flagMap map[string]string) (*query.ReconcileResult, error) {
+				options, err := decodeActionFlags[ReconcileFlags](flagMap)
+				if err != nil {
+					return nil, err
+				}
+				return s.Reconcile(ctx, id, options)
+			}).
+			WithShort("Join this profile's rows against another profile on a shared key")).
 		Register()
 }
 
@@ -256,7 +277,27 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
 			})
 		}
-		entity.NewDynamicEntity("profile-"+slugify(name), schemaJSON).
+		// A bound list param offers the same include/exclude control a column
+		// does. profileFilterSource takes an opaque key, so the param's own name
+		// routes it through the same lookup without a second source type.
+		for _, binding := range resolved.Profile.ParamFilterBindings() {
+			filterName := profileParamFilterName(resolved.Profile.Name, binding.Key)
+			if _, exists := entity.GetFilter(filterName); exists {
+				s.unmarkRegistered(name)
+				return fmt.Errorf("profile filter %q is already registered", filterName)
+			}
+			entity.RegisterFilter(entity.NamedFilter{
+				Name: filterName, Label: binding.Label, Type: "multi-filter", Multi: true,
+				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
+			})
+		}
+		builder := entity.NewDynamicEntity("profile-"+slugify(name), schemaJSON)
+		// A param filters on an input the rows never carry, so it has no schema
+		// property to bind through; it is offered by key instead.
+		for _, binding := range resolved.Profile.ParamFilterBindings() {
+			builder = builder.Filter(binding.Key, profileParamFilterName(resolved.Profile.Name, binding.Key))
+		}
+		builder.
 			List(func(_ context.Context, opts map[string]string) ([]map[string]any, error) {
 				store, err := s.store()
 				if err != nil {
@@ -387,6 +428,14 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 func profileFilterName(profileName, columnName string) string {
 	digest := sha256.Sum256([]byte(columnName))
 	return fmt.Sprintf("profile-%s-column-%x", slugify(profileName), digest[:6])
+}
+
+// profileParamFilterName keys a list param's filter. The -param- segment keeps
+// it distinct from the column namespace, so a param and a column that share a
+// name do not collide on one registration.
+func profileParamFilterName(profileName, paramName string) string {
+	digest := sha256.Sum256([]byte(paramName))
+	return fmt.Sprintf("profile-%s-param-%x", slugify(profileName), digest[:6])
 }
 
 type profileFilterSource struct {

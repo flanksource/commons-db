@@ -79,10 +79,10 @@ var _ = Describe("opentelemetry provider", func() {
 		boolQuery := requestBody["query"].(map[string]any)["bool"].(map[string]any)
 		Expect(boolQuery["filter"]).To(ConsistOf(
 			map[string]any{"term": map[string]any{"process.serviceName": "prod-api"}},
-			map[string]any{"term": map[string]any{"process.serviceName": "prod"}},
+			map[string]any{"terms": map[string]any{"process.serviceName": []any{"prod"}}},
 		))
 		Expect(boolQuery["must_not"]).To(ConsistOf(
-			map[string]any{"term": map[string]any{"process.serviceName": "staging"}},
+			map[string]any{"terms": map[string]any{"process.serviceName": []any{"staging"}}},
 		))
 
 		// The trace-shaped options fill what the specification left unset.
@@ -170,7 +170,7 @@ var _ = Describe("opentelemetry provider", func() {
 })
 
 var _ = Describe("opensearch column filtering", func() {
-	It("adds every include as an independent filter and every exclude as must_not", func() {
+	It("ORs the included values into one terms clause and excludes them via must_not", func() {
 		var requestBody map[string]any
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodHead {
@@ -196,11 +196,10 @@ var _ = Describe("opensearch column filtering", func() {
 		outer := requestBody["query"].(map[string]any)["bool"].(map[string]any)
 		Expect(outer["filter"]).To(ConsistOf(
 			map[string]any{"match": map[string]any{"message": "failed"}},
-			map[string]any{"term": map[string]any{"service": "api"}},
-			map[string]any{"term": map[string]any{"service": "worker"}},
+			map[string]any{"terms": map[string]any{"service": []any{"api", "worker"}}},
 		))
 		Expect(outer["must_not"]).To(ConsistOf(
-			map[string]any{"term": map[string]any{"service": "debug"}},
+			map[string]any{"terms": map[string]any{"service": []any{"debug"}}},
 		))
 	})
 
@@ -249,8 +248,8 @@ var _ = Describe("opensearch column filtering", func() {
 		))
 		encoded, err := json.Marshal(requestBody["query"])
 		Expect(err).ToNot(HaveOccurred())
-		Expect(string(encoded)).To(ContainSubstring(`"environment":"prod"`))
-		Expect(string(encoded)).ToNot(ContainSubstring(`"service":"current"`))
+		Expect(string(encoded)).To(ContainSubstring(`"environment":["prod"]`))
+		Expect(string(encoded)).ToNot(ContainSubstring(`"service"`))
 	})
 })
 

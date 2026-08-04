@@ -35,7 +35,7 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
-	resolved, err := resolveParams(p.Params, params)
+	resolved, filters, err := resolveProfileInput(p, params)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
@@ -43,6 +43,7 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	req.Filters = filters
 	// The rendered query and options are what run, so they are what must be
 	// proven read-only — a templated options.method would otherwise slip a
 	// non-GET request past the check.

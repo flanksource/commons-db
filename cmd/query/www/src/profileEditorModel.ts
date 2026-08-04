@@ -1,5 +1,6 @@
 import type { JsonSchemaObject } from "@flanksource/clicky-ui";
 import profileSchemaDocument from "../../../../schemas/profile.json";
+import { validateProfileParams } from "./profileParamModel";
 import type { ProfileColumn, ProfileWizardDraft } from "./profileWizardModel";
 
 type BundledProfileSchema = JsonSchemaObject & {
@@ -121,6 +122,49 @@ export function mergeSampledProfileColumns(
   ];
 }
 
+export function resetProfileColumns(
+  draft: ProfileWizardDraft,
+  sampled: ProfileColumn[],
+): ProfileWizardDraft {
+  if (sampled.length === 0) {
+    throw new Error("Cannot reset profile columns without sampled columns");
+  }
+  return { ...draft, columns: structuredClone(sampled) };
+}
+
+export function profileColumnResetState({
+  providerType,
+  sampledColumnCount,
+  sampleStale,
+}: {
+  providerType: string;
+  sampledColumnCount: number;
+  sampleStale: boolean;
+}) {
+  if (providerType !== "opensearch") {
+    return { visible: false, disabled: true, title: "" };
+  }
+  if (sampledColumnCount === 0) {
+    return {
+      visible: true,
+      disabled: true,
+      title: "Run a sample before resetting columns",
+    };
+  }
+  if (sampleStale) {
+    return {
+      visible: true,
+      disabled: true,
+      title: "Run another sample for the current source and query",
+    };
+  }
+  return {
+    visible: true,
+    disabled: false,
+    title: "Replace configured columns with the latest sample",
+  };
+}
+
 export function profileSampleSignature(draft: ProfileWizardDraft): string {
   return JSON.stringify({
     provider: draft.provider ?? {},
@@ -140,7 +184,7 @@ export function validateProfileEditorDraft(
     if (names.has(name)) return `Column name "${name}" is duplicated`;
     names.add(name);
   }
-  return null;
+  return validateProfileParams(draft.params, draft.provider?.type);
 }
 
 export function profileUpdateConflictTarget(error: string): string | null {

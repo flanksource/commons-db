@@ -20,13 +20,16 @@ import { makeFieldValueLookup, valueLookupField } from "./esFieldValues";
 import { esQueryFields, paramRoles } from "./esQueryBuilder";
 import { fieldForParam, type EsSearch } from "./esQueryBuilderModel";
 import { ValuesCombobox } from "./esValueCombobox";
+import { ListValueFileButton } from "./listValuePicker";
 import type { ProfileDraft } from "./profileBuilderWorkspace";
-import type { ParamDraft } from "./profileWizardModel";
+import { paramHasOptions, type ParamDraft } from "./profileWizardModel";
 
 const esParamPost: PostExtension = (field, nodes, ctx) => {
   if (field.schema["x-clicky-component"] !== "es-param") return nodes;
   const param = (field.value ?? {}) as ParamDraft;
-  if (param.type !== "enum") return nodes;
+  // A list picks several of the same fixed values an enum picks one of, so both
+  // answer their options from the index the same way.
+  if (!paramHasOptions(param)) return nodes;
   return {
     label: nodes.label,
     value: (
@@ -45,9 +48,13 @@ const esParamPost: PostExtension = (field, nodes, ctx) => {
 export const esParamOptionsFormExtensions = { post: [esParamPost] };
 
 /**
- * The options picker as the profile form mounts it. It renders only where the
- * parameter is actually answerable from the index: a saved connection, an
- * index, a condition binding the parameter, and a field that can be aggregated.
+ * The options picker as the profile form mounts it.
+ *
+ * Reading them off the index needs a saved connection, an index, a condition
+ * binding the parameter, and a field that can be aggregated — so that half
+ * appears only where the question is answerable. Loading them from a file needs
+ * none of that, so it is always offered; before this, a parameter on a profile
+ * with no connection had no options UI at all.
  */
 function EsParamOptionsField({
   param,
@@ -80,18 +87,31 @@ function EsParamOptionsField({
     index: target,
     roles: paramRoles(rootValue.params),
   });
-  if (!lookupField || !source) return null;
-
   return (
     <div className="mt-1 flex flex-col gap-1">
-      <span className="text-xs text-muted-foreground">
-        Options from {lookupField}
-      </span>
-      <ValuesCombobox
-        label="Options"
-        lookup={source({ field: lookupField })}
-        values={param.options ?? []}
-        onChange={onChange}
+      {lookupField && source ? (
+        <>
+          <span className="text-xs text-muted-foreground">Options from {lookupField}</span>
+          <ValuesCombobox
+            label="Options"
+            lookup={source({ field: lookupField })}
+            values={param.options ?? []}
+            onChange={onChange}
+          />
+        </>
+      ) : null}
+      <ListValueFileButton
+        title="Load this parameter's options from a CSV, JSON or text file"
+        onValues={(values) => {
+          // A file adds to the options rather than replacing them, so loading a
+          // second file does not silently discard the first.
+          const merged = [...(param.options ?? [])];
+          for (const value of values) {
+            if (!merged.includes(value)) merged.push(value);
+          }
+          onChange(merged);
+          return merged.length - (param.options?.length ?? 0);
+        }}
       />
     </div>
   );

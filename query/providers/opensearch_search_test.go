@@ -165,10 +165,10 @@ var _ = Describe("opensearch structured search", func() {
 		outer := capture.body["query"].(map[string]any)["bool"].(map[string]any)
 		Expect(outer["filter"]).To(ConsistOf(
 			map[string]any{"match": map[string]any{"message": "failed"}},
-			map[string]any{"term": map[string]any{"service": "api"}},
+			map[string]any{"terms": map[string]any{"service": []any{"api"}}},
 		))
 		Expect(outer["must_not"]).To(ConsistOf(
-			map[string]any{"term": map[string]any{"service": "debug"}},
+			map[string]any{"terms": map[string]any{"service": []any{"debug"}}},
 		))
 	})
 

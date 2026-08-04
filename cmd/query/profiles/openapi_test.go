@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/query"
 )
@@ -152,5 +153,65 @@ func TestProfileOpenAPIAdvertisesNativeColumnFilters(t *testing.T) {
 	item := op.Responses["200"].Content["application/json"].Schema.Items
 	if item.Properties["service"].Extensions["x-clicky-filter-key"] != "filter.service" {
 		t.Fatalf("response filter key missing: %+v", item.Properties["service"])
+	}
+}
+
+// A bound list param must reach the browser as the same multi-filter a native
+// column filter does — that pairing is what renders the tri-state control.
+func TestProfileOpenAPIAdvertisesBoundListParamsAsMultiFilters(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "logs",
+		Provider: query.ProviderConfig{Type: "opensearch"},
+		Params: []query.ParamDef{
+			{Name: "regions", Type: query.ParamTypeList, Field: "region", Options: []string{"us-east", "eu"}},
+			{Name: "accounts", Type: query.ParamTypeList, Field: "account_id"},
+			{Name: "plain", Type: query.ParamTypeList},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	op := spec.Paths["/api/v1/profile/profile-logs"]["get"]
+
+	byName := map[string]rpc.OpenAPIParameter{}
+	for _, parameter := range op.Parameters {
+		byName[parameter.Name] = parameter
+	}
+
+	// Static options are inlined, so the control needs no server round trip.
+	static := byName["regions"]
+	if static.Lookup == nil || !static.Lookup.Multi {
+		t.Fatalf("static list param is not a multi lookup: %+v", static)
+	}
+	if static.Lookup.URL != "" || static.Lookup.SearchParam != "" {
+		t.Fatalf("static options should not advertise a search endpoint: %+v", static.Lookup)
+	}
+	staticFilter := spec.Components.ClickyFilters[profileParamFilterName("logs", "regions")]
+	if staticFilter.Type != "multi-filter" || !staticFilter.Multi {
+		t.Fatalf("static filter component = %+v", staticFilter)
+	}
+	if staticFilter.Source.Kind != entity.SourceStatic || len(staticFilter.Source.Options) != 2 {
+		t.Fatalf("static options missing from the component: %+v", staticFilter.Source)
+	}
+
+	// Without options the provider answers, so the lookup carries a search URL.
+	dynamic := byName["accounts"]
+	if dynamic.Lookup == nil || dynamic.Lookup.URL != "/api/v1/profile/profile-logs" || dynamic.Lookup.SearchParam != "__lookup_q" {
+		t.Fatalf("dynamic list param lookup = %+v", dynamic.Lookup)
+	}
+	if got := spec.Components.ClickyFilters[profileParamFilterName("logs", "accounts")].Source.Kind; got != entity.SourceCustom {
+		t.Fatalf("dynamic source kind = %q, want %q", got, entity.SourceCustom)
+	}
+
+	// An unbound list can hold no exclusion, so it stays a plain parameter.
+	if byName["plain"].Lookup != nil {
+		t.Fatalf("unbound list param should advertise no filter: %+v", byName["plain"])
+	}
+}
+
+// A param and a column that share a name must not overwrite each other's filter.
+func TestProfileParamAndColumnFilterNamesDoNotCollide(t *testing.T) {
+	if profileParamFilterName("logs", "service") == profileFilterName("logs", "service") {
+		t.Fatal("param and column filter names collide")
 	}
 }

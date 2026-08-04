@@ -111,7 +111,32 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 		merged.Trace = nil
 		merged.Top = overlay.Top
 	}
+	merged.Replay = query.MergeReplaySpec(merged.Replay, overlay.Replay)
+	merged.Limits = mergeRowLimits(merged.Limits, overlay.Limits)
 	return merged
+}
+
+// mergeRowLimits layers the caps one at a time, like provider options: a
+// profile that imports a base to raise only its export ceiling keeps the page
+// the base declared.
+func mergeRowLimits(base, overlay *query.RowLimits) *query.RowLimits {
+	if overlay == nil {
+		return base
+	}
+	if base == nil {
+		return overlay
+	}
+	merged := *base
+	if overlay.PageSize != 0 {
+		merged.PageSize = overlay.PageSize
+	}
+	if overlay.MaxPageSize != 0 {
+		merged.MaxPageSize = overlay.MaxPageSize
+	}
+	if overlay.MaxExportRows != 0 {
+		merged.MaxExportRows = overlay.MaxExportRows
+	}
+	return &merged
 }
 
 func mergeMap(base, overlay map[string]any) map[string]any {
@@ -162,6 +187,9 @@ func mergeParam(base, overlay query.ParamDef) query.ParamDef {
 	}
 	if len(overlay.Options) > 0 {
 		base.Options = slices.Clone(overlay.Options)
+	}
+	if overlay.Field != "" {
+		base.Field = overlay.Field
 	}
 	base.Required = base.Required || overlay.Required
 	if overlay.Description != "" {
