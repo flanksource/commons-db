@@ -134,6 +134,17 @@ func (h HTTPConnection) GetEndpoint() string {
 	return h.URL
 }
 
+// IsEmpty reports whether the connection names no endpoint and carries no
+// credentials, i.e. it would hydrate into nothing usable.
+func (h HTTPConnection) IsEmpty() bool {
+	return h.ConnectionName == "" &&
+		h.URL == "" &&
+		h.Authentication.IsEmpty() &&
+		h.Bearer.IsEmpty() &&
+		h.OAuth.IsEmpty() &&
+		h.TLS.IsEmpty()
+}
+
 func (h *HTTPConnection) Hydrate(ctx ConnectionContext, namespace string) (*HTTPConnection, error) {
 	var err error
 	if h.ConnectionName != "" {
