@@ -8,12 +8,16 @@ import (
 )
 
 // ReconcileFlags are the flags of the profiles `reconcile` action. The entity id
-// is the source profile; --dest names the other side.
+// is the source profile; every flag overrides the corresponding field of the
+// reconcile the source profile stores, so a saved join runs with no flags at all
+// and an ad-hoc one supplies its own.
 type ReconcileFlags struct {
-	Dest       string   `flag:"dest" help:"Profile to reconcile against" required:"true"`
+	Dest       string   `flag:"dest" help:"Profile to reconcile against; required unless the source profile stores a reconcile block"`
 	KeyCEL     string   `flag:"key-cel" help:"CEL expression evaluated against a row on either side to derive the join key"`
 	KeyColumns []string `flag:"key-columns" help:"Column names whose values form the join key (use --key-cel when the two sides name them differently)"`
 	TimeColumn string   `flag:"time-column" help:"Row key holding each side's event time; defaults to the profile's timestamp column"`
+	KeyFrom    string   `flag:"key-from" help:"Reconcile keys at or after this one; empty starts at the first key"`
+	KeyTo      string   `flag:"key-to" help:"Reconcile keys before this one; empty runs to the last key"`
 	Params     []string `flag:"param" help:"Profile filter param as key=value (repeatable), applied to whichever side declares it"`
 }
 
@@ -22,9 +26,6 @@ func (ReconcileFlags) ClickyActionFlags() {}
 // Reconcile runs two profiles and joins their results on a shared key,
 // reporting which records made it across and how long they took.
 func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileFlags) (*query.ReconcileResult, error) {
-	if options.Dest == "" {
-		return nil, fmt.Errorf("--dest is required: reconcile joins two profiles")
-	}
 	store, err := s.store()
 	if err != nil {
 		return nil, err
@@ -33,30 +34,90 @@ func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileF
 	if err != nil {
 		return nil, err
 	}
-	dest, err := Resolve(ctx, store, options.Dest)
+
+	// parseParamValues rather than parseKeyValues: it is the one that refuses an
+	// @file reference, which an action served over HTTP must.
+	parsed, err := parseParamValues(options.Params)
+	if err != nil {
+		return nil, err
+	}
+	flagParams := make(map[string]string, len(parsed))
+	for key, value := range parsed {
+		flagParams[key] = fmt.Sprint(value)
+	}
+	config, err := reconcileConfig(source.Profile, options, flagParams)
 	if err != nil {
 		return nil, err
 	}
 
-	params, err := parseParamValues(options.Params)
+	dest, err := Resolve(ctx, store, config.Dest)
 	if err != nil {
 		return nil, err
+	}
+
+	params := make(map[string]any, len(config.Params))
+	for key, value := range config.Params {
+		params[key] = value
 	}
 
 	queryCtx := s.context().Wrap(ctx)
-	sourceResult, err := query.Execute(queryCtx, source.Profile, paramsFor(queryCtx, source.Profile, params, "source"))
-	if err != nil {
-		return nil, fmt.Errorf("source profile %q: %w", name, err)
-	}
-	destResult, err := query.Execute(queryCtx, dest.Profile, paramsFor(queryCtx, dest.Profile, params, "dest"))
-	if err != nil {
-		return nil, fmt.Errorf("dest profile %q: %w", options.Dest, err)
-	}
-
-	return query.Reconcile(queryCtx, sourceResult, destResult, source.Profile, dest.Profile, query.ReconcileSpec{
-		Key:        query.KeySpec{Columns: options.KeyColumns, CEL: options.KeyCEL},
-		TimeColumn: options.TimeColumn,
+	return query.ReconcileProfiles(queryCtx, query.ReconcileRun{
+		Source:       source.Profile,
+		Dest:         dest.Profile,
+		Config:       config,
+		SourceParams: paramsFor(queryCtx, source.Profile, params, "source"),
+		DestParams:   paramsFor(queryCtx, dest.Profile, params, "dest"),
 	})
+}
+
+// reconcileConfig merges the reconcile stored on the source profile with the
+// flags of this invocation, field by field: a flag that was given wins, one that
+// was not leaves the stored value alone. Params merge per key rather than
+// replacing the stored set, so overriding one filter does not silently drop the
+// rest.
+func reconcileConfig(source query.Profile, options ReconcileFlags, flagParams map[string]string) (query.ReconcileConfig, error) {
+	config := query.ReconcileConfig{}
+	if source.Reconcile != nil {
+		config = *source.Reconcile
+	}
+	if options.Dest != "" {
+		config.Dest = options.Dest
+	}
+	if options.KeyCEL != "" {
+		config.Key = query.KeySpec{CEL: options.KeyCEL}
+	}
+	if len(options.KeyColumns) > 0 {
+		config.Key = query.KeySpec{Columns: options.KeyColumns}
+	}
+	if options.KeyCEL != "" && len(options.KeyColumns) > 0 {
+		return config, fmt.Errorf("--key-cel and --key-columns both set; pick one")
+	}
+	if options.TimeColumn != "" {
+		config.TimeColumn = options.TimeColumn
+	}
+	// A range narrows both sides to the same keys, which a per-side row cap
+	// could not: two sides cut at N rows each are two different key sets, so
+	// the bound itself produced the one-sided keys it then reported.
+	if options.KeyFrom != "" || options.KeyTo != "" {
+		config.Range = &query.KeyRange{From: options.KeyFrom, To: options.KeyTo}
+	}
+	if len(flagParams) > 0 {
+		merged := make(map[string]string, len(config.Params)+len(flagParams))
+		for key, value := range config.Params {
+			merged[key] = value
+		}
+		for key, value := range flagParams {
+			merged[key] = value
+		}
+		config.Params = merged
+	}
+	if config.Dest == "" {
+		return config, fmt.Errorf("--dest is required: reconcile joins two profiles, and %q stores no reconcile block", source.Name)
+	}
+	if err := config.Range.Validate(); err != nil {
+		return config, err
+	}
+	return config, nil
 }
 
 // paramsFor narrows the caller's filters to those the given profile declares.

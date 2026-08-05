@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -154,5 +155,120 @@ func TestReconcileRendersASideBySideTable(t *testing.T) {
 	}
 	if summary := result.Pretty().Content; !strings.Contains(summary, "render-source -> render-dest") {
 		t.Errorf("summary = %q", summary)
+	}
+}
+
+// idRows builds count rows keyed id001, id002, … so a row bound is observable.
+func idRows(count int) []query.Row {
+	rows := make([]query.Row, 0, count)
+	for i := 1; i <= count; i++ {
+		rows = append(rows, query.Row{"id": fmt.Sprintf("id%03d", i)})
+	}
+	return rows
+}
+
+// A profile that stores a reconcile block runs with no flags at all: the stored
+// block is the whole invocation.
+func TestReconcileUsesTheBlockStoredOnTheProfile(t *testing.T) {
+	dest := sideProfile(t, "stored-dest", "recon-dest-stored", "", nil, idRows(2))
+	source := sideProfile(t, "stored-source", "recon-source-stored", "", nil, idRows(3))
+	source.Reconcile = &query.ReconcileConfig{
+		Dest: dest.Name,
+		ReconcileSpec: query.ReconcileSpec{
+			Range: &query.KeyRange{To: "id003"},
+			Key:   query.KeySpec{Columns: []string{"id"}},
+		},
+	}
+	service := serviceOver(t, source, dest)
+
+	result, err := service.Reconcile(context.Background(), source.Name, ReconcileFlags{})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.Dest != dest.Name {
+		t.Errorf("dest = %q, want %q", result.Dest, dest.Name)
+	}
+	if result.Range == nil || result.Range.To != "id003" {
+		t.Errorf("range = %+v, want the stored range", result.Range)
+	}
+	// The range covers id001 and id002, which both sides have. The source's
+	// third row is outside the range rather than cut off inside it, so it is
+	// not a finding — which a per-side row cap could not express.
+	if want := (query.ReconcileStats{Matched: 2}); result.Stats != want {
+		t.Errorf("stats = %+v, want %+v", result.Stats, want)
+	}
+	if result.Bounded() {
+		t.Errorf("a ranged run reads both sides in full inside the range, so nothing was cut short")
+	}
+}
+
+func TestReconcileFlagsOverrideTheStoredBlockFieldByField(t *testing.T) {
+	stored := sideProfile(t, "override-stored-dest", "recon-dest-stored-override", "", nil, idRows(4))
+	other := sideProfile(t, "override-other-dest", "recon-dest-other", "", nil, idRows(4))
+	source := sideProfile(t, "override-source", "recon-source-override", "",
+		[]query.ParamDef{{Name: "region", Type: query.ParamTypeString}}, idRows(4))
+	source.Reconcile = &query.ReconcileConfig{
+		Dest:   stored.Name,
+		Params: map[string]string{"region": "eu", "tier": "gold"},
+		ReconcileSpec: query.ReconcileSpec{
+			Range: &query.KeyRange{To: "id002"},
+			Key:   query.KeySpec{Columns: []string{"id"}},
+		},
+	}
+	service := serviceOver(t, source, stored, other)
+
+	result, err := service.Reconcile(context.Background(), source.Name, ReconcileFlags{
+		Dest: other.Name, KeyTo: "id004", Params: []string{"region=us"},
+	})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.Dest != other.Name {
+		t.Errorf("dest = %q, want the flag's %q", result.Dest, other.Name)
+	}
+	if result.Range == nil || result.Range.To != "id004" {
+		t.Errorf("range = %+v, want the flag's id004", result.Range)
+	}
+	// The key came from the stored block, which no flag overrode.
+	if want := (query.ReconcileStats{Matched: 3}); result.Stats != want {
+		t.Errorf("stats = %+v, want %+v", result.Stats, want)
+	}
+}
+
+func TestReconcileMergesStoredParamsWithFlagParams(t *testing.T) {
+	dest := sideProfile(t, "merge-dest", "recon-dest-merge", "", nil, idRows(1))
+	source := sideProfile(t, "merge-source", "recon-source-merge", "",
+		[]query.ParamDef{{Name: "region", Type: query.ParamTypeString}, {Name: "tier", Type: query.ParamTypeString}},
+		idRows(1))
+	source.Reconcile = &query.ReconcileConfig{
+		Dest:          dest.Name,
+		Params:        map[string]string{"region": "eu", "tier": "gold"},
+		ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{Columns: []string{"id"}}},
+	}
+	service := serviceOver(t, source, dest)
+
+	// Overriding one stored filter must not drop the others.
+	config, err := reconcileConfig(source, ReconcileFlags{Params: []string{"region=us"}}, map[string]string{"region": "us"})
+	if err != nil {
+		t.Fatalf("reconcileConfig: %v", err)
+	}
+	if config.Params["region"] != "us" || config.Params["tier"] != "gold" {
+		t.Errorf("params = %v, want region overridden and tier kept", config.Params)
+	}
+	if _, err := service.Reconcile(context.Background(), source.Name, ReconcileFlags{Params: []string{"region=us"}}); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+}
+
+func TestReconcileRejectsARangeThatCoversNoKeys(t *testing.T) {
+	dest := sideProfile(t, "range-dest", "recon-dest-range", "", nil, idRows(1))
+	source := sideProfile(t, "range-source", "recon-source-range", "", nil, idRows(1))
+	service := serviceOver(t, source, dest)
+
+	_, err := service.Reconcile(context.Background(), source.Name, ReconcileFlags{
+		Dest: dest.Name, KeyColumns: []string{"id"}, KeyFrom: "id009", KeyTo: "id001",
+	})
+	if err == nil || !strings.Contains(err.Error(), "covers no keys") {
+		t.Fatalf("err = %v, want it to reject an empty range", err)
 	}
 }

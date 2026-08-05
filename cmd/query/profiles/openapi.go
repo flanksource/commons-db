@@ -103,8 +103,9 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		Entity:      entityName,
 		Title:       profile.Name,
 		Parent:      profileSurfaceParent,
+		Path:        profileSurfacePath(profile.Name),
 		Description: "Run " + profile.Name,
-		Icon:        providerIcon(profile.Provider.Type),
+		Icon:        profileIcon(profile),
 	})
 
 	bindings, err := profile.ColumnFilterBindings()
@@ -124,18 +125,29 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	for _, binding := range bindings {
 		filterName := profileFilterName(profile.Name, binding.Column)
 		ensureProfileFilterComponent(spec, entity.FilterSpec{
-			Name: filterName, Label: binding.Label, Type: "multi-filter", Multi: true,
+			Name: filterName, Label: binding.Label,
+			Type: binding.Kind.ControlType(), Multi: binding.Multi,
 			Source: entity.FilterSourceSpec{Kind: entity.SourceCustom},
 		})
-		parameters = append(parameters, rpc.OpenAPIParameter{
-			Name: binding.Key, In: "query", Description: "Include or exclude " + binding.Label + " values",
-			Schema: &rpc.OpenAPISchema{Type: "string", Title: binding.Label},
-			Clicky: &rpc.ClickyParameterMeta{Role: "filter"},
-			Lookup: &rpc.ClickyLookupMeta{
+		schema := &rpc.OpenAPISchema{Type: "string", Title: binding.Label}
+		for _, option := range binding.Options {
+			schema.Enum = append(schema.Enum, option)
+		}
+		parameter := rpc.OpenAPIParameter{
+			Name: binding.Key, In: "query",
+			Description: profileFilterDescription(binding),
+			Schema:      schema,
+			Clicky:      &rpc.ClickyParameterMeta{Role: "filter"},
+		}
+		// Only a filter the backend can enumerate gets a lookup URL; pointing one
+		// at a range would advertise a list that has no answer.
+		if binding.Lookup {
+			parameter.Lookup = &rpc.ClickyLookupMeta{
 				Ref: "#/components/x-clicky-filters/" + filterName, URL: path,
-				Filter: binding.Key, SearchParam: "__lookup_q", Multi: true,
-			},
-		})
+				Filter: binding.Key, SearchParam: "__lookup_q", Multi: binding.Multi,
+			}
+		}
+		parameters = append(parameters, parameter)
 	}
 	if !roles[query.ParamRoleLimit] {
 		limits := profile.RowLimits()
@@ -144,7 +156,7 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 				Name: "limit", In: "query",
 				Description: fmt.Sprintf("Rows per page (maximum %d); export up to %d rows with scope=all", limits.MaxPageSize, limits.MaxExportRows),
 				Schema:      &rpc.OpenAPISchema{Type: "integer", Default: limits.PageSize},
-				Clicky: &rpc.ClickyParameterMeta{Role: "limit"},
+				Clicky:      &rpc.ClickyParameterMeta{Role: "limit"},
 			})
 	}
 	if !roles[query.ParamRoleOffset] {
@@ -153,6 +165,21 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 				Name: "offset", In: "query", Description: "Rows to skip",
 				Schema: &rpc.OpenAPISchema{Type: "integer", Default: 0},
 				Clicky: &rpc.ClickyParameterMeta{Role: "offset"},
+			})
+	}
+	// A cursor is only offered by a profile that can actually serve one: it
+	// needs a total order to name a position in, and a provider that resumes
+	// from one. Advertising it otherwise would put the UI into cursor mode
+	// against a server that refuses every cursor it sends.
+	if !roles[query.ParamRoleCursor] &&
+		profile.Order.Pageable() == nil &&
+		query.SupportsPaging(profile.Provider.Type).Supports(query.PagingCursor) {
+		parameters = append(parameters,
+			rpc.OpenAPIParameter{
+				Name: "cursor", In: "query",
+				Description: "Opaque position from the previous page's X-Next-Cursor; resumes after it",
+				Schema:      &rpc.OpenAPISchema{Type: "string"},
+				Clicky:      &rpc.ClickyParameterMeta{Role: "cursor"},
 			})
 	}
 	spec.Paths[path] = rpc.OpenAPIPath{"get": {
@@ -191,6 +218,23 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	return nil
 }
 
+// profileFilterDescription says what this filter's wire value means, which
+// differs by kind: a value selection takes a list, a range takes bounds.
+func profileFilterDescription(binding query.ColumnFilterBinding) string {
+	switch binding.Kind.Normalized() {
+	case query.ColumnFilterKindRange:
+		return "Bound " + binding.Label + " with >=, >, <= or < (e.g. \">=100,<500\")"
+	case query.ColumnFilterKindTime:
+		return "Bound " + binding.Label + " with >=, >, <= or < using a time or date math (e.g. \">=now-1h\")"
+	case query.ColumnFilterKindBoolean:
+		return "Restrict " + binding.Label + " to true or false"
+	case query.ColumnFilterKindText:
+		return "Match " + binding.Label + " by substring; prefix a value with ! to exclude it"
+	default:
+		return "Include or exclude " + binding.Label + " values; prefix a value with ! to exclude it"
+	}
+}
+
 // ensureProfileFilterComponent is the single writer of the spec's filter
 // components, so a column filter and a list param register through one path.
 func ensureProfileFilterComponent(spec *rpc.OpenAPISpec, filter entity.FilterSpec) {
@@ -209,13 +253,14 @@ func profileExportMeta(profile query.Profile) *rpc.ExportMeta {
 		Scopes:        []string{"page"},
 		FormatMaxRows: map[string]int{"pdf": maxPDFRows},
 	}
-	if supportsAllRows(profile.Provider.Type) {
-		meta.Scopes = append(meta.Scopes, "all")
-		if len(profile.Processors) > 0 || profile.Top != nil {
-			meta.AllRowsMode = "buffered"
-		} else {
-			meta.AllRowsMode = "streaming"
-		}
+	// Every provider can serve every row now — one without native paging is
+	// paged by slicing a buffered result. What differs is the cost, which is
+	// what AllRowsMode names.
+	meta.Scopes = append(meta.Scopes, "all")
+	if streamable, err := profile.Streamable(); err == nil && streamable {
+		meta.AllRowsMode = "streaming"
+	} else {
+		meta.AllRowsMode = "buffered"
 	}
 	return meta
 }

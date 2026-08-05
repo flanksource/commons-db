@@ -84,10 +84,6 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) error 
 	return nil
 }
 
-func applyColumns(ctx context.Context, columns []ColumnDef, rows []Row) error {
-	return applyRowTransforms(ctx, Profile{Columns: columns}, rows)
-}
-
 func evalRowCEL(ctx context.Context, expression string, row Row) (any, error) {
 	template := gomplate.Template{Expression: expression}
 	for _, function := range context.CelEnvFuncs {

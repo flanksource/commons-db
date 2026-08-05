@@ -4,13 +4,13 @@ import (
 	"bytes"
 	stdcontext "context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"unicode"
 
-	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/formatters"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -136,15 +136,21 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 
-	rows, total, mode, err := h.exportRows(execCtx, p, params, export)
+	export.maxRows = p.RowLimits().MaxExportRows
+	response, err := exportRows(execCtx, p, params, export)
 	if err != nil {
+		// A stale cursor is the caller's to fix by starting the walk again, so
+		// it is a 400 rather than a 500 — and it says which input moved.
+		if errors.Is(err, query.ErrCursorStale) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	if export.format == "clicky-json" {
-		defer rows.Close()
-		page, err := drainRows(rows)
+		page, err := query.CollectRows(response.rows)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -159,7 +165,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		setExportHeaders(w, r, p.Name, export, mode, total)
+		setExportHeaders(w, r, p.Name, export, response)
 		_, _ = w.Write([]byte(output))
 		return
 	}
@@ -169,7 +175,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	clickyRows := &profileClickyRows{rows: rows, columns: columns}
+	clickyRows := newProfileClickyRows(response.rows, columns, response.ceiling)
 	opts := formatters.StreamOptions{Format: export.format}
 	if export.format == "pdf" {
 		opts.MaxRows = maxPDFRows
@@ -178,16 +184,24 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
-		setExportHeaders(w, r, p.Name, export, mode, total)
+		setExportHeaders(w, r, p.Name, export, response)
 		_, _ = w.Write(output.Bytes())
 		return
 	}
 
-	setExportHeaders(w, r, p.Name, export, mode, total)
+	setExportHeaders(w, r, p.Name, export, response)
 	if _, err := formatters.WriteTableStream(r.Context(), w, clickyRows, opts); err != nil {
 		// Headers may already be committed for a true stream; cancellation and
 		// backend cursor errors therefore terminate the response at that point.
 		execCtx.Warnf("profile %q export failed after streaming began: %v", p.Name, err)
+		return
+	}
+	// Whether the ceiling bit is only knowable now, which is why it was
+	// declared as a trailer: an export that stopped short and said nothing is
+	// indistinguishable from one that finished.
+	if clickyRows.overflowed {
+		execCtx.Warnf("profile %q: export reached its %d row ceiling with more rows to come", p.Name, export.maxRows)
+		w.Header().Set("X-Truncated", "true")
 	}
 }
 
@@ -255,17 +269,6 @@ func (h *execHandler) writeConnectionRequired(w http.ResponseWriter, profile, ma
 	})
 }
 
-type exportRequest struct {
-	format string
-	scope  string
-	limit  int
-	offset int
-
-	// maxRows is the profile's export ceiling, resolved alongside the page so
-	// every response reports and enforces the same number.
-	maxRows int
-}
-
 func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, error) {
 	limits := profile.RowLimits()
 	request := exportRequest{
@@ -299,8 +302,15 @@ func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, 
 		}
 		request.offset = offset
 	}
+	if value := r.URL.Query().Get(profile.ParamNameForRole(query.ParamRoleCursor, "cursor")); value != "" {
+		request.cursor = query.Cursor(value)
+	}
 	if request.scope == "all" {
 		request.offset = 0
+		request.cursor = ""
+	}
+	if !request.cursor.IsZero() && request.offset != 0 {
+		return request, fmt.Errorf("a cursor already says where to resume, so it cannot be combined with an offset")
 	}
 	return request, nil
 }
@@ -350,132 +360,12 @@ func requestedFormat(r *http.Request) string {
 	}
 }
 
-func (h *execHandler) exportRows(ctx dbcontext.Context, p query.Profile, params map[string]any, request exportRequest) (query.RowIterator, *int, string, error) {
-	bufferedPipeline := len(p.Processors) > 0 || p.Top != nil
-	if request.scope == "all" {
-		if !supportsAllRows(p.Provider.Type) {
-			return nil, nil, "", fmt.Errorf("provider %q does not support all-row export", p.Provider.Type)
-		}
-		ceiling := request.maxRows
-		if bufferedPipeline {
-			result, err := query.Execute(ctx, p, params)
-			if err != nil {
-				return nil, nil, "", err
-			}
-			if len(result.Rows) > ceiling {
-				result.Rows = result.Rows[:ceiling]
-			}
-			total := len(result.Rows)
-			return query.SliceRows(result.Rows), &total, "buffered", nil
-		}
-		rows, err := query.ExecuteRowsBounded(ctx, p, ceiling, params)
-		if err != nil {
-			return nil, nil, "", err
-		}
-		return query.BoundRows(rows, ceiling), nil, "streaming", nil
-	}
-
-	if !bufferedPipeline && query.SupportsStreaming(p.Provider.Type) {
-		maxRows := request.offset + request.limit + 1
-		if maxRows <= request.offset {
-			return nil, nil, "", fmt.Errorf("requested page is too large")
-		}
-		rows, err := query.ExecuteRowsBounded(ctx, p, maxRows, params)
-		if err != nil {
-			return nil, nil, "", err
-		}
-		page, complete, err := collectPage(rows, request.offset, request.limit)
-		if err != nil {
-			return nil, nil, "", err
-		}
-		var total *int
-		if complete {
-			value := request.offset + len(page)
-			total = &value
-		}
-		return query.SliceRows(page), total, "page", nil
-	}
-
-	result, err := query.Execute(ctx, p, params)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	total := len(result.Rows)
-	start := min(request.offset, total)
-	end := min(start+request.limit, total)
-	return query.SliceRows(result.Rows[start:end]), &total, "page", nil
-}
-
-func collectPage(rows query.RowIterator, offset, limit int) ([]query.Row, bool, error) {
-	defer rows.Close()
-	for skipped := 0; skipped < offset && rows.Next(); skipped++ {
-	}
-	page := make([]query.Row, 0, limit)
-	for len(page) < limit && rows.Next() {
-		page = append(page, rows.Row())
-	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
-	complete := !rows.Next()
-	if err := rows.Err(); err != nil {
-		return nil, false, err
-	}
-	return page, complete, nil
-}
-
-func drainRows(rows query.RowIterator) ([]query.Row, error) {
-	var result []query.Row
-	for rows.Next() {
-		result = append(result, rows.Row())
-	}
-	return result, rows.Err()
-}
-
-type profileClickyRows struct {
-	rows    query.RowIterator
-	columns []api.ColumnDef
-}
-
-func (i *profileClickyRows) Columns() []api.ColumnDef { return i.columns }
-func (i *profileClickyRows) Next() bool               { return i.rows.Next() }
-func (i *profileClickyRows) Row() map[string]any      { return i.rows.Row() }
-func (i *profileClickyRows) Err() error               { return i.rows.Err() }
-func (i *profileClickyRows) Close() error             { return i.rows.Close() }
-
-func supportsAllRows(provider string) bool {
-	return query.SupportsStreaming(provider)
-}
-
 func isTabularExport(format string) bool {
 	switch format {
 	case "csv", "markdown", "html", "excel", "pdf":
 		return true
 	default:
 		return false
-	}
-}
-
-func setExportHeaders(w http.ResponseWriter, r *http.Request, profileName string, request exportRequest, mode string, total *int) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", "Content-Disposition, X-Export-Mode, X-Page-Limit, X-Page-Offset, X-Total-Count, X-Max-Rows")
-	w.Header().Set("Content-Type", exportContentType(request.format))
-	w.Header().Set("X-Export-Mode", mode)
-	if request.scope == "page" {
-		w.Header().Set("X-Page-Limit", strconv.Itoa(request.limit))
-		w.Header().Set("X-Page-Offset", strconv.Itoa(request.offset))
-	} else {
-		w.Header().Set("X-Max-Rows", strconv.Itoa(request.maxRows))
-	}
-	if total != nil {
-		w.Header().Set("X-Total-Count", strconv.Itoa(*total))
-	}
-	if r.URL.Query().Has("_download") || r.URL.Query().Get("filename") != "" {
-		filename := r.URL.Query().Get("filename")
-		if filename == "" {
-			filename = profileName + exportExtension(request.format)
-		}
-		w.Header().Set("Content-Disposition", "attachment; filename="+strconv.Quote(sanitizeExportFilename(filename)))
 	}
 }
 

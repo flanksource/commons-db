@@ -59,10 +59,15 @@ type ProviderRequest struct {
 	// Filters contains native include/exclude clauses bound to profile columns.
 	Filters []ColumnFilterValue
 
-	// MaxRows is an execution hint for bounded callers such as an interactive
-	// page. Streaming providers may use it to avoid opening a backend cursor
-	// when one finite request can satisfy the caller. Zero means unbounded.
-	MaxRows int
+	// Order is the Profile's declared result order. A provider that pages by
+	// cursor needs it to sort by, and to cut the next position out of the last
+	// row it returned.
+	Order Order
+
+	// Position is the decoded cursor this request resumes after, empty at the
+	// start of a walk. The engine validates and decodes it, so a provider works
+	// in key values and never in the token format.
+	Position CursorPosition
 }
 
 var providerRegistry = map[string]Provider{}

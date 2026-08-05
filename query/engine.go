@@ -16,7 +16,17 @@ import (
 // params carries the server-side filter values for the Profile's declared Params
 // (omit when there are none). They are validated/coerced against the
 // declarations and exposed to the query template as `params`.
+//
+// The read stops at the Profile's own MaxExportRows, and Result.Truncated says
+// whether stopping there left rows behind. Every buffered caller — the CLI, a
+// replay, a reconcile that cannot merge — is asking for the whole result, and
+// "the whole result" against an unbounded source is not a number any of them
+// can hold. The ceiling is the profile's to raise.
 func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result, error) {
+	var supplied map[string]any
+	if len(params) > 0 {
+		supplied = params[0]
+	}
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
@@ -25,10 +35,6 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 	}
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
-	}
-	var supplied map[string]any
-	if len(params) > 0 {
-		supplied = params[0]
 	}
 	resolved, filters, err := resolveProfileInput(p, supplied)
 	if err != nil {
@@ -41,27 +47,19 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 // context sub-queries → processors (→ top sort/limit). Shared by Execute and
 // each top-session tick.
 func executeResolved(ctx context.Context, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Result, error) {
-	provider, err := GetProvider(p.Provider.Type)
-	if err != nil {
-		return nil, err
-	}
-
 	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	req.Filters = filters
+	req.Order = p.Order
 
-	rows, err := provider.Execute(ctx, req)
+	rows, truncated, err := drainPages(ctx, p, req)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
+		return nil, err
 	}
 
-	if err := applyRowTransforms(ctx, p, rows); err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
-	}
-
-	result := &Result{Profile: p.Name, Rows: rows}
+	result := &Result{Profile: p.Name, Rows: rows, Truncated: truncated}
 
 	for name, sub := range p.Context {
 		subRows, err := executeSubQuery(ctx, sub, p.Params, resolved)
@@ -80,7 +78,9 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	}
 
 	if p.Top != nil {
-		result.Rows = sortAndLimit(result.Rows, p.Top.SortBy, p.Top.Limit)
+		var cut bool
+		result.Rows, cut = sortAndLimit(result.Rows, p.Top.SortBy, p.Top.Limit)
+		result.Truncated = result.Truncated || cut
 	}
 	result.ColumnFilterKeys, err = p.ColumnFilterKeys()
 	if err != nil {
@@ -90,17 +90,53 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 }
 
 // sortAndLimit orders rows descending by the named column, then truncates to
-// limit. Zero values leave the rows untouched.
-func sortAndLimit(rows []Row, sortBy string, limit int) []Row {
+// limit. Zero values leave the rows untouched. The second return reports that
+// the cut actually removed rows, so a snapshot that dropped the tail is not
+// presented as the whole of it.
+func sortAndLimit(rows []Row, sortBy string, limit int) ([]Row, bool) {
 	if sortBy != "" {
 		sort.SliceStable(rows, func(i, j int) bool {
 			return compareRowValues(rows[i][sortBy], rows[j][sortBy]) > 0
 		})
 	}
 	if limit > 0 && len(rows) > limit {
-		rows = rows[:limit]
+		return rows[:limit], true
 	}
-	return rows
+	return rows, false
+}
+
+// drainPages walks every page of the provider's result, stopping at the
+// Profile's export ceiling.
+//
+// truncated reports that the walk did not see all the query had. Two separate
+// things cause that and both matter: the ceiling cutting the read, and the
+// provider applying a cap of its own. The second is the one that used to be
+// invisible — a backend default quietly limiting a read is otherwise
+// indistinguishable from a small table, which is how "read everything" came to
+// mean "read the first 500 and say nothing".
+func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, bool, error) {
+	maxRows := p.RowLimits().MaxExportRows
+	batch := walkBatchSize
+	if maxRows > 0 && maxRows < batch {
+		batch = maxRows
+	}
+	walk := walkRequest(p, batch)
+
+	var rows []Row
+	var truncated bool
+	for page, err := range withRowTransforms(ctx, p, providerPages(ctx, p, req, walk)) {
+		if err != nil {
+			return nil, false, err
+		}
+		truncated = truncated || page.Truncated
+		rows = append(rows, page.Rows...)
+		if maxRows > 0 && len(rows) >= maxRows {
+			truncated = truncated || len(rows) > maxRows || page.HasMore
+			rows = rows[:maxRows]
+			break
+		}
+	}
+	return rows, truncated, nil
 }
 
 // compareRowValues orders numbers numerically and everything else by its
@@ -160,7 +196,7 @@ func executeSubQuery(ctx context.Context, sub SubQuery, defs []ParamDef, params 
 // the provider options and the connection — against the resolved params, so
 // every provider type supports the same `{{.params.x}}` / `$(.params.x)`
 // interpolation instead of only those driven by a query string. Callers set
-// Filters and MaxRows on the result.
+// Filters, Order and Position on the result.
 func buildProviderRequest(ctx context.Context, cfg ProviderConfig, rawQuery string, defs []ParamDef, resolved map[string]any) (ProviderRequest, error) {
 	template := newParamTemplate(ctx, resolved)
 	query, err := template.render("query", rawQuery)

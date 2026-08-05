@@ -28,8 +28,8 @@ const (
 )
 
 // ParamRole assigns a profile parameter to a first-class table control. Filter
-// is the default; limit/offset drive the pager and time-from/time-to are paired
-// into the table's date-range control.
+// is the default; limit/offset/cursor drive the pager and time-from/time-to are
+// paired into the table's date-range control.
 type ParamRole string
 
 const (
@@ -38,6 +38,15 @@ const (
 	ParamRoleOffset   ParamRole = "offset"
 	ParamRoleTimeFrom ParamRole = "time-from"
 	ParamRoleTimeTo   ParamRole = "time-to"
+
+	// ParamRoleCursor carries a keyset position into a query that pages by one.
+	// It is the role that makes cursor paging reachable on a backend whose
+	// query text this package will not rewrite: the server decodes the opaque
+	// cursor and exposes its key values as `params.<name>.<column>`, so the
+	// author writes their own resume predicate — `WHERE (created_at, id) >
+	// ({{.params.cursor.created_at}}, {{.params.cursor.id}})` — against the
+	// order they declared.
+	ParamRoleCursor ParamRole = "cursor"
 )
 
 // ParamDef declares one server-side filter parameter of a Profile. Supplied
@@ -142,7 +151,8 @@ func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, []
 			resolved[def.Name] = include
 			if def.Field != "" {
 				filters = append(filters, ColumnFilterValue{
-					Key: def.Name, Field: def.Field, Include: include, Exclude: exclude,
+					Key: def.Name, Field: def.Field, Kind: ColumnFilterKindTerms,
+					Include: include, Exclude: exclude,
 				})
 			}
 			continue
@@ -163,11 +173,17 @@ func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, []
 // coerceList decodes a multi-value selection. The wire form is the one column
 // filters already use — comma-joined, "!" excludes — so the CLI, the query
 // string and a JSON body all decode through a single implementation.
+//
+// A list param is always a value selection, whatever its tokens look like: a
+// bounded parameter is already expressible as two numbers plus a query
+// template, and a bound list's whole contract is that params.<name> is a list
+// of values the query interpolates.
 func (d ParamDef) coerceList(raw any) ([]string, []string, error) {
-	include, exclude, err := parseColumnFilterSelection(raw)
+	selection, err := parseColumnFilterSelection(ColumnFilterKindTerms, raw)
 	if err != nil {
 		return nil, nil, err
 	}
+	include, exclude := selection.Include, selection.Exclude
 	if len(exclude) > 0 && d.Field == "" {
 		return nil, nil, fmt.Errorf(
 			"excluding a value (!%s) requires a backend field; declare `field` on the parameter", exclude[0])

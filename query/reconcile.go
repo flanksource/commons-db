@@ -32,6 +32,16 @@ const (
 // two *different* profiles on a shared identity and reports presence and
 // latency. Their statuses are deliberately not interchangeable.
 type ReconcileSpec struct {
+	// Range narrows the join to a span of keys. An empty range covers all of
+	// them.
+	//
+	// It replaced a per-side row cap, which could not be made correct: two sides
+	// cut at N rows each are two different sets of keys unless they happen to be
+	// ordered identically, so the bound itself produced the one-sided keys the
+	// run then reported as findings. A range cuts both sides at the same keys by
+	// construction, so a key missing from one side inside it is missing.
+	Range *KeyRange `json:"range,omitempty" yaml:"range,omitempty"`
+
 	// Key derives the join identity from a row on either side. Cross-profile
 	// joins normally need KeySpec.CEL, since the two sides rarely name the same
 	// field the same way.
@@ -42,6 +52,121 @@ type ReconcileSpec struct {
 	// from the profile column declared with Kind: timestamp; when no such column
 	// exists, the time fields are simply omitted.
 	TimeColumn string `json:"timeColumn,omitempty" yaml:"timeColumn,omitempty"`
+}
+
+// ReconcileConfig is a whole reconcile: which profile to join against, how to
+// derive the identity, and how many rows to read per side. It is what a Profile
+// stores under `reconcile:` and what the action's flags override, whereas
+// ReconcileSpec is only what the join itself needs.
+type ReconcileConfig struct {
+	// Dest names the profile the source is reconciled against.
+	Dest string `json:"dest" yaml:"dest"`
+
+
+	// Params are the stored filter values, applied to whichever side declares
+	// each one.
+	Params map[string]string `json:"params,omitempty" yaml:"params,omitempty"`
+
+	// Key and TimeColumn are promoted, so a stored reconcile reads as one flat
+	// block rather than nesting the join spec inside itself.
+	ReconcileSpec `yaml:",inline"`
+}
+
+// Clone returns a deep copy, so merging two profiles never aliases a stored
+// config's params or key columns.
+func (c *ReconcileConfig) Clone() *ReconcileConfig {
+	if c == nil {
+		return nil
+	}
+	cloned := *c
+	cloned.Key.Columns = append([]string(nil), c.Key.Columns...)
+	if c.Params != nil {
+		cloned.Params = make(map[string]string, len(c.Params))
+		for key, value := range c.Params {
+			cloned.Params[key] = value
+		}
+	}
+	return &cloned
+}
+
+// MergeReconcileConfig layers an imported profile's reconcile with the
+// importing profile's, field by field — the same way a replay block merges, so
+// a profile can inherit a join and change only its bound or one filter.
+func MergeReconcileConfig(base, override *ReconcileConfig) *ReconcileConfig {
+	if override == nil {
+		return base.Clone()
+	}
+	if base == nil {
+		return override.Clone()
+	}
+	merged := base.Clone()
+	if override.Dest != "" {
+		merged.Dest = override.Dest
+	}
+	if override.Range != nil {
+		merged.Range = override.Range.Clone()
+	}
+	if override.TimeColumn != "" {
+		merged.TimeColumn = override.TimeColumn
+	}
+	// The key is one choice of identity, not a set of fields to blend: a
+	// columns key and a CEL key cannot be half-overridden without producing the
+	// both-set state the engine rejects.
+	if len(override.Key.Columns) > 0 || override.Key.CEL != "" {
+		merged.Key = override.Key
+		merged.Key.Columns = append([]string(nil), override.Key.Columns...)
+	}
+	for name, value := range override.Params {
+		if merged.Params == nil {
+			merged.Params = map[string]string{}
+		}
+		merged.Params[name] = value
+	}
+	return merged
+}
+
+// ReconcileRun is one execution of a ReconcileConfig: the two resolved profiles
+// and each side's filter values, already narrowed to what that side declares.
+type ReconcileRun struct {
+	Source       Profile
+	Dest         Profile
+	Config       ReconcileConfig
+	SourceParams map[string]any
+	DestParams   map[string]any
+}
+
+// ReconcileProfiles runs both sides and joins them.
+//
+// When the key is a prefix of both orders the join is a merge: both sides are
+// walked in key order and each key is emitted once it can no longer grow, so a
+// run holds one key's rows rather than two datasets. Otherwise there is no way
+// to know a key is finished without having read everything, and the run says
+// which it did.
+func ReconcileProfiles(ctx context.Context, run ReconcileRun) (*ReconcileResult, error) {
+	if mergeable, _ := run.Mergeable(); mergeable {
+		return mergeJoin(ctx, run)
+	}
+
+	source, err := Execute(ctx, run.Source, run.SourceParams)
+	if err != nil {
+		return nil, fmt.Errorf("source profile %q: %w", run.Source.Name, err)
+	}
+	dest, err := Execute(ctx, run.Dest, run.DestParams)
+	if err != nil {
+		return nil, fmt.Errorf("dest profile %q: %w", run.Dest.Name, err)
+	}
+	result, err := Reconcile(ctx, source, dest, run.Source, run.Dest, run.Config.ReconcileSpec)
+	if err != nil {
+		return nil, err
+	}
+	result.Mode = ReconcileBuffered
+	result.Range = run.Config.Range
+	_, result.BufferedReason = run.Mergeable()
+	// A backend that capped either read leaves keys unaccounted for, and a
+	// one-sided key inside an incomplete read is not a finding.
+	result.SourceTruncated = source.Truncated
+	result.DestTruncated = dest.Truncated
+	return result, nil
 }
 
 // ReconcileStats summarises a reconcile run. Counts are per key, not per emitted
@@ -85,7 +210,27 @@ type ReconcileResult struct {
 	Dest          string         `json:"dest"`
 	Rows          []ReconcileRow `json:"rows"`
 	Stats         ReconcileStats `json:"stats"`
+
+	// Mode says how the two sides were joined, and BufferedReason says why a run
+	// could not be merged — which is always something the author can change.
+	Mode           ReconcileMode `json:"mode,omitempty"`
+	BufferedReason string        `json:"buffered_reason,omitempty"`
+
+	// Range is the span of keys this run covered; nil means all of them. Both
+	// sides are cut at the same keys, so a one-sided key inside the range is a
+	// finding rather than an artefact of where the read stopped.
+	Range *KeyRange `json:"range,omitempty"`
+
+	// The Truncated flags report a side whose backend cut the read short. A
+	// one-sided key from an incomplete read is not a finding, which is why they
+	// travel with the result.
+	SourceTruncated bool `json:"source_truncated,omitempty"`
+	DestTruncated   bool `json:"dest_truncated,omitempty"`
 }
+
+// Bounded reports whether either side was cut short by its backend, leaving
+// keys unaccounted for.
+func (r *ReconcileResult) Bounded() bool { return r.SourceTruncated || r.DestTruncated }
 
 // Reconcile joins two Results on spec.Key.
 //
@@ -130,60 +275,69 @@ func Reconcile(ctx context.Context, source, dest *Result, sourceProfile, destPro
 	}
 
 	for _, key := range unionKeys(sourceGroups, destGroups) {
-		sourceRows := sourceGroups[key]
-		destRows := destGroups[key]
-		if len(sourceRows) > 1 || len(destRows) > 1 {
-			result.Stats.DupKeys++
+		// The range applies here as well as on a merged run, so the two modes
+		// answer the same question and only differ in what they had to read.
+		if !spec.Range.Contains(key) {
+			continue
 		}
-
-		switch {
-		case len(sourceRows) > 0 && len(destRows) > 0:
-			result.Stats.Matched++
-			for i, s := range sourceRows {
-				for j, d := range destRows {
-					result.Rows = append(result.Rows, ReconcileRow{
-						Key:            key,
-						Status:         ReconcileMatched,
-						Source:         s.row,
-						Dest:           d.row,
-						SourceTime:     s.at,
-						DestTime:       d.at,
-						TimeDiff:       timeDiff(s.at, d.at),
-						SourceDupIndex: i + 1,
-						SourceDupCount: len(sourceRows),
-						DestDupIndex:   j + 1,
-						DestDupCount:   len(destRows),
-					})
-				}
-			}
-		case len(sourceRows) > 0:
-			result.Stats.OnlySource++
-			for i, s := range sourceRows {
-				result.Rows = append(result.Rows, ReconcileRow{
-					Key:            key,
-					Status:         ReconcileOnlySource,
-					Source:         s.row,
-					SourceTime:     s.at,
-					SourceDupIndex: i + 1,
-					SourceDupCount: len(sourceRows),
-				})
-			}
-		default:
-			result.Stats.OnlyDest++
-			for j, d := range destRows {
-				result.Rows = append(result.Rows, ReconcileRow{
-					Key:          key,
-					Status:       ReconcileOnlyDest,
-					Dest:         d.row,
-					DestTime:     d.at,
-					DestDupIndex: j + 1,
-					DestDupCount: len(destRows),
-				})
-			}
-		}
+		result.appendGroup(key, sourceGroups[key], destGroups[key])
 	}
 
 	return result, nil
+}
+
+// appendGroup emits one key's rows. It is shared by both join modes so a merged
+// run and a buffered one cannot disagree about what a key's result looks like.
+func (r *ReconcileResult) appendGroup(key string, sourceRows, destRows []keyedRow) {
+	if len(sourceRows) > 1 || len(destRows) > 1 {
+		r.Stats.DupKeys++
+	}
+
+	switch {
+	case len(sourceRows) > 0 && len(destRows) > 0:
+		r.Stats.Matched++
+		for i, s := range sourceRows {
+			for j, d := range destRows {
+				r.Rows = append(r.Rows, ReconcileRow{
+					Key:            key,
+					Status:         ReconcileMatched,
+					Source:         s.row,
+					Dest:           d.row,
+					SourceTime:     s.at,
+					DestTime:       d.at,
+					TimeDiff:       timeDiff(s.at, d.at),
+					SourceDupIndex: i + 1,
+					SourceDupCount: len(sourceRows),
+					DestDupIndex:   j + 1,
+					DestDupCount:   len(destRows),
+				})
+			}
+		}
+	case len(sourceRows) > 0:
+		r.Stats.OnlySource++
+		for i, s := range sourceRows {
+			r.Rows = append(r.Rows, ReconcileRow{
+				Key:            key,
+				Status:         ReconcileOnlySource,
+				Source:         s.row,
+				SourceTime:     s.at,
+				SourceDupIndex: i + 1,
+				SourceDupCount: len(sourceRows),
+			})
+		}
+	default:
+		r.Stats.OnlyDest++
+		for j, d := range destRows {
+			r.Rows = append(r.Rows, ReconcileRow{
+				Key:          key,
+				Status:       ReconcileOnlyDest,
+				Dest:         d.row,
+				DestTime:     d.at,
+				DestDupIndex: j + 1,
+				DestDupCount: len(destRows),
+			})
+		}
+	}
 }
 
 // keyedRow is a row with its key already derived and its event time already

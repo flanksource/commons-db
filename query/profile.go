@@ -18,6 +18,12 @@ type Profile struct {
 	// by inline provider connections. When empty, the caller's namespace is used.
 	Namespace string `json:"namespace,omitempty" yaml:"namespace,omitempty"`
 
+	// Icon overrides the glyph the UI shows for this Profile. It is an opaque
+	// icon name resolved by the frontend's icon provider (e.g. "kubernetes",
+	// "activemq"). When empty the provider type's own mark is used, so this only
+	// needs setting where the backend type is not what the Profile is *about*.
+	Icon string `json:"icon,omitempty" yaml:"icon,omitempty"`
+
 	// Provider selects and configures the backend the Profile reads from.
 	Provider ProviderConfig `json:"provider" yaml:"provider"`
 
@@ -74,16 +80,43 @@ type Profile struct {
 	// destination without hand-assembling the call.
 	Replay *ReplaySpec `json:"replay,omitempty" yaml:"replay,omitempty"`
 
+	// Reconcile is the profile this one is normally joined against, and how:
+	// the shared identity, the event-time column, and the per-side row bound.
+	// It supplies the defaults of the `reconcile` action, so the join a profile
+	// is habitually checked against is stored with it rather than retyped.
+	Reconcile *ReconcileConfig `json:"reconcile,omitempty" yaml:"reconcile,omitempty"`
+
 	// Limits are the row caps this Profile sets for itself: the page it returns
 	// by default, the largest page a caller may ask for, and where an all-row
 	// export stops. Each unset cap takes its default. None of them is the
 	// query's own limit, which is a provider option.
 	Limits *RowLimits `json:"limits,omitempty" yaml:"limits,omitempty"`
+
+	// Order is the total order this Profile's rows are returned in, ending in a
+	// column declared unique. It is what makes a page identifiable twice
+	// running, so paging past the first page requires it: without one, two
+	// executions of the same query may interleave rows differently and a second
+	// page can repeat or skip rows from the first.
+	Order Order `json:"order,omitempty" yaml:"order,omitempty"`
 }
 
 // RowLimits resolves this Profile's row caps against the defaults, so callers
 // never reach for a default constant themselves.
 func (p Profile) RowLimits() RowLimits { return p.Limits.Resolve() }
+
+// Streamable reports whether this Profile can be served page by page.
+//
+// A Top sorts the whole result before its first row is correct, and a processor
+// that is not a PageProcessor needs every row for the same reason. Either one
+// means a page is cut from a full run of the query rather than read from a
+// cursor — which is correct but costs the whole query per page, so callers ask
+// rather than assume.
+func (p Profile) Streamable() (bool, error) {
+	if p.Top != nil {
+		return false, nil
+	}
+	return StreamableProcessors(p.Processors)
+}
 
 // AliasDef is an ordered, named CEL projection over a provider row.
 type AliasDef struct {
@@ -162,7 +195,14 @@ type SubQuery struct {
 // the processor decodes for itself.
 type ProcessorSpec struct {
 	// Type is the registered processor key (e.g. "sqlite.merge", "sqlite.recon").
-	Type string `json:"type" yaml:"type"`
+	// Optional when Use names a library entry, which supplies it.
+	Type string `json:"type,omitempty" yaml:"type,omitempty"`
+
+	// Use names a library processor (see RegisterNamedProcessor) whose type and
+	// configuration this spec starts from — the processor equivalent of
+	// Profile.Imports. Config set here is merged over the preset's, so a profile
+	// can adopt a shared transform and still override a single key.
+	Use string `json:"use,omitempty" yaml:"use,omitempty"`
 
 	// Config is the processor-specific configuration.
 	Config map[string]any `json:"config,omitempty" yaml:"config,omitempty"`

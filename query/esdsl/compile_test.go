@@ -143,16 +143,35 @@ var _ = Describe("Compile output shaping", func() {
 		Expect(compiled.Body["from"]).To(Equal(10))
 	})
 
-	It("clamps size to MaxRows", func() {
-		compiled, err := Compile(CompileRequest{Search: Search{Size: intPtr(5000)}, MaxRows: 200})
+	It("narrows a larger specification size to the page asked for", func() {
+		compiled, err := Compile(CompileRequest{Search: Search{Size: intPtr(5000)}, PageSize: 200})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(compiled.Size).To(Equal(200))
+		Expect(compiled.Capped).To(BeFalse())
 	})
 
-	It("applies MaxRows when the specification sets no size", func() {
-		compiled, err := Compile(CompileRequest{MaxRows: 200})
+	It("applies the page size when the specification sets none", func() {
+		compiled, err := Compile(CompileRequest{PageSize: 200})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(compiled.Size).To(Equal(200))
+		Expect(compiled.Capped).To(BeFalse())
+	})
+
+	// A profile whose own size is smaller than the page asked for serves a short
+	// page. Left unreported, that short page reads as the end of the index — so
+	// a `size: 50` profile answered "50" as the total of a million documents.
+	It("reports a specification size that holds the page below what was asked", func() {
+		compiled, err := Compile(CompileRequest{Search: Search{Size: intPtr(50)}, PageSize: 200})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compiled.Size).To(Equal(50))
+		Expect(compiled.Capped).To(BeTrue())
+	})
+
+	It("leaves the specification size alone when no page is asked for", func() {
+		compiled, err := Compile(CompileRequest{Search: Search{Size: intPtr(50)}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compiled.Size).To(Equal(50))
+		Expect(compiled.Capped).To(BeFalse())
 	})
 
 	It("renders sort, _source, fields and hit counting", func() {
@@ -195,13 +214,4 @@ var _ = Describe("Compile output shaping", func() {
 		}))
 	})
 
-	It("rejects from and aggregations while scrolling", func() {
-		_, err := Compile(CompileRequest{Search: Search{From: intPtr(10)}, Scroll: true})
-		Expect(err).To(MatchError(ContainSubstring("from is not supported while scrolling")))
-
-		_, err = Compile(CompileRequest{Search: Search{
-			Aggregations: map[string]json.RawMessage{"by_level": json.RawMessage(`{}`)},
-		}, Scroll: true})
-		Expect(err).To(MatchError(ContainSubstring("aggregations are not supported while scrolling")))
-	})
 })

@@ -1,10 +1,13 @@
 import {
   LogsTable,
+  type ClickyDownloadOptions,
+  type DataTablePagination,
   type OperationResultFilterConfig,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { useProfiles } from "./profilesQuery";
 
 // slugify mirrors cmd/query/profilestore.go slugify so a profile name maps to its
 // dynamic-entity name ("profile-" + slug). The entity name (not the pluralized
@@ -38,18 +41,11 @@ function entitySegment(url: string): string {
   return path.split("/").filter(Boolean).pop() ?? "";
 }
 
-// useLogsEntityNames fetches the profile definitions and returns the set of
-// dynamic-entity names whose profile declares `render: logs`. Failure yields an
-// empty set, so logs profiles simply fall back to the default table.
+// useLogsEntityNames returns the set of dynamic-entity names whose profile
+// declares `render: logs`. It reads the shared profile query, so a rename does
+// not leave this view resolving against a stale profile list.
 export function useLogsEntityNames(): Set<string> {
-  const { data } = useQuery({
-    queryKey: ["logs-entity-names"],
-    queryFn: async () => {
-      const res = await fetch("/api/v1/profiles", { headers: { Accept: "application/json" } });
-      if (!res.ok) return [] as Record<string, unknown>[];
-      return asArray(await res.json());
-    },
-  });
+  const { data } = useProfiles();
   const names = new Set<string>();
   for (const p of data ?? []) {
     if (p.render === "logs") {
@@ -68,10 +64,14 @@ function LogsResult({
   requestUrl,
   filterConfig,
   columnFilterKeys,
+  pagination,
+  download,
 }: {
   requestUrl: string;
   filterConfig?: OperationResultFilterConfig;
   columnFilterKeys: Record<string, string>;
+  pagination?: DataTablePagination;
+  download?: ClickyDownloadOptions;
 }): ReactNode {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["logs-rows", requestUrl],
@@ -93,6 +93,11 @@ function LogsResult({
       columnFilterKeys={columnFilterKeys}
       cellFilters={filterConfig?.cellFilters}
       onCellFilterChange={filterConfig?.onCellFilterChange}
+      // A logs profile is paged by the server exactly like every other one, so
+      // it gets the same pager and download menu. Dropping them here is what
+      // made the first page look like the whole log.
+      {...(pagination ? { pagination } : {})}
+      {...(download ? { download } : {})}
     />
   );
 }
@@ -121,7 +126,7 @@ export function logsColumnFilterKeys(payload: unknown): Record<string, string> {
 export function logsResultRenderer(
   logsEntityNames: Set<string>,
 ): (ctx: ResultRenderContext) => ReactNode {
-  return ({ response, defaultView, filterConfig }) => {
+  return ({ response, defaultView, filterConfig, pagination, download }) => {
     const requestUrl = response?.requestUrl;
     if (!requestUrl || !logsEntityNames.has(entitySegment(requestUrl))) return defaultView;
     return (
@@ -129,6 +134,8 @@ export function logsResultRenderer(
         requestUrl={requestUrl}
         filterConfig={filterConfig}
         columnFilterKeys={logsColumnFilterKeys(response.parsed)}
+        {...(pagination ? { pagination } : {})}
+        {...(download ? { download } : {})}
       />
     );
   };

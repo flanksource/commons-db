@@ -118,7 +118,7 @@ var _ = Describe("Execute", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(provider.last.Params).To(Equal(map[string]any{"namespace": "prod"}))
 		Expect(provider.last.Filters).To(Equal([]query.ColumnFilterValue{{
-			Column: "service", Key: "filter.service", Field: "service",
+			Column: "service", Key: "filter.service", Field: "service", Kind: query.ColumnFilterKindTerms,
 			Include: []string{"payments"}, Exclude: []string{"worker"},
 		}}))
 	})
@@ -325,5 +325,42 @@ var _ = Describe("param templating", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(secondary.last.Query).To(Equal("select policy for kenya"))
 		Expect(secondary.last.Options).To(HaveKeyWithValue("index", "kenya-policies"))
+	})
+})
+
+// Execute is what every buffered caller reaches — the CLI, a replay, a reconcile
+// that cannot merge. "Read everything" against a source with more than fits is
+// not a thing any of them can do, so the read stops at the profile's own export
+// ceiling and says that it did. A bounded read that reports nothing is
+// indistinguishable from a small table, which is the defect this pins.
+var _ = Describe("Execute row ceiling", func() {
+	profile := func(rows int, limits *query.RowLimits) query.Profile {
+		provider := &mockProvider{typ: "ceiling-mock", rows: make([]query.Row, rows)}
+		for i := range provider.rows {
+			provider.rows[i] = query.Row{"id": i + 1}
+		}
+		query.RegisterProvider(provider)
+		return query.Profile{Name: "ceiling", Provider: query.ProviderConfig{Type: provider.typ}, Limits: limits}
+	}
+
+	It("stops at the profile's export ceiling and reports it", func() {
+		result, err := query.Execute(context.New(), profile(50, &query.RowLimits{MaxExportRows: 20}))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(20))
+		Expect(result.Truncated).To(BeTrue())
+	})
+
+	It("reads a result that fits without claiming it was cut", func() {
+		result, err := query.Execute(context.New(), profile(20, &query.RowLimits{MaxExportRows: 20}))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(20))
+		Expect(result.Truncated).To(BeFalse())
+	})
+
+	It("takes the default ceiling when the profile sets none", func() {
+		result, err := query.Execute(context.New(), profile(10, nil))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(10))
+		Expect(result.Truncated).To(BeFalse())
 	})
 })

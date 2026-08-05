@@ -226,6 +226,71 @@ var _ = Describe("Profile schema", func() {
 		Expect(typeSchema["x-enum-labels"].(map[string]string)).To(HaveKeyWithValue("key_values", "[]KeyValue"))
 	})
 
+	It("picks profile references from the same hierarchy the sidebar shows", func() {
+		props := schema.Profile()["properties"].(schema.Schema)
+
+		// The dotted naming convention IS the import graph (jms.incoming imports
+		// jms), so imports is a hierarchical picker rather than free text.
+		imports := props["imports"].(schema.Schema)
+		Expect(imports["type"]).To(Equal("array"))
+		Expect(imports["items"].(schema.Schema)["type"]).To(Equal("string"),
+			"the stored value stays a plain string array")
+		importLookup := imports["x-clicky-lookup"].(schema.Schema)
+		Expect(importLookup["url"]).To(Equal("/api/v1/profiles"))
+		// Must match profileFilter.Key() in cmd/query/profiles; a mismatch yields
+		// an empty option set with no error.
+		Expect(importLookup["filter"]).To(Equal("profile"))
+		Expect(importLookup["multi"]).To(BeTrue())
+		// "." and "/" split; "-" deliberately does not, or remote-debugger would
+		// shatter into a hierarchy that does not exist.
+		Expect(importLookup["hierarchy"].(schema.Schema)["delimiters"]).To(Equal("./"))
+
+		dest := props["reconcile"].(schema.Schema)["properties"].(schema.Schema)["dest"].(schema.Schema)
+		Expect(dest["type"]).To(Equal("string"))
+		destLookup := dest["x-clicky-lookup"].(schema.Schema)
+		Expect(destLookup["filter"]).To(Equal("profile"))
+		Expect(destLookup["multi"]).To(BeFalse())
+		Expect(destLookup["hierarchy"].(schema.Schema)["delimiters"]).To(Equal("./"))
+	})
+
+	It("lets a profile override the glyph its provider type would give it", func() {
+		icon := schema.Profile()["properties"].(schema.Schema)["icon"].(schema.Schema)
+		Expect(icon["type"]).To(Equal("string"))
+		Expect(icon["description"]).To(ContainSubstring("provider"))
+	})
+
+	It("presents params as summary rows identified by their own properties", func() {
+		props := schema.Profile()["properties"].(schema.Schema)
+		params := props["params"].(schema.Schema)
+		Expect(params["x-array-display"]).To(Equal("accordion"))
+		// The array's description doubles as the add row's zero-item copy.
+		Expect(params["description"]).To(ContainSubstring("{{.params.<name>}}"))
+
+		item := params["x-item"].(schema.Schema)
+		Expect(item["title"]).To(Equal([]string{"label", "name"}))
+		Expect(item["glyph"]).To(Equal("type"))
+		Expect(item["badge"]).To(Equal("role"))
+		Expect(item["flag"]).To(Equal("required"))
+		Expect(item["noun"]).To(Equal("parameter"))
+
+		param := params["items"].(schema.Schema)
+		Expect(param["title"]).To(Equal("Parameter"))
+		Expect(param["x-columns"]).To(Equal("auto"))
+
+		paramProps := param["properties"].(schema.Schema)
+		typeProp := paramProps["type"].(schema.Schema)
+		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveKeyWithValue("list", "list-dashes"))
+		Expect(typeProp["x-enum-tones"].(map[string]string)).To(HaveKeyWithValue("list", "indigo"))
+		// Without this, x-enum-icons alone flips the control to the icon-card
+		// grid, which is far too wide for an accordion body.
+		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
+		Expect(paramProps["role"].(schema.Schema)["x-enum-display"]).To(Equal("combobox"))
+
+		// The two long fields take the whole row rather than one narrow column.
+		Expect(paramProps["options"].(schema.Schema)["x-col-span"]).To(Equal("full"))
+		Expect(paramProps["description"].(schema.Schema)["x-col-span"]).To(Equal("full"))
+	})
+
 	It("uses a nested provider discriminator with icon combobox options", func() {
 		s := schema.Profile()
 		props := s["properties"].(schema.Schema)
@@ -235,6 +300,29 @@ var _ = Describe("Profile schema", func() {
 		typeProp := provider["properties"].(schema.Schema)["type"].(schema.Schema)
 		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
 		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(12))
+	})
+
+	It("exposes the reconcile block a profile stores its habitual join in", func() {
+		props := schema.Profile()["properties"].(schema.Schema)
+		reconcile := props["reconcile"].(schema.Schema)["properties"].(schema.Schema)
+
+		Expect(reconcile["dest"].(schema.Schema)["type"]).To(Equal("string"))
+		Expect(reconcile["timeColumn"]).To(HaveKey("description"))
+
+		// A range narrows both sides to the same keys, which the per-side row
+		// cap it replaced could not: two sides cut at N rows each are two
+		// different key sets, so the bound itself produced one-sided findings.
+		keyRange := reconcile["range"].(schema.Schema)
+		Expect(keyRange["properties"].(schema.Schema)).To(HaveKey("from"))
+		Expect(keyRange["properties"].(schema.Schema)).To(HaveKey("to"))
+		Expect(reconcile).ToNot(HaveKey("limit"))
+
+		// Columns and CEL are alternatives the engine rejects together, so both
+		// are offered and the description is what says to pick one.
+		key := reconcile["key"].(schema.Schema)
+		Expect(key["properties"].(schema.Schema)).To(HaveKey("columns"))
+		Expect(key["properties"].(schema.Schema)).To(HaveKey("cel"))
+		Expect(key["description"]).To(ContainSubstring("never both"))
 	})
 
 	It("bundles every provider component and enriches inline URLs", func() {
@@ -386,7 +474,11 @@ var _ = Describe("ProfileInstance schema", func() {
 			{Name: "secret", Hidden: true},
 		},
 	}
-	s := schema.ProfileInstance(p)
+	s, profileInstanceErr := schema.ProfileInstance(p)
+
+	It("resolves the profile's column filters", func() {
+		Expect(profileInstanceErr).ToNot(HaveOccurred())
+	})
 
 	It("exposes params as form properties with required + enum", func() {
 		props := s["properties"].(schema.Schema)
@@ -410,7 +502,7 @@ var _ = Describe("ProfileInstance schema", func() {
 	})
 
 	It("emits the render mode and no per-column sort/filter flags for a logs profile", func() {
-		logsSchema := schema.ProfileInstance(query.Profile{
+		logsSchema, err := schema.ProfileInstance(query.Profile{
 			Name:   "jaeger spans",
 			Render: query.RenderLogs,
 			Columns: []query.ColumnDef{
@@ -418,6 +510,7 @@ var _ = Describe("ProfileInstance schema", func() {
 				{Name: "duration", Type: query.ColumnTypeDuration},
 			},
 		})
+		Expect(err).ToNot(HaveOccurred())
 		Expect(logsSchema["x-clicky-render"]).To(Equal("logs"))
 		for _, c := range logsSchema["x-clicky-columns"].([]any) {
 			col := c.(schema.Schema)
@@ -436,10 +529,16 @@ var _ = Describe("Profile column editor schema", func() {
 
 		Expect(props["label"].(schema.Schema)["x-clicky-order"]).To(Equal(0))
 		Expect(props["name"].(schema.Schema)["x-clicky-order"]).To(Equal(1))
-		Expect(props["type"].(schema.Schema)["x-clicky-order"]).To(Equal(2))
+		Expect(props["source"].(schema.Schema)["x-clicky-order"]).To(Equal(2))
+		Expect(props["type"].(schema.Schema)["x-clicky-order"]).To(Equal(3))
 		filter := props["filter"].(schema.Schema)
-		Expect(filter["x-clicky-order"]).To(Equal(8))
-		Expect(filter["properties"].(schema.Schema)["field"].(schema.Schema)["description"]).To(ContainSubstring("OpenSearch"))
+		Expect(filter["x-clicky-order"]).To(Equal(9))
+		filterProps := filter["properties"].(schema.Schema)
+		// The field is optional now: a column whose own definition names a
+		// backend field does not restate it, and an enumerated filter names none.
+		Expect(filter).ToNot(HaveKey("required"))
+		Expect(filterProps["field"].(schema.Schema)["description"]).To(ContainSubstring("required only when the column implies none"))
+		Expect(filterProps["kind"].(schema.Schema)["enum"]).To(Equal(query.ColumnFilterKindValues()))
 		Expect(props["kind"].(schema.Schema)["title"]).To(Equal("Role"))
 		Expect(props["kind"].(schema.Schema)["description"]).To(ContainSubstring("independent of Type"))
 		Expect(props["format"].(schema.Schema)["enum"]).To(Equal([]string{"date", "float", "duration", "bytes", "currency"}))

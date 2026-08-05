@@ -6,6 +6,7 @@ import (
 	"encoding/csv"
 	"encoding/json"
 	"io"
+	"iter"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -238,17 +239,38 @@ insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
 }
 
 type execStreamMock struct {
-	rows []query.Row
-	last query.ProviderRequest
+	rows     []query.Row
+	last     query.ProviderRequest
+	lastPage query.PageRequest
 }
 
 func (m *execStreamMock) Type() string { return "exec-stream" }
+
+func (m *execStreamMock) PagingModes() query.PagingMode {
+	return query.PagingOffset | query.PagingCursor
+}
+
 func (m *execStreamMock) Execute(_ dbcontext.Context, _ query.ProviderRequest) ([]query.Row, error) {
 	return m.rows, nil
 }
-func (m *execStreamMock) OpenRows(_ dbcontext.Context, req query.ProviderRequest) (query.RowIterator, error) {
+
+func (m *execStreamMock) Pages(_ dbcontext.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
 	m.last = req
-	return query.SliceRows(m.rows), nil
+	m.lastPage = page
+	return func(yield func(query.Page, error) bool) {
+		total := query.Total{Value: int64(len(m.rows)), Exact: true}
+		for start := min(page.Offset, len(m.rows)); ; start += page.Limit {
+			end := min(start+page.Limit, len(m.rows))
+			more := end < len(m.rows)
+			if !yield(query.Page{
+				Rows:    m.rows[start:end],
+				HasMore: more,
+				Total:   &total,
+			}, nil) || !more {
+				return
+			}
+		}
+	}
 }
 
 func newExecStreamTest(t *testing.T, rows []query.Row, columns []query.ColumnDef) *execHandler {
@@ -258,7 +280,13 @@ func newExecStreamTest(t *testing.T, rows []query.Row, columns []query.ColumnDef
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(context.Background(), query.Profile{Name: "export", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows", Columns: columns}); err != nil {
+	profile := query.Profile{
+		Name: "export", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows", Columns: columns,
+		// Paging past the first page needs a total order, so an export fixture
+		// declares one the way a real profile has to.
+		Order: query.Order{{Column: "id", Unique: true}},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
 		t.Fatal(err)
 	}
 	return newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
@@ -329,7 +357,11 @@ func TestExecHandlerBoundsInteractiveStreamingRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(context.Background(), query.Profile{Name: "bounded", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows"}); err != nil {
+	profile := query.Profile{
+		Name: "bounded", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+		Order: query.Order{{Column: "id", Unique: true}},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
 		t.Fatal(err)
 	}
 	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
@@ -337,8 +369,40 @@ func TestExecHandlerBoundsInteractiveStreamingRequest(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if mock.last.MaxRows != 76 {
-		t.Fatalf("provider max rows = %d, want offset + limit + lookahead = 76", mock.last.MaxRows)
+	// The page the provider is asked for is the page the caller asked for. It
+	// used to be offset+limit+1, because the offset was skipped here rather
+	// than by whoever owns the cursor.
+	if mock.lastPage.Limit != 25 || mock.lastPage.Offset != 50 {
+		t.Fatalf("provider page = %+v, want limit 25 offset 50", mock.lastPage)
+	}
+	if rec.Header().Get("X-Has-More") != "true" {
+		t.Fatalf("expected X-Has-More on a page with rows behind it: %v", rec.Header())
+	}
+}
+
+// A profile with no declared order cannot be paged past its first page: two
+// executions may interleave tied rows differently, so page 2 could repeat or
+// skip rows from page 1. Refusing is the only answer that is not quietly wrong.
+func TestExecHandlerRefusesToPageAnUnorderedProfile(t *testing.T) {
+	mock := &execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}}}
+	query.RegisterProvider(mock)
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "unordered", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	if rec := get(h, "/api/v1/profile/unordered?limit=1&offset=1", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for a second page of an unordered profile", rec.Code)
+	}
+	// The first page is still answerable: it names no position.
+	if rec := get(h, "/api/v1/profile/unordered?limit=1", ""); rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want the first page to be served", rec.Code, rec.Body.String())
 	}
 }
 
@@ -401,6 +465,7 @@ func TestExecHandlerBoundsAllRowExportByExportCeiling(t *testing.T) {
 			profile := query.Profile{
 				Name: "ceiling", Provider: query.ProviderConfig{Type: mock.Type()},
 				Query: "rows", Limits: tt.limits,
+				Order: query.Order{{Column: "id", Unique: true}},
 			}
 			if err := store.Save(context.Background(), profile); err != nil {
 				t.Fatal(err)
@@ -411,13 +476,55 @@ func TestExecHandlerBoundsAllRowExportByExportCeiling(t *testing.T) {
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 			}
-			if mock.last.MaxRows != tt.want {
-				t.Fatalf("provider max rows = %d, want the export ceiling %d", mock.last.MaxRows, tt.want)
-			}
 			if got := rec.Header().Get("X-Max-Rows"); got != strconv.Itoa(tt.want) {
 				t.Fatalf("X-Max-Rows = %q, want %d", got, tt.want)
 			}
+			// An export whose rows fit under the ceiling is complete, and must
+			// not claim otherwise.
+			if got := rec.Header().Get("X-Truncated"); got != "" {
+				t.Fatalf("X-Truncated = %q on an export that fit under its ceiling", got)
+			}
 		})
+	}
+}
+
+// An export that stopped at the ceiling and said nothing is indistinguishable
+// from one that finished, which is the defect this whole contract exists to
+// remove. The answer is only knowable after the rows are written, which is why
+// it is declared as a trailer and asserted here rather than in the headers.
+func TestExecHandlerReportsAnExportCutByItsCeiling(t *testing.T) {
+	const ceiling = 40
+	rows := make([]query.Row, 100)
+	for i := range rows {
+		rows[i] = query.Row{"id": i}
+	}
+	query.RegisterProvider(&execStreamMock{rows: rows})
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := query.Profile{
+		Name: "cut", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows",
+		Limits: &query.RowLimits{MaxExportRows: ceiling},
+		Order:  query.Order{{Column: "id", Unique: true}},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	rec := get(h, "/api/v1/profile/cut?format=ndjson&scope=all", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if declared := rec.Header().Get("Trailer"); !strings.Contains(declared, "X-Truncated") {
+		t.Fatalf("Trailer = %q, want it to declare X-Truncated", declared)
+	}
+	if got := rec.Header().Get("X-Truncated"); got != "true" {
+		t.Fatalf("X-Truncated = %q on an export cut at its %d row ceiling", got, ceiling)
+	}
+	if count := strings.Count(strings.TrimSpace(rec.Body.String()), "\n") + 1; count != ceiling {
+		t.Fatalf("wrote %d rows, want the %d-row ceiling", count, ceiling)
 	}
 }
 
