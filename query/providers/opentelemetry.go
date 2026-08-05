@@ -2,6 +2,7 @@ package providers
 
 import (
 	"fmt"
+	"iter"
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
@@ -38,27 +39,47 @@ type openTelemetryOptions struct {
 	Search *esdsl.Search `json:"search,omitempty"`
 }
 
-func (openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	searcher, options, err := openTelemetrySearchClient(ctx, req)
-	if err != nil {
-		return nil, err
+// PagingModes matches the OpenSearch provider it is backed by: from/size inside
+// the index result window, search_after over a point-in-time past it.
+func (openTelemetryProvider) PagingModes() query.PagingMode {
+	return query.PagingOffset | query.PagingCursor
+}
+
+func (p openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
+	var result []query.Row
+	for page, err := range p.Pages(ctx, req, query.PageRequest{Limit: openSearchWalkBatch}) {
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, page.Rows...)
 	}
-	search, err := buildOpenTelemetryRequest(req, options)
-	if err != nil {
-		return nil, err
+	return result, nil
+}
+
+// Pages walks the trace index the same way the OpenSearch provider walks a log
+// index; only the row shape differs.
+func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
+	return func(yield func(query.Page, error) bool) {
+		searcher, options, err := openTelemetrySearchClient(ctx, req)
+		if err != nil {
+			yield(query.Page{}, err)
+			return
+		}
+		walk := openSearchWalk{
+			searcher: searcher,
+			index:    options.Index,
+			build: func(position openSearchPage) (openSearchRequest, error) {
+				return buildOpenTelemetryRequest(req, options, position)
+			},
+			mapRows: func(raw opensearch.Response) []query.Row {
+				return openTelemetryRows(raw, options)
+			},
+		}
+		walk.run(ctx, req, page, yield)
 	}
-	body, err := search.encode()
-	if err != nil {
-		return nil, err
-	}
-	result, err := searcher.SearchRaw(ctx, opensearch.Request{
-		Index: options.Index,
-		Query: body,
-		Limit: search.limitParam(),
-	})
-	if err != nil {
-		return nil, err
-	}
+}
+
+func openTelemetryRows(result opensearch.Response, options openTelemetryOptions) []query.Row {
 	rows := make([]query.Row, 0, len(result.Hits.Hits))
 	for _, hit := range result.Hits.Hits {
 		document := make(map[string]any, len(hit.Fields)+len(hit.Source))
@@ -70,7 +91,7 @@ func (openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequ
 		}
 		rows = append(rows, openTelemetryRow(document, options))
 	}
-	return rows, nil
+	return rows
 }
 
 func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (*opensearch.Searcher, openTelemetryOptions, error) {

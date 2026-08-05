@@ -243,25 +243,29 @@ var _ = Describe("opensearch structured search", func() {
 		Expect(capture.size).To(Equal("40"))
 	})
 
-	DescribeTable("pages a scrolling read at the smaller of the hit cap and the scroll batch",
-		func(specSize int, expected string) {
+	DescribeTable("asks for the smaller of the specification's size and the page",
+		func(specSize int, expected string, capped bool) {
 			var capture openSearchCapture
 			server := stubOpenSearch(&capture)
 			defer server.Close()
 
-			rows, err := query.ExecuteRows(context.New(), openSearchProfile(server.URL, map[string]any{
+			profile := openSearchProfile(server.URL, map[string]any{
 				"search": map[string]any{
 					"size":  specSize,
 					"query": map[string]any{"op": "match_all"},
 				},
-			}))
-			Expect(err).ToNot(HaveOccurred())
-			defer rows.Close()
-
+			})
+			for page, err := range query.ExecutePages(context.New(), profile, query.PageRequest{Limit: 1000}) {
+				Expect(err).ToNot(HaveOccurred())
+				// A page held short by the profile's own size says so, so it is
+				// not read as the end of the index.
+				Expect(page.Truncated).To(Equal(capped))
+				break
+			}
 			Expect(capture.size).To(Equal(expected))
 		},
-		Entry("a cap below the batch", 40, "40"),
-		Entry("a cap above the batch", 5000, "1000"),
+		Entry("a size below the page", 40, "40", true),
+		Entry("a size above the page", 5000, "1000", false),
 	)
 
 	It("preserves numeric literals in a raw query body", func() {

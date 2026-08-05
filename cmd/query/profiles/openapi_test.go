@@ -44,11 +44,23 @@ func TestMergeStoredProfilesTracksStoreImmediately(t *testing.T) {
 	if op.Clicky == nil || op.Clicky.Surface != "profile-live-sales" || op.Clicky.Scope != "collection" {
 		t.Fatalf("unexpected clicky metadata: %+v", op.Clicky)
 	}
-	if len(op.Parameters) != 3 || !op.Parameters[0].Required || op.Parameters[0].Clicky.Role != "filter" {
+	if !op.Parameters[0].Required || op.Parameters[0].Clicky.Role != "filter" {
 		t.Fatalf("profile filter parameter missing: %+v", op.Parameters)
 	}
-	if op.Parameters[1].Clicky.Role != "limit" || op.Parameters[2].Clicky.Role != "offset" {
+	// Asserted by role rather than by position: the parameter list grows with
+	// every filterable column, and which paging roles are offered is the fact
+	// under test.
+	roles := map[string]bool{}
+	for _, param := range op.Parameters {
+		roles[string(param.Clicky.Role)] = true
+	}
+	if !roles["limit"] || !roles["offset"] {
 		t.Fatalf("profile pagination parameters missing: %+v", op.Parameters)
+	}
+	// This profile declares no order, so there is no position a cursor could
+	// name and none is offered.
+	if roles["cursor"] {
+		t.Fatalf("cursor offered on a profile that declares no order: %+v", op.Parameters)
 	}
 	if got := op.Parameters[0].Schema.Enum; len(got) != 2 || got[0] != "US" {
 		t.Fatalf("profile enum missing: %+v", got)
@@ -156,6 +168,62 @@ func TestProfileOpenAPIAdvertisesNativeColumnFilters(t *testing.T) {
 	}
 }
 
+// The control the browser renders comes from the column's kind, and a filter
+// whose values cannot be enumerated must not advertise a lookup URL — pointing
+// one at a range would offer a list that has no answer.
+func TestProfileOpenAPIAdvertisesEachFilterKindsOwnControl(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "orders",
+		Provider: query.ProviderConfig{Type: "postgres"},
+		Columns: []query.ColumnDef{
+			{Name: "region", Type: query.ColumnTypeString},
+			{Name: "latency_ms", Type: query.ColumnTypeNumber},
+			{Name: "created_at", Type: query.ColumnTypeDateTime},
+			{Name: "deleted", Type: query.ColumnTypeBoolean},
+			{Name: "env", Filter: &query.ColumnFilterDef{Options: []string{"prod", "dev"}}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	op := spec.Paths["/api/v1/profile/profile-orders"]["get"]
+	byName := map[string]rpc.OpenAPIParameter{}
+	for _, parameter := range op.Parameters {
+		byName[parameter.Name] = parameter
+	}
+	for key, wantLookup := range map[string]bool{
+		"filter.region":     true,
+		"filter.latency_ms": false,
+		"filter.created_at": false,
+		"filter.deleted":    false,
+		// Enumerated values are already the answer, so there is nothing to fetch.
+		"filter.env": false,
+	} {
+		parameter, ok := byName[key]
+		if !ok {
+			t.Fatalf("parameter %q is missing from %+v", key, op.Parameters)
+		}
+		if (parameter.Lookup != nil) != wantLookup {
+			t.Fatalf("parameter %q lookup = %+v, want present=%v", key, parameter.Lookup, wantLookup)
+		}
+	}
+	if got := byName["filter.env"].Schema.Enum; len(got) != 2 || got[0] != "prod" {
+		t.Fatalf("enumerated filter options missing: %+v", got)
+	}
+
+	filters := spec.Components.ClickyFilters
+	for name, want := range map[string]string{"region": "multi-filter", "latency_ms": "number", "created_at": "date", "deleted": "bool"} {
+		filter, ok := filters[profileFilterName("orders", name)]
+		if !ok {
+			t.Fatalf("filter component for %q is missing", name)
+		}
+		if filter.Type != want {
+			t.Fatalf("filter %q type = %q, want %q", name, filter.Type, want)
+		}
+	}
+}
+
 // A bound list param must reach the browser as the same multi-filter a native
 // column filter does — that pairing is what renders the tri-state control.
 func TestProfileOpenAPIAdvertisesBoundListParamsAsMultiFilters(t *testing.T) {
@@ -206,6 +274,55 @@ func TestProfileOpenAPIAdvertisesBoundListParamsAsMultiFilters(t *testing.T) {
 	// An unbound list can hold no exclusion, so it stays a plain parameter.
 	if byName["plain"].Lookup != nil {
 		t.Fatalf("unbound list param should advertise no filter: %+v", byName["plain"])
+	}
+}
+
+// A cursor is only offered by a profile that can serve one. A UI shown a cursor
+// param enters cursor mode, so advertising it on a profile that has no total
+// order to name a position in would put every page it then asks for into a
+// refusal.
+func TestProfileAdvertisesCursorOnlyWhenItCanServeOne(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		order query.Order
+		want  bool
+	}{
+		{name: "ordered", order: query.Order{{Column: "created_at"}, {Column: "id", Unique: true}}, want: true},
+		{name: "unordered", want: false},
+		// An order with no unique tiebreaker is not a total order, so a
+		// position in it names a set of rows rather than a row.
+		{name: "no tiebreaker", order: query.Order{{Column: "created_at"}}, want: false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := NewFileStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := sampleProfile("Cursor Probe")
+			profile.Provider.Type = "sql"
+			profile.Order = tt.order
+			if err := store.Save(context.Background(), profile); err != nil {
+				t.Fatal(err)
+			}
+
+			spec := &rpc.OpenAPISpec{
+				Paths:  map[string]rpc.OpenAPIPath{},
+				Clicky: &rpc.ClickySpecMeta{Surfaces: []rpc.ClickySurface{{Key: "profiles", Entity: "profiles"}}},
+			}
+			if err := mergeStoredProfiles(spec, store); err != nil {
+				t.Fatal(err)
+			}
+			op := spec.Paths["/api/v1/profile/profile-cursor-probe"]["get"]
+			var offered bool
+			for _, param := range op.Parameters {
+				if param.Clicky != nil && param.Clicky.Role == "cursor" {
+					offered = true
+				}
+			}
+			if offered != tt.want {
+				t.Fatalf("cursor offered = %v, want %v: %+v", offered, tt.want, op.Parameters)
+			}
+		})
 	}
 }
 

@@ -20,12 +20,9 @@ type CompileRequest struct {
 	// operand of their own.
 	Referenced []string
 
-	// Scroll marks a scrolling read. from and aggregations are not supported by
-	// a scroll context, so they are rejected rather than silently dropped.
-	Scroll bool
-
-	// MaxRows bounds the resolved size. Zero leaves it unbounded.
-	MaxRows int
+	// PageSize is how many hits the caller asked this page for. Zero leaves the
+	// specification's own size in place.
+	PageSize int
 }
 
 // Compiled is a search request ready to send.
@@ -39,6 +36,10 @@ type Compiled struct {
 
 	// From is the resolved offset. Zero means no offset.
 	From int
+
+	// Capped reports that the specification's own size held the page below the
+	// PageSize asked for, so a short page is not read as the end of the index.
+	Capped bool
 
 	// ParamUses reports each condition field that structurally consumed a
 	// parameter. Providers use it to avoid applying the same include twice when
@@ -80,15 +81,17 @@ func Compile(req CompileRequest) (Compiled, error) {
 	if err != nil {
 		return Compiled{}, err
 	}
-	if req.MaxRows > 0 && (size == 0 || size > req.MaxRows) {
-		size = req.MaxRows
-	}
-	if req.Scroll {
-		if from > 0 {
-			return Compiled{}, fmt.Errorf("from is not supported while scrolling")
-		}
-		if len(req.Search.Aggregations) > 0 {
-			return Compiled{}, fmt.Errorf("aggregations are not supported while scrolling")
+	// The page a caller asked for wins over a specification that asks for more,
+	// and a specification asking for less is honoured but reported: a page cut
+	// short by the profile's own size is otherwise indistinguishable from the
+	// end of the index.
+	var capped bool
+	if req.PageSize > 0 {
+		switch {
+		case size == 0 || size > req.PageSize:
+			size = req.PageSize
+		case size < req.PageSize:
+			capped = true
 		}
 	}
 
@@ -103,7 +106,7 @@ func Compile(req CompileRequest) (Compiled, error) {
 	if from > 0 {
 		body["from"] = from
 	}
-	return Compiled{Body: body, Size: size, From: from, ParamUses: paramUses}, nil
+	return Compiled{Body: body, Size: size, From: from, Capped: capped, ParamUses: paramUses}, nil
 }
 
 func compileRoot(root *bound) (map[string]any, error) {

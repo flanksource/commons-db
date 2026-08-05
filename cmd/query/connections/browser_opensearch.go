@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
+	"github.com/flanksource/commons-db/query/providers"
 )
 
 // browserCompileRequest asks for the Query DSL a structured specification
@@ -205,7 +206,12 @@ func compileParamBindings(params map[string]any, roles map[string]string) []esds
 	return bindings
 }
 
-func (h *connectionBrowserHandler) executeOpenSearch(r *http.Request, conn *models.Connection, request browserQueryRequest) (browserQueryResult, error) {
+func (h *connectionBrowserHandler) executeOpenSearch(
+	r *http.Request,
+	conn *models.Connection,
+	descriptor browserDescriptor,
+	request browserQueryRequest,
+) (browserQueryResult, error) {
 	index, _ := request.Options["index"].(string)
 	if index == "" {
 		return browserQueryResult{}, fmt.Errorf("OpenSearch index is required")
@@ -214,11 +220,30 @@ func (h *connectionBrowserHandler) executeOpenSearch(r *http.Request, conn *mode
 	if err != nil {
 		return browserQueryResult{}, err
 	}
+
 	requestCtx := h.ctx.Wrap(r.Context())
 	searcher, err := h.openSearchSearcher(requestCtx, conn)
 	if err != nil {
 		return browserQueryResult{}, err
 	}
+	fields, err := h.openSearchFieldCatalog(r.Context(), searcher, index)
+	if err != nil {
+		return browserQueryResult{}, err
+	}
+
+	// A selection narrows the query's result, so it is merged into the body the
+	// author already wrote rather than replacing it — the same merge a stored
+	// profile's filters go through, so the console and a profile cannot disagree
+	// about what a filter means.
+	profile := browserProfile(descriptor, conn, request.Query, request.Options, openSearchFilterColumns(fields))
+	filters, err := resolveBrowserFilters(profile, request.Filters)
+	if err != nil {
+		return browserQueryResult{}, err
+	}
+	if body, err = providers.FilterOpenSearch(body, filters); err != nil {
+		return browserQueryResult{}, err
+	}
+
 	raw, err := searcher.SearchRaw(requestCtx, opensearch.Request{Index: index, Query: body, Limit: limit})
 	if err != nil {
 		return browserQueryResult{}, err
@@ -231,10 +256,26 @@ func (h *connectionBrowserHandler) executeOpenSearch(r *http.Request, conn *mode
 		}
 		rows = append(rows, row)
 	}
-	return browserQueryResult{Rows: rows, Metadata: map[string]any{
-		"total": raw.Hits.Total.Value, "relation": raw.Hits.Total.Relation,
-		"took": raw.Took, "timedOut": raw.TimedOut, "aggregations": raw.Aggregations,
-	}}, nil
+	// The hits are the display set and the mapping says how each of them can be
+	// narrowed, so a filtered run keeps offering the filters that produced it.
+	profile.Columns = openSearchBrowserColumns(rows, fields)
+	columns, err := describeBrowserColumns(profile, nil)
+	if err != nil {
+		return browserQueryResult{}, err
+	}
+	return browserQueryResult{
+		Rows:    rows,
+		Columns: columns,
+		// The hit cap is what stopped this read, so a total above what came back
+		// is the console having shown a slice — the same fact the SQL path
+		// reports, said the same way.
+		Truncated: raw.Hits.Total.Value > int64(len(rows)),
+		Limit:     len(rows),
+		Metadata: map[string]any{
+			"total": raw.Hits.Total.Value, "relation": raw.Hits.Total.Relation,
+			"took": raw.Took, "timedOut": raw.TimedOut, "aggregations": raw.Aggregations,
+		},
+	}, nil
 }
 
 // openSearchBrowserBody renders the search body and the hit cap. The builder
@@ -283,10 +324,16 @@ func openSearchBrowserBody(request browserQueryRequest) (body string, limit stri
 	return encodedBody, strconv.Itoa(compiled.Size), nil
 }
 
+// browserOpenSearchLimit resolves how many documents a console search returns.
+//
+// An unset limit is a page, not "whatever the searcher feels like": the browser
+// is an interactive console, and a console that quietly caps at some backend
+// default cannot tell the user whether they are looking at their data or at a
+// slice of it.
 func browserOpenSearchLimit(options map[string]any) string {
 	value := options["limit"]
 	if value == nil {
-		return ""
+		return strconv.Itoa(query.DefaultPageSize)
 	}
 	return strings.TrimSpace(fmt.Sprint(value))
 }

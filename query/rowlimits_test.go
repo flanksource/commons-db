@@ -73,35 +73,3 @@ var _ = Describe("RowLimits", func() {
 		})
 	})
 })
-
-var _ = Describe("BoundRows", func() {
-	rows := func(count int) []query.Row {
-		out := make([]query.Row, 0, count)
-		for i := range count {
-			out = append(out, query.Row{"id": i})
-		}
-		return out
-	}
-
-	drain := func(iterator query.RowIterator) []query.Row {
-		defer func() { Expect(iterator.Close()).To(Succeed()) }()
-		var collected []query.Row
-		for iterator.Next() {
-			collected = append(collected, iterator.Row())
-		}
-		Expect(iterator.Err()).ToNot(HaveOccurred())
-		return collected
-	}
-
-	It("stops the source at the ceiling", func() {
-		Expect(drain(query.BoundRows(query.SliceRows(rows(5)), 3))).To(HaveLen(3))
-	})
-
-	It("passes a source shorter than the ceiling through untouched", func() {
-		Expect(drain(query.BoundRows(query.SliceRows(rows(2)), 3))).To(Equal(rows(2)))
-	})
-
-	It("rejects a ceiling that would return nothing", func() {
-		Expect(func() { query.BoundRows(query.SliceRows(rows(1)), 0) }).To(Panic())
-	})
-})

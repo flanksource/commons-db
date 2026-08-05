@@ -7,12 +7,18 @@ import (
 
 // buildOpenTelemetryRequest compiles the profile's search specification and
 // composes the runtime column filters onto it.
-func buildOpenTelemetryRequest(req query.ProviderRequest, options openTelemetryOptions) (openSearchRequest, error) {
+func buildOpenTelemetryRequest(req query.ProviderRequest, options openTelemetryOptions, page openSearchPage) (openSearchRequest, error) {
+	search := openTelemetrySearch(options)
+	// A declared order is the profile's, and it is what a cursor is cut from,
+	// so it wins over the trace-shaped default sort.
+	if len(req.Order) > 0 {
+		search.Sort = nil
+	}
 	compiled, err := esdsl.Compile(esdsl.CompileRequest{
-		Search:     openTelemetrySearch(options),
+		Search:     search,
 		Params:     openSearchParamBindings(req),
 		Referenced: openSearchReferencedParams(req),
-		MaxRows:    req.MaxRows,
+		PageSize:   page.size,
 	})
 	if err != nil {
 		return openSearchRequest{}, err
@@ -20,7 +26,11 @@ func buildOpenTelemetryRequest(req query.ProviderRequest, options openTelemetryO
 	if err := applyOpenSearchFilters(compiled.Body, req.Filters, compiled.ParamUses); err != nil {
 		return openSearchRequest{}, err
 	}
-	return openSearchRequest{body: compiled.Body, limit: compiled.Size}, nil
+	if len(req.Order) > 0 {
+		compiled.Body["sort"] = openSearchSort(req.Order)
+	}
+	applyOpenSearchPage(compiled.Body, page)
+	return openSearchRequest{body: compiled.Body, limit: compiled.Size, capped: compiled.Capped}, nil
 }
 
 // openTelemetrySearch layers the trace-shaped options underneath the

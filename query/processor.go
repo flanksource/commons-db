@@ -20,6 +20,38 @@ type Processor interface {
 	Process(ctx context.Context, spec ProcessorSpec, in *Result) (*Result, error)
 }
 
+// PageProcessor is an optional Processor capability: a processor whose output
+// for a row depends only on that row can run on one page at a time, so a
+// profile using nothing else can still be served page by page.
+//
+// A processor that does not implement it is not deficient — a merge or a
+// reconcile genuinely needs every row before any row is correct. It just means
+// the profile answering with it has to run its query in full, which is a cost
+// worth being able to name rather than discover.
+type PageProcessor interface {
+	Processor
+	ProcessPage(ctx context.Context, spec ProcessorSpec, page Page) (Page, error)
+}
+
+// StreamableProcessors reports whether every processor in specs can run page by
+// page.
+func StreamableProcessors(specs []ProcessorSpec) (bool, error) {
+	for index, spec := range specs {
+		resolved, err := spec.Resolve()
+		if err != nil {
+			return false, fmt.Errorf("processor %d: %w", index, err)
+		}
+		p, err := GetProcessor(resolved.Type)
+		if err != nil {
+			return false, err
+		}
+		if _, ok := p.(PageProcessor); !ok {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
 var processorRegistry = map[string]Processor{}
 
 // RegisterProcessor adds p to the global processor registry, keyed by p.Type().
@@ -48,17 +80,31 @@ func RegisteredProcessors() []string {
 	return types
 }
 
-// applyProcessors runs the Result through each processor in order.
+// applyProcessors runs the Result through each processor in order, expanding
+// library references first.
 func applyProcessors(ctx context.Context, specs []ProcessorSpec, result *Result) (*Result, error) {
-	for _, spec := range specs {
-		p, err := GetProcessor(spec.Type)
+	for index, spec := range specs {
+		resolved, err := spec.Resolve()
+		if err != nil {
+			return nil, fmt.Errorf("processor %d: %w", index, err)
+		}
+		p, err := GetProcessor(resolved.Type)
 		if err != nil {
 			return nil, err
 		}
-		result, err = p.Process(ctx, spec, result)
+		result, err = p.Process(ctx, resolved, result)
 		if err != nil {
-			return nil, fmt.Errorf("processor %q: %w", spec.Type, err)
+			return nil, fmt.Errorf("processor %q: %w", resolved.Label(), err)
 		}
 	}
 	return result, nil
+}
+
+// Label names the processor in errors: the library entry when there is one,
+// since that is what the author wrote.
+func (s ProcessorSpec) Label() string {
+	if s.Use != "" {
+		return s.Use
+	}
+	return s.Type
 }

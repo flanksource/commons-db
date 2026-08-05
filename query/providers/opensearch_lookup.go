@@ -11,7 +11,9 @@ func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.Prov
 	if err != nil {
 		return nil, 0, err
 	}
-	request, err := buildOpenSearchRequest(req, options, false)
+	// A value lookup reads an aggregation rather than hits, so it wants the
+	// query body without a page position on it.
+	request, err := buildOpenSearchRequest(req, options, openSearchPage{})
 	if err != nil {
 		return nil, 0, err
 	}
@@ -23,7 +25,7 @@ func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.P
 	if err != nil {
 		return nil, 0, err
 	}
-	request, err := buildOpenTelemetryRequest(req, options)
+	request, err := buildOpenTelemetryRequest(req, options, openSearchPage{})
 	if err != nil {
 		return nil, 0, err
 	}

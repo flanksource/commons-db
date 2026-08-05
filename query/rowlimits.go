@@ -99,30 +99,3 @@ func (l *RowLimits) Validate() error {
 	}
 	return nil
 }
-
-// BoundRows stops an iterator after maxRows, whatever the source does with the
-// bound it was opened with — a provider is free to treat ExecuteRowsBounded's
-// maxRows as a hint, so the ceiling is enforced here as well.
-func BoundRows(rows RowIterator, maxRows int) RowIterator {
-	if maxRows <= 0 {
-		panic(fmt.Sprintf("BoundRows: maxRows must be greater than zero, got %d", maxRows))
-	}
-	return &boundedRowIterator{rows: rows, remaining: maxRows}
-}
-
-type boundedRowIterator struct {
-	rows      RowIterator
-	remaining int
-}
-
-func (i *boundedRowIterator) Next() bool {
-	if i.remaining == 0 || !i.rows.Next() {
-		return false
-	}
-	i.remaining--
-	return true
-}
-
-func (i *boundedRowIterator) Row() Row     { return i.rows.Row() }
-func (i *boundedRowIterator) Err() error   { return i.rows.Err() }
-func (i *boundedRowIterator) Close() error { return i.rows.Close() }

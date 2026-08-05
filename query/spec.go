@@ -137,6 +137,14 @@ func (p Profile) Validate() error {
 	if err := p.Limits.Validate(); err != nil {
 		return fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	if err := p.Order.Validate(); err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	for index, processor := range p.Processors {
+		if _, err := processor.Resolve(); err != nil {
+			return fmt.Errorf("profile %q processor %d: %w", p.Name, index, err)
+		}
+	}
 	for _, column := range p.Columns {
 		if err := column.Validate(); err != nil {
 			return fmt.Errorf("profile %q %w", p.Name, err)

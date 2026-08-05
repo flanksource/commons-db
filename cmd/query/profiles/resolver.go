@@ -66,6 +66,11 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 	if overlay.Namespace != "" {
 		merged.Namespace = overlay.Namespace
 	}
+	// An importing profile inherits its parent's icon unless it names its own,
+	// so a family like jms.* keeps one mark without repeating it in every file.
+	if overlay.Icon != "" {
+		merged.Icon = overlay.Icon
+	}
 	if overlay.Provider.Type != "" {
 		merged.Provider.Type = overlay.Provider.Type
 	}
@@ -85,6 +90,13 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 	}
 	if len(overlay.Ignore) > 0 {
 		merged.Ignore = slices.Clone(overlay.Ignore)
+	}
+	// An order is one choice of sequence, not a set of columns to blend: half of
+	// one order and half of another is an order the author never wrote, and its
+	// tiebreaker may not be last — which is exactly the state that makes paging
+	// silently unstable.
+	if len(overlay.Order) > 0 {
+		merged.Order = slices.Clone(overlay.Order)
 	}
 	if len(overlay.Processors) > 0 {
 		merged.Processors = slices.Clone(overlay.Processors)
@@ -112,6 +124,7 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 		merged.Top = overlay.Top
 	}
 	merged.Replay = query.MergeReplaySpec(merged.Replay, overlay.Replay)
+	merged.Reconcile = query.MergeReconcileConfig(merged.Reconcile, overlay.Reconcile)
 	merged.Limits = mergeRowLimits(merged.Limits, overlay.Limits)
 	return merged
 }

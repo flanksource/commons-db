@@ -56,6 +56,19 @@ func New(options Options) (*Service, error) {
 // section. It is the x-clicky-parent of each generated profile entity.
 const profileSurfaceParent = "profiles"
 
+// profilePathDelimiters are the characters a profile name uses to encode its
+// place in the hierarchy: `jms.incoming.disbursements` and `logs/api` both nest
+// three and two levels deep. A hyphen is deliberately absent — it is an ordinary
+// name character, and splitting on it would shatter `remote-debugger`.
+const profilePathDelimiters = "./"
+
+// profileSurfacePath is the x-clicky-path a profile surface carries: its name
+// split on the delimiters above and rejoined with clicky's wire separator, so
+// the frontend nests the sidebar without knowing this convention exists.
+func profileSurfacePath(name string) string {
+	return entity.JoinPath(entity.SplitPath(name, profilePathDelimiters))
+}
+
 // profileItem adapts a query.Profile to clicky's EntityItem. The embedded Profile
 // is promoted in JSON, so list/get responses carry the full definition (used by
 // the UI to pre-fill the edit form).
@@ -153,6 +166,16 @@ func (s *Service) RegisterClicky() {
 				return s.Reconcile(ctx, id, options)
 			}).
 			WithShort("Join this profile's rows against another profile on a shared key")).
+		WithAction(entity.ActionWithFlagsAndContext("run", RunFlags{},
+			func(ctx context.Context, id string, flagMap map[string]string) (*RunResult, error) {
+				options, err := decodeActionFlags[RunFlags](flagMap)
+				if err != nil {
+					return nil, err
+				}
+				return s.Run(ctx, id, options)
+			}).
+			WithShort("Read one page of this profile, or every page with --all")).
+		Filters(profileFilter{service: s}).
 		Register()
 }
 
@@ -271,10 +294,19 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 			}
 		}
 		for _, binding := range bindings {
-			filterName := profileFilterName(resolved.Profile.Name, binding.Column)
+			// A registered filter is what tells the browser which control to render,
+			// so every binding registers — including the ones with nothing to
+			// enumerate. A range, a date bound and a toggle are typed rather than
+			// chosen from, and their empty option set is the accurate answer to
+			// "what can this be filtered to": type a value.
+			source := entity.FilterSource(entity.StaticOptions(nil))
+			if binding.Lookup {
+				source = profileFilterSource{service: s, profileName: name, key: binding.Key}
+			}
 			entity.RegisterFilter(entity.NamedFilter{
-				Name: filterName, Label: binding.Label, Type: "multi-filter", Multi: true,
-				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
+				Name:  profileFilterName(resolved.Profile.Name, binding.Column),
+				Label: binding.Label, Type: binding.Kind.ControlType(), Multi: binding.Multi,
+				Source: source,
 			})
 		}
 		// A bound list param offers the same include/exclude control a column
@@ -310,9 +342,17 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 				// The base profile flow needs no database; only postgres/sqlite
 				// processors do. The context provider supplies the DB-backed
 				// context under `serve` and a DB-less one on the CLI.
-				res, err := query.Execute(s.context(), live.Profile, toParams(opts))
+				queryCtx := s.context()
+				res, err := query.Execute(queryCtx, live.Profile, toParams(opts))
 				if err != nil {
 					return nil, err
+				}
+				// The entity list has no page of its own to report, so the one
+				// thing it must not do is present a bounded read as the whole
+				// table. `run --all --limit` is the surface that pages.
+				if res.Truncated {
+					queryCtx.Warnf("profile %q: listed the first %d rows of a larger result; page it with `run --cursor` or raise limits.maxExportRows",
+						name, len(res.Rows))
 				}
 				return res.Rows, nil
 			}).
@@ -398,6 +438,10 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		if binding, ok := filterByColumn[c.Name]; ok {
 			prop["x-clicky-filter"] = profileFilterName(p.Name, c.Name)
 			prop["x-clicky-filter-key"] = binding.Key
+			// The kind is what decides the control the browser renders, and it
+			// is not derivable from the column type alone once a profile can
+			// override it.
+			prop["x-clicky-filter-kind"] = string(binding.Kind.Normalized())
 		}
 		if !idAssigned {
 			prop["x-clicky-id"] = true
@@ -413,7 +457,8 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		"type":            "object",
 		"properties":      props,
 		"x-clicky-parent": profileSurfaceParent,
-		"x-clicky-icon":   providerIcon(p.Provider.Type),
+		"x-clicky-icon":   profileIcon(p),
+		"x-clicky-path":   profileSurfacePath(p.Name),
 		"x-clicky-title":  p.Name,
 	}
 	// x-clicky-render lets the frontend pick a presentation (e.g. the LogsTable

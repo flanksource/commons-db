@@ -172,12 +172,38 @@ func (r *ReconcileResult) Render(format string) (string, error) {
 // Pretty renders the summary line plus the joined table, and is what clicky's
 // formatter picks up on the CLI.
 func (r *ReconcileResult) Pretty() api.Text {
-	table := r.Table()
-	return api.Text{
+	text := api.Text{
 		Content: fmt.Sprintf("%s -> %s  matched=%d only-source=%d only-dest=%d dup-keys=%d\n",
 			r.Source, r.Dest, r.Stats.Matched, r.Stats.OnlySource, r.Stats.OnlyDest, r.Stats.DupKeys),
-		Children: []api.Textable{table},
 	}
+	if warning := r.boundWarning(); warning != "" {
+		text.Children = append(text.Children, api.Text{Content: warning, Style: "text-yellow-500"})
+	}
+	text.Children = append(text.Children, r.Table())
+	return text
+}
+
+// boundWarning names the sides whose backend cut the read short. A key can only
+// be missing from a side that was read in full, so an incomplete run has to say
+// which of its findings are not findings.
+//
+// A key range needs no such warning: it cuts both sides at the same keys, so a
+// one-sided key inside it is missing rather than merely unread.
+func (r *ReconcileResult) boundWarning() string {
+	var side string
+	switch {
+	case r.SourceTruncated && r.DestTruncated:
+		side = "both sides"
+	case r.SourceTruncated:
+		side = "the source"
+	case r.DestTruncated:
+		side = "the destination"
+	default:
+		return ""
+	}
+	return fmt.Sprintf(
+		"%s stopped short of the whole dataset, so a one-sided key here may simply not have been read — reconcile a key range instead of relying on where the read happened to stop\n",
+		side)
 }
 
 func renderReconcileKey(row ReconcileRow) any {
