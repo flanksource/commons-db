@@ -172,6 +172,64 @@ var _ = Describe("opensearch structured search", func() {
 		))
 	})
 
+	It("emits a mapped list include once and keeps its native exclusions", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{"query": map[string]any{
+				"op": "terms", "field": "scheme.id",
+				"value": map[string]any{"param": "schemes"}, "optional": true,
+			}},
+		})
+		profile.Params = []query.ParamDef{{
+			Name: "schemes", Type: query.ParamTypeList, Field: "scheme.id",
+		}}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"schemes": []string{"one", "two", "!three"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"terms": map[string]any{"scheme.id": []any{"one", "two"}}},
+			},
+			"must_not": []any{
+				map[string]any{"terms": map[string]any{"scheme.id": []any{"three"}}},
+			},
+		}}))
+	})
+
+	It("accepts a native-only list mapping in a structured search", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{"query": map[string]any{"op": "match_all"}},
+		})
+		profile.Params = []query.ParamDef{{
+			Name: "schemes", Type: query.ParamTypeList, Field: "scheme.id",
+		}}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"schemes": []string{"one", "!three"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"match_all": map[string]any{}},
+				map[string]any{"terms": map[string]any{"scheme.id": []any{"one"}}},
+			},
+			"must_not": []any{
+				map[string]any{"terms": map[string]any{"scheme.id": []any{"three"}}},
+			},
+		}}))
+	})
+
 	It("uses options.limit as the hit cap when the specification sets no size", func() {
 		var capture openSearchCapture
 		server := stubOpenSearch(&capture)

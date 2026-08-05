@@ -101,7 +101,14 @@ export function makeFieldValueLookup(options: {
   const { baseUrl, index, params, roles } = options;
   if (!baseUrl || !index) return undefined;
   return ({ field, search }) => ({
-    key: JSON.stringify([baseUrl, index, field, search ?? null, params ?? null]),
+    key: JSON.stringify([
+      baseUrl,
+      index,
+      field,
+      search ?? null,
+      params ?? null,
+      roles ?? null,
+    ]),
     fetch: async (query) => {
       const body: ValuesRequestBody = {
         index,

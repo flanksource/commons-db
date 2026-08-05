@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   conditionAt,
   emptyCondition,
+  fieldForParam,
   insertAt,
   isEmptySpec,
   isParamValue,
@@ -146,5 +147,34 @@ describe("raw-DSL transition", () => {
       search: { query: { op: "bool", conditions: [] } },
       query: "",
     });
+  });
+});
+
+describe("fieldForParam", () => {
+  const bound: EsSearch = {
+    query: {
+      op: "bool",
+      conditions: [
+        { op: "term", field: "level", value: "error" },
+        {
+          op: "bool",
+          conditions: [
+            { op: "terms", field: "service.name", values: [{ param: "service" }] },
+            { op: "range", field: "@timestamp", gte: { param: "since" } },
+          ],
+        },
+      ],
+    },
+  };
+
+  it("reads the field off the condition a parameter is bound to", () => {
+    expect(fieldForParam(bound, "service")).toBe("service.name");
+    expect(fieldForParam(bound, "since")).toBe("@timestamp");
+  });
+
+  it("has no field for a parameter the specification never references", () => {
+    expect(fieldForParam(bound, "unused")).toBeUndefined();
+    expect(fieldForParam(bound, "")).toBeUndefined();
+    expect(fieldForParam(undefined, "service")).toBeUndefined();
   });
 });

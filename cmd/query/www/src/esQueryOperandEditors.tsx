@@ -6,17 +6,33 @@
  */
 
 import { InputField, Select } from "@flanksource/clicky-ui";
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
-  paramName,
+  isParamValue,
   type EsCondition,
   type EsValue,
 } from "./esQueryBuilderModel";
+import type { FieldValuesQuery } from "./esFieldValues";
+import type { ParamOperand } from "./esParamMappingModel";
+import { extendEsParamOperand } from "./esParamOperandExtension";
+import {
+  conditionOperandPatch,
+  multipleConditionValues,
+} from "./esQueryOperandModel";
 import type { EsQualifierSchema } from "./esQueryOperators";
+import { ValueCombobox, ValuesCombobox } from "./esValueCombobox";
+import type { ParamDraft } from "./profileWizardModel";
 
 // Date math a range over a date field commonly starts from. They are ordinary
 // operand values that the backend resolves — this only saves the typing.
-const dateMathPresets = ["now-15m", "now-1h", "now-24h", "now-7d", "now/d", "now"];
+const dateMathPresets = [
+  "now-15m",
+  "now-1h",
+  "now-24h",
+  "now-7d",
+  "now/d",
+  "now",
+];
 
 export function ConditionOperand({
   condition,
@@ -24,22 +40,37 @@ export function ConditionOperand({
   rowId,
   params,
   dateMath,
+  values,
   set,
+  onBindParam,
+  onUnbindParam,
 }: {
   condition: EsCondition;
   arity: string;
   rowId: string;
-  params: string[];
+  params: ParamDraft[];
   dateMath: boolean;
+  /** The field's own values, when the mapping allows aggregating them. */
+  values?: FieldValuesQuery;
   set: (patch: Partial<EsCondition>) => void;
+  onBindParam: (operand: ParamOperand, name: string) => void;
+  onUnbindParam: (name: string) => void;
 }) {
   if (arity === "none" || arity === "group") return null;
   if (arity === "multiple") {
     return (
       <ValuesInput
-        values={condition.values ?? []}
+        values={multipleConditionValues(condition)}
         params={params}
-        onChange={(values) => set({ values })}
+        {...(values ? { lookup: values } : {})}
+        onChange={(next) => {
+          if (isParamValue(next)) return onBindParam("values", next.param);
+          const bound = boundParam(multipleConditionValues(condition));
+          if (next === undefined && bound) return onUnbindParam(bound);
+          if (!Array.isArray(next))
+            throw new Error("multiple operand requires a value list");
+          set(conditionOperandPatch({ arity: "multiple", values: next }));
+        }}
       />
     );
   }
@@ -54,7 +85,14 @@ export function ConditionOperand({
             value={condition[bound]}
             params={params}
             presets={dateMath ? dateMathPresets : []}
-            onChange={(next) => set({ [bound]: next })}
+            onChange={(next) => {
+              if (isParamValue(next)) return onBindParam(bound, next.param);
+              const mapped = boundParam(condition[bound]);
+              if (next === undefined && mapped) return onUnbindParam(mapped);
+              set(
+                conditionOperandPatch({ arity: "range", bound, value: next }),
+              );
+            }}
           />
         ))}
       </span>
@@ -67,7 +105,13 @@ export function ConditionOperand({
       value={condition.value}
       params={params}
       presets={dateMath ? dateMathPresets : []}
-      onChange={(next) => set({ value: next })}
+      {...(values ? { lookup: values } : {})}
+      onChange={(next) => {
+        if (isParamValue(next)) return onBindParam("value", next.param);
+        const bound = boundParam(condition.value);
+        if (next === undefined && bound) return onUnbindParam(bound);
+        set(conditionOperandPatch({ arity: "single", value: next }));
+      }}
     />
   );
 }
@@ -78,79 +122,109 @@ function ValueInput({
   value,
   params,
   presets,
+  lookup,
   onChange,
 }: {
   id: string;
   label: string;
   value: EsValue;
-  params: string[];
+  params: ParamDraft[];
   presets: string[];
+  lookup?: FieldValuesQuery;
   onChange: (next: EsValue) => void;
 }) {
-  const bound = paramName(value);
-  if (bound !== undefined) {
-    return <ParamChip name={bound} label={label} onClear={() => onChange(undefined)} />;
-  }
-  const listId = presets.length ? `es-presets-${id}` : undefined;
-  return (
-    <span className="flex items-center gap-1">
-      <InputField
-        aria-label={label}
-        className="min-w-36"
-        placeholder={label}
-        value={value === undefined || value === null ? "" : String(value)}
-        {...(listId ? { list: listId } : {})}
+  let node: ReactNode;
+  if (lookup) {
+    node = (
+      <ValueCombobox
+        id={id}
+        label={label}
+        lookup={lookup}
+        value={
+          isParamValue(value) || value === undefined || value === null
+            ? ""
+            : String(value)
+        }
         onChange={(next) => onChange(next === "" ? undefined : next)}
       />
-      {listId ? (
-        <datalist id={listId}>
-          {presets.map((preset) => (
-            <option key={preset} value={preset} />
-          ))}
-        </datalist>
-      ) : null}
-      <ParamBinder
-        label={label}
-        params={params}
-        onBind={(param) => onChange({ param })}
-      />
-    </span>
-  );
+    );
+  } else {
+    const listId = presets.length ? `es-presets-${id}` : undefined;
+    node = (
+      <>
+        <InputField
+          aria-label={label}
+          className="min-w-36"
+          placeholder={label}
+          value={
+            isParamValue(value) || value === undefined || value === null
+              ? ""
+              : String(value)
+          }
+          {...(listId ? { list: listId } : {})}
+          onChange={(next) => onChange(next === "" ? undefined : next)}
+        />
+        {listId ? (
+          <datalist id={listId}>
+            {presets.map((preset) => (
+              <option key={preset} value={preset} />
+            ))}
+          </datalist>
+        ) : null}
+      </>
+    );
+  }
+  return extendEsParamOperand({
+    label,
+    value,
+    onChange,
+    node,
+    params,
+  });
 }
 
 function ValuesInput({
   values,
   params,
+  lookup,
   onChange,
 }: {
   values: EsValue[];
-  params: string[];
-  onChange: (values: EsValue[]) => void;
+  params: ParamDraft[];
+  lookup?: FieldValuesQuery;
+  onChange: (values: EsValue[] | EsValue | undefined) => void;
 }) {
   const [draft, setDraft] = useState("");
-  const commit = () => {
-    const parsed = draft
-      .split(",")
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-    if (!parsed.length) return;
-    onChange([...values, ...parsed]);
-    setDraft("");
-  };
-  const removeAt = (index: number) =>
-    onChange(values.filter((_value, position) => position !== index));
-  return (
-    <span className="flex min-w-56 flex-1 flex-wrap items-center gap-1">
-      {values.map((value, index) => {
-        const bound = paramName(value);
-        return bound !== undefined ? (
-          <ParamChip
-            key={index}
-            name={bound}
-            label="value"
-            onClear={() => removeAt(index)}
-          />
-        ) : (
+  const bound = values.filter(isParamValue);
+  const literals = values.filter((value) => !isParamValue(value));
+  let node: ReactNode;
+  if (lookup) {
+    node = (
+      <ValuesCombobox
+        label="Values"
+        lookup={lookup}
+        values={literals.map(String)}
+        onChange={(next) => onChange([...next, ...bound])}
+      />
+    );
+  } else {
+    const commit = () => {
+      const parsed = draft
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+      if (!parsed.length) return;
+      onChange([...literals, ...parsed, ...bound]);
+      setDraft("");
+    };
+    const removeAt = (index: number) =>
+      onChange([
+        ...literals.filter((_value, position) => position !== index),
+        ...bound,
+      ]);
+    node = (
+      <span className="flex min-w-56 flex-1 flex-wrap items-center gap-1">
+        {literals.map((value, index) => (
           <span
             key={index}
             className="es-value-chip inline-flex items-center gap-1 rounded border bg-muted px-1.5 py-0.5 text-xs"
@@ -165,82 +239,35 @@ function ValuesInput({
               ×
             </button>
           </span>
-        );
-      })}
-      <InputField
-        aria-label="Add value"
-        className="min-w-32"
-        placeholder="Add value…"
-        value={draft}
-        onChange={setDraft}
-        onKeyDown={(event) => {
-          if (event.key !== "Enter" && event.key !== ",") return;
-          event.preventDefault();
-          commit();
-        }}
-        onBlur={commit}
-      />
-      <ParamBinder
-        label="value"
-        params={params}
-        onBind={(param) => onChange([...values, { param }])}
-      />
-    </span>
-  );
+        ))}
+        <InputField
+          aria-label="Add value"
+          className="min-w-32"
+          placeholder="Add value…"
+          value={draft}
+          onChange={setDraft}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter" && event.key !== ",") return;
+            event.preventDefault();
+            commit();
+          }}
+          onBlur={commit}
+        />
+      </span>
+    );
+  }
+  return extendEsParamOperand({
+    label: "value",
+    value: values,
+    onChange,
+    node,
+    params,
+  });
 }
 
-/**
- * ParamChip shows an operand bound to a profile parameter. The value is
- * substituted structurally at compile time, never interpolated into the DSL,
- * which is what the chip stands for.
- */
-function ParamChip({
-  name,
-  label,
-  onClear,
-}: {
-  name: string;
-  label: string;
-  onClear: () => void;
-}) {
-  return (
-    <span className="es-param-chip inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/5 px-1.5 py-0.5 font-mono text-xs">
-      {name}
-      <button
-        type="button"
-        aria-label={`Unbind ${label}`}
-        className="opacity-60 hover:opacity-100"
-        onClick={onClear}
-      >
-        ×
-      </button>
-    </span>
-  );
-}
-
-function ParamBinder({
-  label,
-  params,
-  onBind,
-}: {
-  label: string;
-  params: string[];
-  onBind: (param: string) => void;
-}) {
-  if (!params.length) return null;
-  return (
-    <span className="w-24 shrink-0">
-      <Select
-        aria-label={`Bind ${label} to a parameter`}
-        value=""
-        placeholder="param"
-        options={params.map((param) => ({ value: param, label: param }))}
-        onChange={(event) => {
-          if (event.target.value) onBind(event.target.value);
-        }}
-      />
-    </span>
-  );
+function boundParam(value: EsValue | EsValue[]): string | undefined {
+  const values = Array.isArray(value) ? value : [value];
+  return values.find(isParamValue)?.param;
 }
 
 export function QualifierInput({
@@ -256,7 +283,8 @@ export function QualifierInput({
 }) {
   const label = schema.title ?? name;
   if (schema.type === "boolean") {
-    const checked = value === undefined ? schema.default === true : value === true;
+    const checked =
+      value === undefined ? schema.default === true : value === true;
     return (
       <label
         className="flex items-center gap-1 text-xs text-muted-foreground"

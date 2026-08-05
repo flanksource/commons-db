@@ -1,6 +1,7 @@
 package connections
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -122,13 +123,27 @@ func (h *connectionBrowserHandler) openSearchCatalog(r *http.Request, conn *mode
 	return browserCatalog{Nodes: inspection.Nodes}, nil
 }
 
+// catalogNodesForOpenSearch nests each rotation under the wildcard it rolls up
+// into, so the catalog reads as the handful of logical targets an author has
+// rather than one row per day. Patterns lead the target list, so a member is
+// always seen after the node it belongs under.
 func catalogNodesForOpenSearch(targets []opensearchinspect.Target) []browserCatalogNode {
 	nodes := make([]browserCatalogNode, 0, len(targets))
+	positions := map[string]int{}
 	for _, target := range targets {
-		nodes = append(nodes, browserCatalogNode{
+		node := browserCatalogNode{
 			ID: target.Kind + ":" + target.Name, Label: target.Name, Kind: target.Kind, Query: `{"query":{"match_all":{}}}`,
 			Options: map[string]any{"index": target.Name, "targetKind": target.Kind, "limit": "200"},
-		})
+		}
+		if position, nested := positions[target.Pattern]; nested {
+			nodes[position].Children = append(nodes[position].Children, node)
+			continue
+		}
+		if target.Kind == "pattern" {
+			node.Label = fmt.Sprintf("%s · %d indexes", target.Name, target.Count)
+			positions[target.Name] = len(nodes)
+		}
+		nodes = append(nodes, node)
 	}
 	return nodes
 }

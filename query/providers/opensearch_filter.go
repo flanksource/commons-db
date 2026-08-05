@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 // decodeOpenSearchBody parses a hand-written Query DSL body. Numbers are
@@ -26,24 +27,45 @@ func decodeOpenSearchBody(raw string) (map[string]any, error) {
 // become a single terms clause — one term clause per value would AND them and
 // match nothing. Distinct fields stay ANDed, and two filters bound to the same
 // backend field (a column filter and a list param, say) merge into one clause.
-func applyOpenSearchFilters(body map[string]any, filters []query.ColumnFilterValue) {
-	if len(filters) == 0 {
-		return
+func applyOpenSearchFilters(body map[string]any, filters []query.ColumnFilterValue, paramUses []esdsl.ParamUse) error {
+	usesByName := make(map[string][]esdsl.ParamUse, len(paramUses))
+	for _, use := range paramUses {
+		usesByName[use.Name] = append(usesByName[use.Name], use)
+	}
+	effective := make([]query.ColumnFilterValue, 0, len(filters))
+	for _, filter := range filters {
+		uses := usesByName[filter.Key]
+		if len(uses) > 1 {
+			return fmt.Errorf("param %q has %d structural query mappings; list parameters require exactly one", filter.Key, len(uses))
+		}
+		if len(uses) == 1 {
+			if uses[0].Field != filter.Field {
+				return fmt.Errorf("param %q maps native field %q but its query condition uses %q", filter.Key, filter.Field, uses[0].Field)
+			}
+			filter.Include = nil
+		}
+		if len(filter.Include) > 0 || len(filter.Exclude) > 0 {
+			effective = append(effective, filter)
+		}
+	}
+	if len(effective) == 0 {
+		return nil
 	}
 	existing := body["query"]
 	if existing == nil {
 		existing = map[string]any{"match_all": map[string]any{}}
 	}
-	includes := append([]any{existing}, openSearchTermsByField(filters, func(f query.ColumnFilterValue) []string {
+	includes := append([]any{existing}, openSearchTermsByField(effective, func(f query.ColumnFilterValue) []string {
 		return f.Include
 	})...)
-	excludes := openSearchTermsByField(filters, func(f query.ColumnFilterValue) []string { return f.Exclude })
+	excludes := openSearchTermsByField(effective, func(f query.ColumnFilterValue) []string { return f.Exclude })
 
 	boolQuery := map[string]any{"filter": includes}
 	if len(excludes) > 0 {
 		boolQuery["must_not"] = excludes
 	}
 	body["query"] = map[string]any{"bool": boolQuery}
+	return nil
 }
 
 // openSearchTermsByField groups the values select returns by backend field,

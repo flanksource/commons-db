@@ -47,6 +47,10 @@ type Target struct {
 	Hidden     bool   `json:"hidden,omitempty"`
 	System     bool   `json:"system,omitempty"`
 	DataStream string `json:"dataStream,omitempty"`
+	// Pattern names the wildcard target a rotated index rolls up into.
+	Pattern string `json:"pattern,omitempty"`
+	// Count is how many rotations a `pattern` target covers.
+	Count int `json:"count,omitempty"`
 }
 
 type TargetCatalog struct {
@@ -125,9 +129,12 @@ func (i *Inspector) Targets(ctx context.Context) (TargetCatalog, error) {
 	for _, target := range targets {
 		ordered = append(ordered, target)
 	}
+	ordered = RollupTargets(ordered)
+	// Patterns lead, so a rotation survives the target limit even when its
+	// thousands of daily indexes do not.
 	sort.Slice(ordered, func(a, b int) bool {
-		if ordered[a].Kind != ordered[b].Kind {
-			return ordered[a].Kind < ordered[b].Kind
+		if kindRank(ordered[a].Kind) != kindRank(ordered[b].Kind) {
+			return kindRank(ordered[a].Kind) < kindRank(ordered[b].Kind)
 		}
 		return ordered[a].Name < ordered[b].Name
 	})
@@ -194,8 +201,22 @@ func (i *Inspector) Fields(ctx context.Context, target Target) (FieldCatalog, er
 	return catalog, nil
 }
 
+// kindRank orders the target kinds from most to least useful to pick.
+func kindRank(kind string) int {
+	switch kind {
+	case "pattern":
+		return 0
+	case "alias":
+		return 1
+	case "data_stream":
+		return 2
+	default:
+		return 3
+	}
+}
+
 func validTargetKind(kind string) bool {
-	return kind == "index" || kind == "alias" || kind == "data_stream"
+	return kind == "index" || kind == "alias" || kind == "data_stream" || kind == "pattern"
 }
 
 func targetKey(kind, name string) string { return kind + ":" + name }

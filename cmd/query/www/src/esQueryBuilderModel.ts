@@ -163,6 +163,37 @@ export function paramName(value: EsValue): string | undefined {
 }
 
 /**
+ * fieldForParam is the field a parameter filters on: the field of the first
+ * condition whose operand binds it. A parameter the specification never
+ * references has no field, and so nothing to offer values from.
+ */
+export function fieldForParam(
+  search: EsSearch | undefined,
+  name: string,
+): string | undefined {
+  const walk = (condition: EsCondition | undefined): string | undefined => {
+    if (!condition) return undefined;
+    const operands: EsValue[] = [
+      condition.value,
+      ...(condition.values ?? []),
+      condition.gt,
+      condition.gte,
+      condition.lt,
+      condition.lte,
+    ];
+    if (condition.field && operands.some((value) => paramName(value) === name)) {
+      return condition.field;
+    }
+    for (const child of condition.conditions ?? []) {
+      const found = walk(child);
+      if (found) return found;
+    }
+    return undefined;
+  };
+  return name ? walk(search?.query) : undefined;
+}
+
+/**
  * isEmptySpec reports whether a specification says nothing the raw query would
  * not. It is what decides whether a profile is still in raw mode.
  */

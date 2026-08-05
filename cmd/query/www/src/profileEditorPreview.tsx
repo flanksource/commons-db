@@ -48,7 +48,13 @@ export function ProfileEditorPreview({
                   key={column.name}
                   className="max-w-[24rem] truncate border-b border-border px-3 py-1 font-mono text-[11px]"
                 >
-                  {formatPreviewCell(row[column.name])}
+                  {formatPreviewCell(
+                    Object.prototype.hasOwnProperty.call(row, column.name)
+                      ? row[column.name]
+                      : column.source
+                        ? row[column.source]
+                        : undefined,
+                  )}
                 </td>
               ))}
             </tr>

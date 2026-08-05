@@ -39,6 +39,17 @@ type Compiled struct {
 
 	// From is the resolved offset. Zero means no offset.
 	From int
+
+	// ParamUses reports each condition field that structurally consumed a
+	// parameter. Providers use it to avoid applying the same include twice when
+	// a parameter also has a native include/exclude field binding.
+	ParamUses []ParamUse
+}
+
+// ParamUse is one structural parameter operand and its condition field.
+type ParamUse struct {
+	Name  string
+	Field string
 }
 
 // JSON encodes the request body.
@@ -65,7 +76,7 @@ func Compile(req CompileRequest) (Compiled, error) {
 	if err := req.Search.Validate(); err != nil {
 		return Compiled{}, err
 	}
-	root, size, from, err := bindSearch(req.Search, req.Params, req.Referenced)
+	root, size, from, paramUses, err := bindSearch(req.Search, req.Params, req.Referenced)
 	if err != nil {
 		return Compiled{}, err
 	}
@@ -92,7 +103,7 @@ func Compile(req CompileRequest) (Compiled, error) {
 	if from > 0 {
 		body["from"] = from
 	}
-	return Compiled{Body: body, Size: size, From: from}, nil
+	return Compiled{Body: body, Size: size, From: from, ParamUses: paramUses}, nil
 }
 
 func compileRoot(root *bound) (map[string]any, error) {

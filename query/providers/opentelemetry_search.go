@@ -11,13 +11,15 @@ func buildOpenTelemetryRequest(req query.ProviderRequest, options openTelemetryO
 	compiled, err := esdsl.Compile(esdsl.CompileRequest{
 		Search:     openTelemetrySearch(options),
 		Params:     openSearchParamBindings(req),
-		Referenced: req.TemplatedParams,
+		Referenced: openSearchReferencedParams(req),
 		MaxRows:    req.MaxRows,
 	})
 	if err != nil {
 		return openSearchRequest{}, err
 	}
-	applyOpenSearchFilters(compiled.Body, req.Filters)
+	if err := applyOpenSearchFilters(compiled.Body, req.Filters, compiled.ParamUses); err != nil {
+		return openSearchRequest{}, err
+	}
 	return openSearchRequest{body: compiled.Body, limit: compiled.Size}, nil
 }
 

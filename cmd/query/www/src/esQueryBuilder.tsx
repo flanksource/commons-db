@@ -48,6 +48,12 @@ import {
 import { EsQuerySortEditor } from "./esQuerySortEditor";
 import type { ProfileDraft } from "./profileBuilderWorkspace";
 import type { ParamDraft } from "./profileWizardModel";
+import {
+  bindParamOperand,
+  reconcileSearchParamMappings,
+  removeParamMapping,
+  type ParamMappingEdit,
+} from "./esParamMappingModel";
 
 export type EsQueryBuilderProps = {
   search: EsSearch;
@@ -55,7 +61,8 @@ export type EsQueryBuilderProps = {
   fields: EsFieldMapping[];
   vocabulary: EsBuilderVocabulary;
   /** Declared profile parameters an operand can bind to. */
-  params?: string[];
+  params?: ParamDraft[];
+  onMappingChange?: (edit: ParamMappingEdit) => void;
   /** Where a field's own values come from; absent without a connection. */
   values?: FieldValuesSource;
   compilation?: EsCompilation;
@@ -68,11 +75,38 @@ export function EsQueryBuilder({
   fields,
   vocabulary,
   params = [],
+  onMappingChange,
   values,
   compilation,
   className,
 }: EsQueryBuilderProps) {
   const root = search.query ?? emptyGroup();
+  const mappingFieldsChanged = (edit: ParamMappingEdit) =>
+    edit.params.some((param, index) => param.field !== params[index]?.field);
+  const commitMappingEdit = (edit: ParamMappingEdit) => {
+    if (onMappingChange) {
+      onMappingChange(edit);
+      return;
+    }
+    if (mappingFieldsChanged(edit)) {
+      throw new Error(
+        "list parameter mappings require an atomic mapping change handler",
+      );
+    }
+    onChange(edit.search);
+  };
+  const commitSearchEdit = (nextSearch: EsSearch) => {
+    const edit = reconcileSearchParamMappings({
+      previousSearch: search,
+      nextSearch,
+      params,
+    });
+    if (mappingFieldsChanged(edit)) {
+      commitMappingEdit(edit);
+      return;
+    }
+    onChange(nextSearch);
+  };
   const context: EsQueryContext = {
     fields,
     vocabulary,
@@ -93,9 +127,9 @@ export function EsQueryBuilder({
   };
   const actions: EsQueryTreeActions = {
     update: (path, update) =>
-      onChange({ ...search, query: updateAt(root, path, update) }),
+      commitSearchEdit({ ...search, query: updateAt(root, path, update) }),
     insert: (groupPath, condition) =>
-      onChange({
+      commitSearchEdit({
         ...search,
         query: insertAt(
           root,
@@ -104,7 +138,16 @@ export function EsQueryBuilder({
           condition,
         ),
       }),
-    remove: (path) => onChange({ ...search, query: removeAt(root, path) }),
+    remove: (path) =>
+      commitSearchEdit({ ...search, query: removeAt(root, path) }),
+    mapParam: (path, operand, name) => {
+      const edit = bindParamOperand({ search, params, path, operand, name });
+      commitMappingEdit(edit);
+    },
+    unmapParam: (path, name) => {
+      const edit = removeParamMapping({ search, params, name, path });
+      commitMappingEdit(edit);
+    },
   };
 
   return (
@@ -200,6 +243,7 @@ const esQueryBuilderPost: PostExtension = (field, nodes, ctx) => {
         onChange={field.onChange}
         schema={field.schema}
         rootValue={(ctx?.rootValue ?? {}) as ProfileDraft}
+        onRootChange={ctx?.onRootChange}
       />
     ),
   };
@@ -217,11 +261,13 @@ function EsQueryBuilderField({
   onChange,
   schema,
   rootValue,
+  onRootChange,
 }: {
   search: EsSearch;
   onChange: (next: unknown) => void;
   schema: JsonSchemaProperty;
   rootValue: ProfileDraft;
+  onRootChange?: (next: Record<string, unknown>) => void;
 }) {
   const connectionID = savedConnectionID(rootValue.provider?.connection);
   const baseUrl = connectionID ? browserBaseUrl(connectionID) : "";
@@ -251,7 +297,25 @@ function EsQueryBuilderField({
       onChange={(next) => onChange(next)}
       fields={esQueryFields(inspection.completion)}
       vocabulary={esBuilderVocabulary({ properties: { search: schema } })}
-      params={paramNames(rootValue.params)}
+      params={rootValue.params ?? []}
+      onMappingChange={(edit) => {
+        if (!onRootChange) {
+          throw new Error(
+            "query parameter mappings require an atomic root form update",
+          );
+        }
+        onRootChange({
+          ...rootValue,
+          params: edit.params,
+          provider: {
+            ...(rootValue.provider ?? {}),
+            options: {
+              ...(rootValue.provider?.options ?? {}),
+              search: edit.search,
+            },
+          },
+        });
+      }}
       {...(values ? { values } : {})}
       compilation={compilation}
     />

@@ -44,6 +44,43 @@ var _ = Describe("opensearch provider", func() {
 		Expect(requestedSize).To(Equal("101"))
 	})
 
+	// An export ceiling is a bound, but it is far past what one search may
+	// return: OpenSearch rejects a size above index.max_result_window and points
+	// at the scroll API. So the bound says how far to read, not how to read.
+	It("scrolls a bound larger than one search window rather than asking for it in one page", func() {
+		var usedScroll bool
+		var requestedSize string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if strings.Contains(r.URL.Path, "/_search/scroll") {
+				_, _ = fmt.Fprint(w, `{"succeeded":true,"num_freed":1}`)
+				return
+			}
+			usedScroll = r.URL.Query().Has("scroll")
+			requestedSize = r.URL.Query().Get("size")
+			_, _ = fmt.Fprint(w, `{"_scroll_id":"scroll-1","took":1,"timed_out":false,"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_index":"logs","_id":"one","_source":{"message":"hello"}}]}}`)
+		}))
+		defer srv.Close()
+
+		rows, err := query.ExecuteRowsBounded(context.New(), query.Profile{
+			Name: "exporting-opensearch",
+			Provider: query.ProviderConfig{
+				Type:    "opensearch",
+				Options: map[string]any{"address": srv.URL, "index": "logs"},
+			},
+			Query: `{"query":{"match_all":{}}}`,
+		}, query.DefaultMaxExportRows)
+		Expect(err).ToNot(HaveOccurred())
+		defer rows.Close()
+		Expect(rows.Next()).To(BeTrue())
+		Expect(usedScroll).To(BeTrue())
+		Expect(requestedSize).ToNot(Equal("100000"))
+	})
+
 	It("clears an unbounded scroll when iteration stops early", func() {
 		var clearedScroll bool
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -5,7 +5,10 @@
  * resulting operators are ordered for an author.
  */
 
-import { defaultOperatorForFamily } from "./esQueryBuilderModel";
+import {
+  defaultOperatorForFamily,
+  type EsCondition,
+} from "./esQueryBuilderModel";
 
 /** One entry of x-es-operators, keyed exactly as esdsl.OperatorInfo marshals. */
 export type EsOperatorInfo = {
@@ -18,6 +21,44 @@ export type EsOperatorInfo = {
   analyzed?: boolean;
   group?: boolean;
 };
+
+export function changeConditionOperator(
+  condition: EsCondition,
+  next: EsOperatorInfo,
+): EsCondition {
+  const { value, values, gt, gte, lt, lte, conditions, ...rest } = condition;
+  const changed: EsCondition = { ...rest, op: next.op };
+
+  if (next.arity === "single") {
+    const operand = value !== undefined
+      ? value
+      : values?.length === 1
+        ? values[0]
+        : undefined;
+    return operand === undefined ? changed : { ...changed, value: operand };
+  }
+  if (next.arity === "multiple") {
+    const operands = values?.length
+      ? values
+      : value === undefined
+        ? []
+        : [value];
+    return operands.length === 0 ? changed : { ...changed, values: operands };
+  }
+  if (next.arity === "range") {
+    return {
+      ...changed,
+      ...(gt !== undefined ? { gt } : {}),
+      ...(gte !== undefined ? { gte } : {}),
+      ...(lt !== undefined ? { lt } : {}),
+      ...(lte !== undefined ? { lte } : {}),
+    };
+  }
+  if (next.arity === "group") {
+    return { ...changed, conditions: conditions ?? [] };
+  }
+  return changed;
+}
 
 /** A field as _field_caps reports it, via the browser inspection response. */
 export type EsFieldMapping = {

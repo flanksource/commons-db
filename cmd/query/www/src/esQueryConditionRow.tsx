@@ -13,8 +13,12 @@ import {
 } from "@flanksource/clicky-ui";
 import { UiTrash } from "@flanksource/clicky-ui/icons";
 import type { ConditionPath, EsCondition } from "./esQueryBuilderModel";
+import type { ParamOperand } from "./esParamMappingModel";
+import type { FieldValuesQuery } from "./esFieldValues";
 import { ConditionOperand, QualifierInput } from "./esQueryOperandEditors";
+import type { ParamDraft } from "./profileWizardModel";
 import {
+  changeConditionOperator,
   fieldWarning,
   operatorsForField,
   qualifiersForOperator,
@@ -26,7 +30,15 @@ export type EsQueryContext = {
   fields: EsFieldMapping[];
   vocabulary: EsBuilderVocabulary;
   /** Declared profile parameters an operand can bind to. */
-  params: string[];
+  params: ParamDraft[];
+  /**
+   * The values a row's field holds, scoped by the builder to the rest of the
+   * query. Absent where the host has no connection to ask.
+   */
+  values?: (request: {
+    path: ConditionPath;
+    field: string;
+  }) => FieldValuesQuery | undefined;
 };
 
 /**
@@ -40,6 +52,8 @@ export type EsQueryTreeActions = {
   ) => void;
   insert: (groupPath: ConditionPath, condition: EsCondition) => void;
   remove: (path: ConditionPath) => void;
+  mapParam: (path: ConditionPath, operand: ParamOperand, name: string) => void;
+  unmapParam: (path: ConditionPath, name: string) => void;
 };
 
 // How each bool clause reads to an author. filter and must both narrow, but
@@ -77,6 +91,9 @@ export function EsQueryConditionRow({
   const set = (patch: Partial<EsCondition>) =>
     actions.update(path, (current) => ({ ...current, ...patch }));
   const rowId = path.join("-") || "root";
+  const values = condition.field
+    ? context.values?.({ path, field: condition.field })
+    : undefined;
 
   const advanced = qualifiersForOperator({
     names: qualifierNames,
@@ -122,7 +139,19 @@ export function EsQueryConditionRow({
           <Select
             aria-label="Operator"
             value={condition.op}
-            onChange={(event) => set({ op: event.target.value })}
+            onChange={(event) => {
+              const next = catalog.find(
+                (entry) => entry.op === event.target.value,
+              );
+              if (!next) {
+                throw new Error(
+                  `operator ${event.target.value} is missing from the catalog`,
+                );
+              }
+              actions.update(path, (current) =>
+                changeConditionOperator(current, next),
+              );
+            }}
           >
             {operatorGroups(catalog, field, condition.op).map((group) => {
               const options = group.operators.map((entry) => (
@@ -148,7 +177,10 @@ export function EsQueryConditionRow({
           dateMath={Boolean(
             field?.dataType === "date" || field?.types?.includes("date"),
           )}
+          {...(values ? { values } : {})}
           set={set}
+          onBindParam={(operand, name) => actions.mapParam(path, operand, name)}
+          onUnbindParam={(name) => actions.unmapParam(path, name)}
         />
         <IconButton
           icon={UiTrash}

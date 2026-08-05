@@ -47,6 +47,9 @@ const operator = (
 const vocabulary: EsBuilderVocabulary = {
   catalog: [
     operator("term", ["keyword", "number", "boolean", "ip", "date"]),
+    operator("terms", ["keyword", "number", "boolean", "ip", "date"], {
+      arity: "multiple",
+    }),
     operator("range", ["date", "number", "ip"], { arity: "range" }),
     operator("exists", ["any"], { arity: "none" }),
     operator("bool", [], {
@@ -197,6 +200,16 @@ describe("EsQueryBuilder value lookups", () => {
       query: { op: "bool", conditions: [{ op: "term", field: "service.name" }] },
     });
     expect(html).toMatch(/role="combobox"[^>]*aria-label="Value"/);
+  });
+
+  it("picks multiple operands from existing values for is one of", () => {
+    const { html } = renderWithLookup({
+      query: {
+        op: "bool",
+        conditions: [{ op: "terms", field: "service.name", values: ["payments"] }],
+      },
+    });
+    expect(html).toMatch(/role="combobox"[^>]*aria-label="Values"/);
   });
 
   it("leaves the operand a plain input when the host has no connection", () => {

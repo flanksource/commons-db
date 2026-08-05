@@ -94,6 +94,21 @@ var _ = Describe("Resolve", func() {
 		Expect(resolved.ConnectionProfile).To(Equal("owner"))
 	})
 
+	// Each cap answers its own question, so an overlay that raises the export
+	// ceiling says nothing about the page the base declared.
+	It("layers row limits one cap at a time", func() {
+		merged := mergeProfile(
+			query.Profile{Limits: &query.RowLimits{PageSize: 25, MaxExportRows: 5000}},
+			query.Profile{Limits: &query.RowLimits{MaxExportRows: 250_000}},
+		)
+		Expect(*merged.Limits).To(Equal(query.RowLimits{PageSize: 25, MaxExportRows: 250_000}))
+
+		Expect(mergeProfile(
+			query.Profile{Limits: &query.RowLimits{PageSize: 25}},
+			query.Profile{},
+		).Limits).To(Equal(&query.RowLimits{PageSize: 25}))
+	})
+
 	It("clears the inherited session kind when an overlay selects the other kind", func() {
 		merged := mergeProfile(
 			query.Profile{Trace: &query.TraceSpec{}},

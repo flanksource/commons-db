@@ -45,6 +45,23 @@ type browserDescriptor struct {
 	OptionsSchema  queryschema.Schema `json:"optionsSchema,omitempty"`
 	InitialOptions map[string]any     `json:"initialOptions,omitempty"`
 	Catalog        bool               `json:"catalog,omitempty"`
+	// TargetLabel names what a query runs against when the source picks one flat
+	// target — the `index` option — instead of navigating a hierarchy. Setting it
+	// gives the browser a target combobox in place of the catalog tree.
+	TargetLabel string `json:"targetLabel,omitempty"`
+	// RowLimits are the row caps that apply when a profile sets none of its own:
+	// the page it returns by default, the largest page a caller may ask for, and
+	// where an export stops. The browser shows them beside the query's own limit
+	// — an option the author does set — so the four are not confused.
+	RowLimits *browserRowLimits `json:"rowLimits,omitempty"`
+}
+
+// browserRowLimits carries the default row caps to the browser, which shows
+// them as the values a profile inherits when it declares no limits of its own.
+type browserRowLimits struct {
+	PageSize      int `json:"pageSize"`
+	MaxPageSize   int `json:"maxPageSize"`
+	MaxExportRows int `json:"maxExportRows"`
 }
 
 type browserQueryRequest struct {
@@ -137,6 +154,8 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		h.serveQuery(w, r, conn)
 	case tail == "/compile" && r.Method == http.MethodPost:
 		h.serveCompile(w, r, conn)
+	case tail == "/values" && r.Method == http.MethodPost:
+		h.serveValues(w, r, conn)
 	case tail == "/catalog" && r.Method == http.MethodGet:
 		h.serveCatalog(w, r, conn)
 	case tail == "/inspect" && r.Method == http.MethodGet:
@@ -182,6 +201,7 @@ func descriptorForConnection(connType string) (browserDescriptor, bool) {
 		d.InitialOptions = map[string]any{"since": "1h", "limit": "200", "direction": "backward"}
 	case models.ConnectionTypeOpenSearch:
 		d.Provider, d.Language, d.QueryLabel, d.DefaultQuery, d.Catalog = "opensearch", "json", "OpenSearch query DSL", `{"query":{"match_all":{}}}`, true
+		d.TargetLabel = "Index"
 		d.InitialOptions = map[string]any{"limit": "200"}
 	case models.ConnectionTypeJaeger:
 		d.Provider, d.Language, d.QueryLabel, d.ResultView = "jaeger", "text", "Trace ID (optional)", "table"
@@ -192,6 +212,12 @@ func descriptorForConnection(connType string) (browserDescriptor, bool) {
 		return browserDescriptor{}, false
 	}
 	d.OptionsSchema = queryschema.BrowserOptions(d.Provider)
+	defaults := (*query.RowLimits)(nil).Resolve()
+	d.RowLimits = &browserRowLimits{
+		PageSize:      defaults.PageSize,
+		MaxPageSize:   defaults.MaxPageSize,
+		MaxExportRows: defaults.MaxExportRows,
+	}
 	return d, true
 }
 
@@ -349,6 +375,12 @@ func (h *connectionBrowserHandler) inspectConnection(ctx context.Context, conn *
 				selected = &targets.Targets[i]
 				break
 			}
+		}
+		// A wildcard is a target by construction — `_field_caps` resolves it — so
+		// an author can type one the enumeration never listed, which matters when
+		// the target list was truncated. A concrete name still has to exist.
+		if selected == nil && strings.Contains(targetName, "*") {
+			selected = &opensearchinspect.Target{Name: targetName, Kind: "pattern"}
 		}
 		if selected == nil {
 			return browserInspection{}, fmt.Errorf("OpenSearch target %q (%s) was not discovered", targetName, targetKind)

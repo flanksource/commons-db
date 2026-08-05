@@ -70,7 +70,7 @@ func (opensearchProvider) OpenRows(ctx context.Context, req query.ProviderReques
 	if err != nil {
 		return nil, err
 	}
-	scroll := req.MaxRows <= 0
+	scroll := openSearchScrolls(req.MaxRows)
 	search, err := buildOpenSearchRequest(req, opts, scroll)
 	if err != nil {
 		return nil, err

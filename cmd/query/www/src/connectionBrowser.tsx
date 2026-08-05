@@ -1,21 +1,18 @@
 import {
   CacheBrowser,
-  Combobox,
   type EntityDetailBodyRenderContext,
   type EntityDetailHeaderRenderContext,
   type QueryBrowserResult,
 } from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import {
   browserBaseUrl,
   fetchJSON,
   mergeProviderOptions,
-  openSearchIndexOptions,
   queryBrowserOptionsSchema,
   useInspection,
   type BrowserDescriptor,
-  type BrowserInspection,
   type ConnectionProfileActionRenderer,
 } from "./connectionBrowserModel";
 import { ConnectionQueryWorkspace } from "./connectionQueryWorkspace";
@@ -95,24 +92,13 @@ function ConnectionBrowser({
     },
     retry: 0,
   });
-  // Shares the browser's inspection cache entry, so selecting an index here
-  // costs no extra request.
-  const inspection = useQuery({
-    queryKey: ["connection-browser-inspection", id],
-    queryFn: () => fetchJSON<BrowserInspection>(`${baseUrl}/inspect`),
-    enabled:
-      descriptor.data?.provider === "opensearch" &&
-      descriptor.data.catalog === true,
-    retry: 0,
-    staleTime: 5 * 60_000,
-  });
-  const [selectedOpenSearchIndex, setSelectedOpenSearchIndex] = useState("");
+  // The target the browser is pointed at, so "Build profile" starts where the
+  // author left off. It is reported by the browser rather than picked here —
+  // the picker lives in the browser's navigator.
+  const [selectedTarget, setSelectedTarget] = useState("");
   const profileOptions = useMemo(
-    () =>
-      selectedOpenSearchIndex
-        ? { index: selectedOpenSearchIndex }
-        : undefined,
-    [selectedOpenSearchIndex],
+    () => (selectedTarget ? { index: selectedTarget } : undefined),
+    [selectedTarget],
   );
 
   if (descriptor.isLoading) {
@@ -151,33 +137,14 @@ function ConnectionBrowser({
       : null;
   return (
     <div className="flex min-w-0 flex-col gap-3">
-      {profileAction || descriptor.data.provider === "opensearch" ? (
-        <div className="flex flex-wrap items-center gap-2">
-          {descriptor.data.provider === "opensearch" ? (
-            <Combobox
-              ariaLabel="OpenSearch index"
-              label="Index"
-              value={selectedOpenSearchIndex}
-              onChange={setSelectedOpenSearchIndex}
-              options={openSearchIndexOptions(inspection.data)}
-              placeholder={
-                inspection.isError ? "Unable to load indexes" : "Select index…"
-              }
-              loading={inspection.isLoading}
-              invalid={inspection.isError}
-              allowCustomValue={false}
-              className="min-w-72 flex-1 sm:max-w-xl"
-            />
-          ) : null}
-          {profileAction}
-        </div>
+      {profileAction ? (
+        <div className="flex flex-wrap items-center gap-2">{profileAction}</div>
       ) : null}
       <ConnectionQueryBrowser
         id={id}
         baseUrl={baseUrl}
         descriptor={descriptor.data}
-        selectedOpenSearchIndex={selectedOpenSearchIndex}
-        onOpenSearchIndexChange={setSelectedOpenSearchIndex}
+        onTargetChange={setSelectedTarget}
       />
     </div>
   );
@@ -187,14 +154,12 @@ function ConnectionQueryBrowser({
   id,
   baseUrl,
   descriptor,
-  selectedOpenSearchIndex,
-  onOpenSearchIndexChange,
+  onTargetChange,
 }: {
   id: string;
   baseUrl: string;
   descriptor: BrowserDescriptor;
-  selectedOpenSearchIndex: string;
-  onOpenSearchIndexChange: (index: string) => void;
+  onTargetChange: (target: string) => void;
 }) {
   const [selection, setSelection] = useState<{
     query?: string;
@@ -227,32 +192,6 @@ function ConnectionQueryBrowser({
     [descriptor.initialOptions, selection.options],
   );
 
-  // The index combobox lives above the browser, so a change there has to reach
-  // the options the browser runs with.
-  useEffect(() => {
-    if (descriptor.provider !== "opensearch") return;
-    const currentIndex = String(
-      liveOptions.index ?? selection.options?.index ?? "",
-    );
-    if (currentIndex === selectedOpenSearchIndex) return;
-    const target = inspection.data?.targets?.find(
-      (candidate) => candidate.name === selectedOpenSearchIndex,
-    );
-    const nextOptions = { ...liveOptions };
-    if (selectedOpenSearchIndex) nextOptions.index = selectedOpenSearchIndex;
-    else delete nextOptions.index;
-    if (target?.kind) nextOptions.targetKind = target.kind;
-    else delete nextOptions.targetKind;
-    setSelection((current) => ({ ...current, options: nextOptions }));
-    setLiveOptions(nextOptions);
-  }, [
-    descriptor.provider,
-    inspection.data?.targets,
-    liveOptions,
-    selectedOpenSearchIndex,
-    selection.options?.index,
-  ]);
-
   return (
     <ConnectionQueryWorkspace
       id={`${descriptor.provider ?? "query"}:${id}`}
@@ -265,7 +204,10 @@ function ConnectionQueryBrowser({
         setSelection((current) => ({ ...current, query: next }))
       }
       options={options}
-      onOptionsChange={setLiveOptions}
+      onOptionsChange={(next) => {
+        setLiveOptions(next);
+        onTargetChange(String(next.index ?? ""));
+      }}
       optionsSchema={queryBrowserOptionsSchema(descriptor)}
       search={search}
       onSearchChange={(transition) => {
@@ -276,9 +218,6 @@ function ConnectionQueryBrowser({
       onCatalogSelect={(node) => {
         setSelection({ query: node.query, options: node.options });
         setLiveOptions(node.options ?? {});
-        if (descriptor.provider === "opensearch") {
-          onOpenSearchIndexChange(String(node.options?.index ?? ""));
-        }
       }}
       execute={(request) =>
         fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {

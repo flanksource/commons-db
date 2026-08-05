@@ -797,7 +797,7 @@
                                   "type": "string"
                                 },
                                 "value": {
-                                  "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                                  "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                                   "title": "Value",
                                   "x-es-value": true
                                 },
@@ -962,7 +962,7 @@
                             "type": "string"
                           },
                           "value": {
-                            "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                            "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                             "title": "Value",
                             "x-es-value": true
                           },
@@ -1127,7 +1127,7 @@
                       "type": "string"
                     },
                     "value": {
-                      "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                      "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                       "title": "Value",
                       "x-es-value": true
                     },
@@ -1826,7 +1826,7 @@
                                   "type": "string"
                                 },
                                 "value": {
-                                  "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                                  "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                                   "title": "Value",
                                   "x-es-value": true
                                 },
@@ -1991,7 +1991,7 @@
                             "type": "string"
                           },
                           "value": {
-                            "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                            "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                             "title": "Value",
                             "x-es-value": true
                           },
@@ -2156,7 +2156,7 @@
                       "type": "string"
                     },
                     "value": {
-                      "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                      "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                       "title": "Value",
                       "x-es-value": true
                     },
@@ -3108,7 +3108,7 @@
             "description": "Expression computing the cell value from `row`",
             "title": "CEL",
             "type": "string",
-            "x-clicky-order": 7
+            "x-clicky-order": 8
           },
           "filter": {
             "description": "Backend mapping for native include/exclude filters; direct columns and simple CEL infer this automatically",
@@ -3124,7 +3124,7 @@
             ],
             "title": "Filter",
             "type": "object",
-            "x-clicky-order": 8
+            "x-clicky-order": 9
           },
           "format": {
             "description": "Optional display formatter; blank derives from Type and Unit takes precedence",
@@ -3137,7 +3137,7 @@
             ],
             "title": "Format",
             "type": "string",
-            "x-clicky-order": 4,
+            "x-clicky-order": 5,
             "x-enum-labels": {
               "bytes": "Bytes",
               "currency": "Currency",
@@ -3150,7 +3150,7 @@
             "description": "Hide the column from default output while retaining it for CEL and processors",
             "title": "Hidden",
             "type": "boolean",
-            "x-clicky-order": 9
+            "x-clicky-order": 10
           },
           "kind": {
             "description": "Optional table behavior, independent of Type: timestamp adds the date-range control, tags renders filterable chips, and status applies status styling",
@@ -3161,7 +3161,7 @@
             ],
             "title": "Role",
             "type": "string",
-            "x-clicky-order": 3
+            "x-clicky-order": 4
           },
           "label": {
             "description": "Optional column header; blank uses Name",
@@ -3170,10 +3170,16 @@
             "x-clicky-order": 0
           },
           "name": {
-            "description": "Exact key read from each query result row",
+            "description": "Public field name used by tables, filters, APIs, and exports",
             "title": "Name",
             "type": "string",
             "x-clicky-order": 1
+          },
+          "source": {
+            "description": "Original provider field copied into Name and removed from output",
+            "title": "Source",
+            "type": "string",
+            "x-clicky-order": 2
           },
           "type": {
             "description": "Value shape and default formatting; independent of Role",
@@ -3192,7 +3198,7 @@
             ],
             "title": "Type",
             "type": "string",
-            "x-clicky-order": 2,
+            "x-clicky-order": 3,
             "x-enum-labels": {
               "json": "JSON",
               "key_value": "KeyValue{}",
@@ -3215,7 +3221,7 @@
             ],
             "title": "Unit",
             "type": "string",
-            "x-clicky-order": 5,
+            "x-clicky-order": 6,
             "x-enum-labels": {
               "Bps": "Bytes/sec",
               "binBps": "Binary bytes/sec",
@@ -3233,7 +3239,7 @@
             "description": "Maximum rendered width in characters",
             "title": "Width",
             "type": "integer",
-            "x-clicky-order": 6
+            "x-clicky-order": 7
           }
         },
         "required": [
@@ -3282,16 +3288,23 @@
             "title": "Description",
             "type": "string"
           },
+          "field": {
+            "description": "Backend field this parameter filters on; enables excluding a value and requires an OpenSearch or OpenTelemetry provider",
+            "title": "Field",
+            "type": "string",
+            "x-clicky-component": "es-param-field"
+          },
           "label": {
             "title": "Label",
             "type": "string"
           },
           "name": {
-            "description": "Parameter key, referenced as {{.params.\u003cname\u003e}}",
+            "description": "Parameter key, referenced as {{.params.\u003cname\u003e}} in the query, in any provider option, or in the connection",
             "title": "Name",
             "type": "string"
           },
           "options": {
+            "description": "Allowed values; leave empty on a bound list to offer the backend's own distinct values",
             "items": {
               "type": "string"
             },
@@ -3320,24 +3333,31 @@
             "type": "string"
           },
           "type": {
+            "description": "A list accepts several values at once; bind it to a field to allow excluding them",
             "enum": [
               "string",
               "number",
               "boolean",
               "date",
-              "enum"
+              "enum",
+              "list"
             ],
             "title": "Type",
-            "type": "string"
+            "type": "string",
+            "x-enum-labels": {
+              "list": "List (multi-select)"
+            }
           }
         },
         "required": [
           "name"
         ],
-        "type": "object"
+        "type": "object",
+        "x-clicky-component": "es-param"
       },
       "title": "Params",
-      "type": "array"
+      "type": "array",
+      "x-clicky-component": "es-params"
     },
     "profile": {
       "description": "Profile name",
@@ -3644,6 +3664,116 @@
       ],
       "title": "Render",
       "type": "string"
+    },
+    "replay": {
+      "description": "Turn one result row back into an outbound HTTP request",
+      "properties": {
+        "body": {
+          "description": "CEL expression yielding the request body; non-string values are JSON encoded",
+          "format": "textarea",
+          "title": "Body",
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Header name to CEL expression; an expression yielding blank omits the header",
+          "title": "Headers",
+          "type": "object"
+        },
+        "kind": {
+          "default": "http",
+          "enum": [
+            "http"
+          ],
+          "title": "Kind",
+          "type": "string",
+          "x-clicky-order": 1
+        },
+        "method": {
+          "description": "CEL expression yielding the HTTP method, e.g. \"POST\" (defaults to POST)",
+          "title": "Method",
+          "type": "string"
+        },
+        "target": {
+          "description": "Connection the request is sent to; required for a relative URL",
+          "properties": {
+            "connection": {
+              "description": "Pick a saved connection or type an inline DSN/URL",
+              "title": "Connection",
+              "type": "string",
+              "x-clicky-lookup": {
+                "filter": "connection",
+                "multi": false,
+                "scope": {
+                  "from": "provider.type",
+                  "map": {
+                    "clickhouse": [
+                      "clickhouse"
+                    ],
+                    "http": [
+                      "http"
+                    ],
+                    "jaeger": [
+                      "jaeger"
+                    ],
+                    "loki": [
+                      "loki"
+                    ],
+                    "mysql": [
+                      "mysql"
+                    ],
+                    "opensearch": [
+                      "opensearch"
+                    ],
+                    "opentelemetry": [
+                      "opentelemetry"
+                    ],
+                    "postgres": [
+                      "postgres"
+                    ],
+                    "postgrest": [
+                      "http"
+                    ],
+                    "prometheus": [
+                      "prometheus"
+                    ],
+                    "sql": [
+                      "postgres",
+                      "mysql",
+                      "sql_server",
+                      "clickhouse"
+                    ],
+                    "sqlserver": [
+                      "sql_server"
+                    ]
+                  },
+                  "param": "types"
+                },
+                "searchParam": "__lookup_q",
+                "url": "/api/v1/connection"
+              }
+            },
+            "url": {
+              "description": "Base URL",
+              "title": "URL",
+              "type": "string"
+            }
+          },
+          "title": "Target",
+          "type": "object",
+          "x-clicky-component": "connection-http",
+          "x-clicky-order": 2
+        },
+        "url": {
+          "description": "CEL expression yielding an absolute URL or a path relative to the target",
+          "title": "URL",
+          "type": "string"
+        }
+      },
+      "title": "Replay",
+      "type": "object"
     }
   },
   "required": [

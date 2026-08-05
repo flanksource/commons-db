@@ -9,6 +9,7 @@ import {
   PROFILE_COLUMN_UNIT_OPTIONS,
   profileWizardStepReady,
   profileWizardSteps,
+  withProfileLimits,
   type ProfileColumn,
 } from "./profileWizardModel";
 
@@ -28,6 +29,22 @@ describe("profile wizard flow", () => {
       { id: "fields", label: "Name & shape", description: "Fields" },
       { id: "review", label: "Review", description: "Save" },
     ]);
+  });
+});
+
+describe("writing the row caps onto a draft", () => {
+  const draft = { profile: "os", limits: { maxExportRows: 250000 } };
+
+  it("stores the caps the profile sets for itself", () => {
+    expect(withProfileLimits(draft, { pageSize: 200 })).toEqual({
+      profile: "os",
+      limits: { pageSize: 200 },
+    });
+  });
+
+  it("leaves no block on a profile that caps nothing", () => {
+    expect(withProfileLimits(draft, undefined)).toEqual({ profile: "os" });
+    expect(withProfileLimits(draft, undefined)).not.toHaveProperty("limits");
   });
 });
 

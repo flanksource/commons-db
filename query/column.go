@@ -40,8 +40,12 @@ const (
 
 // ColumnDef declares one output column of a Profile.
 type ColumnDef struct {
-	// Name is the row key this column reads from and the default header label.
+	// Name is the public row key and default header label.
 	Name string `json:"name" yaml:"name"`
+
+	// Source is the provider row key copied into Name. The original key is
+	// removed after all column expressions have been evaluated.
+	Source string `json:"source,omitempty" yaml:"source,omitempty"`
 
 	// Label overrides the column header. Defaults to a prettified Name.
 	Label string `json:"label,omitempty" yaml:"label,omitempty"`
@@ -99,6 +103,9 @@ func (c ColumnDef) clickyFormat() string {
 
 // Validate rejects unsupported display metadata before a profile executes.
 func (c ColumnDef) Validate() error {
+	if c.Source != "" && c.CEL != "" {
+		return fmt.Errorf("column %q cannot set both source and cel", c.Name)
+	}
 	if c.Filter != nil && strings.TrimSpace(c.Filter.Field) == "" {
 		return fmt.Errorf("column %q filter field is required", c.Name)
 	}
