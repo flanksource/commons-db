@@ -35,23 +35,24 @@ type bound struct {
 type binder struct {
 	params map[string]ParamBinding
 	used   map[string]bool
+	uses   []ParamUse
 }
 
 // bindSearch resolves every parameter reference in the specification, folds
 // role-carrying parameters into native constructs, and reports the resolved
 // size and from. A nil root means "match every document". referenced names
 // parameters already consumed by the caller, which count as used here.
-func bindSearch(search Search, params []ParamBinding, referenced []string) (root *bound, size int, from int, err error) {
+func bindSearch(search Search, params []ParamBinding, referenced []string) (root *bound, size int, from int, uses []ParamUse, err error) {
 	b := &binder{params: make(map[string]ParamBinding, len(params)), used: map[string]bool{}}
 	for _, name := range referenced {
 		b.used[name] = true
 	}
 	for _, param := range params {
 		if param.Name == "" {
-			return nil, 0, 0, fmt.Errorf("parameter binding is missing a name")
+			return nil, 0, 0, nil, fmt.Errorf("parameter binding is missing a name")
 		}
 		if _, duplicate := b.params[param.Name]; duplicate {
-			return nil, 0, 0, fmt.Errorf("parameter %q is bound twice", param.Name)
+			return nil, 0, 0, nil, fmt.Errorf("parameter %q is bound twice", param.Name)
 		}
 		b.params[param.Name] = param
 	}
@@ -60,7 +61,7 @@ func bindSearch(search Search, params []ParamBinding, referenced []string) (root
 	if search.Query != nil {
 		node, keep, bindErr := b.bindCondition(*search.Query, "query")
 		if bindErr != nil {
-			return nil, 0, 0, bindErr
+			return nil, 0, 0, nil, bindErr
 		}
 		if keep {
 			tree = &node
@@ -69,23 +70,23 @@ func bindSearch(search Search, params []ParamBinding, referenced []string) (root
 
 	timeRange, err := b.bindTimeRange(search.TimeField)
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, nil, err
 	}
 	tree = attachFilter(tree, timeRange)
 
 	size, err = b.resolveCount(RoleLimit, search.Size, "limit")
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, nil, err
 	}
 	from, err = b.resolveCount(RoleOffset, search.From, "offset")
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, nil, err
 	}
 
 	if err := b.assertAllUsed(); err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, nil, err
 	}
-	return tree, size, from, nil
+	return tree, size, from, b.uses, nil
 }
 
 // attachFilter adds extra as a filter clause of tree, wrapping a leaf root in a
@@ -251,6 +252,7 @@ func (b *binder) bindCondition(c Condition, path string) (bound, bool, error) {
 		}
 		return node, len(node.children) > 0, nil
 	}
+	b.recordParamUses(c)
 
 	switch info.Arity {
 	case ArityNone:
@@ -280,6 +282,22 @@ func (b *binder) bindCondition(c Condition, path string) (bound, bool, error) {
 		}
 	}
 	return node, true, nil
+}
+
+func (b *binder) recordParamUses(condition Condition) {
+	if condition.Field == "" {
+		return
+	}
+	seen := map[string]bool{}
+	for _, name := range paramNames(condition) {
+		if seen[name] {
+			continue
+		}
+		if _, supplied := b.params[name]; supplied {
+			b.uses = append(b.uses, ParamUse{Name: name, Field: condition.Field})
+			seen[name] = true
+		}
+	}
 }
 
 // bindList resolves a multi-operand condition, expanding a single operand that

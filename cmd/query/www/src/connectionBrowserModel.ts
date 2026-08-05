@@ -24,6 +24,43 @@ export type BrowserDescriptor = {
   optionsSchema?: JsonSchemaObject;
   initialOptions?: Record<string, unknown>;
   catalog?: boolean;
+  /**
+   * What a query runs against when the source picks one flat target — the
+   * `index` option. Set, the browser offers a target combobox instead of a
+   * catalog tree.
+   */
+  targetLabel?: string;
+  /**
+   * The row caps that apply when a profile declares none of its own: the page a
+   * caller gets by default, the largest page it may ask for, and where an
+   * all-row export stops. The query's own `limit` option is none of them.
+   */
+  rowLimits?: BrowserRowLimits;
+};
+
+/** The defaults the server serves, shown as what an unset cap inherits. */
+export type BrowserRowLimits = {
+  pageSize: number;
+  maxPageSize: number;
+  maxExportRows: number;
+};
+
+/** The caps a profile sets for itself; each unset one takes its default. */
+export type ProfileRowLimits = {
+  pageSize?: number;
+  maxPageSize?: number;
+  maxExportRows?: number;
+};
+
+export type TargetKind = "index" | "alias" | "data_stream" | "pattern";
+
+export type InspectionTarget = {
+  name: string;
+  kind: TargetKind;
+  /** The rotation wildcard this concrete index rolls up into. */
+  pattern?: string;
+  /** How many rotations a `pattern` target covers. */
+  count?: number;
 };
 
 export type CatalogNode = {
@@ -58,10 +95,10 @@ export type BrowserInspection = {
       columns: InspectionField[];
     }[];
   }[];
-  targets?: { name: string; kind: "index" | "alias" | "data_stream" }[];
+  targets?: InspectionTarget[];
   nodes?: CatalogNode[];
   selected?: {
-    target: { name: string; kind: "index" | "alias" | "data_stream" };
+    target: InspectionTarget;
     fields: InspectionField[];
   };
   truncated?: boolean;
@@ -98,35 +135,91 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
   return response.json() as Promise<T>;
 }
 
+/**
+ * Rotations lead: a cluster with fifty-three daily jaeger indexes has one
+ * target an author actually means, and it is `jaeger-span-*`. The concrete
+ * indexes stay listed last so a single day is still reachable.
+ */
+const targetGroups: { kind: TargetKind; label: string }[] = [
+  { kind: "pattern", label: "Index patterns" },
+  { kind: "alias", label: "Aliases" },
+  { kind: "data_stream", label: "Data streams" },
+  { kind: "index", label: "Indexes" },
+];
+
 export function openSearchIndexOptions(
   inspection?: BrowserInspection,
 ): ComboboxOption[] {
   if (inspection?.kind !== "opensearch") return [];
-  return (inspection.targets ?? []).map((target) => ({
-    value: target.name,
-    label: target.name,
-    group:
-      target.kind === "data_stream"
-        ? "Data streams"
-        : target.kind === "alias"
-          ? "Aliases"
-          : "Indexes",
-    title: `${target.name} · ${target.kind.replace("_", " ")}`,
-  }));
+  const targets = inspection.targets ?? [];
+  return targetGroups.flatMap(({ kind, label }) =>
+    targets
+      .filter((target) => target.kind === kind)
+      .map((target) => ({
+        value: target.name,
+        label: target.count ? `${target.name} · ${target.count} indexes` : target.name,
+        selectedLabel: target.name,
+        group: label,
+        title: target.count
+          ? `${target.name} · ${target.count} rotated indexes`
+          : `${target.name} · ${target.kind.replace("_", " ")}`,
+      })),
+  );
 }
 
 /**
- * queryBrowserOptionsSchema is what the inline options form edits. The index has
- * its own combobox above the browser and the structured search has the filter
- * builder, so neither is rendered a second time as a generic field.
+ * openSearchTargetKind resolves how to inspect a picked target. An undiscovered
+ * name containing a wildcard is a pattern by construction — the server inspects
+ * it without requiring it to have been enumerated.
+ */
+export function openSearchTargetKind(
+  inspection: BrowserInspection | undefined,
+  name: string,
+): string {
+  const discovered = (inspection?.targets ?? []).find(
+    (target) => target.name === name,
+  );
+  if (discovered) return discovered.kind;
+  return name.includes("*") ? "pattern" : "";
+}
+
+/**
+ * withTarget applies a picked target over a host's options, clearing both keys
+ * when the picker is emptied so a stale index cannot survive the selection.
+ */
+export function withTarget(
+  options: Record<string, unknown>,
+  target: { index: string; targetKind: string } | undefined,
+): Record<string, unknown> {
+  if (!target) return options;
+  const next = { ...options };
+  if (target.index) {
+    next.index = target.index;
+    next.targetKind = target.targetKind;
+  } else {
+    delete next.index;
+    delete next.targetKind;
+  }
+  return next;
+}
+
+/**
+ * queryBrowserOptionsSchema is what the inline options form edits — the leftover
+ * options, once the navigator has claimed the ones that belong with the query.
+ * The target has its own combobox, and where the source has a structured search
+ * the builder owns both the search and the limit it returns, so none of the
+ * three is rendered a second time as a generic field.
  */
 export function queryBrowserOptionsSchema(
   descriptor: BrowserDescriptor,
 ): JsonSchemaObject | undefined {
   if (!descriptor.optionsSchema) return undefined;
   const properties = { ...(descriptor.optionsSchema.properties ?? {}) };
-  delete properties.search;
-  if (descriptor.provider === "opensearch") delete properties.index;
+  if (properties.search) {
+    delete properties.search;
+    delete properties.limit;
+  }
+  if (descriptor.targetLabel) delete properties.index;
   return { ...descriptor.optionsSchema, properties };
 }
 

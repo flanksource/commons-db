@@ -10,6 +10,24 @@ import (
 )
 
 var _ = Describe("CEL columns", func() {
+	It("renames a provider field and removes its original key", func() {
+		query.RegisterProvider(&mockProvider{
+			typ:  "renamed-source",
+			rows: []query.Row{{"request_count": 12.0, "service": "payments"}},
+		})
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "renamed",
+			Provider: query.ProviderConfig{Type: "renamed-source"},
+			Columns: []query.ColumnDef{
+				{Name: "requests", Source: "request_count", Type: query.ColumnTypeNumber},
+				{Name: "service"},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(Equal([]query.Row{{"requests": 12.0, "service": "payments"}}))
+	})
+
 	It("computes a column value from the row", func() {
 		query.RegisterProvider(&mockProvider{
 			typ:  "cel-source",

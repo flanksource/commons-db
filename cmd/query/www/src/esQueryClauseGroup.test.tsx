@@ -41,6 +41,8 @@ const noopActions: EsQueryTreeActions = {
   update: () => undefined,
   insert: () => undefined,
   remove: () => undefined,
+  mapParam: () => undefined,
+  unmapParam: () => undefined,
 };
 
 const render = (condition: EsCondition, root = true) => {

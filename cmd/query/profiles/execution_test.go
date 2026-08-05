@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -373,6 +374,81 @@ func TestExecHandlerStreamsAllRowsAsNDJSON(t *testing.T) {
 	}
 	if disposition := rec.Header().Get("Content-Disposition"); !strings.Contains(disposition, "rows.ndjson") {
 		t.Fatalf("missing attachment filename: %q", disposition)
+	}
+}
+
+// An all-row export is the one request with no page to bound it, so the export
+// ceiling is what stops it. It is deliberately far above a page: maxPageSize
+// bounds one response, maxExportRows bounds the whole export. A profile that
+// exports a large table raises its own ceiling and that number is the one that
+// applies, headers included.
+func TestExecHandlerBoundsAllRowExportByExportCeiling(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		limits *query.RowLimits
+		want   int
+	}{
+		{name: "default", want: query.DefaultMaxExportRows},
+		{name: "profile", limits: &query.RowLimits{MaxExportRows: 250_000}, want: 250_000},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}}}
+			query.RegisterProvider(mock)
+			store, err := NewFileStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := query.Profile{
+				Name: "ceiling", Provider: query.ProviderConfig{Type: mock.Type()},
+				Query: "rows", Limits: tt.limits,
+			}
+			if err := store.Save(context.Background(), profile); err != nil {
+				t.Fatal(err)
+			}
+			h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+			rec := get(h, "/api/v1/profile/ceiling?format=ndjson&scope=all", "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if mock.last.MaxRows != tt.want {
+				t.Fatalf("provider max rows = %d, want the export ceiling %d", mock.last.MaxRows, tt.want)
+			}
+			if got := rec.Header().Get("X-Max-Rows"); got != strconv.Itoa(tt.want) {
+				t.Fatalf("X-Max-Rows = %q, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// The page a caller may ask for is the profile's, not the server's: a profile
+// that widens maxPageSize accepts a page the default would have refused, and
+// says its own number when it refuses one.
+func TestExecHandlerPageLimitFollowsProfileMaxPageSize(t *testing.T) {
+	mock := &execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}}}
+	query.RegisterProvider(mock)
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := query.Profile{
+		Name: "pages", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+		Limits: &query.RowLimits{PageSize: 5, MaxPageSize: 2000},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	if rec := get(h, "/api/v1/profile/pages?format=ndjson&limit=1500", ""); rec.Code != http.StatusOK {
+		t.Fatalf("page within the profile's maximum: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec := get(h, "/api/v1/profile/pages?format=ndjson&limit=2500", "")
+	if rec.Code == http.StatusOK || !strings.Contains(rec.Body.String(), "between 1 and 2000") {
+		t.Fatalf("page past the profile's maximum: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := get(h, "/api/v1/profile/pages?format=ndjson", ""); rec.Header().Get("X-Page-Limit") != "5" {
+		t.Fatalf("default page = %q, want the profile's 5", rec.Header().Get("X-Page-Limit"))
 	}
 }
 

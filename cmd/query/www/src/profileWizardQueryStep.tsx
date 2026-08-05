@@ -13,7 +13,7 @@ import {
   ConnectionQueryWorkspace,
   supportsQueryBuilder,
 } from "./connectionQueryWorkspace";
-import { defaultParamValues, paramNames, paramRoles } from "./esQueryBuilder";
+import { defaultParamValues, paramRoles } from "./esQueryBuilder";
 import type { EsSearch } from "./esQueryBuilderModel";
 import {
   profileWizardErrorMessage,
@@ -178,7 +178,18 @@ export function ProfileWizardQueryStep({
             provider: { ...(draft.provider ?? {}), options },
           });
         }}
-        params={paramNames(draft.params)}
+        params={draft.params ?? []}
+        onParamMappingChange={(edit) => {
+          const options = effectiveOptions(liveOptions);
+          options.search = edit.search;
+          setQuery("");
+          onDraftChange({
+            ...draft,
+            query: "",
+            params: edit.params,
+            provider: { ...(draft.provider ?? {}), options },
+          });
+        }}
         paramValues={defaultParamValues(draft.params)}
         paramRoles={paramRoles(draft.params)}
         {...(draft.limits ? { limits: draft.limits } : {})}

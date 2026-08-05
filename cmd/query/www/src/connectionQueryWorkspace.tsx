@@ -40,6 +40,8 @@ import { useCompiledSearch } from "./esQueryPreview";
 import { PrometheusResults } from "./prometheusResults";
 import { QueryRowLimits } from "./queryRowLimits";
 import { QueryTargetPicker } from "./queryTargetPicker";
+import type { ParamMappingEdit } from "./esParamMappingModel";
+import type { ParamDraft } from "./profileWizardModel";
 
 export type NavigatorTab = { id: "catalog" | "form" | "json"; label: string };
 
@@ -129,8 +131,9 @@ export type ConnectionQueryWorkspaceProps = {
    */
   limits?: ProfileRowLimits;
   onLimitsChange?: (limits: ProfileRowLimits | undefined) => void;
-  /** Declared profile parameter names an operand can bind to. */
-  params?: string[];
+  /** Declared profile parameters an operand can bind to. */
+  params?: ParamDraft[];
+  onParamMappingChange?: (edit: ParamMappingEdit) => void;
   /**
    * What those parameters currently resolve to. The server binds a {param:…}
    * operand from them and interpolates a {{.params.…}} one, so without values
@@ -163,6 +166,7 @@ export function ConnectionQueryWorkspace({
   limits,
   onLimitsChange,
   params,
+  onParamMappingChange,
   paramValues,
   paramRoles,
   compileBaseUrl = "",
@@ -290,6 +294,9 @@ export function ConnectionQueryWorkspace({
                 fields={esQueryFields(inspection.completion)}
                 vocabulary={esBuilderVocabulary(descriptor.optionsSchema)}
                 {...(params ? { params } : {})}
+                {...(onParamMappingChange
+                  ? { onMappingChange: onParamMappingChange }
+                  : {})}
                 {...(values ? { values } : {})}
                 compilation={compilation}
               />

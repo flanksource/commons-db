@@ -1,6 +1,8 @@
 /**
- * What a matching document comes back as: how many hits, where they start, which
- * _source fields travel, and whether the backend counts past its default.
+ * What a matching document comes back as: where the hits start, which _source
+ * fields travel, and whether the backend counts past its default. How many hits
+ * come back is the query's Limit, edited next to the filters — one row cap, so
+ * that it cannot disagree with itself across the form and the raw DSL.
  */
 
 import { InputField } from "@flanksource/clicky-ui";
@@ -43,15 +45,6 @@ export function EsQueryOutputEditor({
     <section className="flex flex-col gap-2">
       <h3 className="text-xs font-medium text-muted-foreground">Output</h3>
       <div className="flex flex-wrap items-center gap-2">
-        <InputField
-          aria-label="Size"
-          className="w-28"
-          type="number"
-          placeholder="size"
-          title="Maximum hits returned. A limit-role param overrides it."
-          value={search.size === undefined ? "" : String(search.size)}
-          onChange={(next) => onChange({ size: parseCount(next) })}
-        />
         <InputField
           aria-label="From"
           className="w-28"

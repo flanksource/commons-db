@@ -146,7 +146,7 @@ describe("makeFieldValueLookup", () => {
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).not.toHaveProperty("params");
   });
 
-  it("keys a lookup by its connection, index, field, scope and parameter values", () => {
+  it("keys a lookup by every input that changes the compiled value scope", () => {
     const source = makeFieldValueLookup({ baseUrl, index: "logs-*" })!;
     const scoped = source({ field: "service.name", search });
     expect(scoped.key).not.toBe(source({ field: "service.name" }).key);
@@ -159,5 +159,12 @@ describe("makeFieldValueLookup", () => {
       params: { env: "prod" },
     })!;
     expect(parameterized({ field: "service.name", search }).key).not.toBe(scoped.key);
+
+    const withRole = makeFieldValueLookup({
+      baseUrl,
+      index: "logs-*",
+      roles: { since: "time-from" },
+    })!;
+    expect(withRole({ field: "service.name", search }).key).not.toBe(scoped.key);
   });
 });

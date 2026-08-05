@@ -1,16 +1,8 @@
-/**
- * An enum parameter's options, taken from the index rather than typed. The
- * parameter itself says nothing about a field — the search specification does,
- * by binding the parameter to a condition — so the field is read back from
- * there and the same lookup the builder's operands use answers the values.
- *
- * This mounts on the parameter object rather than on its `options` array: a
- * form extension is handed a control and the form's root value, never the
- * instance path, so an extension on the array alone could not tell which
- * parameter it belongs to.
- */
-
-import type { PostExtension } from "@flanksource/clicky-ui";
+import {
+  Combobox,
+  type PostExtension,
+  type PreExtension,
+} from "@flanksource/clicky-ui";
 import {
   browserBaseUrl,
   savedConnectionID,
@@ -18,57 +10,87 @@ import {
 } from "./connectionBrowserModel";
 import { makeFieldValueLookup, valueLookupField } from "./esFieldValues";
 import { esQueryFields, paramRoles } from "./esQueryBuilder";
-import { fieldForParam, type EsSearch } from "./esQueryBuilderModel";
+import type { EsSearch } from "./esQueryBuilderModel";
+import {
+  addParamMapping,
+  paramMappings,
+  reconcileParamMappings,
+  removeParamMapping,
+  type ParamMapping,
+  type ParamMappingEdit,
+} from "./esParamMappingModel";
 import { ValuesCombobox } from "./esValueCombobox";
 import { ListValueFileButton } from "./listValuePicker";
 import type { ProfileDraft } from "./profileBuilderWorkspace";
 import { paramHasOptions, type ParamDraft } from "./profileWizardModel";
 
+const esParamsPre: PreExtension = (field, ctx) => {
+  if (field.schema["x-clicky-component"] === "es-param-field") return null;
+  if (field.schema["x-clicky-component"] !== "es-params") return field;
+  return {
+    ...field,
+    onChange: (next) => {
+      const root = (ctx.rootValue ?? {}) as ProfileDraft;
+      const params = next as ParamDraft[];
+      const search = structuredSearch(root);
+      if (!search) return field.onChange(params);
+      if (!ctx.onRootChange) {
+        throw new Error(
+          "structured parameter edits require an atomic root form update",
+        );
+      }
+      commitMapping(
+        root,
+        reconcileParamMappings({
+          search,
+          previous: (field.value ?? []) as ParamDraft[],
+          next: params,
+        }),
+        ctx.onRootChange,
+      );
+    },
+  };
+};
+
 const esParamPost: PostExtension = (field, nodes, ctx) => {
   if (field.schema["x-clicky-component"] !== "es-param") return nodes;
   const param = (field.value ?? {}) as ParamDraft;
-  // A list picks several of the same fixed values an enum picks one of, so both
-  // answer their options from the index the same way.
-  if (!paramHasOptions(param)) return nodes;
   return {
     label: nodes.label,
     value: (
       <>
         {nodes.value}
-        <EsParamOptionsField
+        <EsParamFields
           param={param}
           rootValue={(ctx?.rootValue ?? {}) as ProfileDraft}
-          onChange={(options) => field.onChange({ ...param, options })}
+          onOptionsChange={(options) => field.onChange({ ...param, options })}
+          {...(ctx?.onRootChange ? { onRootChange: ctx.onRootChange } : {})}
         />
       </>
     ),
   };
 };
 
-export const esParamOptionsFormExtensions = { post: [esParamPost] };
+export const esParamOptionsFormExtensions = {
+  pre: [esParamsPre],
+  post: [esParamPost],
+};
 
-/**
- * The options picker as the profile form mounts it.
- *
- * Reading them off the index needs a saved connection, an index, a condition
- * binding the parameter, and a field that can be aggregated — so that half
- * appears only where the question is answerable. Loading them from a file needs
- * none of that, so it is always offered; before this, a parameter on a profile
- * with no connection had no options UI at all.
- */
-function EsParamOptionsField({
+function EsParamFields({
   param,
   rootValue,
-  onChange,
+  onOptionsChange,
+  onRootChange,
 }: {
   param: ParamDraft;
   rootValue: ProfileDraft;
-  onChange: (options: string[]) => void;
+  onOptionsChange: (options: string[]) => void;
+  onRootChange?: (next: Record<string, unknown>) => void;
 }) {
   const connectionID = savedConnectionID(rootValue.provider?.connection);
   const baseUrl = connectionID ? browserBaseUrl(connectionID) : "";
   const target = String(rootValue.provider?.options?.index ?? "");
-  const search = rootValue.provider?.options?.search as EsSearch | undefined;
+  const search = structuredSearch(rootValue);
   const inspection = useInspection({
     cacheKey: "es-param-options",
     id: connectionID ?? "",
@@ -77,42 +99,179 @@ function EsParamOptionsField({
     database: "",
     target,
   });
-
-  const bound = fieldForParam(search, param.name ?? "");
-  const lookupField = bound
-    ? valueLookupField(esQueryFields(inspection.completion), bound)
-    : undefined;
+  const fields = esQueryFields(inspection.completion);
+  const mappings = mappingRows(search, param);
+  const field = mappings[0]?.field ?? param.field;
+  const lookupField = field ? valueLookupField(fields, field) : undefined;
   const source = makeFieldValueLookup({
     baseUrl,
     index: target,
     roles: paramRoles(rootValue.params),
   });
+  const name = param.name ?? "";
+  const automatic = param.role === "limit" || param.role === "offset";
+
   return (
     <div className="mt-1 flex flex-col gap-1">
-      {lookupField && source ? (
+      {automatic ? (
+        <span className="text-xs text-muted-foreground">
+          Mapped automatically to the result {param.role}.
+        </span>
+      ) : (
         <>
-          <span className="text-xs text-muted-foreground">Options from {lookupField}</span>
-          <ValuesCombobox
-            label="Options"
-            lookup={source({ field: lookupField })}
-            values={param.options ?? []}
-            onChange={onChange}
+          {mappings.length ? (
+            <div className="flex flex-wrap gap-1">
+              {mappings.map((mapping) => (
+                <FieldMappingPill
+                  key={`${mapping.path.join(".")}:${mapping.field}`}
+                  field={mapping.field}
+                  onClear={() => {
+                    if (!search || !onRootChange || !name) return;
+                    commitMapping(
+                      rootValue,
+                      removeParamMapping({
+                        search,
+                        params: rootValue.params ?? [],
+                        name,
+                        ...(mapping.structural ? { path: mapping.path } : {}),
+                      }),
+                      onRootChange,
+                    );
+                  }}
+                />
+              ))}
+            </div>
+          ) : null}
+          {search ? (
+            <Combobox
+              ariaLabel={`Map ${name || "parameter"} to a field`}
+              className="min-w-56"
+              value=""
+              options={fields.map((entry) => ({
+                value: entry.name,
+                label: entry.name,
+              }))}
+              placeholder="Map to field…"
+              allowCustomValue
+              disabled={!name || !onRootChange}
+              onChange={(next) => {
+                if (!next || !name || !onRootChange) return;
+                commitMapping(
+                  rootValue,
+                  addParamMapping({
+                    search,
+                    params: rootValue.params ?? [],
+                    name,
+                    field: next,
+                  }),
+                  onRootChange,
+                );
+              }}
+            />
+          ) : (
+            <span className="text-xs text-muted-foreground">
+              Switch Source &amp; Query to Form to map this parameter to a
+              field.
+            </span>
+          )}
+        </>
+      )}
+      {paramHasOptions(param) ? (
+        <>
+          {lookupField && source ? (
+            <>
+              <span className="text-xs text-muted-foreground">
+                Options from {lookupField}
+              </span>
+              <ValuesCombobox
+                label="Options"
+                lookup={source({ field: lookupField })}
+                values={param.options ?? []}
+                onChange={onOptionsChange}
+              />
+            </>
+          ) : null}
+          <ListValueFileButton
+            title="Load this parameter's options from a CSV, JSON or text file"
+            onValues={(values) => {
+              const merged = [...(param.options ?? [])];
+              for (const value of values) {
+                if (!merged.includes(value)) merged.push(value);
+              }
+              onOptionsChange(merged);
+              return merged.length - (param.options?.length ?? 0);
+            }}
           />
         </>
       ) : null}
-      <ListValueFileButton
-        title="Load this parameter's options from a CSV, JSON or text file"
-        onValues={(values) => {
-          // A file adds to the options rather than replacing them, so loading a
-          // second file does not silently discard the first.
-          const merged = [...(param.options ?? [])];
-          for (const value of values) {
-            if (!merged.includes(value)) merged.push(value);
-          }
-          onChange(merged);
-          return merged.length - (param.options?.length ?? 0);
-        }}
-      />
     </div>
   );
+}
+
+type MappingRow = ParamMapping & { structural: boolean };
+
+function mappingRows(
+  search: EsSearch | undefined,
+  param: ParamDraft,
+): MappingRow[] {
+  if (!search || !param.name)
+    return param.field
+      ? [{ path: [], field: param.field, operand: "value", structural: false }]
+      : [];
+  if (param.role === "time-from" || param.role === "time-to") {
+    return search.timeField
+      ? [
+          {
+            path: [],
+            field: search.timeField,
+            operand: "value",
+            structural: false,
+          },
+        ]
+      : [];
+  }
+  const mapped = paramMappings(search, param.name);
+  return mapped.length || !param.field
+    ? mapped.map((mapping) => ({ ...mapping, structural: true }))
+    : [{ path: [], field: param.field, operand: "value", structural: false }];
+}
+
+function FieldMappingPill({
+  field,
+  onClear,
+}: {
+  field: string;
+  onClear: () => void;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-primary/30 bg-primary/5 px-2 py-0.5 font-mono text-xs">
+      {field}
+      <button
+        type="button"
+        aria-label={`Remove mapping to ${field}`}
+        onClick={onClear}
+      >
+        ×
+      </button>
+    </span>
+  );
+}
+
+function structuredSearch(root: ProfileDraft): EsSearch | undefined {
+  return root.provider?.options?.search as EsSearch | undefined;
+}
+
+function commitMapping(
+  root: ProfileDraft,
+  edit: ParamMappingEdit,
+  onRootChange: (next: Record<string, unknown>) => void,
+) {
+  onRootChange({
+    ...root,
+    params: edit.params,
+    provider: {
+      ...(root.provider ?? {}),
+      options: { ...(root.provider?.options ?? {}), search: edit.search },
+    },
+  });
 }

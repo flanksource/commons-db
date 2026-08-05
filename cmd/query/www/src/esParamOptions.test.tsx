@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
 import type { ParamDraft } from "./profileWizardModel";
 
 const [post] = esParamOptionsFormExtensions.post;
+const [pre] = esParamOptionsFormExtensions.pre;
 const nodes = { label: "label", value: "fields" };
 
 const control = (param: ParamDraft, component = "es-param") => ({
@@ -20,6 +21,7 @@ const control = (param: ParamDraft, component = "es-param") => ({
 // The specification is what ties a parameter to a field: the parameter itself
 // only carries a name.
 const rootValue = {
+  params: [{ name: "service", type: "list" } satisfies ParamDraft],
   provider: {
     connection: "connection://8f1c0b9e-0000-4000-8000-000000000000",
     options: {
@@ -71,8 +73,12 @@ describe("esParamOptionsFormExtensions", () => {
     );
   });
 
-  it("passes a parameter that is not an enum through untouched", () => {
-    expect(post(control({ name: "service", type: "string" }), nodes)).toBe(nodes);
+  it("adds the mapping editor to a scalar parameter", () => {
+    const html = renderExtension({ name: "service", type: "string" });
+    expect(html).toMatch(
+      /role="combobox"[^>]*aria-label="Map service to a field"/,
+    );
+    expect(html).not.toContain("Load from file");
   });
 
   it("keeps the parameter's own fields when it offers options", () => {
@@ -108,5 +114,83 @@ describe("esParamOptionsFormExtensions", () => {
     });
     expect(html).not.toContain("Options from");
     expect(html).toContain("Load from file");
+  });
+
+  it("asks the author to switch to Form before mapping a raw query", () => {
+    const html = renderExtension(
+      { name: "service", type: "string" },
+      {
+        params: [{ name: "service", type: "string" }],
+        provider: { options: { index: "logs-*" } },
+      },
+    );
+    expect(html).toContain("Switch Source &amp; Query to Form");
+  });
+
+  it("renames condition references through one root update", () => {
+    const onRootChange = vi.fn();
+    const field = {
+      ...control(rootValue.params[0]),
+      kind: "array" as const,
+      schema: { "x-clicky-component": "es-params" },
+      value: rootValue.params,
+    };
+    const extended = pre(field, {
+      key: "params",
+      prop: field.schema,
+      value: field.value,
+      rootValue: rootValue as unknown as Record<string, unknown>,
+      onRootChange,
+    });
+
+    extended?.onChange([{ name: "application", type: "list" }]);
+
+    expect(onRootChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        params: [{ name: "application", type: "list", field: "service.name" }],
+        provider: expect.objectContaining({
+          options: expect.objectContaining({
+            search: expect.objectContaining({
+              query: expect.objectContaining({
+                values: [{ param: "application" }],
+              }),
+            }),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("rejects a structured parameter edit without an atomic root updater", () => {
+    const field = {
+      ...control(rootValue.params[0]),
+      kind: "array" as const,
+      schema: { "x-clicky-component": "es-params" },
+      value: rootValue.params,
+    };
+    const extended = pre(field, {
+      key: "params",
+      prop: field.schema,
+      value: field.value,
+      rootValue: rootValue as unknown as Record<string, unknown>,
+    });
+
+    expect(() =>
+      extended?.onChange([{ name: "application", type: "list" }]),
+    ).toThrow("structured parameter edits require an atomic root form update");
+  });
+
+  it("hides the raw field input owned by the mapping extension", () => {
+    const field = {
+      ...control({ name: "service", type: "list" }),
+      schema: { "x-clicky-component": "es-param-field" },
+    };
+    expect(
+      pre(field, {
+        key: "field",
+        prop: field.schema,
+        value: "service.name",
+      }),
+    ).toBeNull();
   });
 });

@@ -55,7 +55,9 @@ func buildOpenSearchRequest(req query.ProviderRequest, opts opensearchOptions, s
 		if err != nil {
 			return openSearchRequest{}, err
 		}
-		applyOpenSearchFilters(body, req.Filters)
+		if err := applyOpenSearchFilters(body, req.Filters, nil); err != nil {
+			return openSearchRequest{}, err
+		}
 		return openSearchRequest{body: body, limit: boundOpenSearchLimit(limit, req.MaxRows)}, nil
 	default:
 		return openSearchRequest{}, fmt.Errorf("opensearch requires a query or provider.options.search")
@@ -79,15 +81,27 @@ func compileOpenSearchSearch(req query.ProviderRequest, opts opensearchOptions, 
 	compiled, err := esdsl.Compile(esdsl.CompileRequest{
 		Search:     search,
 		Params:     openSearchParamBindings(req),
-		Referenced: req.TemplatedParams,
+		Referenced: openSearchReferencedParams(req),
 		Scroll:     scroll,
 		MaxRows:    req.MaxRows,
 	})
 	if err != nil {
 		return openSearchRequest{}, err
 	}
-	applyOpenSearchFilters(compiled.Body, req.Filters)
+	if err := applyOpenSearchFilters(compiled.Body, req.Filters, compiled.ParamUses); err != nil {
+		return openSearchRequest{}, err
+	}
 	return openSearchRequest{body: compiled.Body, limit: compiled.Size}, nil
+}
+
+func openSearchReferencedParams(req query.ProviderRequest) []string {
+	referenced := append([]string{}, req.TemplatedParams...)
+	for _, filter := range req.Filters {
+		if _, isParam := req.Params[filter.Key]; isParam {
+			referenced = append(referenced, filter.Key)
+		}
+	}
+	return referenced
 }
 
 // openSearchParamBindings pairs each resolved parameter with its declared role.

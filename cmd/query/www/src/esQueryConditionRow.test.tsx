@@ -55,10 +55,16 @@ const noopActions: EsQueryTreeActions = {
   update: () => undefined,
   insert: () => undefined,
   remove: () => undefined,
+  mapParam: () => undefined,
+  unmapParam: () => undefined,
 };
 
 const render = (condition: EsCondition, params: string[] = []) => {
-  const context: EsQueryContext = { fields, vocabulary, params };
+  const context: EsQueryContext = {
+    fields,
+    vocabulary,
+    params: params.map((name) => ({ name })),
+  };
   return renderToStaticMarkup(
     <EsQueryConditionRow
       condition={condition}

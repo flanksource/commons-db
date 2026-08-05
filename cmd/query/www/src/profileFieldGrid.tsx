@@ -1,3 +1,5 @@
+import { IconButton } from "@flanksource/clicky-ui";
+import { UiEye, UiEyeClosed, UiTrash } from "@flanksource/clicky-ui/icons";
 import type { ProfileFieldState } from "./profileFieldState";
 import type { ProfileColumn, ProfileFieldFilter } from "./profileWizardModel";
 
@@ -82,20 +84,19 @@ export function ProfileFieldFilters({
 }
 
 /**
- * Spreadsheet-style column list: include, label, type and width are edited in
- * place, so renaming N columns costs N clicks instead of N select-then-edit
- * round trips through the inspector. Anything that does not fit a grid cell —
- * role, format, unit, CEL — stays in the inspector pane.
+ * Spreadsheet-style column list: include, label and type are edited in place,
+ * with quick visibility and delete actions on every row. Anything that does not
+ * fit a grid cell — role, format, unit, width, CEL — stays in the inspector pane.
  */
 export function ProfileFieldGrid({ state }: { state: ProfileFieldState }) {
   return (
     <div className="min-h-0 flex-1 overflow-auto" role="list">
-      <table className="w-full border-collapse text-left">
+      <table className="w-fit border-collapse text-left">
         <thead className="sticky top-0 z-10 bg-muted/70 backdrop-blur">
           <tr>
-            {["", "Field", "Display label", "Type", "Width", "CEL"].map((heading, index) => (
+            {["Actions", "Field", "Display label", "Type", "CEL"].map((heading) => (
               <th
-                key={heading || index}
+                key={heading}
                 className="whitespace-nowrap border-b border-border px-3 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground"
               >
                 {heading}
@@ -135,22 +136,47 @@ function ProfileFieldGridRow({
   selected: boolean;
   active: boolean;
 }) {
+  const fieldState = !selected ? "deleted" : field.hidden ? "hidden" : "visible";
+  const stateClassName =
+    fieldState === "deleted"
+      ? "text-muted-foreground line-through opacity-60 [&_input]:line-through [&_select]:line-through"
+      : fieldState === "hidden"
+        ? "text-muted-foreground opacity-60"
+        : "";
   return (
     <tr
       role="listitem"
-      className={`border-b border-border ${active ? "bg-primary/10" : "hover:bg-muted/40"}`}
+      data-field-state={fieldState}
+      className={`border-b border-border ${active ? "bg-primary/10" : "hover:bg-muted/40"} ${stateClassName}`}
       onClick={() => state.setActiveName(field.name)}
     >
+      <td className="px-3 py-1" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-center gap-1">
+          <IconButton
+            icon={field.hidden ? UiEye : UiEyeClosed}
+            label={`${field.hidden ? "Show" : "Hide"} ${field.name}`}
+            disabled={!selected}
+            onClick={() => state.patchField(field, { hidden: !field.hidden })}
+          />
+          <IconButton
+            icon={UiTrash}
+            label={`Delete ${field.name}`}
+            disabled={!selected}
+            className="text-destructive hover:text-destructive"
+            onClick={() => state.removeField(field)}
+          />
+        </div>
+      </td>
       <td className="px-3 py-1">
         <input
-          type="checkbox"
-          checked={selected}
-          aria-label={`Include ${field.name}`}
-          onChange={(event) => state.setFieldSelection(field, event.target.checked)}
+          value={field.name}
+          aria-label={`Rename ${field.name}`}
+          disabled={!selected}
+          className={`${inputClassNameSm} min-w-[10rem] font-mono`}
+          onChange={(event) =>
+            state.patchField(field, { name: event.target.value })
+          }
         />
-      </td>
-      <td className="max-w-[18rem] truncate px-3 py-1 font-mono text-xs">
-        {field.name}
       </td>
       <td className="px-3 py-1">
         <input
@@ -177,21 +203,6 @@ function ProfileFieldGridRow({
             <option key={type} value={type}>{type}</option>
           ))}
         </select>
-      </td>
-      <td className="px-3 py-1">
-        <input
-          type="number"
-          min={1}
-          value={field.width ?? ""}
-          placeholder="Auto"
-          aria-label={`Width for ${field.name}`}
-          className={`${inputClassNameSm} w-20`}
-          onChange={(event) =>
-            state.patchField(field, {
-              width: event.target.value ? Number(event.target.value) : undefined,
-            })
-          }
-        />
       </td>
       <td className="px-3 py-1">
         {field.cel ? (

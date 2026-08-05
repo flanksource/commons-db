@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  changeConditionOperator,
   esBuilderVocabulary,
   fieldFamily,
   fieldWarning,
@@ -35,6 +36,82 @@ const field = (mapping: Partial<EsFieldMapping> & { name: string }): EsFieldMapp
   searchable: true,
   aggregatable: true,
   ...mapping,
+});
+
+describe("condition operator transitions", () => {
+  const operator = (op: string) => {
+    const match = catalog.find((entry) => entry.op === op);
+    if (!match) throw new Error(`missing test operator ${op}`);
+    return match;
+  };
+
+  it("moves a singular operand into values when changing to terms", () => {
+    expect(
+      changeConditionOperator(
+        {
+          op: "term",
+          occur: "filter",
+          field: "tag.scheme@id",
+          value: "scheme-1",
+          boost: 2,
+        },
+        operator("terms"),
+      ),
+    ).toEqual({
+      op: "terms",
+      occur: "filter",
+      field: "tag.scheme@id",
+      values: ["scheme-1"],
+      boost: 2,
+    });
+  });
+
+  it("promotes one list operand when changing to a singular operator", () => {
+    expect(
+      changeConditionOperator(
+        { op: "terms", field: "level", values: ["error"] },
+        operator("term"),
+      ),
+    ).toEqual({ op: "term", field: "level", value: "error" });
+  });
+
+  it("clears a list that cannot be converted to one operand", () => {
+    expect(
+      changeConditionOperator(
+        { op: "terms", field: "level", values: ["warn", "error"] },
+        operator("term"),
+      ),
+    ).toEqual({ op: "term", field: "level" });
+  });
+
+  it("keeps only operands accepted by the next arity", () => {
+    expect(
+      changeConditionOperator(
+        {
+          op: "range",
+          field: "@timestamp",
+          value: "stale",
+          values: ["also-stale"],
+          gte: "now-1h",
+          lte: "now",
+          conditions: [{ op: "exists", field: "trace.id" }],
+        },
+        operator("range"),
+      ),
+    ).toEqual({
+      op: "range",
+      field: "@timestamp",
+      gte: "now-1h",
+      lte: "now",
+    });
+
+    expect(
+      changeConditionOperator(
+        { op: "term", field: "level", value: "error", gte: "stale" },
+        operator("exists"),
+      ),
+    ).toEqual({ op: "exists", field: "level" });
+  });
 });
 
 describe("field families", () => {

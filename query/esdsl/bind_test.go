@@ -38,6 +38,28 @@ var _ = Describe("Bind operands", func() {
 		Expect(query).To(Equal(map[string]any{"terms": map[string]any{"level": []any{"error", "warn"}}}))
 	})
 
+	It("reports every condition field that structurally binds a parameter", func() {
+		compiled, err := Compile(CompileRequest{
+			Search: Search{Query: &Condition{Op: OpBool, Conditions: []Condition{
+				{Op: OpTerm, Field: "service.name", Value: Param("service")},
+				{Op: OpTerm, Field: "peer.service", Value: Param("service")},
+				{Op: OpTerms, Field: "scheme.id", Value: Param("schemes")},
+			}}},
+			Params: []ParamBinding{
+				{Name: "service", Value: "api"},
+				{Name: "schemes", Value: []string{"one", "two"}},
+			},
+			Referenced: []string{"outside"},
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compiled.ParamUses).To(Equal([]ParamUse{
+			{Name: "service", Field: "service.name"},
+			{Name: "service", Field: "peer.service"},
+			{Name: "schemes", Field: "scheme.id"},
+		}))
+	})
+
 	It("passes date math through verbatim", func() {
 		query := compileQuery(
 			Condition{Op: OpRange, Field: "@timestamp", Gte: Param("since"), Lt: Literal("2024-01-01||+1M")},

@@ -211,7 +211,7 @@ describe("ConnectionQueryWorkspace compilation", () => {
 
   it("compiles the specification against the host's parameter values", () => {
     const inputs = renderWorkspace({
-      params: ["service", "since"],
+      params: [{ name: "service" }, { name: "since", role: "time-from" }],
       paramValues: { service: "payments", since: "now-1h" },
       paramRoles: { since: "time-from" },
     });

@@ -1,8 +1,10 @@
 import { useMemo, useState } from "react";
 import {
   applyVisibleFieldSelection,
+  availableProfileFields,
   filterProfileFields,
   patchProfileField,
+  renameProfileField,
   type ProfileColumn,
   type ProfileFieldFilter,
 } from "./profileWizardModel";
@@ -36,13 +38,10 @@ export function useProfileFieldState({
     type: "",
     selection: "all",
   });
-  const available = useMemo(() => {
-    const discoveredNames = new Set(discovered.map((field) => field.name));
-    return [
-      ...discovered,
-      ...configured.filter((field) => !discoveredNames.has(field.name)),
-    ];
-  }, [configured, discovered]);
+  const available = useMemo(
+    () => availableProfileFields(discovered, configured),
+    [configured, discovered],
+  );
   const selectedNames = useMemo(
     () => new Set(configured.map((field) => field.name)),
     [configured],
@@ -90,14 +89,18 @@ export function useProfileFieldState({
   };
 
   const patchField = (field: ProfileColumn, patch: Partial<ProfileColumn>) => {
-    const updated = patchProfileField(field, patch);
+    const { name, ...properties } = patch;
+    const updated =
+      typeof name === "string"
+        ? patchProfileField(renameProfileField(field, name), properties)
+        : patchProfileField(field, patch);
     const exists = configured.some((entry) => entry.name === field.name);
     onConfiguredChange(
       exists
         ? configured.map((entry) => (entry.name === field.name ? updated : entry))
         : [...configured, updated],
     );
-    if (typeof patch.name === "string") onActiveNameChange(patch.name);
+    if (typeof name === "string") onActiveNameChange(name);
   };
 
   const updateActiveField = (patch: Partial<ProfileColumn>) => {
@@ -121,11 +124,18 @@ export function useProfileFieldState({
     onConfiguredChange(next);
   };
 
-  const removeActive = () => {
-    if (!activeField) return;
-    const next = configured.filter((field) => field.name !== activeField.name);
+  const removeField = (field: ProfileColumn) => {
+    const removedIndex = configured.findIndex((entry) => entry.name === field.name);
+    if (removedIndex < 0) return;
+    const next = configured.filter((entry) => entry.name !== field.name);
     onConfiguredChange(next);
-    onActiveNameChange(next[Math.max(0, activeIndex - 1)]?.name ?? "");
+    if (activeField?.name === field.name) {
+      onActiveNameChange(next[Math.max(0, removedIndex - 1)]?.name ?? "");
+    }
+  };
+
+  const removeActive = () => {
+    if (activeField) removeField(activeField);
   };
 
   return {
@@ -147,6 +157,7 @@ export function useProfileFieldState({
     updateActiveField,
     addField,
     moveActive,
+    removeField,
     removeActive,
   };
 }

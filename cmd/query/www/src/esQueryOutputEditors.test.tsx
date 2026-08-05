@@ -136,14 +136,19 @@ describe("reading a count", () => {
 });
 
 describe("the output editor", () => {
-  it("shows the hit window and the _source controls", () => {
-    const html = renderOutput({ size: 100, from: 20 });
-    expect(html).toContain('aria-label="Size"');
-    expect(html).toContain('value="100"');
+  it("shows where the hits start and the _source controls", () => {
+    const html = renderOutput({ from: 20 });
     expect(html).toContain('aria-label="From"');
     expect(html).toContain('value="20"');
     expect(html).toContain('aria-label="Add includes pattern"');
     expect(html).toContain('aria-label="Add excludes pattern"');
+  });
+
+  // How many rows come back is the query's Limit, edited beside the filters.
+  // A second control here would be a row cap that can disagree with the one the
+  // raw query also honours.
+  it("leaves the row count to the query's own limit", () => {
+    expect(renderOutput({ size: 100 })).not.toContain('aria-label="Size"');
   });
 
   it("renders each stored _source pattern as a removable chip", () => {

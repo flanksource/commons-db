@@ -11,10 +11,12 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   cloneProfileDraft,
   mergeSampledProfileColumns,
+  profileColumnResetState,
   profileEditorSectionStatus,
   profileEditorSections,
   profileSampleSignature,
   profileUpdateConflictTarget,
+  resetProfileColumns,
   validateProfileEditorDraft,
   type ProfileEditorSection,
 } from "./profileEditorModel";
@@ -32,6 +34,7 @@ import {
 } from "./profileFieldEditor";
 import { ProfileFieldFilters, ProfileFieldGrid } from "./profileFieldGrid";
 import { useProfileFieldState } from "./profileFieldState";
+import type { ProfileSample } from "./profileWizardQueryStep";
 import type { ProfileColumn, ProfileWizardDraft } from "./profileWizardModel";
 
 const ProfileEditorRaw = lazy(() =>
@@ -68,6 +71,7 @@ export function ProfileEditor({
   const [draft, setDraft] = useState<ProfileWizardDraft>(initialDraft);
   const [section, setSection] = useState<ProfileEditorSection>("general");
   const [discovered, setDiscovered] = useState<ProfileColumn[]>(initialDraft.columns ?? []);
+  const [sampledColumns, setSampledColumns] = useState<ProfileColumn[]>([]);
   const [sampleRows, setSampleRows] = useState<Record<string, unknown>[]>([]);
   const [activeField, setActiveField] = useState(initialDraft.columns?.[0]?.name ?? "");
   const [lastSampleSignature, setLastSampleSignature] = useState(() => profileSampleSignature(initialDraft));
@@ -76,9 +80,15 @@ export function ProfileEditor({
   const [error, setError] = useState("");
   const [replaceTarget, setReplaceTarget] = useState("");
   const [confirmDiscard, setConfirmDiscard] = useState(false);
+  const [confirmResetColumns, setConfirmResetColumns] = useState(false);
   const dirty = JSON.stringify(draft) !== initialSerialized;
   const validationError = validateProfileEditorDraft(draft);
   const sampleStale = profileSampleSignature(draft) !== lastSampleSignature;
+  const resetState = profileColumnResetState({
+    providerType: draft.provider?.type ?? "",
+    sampledColumnCount: sampledColumns.length,
+    sampleStale,
+  });
 
   const fields = useProfileFieldState({
     discovered,
@@ -136,7 +146,8 @@ export function ProfileEditor({
     }
   };
 
-  const acceptSample = ({ columns, rows }: { columns: ProfileColumn[]; rows: Record<string, unknown>[] }) => {
+  const acceptSample = ({ columns, rows, sourceDraft }: ProfileSample) => {
+    setSampledColumns(structuredClone(columns));
     setDiscovered(columns);
     setSampleRows(rows);
     setDraft((current) => ({
@@ -144,7 +155,13 @@ export function ProfileEditor({
       columns: mergeSampledProfileColumns(current.columns ?? [], columns),
     }));
     setActiveField((current) => current || columns[0]?.name || "");
-    setLastSampleSignature(profileSampleSignature(draft));
+    setLastSampleSignature(profileSampleSignature(sourceDraft));
+  };
+
+  const resetColumns = () => {
+    setDraft((current) => resetProfileColumns(current, sampledColumns));
+    setActiveField(sampledColumns[0].name);
+    setConfirmResetColumns(false);
   };
 
   const sectionContent = (
@@ -228,6 +245,18 @@ export function ProfileEditor({
               <span className="text-[11px] text-muted-foreground">
                 {fields.configuredCount} of {fields.available.length} included
               </span>
+              {resetState.visible ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={resetState.disabled}
+                  title={resetState.title}
+                  onClick={() => setConfirmResetColumns(true)}
+                >
+                  Reset columns
+                </Button>
+              ) : null}
               <Button type="button" size="sm" variant="outline" onClick={fields.addField}>
                 Add column
               </Button>
@@ -303,7 +332,7 @@ export function ProfileEditor({
         content: <ProfileEditorPreview columns={draft.columns ?? []} rows={sampleRows} />,
       },
     ];
-  }, [draft, fields, sampleRows, sampleStale, section, sectionContent]);
+  }, [draft, fields, resetState, sampleRows, sampleStale, section, sectionContent]);
 
   const leave = () => (dirty ? setConfirmDiscard(true) : onClose());
 
@@ -362,6 +391,34 @@ export function ProfileEditor({
         >
           <p className="text-sm text-muted-foreground">
             Your unsaved profile changes will be lost.
+          </p>
+        </Modal>
+      ) : null}
+
+      {confirmResetColumns ? (
+        <Modal
+          open
+          onClose={() => setConfirmResetColumns(false)}
+          title="Reset columns from latest sample?"
+          size="sm"
+          footer={
+            <div className="flex w-full justify-end gap-2">
+              <Button type="button" variant="ghost" onClick={() => setConfirmResetColumns(false)}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={resetState.disabled}
+                onClick={resetColumns}
+              >
+                Reset columns
+              </Button>
+            </div>
+          }
+        >
+          <p className="text-sm text-muted-foreground">
+            Replace {fields.configuredCount} configured column{fields.configuredCount === 1 ? "" : "s"} with {sampledColumns.length} column{sampledColumns.length === 1 ? "" : "s"} from the latest sample. Custom labels, expressions, formatting, ordering, and manually added columns will be removed. The profile will remain unsaved until you save it.
           </p>
         </Modal>
       ) : null}

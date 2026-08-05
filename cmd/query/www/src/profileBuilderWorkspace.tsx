@@ -19,7 +19,7 @@ import {
   type ProfileRowLimits,
 } from "./connectionBrowserModel";
 import { ConnectionQueryWorkspace } from "./connectionQueryWorkspace";
-import { defaultParamValues, paramNames, paramRoles } from "./esQueryBuilder";
+import { defaultParamValues, paramRoles } from "./esQueryBuilder";
 import type { EsSearch } from "./esQueryBuilderModel";
 import {
   ColumnPicker,
@@ -81,6 +81,9 @@ export function ProfileBuilderWorkspace({
   const [search, setSearch] = useState<EsSearch | undefined>(
     () => initialProviderOptions.search as EsSearch | undefined,
   );
+  const [params, setParams] = useState<ParamDraft[]>(
+    () => rootValue.params ?? [],
+  );
   const [liveOptions, setLiveOptions] = useState<Record<string, unknown>>(
     initialProviderOptions,
   );
@@ -88,7 +91,7 @@ export function ProfileBuilderWorkspace({
     {},
   );
   const [sampleParams, setSampleParams] = useState<Record<string, unknown>>(
-    () => defaultParamValues(rootValue.params ?? []),
+    () => defaultParamValues(params),
   );
   const [sampleColumns, setSampleColumns] = useState<ProfileColumn[]>([]);
   const [selectedColumns, setSelectedColumns] = useState<Set<string>>(
@@ -158,10 +161,7 @@ export function ProfileBuilderWorkspace({
     [catalogOptions, initialProviderOptions, inspection.sqlDatabase, search],
   );
 
-  const paramSchema = useMemo(
-    () => sampleParamSchema(rootValue.params ?? []),
-    [rootValue.params],
-  );
+  const paramSchema = useMemo(() => sampleParamSchema(params), [params]);
   const existingColumns = rootValue.columns ?? [];
   const existingNames = useMemo(
     () => new Set(existingColumns.map((column) => column.name)),
@@ -197,6 +197,7 @@ export function ProfileBuilderWorkspace({
       {
         ...rootValue,
         query,
+        params,
         provider: {
           ...(rootValue.provider ?? {}),
           options: effectiveOptions(liveOptions),
@@ -296,9 +297,13 @@ export function ProfileBuilderWorkspace({
             }}
             {...(limits ? { limits } : {})}
             onLimitsChange={setLimits}
-            params={paramNames(rootValue.params)}
+            params={params}
+            onParamMappingChange={(edit) => {
+              setSearch(edit.search);
+              setParams(edit.params);
+            }}
             paramValues={sampleParams}
-            paramRoles={paramRoles(rootValue.params)}
+            paramRoles={paramRoles(params)}
             compileBaseUrl={baseUrl}
             className="h-full min-h-0"
             onCatalogSelect={(node) => {
@@ -316,6 +321,7 @@ export function ProfileBuilderWorkspace({
                   body: JSON.stringify({
                     profile: {
                       ...rootValue,
+                      params,
                       profile: rootValue.profile || "sample",
                       query: request.query,
                       provider: {

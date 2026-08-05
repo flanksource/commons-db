@@ -19,6 +19,7 @@ import { getMonacoWorker } from "./monacoWorkers";
 import { ChatWidget } from "./chatWidget";
 import { profileBuilderFormExtensions } from "./profileBuilder";
 import { esQueryBuilderFormExtensions } from "./esQueryBuilder";
+import { esParamOptionsFormExtensions } from "./esParamOptions";
 import { BuildProfileButton } from "./buildProfileAction";
 import {
   EditProfileButton,
@@ -37,11 +38,13 @@ import {
 // profile query builder, and the structured OpenSearch filter builder that
 // mounts on provider.options.search in both the create and the edit form.
 const formExtensions = {
+  pre: [...esParamOptionsFormExtensions.pre],
   post: [
     ...namespaceFormExtensions.post,
     ...secretFormExtensions.post,
     ...profileBuilderFormExtensions.post,
     ...esQueryBuilderFormExtensions.post,
+    ...esParamOptionsFormExtensions.post,
   ],
 };
 
@@ -96,7 +99,7 @@ function Explorer() {
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {action}
         </div>
-        <div className="min-h-0 flex-1">{result}</div>
+        <div className="flex min-h-0 flex-1 flex-col">{result}</div>
       </div>
     );
   };

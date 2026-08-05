@@ -37,6 +37,21 @@ var _ = Describe("OpenSearch column filters", func() {
 		}))
 	})
 
+	It("keeps renamed column filters bound to the provider field", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Columns: []query.ColumnDef{{
+				Name: "service", Source: "service.name", Type: query.ColumnTypeString,
+			}},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(Equal([]query.ColumnFilterBinding{{
+			Column: "service", Key: "filter.service", Field: "service.name", Label: "service",
+		}}))
+	})
+
 	It("does not advertise native column filters for non-OpenSearch providers", func() {
 		bindings, err := (query.Profile{
 			Provider: query.ProviderConfig{Type: "postgres"},

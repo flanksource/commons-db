@@ -74,7 +74,7 @@ export function ProfileFieldEditorForm({
   const wide = columns === 2 ? "sm:col-span-2" : "";
   return (
     <div className={`grid gap-4 ${columns === 2 ? "sm:grid-cols-2" : ""}`}>
-      <EditorField label="Name" help="Unique field name used by filters and expressions.">
+      <EditorField label="Output name" help="Public field name used by tables, filters, APIs, and every export.">
         <input value={field.name} className={inputClassName} onChange={(event) => onChange({ name: event.target.value })} />
       </EditorField>
       <EditorField label="Display label" help="Optional table header; blank uses the field name.">

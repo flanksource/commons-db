@@ -287,7 +287,7 @@
                               "type": "string"
                             },
                             "value": {
-                              "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                              "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                               "title": "Value",
                               "x-es-value": true
                             },
@@ -452,7 +452,7 @@
                         "type": "string"
                       },
                       "value": {
-                        "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                        "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                         "title": "Value",
                         "x-es-value": true
                       },
@@ -617,7 +617,7 @@
                   "type": "string"
                 },
                 "value": {
-                  "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param",
+                  "description": "Operand: a literal, or {\"param\": \"\u003cname\u003e\"} to bind a profile param (escaped, and pruned when empty). A literal string may also interpolate one as {{.params.\u003cname\u003e}}, which substitutes verbatim and fails when the param has no value",
                   "title": "Value",
                   "x-es-value": true
                 },
