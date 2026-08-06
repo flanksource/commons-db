@@ -54,6 +54,8 @@ export function paramHasOptions(param: ParamDraft): boolean {
 export type ProfileWizardDraft = Record<string, unknown> & {
   namespace?: string;
   profile?: string;
+  /** Overrides the sidebar/picker glyph the provider type would otherwise give. */
+  icon?: string;
   provider?: ProfileProvider;
   query?: string;
   columns?: ProfileColumn[];

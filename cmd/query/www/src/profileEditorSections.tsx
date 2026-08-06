@@ -1,4 +1,4 @@
-import { JsonSchemaForm } from "@flanksource/clicky-ui";
+import { Icon, JsonSchemaForm, type FormLayout, type LookupFetcher } from "@flanksource/clicky-ui";
 import type { ReactNode } from "react";
 import {
   mergeProfileProjection,
@@ -51,6 +51,23 @@ export function ProfileGeneralSection({
             <option value="table">Table</option>
             <option value="logs">Logs</option>
           </select>
+        </EditorField>
+        <EditorField label="Icon">
+          <div className="flex items-center gap-2">
+            <input
+              value={typeof draft.icon === "string" ? draft.icon : ""}
+              className={inputClassName}
+              // Empty is the norm: the provider type already supplies a mark.
+              // This is for the profile whose subject is not its backend.
+              placeholder="Provider default"
+              onChange={(event) => onChange({ ...draft, icon: event.target.value || undefined })}
+            />
+            {typeof draft.icon === "string" && draft.icon !== "" ? (
+              // Shows what the name actually resolves to — an unresolvable name
+              // renders nothing anywhere, which is invisible without a preview.
+              <Icon name={draft.icon} className="size-5 shrink-0" />
+            ) : null}
+          </div>
         </EditorField>
       </div>
     </SectionCard>
@@ -161,12 +178,21 @@ export function ProfileSchemaSection({
   title,
   description,
   idPrefix,
+  layout,
+  lookupFetcher,
   onChange,
 }: EditorSectionProps & {
   keys: string[];
   title: string;
   description: string;
   idPrefix: string;
+  // Presentation is the call site's, not this component's — it is shared with
+  // Advanced composition, which must keep the plain stacked defaults.
+  layout?: FormLayout;
+  // JsonSchemaForm always installs its own lookup provider, so an outer one is
+  // shadowed rather than inherited: without this, x-clicky-lookup fields (the
+  // imports and reconcile.dest profile pickers) render with no options at all.
+  lookupFetcher?: LookupFetcher;
 }) {
   return (
     <SectionCard title={title} description={description}>
@@ -176,6 +202,8 @@ export function ProfileSchemaSection({
         value={Object.fromEntries(keys.flatMap((key) => Object.prototype.hasOwnProperty.call(draft, key) ? [[key, draft[key]]] : []))}
         onChange={(next) => onChange(mergeProfileProjection(draft, keys, next))}
         showPreferencesMenu={false}
+        {...(layout ? { layout } : {})}
+        {...(lookupFetcher ? { lookupFetcher } : {})}
       />
     </SectionCard>
   );

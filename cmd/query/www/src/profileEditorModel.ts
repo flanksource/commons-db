@@ -15,13 +15,13 @@ export const profileEditorSections = [
   { id: "source", label: "Source & Query", hint: "Provider, connection, sample" },
   { id: "columns", label: "Columns", hint: "Fields, labels, expressions" },
   { id: "parameters", label: "Parameters", hint: "Named query inputs" },
-  { id: "advanced", label: "Advanced", hint: "Imports, aliases, output" },
+  { id: "advanced", label: "Advanced", hint: "Imports, aliases, processors, output" },
   { id: "raw", label: "Raw YAML", hint: "Edit the document directly" },
 ] as const;
 
 export type ProfileEditorSection = (typeof profileEditorSections)[number]["id"];
 
-export const profileAdvancedKeys = ["imports", "aliases", "ignore", "output"];
+export const profileAdvancedKeys = ["imports", "aliases", "ignore", "processors", "output"];
 
 export type ProfileSectionStatus = { badge?: string; attention?: boolean };
 
