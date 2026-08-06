@@ -2,6 +2,7 @@ import {
   Button,
   Modal,
   Workspace,
+  useOperationLookupFetcher,
   type OperationsApiClient,
   type ResolvedOperation,
   type WorkspacePaneSpec,
@@ -11,6 +12,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import {
   cloneProfileDraft,
   mergeSampledProfileColumns,
+  profileAdvancedKeys,
   profileColumnResetState,
   profileEditorSectionStatus,
   profileEditorSections,
@@ -66,6 +68,7 @@ export function ProfileEditor({
   onClose: () => void;
   onSuccess: (name: string) => void | Promise<void>;
 }) {
+  const lookupFetcher = useOperationLookupFetcher(client);
   const initialDraft = useMemo(() => cloneProfileDraft(initialValue), [initialValue]);
   const initialSerialized = useMemo(() => JSON.stringify(initialDraft), [initialDraft]);
   const [draft, setDraft] = useState<ProfileWizardDraft>(initialDraft);
@@ -181,18 +184,27 @@ export function ProfileEditor({
           draft={draft}
           keys={["params"]}
           title="Parameters"
-          description="Define the named values accepted by the profile query and filters."
+          // The zero-item explanation lives on the schema now (it is the add
+          // row's own copy), so this stays a one-liner rather than repeating it.
+          description="Named values the profile query and filters accept at run time."
           idPrefix="profile-parameters"
+          // The accordion needs the full pane for its auto-fill grid — the
+          // default 600px stack would cap it at two columns — and its help
+          // belongs on the label, not stacked under every control.
+          layout={{ mode: "stacked", valueMaxWidth: "none", help: "hover" }}
           onChange={setDraft}
         />
       ) : null}
       {section === "advanced" ? (
         <ProfileSchemaSection
           draft={draft}
-          keys={["imports", "aliases", "ignore", "output"]}
+          keys={profileAdvancedKeys}
           title="Advanced composition"
-          description="Compose profiles, add ordered aliases, and control output without exposing the root schema as the page layout."
+          description="Compose profiles, add ordered aliases, chain post-query processors, and control output without exposing the root schema as the page layout."
           idPrefix="profile-advanced"
+          // Imports and reconcile.dest name other profiles; the fetcher is what
+          // turns them from free text into the hierarchical profile picker.
+          {...(lookupFetcher ? { lookupFetcher } : {})}
           onChange={setDraft}
         />
       ) : null}

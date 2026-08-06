@@ -1,7 +1,9 @@
+import type { JsonSchemaObject } from "@flanksource/clicky-ui";
 import { describe, expect, it } from "vitest";
 import {
   mergeProfileProjection,
   mergeSampledProfileColumns,
+  profileAdvancedKeys,
   profileEditRoute,
   profileEditSurfaceKey,
   profileColumnResetState,
@@ -45,6 +47,20 @@ describe("profile editor model", () => {
       context: { policy: { query: "select 1" } },
     });
     expect(profileSchemaProjection(["params"]).properties).toHaveProperty("params");
+  });
+
+  it("offers processors in the advanced section, with the library presets as choices", () => {
+    expect(profileAdvancedKeys).toContain("processors");
+
+    const processors = profileSchemaProjection(profileAdvancedKeys).properties
+      ?.processors as JsonSchemaObject;
+    const use = (processors?.items as JsonSchemaObject)?.properties
+      ?.use as JsonSchemaObject;
+
+    expect(use?.enum).toContain("java.stacktrace");
+    expect(use?.["x-enum-labels"]).toMatchObject({
+      "java.stacktrace": "Java stack trace merge",
+    });
   });
 
   it("merges samples by name while retaining configured and missing fields", () => {
