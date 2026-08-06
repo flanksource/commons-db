@@ -28,6 +28,9 @@ import {
 } from "./editProfileAction";
 import { profileEditSurfaceKey } from "./profileEditorModel";
 import { profileRowDetailsResult } from "./profileRowDetails";
+import { ReconcileButton } from "./reconcileAction";
+import { ReconcilePage } from "./reconcilePage";
+import { reconcileSurfaceKey } from "./reconcileModel";
 import {
   configureProfileConnectionForm,
   useProfileConnectionMapping,
@@ -78,7 +81,9 @@ const queryClient = new QueryClient();
 // the result renderer so `render: logs` profiles present via clicky-ui LogsTable.
 function Explorer() {
 	const { client, dialog } = useProfileConnectionMapping(baseClient);
-  const editingProfile = profileEditSurfaceKey(useRouter().pathname);
+  const pathname = useRouter().pathname;
+  const editingProfile = profileEditSurfaceKey(pathname);
+  const reconcilingProfile = reconcileSurfaceKey(pathname);
   const logsEntityNames = useLogsEntityNames();
   const renderLogsResult = logsResultRenderer(logsEntityNames);
   const renderResult = (context: ResultRenderContext) => {
@@ -91,7 +96,10 @@ function Explorer() {
       context.surfaceKey === "profiles" ? (
         <BuildProfileButton client={client} />
       ) : isProfileSurface(context.surfaceKey) ? (
-        <EditProfileButton client={client} surfaceKey={context.surfaceKey!} />
+        <>
+          <EditProfileButton client={client} surfaceKey={context.surfaceKey!} />
+          <ReconcileButton client={client} surfaceKey={context.surfaceKey!} />
+        </>
       ) : null;
     if (!action) return result;
     return (
@@ -110,6 +118,16 @@ function Explorer() {
     return (
       <>
         <ProfileEditorPage client={client} surfaceKey={editingProfile} />
+        {dialog}
+      </>
+    );
+  }
+  // Reconciling is a route for the same reason: two schemas, a key being worked
+  // out against them, and a result read as triage all want the whole viewport.
+  if (reconcilingProfile) {
+    return (
+      <>
+        <ReconcilePage client={client} surfaceKey={reconcilingProfile} />
         {dialog}
       </>
     );

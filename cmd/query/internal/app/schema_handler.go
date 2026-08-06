@@ -81,7 +81,11 @@ func (h *schemaHandler) resolve(path string) (schema.Schema, bool, error) {
 		if err != nil {
 			return nil, true, err
 		}
-		return schema.ProfileInstance(resolved.Profile), true, nil
+		instance, err := schema.ProfileInstance(resolved.Profile)
+		if err != nil {
+			return nil, true, err
+		}
+		return instance, true, nil
 	default:
 		return nil, false, nil
 	}

@@ -32,7 +32,7 @@ export function ChatWidget({ client }: { client: OperationsApiClient }) {
       <ChatFab label="Open query assistant" />
       <ChatWindowLayer
         title="Query Assistant"
-        threadsApi="/api/chat/threads"
+        sessionsApi="/api/chat/sessions"
         tools={tools}
         chat={{
           api: "/api/chat",

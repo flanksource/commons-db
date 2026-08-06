@@ -72,6 +72,25 @@ var _ = Describe("Resolve", func() {
 		Expect(resolved.Profile.Ignore).To(Equal([]string{"internal"}))
 	})
 
+	// mergeProfile copies field by field, so a new model field silently vanishes
+	// from every resolved profile unless it is added there — and the sidebar
+	// reads the RESOLVED profile, so a dropped icon shows up only in a browser.
+	It("inherits an icon from an import and lets the importer override it", func() {
+		store := resolverStore{
+			"jms":          {Name: "jms", Icon: "activemq", Provider: query.ProviderConfig{Type: "opentelemetry"}},
+			"jms.incoming": {Name: "jms.incoming", Imports: []string{"jms"}},
+			"jms.outgoing": {Name: "jms.outgoing", Imports: []string{"jms"}, Icon: "kubernetes"},
+		}
+
+		inherited, err := Resolve(context.Background(), store, "jms.incoming")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(inherited.Profile.Icon).To(Equal("activemq"))
+
+		overridden, err := Resolve(context.Background(), store, "jms.outgoing")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(overridden.Profile.Icon).To(Equal("kubernetes"))
+	})
+
 	It("rejects cycles with the complete import path", func() {
 		store := resolverStore{
 			"a": {Name: "a", Imports: []string{"b"}},
