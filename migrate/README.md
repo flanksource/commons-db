@@ -4,6 +4,28 @@
 SQL migrations. Every bundle should use a stable `WithName` when more than one
 bundle can share a database.
 
+## Schema-scoped bundles
+
+`WithSchema` applies one bundle inside a normalized PostgreSQL schema and leaves
+the default behavior on `public` unchanged:
+
+```go
+err := migrate.Apply(ctx, dsn, schemaFS,
+    migrate.WithName("runtime"),
+    migrate.WithSchema("agent_tenant_context"),
+)
+```
+
+The schema name must be a lowercase PostgreSQL identifier no longer than 63
+bytes. The migration creates the schema, scopes Atlas inspection and HCL
+objects, SQL migration metadata, dependent-view handling, and managed security
+to it. A reusable HCL bundle must declare only `schema "public" {}`; the
+migration remaps that declaration to the selected schema.
+
+SQL files run with the selected schema as `search_path`. Keep objects owned by
+the bundle unqualified in SQL files so the same bundle can target different
+schemas. Explicitly qualified SQL remains explicit and is not rewritten.
+
 ## Reusable test database templates
 
 `migrate.NewProvisioner` adapts the same HCL and SQL bundle to `dbtest.Options.Provisioner`:

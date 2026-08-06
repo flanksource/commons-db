@@ -15,7 +15,7 @@ import (
 // riskyModifiedTables returns the tables whose pending diff drops the table or drops/alters
 // a column — the operations PostgreSQL refuses while a view depends on them. Pure additions
 // never block a dependent view, so they are ignored.
-func riskyModifiedTables(changes []schema.Change) []viewdeps.Table {
+func riskyModifiedTables(changes []schema.Change, schemaName string) []viewdeps.Table {
 	var refs []viewdeps.Table
 	seen := map[string]bool{}
 	add := func(t *schema.Table) {
@@ -25,7 +25,7 @@ func riskyModifiedTables(changes []schema.Change) []viewdeps.Table {
 		// Atlas always reports a schema; default to public so a table it left
 		// unqualified resolves the same way the diff did rather than through
 		// whatever search_path this connection happens to carry.
-		ref := viewdeps.Table{Schema: "public", Name: t.Name}
+		ref := viewdeps.Table{Schema: schemaName, Name: t.Name}
 		if t.Schema != nil && t.Schema.Name != "" {
 			ref.Schema = t.Schema.Name
 		}
@@ -54,7 +54,7 @@ func riskyModifiedTables(changes []schema.Change) []viewdeps.Table {
 // it, using pgparser to read CREATE [MATERIALIZED] VIEW targets. The SQL grammar treats
 // PL/pgSQL bodies as opaque literals, so mixed view/function/trigger files parse cleanly;
 // a script that fails to parse is logged and skipped (its views fall through as unmanaged).
-func managedViews(scripts map[string]*script) map[string]string {
+func managedViews(scripts map[string]*script, schemaName string) map[string]string {
 	owners := map[string]string{}
 	for _, s := range scripts {
 		if s.phase != phasePost {
@@ -65,14 +65,14 @@ func managedViews(scripts map[string]*script) map[string]string {
 			logger.GetLogger("migrate").Warnf("skip view attribution for %s: %v", s.path, err)
 			continue
 		}
-		for _, name := range viewNames(stmts) {
+		for _, name := range viewNames(stmts, schemaName) {
 			owners[name] = s.path
 		}
 	}
 	return owners
 }
 
-func viewNames(list *pgnodes.List) []string {
+func viewNames(list *pgnodes.List, schemaName string) []string {
 	if list == nil {
 		return nil
 	}
@@ -80,25 +80,25 @@ func viewNames(list *pgnodes.List) []string {
 	for _, item := range list.Items {
 		switch stmt := item.(type) {
 		case *pgnodes.ViewStmt:
-			names = append(names, qualifyRangeVar(stmt.View))
+			names = append(names, qualifyRangeVar(stmt.View, schemaName))
 		case *pgnodes.CreateTableAsStmt:
 			if stmt.Objtype == pgnodes.OBJECT_MATVIEW && stmt.Into != nil {
-				names = append(names, qualifyRangeVar(stmt.Into.Rel))
+				names = append(names, qualifyRangeVar(stmt.Into.Rel, schemaName))
 			}
 		}
 	}
 	return names
 }
 
-func qualifyRangeVar(rv *pgnodes.RangeVar) string {
+func qualifyRangeVar(rv *pgnodes.RangeVar, schemaName string) string {
 	if rv == nil {
 		return ""
 	}
-	schemaName := rv.Schemaname
-	if schemaName == "" {
-		schemaName = "public"
+	resolvedSchema := rv.Schemaname
+	if resolvedSchema == "" {
+		resolvedSchema = schemaName
 	}
-	return schemaName + "." + rv.Relname
+	return resolvedSchema + "." + rv.Relname
 }
 
 // invalidateDependentViews clears every view that depends on a table the pending diff drops
@@ -111,12 +111,19 @@ func qualifyRangeVar(rv *pgnodes.RangeVar) string {
 //
 // The returned set of invalidated script paths is empty when nothing needed changing. The
 // restore func is never nil.
-func invalidateDependentViews(ctx context.Context, db *sql.DB, scope string, changes []schema.Change, scripts map[string]*script) (map[string]bool, func(context.Context) error, error) {
-	risky := riskyModifiedTables(changes)
+type viewInvalidationOptions struct {
+	Scope   string
+	Schema  string
+	Changes []schema.Change
+	Scripts map[string]*script
+}
+
+func invalidateDependentViews(ctx context.Context, db *sql.DB, opts viewInvalidationOptions) (map[string]bool, func(context.Context) error, error) {
+	risky := riskyModifiedTables(opts.Changes, opts.Schema)
 	if len(risky) == 0 {
 		return nil, noRestore, nil
 	}
-	owners := managedViews(scripts)
+	owners := managedViews(opts.Scripts, opts.Schema)
 	log := logger.GetLogger("migrate")
 
 	dropped, restore, err := viewdeps.Sweep(ctx, viewdeps.DropOptions{
@@ -145,7 +152,7 @@ func invalidateDependentViews(ctx context.Context, db *sql.DB, scope string, cha
 	}
 	for path := range invalidated {
 		if _, err := db.ExecContext(ctx,
-			`DELETE FROM schema_migration_scripts WHERE scope = $1 AND path = $2`, scope, path); err != nil {
+			`DELETE FROM schema_migration_scripts WHERE scope = $1 AND path = $2`, opts.Scope, path); err != nil {
 			return nil, nil, fmt.Errorf("invalidate SQL migration %s: %w", path, err)
 		}
 	}
