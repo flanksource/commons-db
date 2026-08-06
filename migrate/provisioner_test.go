@@ -80,6 +80,9 @@ var _ = Describe("migration provisioner fingerprint", func() {
 		Entry("scope", func(files fstest.MapFS) *SchemaProvisioner {
 			return NewProvisioner(files, WithDir("migrations"), WithName("other"))
 		}),
+		Entry("schema", func(files fstest.MapFS) *SchemaProvisioner {
+			return NewProvisioner(files, WithDir("migrations"), WithName("query"), WithSchema("agent_namespace_context"))
+		}),
 		Entry("exclude patterns", func(files fstest.MapFS) *SchemaProvisioner {
 			return NewProvisioner(files, WithDir("migrations"), WithName("query"), WithExclude("audit.*"))
 		}),

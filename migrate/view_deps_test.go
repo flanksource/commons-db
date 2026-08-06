@@ -59,7 +59,7 @@ CREATE TRIGGER touch_trg BEFORE INSERT ON public.messages FOR EACH ROW EXECUTE F
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, managedViews(tc.scripts))
+			assert.Equal(t, tc.want, managedViews(tc.scripts, defaultSchema))
 		})
 	}
 }
@@ -106,7 +106,7 @@ func TestRiskyModifiedTables(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []string
-			for _, ref := range riskyModifiedTables(tc.changes) {
+			for _, ref := range riskyModifiedTables(tc.changes, defaultSchema) {
 				got = append(got, ref.Qualified())
 			}
 			assert.Equal(t, tc.want, got)

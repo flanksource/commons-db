@@ -56,6 +56,7 @@ func (p *SchemaProvisioner) Fingerprint(ctx context.Context) (string, error) {
 	writeFingerprintField(digest, provisionerFingerprintVersion)
 	writeFingerprintField(digest, p.config.dir)
 	writeFingerprintField(digest, p.config.name)
+	writeFingerprintField(digest, "schema="+p.config.schema)
 	writeFingerprintField(digest, fmt.Sprintf("allow-table-drops=%t", p.config.allowTableDrops))
 	for _, pattern := range sortedCopy(p.config.exclude) {
 		writeFingerprintField(digest, "exclude="+pattern)
@@ -94,7 +95,15 @@ func (p *SchemaProvisioner) PrepareInstance(ctx context.Context, connection stri
 	if err != nil {
 		return err
 	}
-	database, err := sql.Open("postgres", connection)
+	if err := ValidateSchemaName(p.config.schema); err != nil {
+		return fmt.Errorf("migration schema: %w", err)
+	}
+	security = remapSecuritySchema(security, p.config.schema)
+	scopedConnection, err := prepareSchemaConnection(ctx, schemaConnectionOptions{Connection: connection, Schema: p.config.schema})
+	if err != nil {
+		return err
+	}
+	database, err := sql.Open("postgres", scopedConnection)
 	if err != nil {
 		return fmt.Errorf("open SQL migration database: %w", err)
 	}
@@ -105,7 +114,8 @@ func (p *SchemaProvisioner) PrepareInstance(ctx context.Context, connection stri
 	if err := ensureMetadataTables(ctx, database); err != nil {
 		return err
 	}
-	selected, err := selectScripts(ctx, database, p.config.name, scripts)
+	scope := migrationScope(p.config.schema, p.config.name)
+	selected, err := selectScripts(ctx, database, scope, scripts)
 	if err != nil {
 		return err
 	}
@@ -113,14 +123,14 @@ func (p *SchemaProvisioner) PrepareInstance(ctx context.Context, connection stri
 	if err != nil {
 		return err
 	}
-	if err := runScriptPhase(ctx, database, p.config.name, ordered, phasePre); err != nil {
+	if err := runScriptPhase(ctx, database, scope, ordered, phasePre); err != nil {
 		return err
 	}
-	if err := runScriptPhase(ctx, database, p.config.name, ordered, phasePost); err != nil {
+	if err := runScriptPhase(ctx, database, scope, ordered, phasePost); err != nil {
 		return err
 	}
 	if err := retryOnLockContention(ctx, "reconcile database security", func() error {
-		return reconcileSecurity(ctx, database, p.config.name, security)
+		return reconcileSecurity(ctx, database, scope, security)
 	}); err != nil {
 		return fmt.Errorf("reconcile database security: %w", err)
 	}
