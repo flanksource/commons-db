@@ -31,7 +31,7 @@ func newQueryChatServer(root *cobra.Command) (*capchat.Service, error) {
 					"over guessing, never invent connection details, and summarize results clearly.",
 			}, nil
 		}),
-		Tools: provider, Threads: capchat.NewMemoryThreadStore(),
+		Tools: provider, Threads: capchat.FixedThreadStore(capchat.NewMemoryThreadStore()),
 	}), nil
 }
 

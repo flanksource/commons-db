@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { ProfileEditor } from "./profileEditor";
 import { profileEditRoute, profileRoute } from "./profileEditorModel";
+import { PROFILES_QUERY_KEY } from "./profilesQuery";
 
 export function isProfileSurface(surfaceKey?: string): boolean {
   return Boolean(surfaceKey?.startsWith("profile-") && surfaceKey !== "profiles");
@@ -133,7 +134,9 @@ export function ProfileEditorPage({
           queryClient.invalidateQueries({ queryKey: ["operation-list"] }),
           queryClient.invalidateQueries({ queryKey: ["profile-editor", surfaceKey] }),
           queryClient.invalidateQueries({ queryKey: ["profile-json-fields"] }),
-          queryClient.invalidateQueries({ queryKey: ["logs-entity-names"] }),
+          // The profile list drives the sidebar tree, the logs renderer and every
+          // profile picker, so a rename that skipped it left them all stale.
+          queryClient.invalidateQueries({ queryKey: PROFILES_QUERY_KEY }),
         ]);
         router.navigate(profileRoute(name), { replace: true });
       }}

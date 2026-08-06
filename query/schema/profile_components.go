@@ -1,5 +1,13 @@
 package schema
 
+// ProviderTypeIcon returns the runtime icon name for a provider type, or "" for
+// an unknown one. It is the single source of the provider→glyph mapping: the
+// profile form reads it as x-enum-icons and the sidebar surface reads it through
+// profiles.providerIcon, so a profile wears the same mark in both places.
+func ProviderTypeIcon(providerType string) string {
+	return providerTypeIcons[providerType]
+}
+
 // providerTypeIcons are runtime icon names resolved by clicky-ui's fallback
 // icon provider. They intentionally mirror the profile surface icon families.
 var providerTypeIcons = map[string]string{
