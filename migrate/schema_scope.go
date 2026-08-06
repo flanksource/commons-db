@@ -30,7 +30,8 @@ func ValidateSchemaName(name string) error {
 	return nil
 }
 
-func connectionForSchema(connection, schemaName string) (string, error) {
+// ConnectionForSchema returns a PostgreSQL URL whose connections select schemaName.
+func ConnectionForSchema(connection, schemaName string) (string, error) {
 	if err := ValidateSchemaName(schemaName); err != nil {
 		return "", err
 	}
@@ -104,7 +105,7 @@ func prepareSchemaConnection(ctx context.Context, opts schemaConnectionOptions) 
 	if opts.Schema == defaultSchema {
 		return opts.Connection, nil
 	}
-	scopedConnection, err := connectionForSchema(opts.Connection, opts.Schema)
+	scopedConnection, err := ConnectionForSchema(opts.Connection, opts.Schema)
 	if err != nil {
 		return "", err
 	}

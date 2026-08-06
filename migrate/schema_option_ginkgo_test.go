@@ -52,7 +52,7 @@ var _ = Describe("schema-scoped migrations", func() {
 	})
 
 	It("creates a schema-scoped URL without losing existing parameters", func() {
-		got, err := connectionForSchema("postgres://user:pass@localhost/database?sslmode=disable&application_name=migrate", "agent_namespace_context")
+		got, err := ConnectionForSchema("postgres://user:pass@localhost/database?sslmode=disable&application_name=migrate", "agent_namespace_context")
 		Expect(err).NotTo(HaveOccurred())
 		parsed, err := url.Parse(got)
 		Expect(err).NotTo(HaveOccurred())
@@ -62,7 +62,7 @@ var _ = Describe("schema-scoped migrations", func() {
 	})
 
 	It("rejects a non-URL connection when it cannot scope it safely", func() {
-		_, err := connectionForSchema("host=localhost dbname=example", "agent_namespace_context")
+		_, err := ConnectionForSchema("host=localhost dbname=example", "agent_namespace_context")
 		Expect(err).To(MatchError(ContainSubstring("URL-form")))
 	})
 
