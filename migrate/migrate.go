@@ -23,6 +23,7 @@ import (
 type options struct {
 	dir             string
 	name            string
+	schema          string
 	exclude         []string
 	allowTableDrops bool
 	input           map[string]cty.Value
@@ -40,6 +41,11 @@ func WithDir(dir string) Option {
 // It should be stable and unique for each migration bundle sharing a database.
 func WithName(name string) Option {
 	return func(o *options) { o.name = strings.TrimSpace(name) }
+}
+
+// WithSchema selects the PostgreSQL schema used for the complete migration lifecycle.
+func WithSchema(name string) Option {
+	return func(o *options) { o.schema = name }
 }
 
 // WithVariables supplies values for HCL variable blocks and security expressions.
@@ -69,7 +75,7 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 }
 
 func resolveOptions(opts []Option) options {
-	cfg := options{dir: "."}
+	cfg := options{dir: ".", schema: defaultSchema}
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -105,6 +111,9 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if schemaFS == nil {
 		return errors.New("schema filesystem is nil")
 	}
+	if err := ValidateSchemaName(cfg.schema); err != nil {
+		return fmt.Errorf("migration schema: %w", err)
+	}
 
 	scripts, err := loadScripts(schemaFS, cfg.dir)
 	if err != nil {
@@ -114,8 +123,13 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if err != nil {
 		return err
 	}
+	security = remapSecuritySchema(security, cfg.schema)
 
-	db, err := sql.Open("postgres", connection)
+	scopedConnection, err := prepareSchemaConnection(ctx, schemaConnectionOptions{Connection: connection, Schema: cfg.schema})
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("postgres", scopedConnection)
 	if err != nil {
 		return fmt.Errorf("open SQL migration database: %w", err)
 	}
@@ -126,7 +140,8 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if err := ensureMetadataTables(ctx, db); err != nil {
 		return err
 	}
-	selected, err := selectScripts(ctx, db, cfg.name, scripts)
+	scope := migrationScope(cfg.schema, cfg.name)
+	selected, err := selectScripts(ctx, db, scope, scripts)
 	if err != nil {
 		return err
 	}
@@ -134,23 +149,26 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if err != nil {
 		return err
 	}
-	if err := runScriptPhase(ctx, db, cfg.name, ordered, phasePre); err != nil {
+	if err := runScriptPhase(ctx, db, scope, ordered, phasePre); err != nil {
 		return err
 	}
 
-	client, err := sqlclient.Open(ctx, connectionWithLockTimeout(connection))
+	client, err := sqlclient.Open(ctx, connectionWithLockTimeout(scopedConnection))
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
 	defer client.Close()
 
-	current, err := atlasmigrate.SchemaConn(client.Driver, client.URL.Schema, &schema.InspectOptions{Exclude: cfg.exclude}).ReadState(ctx)
+	current, err := atlasmigrate.SchemaConn(client.Driver, cfg.schema, &schema.InspectOptions{Exclude: cfg.exclude}).ReadState(ctx)
 	if err != nil {
 		return fmt.Errorf("inspect current schema: %w", err)
 	}
 	desired := &schema.Realm{}
 	if err := client.Eval(parser, desired, cfg.input); err != nil {
 		return fmt.Errorf("evaluate HCL schemas: %w", err)
+	}
+	if err := remapDesiredSchema(desired, cfg.schema); err != nil {
+		return fmt.Errorf("scope desired schema: %w", err)
 	}
 
 	changes, err := client.RealmDiff(current, desired)
@@ -164,13 +182,15 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if len(changes) == 0 {
 		logger.GetLogger("migrate").Debugf("No schema changes detected")
 	} else {
-		invalidated, restore, err := invalidateDependentViews(ctx, db, cfg.name, changes, scripts)
+		invalidated, restore, err := invalidateDependentViews(ctx, db, viewInvalidationOptions{
+			Scope: scope, Schema: cfg.schema, Changes: changes, Scripts: scripts,
+		})
 		if err != nil {
 			return err
 		}
 		restoreViews = restore
 		if len(invalidated) > 0 {
-			if selected, err = selectScripts(ctx, db, cfg.name, scripts); err != nil {
+			if selected, err = selectScripts(ctx, db, scope, scripts); err != nil {
 				return err
 			}
 			if ordered, err = topologicalScripts(scripts, selected); err != nil {
@@ -190,7 +210,7 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 		}
 		log.V(1).Infof("Applied %d schema changes", len(changes))
 	}
-	if err := runScriptPhase(ctx, db, cfg.name, ordered, phasePost); err != nil {
+	if err := runScriptPhase(ctx, db, scope, ordered, phasePost); err != nil {
 		return err
 	}
 	// Restore after the post phase: a view this scope does not own may be built
@@ -199,7 +219,7 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 		return err
 	}
 	if err := retryOnLockContention(ctx, "reconcile database security", func() error {
-		return reconcileSecurity(ctx, db, cfg.name, security)
+		return reconcileSecurity(ctx, db, scope, security)
 	}); err != nil {
 		return fmt.Errorf("reconcile database security: %w", err)
 	}
