@@ -35,17 +35,63 @@
             "x-clicky-order": 8
           },
           "filter": {
-            "description": "Backend mapping for native include/exclude filters; direct columns and simple CEL infer this automatically",
+            "description": "How this column is filtered at the backend; a direct column or simple CEL infers the field, and Type infers the control",
             "properties": {
+              "disabled": {
+                "description": "Offer no filter for this column while keeping the column itself rendered",
+                "title": "Disabled",
+                "type": "boolean"
+              },
               "field": {
-                "description": "Exact OpenSearch field used for term filters and value lookup",
-                "title": "OpenSearch field",
-                "type": "string"
+                "description": "Backend field the selection applies to — the indexed field for a document store, the result column for SQL; required only when the column implies none",
+                "title": "Field",
+                "type": "string",
+                "x-clicky-component": "es-param-field"
+              },
+              "kind": {
+                "description": "Overrides the control derived from Type; set it where the rendered type and the backend storage disagree",
+                "enum": [
+                  "terms",
+                  "range",
+                  "time",
+                  "boolean",
+                  "text",
+                  "none"
+                ],
+                "title": "Kind",
+                "type": "string",
+                "x-enum-display": "combobox",
+                "x-enum-labels": {
+                  "boolean": "Yes/no",
+                  "none": "Not filterable",
+                  "range": "Numeric range",
+                  "terms": "Value selection",
+                  "text": "Substring",
+                  "time": "Time range"
+                }
+              },
+              "lookup": {
+                "default": true,
+                "description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked",
+                "title": "Lookup",
+                "type": "boolean"
+              },
+              "multi": {
+                "default": true,
+                "description": "Allow several values at once",
+                "title": "Multi",
+                "type": "boolean"
+              },
+              "options": {
+                "description": "Selectable values; leave empty to ask the backend for its own distinct values",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Options",
+                "type": "array",
+                "x-col-span": "full"
               }
             },
-            "required": [
-              "field"
-            ],
             "title": "Filter",
             "type": "object",
             "x-clicky-order": 9
@@ -175,6 +221,12 @@
       "type": "array",
       "x-layout": "table"
     },
+    "icon": {
+      "description": "Overrides the glyph shown in the sidebar and pickers; blank uses the provider's own mark",
+      "title": "Icon",
+      "type": "string",
+      "x-clicky-order": 2
+    },
     "ignore": {
       "items": {
         "type": "string"
@@ -183,17 +235,59 @@
       "type": "array"
     },
     "imports": {
+      "description": "Profiles merged left to right before this one runs",
       "items": {
         "type": "string"
       },
       "title": "Imports",
-      "type": "array"
+      "type": "array",
+      "x-clicky-lookup": {
+        "filter": "profile",
+        "hierarchy": {
+          "delimiters": "./"
+        },
+        "multi": true,
+        "searchParam": "__lookup_q",
+        "url": "/api/v1/profiles"
+      }
     },
     "namespace": {
       "title": "Namespace",
       "type": "string",
       "x-clicky-component": "k8s-namespace-selector",
       "x-clicky-order": 1
+    },
+    "order": {
+      "description": "Total order the rows are returned in, ending in a column marked unique. Paging past the first page requires it: without a tiebreaker, two runs of the same query may interleave tied rows differently and a second page can repeat or skip rows from the first.",
+      "items": {
+        "properties": {
+          "column": {
+            "description": "Row key to order by",
+            "title": "Column",
+            "type": "string",
+            "x-clicky-order": 0
+          },
+          "desc": {
+            "title": "Descending",
+            "type": "boolean",
+            "x-clicky-order": 1
+          },
+          "unique": {
+            "description": "This column breaks all remaining ties, making the order total. Must be the last entry, and is what a cursor resumes from",
+            "title": "Unique",
+            "type": "boolean",
+            "x-clicky-order": 2
+          }
+        },
+        "required": [
+          "column"
+        ],
+        "title": "Order column",
+        "type": "object"
+      },
+      "title": "Order",
+      "type": "array",
+      "x-layout": "table"
     },
     "output": {
       "items": {
@@ -203,29 +297,38 @@
       "type": "array"
     },
     "params": {
+      "description": "A parameter turns a fixed query into a reusable one: give it a name and it becomes {{.params.\u003cname\u003e}} inside the query, the provider options and the connection.",
       "items": {
         "properties": {
           "default": {
-            "title": "Default"
+            "title": "Default",
+            "x-clicky-order": 5
           },
           "description": {
+            "description": "Shown as the parameter's tooltip in the filter bar",
             "title": "Description",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 9,
+            "x-col-span": "full"
           },
           "field": {
-            "description": "Backend field this parameter filters on; enables excluding a value and requires an OpenSearch or OpenTelemetry provider",
+            "description": "Backend field this parameter filters on; enables excluding a value and requires a provider that applies native filters (OpenSearch, OpenTelemetry, or SQL)",
             "title": "Field",
             "type": "string",
-            "x-clicky-component": "es-param-field"
+            "x-clicky-component": "es-param-field",
+            "x-clicky-order": 4
           },
           "label": {
+            "description": "Human-facing name in the filter bar; blank uses Name",
             "title": "Label",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 1
           },
           "name": {
             "description": "Parameter key, referenced as {{.params.\u003cname\u003e}} in the query, in any provider option, or in the connection",
             "title": "Name",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 0
           },
           "options": {
             "description": "Allowed values; leave empty on a bound list to offer the backend's own distinct values",
@@ -233,28 +336,51 @@
               "type": "string"
             },
             "title": "Options",
-            "type": "array"
+            "type": "array",
+            "x-clicky-order": 8,
+            "x-col-span": "full"
           },
           "required": {
             "title": "Required",
-            "type": "boolean"
+            "type": "boolean",
+            "x-clicky-order": 7
           },
           "role": {
-            "description": "Map this parameter to filtering, paging, or a date-range edge",
+            "description": "Map this parameter to filtering, paging, or a date-range edge; a cursor parameter exposes params.\u003cname\u003e.\u003ccolumn\u003e for a keyset resume predicate",
             "enum": [
               "filter",
               "limit",
               "offset",
+              "cursor",
               "time-from",
               "time-to"
             ],
             "title": "Role",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 3,
+            "x-enum-display": "combobox",
+            "x-enum-icons": {
+              "cursor": "bookmark",
+              "filter": "filter",
+              "limit": "list-ordered",
+              "offset": "arrow-right",
+              "time-from": "clock",
+              "time-to": "timer"
+            },
+            "x-enum-labels": {
+              "cursor": "resumes after",
+              "filter": "filters",
+              "limit": "row limit",
+              "offset": "offset",
+              "time-from": "time from",
+              "time-to": "time to"
+            }
           },
           "template": {
             "description": "Value rewrite; {value} is the supplied value",
             "title": "Template",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 6
           },
           "type": {
             "description": "A list accepts several values at once; bind it to a field to allow excluding them",
@@ -268,20 +394,105 @@
             ],
             "title": "Type",
             "type": "string",
+            "x-clicky-order": 2,
+            "x-enum-display": "combobox",
+            "x-enum-icons": {
+              "boolean": "toggle-on",
+              "date": "calendar",
+              "enum": "tag",
+              "list": "list-dashes",
+              "number": "sigma",
+              "string": "cursor-text"
+            },
             "x-enum-labels": {
               "list": "List (multi-select)"
+            },
+            "x-enum-tones": {
+              "boolean": "amber",
+              "date": "sky",
+              "enum": "teal",
+              "list": "indigo",
+              "number": "violet",
+              "string": "slate"
             }
           }
         },
         "required": [
           "name"
         ],
+        "title": "Parameter",
         "type": "object",
-        "x-clicky-component": "es-param"
+        "x-clicky-component": "es-param",
+        "x-columns": "auto",
+        "x-columns-max-width": "76rem"
       },
       "title": "Params",
       "type": "array",
-      "x-clicky-component": "es-params"
+      "x-array-display": "accordion",
+      "x-clicky-component": "es-params",
+      "x-item": {
+        "badge": "role",
+        "fallback": "Untitled parameter",
+        "flag": "required",
+        "glyph": "type",
+        "noun": "parameter",
+        "nounPlural": "parameters",
+        "summary": [
+          {
+            "pattern": "{{.params.{}}}",
+            "property": "name"
+          },
+          {
+            "property": "field"
+          }
+        ],
+        "title": [
+          "label",
+          "name"
+        ]
+      }
+    },
+    "processors": {
+      "description": "Post-query steps applied in order, after columns and aliases",
+      "items": {
+        "properties": {
+          "config": {
+            "description": "Processor-specific configuration",
+            "title": "Config",
+            "type": "object",
+            "x-clicky-order": 2
+          },
+          "type": {
+            "description": "Registered processor key; leave blank when a library processor is chosen",
+            "enum": [
+              "cel.batch",
+              "sqlite.merge",
+              "sqlite.recon"
+            ],
+            "title": "Type",
+            "type": "string",
+            "x-clicky-order": 1
+          },
+          "use": {
+            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.",
+            "enum": [
+              "java.stacktrace"
+            ],
+            "title": "Library processor",
+            "type": "string",
+            "x-clicky-order": 0,
+            "x-enum-display": "combobox",
+            "x-enum-labels": {
+              "java.stacktrace": "Java stack trace merge"
+            }
+          }
+        },
+        "title": "Processor",
+        "type": "object"
+      },
+      "title": "Processors",
+      "type": "array",
+      "x-layout": "table"
     },
     "profile": {
       "description": "Profile name",
@@ -579,6 +790,80 @@
       "title": "Query",
       "type": "string",
       "x-clicky-component": "profile-query-builder"
+    },
+    "reconcile": {
+      "description": "Join this profile's rows against another profile on a shared identity",
+      "properties": {
+        "dest": {
+          "description": "The profile to reconcile against",
+          "title": "Destination profile",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "profile",
+            "hierarchy": {
+              "delimiters": "./"
+            },
+            "multi": false,
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/profiles"
+          },
+          "x-clicky-order": 1
+        },
+        "key": {
+          "description": "How the shared identity is read from a row on either side; set columns or cel, never both",
+          "properties": {
+            "cel": {
+              "description": "Expression evaluated against a row on either side; required when the two sides name the identity differently",
+              "format": "textarea",
+              "title": "CEL",
+              "type": "string"
+            },
+            "columns": {
+              "description": "Row keys whose values, joined in order, form the key — only when both sides name them the same",
+              "items": {
+                "type": "string"
+              },
+              "title": "Columns",
+              "type": "array"
+            }
+          },
+          "title": "Key",
+          "type": "object",
+          "x-clicky-order": 2
+        },
+        "params": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Filter values applied to whichever side declares each one",
+          "title": "Params",
+          "type": "object"
+        },
+        "range": {
+          "description": "Span of keys to reconcile; empty covers all of them. A range cuts both sides at the same keys, so a key missing from one side inside it is missing rather than merely unread",
+          "properties": {
+            "from": {
+              "description": "Reconcile keys at or after this one; empty starts at the first key",
+              "title": "From",
+              "type": "string"
+            },
+            "to": {
+              "description": "Reconcile keys before this one; empty runs to the last key",
+              "title": "To",
+              "type": "string"
+            }
+          },
+          "title": "Key range",
+          "type": "object"
+        },
+        "timeColumn": {
+          "description": "Row key holding each side's event time; defaults to the profile's timestamp column",
+          "title": "Time column",
+          "type": "string"
+        }
+      },
+      "title": "Reconcile",
+      "type": "object"
     },
     "render": {
       "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)",
