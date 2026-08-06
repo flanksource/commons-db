@@ -11,6 +11,7 @@ import {
   QueryBrowser,
   Tabs,
   type JsonSchemaObject,
+  type QueryBrowserFilterLookup,
   type QueryBrowserRequest,
   type QueryBrowserResult,
   type QueryBrowserResultContext,
@@ -145,6 +146,11 @@ export type ConnectionQueryWorkspaceProps = {
   /** Where POST /compile lives. Empty leaves the preview unresolved. */
   compileBaseUrl?: string;
   execute: (request: QueryBrowserRequest) => Promise<QueryBrowserResult>;
+  /**
+   * Answers a filter's value type-ahead. Absent leaves every filter the source
+   * described showing only the values the result itself carried.
+   */
+  lookupFilterValues?: QueryBrowserFilterLookup;
   renderResults?: (context: QueryBrowserResultContext) => ReactNode;
   className?: string;
 };
@@ -171,6 +177,7 @@ export function ConnectionQueryWorkspace({
   paramRoles,
   compileBaseUrl = "",
   execute,
+  lookupFilterValues,
   renderResults,
   className,
 }: ConnectionQueryWorkspaceProps) {
@@ -327,6 +334,7 @@ export function ConnectionQueryWorkspace({
             : request,
         )
       }
+      {...(lookupFilterValues ? { lookupFilterValues } : {})}
       renderResults={renderResults ?? descriptorResultView(descriptor)}
     />
   );

@@ -22,11 +22,11 @@ var _ = Describe("Profile.Validate on params", func() {
 
 	Describe("a declared exclusion must have somewhere to go", func() {
 		It("rejects a bound list param on a provider that applies no native filters", func() {
-			err := profileWith("sql", listParam("region")).Validate()
+			err := profileWith("prometheus", listParam("region")).Validate()
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(SatisfyAll(
 				ContainSubstring("regions"),
-				ContainSubstring("sql"),
+				ContainSubstring("prometheus"),
 			))
 		})
 
@@ -38,8 +38,19 @@ var _ = Describe("Profile.Validate on params", func() {
 			Expect(profileWith("opentelemetry", listParam("region")).Validate()).To(Succeed())
 		})
 
+		It("accepts a bound list param on sql, which filters over its result", func() {
+			Expect(profileWith("sql", listParam("region")).Validate()).To(Succeed())
+		})
+
+		// A SQL filter narrows one result column, so a field that cannot be
+		// quoted into a column reference could never be applied.
+		It("rejects a sql-bound list param whose field is not a column name", func() {
+			err := profileWith("postgres", listParam("payload.user")).Validate()
+			Expect(err).To(MatchError(ContainSubstring("is not a plain column name")))
+		})
+
 		It("accepts an unbound list param on any provider, since it can hold no exclusion", func() {
-			Expect(profileWith("sql", listParam("")).Validate()).To(Succeed())
+			Expect(profileWith("prometheus", listParam("")).Validate()).To(Succeed())
 		})
 	})
 

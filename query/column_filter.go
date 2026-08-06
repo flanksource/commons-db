@@ -15,23 +15,117 @@ var (
 	indexedCELField = regexp.MustCompile(`^(?:row|span)\[['"]([^'"]+)['"]\]$`)
 )
 
+// ColumnFilterDef declares how a column is filtered at the backend. Every field
+// is an override: a direct column, or one whose CEL is a plain row lookup,
+// infers its field from the column itself and its control from Type. This
+// exists for the columns inference cannot reach — a computed CEL or a JSONPath
+// value — and for the ones where inference has the shape right and the backend
+// wrong.
 type ColumnFilterDef struct {
-	Field string `json:"field" yaml:"field"`
+	// Field is the backend field the selection is applied to. For a document
+	// store it is the indexed field; for SQL it is the result column the query
+	// returns. Required only when the column's own definition implies none.
+	Field string `json:"field,omitempty" yaml:"field,omitempty"`
+
+	// Kind overrides the control and the value grammar. Empty derives it from
+	// Type: string, status and health select values; number, duration and bytes
+	// take numeric bounds; datetime takes a time range; boolean is a yes/no
+	// toggle; key_value, key_values and json offer nothing. Set it where the
+	// rendered type and the backend storage disagree — a status code shown as a
+	// badge but stored as a number filters by range.
+	Kind ColumnFilterKind `json:"kind,omitempty" yaml:"kind,omitempty"`
+
+	// Options enumerates the selectable values, replacing the backend lookup. It
+	// is what a low-cardinality field the backend cannot aggregate needs: the
+	// question the lookup asks has no answer there. Value selections only.
+	Options []string `json:"options,omitempty" yaml:"options,omitempty"`
+
+	// Lookup asks the backend for this field's distinct values. Defaults to true
+	// for a value selection with no Options. Turning it off leaves the values
+	// typed rather than picked, which is the only workable control over a
+	// high-cardinality field like a trace id.
+	Lookup *bool `json:"lookup,omitempty" yaml:"lookup,omitempty"`
+
+	// Multi allows several values at once, defaulting to true. A single-valued
+	// filter still excludes: "!eu" is one value with a sign, not two.
+	Multi *bool `json:"multi,omitempty" yaml:"multi,omitempty"`
+
+	// Disabled offers no filter for this column while leaving the column itself
+	// rendered, which Hidden does not.
+	Disabled bool `json:"disabled,omitempty" yaml:"disabled,omitempty"`
 }
 
+// Validate rejects a filter declaration that cannot behave as written.
+func (d ColumnFilterDef) Validate(column string) error {
+	if !d.Kind.Valid() {
+		return fmt.Errorf("column %q filter kind %q is unsupported", column, d.Kind)
+	}
+	if len(d.Options) == 0 {
+		return nil
+	}
+	if kind := d.Kind.Normalized(); kind != ColumnFilterKindTerms {
+		return fmt.Errorf("column %q filter options require a %q filter, not %q", column, ColumnFilterKindTerms, kind)
+	}
+	if err := validateFilterOptions(d.Options); err != nil {
+		return fmt.Errorf("column %q filter: %w", column, err)
+	}
+	return nil
+}
+
+// ColumnFilterBinding is one filterable column or param as every consumer sees
+// it: the request key it answers to, the backend field it applies to, and the
+// control it offers.
 type ColumnFilterBinding struct {
-	Column string
-	Key    string
-	Field  string
-	Label  string
-}
-
-type ColumnFilterValue struct {
 	Column  string
 	Key     string
 	Field   string
+	Label   string
+	Kind    ColumnFilterKind
+	Options []string
+	Lookup  bool
+	Multi   bool
+}
+
+// FilterBound is one edge of a range. Value is carried as the kind stores it: a
+// float64 for a numeric field, and for a date field the operand as written —
+// either an RFC3339 instant or date math, which the backend resolves.
+type FilterBound struct {
+	Value     any
+	Inclusive bool
+}
+
+// FilterRange is a bounded selection. Either edge may be absent, leaving that
+// side open; both absent is not a selection.
+type FilterRange struct {
+	Min *FilterBound
+	Max *FilterBound
+}
+
+// ColumnFilterValue is one resolved selection on its way to a provider.
+type ColumnFilterValue struct {
+	Column string
+	Key    string
+	Field  string
+
+	// Kind is the grammar the value was parsed under and the one a provider
+	// compiles it back out of. Empty means a value selection.
+	Kind ColumnFilterKind
+
+	// Include and Exclude carry a value or substring selection.
 	Include []string
 	Exclude []string
+
+	// Range carries a numeric or time selection.
+	Range *FilterRange
+
+	// Bool carries a yes/no selection. Nil is the "any" arm.
+	Bool *bool
+}
+
+// IsZero reports that nothing was selected, which is the same as the filter
+// being absent.
+func (v ColumnFilterValue) IsZero() bool {
+	return len(v.Include) == 0 && len(v.Exclude) == 0 && v.Range == nil && v.Bool == nil
 }
 
 // SupportsNativeFilters reports whether a provider type turns
@@ -43,9 +137,20 @@ type ColumnFilterValue struct {
 // OpenAPI generators, and every test in the external query_test package, run
 // without linking query/providers, and a probe would report false there and
 // silently delete every binding.
+// The SQL entries are the registry keys the sql provider registers under, not
+// connection types — "sqlserver", not models.ConnectionTypeSQLServer. The
+// generic "sql" key is included even though its engine is unknown until the
+// connection is hydrated: a binding is dialect-agnostic, and only quoting the
+// identifier needs to know which engine it is for.
+//
+// postgrest stays out. It has no filter builder, its filter syntax is
+// PostgREST's own, and its Execute never sees a dialect — so listing it would
+// advertise controls that silently do nothing, which is what this list exists
+// to prevent.
 func SupportsNativeFilters(providerType string) bool {
 	switch providerType {
-	case "opensearch", "opentelemetry":
+	case "opensearch", "opentelemetry",
+		"sql", "postgres", "mysql", "sqlserver", "clickhouse":
 		return true
 	default:
 		return false
@@ -58,31 +163,41 @@ func (p Profile) ColumnFilterBindings() ([]ColumnFilterBinding, error) {
 	}
 	bindings := make([]ColumnFilterBinding, 0, len(p.Columns))
 	for _, column := range p.Columns {
-		if column.Hidden || !columnFilterScalar(column.Type) {
-			continue
-		}
-		field, ok, err := columnFilterField(column)
+		binding, ok, err := resolveColumnFilterBinding(p, column)
 		if err != nil {
 			return nil, err
 		}
-		if !ok {
-			continue
+		if ok {
+			bindings = append(bindings, binding)
 		}
-		if column.Filter == nil {
-			field = openTelemetryFilterField(p, field)
-		}
-		label := column.Label
-		if label == "" {
-			label = column.Name
-		}
-		bindings = append(bindings, ColumnFilterBinding{
-			Column: column.Name,
-			Key:    columnFilterPrefix + column.Name,
-			Field:  field,
-			Label:  label,
-		})
 	}
 	return bindings, nil
+}
+
+// sqlIdentifierField matches the only shape a SQL backend field may take: one
+// plain column of the query's result. A SQL filter names an output column and
+// quotes it, so anything that is not an identifier could not be quoted into a
+// column reference at all.
+var sqlIdentifierField = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,127}$`)
+
+// validateSQLFilterField rejects a declared backend field a SQL profile could
+// never apply.
+//
+// It runs only on a field the author wrote. An inferred one that is not an
+// identifier — a column literally named "payload.user" — yields no binding and
+// no error, exactly as a computed-CEL column does today, because failing there
+// would break profiles that are valid and working right now.
+func validateSQLFilterField(providerType, owner, field string) error {
+	switch providerType {
+	case "sql", "postgres", "mysql", "sqlserver", "clickhouse":
+	default:
+		return nil
+	}
+	if sqlIdentifierField.MatchString(field) {
+		return nil
+	}
+	return fmt.Errorf(
+		"%s filter field %q is not a plain column name; a SQL filter narrows one column of the query's result", owner, field)
 }
 
 // ParamFilterBindings returns the bindings the profile's tri-state list params
@@ -99,6 +214,7 @@ func (p Profile) ParamFilterBindings() []ColumnFilterBinding {
 		}
 		bindings = append(bindings, ColumnFilterBinding{
 			Key: param.Name, Field: param.Field, Label: param.DisplayLabel(),
+			Kind: ColumnFilterKindTerms, Lookup: true, Multi: true,
 		})
 	}
 	return bindings
@@ -131,37 +247,38 @@ func (p Profile) ColumnFilterKeys() (map[string]string, error) {
 	return keys, nil
 }
 
-func columnFilterScalar(columnType ColumnType) bool {
-	switch columnType {
-	case ColumnTypeKeyValue, ColumnTypeKeyValues, ColumnTypeJSON:
-		return false
-	default:
-		return true
-	}
-}
-
-func columnFilterField(column ColumnDef) (string, bool, error) {
+// columnFilterField infers the backend field a column filters on and reports
+// whether the profile declared it outright. A declared field is taken as
+// written; an inferred one still passes through the provider's own naming.
+//
+// A column whose value is computed — a CEL expression that is not a plain row
+// lookup, a JSONPath — resolves to nothing and is silently left unfilterable.
+// The value exists only after the row was read, so there is no backend field to
+// push the selection down to, and an author who wants one says so with
+// filter.field.
+func columnFilterField(column ColumnDef) (field string, declared bool, ok bool, err error) {
 	if column.Filter != nil {
-		field := strings.TrimSpace(column.Filter.Field)
-		if field == "" {
-			return "", false, fmt.Errorf("column %q filter field is required", column.Name)
+		if declaredField := strings.TrimSpace(column.Filter.Field); declaredField != "" {
+			return declaredField, true, true, nil
 		}
-		return field, true, nil
 	}
 	if column.Source != "" {
-		return column.Source, true, nil
+		return column.Source, false, true, nil
 	}
 	expression := strings.TrimSpace(column.CEL)
 	if expression == "" {
-		return column.Name, column.Name != "", nil
+		if column.Name == "" {
+			return "", false, false, fmt.Errorf("column filter requires a name or an explicit filter field")
+		}
+		return column.Name, false, true, nil
 	}
 	if matches := directCELField.FindStringSubmatch(expression); len(matches) == 2 {
-		return matches[1], true, nil
+		return matches[1], false, true, nil
 	}
 	if matches := indexedCELField.FindStringSubmatch(expression); len(matches) == 2 {
-		return matches[1], true, nil
+		return matches[1], false, true, nil
 	}
-	return "", false, nil
+	return "", false, false, nil
 }
 
 func openTelemetryFilterField(profile Profile, inferred string) string {
@@ -236,17 +353,15 @@ func partitionProfileInput(profile Profile, input map[string]any) (map[string]an
 		if !ok {
 			return nil, nil, fmt.Errorf("column filter %q is not supported by profile %q", key, profile.Name)
 		}
-		include, exclude, err := parseColumnFilterSelection(value)
+		selection, err := parseColumnFilterSelection(binding.Kind, value)
 		if err != nil {
 			return nil, nil, fmt.Errorf("column filter %q: %w", key, err)
 		}
-		if len(include) == 0 && len(exclude) == 0 {
+		if selection.IsZero() {
 			continue
 		}
-		values[key] = ColumnFilterValue{
-			Column: binding.Column, Key: binding.Key, Field: binding.Field,
-			Include: include, Exclude: exclude,
-		}
+		selection.Column, selection.Key, selection.Field = binding.Column, binding.Key, binding.Field
+		values[key] = selection
 	}
 	filters := make([]ColumnFilterValue, 0, len(values))
 	for _, binding := range bindings {
@@ -271,6 +386,20 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 	binding, err := profile.filterBinding(key)
 	if err != nil {
 		return nil, 0, err
+	}
+	if !binding.Kind.Lookupable() {
+		return nil, 0, fmt.Errorf("filter %q is a %s filter and has no values to list", key, binding.Kind.Normalized())
+	}
+	// An enumerated filter already carries the answer, so asking the backend
+	// would be a round trip whose result is sitting in the profile.
+	if len(binding.Options) > 0 {
+		options := make([]FilterOption, 0, len(binding.Options))
+		for _, option := range binding.Options {
+			if search == "" || strings.Contains(strings.ToLower(option), strings.ToLower(search)) {
+				options = append(options, FilterOption{Value: option})
+			}
+		}
+		return options, len(options), nil
 	}
 	// The filter being looked up must not narrow its own options, or a chosen
 	// value would hide every alternative. Every other active selection — column
@@ -297,46 +426,15 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 	return lookup.LookupFilterValues(ctx, req, binding, search, limit)
 }
 
-func parseColumnFilterSelection(value any) ([]string, []string, error) {
-	var raw []string
-	switch typed := value.(type) {
-	case string:
-		raw = []string{typed}
-	case []string:
-		raw = typed
-	case []any:
-		for _, item := range typed {
-			text, ok := item.(string)
-			if !ok {
-				return nil, nil, fmt.Errorf("value must be a string, got %T", item)
-			}
-			raw = append(raw, text)
-		}
-	default:
-		return nil, nil, fmt.Errorf("value must be a string or string list, got %T", value)
+// ResolveColumnFilters resolves filter.<column> request values against a
+// profile's columns, for a caller that assembled the profile itself rather than
+// loading a stored one — the connection browser, which infers its columns from
+// the rows a first, unfiltered run returned. Params are not resolved here: an
+// assembled profile declares none.
+func ResolveColumnFilters(profile Profile, input map[string]any) ([]ColumnFilterValue, error) {
+	_, filters, err := partitionProfileInput(profile, input)
+	if err != nil {
+		return nil, err
 	}
-	include, exclude := []string{}, []string{}
-	seenInclude, seenExclude := map[string]bool{}, map[string]bool{}
-	for _, joined := range raw {
-		for _, item := range strings.Split(joined, ",") {
-			item = strings.TrimSpace(item)
-			if item == "" {
-				continue
-			}
-			if strings.HasPrefix(item, "!") {
-				item = strings.TrimSpace(strings.TrimPrefix(item, "!"))
-				if item == "" {
-					return nil, nil, fmt.Errorf("excluded value must not be empty")
-				}
-				if !seenExclude[item] {
-					exclude = append(exclude, item)
-					seenExclude[item] = true
-				}
-			} else if !seenInclude[item] {
-				include = append(include, item)
-				seenInclude[item] = true
-			}
-		}
-	}
-	return include, exclude, nil
+	return filters, nil
 }

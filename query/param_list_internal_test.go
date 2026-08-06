@@ -114,7 +114,8 @@ var _ = Describe("list param coercion", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved["regions"]).To(Equal([]string{}))
 			Expect(filters).To(Equal([]ColumnFilterValue{{
-				Key: "regions", Field: "region", Include: []string{}, Exclude: []string{"eu"},
+				Key: "regions", Field: "region", Kind: ColumnFilterKindTerms,
+				Include: []string{}, Exclude: []string{"eu"},
 			}}))
 		})
 	})
@@ -126,7 +127,8 @@ var _ = Describe("list param coercion", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved).To(Equal(map[string]any{"regions": []string{"us-east"}}))
 			Expect(filters).To(Equal([]ColumnFilterValue{{
-				Key: "regions", Field: "region", Include: []string{"us-east"}, Exclude: []string{"eu"},
+				Key: "regions", Field: "region", Kind: ColumnFilterKindTerms,
+				Include: []string{"us-east"}, Exclude: []string{"eu"},
 			}}))
 		})
 
