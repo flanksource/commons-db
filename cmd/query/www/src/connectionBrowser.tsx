@@ -15,6 +15,7 @@ import {
   type BrowserDescriptor,
   type ConnectionProfileActionRenderer,
 } from "./connectionBrowserModel";
+import { makeBrowserFilterLookup } from "./browserFilterValues";
 import { ConnectionQueryWorkspace } from "./connectionQueryWorkspace";
 import type { EsSearch } from "./esQueryBuilderModel";
 
@@ -191,6 +192,10 @@ function ConnectionQueryBrowser({
       }),
     [descriptor.initialOptions, selection.options],
   );
+  const lookupFilterValues = useMemo(
+    () => makeBrowserFilterLookup(baseUrl),
+    [baseUrl],
+  );
 
   return (
     <ConnectionQueryWorkspace
@@ -219,6 +224,7 @@ function ConnectionQueryBrowser({
         setSelection({ query: node.query, options: node.options });
         setLiveOptions(node.options ?? {});
       }}
+      {...(lookupFilterValues ? { lookupFilterValues } : {})}
       execute={(request) =>
         fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
           method: "POST",

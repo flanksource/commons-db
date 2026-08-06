@@ -3,7 +3,6 @@ package query
 import (
 	"fmt"
 	"slices"
-	"strings"
 
 	"github.com/flanksource/clicky/api"
 )
@@ -71,9 +70,10 @@ type ColumnDef struct {
 	// The row is exposed as `row` in the CEL environment.
 	CEL string `json:"cel,omitempty" yaml:"cel,omitempty"`
 
-	// Filter overrides the backend field used by native OpenSearch filtering.
-	// Direct columns and simple row/span CEL lookups infer this automatically;
-	// computed CEL and JSONPath columns require an explicit field.
+	// Filter overrides how this column is filtered at the backend. Direct
+	// columns and simple row/span CEL lookups infer the field automatically and
+	// Type infers the control; computed CEL and JSONPath columns need an
+	// explicit field to be filterable at all.
 	Filter *ColumnFilterDef `json:"filter,omitempty" yaml:"filter,omitempty"`
 
 	// Hidden excludes the column from rendered output while keeping it available
@@ -106,8 +106,10 @@ func (c ColumnDef) Validate() error {
 	if c.Source != "" && c.CEL != "" {
 		return fmt.Errorf("column %q cannot set both source and cel", c.Name)
 	}
-	if c.Filter != nil && strings.TrimSpace(c.Filter.Field) == "" {
-		return fmt.Errorf("column %q filter field is required", c.Name)
+	if c.Filter != nil {
+		if err := c.Filter.Validate(c.Name); err != nil {
+			return err
+		}
 	}
 	if c.Format != "" && !slices.Contains(api.ColumnFormatValues(), c.Format) {
 		return fmt.Errorf("column %q format %q is unsupported", c.Name, c.Format)

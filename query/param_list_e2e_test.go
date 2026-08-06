@@ -49,8 +49,9 @@ params:
 		// The template sees only the includes; the exclusion rides the filter.
 		Expect(mp.last.Params).To(Equal(map[string]any{"regions": []string{"us-east", "us-west"}}))
 		Expect(mp.last.Filters).To(Equal([]query.ColumnFilterValue{{
-			Key:   "regions",
-			Field: "region.keyword",
+			Key:     "regions",
+			Field:   "region.keyword",
+			Kind:    query.ColumnFilterKindTerms,
 			Include: []string{"us-east", "us-west"},
 			Exclude: []string{"eu"},
 		}}))
@@ -72,9 +73,10 @@ params:
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(mp.last.Filters).To(Equal([]query.ColumnFilterValue{
-			{Column: "service", Key: "filter.service", Field: "service",
+			{Column: "service", Key: "filter.service", Field: "service", Kind: query.ColumnFilterKindTerms,
 				Include: []string{"api"}, Exclude: []string{"worker"}},
-			{Key: "regions", Field: "region", Include: []string{"eu"}, Exclude: []string{}},
+			{Key: "regions", Field: "region", Kind: query.ColumnFilterKindTerms,
+				Include: []string{"eu"}, Exclude: []string{}},
 		}))
 	})
 

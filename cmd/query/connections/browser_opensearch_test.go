@@ -222,6 +222,12 @@ func TestExecuteOpenSearchCompilesOptionsSearch(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		// A run also reads the mapping, to know which of the columns it returns
+		// the index can narrow on. Only the search is what this test is about.
+		if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+			_, _ = w.Write([]byte(`{"fields":{"level":{"keyword":{"searchable":true,"aggregatable":true}}}}`))
+			return
+		}
 		body := new(bytes.Buffer)
 		_, _ = body.ReadFrom(r.Body)
 		received = body.String() + "\nsize=" + r.URL.Query().Get("size")

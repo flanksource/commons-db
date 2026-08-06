@@ -51,6 +51,11 @@ func (p Profile) validateParamField(param ParamDef) error {
 			"profile %q param %q declares field %q, but provider %q applies no native filters, so an excluded value would be silently dropped",
 			p.Name, param.Name, param.Field, p.Provider.Type)
 	}
+	// A param's field is always written by the author, never inferred, so an
+	// unusable one is always worth refusing.
+	if err := validateSQLFilterField(p.Provider.Type, fmt.Sprintf("profile %q param %q", p.Name, param.Name), param.Field); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -60,17 +65,8 @@ func (p Profile) validateParamOptions(param ParamDef) error {
 	if param.Type != ParamTypeList {
 		return nil
 	}
-	for _, option := range param.Options {
-		if strings.Contains(option, ",") {
-			return fmt.Errorf(
-				"profile %q param %q option %q contains a comma, which separates values on the wire",
-				p.Name, param.Name, option)
-		}
-		if strings.HasPrefix(option, "!") {
-			return fmt.Errorf(
-				"profile %q param %q option %q starts with !, which marks an exclusion on the wire",
-				p.Name, param.Name, option)
-		}
+	if err := validateFilterOptions(param.Options); err != nil {
+		return fmt.Errorf("profile %q param %q: %w", p.Name, param.Name, err)
 	}
 	return nil
 }

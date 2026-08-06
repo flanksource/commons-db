@@ -4,6 +4,7 @@ import (
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 )
 
 var _ = Describe("OpenSearch column filters", func() {
@@ -30,11 +31,92 @@ var _ = Describe("OpenSearch column filters", func() {
 		bindings, err := profile.ColumnFilterBindings()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(bindings).To(Equal([]query.ColumnFilterBinding{
-			{Column: "service", Key: "filter.service", Field: "process.serviceName", Label: "service"},
-			{Column: "service_name", Key: "filter.service_name", Field: "process.serviceName", Label: "service_name"},
-			{Column: "method", Key: "filter.method", Field: "attributes.http.method", Label: "method"},
-			{Column: "status", Key: "filter.status", Field: "attributes.http.status_code", Label: "status"},
+			{Column: "service", Key: "filter.service", Field: "process.serviceName", Label: "service", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
+			{Column: "service_name", Key: "filter.service_name", Field: "process.serviceName", Label: "service_name", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
+			{Column: "method", Key: "filter.method", Field: "attributes.http.method", Label: "method", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
+			{Column: "status", Key: "filter.status", Field: "attributes.http.status_code", Label: "status", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
 		}))
+	})
+
+	It("keeps the provider's inferred field for a filter that only enumerates values", func() {
+		// The OpenTelemetry naming table applies to an inferred field, so a
+		// filter that declares options but no field must not lose it.
+		profile := query.Profile{
+			Provider: query.ProviderConfig{
+				Type:    "opentelemetry",
+				Options: map[string]any{"serviceField": "process.serviceName"},
+			},
+			Columns: []query.ColumnDef{{
+				Name:   "service",
+				Filter: &query.ColumnFilterDef{Options: []string{"api", "web"}},
+			}},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(Equal([]query.ColumnFilterBinding{{
+			Column: "service", Key: "filter.service", Field: "process.serviceName", Label: "service",
+			Kind: query.ColumnFilterKindTerms, Options: []string{"api", "web"}, Lookup: false, Multi: true,
+		}}))
+	})
+
+	It("derives the control from the column type", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Columns: []query.ColumnDef{
+				{Name: "region", Type: query.ColumnTypeString},
+				{Name: "latency", Type: query.ColumnTypeDuration},
+				{Name: "size", Type: query.ColumnTypeBytes},
+				{Name: "created", Type: query.ColumnTypeDateTime},
+				{Name: "deleted", Type: query.ColumnTypeBoolean},
+				{Name: "labels", Type: query.ColumnTypeKeyValues},
+				{Name: "payload", Type: query.ColumnTypeJSON},
+			},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		kinds := map[string]query.ColumnFilterKind{}
+		for _, binding := range bindings {
+			kinds[binding.Column] = binding.Kind
+		}
+		Expect(kinds).To(Equal(map[string]query.ColumnFilterKind{
+			"region":  query.ColumnFilterKindTerms,
+			"latency": query.ColumnFilterKindRange,
+			"size":    query.ColumnFilterKindRange,
+			"created": query.ColumnFilterKindTime,
+			"deleted": query.ColumnFilterKindBoolean,
+		}))
+	})
+
+	It("offers no lookup for a filter whose values are typed rather than picked", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Columns: []query.ColumnDef{
+				{Name: "latency", Type: query.ColumnTypeNumber},
+				{Name: "trace_id", Filter: &query.ColumnFilterDef{Lookup: lo.ToPtr(false)}},
+			},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings[0].Lookup).To(BeFalse())
+		Expect(bindings[1].Lookup).To(BeFalse())
+	})
+
+	It("removes a disabled column's filter while keeping the column", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Columns: []query.ColumnDef{
+				{Name: "region"},
+				{Name: "note", Filter: &query.ColumnFilterDef{Disabled: true}},
+			},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(HaveLen(1))
+		Expect(bindings[0].Column).To(Equal("region"))
 	})
 
 	It("keeps renamed column filters bound to the provider field", func() {
@@ -49,25 +131,66 @@ var _ = Describe("OpenSearch column filters", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(bindings).To(Equal([]query.ColumnFilterBinding{{
 			Column: "service", Key: "filter.service", Field: "service.name", Label: "service",
+			Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true,
 		}}))
 	})
 
-	It("does not advertise native column filters for non-OpenSearch providers", func() {
+	It("does not advertise native column filters for a provider that applies none", func() {
 		bindings, err := (query.Profile{
-			Provider: query.ProviderConfig{Type: "postgres"},
+			Provider: query.ProviderConfig{Type: "prometheus"},
 			Columns:  []query.ColumnDef{{Name: "status"}},
 		}).ColumnFilterBindings()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(bindings).To(BeEmpty())
 	})
 
-	It("rejects an explicit filter without a backend field", func() {
+	It("requires a backend field only when the column implies none", func() {
+		// An empty filter on a direct column still resolves through the column
+		// itself; only a computed value has nothing to push the selection to.
+		bindings, err := (query.Profile{
+			Name:     "direct",
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Columns:  []query.ColumnDef{{Name: "status", Filter: &query.ColumnFilterDef{}}},
+		}).ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(HaveLen(1))
+		Expect(bindings[0].Field).To(Equal("status"))
+
+		computed, err := (query.Profile{
+			Name:     "computed",
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Columns: []query.ColumnDef{{
+				Name: "status", CEL: `jsonpath("$.status", row.payload)`,
+				Filter: &query.ColumnFilterDef{},
+			}},
+		}).ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(computed).To(BeEmpty())
+	})
+
+	It("rejects filter options that the wire form cannot carry", func() {
+		for _, option := range []string{"a,b", "!a"} {
+			err := (query.Profile{
+				Name:     "invalid",
+				Provider: query.ProviderConfig{Type: "opensearch"},
+				Columns: []query.ColumnDef{{
+					Name: "status", Filter: &query.ColumnFilterDef{Options: []string{option}},
+				}},
+			}).Validate()
+			Expect(err).To(HaveOccurred(), "option %q must be rejected", option)
+		}
+	})
+
+	It("rejects filter options on a filter that selects no values", func() {
 		err := (query.Profile{
 			Name:     "invalid",
 			Provider: query.ProviderConfig{Type: "opensearch"},
-			Columns:  []query.ColumnDef{{Name: "status", Filter: &query.ColumnFilterDef{}}},
+			Columns: []query.ColumnDef{{
+				Name:   "latency",
+				Filter: &query.ColumnFilterDef{Kind: query.ColumnFilterKindRange, Options: []string{"1"}},
+			}},
 		}).Validate()
-		Expect(err).To(MatchError(ContainSubstring("filter field is required")))
+		Expect(err).To(MatchError(ContainSubstring("filter options require")))
 	})
 
 	It("rejects a declared parameter that conflicts with a native column filter", func() {
