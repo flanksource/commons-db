@@ -87,6 +87,46 @@ func TestInferSampleColumnsStructuredTypes(t *testing.T) {
 	}
 }
 
+// An OpenSearch mapping has no type for an identifier — a UUID field is
+// `keyword` like every other string — so the shape of the values is the only
+// signal both providers share.
+func TestInferSampleColumnsIdentifiers(t *testing.T) {
+	columns := InferSampleColumns([]Row{
+		{
+			"id":     "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+			"digest": "9e107d9d372bb6826bd81d3542a419d6",
+			"region": "eu-west-1",
+			"mixed":  "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+		},
+		{
+			"id":     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+			"digest": "e4d909c290d0fb1ca068ffaddf22cbd0",
+			"region": "us-east-1",
+			"mixed":  "not-an-identifier",
+		},
+	})
+	want := map[string]ColumnType{
+		// 32 bare hex digits is equally an MD5 digest, and a digest is a value
+		// someone might well want to pick from a list.
+		"digest": ColumnTypeString,
+		"id":     ColumnTypeUUID,
+		"mixed":  ColumnTypeString,
+		"region": ColumnTypeString,
+	}
+	got := map[string]ColumnType{}
+	for _, column := range columns {
+		got[column.Name] = column.Type
+	}
+	if len(got) != len(want) {
+		t.Fatalf("columns = %#v", columns)
+	}
+	for name, expected := range want {
+		if got[name] != expected {
+			t.Errorf("column %q type = %q, want %q", name, got[name], expected)
+		}
+	}
+}
+
 func TestSampleRejectsUnsafeRequests(t *testing.T) {
 	tests := []struct {
 		provider, query string
@@ -102,6 +142,45 @@ func TestSampleRejectsUnsafeRequests(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.provider+"-"+strings.Fields(tt.query)[0], func(t *testing.T) {
 			_, err := Sample(dbcontext.New(), Profile{Name: "unsafe", Query: tt.query, Provider: ProviderConfig{Type: tt.provider, Options: tt.options}}, nil, 100)
+			if err == nil || !strings.Contains(err.Error(), "read-only") {
+				t.Fatalf("expected read-only rejection, got %v", err)
+			}
+		})
+	}
+}
+
+// The read-only check must run on the rendered request: a param that reaches
+// the query or the options through a template is otherwise invisible to it.
+func TestSampleRejectsUnsafeTemplatedRequests(t *testing.T) {
+	tests := []struct {
+		name    string
+		profile Profile
+		params  map[string]any
+	}{
+		{
+			name: "http-method",
+			profile: Profile{
+				Name:     "templated-method",
+				Query:    "/jobs",
+				Provider: ProviderConfig{Type: "http", Options: map[string]any{"method": "{{.params.m}}"}},
+				Params:   []ParamDef{{Name: "m"}},
+			},
+			params: map[string]any{"m": "POST"},
+		},
+		{
+			name: "sql-statement",
+			profile: Profile{
+				Name:     "templated-sql",
+				Query:    "SELECT * FROM jobs; {{.params.tail}}",
+				Provider: ProviderConfig{Type: "postgres"},
+				Params:   []ParamDef{{Name: "tail"}},
+			},
+			params: map[string]any{"tail": "DELETE FROM jobs"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Sample(dbcontext.New(), tt.profile, tt.params, 100)
 			if err == nil || !strings.Contains(err.Error(), "read-only") {
 				t.Fatalf("expected read-only rejection, got %v", err)
 			}

@@ -20,6 +20,21 @@ type Provider interface {
 	Execute(ctx context.Context, req ProviderRequest) ([]Row, error)
 }
 
+type FilterOption struct {
+	Value string
+	Count int64
+}
+
+// FilterLookupProvider resolves distinct backend values for one bound column.
+//
+// The total is a *Total rather than an int because not every backend can count
+// exactly: a SQL COUNT is the number, an OpenSearch cardinality aggregation is
+// an estimate, and nil is "the backend did not say". Collapsing the three into
+// an int is what lets an estimate be rendered as a count.
+type FilterLookupProvider interface {
+	LookupFilterValues(ctx context.Context, req ProviderRequest, binding ColumnFilterBinding, search string, limit int) ([]FilterOption, *Total, error)
+}
+
 // ProviderRequest is the resolved input handed to a Provider by the engine.
 type ProviderRequest struct {
 	// Connection references a connection (connection://name) or an inline DSN/URL.
@@ -35,10 +50,29 @@ type ProviderRequest struct {
 	// native query builders that cannot be expressed as a query template.
 	Params map[string]any
 
-	// MaxRows is an execution hint for bounded callers such as an interactive
-	// page. Streaming providers may use it to avoid opening a backend cursor
-	// when one finite request can satisfy the caller. Zero means unbounded.
-	MaxRows int
+	// ParamRoles maps each declared param name to its ParamRole, so a structural
+	// query builder can fold role-carrying params (time-from, limit, …) into the
+	// backend's native constructs instead of treating them as plain filters.
+	ParamRoles map[string]ParamRole
+
+	// TemplatedParams names the params consumed while templating Query, Options
+	// or Connection. A provider with its own structural param binding counts
+	// them as referenced, so a param interpolated into the options is not
+	// reported as unused.
+	TemplatedParams []string
+
+	// Filters contains native include/exclude clauses bound to profile columns.
+	Filters []ColumnFilterValue
+
+	// Order is the Profile's declared result order. A provider that pages by
+	// cursor needs it to sort by, and to cut the next position out of the last
+	// row it returned.
+	Order Order
+
+	// Position is the decoded cursor this request resumes after, empty at the
+	// start of a walk. The engine validates and decodes it, so a provider works
+	// in key values and never in the token format.
+	Position CursorPosition
 }
 
 var providerRegistry = map[string]Provider{}

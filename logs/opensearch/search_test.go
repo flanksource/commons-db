@@ -35,7 +35,7 @@ func TestSearchRawPreservesNativeEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`})
+	result, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`, Limit: "10"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestNewHonorsInsecureTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insecure TLS connection failed: %v", err)
 	}
-	if _, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`}); err != nil {
+	if _, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`, Limit: "10"}); err != nil {
 		t.Fatalf("search over insecure TLS failed: %v", err)
 	}
 }

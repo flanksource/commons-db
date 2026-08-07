@@ -1,0 +1,23 @@
+/* Playground-only chrome. The variants themselves use nothing but Tailwind
+ * utilities + clicky-ui components, so whatever wins ports over verbatim. */
+
+/* Reserve the top 2.5rem for the variant switcher. clicky-ui's Modal centres
+ * its panel in the viewport, so a panel 5rem shorter than 100dvh leaves
+ * exactly 2.5rem of clearance above and below. */
+.design-dialog-tall {
+  height: calc(100dvh - 5rem);
+  max-height: calc(100dvh - 5rem);
+}
+
+/* Modal's body is `flex flex-col overflow-hidden` when scrollBody={false};
+ * make its single child fill the remaining height instead of collapsing to
+ * content height. Same trick profileBuilder.css already uses in the app. */
+.design-dialog-tall > [data-slot="modal-body"] > * {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* Variant D runs panes edge to edge, so drop the body's own padding. */
+.design-dialog-flush > [data-slot="modal-body"] {
+  padding: 0;
+}

@@ -11,6 +11,7 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	sqlinspect "github.com/flanksource/commons-db/inspect/sql"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/query"
 	queryschema "github.com/flanksource/commons-db/query/schema"
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -45,6 +46,16 @@ func TestDescriptorForConnection(t *testing.T) {
 				t.Fatalf("descriptor = %#v", descriptor)
 			}
 			if descriptor.Kind == "query" {
+				// The browser edits the query's own limit and a profile's three
+				// caps; the connection has no profile, so it declares the defaults
+				// those caps fall back to rather than leaving the frontend to
+				// guess at 100, 1000 and 100000.
+				if descriptor.RowLimits == nil ||
+					descriptor.RowLimits.PageSize != query.DefaultPageSize ||
+					descriptor.RowLimits.MaxPageSize != query.DefaultMaxPageSize ||
+					descriptor.RowLimits.MaxExportRows != query.DefaultMaxExportRows {
+					t.Fatalf("row limits = %#v", descriptor.RowLimits)
+				}
 				props, _ := descriptor.OptionsSchema["properties"].(queryschema.Schema)
 				for _, override := range []string{"url", "address", "type"} {
 					if _, found := props[override]; found {

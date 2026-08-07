@@ -11,6 +11,7 @@ import (
 	"time"
 
 	opensearch "github.com/opensearch-project/opensearch-go/v2"
+	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchtransport"
 
 	"github.com/flanksource/commons-db/connection"
@@ -110,29 +111,37 @@ func (t *Searcher) Search(ctx context.Context, q Request) (*logs.LogResult, erro
 // native hit, aggregation and timing envelope. Connection browsers use this to
 // inspect arbitrary documents; log callers continue through Search's mapping.
 func (t *Searcher) SearchRaw(ctx context.Context, q Request) (Response, error) {
-	if q.Index == "" {
+	if q.Index == "" && q.PIT == "" {
 		return Response{}, ctx.Oops().Errorf("index is empty")
 	}
 
-	const defaultLimit = 500
-	var limit = defaultLimit
-	if q.Limit != "" {
-		var err error
-		limit, err = strconv.Atoi(q.Limit)
-		if err != nil {
-			return Response{}, ctx.Oops().Wrapf(err, "error converting limit to int")
-		}
+	// An unset limit used to mean 500, which made "read everything" and "read
+	// the first 500" indistinguishable to every caller and every reader of the
+	// result. How many documents to ask for is the caller's decision, and it is
+	// now required to make it.
+	if q.Limit == "" {
+		return Response{}, ctx.Oops().Errorf("search limit is required; pass \"0\" to request no documents (an aggregation-only search)")
+	}
+	limit, err := strconv.Atoi(q.Limit)
+	if err != nil {
+		return Response{}, ctx.Oops().Wrapf(err, "error converting limit to int")
 	}
 
 	logger.Tracef("searching index %s with query %s", q.Index, q.Query)
 
-	res, err := t.client.Search(
+	options := []func(*opensearchapi.SearchRequest){
 		t.client.Search.WithContext(ctx),
-		t.client.Search.WithIndex(q.Index),
 		t.client.Search.WithBody(strings.NewReader(q.Query)),
 		t.client.Search.WithSize(limit),
 		t.client.Search.WithErrorTrace(),
-	)
+	}
+	// A point-in-time already names the indices it was opened over, and
+	// OpenSearch rejects a search that names them again.
+	if q.PIT == "" {
+		options = append(options, t.client.Search.WithIndex(q.Index))
+	}
+
+	res, err := t.client.Search(options...)
 	if err != nil {
 		return Response{}, ctx.Oops().Wrapf(err, "error searching")
 	}
@@ -160,108 +169,68 @@ var DefaultFieldMappingConfig = logs.FieldMappingConfig{
 	Severity:  []string{"log"},
 }
 
-// SearchWithScroll initiates a scroll search for large result sets
-func (t *Searcher) SearchWithScroll(ctx context.Context, req ScrollRequest) (*logs.LogResult, string, error) {
-	const defaultScrollSize = 1000
-	const defaultScrollTimeout = time.Minute
-
-	scrollSize := req.Scroll.Size
-	if scrollSize <= 0 {
-		scrollSize = defaultScrollSize
+// OpenPIT opens a point-in-time over index and returns its id.
+//
+// A PIT is what makes a walk a walk rather than a series of unrelated searches:
+// every page reads the same frozen view, so a document written or merged
+// mid-walk cannot shift the rows under a position already handed out. Without
+// one, search_after is stable against ties but still sees the index change.
+func (t *Searcher) OpenPIT(ctx context.Context, index string, keepAlive time.Duration) (string, error) {
+	if index == "" {
+		return "", ctx.Oops().Errorf("index is empty")
 	}
-
-	scrollTimeout := req.Scroll.Timeout
-	if scrollTimeout == 0 {
-		scrollTimeout = defaultScrollTimeout
+	if keepAlive <= 0 {
+		keepAlive = DefaultPITKeepAlive
 	}
-
-	if req.Index == "" {
-		return nil, "", ctx.Oops().Errorf("index is empty")
-	}
-
-	res, err := t.client.Search(
-		t.client.Search.WithContext(ctx),
-		t.client.Search.WithIndex(req.Index),
-		t.client.Search.WithBody(strings.NewReader(req.Query)),
-		t.client.Search.WithSize(scrollSize),
-		t.client.Search.WithScroll(scrollTimeout),
-		t.client.Search.WithErrorTrace(),
+	res, created, err := t.client.PointInTime.Create(
+		t.client.PointInTime.Create.WithContext(ctx),
+		t.client.PointInTime.Create.WithIndex(index),
+		t.client.PointInTime.Create.WithKeepAlive(keepAlive),
 	)
 	if err != nil {
-		return nil, "", ctx.Oops().Wrapf(err, "error initiating scroll search")
+		return "", ctx.Oops().Wrapf(err, "error opening point-in-time")
 	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			return nil, "", ctx.Oops().Wrapf(err, "failed to read error response body from opensearch")
+	if res != nil {
+		defer res.Body.Close()
+		if res.IsError() {
+			body, readErr := io.ReadAll(res.Body)
+			if readErr != nil {
+				return "", ctx.Oops().Wrapf(readErr, "failed to read error response body from opensearch")
+			}
+			return "", ctx.Oops().Errorf("opensearch: open point-in-time failed with status %s: %s", res.Status(), string(body))
 		}
-		return nil, "", ctx.Oops().Errorf("opensearch: scroll search failed with status %s: %s", res.Status(), string(body))
 	}
-
-	var r Response
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		return nil, "", ctx.Oops().Wrapf(err, "error parsing the scroll response body")
+	if created == nil || created.PitID == "" {
+		return "", ctx.Oops().Errorf("opensearch returned an empty point-in-time id")
 	}
-
-	logResult := t.parseSearchResponse(ctx, r)
-	return logResult, r.ScrollID, nil
+	return created.PitID, nil
 }
 
-// ScrollNext retrieves the next batch of results using the scroll ID
-func (t *Searcher) ScrollNext(ctx context.Context, scrollID string, scrollTimeout time.Duration) (*logs.LogResult, string, error) {
-	if scrollTimeout == 0 {
-		scrollTimeout = time.Minute
+// ClosePIT releases a point-in-time. A PIT holds segments open until it expires,
+// so a walk that ends early says so rather than leaving the cluster to time it
+// out.
+func (t *Searcher) ClosePIT(ctx context.Context, pitID string) error {
+	if pitID == "" {
+		return nil
 	}
-
-	res, err := t.client.Scroll(
-		t.client.Scroll.WithContext(ctx),
-		t.client.Scroll.WithScrollID(scrollID),
-		t.client.Scroll.WithScroll(scrollTimeout),
-		t.client.Scroll.WithErrorTrace(),
+	res, _, err := t.client.PointInTime.Delete(
+		t.client.PointInTime.Delete.WithContext(ctx),
+		t.client.PointInTime.Delete.WithPitID(pitID),
 	)
 	if err != nil {
-		return nil, "", ctx.Oops().Wrapf(err, "error continuing scroll search")
+		return ctx.Oops().Wrapf(err, "error closing point-in-time")
+	}
+	if res == nil {
+		return nil
 	}
 	defer res.Body.Close()
-
 	if res.IsError() {
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			return nil, "", ctx.Oops().Wrapf(err, "failed to read error response body from opensearch scroll")
+		payload, readErr := io.ReadAll(res.Body)
+		if readErr != nil {
+			return ctx.Oops().Wrapf(readErr, "failed to read error response body from opensearch")
 		}
-		return nil, "", ctx.Oops().Errorf("opensearch: scroll next failed with status %s: %s", res.Status(), string(body))
+		return ctx.Oops().Errorf("opensearch: close point-in-time failed with status %s: %s", res.Status(), string(payload))
 	}
-
-	var r Response
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		return nil, "", ctx.Oops().Wrapf(err, "error parsing the scroll next response body")
-	}
-
-	logResult := t.parseSearchResponse(ctx, r)
-	return logResult, r.ScrollID, nil
-}
-
-// ClearScroll cleans up the scroll context
-func (t *Searcher) ClearScroll(ctx context.Context, scrollID string) error {
-	res, err := t.client.ClearScroll(
-		t.client.ClearScroll.WithContext(ctx),
-		t.client.ClearScroll.WithScrollID(scrollID),
-	)
-	if err != nil {
-		return ctx.Oops().Wrapf(err, "error clearing scroll")
-	}
-	defer res.Body.Close()
-
-	if res.IsError() {
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			return ctx.Oops().Wrapf(err, "failed to read error response body from clear scroll")
-		}
-		return ctx.Oops().Errorf("opensearch: clear scroll failed with status %s: %s", res.Status(), string(body))
-	}
-
 	return nil
 }
 
@@ -288,6 +257,17 @@ func preprocessJSONFields(source map[string]any) {
 		}
 		// On error, leave the original string value unchanged (treat as text)
 	}
+}
+
+// ParseResponse maps a raw search response to log lines, one per hit and in hit
+// order.
+//
+// It is exported so a caller needing both the mapped rows and the raw hits —
+// their sort values for a cursor, the total for a footer — can map a response
+// it already holds, rather than searching twice or being handed rows whose
+// positions have been thrown away.
+func (t *Searcher) ParseResponse(ctx context.Context, r Response) *logs.LogResult {
+	return t.parseSearchResponse(ctx, r)
 }
 
 // parseSearchResponse extracts log lines from search response

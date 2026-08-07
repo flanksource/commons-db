@@ -34,6 +34,46 @@ func TestIsRetryableMigrationErr(t *testing.T) {
 	}
 }
 
+// A `runs: always` script re-executes every Apply, but that must not drag its
+// dependents (heavyweight trigger/view DDL) into every Apply with it — only a
+// genuine content change cascades, and then exactly once.
+func TestSelectFromRecordedHashesAlwaysDoesNotCascade(t *testing.T) {
+	filesystem := fstest.MapFS{
+		"migrations/functions.sql": &fstest.MapFile{Data: []byte("-- phase: pre\n-- runs: always\nSELECT 1")},
+		"migrations/triggers.sql":  &fstest.MapFile{Data: []byte("-- dependsOn: functions.sql\nSELECT 2")},
+		"migrations/views.sql":     &fstest.MapFile{Data: []byte("-- dependsOn: triggers.sql\nSELECT 3")},
+	}
+	scripts, err := loadScripts(filesystem, "migrations")
+	require.NoError(t, err)
+	recorded := func(names ...string) map[string][]byte {
+		hashes := map[string][]byte{}
+		for _, name := range names {
+			hashes[name] = scripts[name].hash
+		}
+		return hashes
+	}
+
+	// Steady state: every hash recorded — only the always script runs.
+	selected := selectFromRecordedHashes(scripts, recorded("functions.sql", "triggers.sql", "views.sql"))
+	assert.Equal(t, map[string]bool{"functions.sql": true, "triggers.sql": false, "views.sql": false}, selected)
+
+	// The always script's content changed since last Apply: cascades once.
+	stale := recorded("functions.sql", "triggers.sql", "views.sql")
+	stale["functions.sql"] = []byte("previous-content-hash")
+	selected = selectFromRecordedHashes(scripts, stale)
+	assert.Equal(t, map[string]bool{"functions.sql": true, "triggers.sql": true, "views.sql": true}, selected)
+
+	// A mid-chain change cascades downstream only.
+	stale = recorded("functions.sql", "triggers.sql", "views.sql")
+	stale["triggers.sql"] = []byte("previous-content-hash")
+	selected = selectFromRecordedHashes(scripts, stale)
+	assert.Equal(t, map[string]bool{"functions.sql": true, "triggers.sql": true, "views.sql": true}, selected)
+
+	// Fresh database: nothing recorded — everything runs.
+	selected = selectFromRecordedHashes(scripts, map[string][]byte{})
+	assert.Equal(t, map[string]bool{"functions.sql": true, "triggers.sql": true, "views.sql": true}, selected)
+}
+
 func TestLoadScriptsDefaultsToPostAndOrdersTransitively(t *testing.T) {
 	filesystem := fstest.MapFS{
 		"migrations/a.sql": &fstest.MapFile{Data: []byte("-- phase: pre\nSELECT 1")},

@@ -9,10 +9,10 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
+
 	"github.com/flanksource/commons-db/context"
 )
-
-const DefaultSampleLimit = 100
 
 // SampleResult is the raw, pre-column/pre-processor output used by profile
 // authoring tools. Columns are inferred only from top-level row keys.
@@ -28,7 +28,7 @@ type SampleResult struct {
 // context queries and processors. Configured row transforms still shape the
 // preview, and only providers whose request can be proven read-only are allowed.
 func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*SampleResult, error) {
-	if err := p.ValidateKind(); err != nil {
+	if err := p.Validate(); err != nil {
 		return nil, err
 	}
 	if p.Kind() != KindQuery {
@@ -37,38 +37,33 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
-	resolved, err := resolveParams(p.Params, params)
+	resolved, filters, err := resolveProfileInput(p, params)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	rendered, err := renderQuery(ctx, p.Query, resolved)
+	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	if err := validateSampleReadOnly(p.Provider.Type, rendered, p.Provider.Options); err != nil {
+	req.Filters = filters
+	// The rendered query and options are what run, so they are what must be
+	// proven read-only — a templated options.method would otherwise slip a
+	// non-GET request past the check.
+	if err := validateSampleReadOnly(p.Provider.Type, req.Query, req.Options); err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return nil, err
 	}
-	started := time.Now()
-	rows, err := provider.Execute(ctx, ProviderRequest{
-		Connection: p.Provider.Connection,
-		Query:      rendered,
-		Options:    p.Provider.Options,
-		Params:     resolved,
-	})
-	duration := time.Since(started)
-	if err != nil {
-		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
-	}
 	if limit <= 0 {
 		limit = DefaultSampleLimit
 	}
-	truncated := len(rows) > limit
-	if truncated {
-		rows = rows[:limit]
+	started := time.Now()
+	rows, truncated, err := sampleRows(ctx, provider, req, limit)
+	duration := time.Since(started)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
 	}
 	if rows == nil {
 		rows = []Row{}
@@ -79,10 +74,47 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	return &SampleResult{
 		Rows:          rows,
 		Columns:       InferSampleColumns(rows),
-		RenderedQuery: rendered,
+		RenderedQuery: req.Query,
 		Truncated:     truncated,
 		DurationMS:    float64(duration) / float64(time.Millisecond),
 	}, nil
+}
+
+// sampleRows reads at most limit rows, and reports whether the source held more.
+//
+// It asks a paging provider for one page of exactly that size rather than for
+// everything, because a sample is a look at the shape of the data and not a
+// read of it: draining an index of millions to show a hundred rows costs the
+// whole index, and past OpenSearch's result window it does not even succeed —
+// a from/size walk is refused there, so sampling a large index returned
+// "reading past row 10000 needs a cursor" instead of a sample.
+//
+// A provider with no native paging has no page to ask for, so its whole result
+// is read and cut here.
+func sampleRows(ctx context.Context, provider Provider, req ProviderRequest, limit int) ([]Row, bool, error) {
+	paging, ok := provider.(PagingProvider)
+	if !ok {
+		rows, err := provider.Execute(ctx, req)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(rows) > limit {
+			return rows[:limit], true, nil
+		}
+		return rows, false, nil
+	}
+
+	// Ending the range after the first page is what releases the backend cursor.
+	for page, err := range paging.Pages(ctx, req, PageRequest{Limit: limit}) {
+		if err != nil {
+			return nil, false, err
+		}
+		if len(page.Rows) > limit {
+			return page.Rows[:limit], true, nil
+		}
+		return page.Rows, page.HasMore || page.Truncated, nil
+	}
+	return nil, false, nil
 }
 
 func validateSampleReadOnly(providerType, query string, options map[string]any) error {
@@ -312,6 +344,9 @@ func sampleColumnType(value any) ColumnType {
 		if _, err := time.Parse(time.RFC3339Nano, value); err == nil {
 			return ColumnTypeDateTime
 		}
+		if isSampleUUID(value) {
+			return ColumnTypeUUID
+		}
 		return ColumnTypeString
 	case time.Duration:
 		return ColumnTypeDuration
@@ -337,6 +372,22 @@ func sampleColumnType(value any) ColumnType {
 		}
 		return ColumnTypeString
 	}
+}
+
+// isSampleUUID recognizes an identifier by its shape rather than by its name,
+// because the backends disagree on names and only one of them has a type for
+// it: a postgres column reports "UUID" but an OpenSearch field holding the same
+// values is mapped `keyword` like every other string.
+//
+// Only the canonical hyphenated form counts. uuid.Parse also accepts 32 bare
+// hex digits, which is equally the shape of an MD5 digest — and a digest is a
+// value someone might well want to pick from a list.
+func isSampleUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	_, err := uuid.Parse(value)
+	return err == nil
 }
 
 func isStructuredSampleType(kind ColumnType) bool {

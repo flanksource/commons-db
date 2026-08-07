@@ -244,27 +244,43 @@ func selectScripts(ctx context.Context, db *sql.DB, scope string, scripts map[st
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	selected := map[string]bool{}
+	return selectFromRecordedHashes(scripts, hashes), nil
+}
+
+// selectFromRecordedHashes decides which scripts run. Hash-dirty scripts —
+// genuine content changes — cascade to their dependents (a dependent may bind
+// objects the changed script redefines). `runs: always` scripts are
+// re-executed every Apply but must NOT cascade: their execution is free by
+// contract (CREATE OR REPLACE), while their dependents replay heavyweight DDL
+// (DROP/CREATE TRIGGER takes ACCESS EXCLUSIVE) that deadlocks concurrent
+// readers when an Apply runs against a live database. An always script's hash
+// is still recorded, so editing its content cascades exactly once.
+func selectFromRecordedHashes(scripts map[string]*script, hashes map[string][]byte) map[string]bool {
+	dirty := map[string]bool{}
 	for name, s := range scripts {
-		selected[name] = s.always || !equalBytes(hashes[name], s.hash)
+		dirty[name] = !equalBytes(hashes[name], s.hash)
 	}
 	changed := true
 	for changed {
 		changed = false
 		for name, s := range scripts {
-			if selected[name] {
+			if dirty[name] {
 				continue
 			}
 			for _, dep := range s.dependsOn {
-				if selected[dep] {
-					selected[name] = true
+				if dirty[dep] {
+					dirty[name] = true
 					changed = true
 					break
 				}
 			}
 		}
 	}
-	return selected, nil
+	selected := map[string]bool{}
+	for name, s := range scripts {
+		selected[name] = s.always || dirty[name]
+	}
+	return selected
 }
 
 func runScriptPhase(ctx context.Context, db *sql.DB, scope string, ordered []*script, phase scriptPhase) error {

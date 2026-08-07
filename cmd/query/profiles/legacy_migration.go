@@ -15,9 +15,13 @@ import (
 const legacyTraceProvider = "legacy-trace"
 
 type legacyTraceParam struct {
-	Field       string `json:"field,omitempty" yaml:"field,omitempty"`
-	Operator    string `json:"operator,omitempty" yaml:"operator,omitempty"`
-	Format      string `json:"format,omitempty" yaml:"format,omitempty"`
+	Field    string `json:"field,omitempty" yaml:"field,omitempty"`
+	Operator string `json:"operator,omitempty" yaml:"operator,omitempty"`
+
+	// Format is parsed so an old file still loads, but it is not migrated: no
+	// version of the trace query builder ever read it.
+	Format string `json:"format,omitempty" yaml:"format,omitempty"`
+
 	Template    string `json:"template,omitempty" yaml:"template,omitempty"`
 	Clause      string `json:"clause,omitempty" yaml:"clause,omitempty"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
@@ -192,10 +196,22 @@ func convertLegacyTraceProfile(legacy legacyTraceProfile, source string) (query.
 	provider := query.ProviderConfig{Type: legacyTraceProvider, Options: map[string]any{
 		"kind": legacyTraceKind(legacy), "source": source,
 	}}
-	if legacyTraceKind(legacy) == "opensearch" {
-		provider = query.ProviderConfig{Type: "opentelemetry", Options: legacyOpenTelemetryOptions(legacy)}
-	} else if legacyTraceKind(legacy) == "import" {
-		provider = query.ProviderConfig{Type: "opentelemetry", Options: map[string]any{"params": legacyProviderParams(legacy.Params)}}
+	kind := legacyTraceKind(legacy)
+	if kind == "opensearch" || kind == "import" {
+		search, err := legacyOpenTelemetrySearch(legacy.Params)
+		if err != nil {
+			return query.Profile{}, err
+		}
+		options := map[string]any{}
+		// An import inherits every index and field setting from its parent, so
+		// only its own filters travel with it.
+		if kind == "opensearch" {
+			options = legacyOpenTelemetryOptions(legacy)
+		}
+		if search != nil {
+			options["search"] = search
+		}
+		provider = query.ProviderConfig{Type: "opentelemetry", Options: options}
 	}
 	return query.Profile{
 		Name: legacy.Name, Imports: legacy.Imports, Provider: provider,
@@ -210,7 +226,7 @@ func legacyOpenTelemetryOptions(legacy legacyTraceProfile) map[string]any {
 		"parentIdField": legacy.ParentIDField, "parentRefType": legacy.ParentRefType,
 		"serviceField": legacy.ServiceField, "operationField": legacy.OperationField,
 		"statusFields": legacy.StatusFields, "selectFields": legacy.SelectFields,
-		"sourceExcludes": legacy.SourceExcludes, "params": legacyProviderParams(legacy.Params),
+		"sourceExcludes": legacy.SourceExcludes,
 	}
 	for key, value := range options {
 		switch typed := value.(type) {
@@ -229,22 +245,6 @@ func legacyOpenTelemetryOptions(legacy legacyTraceProfile) map[string]any {
 		}
 	}
 	return options
-}
-
-func legacyProviderParams(params map[string]legacyTraceParam) map[string]any {
-	converted := make(map[string]any, len(params))
-	for name, param := range params {
-		converted[name] = map[string]any{
-			"field": param.Field, "operator": param.Operator, "format": param.Format,
-			"template": param.Template, "clause": param.Clause, "internal": param.Internal,
-		}
-		for key, value := range converted[name].(map[string]any) {
-			if value == "" || value == false {
-				delete(converted[name].(map[string]any), key)
-			}
-		}
-	}
-	return converted
 }
 
 func legacyTraceKind(profile legacyTraceProfile) string {

@@ -17,4 +17,13 @@ type Result struct {
 
 	// Context holds named side objects keyed by SubQuery name.
 	Context map[string]any `json:"context,omitempty" yaml:"context,omitempty"`
+
+	// ColumnFilterKeys binds rendered columns to native server filter params.
+	ColumnFilterKeys map[string]string `json:"-" yaml:"-"`
+
+	// Truncated reports that this result is short of what the query had to
+	// give — the Profile's export ceiling stopping the read, or the backend
+	// applying a cap of its own. It travels with the Result so a partial answer
+	// is never mistaken for a complete one.
+	Truncated bool `json:"truncated,omitempty" yaml:"truncated,omitempty"`
 }

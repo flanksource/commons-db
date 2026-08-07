@@ -1,17 +1,16 @@
 package providers
 
 import (
-	stdcontext "context"
 	"fmt"
+	"iter"
 	"net/http"
-	"strconv"
-	"time"
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 func init() {
@@ -35,70 +34,50 @@ type opensearchOptions struct {
 
 	// Limit is the maximum number of hits to return.
 	Limit string `json:"limit,omitempty"`
+
+	// Search is the structured search specification. It is mutually exclusive
+	// with the profile's raw query.
+	Search *esdsl.Search `json:"search,omitempty"`
 }
 
-func (opensearchProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	searcher, opts, err := openSearchClient(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	result, err := searcher.Search(ctx, opensearch.Request{
-		Index: opts.Index,
-		Query: req.Query,
-		Limit: opts.Limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return logResultToRows(result), nil
+// PagingModes reports both strategies. Offset is served by from/size and is
+// only usable inside the index result window; cursor paging is served by
+// search_after over a point-in-time and works at any depth, which is why the
+// window is a refusal rather than a silent switch.
+func (opensearchProvider) PagingModes() query.PagingMode {
+	return query.PagingOffset | query.PagingCursor
 }
 
-func (opensearchProvider) OpenRows(ctx context.Context, req query.ProviderRequest) (query.RowIterator, error) {
-	searcher, opts, err := openSearchClient(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	limit := 0
-	if opts.Limit != "" {
-		limit, err = strconv.Atoi(opts.Limit)
-		if err != nil || limit < 0 {
-			return nil, fmt.Errorf("invalid opensearch limit %q", opts.Limit)
-		}
-	}
-	if req.MaxRows > 0 {
-		boundedLimit := req.MaxRows
-		if limit > 0 && limit < boundedLimit {
-			boundedLimit = limit
-		}
-		result, err := searcher.Search(ctx, opensearch.Request{
-			Index: opts.Index,
-			Query: req.Query,
-			Limit: strconv.Itoa(boundedLimit),
-		})
+func (p opensearchProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
+	return drainOpenSearch(ctx, p, req)
+}
+
+// Pages walks the index by search_after when the profile declares an order, and
+// by from/size when it does not.
+//
+// The cursoring walk pins a point-in-time for its whole length, so every page
+// reads the same view of the index; ending the range closes it. The from/size
+// walk cannot go past the index result window and says so rather than quietly
+// changing mechanism at the boundary, which is what a scroll used to do.
+func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
+	return func(yield func(query.Page, error) bool) {
+		searcher, opts, err := openSearchClient(ctx, req)
 		if err != nil {
-			return nil, err
+			yield(query.Page{}, err)
+			return
 		}
-		return query.SliceRows(logResultToRows(result)), nil
+		walk := openSearchWalk{
+			searcher: searcher,
+			index:    opts.Index,
+			build: func(position openSearchPage) (openSearchRequest, error) {
+				return buildOpenSearchRequest(req, opts, position)
+			},
+			mapRows: func(raw opensearch.Response) []query.Row {
+				return logResultToRows(searcher.ParseResponse(ctx, raw))
+			},
+		}
+		walk.run(ctx, req, page, yield)
 	}
-	batchSize := 1000
-	if limit > 0 && limit < batchSize {
-		batchSize = limit
-	}
-	result, scrollID, err := searcher.SearchWithScroll(ctx, opensearch.ScrollRequest{
-		Request: opensearch.Request{Index: opts.Index, Query: req.Query},
-		Scroll:  opensearch.ScrollOptions{Enabled: true, Size: batchSize, Timeout: time.Minute},
-	})
-	if err != nil {
-		return nil, err
-	}
-	return &openSearchRowIterator{
-		ctx:        ctx,
-		cleanupCtx: context.NewContext(stdcontext.WithoutCancel(ctx.Context)),
-		searcher:   searcher,
-		scrollID:   scrollID,
-		rows:       logResultToRows(result),
-		limit:      limit,
-	}, nil
 }
 
 func openSearchClient(ctx context.Context, req query.ProviderRequest) (*opensearch.Searcher, opensearchOptions, error) {
@@ -150,56 +129,4 @@ func openSearchClientForConnection(ctx context.Context, conn *models.Connection)
 		return nil, err
 	}
 	return opensearch.NewWithTransport(ctx, opensearch.Backend{Address: conn.URL}, nil, httpConnection.Transport())
-}
-
-type openSearchRowIterator struct {
-	ctx        context.Context
-	cleanupCtx context.Context
-	searcher   *opensearch.Searcher
-	scrollID   string
-	rows       []query.Row
-	index      int
-	count      int
-	limit      int
-	row        query.Row
-	err        error
-	closed     bool
-}
-
-func (i *openSearchRowIterator) Next() bool {
-	if i.err != nil || i.closed || (i.limit > 0 && i.count >= i.limit) {
-		return false
-	}
-	for i.index >= len(i.rows) {
-		if len(i.rows) == 0 || i.scrollID == "" {
-			return false
-		}
-		result, nextID, err := i.searcher.ScrollNext(i.ctx, i.scrollID, time.Minute)
-		if err != nil {
-			i.err = err
-			return false
-		}
-		i.scrollID = nextID
-		i.rows = logResultToRows(result)
-		i.index = 0
-	}
-	i.row = i.rows[i.index]
-	i.index++
-	i.count++
-	return true
-}
-
-func (i *openSearchRowIterator) Row() query.Row { return i.row }
-func (i *openSearchRowIterator) Err() error     { return i.err }
-func (i *openSearchRowIterator) Close() error {
-	if i.closed {
-		return nil
-	}
-	i.closed = true
-	if i.scrollID == "" {
-		return nil
-	}
-	cleanup, cancel := i.cleanupCtx.WithTimeout(10 * time.Second)
-	defer cancel()
-	return i.searcher.ClearScroll(cleanup, i.scrollID)
 }

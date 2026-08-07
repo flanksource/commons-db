@@ -1,6 +1,13 @@
-import { LogsTable, type ResultRenderContext } from "@flanksource/clicky-ui";
+import {
+  LogsTable,
+  type ClickyDownloadOptions,
+  type DataTablePagination,
+  type OperationResultFilterConfig,
+  type ResultRenderContext,
+} from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
+import { useProfiles } from "./profilesQuery";
 
 // slugify mirrors cmd/query/profilestore.go slugify so a profile name maps to its
 // dynamic-entity name ("profile-" + slug). The entity name (not the pluralized
@@ -34,18 +41,11 @@ function entitySegment(url: string): string {
   return path.split("/").filter(Boolean).pop() ?? "";
 }
 
-// useLogsEntityNames fetches the profile definitions and returns the set of
-// dynamic-entity names whose profile declares `render: logs`. Failure yields an
-// empty set, so logs profiles simply fall back to the default table.
+// useLogsEntityNames returns the set of dynamic-entity names whose profile
+// declares `render: logs`. It reads the shared profile query, so a rename does
+// not leave this view resolving against a stale profile list.
 export function useLogsEntityNames(): Set<string> {
-  const { data } = useQuery({
-    queryKey: ["logs-entity-names"],
-    queryFn: async () => {
-      const res = await fetch("/api/v1/profiles", { headers: { Accept: "application/json" } });
-      if (!res.ok) return [] as Record<string, unknown>[];
-      return asArray(await res.json());
-    },
-  });
+  const { data } = useProfiles();
   const names = new Set<string>();
   for (const p of data ?? []) {
     if (p.render === "logs") {
@@ -60,7 +60,19 @@ export function useLogsEntityNames(): Set<string> {
 // that produced the result (so the active server-side filters are preserved) and
 // renders them through clicky-ui's canonical LogsTable. Client-side filtering and
 // sorting are disabled — filtering stays server-side via the profile's params.
-function LogsResult({ requestUrl }: { requestUrl: string }): ReactNode {
+function LogsResult({
+  requestUrl,
+  filterConfig,
+  columnFilterKeys,
+  pagination,
+  download,
+}: {
+  requestUrl: string;
+  filterConfig?: OperationResultFilterConfig;
+  columnFilterKeys: Record<string, string>;
+  pagination?: DataTablePagination;
+  download?: ClickyDownloadOptions;
+}): ReactNode {
   const { data, isLoading, isError } = useQuery({
     queryKey: ["logs-rows", requestUrl],
     queryFn: async () => {
@@ -73,7 +85,39 @@ function LogsResult({ requestUrl }: { requestUrl: string }): ReactNode {
   if (isLoading) return <div className="text-sm text-muted-foreground">Loading logs…</div>;
   if (isError || !data) return null;
 
-  return <LogsTable logs={data} autoFilter={false} fullscreenTitle="Logs" />;
+  return (
+    <LogsTable
+      logs={data}
+      autoFilter={false}
+      fullscreenTitle="Logs"
+      columnFilterKeys={columnFilterKeys}
+      cellFilters={filterConfig?.cellFilters}
+      onCellFilterChange={filterConfig?.onCellFilterChange}
+      // A logs profile is paged by the server exactly like every other one, so
+      // it gets the same pager and download menu. Dropping them here is what
+      // made the first page look like the whole log.
+      {...(pagination ? { pagination } : {})}
+      {...(download ? { download } : {})}
+    />
+  );
+}
+
+export function logsColumnFilterKeys(payload: unknown): Record<string, string> {
+  if (!payload || typeof payload !== "object") return {};
+  const node = (payload as { node?: unknown }).node;
+  if (!node || typeof node !== "object") return {};
+  const table = node as { kind?: unknown; columns?: unknown };
+  if (table.kind !== "table" || !Array.isArray(table.columns)) return {};
+
+  return Object.fromEntries(
+    table.columns.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const column = value as { name?: unknown; filterKey?: unknown };
+      return typeof column.name === "string" && typeof column.filterKey === "string"
+        ? [[column.name, column.filterKey]]
+        : [];
+    }),
+  );
 }
 
 // logsResultRenderer is the EntityExplorerApp result override: when the result's
@@ -82,9 +126,17 @@ function LogsResult({ requestUrl }: { requestUrl: string }): ReactNode {
 export function logsResultRenderer(
   logsEntityNames: Set<string>,
 ): (ctx: ResultRenderContext) => ReactNode {
-  return ({ response, defaultView }) => {
+  return ({ response, defaultView, filterConfig, pagination, download }) => {
     const requestUrl = response?.requestUrl;
     if (!requestUrl || !logsEntityNames.has(entitySegment(requestUrl))) return defaultView;
-    return <LogsResult requestUrl={requestUrl} />;
+    return (
+      <LogsResult
+        requestUrl={requestUrl}
+        filterConfig={filterConfig}
+        columnFilterKeys={logsColumnFilterKeys(response.parsed)}
+        {...(pagination ? { pagination } : {})}
+        {...(download ? { download } : {})}
+      />
+    );
   };
 }

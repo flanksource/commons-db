@@ -164,7 +164,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 
 	address := fmt.Sprintf("%s:%d", options.Host, options.Port)
 	httpServer := &http.Server{
-		Addr: address, Handler: handler, ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 90 * time.Second,
+		Addr: address, Handler: rpc.Compress(handler), ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 90 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()
