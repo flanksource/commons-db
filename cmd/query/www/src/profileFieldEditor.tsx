@@ -1,5 +1,6 @@
-import { Button } from "@flanksource/clicky-ui";
+import { Button, JSONPathField } from "@flanksource/clicky-ui";
 import type { ReactNode } from "react";
+import { useJsonPathSampleRow } from "./jsonPathSampleRow";
 import {
   inferredFilterKind,
   patchColumnFilter,
@@ -78,6 +79,7 @@ export function ProfileFieldEditorForm({
   onChange: (patch: Partial<ProfileColumn>) => void;
 }) {
   const wide = columns === 2 ? "sm:col-span-2" : "";
+  const sampleRow = useJsonPathSampleRow();
   return (
     <div className={`grid gap-4 ${columns === 2 ? "sm:grid-cols-2" : ""}`}>
       <EditorField label="Output name" help="Public field name used by tables, filters, APIs, and every export.">
@@ -120,6 +122,16 @@ export function ProfileFieldEditorForm({
       <div className={wide}>
         <EditorField label="CEL expression" help="Optional expression computing the value from row.">
           <textarea rows={4} value={field.cel ?? ""} className={`${inputClassName} resize-y font-mono text-xs`} placeholder="Optional value transformation" onChange={(event) => onChange({ cel: event.target.value || undefined })} />
+        </EditorField>
+      </div>
+      <div className={wide}>
+        <EditorField label="JSONPath" help="Optional path computing the value, rooted at the row or at Source; an alternative to CEL.">
+          <JSONPathField
+            aria-label="JSONPath"
+            value={field.jsonpath ?? ""}
+            onChange={(next) => onChange({ jsonpath: next || undefined })}
+            {...(sampleRow === undefined ? {} : { json: sampleRow })}
+          />
         </EditorField>
       </div>
       <label className={`flex items-center gap-2 text-sm font-medium ${wide}`}>

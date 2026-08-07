@@ -20,6 +20,7 @@ import { ChatWidget } from "./chatWidget";
 import { profileBuilderFormExtensions } from "./profileBuilder";
 import { esQueryBuilderFormExtensions } from "./esQueryBuilder";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
+import { jsonPathFormExtensions } from "./jsonPathPicker";
 import { BuildProfileButton } from "./buildProfileAction";
 import {
   EditProfileButton,
@@ -48,6 +49,7 @@ const formExtensions = {
     ...profileBuilderFormExtensions.post,
     ...esQueryBuilderFormExtensions.post,
     ...esParamOptionsFormExtensions.post,
+    ...jsonPathFormExtensions.post,
   ],
 };
 

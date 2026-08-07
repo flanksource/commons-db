@@ -48,11 +48,11 @@ tasks:
       - go build ./...
 
   www:install:
-    desc: Install the query web UI dependencies (links sibling clicky-ui when present, else npm)
+    desc: Install the query web UI dependencies from the npm registry
     dir: cmd/query/www
     cmds:
-      # --no-frozen-lockfile so the @flanksource/clicky-ui workspace link resolves
-      # to the local sibling when checked out, and falls back to the npm range in CI.
+      # @flanksource/clicky-ui resolves from npm — never a link: override to a
+      # sibling checkout, whose branch/dist state would silently decide the build.
       - pnpm install --no-frozen-lockfile
 
   www:build:
