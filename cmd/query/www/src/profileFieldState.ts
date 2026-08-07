@@ -5,6 +5,7 @@ import {
   filterProfileFields,
   patchProfileField,
   renameProfileField,
+  reorderProfileColumns,
   type ProfileColumn,
   type ProfileFieldFilter,
 } from "./profileWizardModel";
@@ -116,12 +117,27 @@ export function useProfileFieldState({
     onActiveNameChange(name);
   };
 
-  const moveActive = (offset: number) => {
-    const target = activeIndex + offset;
-    if (activeIndex < 0 || target < 0 || target >= configured.length) return;
+  const moveField = (field: ProfileColumn, offset: number) => {
+    const from = configured.findIndex((entry) => entry.name === field.name);
+    const target = from + offset;
+    if (from < 0 || target < 0 || target >= configured.length) return;
     const next = [...configured];
-    [next[activeIndex], next[target]] = [next[target], next[activeIndex]];
+    [next[from], next[target]] = [next[target], next[from]];
     onConfiguredChange(next);
+  };
+
+  const moveActive = (offset: number) => {
+    if (activeField) moveField(activeField, offset);
+  };
+
+  /**
+   * Drops the dragged field onto the target's position. Only configured fields
+   * have a position to move: an unselected field is anchored to the sample, so
+   * it is neither a source nor a destination.
+   */
+  const reorderField = (sourceName: string, targetName: string) => {
+    const next = reorderProfileColumns(configured, sourceName, targetName);
+    if (next !== configured) onConfiguredChange(next);
   };
 
   const removeField = (field: ProfileColumn) => {
@@ -157,6 +173,8 @@ export function useProfileFieldState({
     updateActiveField,
     addField,
     moveActive,
+    moveField,
+    reorderField,
     removeField,
     removeActive,
   };
