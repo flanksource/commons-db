@@ -78,4 +78,6 @@ catalogMode: prefer
 confirmModulesPurge: false
 
 linkWorkspacePackages: true
+overrides:
+  '@flanksource/clicky-ui': link:../../../../clicky-ui/packages/ui
 preferWorkspacePackages: true

@@ -1,6 +1,6 @@
 import { Button, JSONPathField } from "@flanksource/clicky-ui";
 import type { ReactNode } from "react";
-import { useJsonPathSampleRow } from "./jsonPathSampleRow";
+import { evaluateJsonPath, useJsonPathSampleRows } from "./jsonPathSampleRow";
 import {
   inferredFilterKind,
   patchColumnFilter,
@@ -79,7 +79,7 @@ export function ProfileFieldEditorForm({
   onChange: (patch: Partial<ProfileColumn>) => void;
 }) {
   const wide = columns === 2 ? "sm:col-span-2" : "";
-  const sampleRow = useJsonPathSampleRow();
+  const rows = useJsonPathSampleRows();
   return (
     <div className={`grid gap-4 ${columns === 2 ? "sm:grid-cols-2" : ""}`}>
       <EditorField label="Output name" help="Public field name used by tables, filters, APIs, and every export.">
@@ -130,7 +130,14 @@ export function ProfileFieldEditorForm({
             aria-label="JSONPath"
             value={field.jsonpath ?? ""}
             onChange={(next) => onChange({ jsonpath: next || undefined })}
-            {...(sampleRow === undefined ? {} : { json: sampleRow })}
+            // This editor owns the whole column, so a path picked out of a
+            // JSON-encoded column can set the Source it needs in the same edit
+            // rather than leaving the author to pair the two by hand.
+            onSelectPath={(next, { root }) =>
+              onChange({ jsonpath: next || undefined, ...(root ? { source: root } : {}) })
+            }
+            {...(rows.length === 0 ? {} : { json: rows[0], rows })}
+            evaluate={evaluateJsonPath}
           />
         </EditorField>
       </div>

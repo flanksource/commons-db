@@ -1,5 +1,5 @@
-import { describe, expect, it } from "vitest";
-import { sampleRequestProfile } from "./jsonPathSampleRow";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { evaluateJsonPath, sampleRequestProfile } from "./jsonPathSampleRow";
 
 const profile = {
   profile: "orders",
@@ -44,5 +44,26 @@ describe("sampleRequestProfile", () => {
     expect(sampleRequestProfile({ query: "SELECT 1" })).toBeNull();
     expect(sampleRequestProfile({ provider: { type: "" }, query: "SELECT 1" })).toBeNull();
     expect(sampleRequestProfile(undefined)).toBeNull();
+  });
+});
+
+describe("evaluateJsonPath", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("sends the expression, its root and the row the caller is already holding", async () => {
+    const response = { matches: ["OPEN"], count: 1, filterField: "payload.status" };
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const row = { payload: '{"status":"OPEN"}' };
+    await expect(evaluateJsonPath({ jsonpath: "$.status", source: "payload", row })).resolves.toEqual(response);
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("/api/v1/profile/sample/jsonpath");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ jsonpath: "$.status", source: "payload", row });
   });
 });

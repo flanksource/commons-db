@@ -401,7 +401,8 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 	if err != nil {
 		return nil, err
 	}
-	return newExecHandler(prefix, s.context(), store, newProfileSampleHandler(prefix, s.context(), next)), nil
+	sample := newProfileSampleHandler(prefix, s.context(), newSampleJSONPathHandler(prefix, next))
+	return newExecHandler(prefix, s.context(), store, sample), nil
 }
 
 func (s *Service) OpenAPIHandler(root *cobra.Command, config *rpc.Config) (http.Handler, error) {
