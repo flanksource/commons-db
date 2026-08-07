@@ -6,6 +6,9 @@ settings:
 
 catalogs:
   default:
+    '@flanksource/clicky-ui':
+      specifier: ^0.3.18
+      version: 0.3.18
     '@tanstack/react-query':
       specifier: ^5.66.8
       version: 5.101.0
@@ -22,7 +25,7 @@ importers:
     dependencies:
       '@flanksource/clicky-ui':
         specifier: ^0.3.16
-        version: 0.3.17(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react-rnd@10.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(recharts@3.8.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.7)(react@18.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tailwindcss@4.3.1)
+        version: 0.3.18(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react-rnd@10.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(recharts@3.8.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.7)(react@18.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tailwindcss@4.3.1)
       '@flanksource/icons':
         specifier: 1.0.63
         version: 1.0.63(react@18.3.1)
@@ -201,8 +204,8 @@ packages:
   '@codemirror/state@6.7.1':
     resolution: {integrity: sha512-9QzNDgE4EYDnAHfrTlR2lwiPciiOymLtwKK+8yHQzCc7GXhAP9xdEbEJFy2IWB1j9UGUl9BsgMmTo/ImA02T7A==}
 
-  '@codemirror/view@6.43.6':
-    resolution: {integrity: sha512-EVunGSYN1wz1p75WY1s3Xg7t3i8Yol0kGZGizNdX9BUFgMFILYVe8/u6EVpo7Ff5PwbZuILb4QAq7IZoKzIEQA==}
+  '@codemirror/view@6.43.8':
+    resolution: {integrity: sha512-qtItTDssZ/5GFfi94hrILu9j/VUeFPDPkhovEfmWFj2ipTxnzPB8DdHgfbb8HYTzLTYhrndKmyQxXUz/PDLenw==}
 
   '@csstools/color-helpers@5.1.0':
     resolution: {integrity: sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==}
@@ -544,8 +547,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@flanksource/clicky-ui@0.3.17':
-    resolution: {integrity: sha512-kWkaIRgGJyzHFpEdBpslFMytHDu+4sWCLb0FW2Bif/mfI3ZheZT1TJmd1kyHjOQE1N+/fFpn74xH01HZFzR3LA==}
+  '@flanksource/clicky-ui@0.3.18':
+    resolution: {integrity: sha512-cQEhkozBwvwER/H23y0nytkJbXFjI4nd6ASlfDAaGp2wjRlToGHwIo/HnjcQNWiolIZFPito2WZkDkCl4qNySw==}
     peerDependencies:
       '@ai-sdk/react': ^3.0.0
       '@mdxeditor/editor': ^4.0.4
@@ -667,8 +670,8 @@ packages:
     resolution: {integrity: sha512-gLyJlPHPZYdAk1JENA9LeHejZe1Ti77/pTeFm/nMXmQH/HFZlcS/O2XJB+L8fkbrNSqhdtlvjBVjxwUYanNH5Q==}
     engines: {node: '>=8.0.0'}
 
-  '@radix-ui/react-compose-refs@1.1.3':
-    resolution: {integrity: sha512-rYOP8OMnuuPMQF1uhPVlGNcCDlkokKqGFE3JcxFViIkAXP7EvFWUliJAstrapypaBLJNHbZL6jGhbVDGTwmVhA==}
+  '@radix-ui/react-compose-refs@1.1.5':
+    resolution: {integrity: sha512-+48PbAAbq3didjJxa+OaWY2ZwgAKsNiRGyeHKszblZMQ+kcpd9pAaT11cMkGEie0vsOi3QdeTE6d5Fe3Gn61kA==}
     peerDependencies:
       '@types/react': '*'
       react: ^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc
@@ -676,8 +679,8 @@ packages:
       '@types/react':
         optional: true
 
-  '@radix-ui/react-slot@1.3.0':
-    resolution: {integrity: sha512-MojKku4U/miO8Av4Dkb+ctMAQx7JmY96LmtDQlAarCRtd7rN52QCSzBF+XAvr5S6coSVj9HEPBgHAHKEJVk/WA==}
+  '@radix-ui/react-slot@1.3.3':
+    resolution: {integrity: sha512-qx7oqnYbxnK9kYI9m317qmFmEgo6ywqWvbTogdj7cL9p3/yx4M48p7Rnw5z3H890cL/ow/EeWJsuTykeZVXP5Q==}
     peerDependencies:
       '@types/react': '*'
       react: ^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc
@@ -1414,6 +1417,9 @@ packages:
 
   dompurify@3.4.12:
     resolution: {integrity: sha512-zQvGet8Z2sWbQhCmfFz/T5QWH2oBmjnqK3qvOjaqaNLrLEF912WamU+ohnTp0TCep/MFVHpdJuCZEdFOdTnEFg==}
+
+  dompurify@3.4.13:
+    resolution: {integrity: sha512-2vmYIoqjze2d+kakP8S/nS5shfsl587kzwEjcGlTdiksUVgFHnFCsLYDVj/JNqJVOQZGSYBTmuycv0PodwmnMQ==}
 
   electron-to-chromium@1.5.376:
     resolution: {integrity: sha512-cUVA7/RvbFTEuw/i3obUwDTRIXojaxkResf+ibByPFxjc6XK3VNtcQXV0NSbAlJ0FMjcJGgftVVB4Qo184EXvA==}
@@ -2702,14 +2708,14 @@ snapshots:
     dependencies:
       '@codemirror/language': 6.12.4
       '@codemirror/state': 6.7.1
-      '@codemirror/view': 6.43.6
+      '@codemirror/view': 6.43.8
       '@lezer/common': 1.5.2
 
   '@codemirror/commands@6.10.4':
     dependencies:
       '@codemirror/language': 6.12.4
       '@codemirror/state': 6.7.1
-      '@codemirror/view': 6.43.6
+      '@codemirror/view': 6.43.8
       '@lezer/common': 1.5.2
 
   '@codemirror/lang-json@6.0.2':
@@ -2729,7 +2735,7 @@ snapshots:
   '@codemirror/language@6.12.4':
     dependencies:
       '@codemirror/state': 6.7.1
-      '@codemirror/view': 6.43.6
+      '@codemirror/view': 6.43.8
       '@lezer/common': 1.5.2
       '@lezer/highlight': 1.2.3
       '@lezer/lr': 1.4.10
@@ -2739,7 +2745,7 @@ snapshots:
     dependencies:
       '@marijn/find-cluster-break': 1.0.3
 
-  '@codemirror/view@6.43.6':
+  '@codemirror/view@6.43.8':
     dependencies:
       '@codemirror/state': 6.7.1
       crelt: 1.0.7
@@ -2927,23 +2933,23 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@flanksource/clicky-ui@0.3.17(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react-rnd@10.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(recharts@3.8.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.7)(react@18.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tailwindcss@4.3.1)':
+  '@flanksource/clicky-ui@0.3.18(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@shikijs/langs@1.29.2)(@shikijs/themes@1.29.2)(@shikijs/transformers@1.29.2)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(marked@15.0.12)(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react-rnd@10.5.3(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(recharts@3.8.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.7)(react@18.3.1)(redux@5.0.1))(shiki@1.29.2)(streamdown@2.5.0(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(tailwindcss@4.3.1)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4
       '@codemirror/lang-json': 6.0.2
       '@codemirror/lang-sql': 6.10.0
       '@codemirror/state': 6.7.1
-      '@codemirror/view': 6.43.6
+      '@codemirror/view': 6.43.8
       '@flanksource/icons': 1.0.63(react@18.3.1)
       '@floating-ui/react': 0.27.20(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
       '@monaco-editor/react': 4.7.0(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
-      '@radix-ui/react-compose-refs': 1.1.3(@types/react@18.3.31)(react@18.3.1)
-      '@radix-ui/react-slot': 1.3.0(@types/react@18.3.31)(react@18.3.1)
+      '@radix-ui/react-compose-refs': 1.1.5(@types/react@18.3.31)(react@18.3.1)
+      '@radix-ui/react-slot': 1.3.3(@types/react@18.3.31)(react@18.3.1)
       '@tanstack/react-query': 5.101.4(react@18.3.1)
       class-variance-authority: 0.7.1
       clsx: 2.1.1
-      dompurify: 3.4.12
+      dompurify: 3.4.13
       jotai: 2.20.2(@babel/core@7.29.7)(@babel/template@7.29.7)(@types/react@18.3.31)(react@18.3.1)
       monaco-editor: 0.48.0
       monaco-yaml: 5.1.1(monaco-editor@0.48.0)
@@ -3065,15 +3071,15 @@ snapshots:
   '@opentelemetry/api@1.9.1':
     optional: true
 
-  '@radix-ui/react-compose-refs@1.1.3(@types/react@18.3.31)(react@18.3.1)':
+  '@radix-ui/react-compose-refs@1.1.5(@types/react@18.3.31)(react@18.3.1)':
     dependencies:
       react: 18.3.1
     optionalDependencies:
       '@types/react': 18.3.31
 
-  '@radix-ui/react-slot@1.3.0(@types/react@18.3.31)(react@18.3.1)':
+  '@radix-ui/react-slot@1.3.3(@types/react@18.3.31)(react@18.3.1)':
     dependencies:
-      '@radix-ui/react-compose-refs': 1.1.3(@types/react@18.3.31)(react@18.3.1)
+      '@radix-ui/react-compose-refs': 1.1.5(@types/react@18.3.31)(react@18.3.1)
       react: 18.3.1
     optionalDependencies:
       '@types/react': 18.3.31
@@ -3901,6 +3907,11 @@ snapshots:
     optional: true
 
   dompurify@3.4.12:
+    optionalDependencies:
+      '@types/trusted-types': 2.0.7
+    optional: true
+
+  dompurify@3.4.13:
     optionalDependencies:
       '@types/trusted-types': 2.0.7
 
