@@ -10,6 +10,20 @@ import (
 
 const columnFilterPrefix = "filter."
 
+const (
+	// DefaultFilterLookupLimit is how many distinct values a profile's filter
+	// offers before the rest must be reached by typing. It is small on purpose:
+	// a list nobody can scan is not a list anyone picks from, and the values past
+	// it are one debounced search away.
+	DefaultFilterLookupLimit = 50
+
+	// MaxFilterLookupLimit is the largest head a filter may ask for. It mirrors
+	// clicky's entity.MaxLookupOptions, which caps the lookup response either
+	// way — declaring it here is what turns a silent reduction at request time
+	// into a loud rejection when the profile is written.
+	MaxFilterLookupLimit = 200
+)
+
 var (
 	directCELField  = regexp.MustCompile(`^(?:row|span)\.([A-Za-z_][A-Za-z0-9_.@-]*)$`)
 	indexedCELField = regexp.MustCompile(`^(?:row|span)\[['"]([^'"]+)['"]\]$`)
@@ -50,6 +64,13 @@ type ColumnFilterDef struct {
 	// filter still excludes: "!eu" is one value with a sign, not two.
 	Multi *bool `json:"multi,omitempty" yaml:"multi,omitempty"`
 
+	// Limit caps how many distinct values one lookup offers, defaulting to
+	// DefaultFilterLookupLimit. Everything past it is reached by typing rather
+	// than scrolling, so raise it for a field whose whole range is worth seeing
+	// at once and lower it for one where even fifty is noise. Value selections
+	// only — the other kinds have no list to cap.
+	Limit *int `json:"limit,omitempty" yaml:"limit,omitempty"`
+
 	// Disabled offers no filter for this column while leaving the column itself
 	// rendered, which Hidden does not.
 	Disabled bool `json:"disabled,omitempty" yaml:"disabled,omitempty"`
@@ -59,6 +80,16 @@ type ColumnFilterDef struct {
 func (d ColumnFilterDef) Validate(column string) error {
 	if !d.Kind.Valid() {
 		return fmt.Errorf("column %q filter kind %q is unsupported", column, d.Kind)
+	}
+	if d.Limit != nil {
+		if kind := d.Kind.Normalized(); kind != ColumnFilterKindTerms {
+			return fmt.Errorf("column %q filter limit requires a %q filter, not %q", column, ColumnFilterKindTerms, kind)
+		}
+		if *d.Limit < 1 || *d.Limit > MaxFilterLookupLimit {
+			return fmt.Errorf(
+				"column %q filter limit %d is out of range; a lookup offers between 1 and %d values",
+				column, *d.Limit, MaxFilterLookupLimit)
+		}
 	}
 	if len(d.Options) == 0 {
 		return nil
@@ -84,6 +115,10 @@ type ColumnFilterBinding struct {
 	Options []string
 	Lookup  bool
 	Multi   bool
+	// Limit is the author's declared cap on the lookup, or zero when they
+	// declared none. Zero is not "no values": it is what leaves the choice to
+	// whoever asks, which is why an inferred binding never fills it in.
+	Limit int
 }
 
 // FilterBound is one edge of a range. Value is carried as the kind stores it: a
@@ -390,8 +425,18 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 	if !binding.Kind.Lookupable() {
 		return nil, nil, fmt.Errorf("filter %q is a %s filter and has no values to list", key, binding.Kind.Normalized())
 	}
+	// A declared limit narrows what the caller asked for; it never widens it.
+	// The guard is on the binding rather than the caller because a binding
+	// nobody declared — every inferred one, and every one the connection browser
+	// builds — must keep answering the size its caller chose.
+	if binding.Limit > 0 && (limit <= 0 || binding.Limit < limit) {
+		limit = binding.Limit
+	}
 	// An enumerated filter already carries the answer, so asking the backend
-	// would be a round trip whose result is sitting in the profile.
+	// would be a round trip whose result is sitting in the profile. It is
+	// deliberately served whole: `options` names the values that exist, so
+	// withholding some of them would answer a different question than the one
+	// the author wrote.
 	if len(binding.Options) > 0 {
 		options := make([]FilterOption, 0, len(binding.Options))
 		for _, option := range binding.Options {

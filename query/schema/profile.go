@@ -214,6 +214,11 @@ func ProfileSource() Schema {
 						"type": "boolean", "title": "Lookup", "default": true,
 						"description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked",
 					},
+					"limit": Schema{
+						"type": "integer", "title": "Limit", "default": query.DefaultFilterLookupLimit,
+						"minimum": 1, "maximum": query.MaxFilterLookupLimit,
+						"description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup",
+					},
 					"multi": Schema{
 						"type": "boolean", "title": "Multi", "default": true,
 						"description": "Allow several values at once",
@@ -588,6 +593,9 @@ func ProfileInstance(p query.Profile) (Schema, error) {
 				"kind":   string(binding.Kind),
 				"multi":  binding.Multi,
 				"lookup": binding.Lookup,
+			}
+			if binding.Limit > 0 {
+				filter["limit"] = binding.Limit
 			}
 			if len(binding.Options) > 0 {
 				filter["options"] = binding.Options

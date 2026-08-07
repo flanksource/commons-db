@@ -1,5 +1,24 @@
 import type { ProfileRowLimits } from "./connectionBrowserModel";
 
+/** How a column is filtered at the backend; every field overrides an inference
+ *  the server would otherwise make from the column itself. */
+export type ProfileColumnFilter = {
+  /** Backend field the selection applies to; blank infers it from the column. */
+  field?: string;
+  /** terms, range, time, boolean, text or none; blank infers it from the type. */
+  kind?: string;
+  /** Enumerated values, replacing the backend lookup. */
+  options?: string[];
+  /** Ask the backend for this field's distinct values. */
+  lookup?: boolean;
+  /** How many of those values the control offers before the rest are typed for. */
+  limit?: number;
+  /** Allow several values at once. */
+  multi?: boolean;
+  /** Offer no filter while keeping the column rendered. */
+  disabled?: boolean;
+};
+
 export type ProfileColumn = {
   name: string;
   source?: string;
@@ -11,6 +30,7 @@ export type ProfileColumn = {
   width?: number;
   cel?: string;
   hidden?: boolean;
+  filter?: ProfileColumnFilter;
   [key: string]: unknown;
 };
 
@@ -187,6 +207,65 @@ export function applyVisibleFieldSelection(
       .map((field) => configuredByName.get(field.name) ?? field),
     ...configured.filter((field) => !discoveredNames.has(field.name)),
   ];
+}
+
+/** The control kinds a column filter can render as, with the server's own
+ *  wording. Mirrors query.ColumnFilterKindValues() and the x-enum-labels the
+ *  profile schema carries for them. */
+export const PROFILE_FILTER_KIND_OPTIONS = [
+  { value: "terms", label: "Value selection" },
+  { value: "range", label: "Numeric range" },
+  { value: "time", label: "Time range" },
+  { value: "boolean", label: "Yes/no" },
+  { value: "text", label: "Substring" },
+  { value: "none", label: "Not filterable" },
+] as const;
+
+/** The server's own default, so an unset limit can be shown for what it does.
+ *  Mirrors query.DefaultFilterLookupLimit. */
+export const PROFILE_FILTER_DEFAULT_LIMIT = 50;
+
+/** Mirrors query.MaxFilterLookupLimit — the largest head a lookup will serve. */
+export const PROFILE_FILTER_MAX_LIMIT = 200;
+
+/**
+ * Merges one filter knob into a column's filter block, dropping the block once
+ * nothing is left in it.
+ *
+ * The distinction matters on save: `filter: {}` is a declaration that declares
+ * nothing, and the server reads a present-but-empty block differently from an
+ * absent one — unchecking the last box has to mean "infer this again", not
+ * "override it with silence".
+ */
+export function patchColumnFilter(
+  filter: ProfileColumnFilter | undefined,
+  patch: Partial<ProfileColumnFilter>,
+): ProfileColumnFilter | undefined {
+  const merged = Object.fromEntries(
+    Object.entries({ ...filter, ...patch }).filter(([, value]) => value !== undefined),
+  ) as ProfileColumnFilter;
+  return Object.keys(merged).length ? merged : undefined;
+}
+
+/** What the server picks for a column that declares no filter kind. Mirrors
+ *  columnFilterKindFor; text is absent there on purpose, so it is here too. */
+export function inferredFilterKind(column: ProfileColumn): string {
+  switch (column.type) {
+    case "number":
+    case "duration":
+    case "bytes":
+      return "range";
+    case "datetime":
+      return "time";
+    case "boolean":
+      return "boolean";
+    case "key_value":
+    case "key_values":
+    case "json":
+      return "none";
+    default:
+      return "terms";
+  }
 }
 
 export function patchProfileField(

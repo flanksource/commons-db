@@ -1,9 +1,15 @@
 import { Button } from "@flanksource/clicky-ui";
 import type { ReactNode } from "react";
 import {
+  inferredFilterKind,
+  patchColumnFilter,
   PROFILE_COLUMN_FORMAT_OPTIONS,
   PROFILE_COLUMN_UNIT_OPTIONS,
+  PROFILE_FILTER_DEFAULT_LIMIT,
+  PROFILE_FILTER_KIND_OPTIONS,
+  PROFILE_FILTER_MAX_LIMIT,
   type ProfileColumn,
+  type ProfileColumnFilter,
 } from "./profileWizardModel";
 
 const inputClassName =
@@ -120,8 +126,120 @@ export function ProfileFieldEditorForm({
         <input type="checkbox" checked={field.hidden ?? false} onChange={(event) => onChange({ hidden: event.target.checked })} />
         Hide this field in the default table
       </label>
+      <div className={wide}>
+        <ProfileFieldFilterEditor field={field} columns={columns} onChange={onChange} />
+      </div>
     </div>
   );
+}
+
+/**
+ * How this column is filtered. Collapsed by default: every field here overrides
+ * an inference the server already makes correctly for most columns, so opening
+ * it should be a deliberate act rather than the price of editing a label.
+ */
+function ProfileFieldFilterEditor({
+  field,
+  columns,
+  onChange,
+}: {
+  field: ProfileColumn;
+  columns: 1 | 2;
+  onChange: (patch: Partial<ProfileColumn>) => void;
+}) {
+  const filter = field.filter ?? {};
+  const set = (patch: Partial<ProfileColumnFilter>) =>
+    onChange({ filter: patchColumnFilter(field.filter, patch) });
+
+  // A value selection is the only kind with a list to enumerate; a range, a
+  // toggle and a substring are typed rather than picked.
+  const kind = filter.kind ?? inferredFilterKind(field);
+  const picksFromAList = kind === "terms";
+  const enumerated = (filter.options?.length ?? 0) > 0;
+  // Declaring the values IS the answer the lookup would go and fetch, so the two
+  // are mutually exclusive — the server enforces this and the form mirrors it.
+  const looksUp = picksFromAList && !enumerated && (filter.lookup ?? true);
+
+  return (
+    <details className="rounded-md border px-3 py-2">
+      <summary className="cursor-pointer text-sm font-medium">
+        Filtering
+        <span className="ml-2 text-xs font-normal text-muted-foreground">
+          {filter.disabled ? "off" : summarizeFilter(kind, enumerated, looksUp, filter.limit)}
+        </span>
+      </summary>
+      <div className={`mt-3 grid gap-4 ${columns === 2 ? "sm:grid-cols-2" : ""}`}>
+        <EditorField label="Control" help="Overrides the control derived from Type; set it where the rendered type and the backend storage disagree.">
+          <select value={filter.kind ?? ""} className={inputClassName} onChange={(event) => set({ kind: event.target.value || undefined })}>
+            <option value="">From Type ({PROFILE_FILTER_KIND_OPTIONS.find((o) => o.value === kind)?.label ?? kind})</option>
+            {PROFILE_FILTER_KIND_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>{option.label}</option>
+            ))}
+          </select>
+        </EditorField>
+        <EditorField label="Backend field" help="The indexed field for a document store, the result column for SQL; blank infers it from the column.">
+          <input value={filter.field ?? ""} className={inputClassName} placeholder={field.source || field.name} onChange={(event) => set({ field: event.target.value || undefined })} />
+        </EditorField>
+        {picksFromAList ? (
+          <>
+            <div className="sm:col-span-2">
+              <EditorField label="Values" help="Comma-separated values to offer instead of asking the backend; leave blank to enumerate from the data.">
+                <input
+                  value={(filter.options ?? []).join(", ")}
+                  className={inputClassName}
+                  placeholder="Ask the backend"
+                  onChange={(event) => set({ options: parseFilterOptions(event.target.value) })}
+                />
+              </EditorField>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input
+                type="checkbox"
+                checked={looksUp}
+                disabled={enumerated}
+                onChange={(event) => set({ lookup: event.target.checked })}
+              />
+              <span className={enumerated ? "text-muted-foreground" : undefined}>
+                {enumerated ? "Values are listed above" : "Look values up from the data"}
+              </span>
+            </label>
+            <EditorField label="Values offered" help={`How many distinct values the control lists before the rest have to be typed for. Blank uses ${PROFILE_FILTER_DEFAULT_LIMIT}.`}>
+              <input
+                type="number"
+                min={1}
+                max={PROFILE_FILTER_MAX_LIMIT}
+                value={filter.limit ?? ""}
+                disabled={!looksUp}
+                className={inputClassName}
+                placeholder={String(PROFILE_FILTER_DEFAULT_LIMIT)}
+                onChange={(event) => set({ limit: event.target.value ? Number(event.target.value) : undefined })}
+              />
+            </EditorField>
+          </>
+        ) : null}
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={filter.multi ?? true} onChange={(event) => set({ multi: event.target.checked })} />
+          Allow several values at once
+        </label>
+        <label className="flex items-center gap-2 text-sm font-medium">
+          <input type="checkbox" checked={filter.disabled ?? false} onChange={(event) => set({ disabled: event.target.checked || undefined })} />
+          Offer no filter for this column
+        </label>
+      </div>
+    </details>
+  );
+}
+
+function parseFilterOptions(raw: string): string[] | undefined {
+  const values = raw.split(",").map((value) => value.trim()).filter(Boolean);
+  return values.length ? values : undefined;
+}
+
+function summarizeFilter(kind: string, enumerated: boolean, looksUp: boolean, limit?: number) {
+  const control = PROFILE_FILTER_KIND_OPTIONS.find((option) => option.value === kind)?.label ?? kind;
+  if (enumerated) return `${control}, listed`;
+  if (!looksUp) return control;
+  return `${control}, top ${limit ?? PROFILE_FILTER_DEFAULT_LIMIT}`;
 }
 
 /** The wizard's carded inspector: names the field itself, because its field

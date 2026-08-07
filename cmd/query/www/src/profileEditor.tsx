@@ -430,7 +430,7 @@ export function ProfileEditor({
           }
         >
           <p className="text-sm text-muted-foreground">
-            Replace {fields.configuredCount} configured column{fields.configuredCount === 1 ? "" : "s"} with {sampledColumns.length} column{sampledColumns.length === 1 ? "" : "s"} from the latest sample. Custom labels, expressions, formatting, ordering, and manually added columns will be removed. The profile will remain unsaved until you save it.
+            Replace {fields.configuredCount} configured column{fields.configuredCount === 1 ? "" : "s"} with {sampledColumns.length} column{sampledColumns.length === 1 ? "" : "s"} from the latest sample. Custom labels, expressions, formatting, filtering, ordering, and manually added columns will be removed. The profile will remain unsaved until you save it.
           </p>
         </Modal>
       ) : null}
