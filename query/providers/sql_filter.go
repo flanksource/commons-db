@@ -14,7 +14,14 @@ import (
 // sqlBaseCTE is the name the author's statement is wrapped under. A collision
 // is an error rather than a rename, because a query that silently referred to
 // someone else's CTE would be a different query.
-const sqlBaseCTE = "__cdb_base"
+const (
+	sqlBaseCTE = "__cdb_base"
+
+	// sqlTotalColumn carries COUNT(*) OVER () on every paged row. It is stripped
+	// before the row reaches a caller — it is the server's bookkeeping, not a
+	// column anyone selected.
+	sqlTotalColumn = "__cdb_total"
+)
 
 // FilterSQL wraps an operator-authored statement so the given selections narrow
 // its result rather than its text, for a caller that runs its own SQL rather
@@ -41,6 +48,111 @@ func FilterSQL(driver, statement string, filters []query.ColumnFilterValue) (str
 // With no active filter it returns the statement and no args, byte for byte: an
 // unfiltered profile runs exactly the statement it has always run, so turning
 // filtering on cannot change what an untouched profile returns.
+// buildPagedSQL builds the statement a page is read from: the author's query,
+// filtered, plus — unless the caller waived it — the size of the whole filtered
+// result on every row.
+//
+// The count comes from COUNT(*) OVER () on the wrapped statement rather than a
+// second SELECT COUNT(*). A second statement would run the author's query twice
+// at two different snapshots, so the count could disagree with the rows it is
+// meant to describe — the same reasoning the filter-value lookup already
+// follows.
+//
+// That window aggregate is also why page.SkipTotal exists. COUNT(*) OVER () with
+// no PARTITION BY is a whole-partition aggregate: the database materializes the
+// entire filtered result before emitting the first row, so time-to-first-byte is
+// full-scan time and no amount of client-side ceiling stops the server. A table
+// pays that to say what it is a page of. An export is taking everything and has
+// a trailer for the one fact it still needs, so it waives the total and gets a
+// walk that streams — and pushes its ceiling down so the backend stops where it
+// does.
+//
+// The order is restated on the wrapper. Selecting out of a CTE does not
+// guarantee the CTE's own ORDER BY survives, and an order that silently stops
+// applying is exactly the instability paging cannot tolerate.
+func buildPagedSQL(
+	dialect sqlDialect,
+	statement string,
+	filters []query.ColumnFilterValue,
+	order query.Order,
+	page query.PageRequest,
+) (string, []any, error) {
+	where, args, err := filterClause(dialect, filters)
+	if err != nil {
+		return "", nil, err
+	}
+	total, err := dialect.quote(sqlTotalColumn)
+	if err != nil {
+		return "", nil, err
+	}
+	ordering, err := orderClause(dialect, order)
+	if err != nil {
+		return "", nil, err
+	}
+	wrapped, err := wrapAsBaseCTE(dialect, statement, func(base string) string {
+		selection := fmt.Sprintf("SELECT %s.*, COUNT(*) OVER () AS %s FROM %s", base, total, base)
+		if page.SkipTotal {
+			selection = fmt.Sprintf("SELECT %s.* FROM %s", base, base)
+		}
+		clauses := []string{selection}
+		if where != "" {
+			clauses = append(clauses, "WHERE "+where)
+		}
+		if ordering != "" {
+			clauses = append(clauses, "ORDER BY "+ordering)
+		}
+		// One past the ceiling, for the same reason a page reads one past its
+		// limit: proving a further row exists is what separates a finished export
+		// from one that stopped. Only an ordered statement takes it — SQL Server
+		// refuses OFFSET/FETCH without an ORDER BY, and an unordered ceiling would
+		// take an arbitrary N rows rather than the first N.
+		if page.Ceiling > 0 && ordering != "" {
+			clauses = append(clauses, dialect.limitTail(page.Ceiling+1))
+		}
+		return strings.Join(clauses, "\n")
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	return wrapped, args, nil
+}
+
+// orderClause renders a declared order for the wrapper. An undeclared order
+// renders nothing, leaving whatever the author's statement does.
+func orderClause(dialect sqlDialect, order query.Order) (string, error) {
+	terms := make([]string, 0, len(order))
+	for _, by := range order {
+		column, err := dialect.quote(by.Column)
+		if err != nil {
+			return "", err
+		}
+		if by.Desc {
+			column += " DESC"
+		}
+		terms = append(terms, column)
+	}
+	return strings.Join(terms, ", "), nil
+}
+
+// filterClause renders the active selections as one WHERE body, or "" when
+// nothing is selected.
+func filterClause(dialect sqlDialect, filters []query.ColumnFilterValue) (string, []any, error) {
+	active := make([]query.ColumnFilterValue, 0, len(filters))
+	for _, filter := range filters {
+		if !filter.IsZero() {
+			active = append(active, filter)
+		}
+	}
+	if len(active) == 0 {
+		return "", nil, nil
+	}
+	predicate, err := sqlPredicates(dialect, active)
+	if err != nil {
+		return "", nil, err
+	}
+	return renderClause(dialect, predicate)
+}
+
 func buildFilteredSQL(dialect sqlDialect, statement string, filters []query.ColumnFilterValue) (string, []any, error) {
 	active := make([]query.ColumnFilterValue, 0, len(filters))
 	for _, filter := range filters {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 
 	context "github.com/flanksource/commons-db/context"
@@ -147,6 +148,62 @@ var _ = Describe("opensearch provider", func() {
 			context.New(), stub.profile("deep", order), query.PageRequest{Limit: 100, Offset: 20000})))
 		Expect(err).To(MatchError(ContainSubstring("needs a cursor")))
 		Expect(err).To(MatchError(ContainSubstring("result window")))
+	})
+
+	// A sample is a look at the shape of the data, so it asks for one page of
+	// that size. It used to drain the whole index and cut the first hundred rows
+	// out of the result, which on any index larger than the result window did not
+	// return a sample at all — it returned "reading past row 10000 needs a
+	// cursor".
+	It("samples one page instead of draining the index", func() {
+		stub := newOpenSearchStub(func(call int) string {
+			hits := make([]string, 0, query.DefaultMaxPageSize)
+			for i := 0; i < query.DefaultMaxPageSize; i++ {
+				hits = append(hits, hit(fmt.Sprintf("doc-%d", call*query.DefaultMaxPageSize+i)))
+			}
+			return response(50000, "eq", hits...)
+		})
+		defer stub.server.Close()
+
+		result, err := query.Sample(context.New(), stub.profile("sampled", nil), nil, 10)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(10))
+		Expect(result.Truncated).To(BeTrue())
+		Expect(stub.sizes).To(Equal([]string{"10"}))
+	})
+
+	// A read of everything is not a caller asking for a deep offset: it is the
+	// provider choosing how to walk, and an ordered index is walked by the one
+	// strategy that reaches the end of it.
+	It("drains an ordered index by cursor so a read of everything passes the result window", func() {
+		// The batch a drain asks for is the provider's, and the stub has to serve
+		// full batches for a short one to mean the end of the index — so the size
+		// on the wire is asserted rather than assumed.
+		const batch = query.DefaultMaxPageSize
+		const total = 12000
+		stub := newOpenSearchStub(func(call int) string {
+			start := call * batch
+			end := min(start+batch, total)
+			hits := make([]string, 0, end-start)
+			for i := start; i < end; i++ {
+				hits = append(hits, hit(fmt.Sprintf("doc-%d", i), i))
+			}
+			return response(total, "eq", hits...)
+		})
+		defer stub.server.Close()
+
+		provider, err := query.GetProvider("opensearch")
+		Expect(err).ToNot(HaveOccurred())
+		rows, err := provider.Execute(context.New(), query.ProviderRequest{
+			Query:   `{"query":{"match_all":{}}}`,
+			Options: map[string]any{"address": stub.server.URL, "index": "logs"},
+			Order:   query.Order{{Column: "seq", Unique: true}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rows).To(HaveLen(total))
+		Expect(stub.sizes).To(HaveEach(strconv.Itoa(batch)))
+		Expect(stub.openedPITs).To(Equal(1))
+		Expect(stub.closedPITs).To(Equal(1))
 	})
 
 	// Offset and cursor are both useful on the same profile: offset can jump to

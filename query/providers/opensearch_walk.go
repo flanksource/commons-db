@@ -25,6 +25,30 @@ type openSearchWalk struct {
 	mapRows func(opensearch.Response) []query.Row
 }
 
+// drainOpenSearch reads every row of an index-backed provider into one slice.
+//
+// It prefers a cursor wherever the profile declares an order, for the same
+// reason the engine's own full walk does: search_after is the only strategy
+// that reads past the index result window, and a read of everything that
+// stopped there would be a read of the first 10,000 rows reported as a failure
+// — which is what a caller asking for all of an index used to get. An
+// unordered profile has no position to resume from and is walked by from/size,
+// so it is still held to the window and still says so.
+func drainOpenSearch(ctx context.Context, provider query.PagingProvider, req query.ProviderRequest) ([]query.Row, error) {
+	page := query.PageRequest{Limit: openSearchWalkBatch}
+	if len(req.Order) > 0 {
+		page.Strategy = query.PagingCursor
+	}
+	var result []query.Row
+	for current, err := range provider.Pages(ctx, req, page) {
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, current.Rows...)
+	}
+	return result, nil
+}
+
 // run serves the strategy the request asked for.
 //
 // It is the request's choice rather than the profile's, because both are useful

@@ -27,6 +27,24 @@ func SupportsPaging(providerType string) PagingMode {
 	return PagingOffset
 }
 
+// PagesNatively reports whether this provider serves a page without producing
+// the whole result first.
+//
+// SupportsPaging answers a different question — which strategies a caller may
+// ask for — and answers PagingOffset for a provider that has no paging at all,
+// because offset paging over a materialized result is still correct. Only this
+// separates a walk that streams from one that buffers, which is what decides
+// whether an all-row export can be served forward and what X-Export-Mode may
+// truthfully call it.
+func PagesNatively(providerType string) bool {
+	provider, err := GetProvider(providerType)
+	if err != nil {
+		return false
+	}
+	_, ok := provider.(PagingProvider)
+	return ok
+}
+
 // walkRequest is the page a full forward walk asks for.
 //
 // It prefers a cursor wherever one is available: it is the only strategy that

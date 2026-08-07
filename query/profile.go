@@ -1,5 +1,7 @@
 package query
 
+import "fmt"
+
 // Profile is a declarative, CEL-driven view over a data provider. It names the
 // backend to read from, the provider-native query, the output columns (with
 // optional CEL formatting), post-query processors, and named context objects.
@@ -103,6 +105,24 @@ type Profile struct {
 // RowLimits resolves this Profile's row caps against the defaults, so callers
 // never reach for a default constant themselves.
 func (p Profile) RowLimits() RowLimits { return p.Limits.Resolve() }
+
+// Pageable reports whether a caller can ask this Profile for a position past
+// its first page, and says why not when it cannot.
+//
+// It is the same question ExecutePages enforces before it serves an offset or a
+// cursor, asked early enough to be answered in a capability declaration: a
+// surface that advertises paging it will refuse sends the caller to a page that
+// can only fail. Whoever describes the profile — OpenAPI parameters, export
+// headers — asks here rather than re-deriving the rule.
+func (p Profile) Pageable() error {
+	if err := p.Order.Pageable(); err != nil {
+		return err
+	}
+	if SupportsPaging(p.Provider.Type) == 0 {
+		return fmt.Errorf("provider %q serves no paging strategy", p.Provider.Type)
+	}
+	return nil
+}
 
 // Streamable reports whether this Profile can be served page by page.
 //
