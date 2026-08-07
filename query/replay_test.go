@@ -243,6 +243,16 @@ var _ = Describe("replay preview hash", func() {
 			o.Rows = []query.Row{{"path": "/other", "tenant": "za", "payload": map[string]any{"id": "GL-2"}}}
 		}),
 	)
+
+	// The caller approves the redacted preview, so the digest is over the
+	// redacted preview — which also keeps a credential out of a fast hash.
+	It("pins the redacted preview rather than the secret behind it", func() {
+		bearer := func(token string) func(*query.ReplayBuildOptions) {
+			return func(o *query.ReplayBuildOptions) { o.Headers = map[string]string{"Authorization": token} }
+		}
+		Expect(hashOf(bearer("Bearer one"))).To(Equal(hashOf(bearer("Bearer two"))))
+		Expect(hashOf(bearer("Bearer one"))).To(Equal(hashOf(nil)))
+	})
 })
 
 var _ = Describe("ExecuteReplay", func() {

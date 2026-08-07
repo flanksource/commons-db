@@ -254,15 +254,21 @@ func BuildReplayPreview(ctx context.Context, opts ReplayBuildOptions) (*ReplayPr
 	if opts.MaxBodyPreview <= 0 {
 		opts.MaxBodyPreview = defaultReplayBodySize
 	}
+	// The hash covers what the user was shown, not the credentials behind it: a
+	// caller approves the redacted preview, so the redacted preview is what the
+	// digest must pin. Keeping secrets out of it also keeps a password from
+	// reaching a fast hash that a leaked digest could be brute-forced against.
+	shownURL := sanitizeURLForDisplay(resolvedURL)
+	shownHeaders := sanitizeReplayHeaders(headers)
 	preview := ReplayPreview{
 		Profile:   opts.Profile.Name,
 		Row:       replayRowSummary(opts.Profile, row, index),
 		Target:    sanitizeURLForDisplay(target.URL),
 		Method:    method,
-		URL:       sanitizeURLForDisplay(resolvedURL),
-		Headers:   sanitizeReplayHeaders(headers),
+		URL:       shownURL,
+		Headers:   shownHeaders,
 		BodyBytes: len(body),
-		Hash:      previewHash(method, resolvedURL, headers, body),
+		Hash:      previewHash(method, shownURL, shownHeaders, body),
 		body:      body,
 		rawURL:    resolvedURL,
 		headers:   headers,
@@ -538,8 +544,10 @@ func truncateString(s string, max int) (string, bool) {
 	return s[:max], true
 }
 
-// previewHash covers everything that would be sent, with headers in a stable
-// order so the same request always hashes the same.
+// previewHash covers the redacted request the caller was shown, with headers in
+// a stable order so the same request always hashes the same. Secret material is
+// redacted before it gets here, so the digest identifies a request without
+// carrying a credential.
 func previewHash(method, url string, headers map[string]string, body string) string {
 	names := make([]string, 0, len(headers))
 	for name := range headers {
