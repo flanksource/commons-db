@@ -329,13 +329,24 @@ func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squi
 		if filter.Range == nil {
 			return nil, nil
 		}
+		// The comparisons are squirrel's typed clauses rather than a hand-built
+		// "col op ?" string, so the column never has to be concatenated into a
+		// SQL fragment to be compared against a bound value.
 		for _, edge := range []struct {
-			bound       *query.FilterBound
-			inclusive   string
-			exclusiveOp string
+			bound  *query.FilterBound
+			closed func(any) squirrel.Sqlizer
+			open   func(any) squirrel.Sqlizer
 		}{
-			{filter.Range.Min, ">=", ">"},
-			{filter.Range.Max, "<=", "<"},
+			{
+				bound:  filter.Range.Min,
+				closed: func(v any) squirrel.Sqlizer { return squirrel.GtOrEq{column: v} },
+				open:   func(v any) squirrel.Sqlizer { return squirrel.Gt{column: v} },
+			},
+			{
+				bound:  filter.Range.Max,
+				closed: func(v any) squirrel.Sqlizer { return squirrel.LtOrEq{column: v} },
+				open:   func(v any) squirrel.Sqlizer { return squirrel.Lt{column: v} },
+			},
 		} {
 			if edge.bound == nil {
 				continue
@@ -344,11 +355,11 @@ func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squi
 			if err != nil {
 				return nil, err
 			}
-			operator := edge.exclusiveOp
+			compare := edge.open
 			if edge.bound.Inclusive {
-				operator = edge.inclusive
+				compare = edge.closed
 			}
-			conditions = append(conditions, squirrel.Expr(column+" "+operator+" ?", value))
+			conditions = append(conditions, compare(value))
 		}
 	default:
 		return nil, fmt.Errorf("field %q has no SQL compiler for a %s filter", filter.Field, kind)
