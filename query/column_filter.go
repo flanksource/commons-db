@@ -305,7 +305,7 @@ func (p Profile) ColumnFilterKeys() (map[string]string, error) {
 // backend field to push the selection down to, and an author who wants one says
 // so with filter.field. That covers a CEL expression which is not a plain row
 // lookup, and a JSONPath which selects rather than addresses — see
-// jsonPathFilterField, which does reach the literal-key-chain paths.
+// FilterFieldForJSONPath, which does reach the literal-key-chain paths.
 func columnFilterField(column ColumnDef) (field string, declared bool, ok bool, err error) {
 	if column.Filter != nil {
 		if declaredField := strings.TrimSpace(column.Filter.Field); declaredField != "" {
@@ -313,7 +313,7 @@ func columnFilterField(column ColumnDef) (field string, declared bool, ok bool, 
 		}
 	}
 	if column.JSONPath != "" {
-		if field, ok := jsonPathFilterField(column); ok {
+		if field, ok := FilterFieldForJSONPath(column.JSONPath, column.Source); ok {
 			return field, false, true, nil
 		}
 		return "", false, false, nil

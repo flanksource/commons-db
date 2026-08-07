@@ -47,8 +47,30 @@ func evalRowJSONPath(expression jp.Expr, source string, row Row) (any, error) {
 	}
 }
 
-// jsonPathFilterField names the backend field a jsonpath column filters on,
-// when the path is a plain chain of literal keys.
+// EvalJSONPath resolves an ad-hoc path against a row for profile authoring
+// tools, which need to show an author what their half-written path selects.
+//
+// Unlike evalRowJSONPath it hands back every match rather than collapsing 0/1/N
+// into nil/value/slice: the collapse is what a column cell wants, and a preview
+// that showed nil for both "no match" and "matched null" would hide the one
+// mistake it exists to catch.
+func EvalJSONPath(expression, source string, row Row) ([]any, error) {
+	parsed, err := jp.ParseString(expression)
+	if err != nil {
+		return nil, fmt.Errorf("jsonpath %q is invalid: %w", expression, err)
+	}
+	root, err := jsonPathRoot(source, row)
+	if err != nil {
+		return nil, err
+	}
+	if root == nil {
+		return nil, nil
+	}
+	return parsed.Get(root), nil
+}
+
+// FilterFieldForJSONPath names the backend field a jsonpath filters on, when the
+// path is a plain chain of literal keys.
 //
 // Such a path addresses exactly one field of the document, so the dotted join of
 // its segments is the name a document store indexes it under — which is what
@@ -57,16 +79,16 @@ func evalRowJSONPath(expression jp.Expr, source string, row Row) (any, error) {
 // expression, a wildcard, a descent, an array index — matches a set whose size
 // depends on the row, so it names no field and the column stays unfilterable
 // unless the author declares one.
-func jsonPathFilterField(column ColumnDef) (string, bool) {
-	expression, err := jp.ParseString(column.JSONPath)
+func FilterFieldForJSONPath(expression, source string) (string, bool) {
+	parsed, err := jp.ParseString(expression)
 	if err != nil {
 		return "", false
 	}
-	segments := make([]string, 0, len(expression)+1)
-	if column.Source != "" {
-		segments = append(segments, column.Source)
+	segments := make([]string, 0, len(parsed)+1)
+	if source != "" {
+		segments = append(segments, source)
 	}
-	for index, fragment := range expression {
+	for index, fragment := range parsed {
 		switch typed := fragment.(type) {
 		case jp.Root:
 			if index != 0 {

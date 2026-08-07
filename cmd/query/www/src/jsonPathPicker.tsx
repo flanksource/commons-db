@@ -3,7 +3,7 @@ import {
   type FieldControl,
   type PostExtension,
 } from "@flanksource/clicky-ui";
-import { useJsonPathSample } from "./jsonPathSampleRow";
+import { evaluateJsonPath, useJsonPathSample } from "./jsonPathSampleRow";
 
 // The column schema tags the `jsonpath` field with this hint so the form renders
 // a browsable tree of a sample row instead of a bare text input.
@@ -12,7 +12,9 @@ const WIDGET = "jsonpath-picker";
 // The picker is rooted at the whole row, so the paths it writes are row-rooted
 // and stand on their own. A column's `source` narrows the root the backend
 // evaluates against, but an extension cannot read its own row's sibling fields,
-// so pairing the two is left to whoever writes `source` by hand.
+// so pairing the two is left to whoever writes `source` by hand — which is why
+// no onSelectPath is passed here: the playground names the column a decoded path
+// needs as its Source, and the author sets it in the field beside this one.
 function JsonPathFieldControl({
   field,
   profile,
@@ -20,13 +22,14 @@ function JsonPathFieldControl({
   field: FieldControl;
   profile: unknown;
 }) {
-  const sampleRow = useJsonPathSample(profile);
+  const rows = useJsonPathSample(profile);
   return (
     <JSONPathField
       aria-label="JSONPath"
       value={(field.value as string) ?? ""}
       onChange={(next) => field.onChange(next)}
-      {...(sampleRow === undefined ? {} : { json: sampleRow })}
+      {...(rows.length === 0 ? {} : { json: rows[0], rows })}
+      evaluate={evaluateJsonPath}
       {...(field.readOnly === undefined ? {} : { disabled: field.readOnly })}
     />
   );
