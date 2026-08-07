@@ -30,11 +30,11 @@ var (
 )
 
 // ColumnFilterDef declares how a column is filtered at the backend. Every field
-// is an override: a direct column, or one whose CEL is a plain row lookup,
-// infers its field from the column itself and its control from Type. This
-// exists for the columns inference cannot reach — a computed CEL or a JSONPath
-// value — and for the ones where inference has the shape right and the backend
-// wrong.
+// is an override: a direct column, one whose CEL is a plain row lookup, or one
+// whose JSONPath is a literal key chain infers its field from the column itself
+// and its control from Type. This exists for the columns inference cannot
+// reach — a computed CEL, or a JSONPath that selects rather than addresses —
+// and for the ones where inference has the shape right and the backend wrong.
 type ColumnFilterDef struct {
 	// Field is the backend field the selection is applied to. For a document
 	// store it is the indexed field; for SQL it is the result column the query
@@ -119,6 +119,20 @@ type ColumnFilterBinding struct {
 	// declared none. Zero is not "no values": it is what leaves the choice to
 	// whoever asks, which is why an inferred binding never fills it in.
 	Limit int
+}
+
+// ControlType is the clicky filter type this binding registers as.
+//
+// It refines the kind's own answer, because whether a value selection is picked
+// or typed is not a property of the kind: a selection with no option list and
+// nothing to enumerate would open an empty dropdown, so it asks for an input
+// instead. That is what a UUID column gets — the values still compare exactly,
+// they are just written rather than chosen.
+func (b ColumnFilterBinding) ControlType() string {
+	if b.Kind.Normalized() == ColumnFilterKindTerms && !b.Lookup && len(b.Options) == 0 {
+		return "value"
+	}
+	return b.Kind.ControlType()
 }
 
 // FilterBound is one edge of a range. Value is carried as the kind stores it: a
@@ -286,16 +300,23 @@ func (p Profile) ColumnFilterKeys() (map[string]string, error) {
 // whether the profile declared it outright. A declared field is taken as
 // written; an inferred one still passes through the provider's own naming.
 //
-// A column whose value is computed — a CEL expression that is not a plain row
-// lookup, a JSONPath — resolves to nothing and is silently left unfilterable.
-// The value exists only after the row was read, so there is no backend field to
-// push the selection down to, and an author who wants one says so with
-// filter.field.
+// A column whose value is computed resolves to nothing and is silently left
+// unfilterable: the value exists only after the row was read, so there is no
+// backend field to push the selection down to, and an author who wants one says
+// so with filter.field. That covers a CEL expression which is not a plain row
+// lookup, and a JSONPath which selects rather than addresses — see
+// jsonPathFilterField, which does reach the literal-key-chain paths.
 func columnFilterField(column ColumnDef) (field string, declared bool, ok bool, err error) {
 	if column.Filter != nil {
 		if declaredField := strings.TrimSpace(column.Filter.Field); declaredField != "" {
 			return declaredField, true, true, nil
 		}
+	}
+	if column.JSONPath != "" {
+		if field, ok := jsonPathFilterField(column); ok {
+			return field, false, true, nil
+		}
+		return "", false, false, nil
 	}
 	if column.Source != "" {
 		return column.Source, false, true, nil

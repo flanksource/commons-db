@@ -100,6 +100,104 @@ var _ = Describe("CEL columns", func() {
 	})
 })
 
+var _ = Describe("JSONPath columns", func() {
+	It("extracts a value from the row", func() {
+		query.RegisterProvider(&mockProvider{typ: "jsonpath-row", rows: []query.Row{
+			{"metadata": map[string]any{"user": map[string]any{"email": "alice@example.com"}}},
+			{"message": "metadata omitted"},
+		}})
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "jsonpath-row",
+			Provider: query.ProviderConfig{Type: "jsonpath-row"},
+			Columns:  []query.ColumnDef{{Name: "user.email", JSONPath: "$.metadata.user.email"}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows[0]).To(HaveKeyWithValue("user.email", "alice@example.com"))
+		Expect(result.Rows[1]).To(HaveKeyWithValue("user.email", BeNil()))
+	})
+
+	It("roots the path at Source when it is set", func() {
+		query.RegisterProvider(&mockProvider{typ: "jsonpath-source", rows: []query.Row{
+			{"metadata": map[string]any{"user": map[string]any{"email": "bob@example.com"}}},
+		}})
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "jsonpath-source",
+			Provider: query.ProviderConfig{Type: "jsonpath-source"},
+			Columns:  []query.ColumnDef{{Name: "user.email", Source: "metadata", JSONPath: "$.user.email"}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows[0]).To(HaveKeyWithValue("user.email", "bob@example.com"))
+	})
+
+	It("parses a Source holding a JSON-encoded object", func() {
+		query.RegisterProvider(&mockProvider{typ: "jsonpath-encoded-object", rows: []query.Row{
+			{"metadata": `{"user":{"email":"carol@example.com"}}`},
+		}})
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "jsonpath-encoded-object",
+			Provider: query.ProviderConfig{Type: "jsonpath-encoded-object"},
+			Columns:  []query.ColumnDef{{Name: "user.email", Source: "metadata", JSONPath: "$.user.email"}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows[0]).To(HaveKeyWithValue("user.email", "carol@example.com"))
+	})
+
+	It("parses a Source holding a JSON-encoded array and filters it", func() {
+		query.RegisterProvider(&mockProvider{typ: "jsonpath-encoded-array", rows: []query.Row{
+			{"tags": `[{"key":"http.response.status_code","value":200}]`},
+			{"tags": []any{map[string]any{"key": "http.response.status_code", "value": 503}}},
+			{"tags": `[{"key":"other","value":"ignored"}]`},
+		}})
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "jsonpath-encoded-array",
+			Provider: query.ProviderConfig{Type: "jsonpath-encoded-array"},
+			Columns: []query.ColumnDef{{
+				Name: "http.response.status_code", Source: "tags",
+				JSONPath: "$[?(@.key == 'http.response.status_code')].value",
+			}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows[0]["http.response.status_code"]).To(BeNumerically("==", 200))
+		Expect(result.Rows[1]["http.response.status_code"]).To(BeNumerically("==", 503))
+		Expect(result.Rows[2]).To(HaveKeyWithValue("http.response.status_code", BeNil()))
+	})
+
+	It("leaves Source in the row rather than renaming or consuming it", func() {
+		query.RegisterProvider(&mockProvider{typ: "jsonpath-keeps-source", rows: []query.Row{
+			{"metadata": map[string]any{"first": "a", "second": "b"}},
+		}})
+
+		result, err := query.Execute(context.New(), query.Profile{
+			Name:     "jsonpath-keeps-source",
+			Provider: query.ProviderConfig{Type: "jsonpath-keeps-source"},
+			Columns: []query.ColumnDef{
+				{Name: "first", Source: "metadata", JSONPath: "$.first"},
+				{Name: "second", Source: "metadata", JSONPath: "$.second"},
+				{Name: "metadata", Type: query.ColumnTypeJSON},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows[0]).To(HaveKeyWithValue("first", "a"))
+		Expect(result.Rows[0]).To(HaveKeyWithValue("second", "b"))
+		Expect(result.Rows[0]).To(HaveKey("metadata"))
+	})
+
+	It("fails loudly on an invalid JSONPath expression", func() {
+		query.RegisterProvider(&mockProvider{typ: "jsonpath-bad", rows: []query.Row{{"a": 1.0}}})
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "jsonpath-bad",
+			Provider: query.ProviderConfig{Type: "jsonpath-bad"},
+			Columns:  []query.ColumnDef{{Name: "x", JSONPath: "$[?(@.a =="}},
+		})
+		Expect(err).To(HaveOccurred())
+	})
+})
+
 var _ = Describe("Result.Render", func() {
 	result := &query.Result{Rows: []query.Row{
 		{"id": 1, "name": "alpha"},

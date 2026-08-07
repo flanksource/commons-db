@@ -134,5 +134,7 @@ var _ = Describe("Profile column validation", func() {
 		Entry("unit without numeric type", query.ColumnDef{Name: "ratio", Unit: "percentunit"}, `column "ratio" unit requires type number, duration, or bytes`),
 		Entry("unit on string", query.ColumnDef{Name: "ratio", Type: query.ColumnTypeString, Unit: "percentunit"}, `column "ratio" unit requires type number, duration, or bytes`),
 		Entry("source plus CEL", query.ColumnDef{Name: "ratio", Source: "raw_ratio", CEL: "row.raw_ratio / 100"}, `column "ratio" cannot set both source and cel`),
+		Entry("CEL plus JSONPath", query.ColumnDef{Name: "user", CEL: "row.user", JSONPath: "$.user"}, `column "user" cannot set both cel and jsonpath`),
+		Entry("malformed JSONPath", query.ColumnDef{Name: "user", JSONPath: "$[?(@.a =="}, `column "user" jsonpath "$[?(@.a ==" is invalid`),
 	)
 })

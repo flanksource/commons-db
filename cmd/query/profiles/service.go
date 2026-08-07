@@ -313,7 +313,7 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 			}
 			entity.RegisterFilter(entity.NamedFilter{
 				Name:  profileFilterName(resolved.Profile.Name, binding.Column),
-				Label: binding.Label, Type: binding.Kind.ControlType(), Multi: binding.Multi,
+				Label: binding.Label, Type: binding.ControlType(), Multi: binding.Multi,
 				Limit:  filterLookupLimit(binding),
 				Source: source,
 			})

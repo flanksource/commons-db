@@ -38,6 +38,26 @@ var _ = Describe("OpenSearch column filters", func() {
 		}))
 	})
 
+	It("makes a literal JSONPath column filterable without an override", func() {
+		// The CEL wrapper equivalent of these paths infers nothing, so this is
+		// what a promoted JSON column gains by being declared as a jsonpath.
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Columns: []query.ColumnDef{
+				{Name: "user", JSONPath: "$.payload.user"},
+				{Name: "status", Source: "payload", JSONPath: "$.status"},
+				{Name: "code", Source: "tags", JSONPath: "$[?(@.key == 'http.status')].value"},
+			},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(Equal([]query.ColumnFilterBinding{
+			{Column: "user", Key: "filter.user", Field: "payload.user", Label: "user", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
+			{Column: "status", Key: "filter.status", Field: "payload.status", Label: "status", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
+		}))
+	})
+
 	It("keeps the provider's inferred field for a filter that only enumerates values", func() {
 		// The OpenTelemetry naming table applies to an inferred field, so a
 		// filter that declares options but no field must not lose it.
@@ -102,6 +122,64 @@ var _ = Describe("OpenSearch column filters", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(bindings[0].Lookup).To(BeFalse())
 		Expect(bindings[1].Lookup).To(BeFalse())
+	})
+
+	// Enumerating identifiers scans the whole result to answer with a page of
+	// the rows, so a UUID column is typed into rather than picked from.
+	It("offers no value list for an identifier column", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "sql"},
+			Columns:  []query.ColumnDef{{Name: "id", Type: query.ColumnTypeUUID}},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(Equal([]query.ColumnFilterBinding{{
+			Column: "id", Key: "filter.id", Field: "id", Label: "id",
+			Kind: query.ColumnFilterKindTerms, Lookup: false, Multi: true,
+		}}))
+		Expect(bindings[0].ControlType()).To(Equal("value"))
+	})
+
+	It("lets an author put the value list back on an identifier column", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "sql"},
+			Columns: []query.ColumnDef{{
+				Name: "tenant_id", Type: query.ColumnTypeUUID,
+				Filter: &query.ColumnFilterDef{Lookup: lo.ToPtr(true)},
+			}},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings[0].Lookup).To(BeTrue())
+		Expect(bindings[0].ControlType()).To(Equal("multi-filter"))
+	})
+
+	// Only a value selection holds several values. Announcing a range or a time
+	// bound as multi is what made the browser render it as a list to type into
+	// instead of the control it is.
+	It("takes several values only for a value selection", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Columns: []query.ColumnDef{
+				{Name: "region", Type: query.ColumnTypeString},
+				{Name: "latency", Type: query.ColumnTypeNumber},
+				{Name: "created", Type: query.ColumnTypeDateTime},
+				{Name: "deleted", Type: query.ColumnTypeBoolean},
+				{Name: "message", Filter: &query.ColumnFilterDef{Kind: query.ColumnFilterKindText}},
+			},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		multi := map[string]bool{}
+		for _, binding := range bindings {
+			multi[binding.Column] = binding.Multi
+		}
+		Expect(multi).To(Equal(map[string]bool{
+			"region": true, "latency": false, "created": false, "deleted": false, "message": false,
+		}))
 	})
 
 	It("removes a disabled column's filter while keeping the column", func() {

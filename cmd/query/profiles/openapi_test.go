@@ -216,7 +216,9 @@ func TestProfileOpenAPIAdvertisesEachFilterKindsOwnControl(t *testing.T) {
 	}
 
 	filters := spec.Components.ClickyFilters
-	for name, want := range map[string]string{"region": "multi-filter", "latency_ms": "number", "created_at": "date", "deleted": "bool"} {
+	for name, want := range map[string]string{
+		"region": "multi-filter", "latency_ms": "number", "created_at": "date-range", "deleted": "bool",
+	} {
 		filter, ok := filters[profileFilterName("orders", name)]
 		if !ok {
 			t.Fatalf("filter component for %q is missing", name)

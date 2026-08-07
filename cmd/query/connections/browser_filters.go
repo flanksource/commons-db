@@ -81,8 +81,12 @@ var sqlColumnTypeFamilies = map[string]query.ColumnType{
 
 	"TEXT": query.ColumnTypeString, "VARCHAR": query.ColumnTypeString, "CHAR": query.ColumnTypeString,
 	"BPCHAR": query.ColumnTypeString, "NVARCHAR": query.ColumnTypeString, "NCHAR": query.ColumnTypeString,
-	"NAME": query.ColumnTypeString, "UUID": query.ColumnTypeString, "ENUM": query.ColumnTypeString,
+	"NAME": query.ColumnTypeString, "ENUM": query.ColumnTypeString,
 	"STRING": query.ColumnTypeString,
+
+	// An identifier compares exactly like a string; it is typed apart because
+	// enumerating one is a scan that answers with a page of the rows.
+	"UUID": query.ColumnTypeUUID, "UNIQUEIDENTIFIER": query.ColumnTypeUUID,
 }
 
 // sqlBrowserColumns describes a SQL result set from the types the driver

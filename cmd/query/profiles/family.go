@@ -143,7 +143,7 @@ func (s *Service) profileFilter(profileName string, binding query.ColumnFilterBi
 	return entity.DynamicFilter{
 		Key:        binding.Key,
 		Label:      binding.Label,
-		Type:       binding.Kind.ControlType(),
+		Type:       binding.ControlType(),
 		Multi:      binding.Multi,
 		Searchable: binding.Lookup,
 		Limit:      filterLookupLimit(binding),

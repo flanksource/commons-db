@@ -16,7 +16,8 @@ func TestSQLColumnTypeReadsTheDriversDecoratedNames(t *testing.T) {
 	for name, want := range map[string]query.ColumnType{
 		"TEXT":                        query.ColumnTypeString,
 		"VARCHAR(255)":                query.ColumnTypeString,
-		"UUID":                        query.ColumnTypeString,
+		"UUID":                        query.ColumnTypeUUID,
+		"UNIQUEIDENTIFIER":            query.ColumnTypeUUID,
 		"INT4":                        query.ColumnTypeNumber,
 		"BIGINT UNSIGNED":             query.ColumnTypeNumber,
 		"NUMERIC(10,2)":               query.ColumnTypeNumber,
@@ -129,6 +130,57 @@ func TestBrowserColumnsOfferAFilterPerComparableColumn(t *testing.T) {
 		if column.Name == "latency_ms" && column.Filter.Lookup {
 			t.Fatal("a range filter must not advertise a value lookup")
 		}
+	}
+}
+
+// A value list over identifiers is a scan of the whole result that answers with
+// a page of the rows. The column still filters — exactly, on values typed in.
+func TestBrowserColumnsOfferNoValueListForIdentifiers(t *testing.T) {
+	profile := browserSQLProfile(t, []query.ColumnDef{
+		{Name: "id", Type: query.ColumnTypeUUID},
+		{Name: "region", Type: query.ColumnTypeString},
+	})
+
+	columns, err := describeBrowserColumns(profile, map[string]string{"id": "UUID"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := map[string]browserColumn{}
+	for _, column := range columns {
+		byName[column.Name] = column
+	}
+	id := byName["id"]
+	if id.Filter == nil || id.Filter.Kind != "terms" || id.Filter.Lookup {
+		t.Fatalf("id column = %+v", id.Filter)
+	}
+	if id.FilterKey != "filter.id" {
+		t.Fatalf("id filter key = %q", id.FilterKey)
+	}
+	if region := byName["region"]; region.Filter == nil || !region.Filter.Lookup {
+		t.Fatalf("a string column still offers its values, got %+v", region.Filter)
+	}
+}
+
+// The browser echoes the column set it was offered, and the echo is what a
+// posted selection binds through. A filter it drops is a control the console
+// offered and the server then declines to compile.
+func TestBrowserColumnDefsRoundTripAnIdentifierFilter(t *testing.T) {
+	profile := browserSQLProfile(t, []query.ColumnDef{{Name: "id", Type: query.ColumnTypeUUID}})
+	echoed, err := describeBrowserColumns(profile, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resolved := browserSQLProfile(t, browserColumnDefs(echoed))
+	bindings, err := resolved.ColumnFilterBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 1 {
+		t.Fatalf("bindings = %+v", bindings)
+	}
+	if bindings[0].Kind != query.ColumnFilterKindTerms || bindings[0].Lookup {
+		t.Fatalf("round-tripped binding = %+v", bindings[0])
 	}
 }
 

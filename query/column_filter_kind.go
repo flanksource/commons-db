@@ -71,6 +71,12 @@ func (k ColumnFilterKind) Lookupable() bool {
 // the FilterBar control the browser renders. The vocabulary is clicky's own
 // (entity.FilterSpec.Type), not one this package invents. An empty result means
 // the filter needs no named component and travels as a plain parameter.
+//
+// A time bound is "date-range" rather than "date": its wire value carries both
+// edges under one key, and "date" is clicky's single-instant input.
+//
+// Callers with a binding in hand should ask it instead — whether a value
+// selection is picked or typed is not a property of the kind alone.
 func (k ColumnFilterKind) ControlType() string {
 	switch k.Normalized() {
 	case ColumnFilterKindTerms:
@@ -78,7 +84,7 @@ func (k ColumnFilterKind) ControlType() string {
 	case ColumnFilterKindRange:
 		return "number"
 	case ColumnFilterKindTime:
-		return "date"
+		return "date-range"
 	case ColumnFilterKindBoolean:
 		return "bool"
 	default:
@@ -175,8 +181,12 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 		Field:  field,
 		Label:  label,
 		Kind:   kind.Normalized(),
-		Multi:  true,
-		Lookup: kind.Lookupable(),
+		// Only a value selection holds several values. A range, a time bound, a
+		// toggle and a substring are each one control writing one operand, and
+		// announcing them as multi is what made the browser render them as a
+		// comma-separated list of values to type.
+		Multi:  kind.Normalized() == ColumnFilterKindTerms,
+		Lookup: kind.Lookupable() && column.Type.Enumerable(),
 	}
 	if def != nil {
 		binding.Options = def.Options
