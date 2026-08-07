@@ -45,9 +45,16 @@ type browserFilterValuesRequest struct {
 }
 
 type browserFilterValuesResult struct {
-	Options   []browserFilterOption `json:"options"`
-	Total     int                   `json:"total,omitempty"`
-	Truncated bool                  `json:"truncated,omitempty"`
+	Options []browserFilterOption `json:"options"`
+	Total   int                   `json:"total,omitempty"`
+
+	// TotalRelation says how to read Total, in the same vocabulary the profile
+	// export headers use: "eq", "gte" or "unknown". OpenSearch stops counting
+	// past its tracking threshold and reports a lower bound; rendering that as
+	// a count states a number nobody promised.
+	TotalRelation string `json:"totalRelation,omitempty"`
+
+	Truncated bool `json:"truncated,omitempty"`
 }
 
 const (
@@ -329,9 +336,12 @@ func (h *connectionBrowserHandler) serveFilterValues(w http.ResponseWriter, r *h
 		return
 	}
 	result := browserFilterValuesResult{
-		Options:   make([]browserFilterOption, 0, len(options)),
-		Total:     total,
-		Truncated: total > len(options),
+		Options:       make([]browserFilterOption, 0, len(options)),
+		TotalRelation: total.Relation(),
+	}
+	if total != nil {
+		result.Total = int(total.Value)
+		result.Truncated = int(total.Value) > len(options)
 	}
 	for _, option := range options {
 		result.Options = append(result.Options, browserFilterOption{Value: option.Value, Count: option.Count})

@@ -26,8 +26,13 @@ type FilterOption struct {
 }
 
 // FilterLookupProvider resolves distinct backend values for one bound column.
+//
+// The total is a *Total rather than an int because not every backend can count
+// exactly: a SQL COUNT is the number, an OpenSearch cardinality aggregation is
+// an estimate, and nil is "the backend did not say". Collapsing the three into
+// an int is what lets an estimate be rendered as a count.
 type FilterLookupProvider interface {
-	LookupFilterValues(ctx context.Context, req ProviderRequest, binding ColumnFilterBinding, search string, limit int) ([]FilterOption, int, error)
+	LookupFilterValues(ctx context.Context, req ProviderRequest, binding ColumnFilterBinding, search string, limit int) ([]FilterOption, *Total, error)
 }
 
 // ProviderRequest is the resolved input handed to a Provider by the engine.

@@ -159,7 +159,11 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 				Clicky:      &rpc.ClickyParameterMeta{Role: "limit"},
 			})
 	}
-	if !roles[query.ParamRoleOffset] {
+	// An offset names a position, and a position is only meaningful under a total
+	// order — the same rule the cursor below is held to, and the same one
+	// ExecutePages enforces when the request arrives. A profile that cannot page
+	// still takes a limit: capping rows needs no order.
+	if !roles[query.ParamRoleOffset] && profile.Pageable() == nil {
 		parameters = append(parameters,
 			rpc.OpenAPIParameter{
 				Name: "offset", In: "query", Description: "Rows to skip",
@@ -172,7 +176,7 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	// from one. Advertising it otherwise would put the UI into cursor mode
 	// against a server that refuses every cursor it sends.
 	if !roles[query.ParamRoleCursor] &&
-		profile.Order.Pageable() == nil &&
+		profile.Pageable() == nil &&
 		query.SupportsPaging(profile.Provider.Type).Supports(query.PagingCursor) {
 		parameters = append(parameters,
 			rpc.OpenAPIParameter{
@@ -189,9 +193,16 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		Parameters:  parameters,
 		Responses: map[string]rpc.OpenAPIResponse{
 			"200": {
-				Description: "Profile rows",
+				Description: "Profile rows. Paging travels in the response headers, not the body.",
+				Headers:     exportResponseHeaders(),
 				Content: map[string]rpc.OpenAPIMediaType{
-					"application/json": {Schema: profileResponseSchema(profile, filterKeys)},
+					// The shape, not merely the encoding, is negotiated: the
+					// interactive table asks for the clicky envelope and every
+					// other format streams a bare sequence of rows. Declaring
+					// only one of the two leaves any generated client wrong
+					// against whichever it did not get.
+					"application/json":        {Schema: profileResponseSchema(profile, filterKeys)},
+					"application/json+clicky": {Schema: clickyDocumentSchema()},
 				},
 			},
 		},
@@ -326,6 +337,35 @@ func profileParameter(spec *rpc.OpenAPISpec, profile query.Profile, param query.
 		parameter.Description = "Include or exclude " + param.DisplayLabel() + " values"
 	}
 	return parameter
+}
+
+// clickyDocumentSchema describes the envelope returned for
+// application/json+clicky: the rendered table clicky-ui's <Clicky> consumes,
+// rather than the bare rows every other format streams.
+//
+// It is described to the depth a caller needs to dispatch on — the node tree is
+// recursive and open, so pinning every kind here would be a second, staler copy
+// of the renderer's own contract.
+func clickyDocumentSchema() *rpc.OpenAPISchema {
+	node := &rpc.OpenAPISchema{
+		Type:        "object",
+		Description: "Rendered node tree; `kind` selects how to read it (table, text, list, map, tree, ...)",
+		Properties: map[string]*rpc.OpenAPISchema{
+			"kind":    {Type: "string"},
+			"columns": {Type: "array", Items: &rpc.OpenAPISchema{Type: "object"}},
+			"rows": {Type: "array", Items: &rpc.OpenAPISchema{
+				Type:       "object",
+				Properties: map[string]*rpc.OpenAPISchema{"cells": {Type: "object"}},
+			}},
+		},
+	}
+	return &rpc.OpenAPISchema{
+		Type: "object",
+		Properties: map[string]*rpc.OpenAPISchema{
+			"version": {Type: "integer", Description: "Envelope version"},
+			"node":    node,
+		},
+	}
 }
 
 func profileResponseSchema(profile query.Profile, filterKeys map[string]string) *rpc.OpenAPISchema {

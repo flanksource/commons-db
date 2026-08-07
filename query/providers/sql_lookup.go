@@ -21,28 +21,28 @@ func (p sqlProvider) LookupFilterValues(
 	binding query.ColumnFilterBinding,
 	search string,
 	limit int,
-) ([]query.FilterOption, int, error) {
+) ([]query.FilterOption, *query.Total, error) {
 	if req.Query == "" {
-		return nil, 0, fmt.Errorf("sql query is required")
+		return nil, nil, fmt.Errorf("sql query is required")
 	}
 	if limit <= 0 {
-		return nil, 0, fmt.Errorf("filter value lookup needs a positive limit")
+		return nil, nil, fmt.Errorf("filter value lookup needs a positive limit")
 	}
 	opts, err := query.DecodeOptions[sqlOptions](req.Options)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	client, dialect, err := sqlConnect(ctx, sqlConnectRequest{
 		Connection: req.Connection, ConnType: p.connType, Options: opts,
 	})
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	defer client.Close()
 
 	statement, args, err := buildLookupSQL(dialect, req.Query, binding, req.Filters, search, limit)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 
 	// statement wraps the author's query in a CTE built from constant syntax;
@@ -50,7 +50,7 @@ func (p sqlProvider) LookupFilterValues(
 	// codeql[go/sql-injection]
 	rows, err := client.QueryContext(ctx, statement, args...)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to look up filter values: %w", err)
+		return nil, nil, fmt.Errorf("failed to look up filter values: %w", err)
 	}
 	defer rows.Close()
 
@@ -60,15 +60,17 @@ func (p sqlProvider) LookupFilterValues(
 		var value any
 		var count, distinct int64
 		if err := rows.Scan(&value, &count, &distinct); err != nil {
-			return nil, 0, fmt.Errorf("failed to read filter values: %w", err)
+			return nil, nil, fmt.Errorf("failed to read filter values: %w", err)
 		}
 		options = append(options, query.FilterOption{Value: fmt.Sprintf("%v", value), Count: count})
 		total = int(distinct)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, fmt.Errorf("failed to read filter values: %w", err)
+		return nil, nil, fmt.Errorf("failed to read filter values: %w", err)
 	}
-	return options, total, nil
+	// COUNT(*) OVER () over the grouped set is the number of distinct values,
+	// not an estimate of it.
+	return options, &query.Total{Value: int64(total), Exact: true}, nil
 }
 
 // buildLookupSQL builds the distinct-values query over the wrapped base.

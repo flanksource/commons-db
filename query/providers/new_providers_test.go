@@ -237,7 +237,10 @@ var _ = Describe("opensearch column filtering", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(options).To(Equal([]query.FilterOption{{Value: "payments", Count: 12}}))
-		Expect(total).To(Equal(1))
+		// A cardinality aggregation is an estimate, so the total is reported as
+		// a bound rather than a count.
+		Expect(total).To(Equal(&query.Total{Value: 1}))
+		Expect(total.Relation()).To(Equal("gte"))
 
 		aggregations := requestBody["aggregations"].(map[string]any)
 		terms := aggregations["__clicky_values"].(map[string]any)["terms"].(map[string]any)

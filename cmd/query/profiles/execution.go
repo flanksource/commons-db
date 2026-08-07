@@ -44,8 +44,15 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.Method == http.MethodGet && !wantsSchema(r) && !wantsLookup(r) {
+	// HEAD answers the same question as GET and is how a caller reads the paging
+	// headers — the total above all — without paying for the rows. The body is
+	// discarded rather than never produced: the totals it reports are only known
+	// by running the page.
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && !wantsSchema(r) && !wantsLookup(r) {
 		if name, ok := h.profileName(r.URL.Path); ok {
+			if r.Method == http.MethodHead {
+				w = headResponseWriter{w}
+			}
 			h.execute(w, r, name)
 			return
 		}
@@ -61,6 +68,10 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.Method == http.MethodOptions {
 		if name, ok := h.profileName(r.URL.Path); ok && name != sampleProfileName {
+			// Without the origin, the preflight fails and the request it was
+			// clearing is never sent — so the methods allowed here would never
+			// be reached.
+			setCORSHeaders(w)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.WriteHeader(http.StatusNoContent)
@@ -69,6 +80,22 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.next.ServeHTTP(w, r)
 }
+
+// headResponseWriter keeps the headers and drops the body, so a HEAD answers
+// with exactly the metadata its GET would carry.
+type headResponseWriter struct{ http.ResponseWriter }
+
+func (headResponseWriter) Write(body []byte) (int, error) { return len(body), nil }
+
+// Flush is preserved so a streaming export still runs to completion — its
+// trailer and its ceiling are only resolved by reading to the end.
+func (h headResponseWriter) Flush() {
+	if flusher, ok := h.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (h headResponseWriter) Unwrap() http.ResponseWriter { return h.ResponseWriter }
 
 func (h *execHandler) connectionProfileName(path string) (string, bool) {
 	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(path, "/"), h.prefix), "/")
@@ -93,6 +120,10 @@ func (h *execHandler) profileName(path string) (string, bool) {
 }
 
 func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name string) {
+	// Before anything that can fail: every error below is one a browser has to
+	// be able to read to act on.
+	setCORSHeaders(w)
+
 	base, cancel := stdcontext.WithCancel(h.ctx.Context)
 	defer cancel()
 	go func() {
@@ -106,7 +137,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 
 	resolved, err := Resolve(r.Context(), h.store, name)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		writeExecError(w, http.StatusNotFound, "profile_not_found", err.Error())
 		return
 	}
 	p := resolved.Profile
@@ -117,22 +148,27 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 
 	params, err := executeParams(r, p)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeExecError(w, http.StatusBadRequest, "invalid_params", err.Error())
 		return
 	}
 
 	export, err := parseExportRequest(r, p)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeExecError(w, http.StatusBadRequest, "invalid_export_request", err.Error())
 		return
 	}
 
 	if export.scope == "all" && export.format == "clicky-json" {
-		http.Error(w, "clicky-json is an interactive page format; choose an export format", http.StatusUnprocessableEntity)
+		writeExecError(w, http.StatusUnprocessableEntity, "format_not_exportable", "clicky-json is an interactive page format; choose an export format")
 		return
 	}
-	if export.scope == "all" && len(p.Columns) == 0 && isTabularExport(export.format) {
-		http.Error(w, "all-row tabular exports require declared profile columns", http.StatusUnprocessableEntity)
+	// A tabular format flattens rows onto one column set, and a profile that
+	// declares none has that set derived from the first row alone — so a key that
+	// only appears later is dropped silently. The scope does not change that: a
+	// page of a document-shaped backend is as heterogeneous as all of it. Refusing
+	// is the only answer that does not hand back a file which looks complete.
+	if len(p.Columns) == 0 && isTabularExport(export.format) {
+		writeExecError(w, http.StatusUnprocessableEntity, "columns_required", "tabular exports require declared profile columns")
 		return
 	}
 
@@ -142,27 +178,27 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		// A stale cursor is the caller's to fix by starting the walk again, so
 		// it is a 400 rather than a 500 — and it says which input moved.
 		if errors.Is(err, query.ErrCursorStale) {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeExecError(w, http.StatusBadRequest, "cursor_stale", err.Error())
 			return
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeExecError(w, http.StatusBadRequest, "query_failed", err.Error())
 		return
 	}
 
 	if export.format == "clicky-json" {
 		page, err := query.CollectRows(response.rows)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeExecError(w, http.StatusInternalServerError, "query_failed", err.Error())
 			return
 		}
 		filterKeys, err := p.ColumnFilterKeys()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeExecError(w, http.StatusInternalServerError, "render_failed", err.Error())
 			return
 		}
 		output, err := (&query.Result{Profile: p.Name, Rows: page, ColumnFilterKeys: filterKeys}).Render(p.Columns, "clicky-json")
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeExecError(w, http.StatusInternalServerError, "render_failed", err.Error())
 			return
 		}
 		setExportHeaders(w, r, p.Name, export, response)
@@ -172,18 +208,27 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 
 	columns, err := query.ClickyColumns(p)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeExecError(w, http.StatusInternalServerError, "render_failed", err.Error())
 		return
 	}
 	clickyRows := newProfileClickyRows(response.rows, columns, response.ceiling)
 	opts := formatters.StreamOptions{Format: export.format}
 	if export.format == "pdf" {
 		opts.MaxRows = maxPDFRows
+		// A PDF's ceiling is its own and lower than the profile's, so the profile's
+		// is not the number to report. Overshooting it is refused below rather
+		// than truncated: a PDF that silently drops four fifths of its rows looks
+		// exactly like a complete one.
+		export.maxRows = maxPDFRows
 		var output bytes.Buffer
 		if _, err := formatters.WriteTableStream(r.Context(), &output, clickyRows, opts); err != nil {
-			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			writeExecError(w, http.StatusUnprocessableEntity, "render_failed", err.Error())
 			return
 		}
+		// A PDF is buffered, so whether a ceiling bit is known before a byte is
+		// written and belongs in the headers rather than a trailer.
+		response.truncated = response.truncated || clickyRows.overflowed
+		response.ceiling = 0
 		setExportHeaders(w, r, p.Name, export, response)
 		_, _ = w.Write(output.Bytes())
 		return
@@ -203,6 +248,23 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		execCtx.Warnf("profile %q: export reached its %d row ceiling with more rows to come", p.Name, export.maxRows)
 		w.Header().Set("X-Truncated", "true")
 	}
+}
+
+// execError is the body every failed execution returns.
+//
+// The 409 that asks for a connection has always been structured, and a client
+// that can branch on one code but has to string-match the rest is a client that
+// breaks when a message is reworded. Code is the stable part; Message is for a
+// person to read.
+type execError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func writeExecError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(execError{Code: code, Message: message})
 }
 
 type connectionMappingRequest struct {
@@ -272,10 +334,11 @@ func (h *execHandler) writeConnectionRequired(w http.ResponseWriter, profile, ma
 func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, error) {
 	limits := profile.RowLimits()
 	request := exportRequest{
-		format:  requestedFormat(r),
-		scope:   r.URL.Query().Get("scope"),
-		limit:   limits.PageSize,
-		maxRows: limits.MaxExportRows,
+		format:   requestedFormat(r),
+		scope:    r.URL.Query().Get("scope"),
+		limit:    limits.PageSize,
+		maxRows:  limits.MaxExportRows,
+		pageable: profile.Pageable() == nil,
 	}
 	if request.scope == "" {
 		request.scope = "page"
@@ -334,29 +397,69 @@ func requestedFormat(r *http.Request) string {
 	case "yml":
 		return "yaml"
 	case "":
-		for _, part := range strings.Split(r.Header.Get("Accept"), ",") {
-			switch strings.ToLower(strings.TrimSpace(strings.Split(part, ";")[0])) {
-			case "application/json+clicky", "application/clicky+json":
-				return "clicky-json"
-			case "application/x-ndjson", "application/ndjson":
-				return "ndjson"
-			case "application/yaml", "application/x-yaml", "text/yaml":
-				return "yaml"
-			case "text/csv", "application/csv":
-				return "csv"
-			case "text/markdown":
-				return "markdown"
-			case "text/html":
-				return "html"
-			case "application/pdf":
-				return "pdf"
-			case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-				return "excel"
-			}
-		}
-		return "json"
+		return acceptedFormat(r.Header.Get("Accept"))
 	default:
 		return format
+	}
+}
+
+// acceptedFormat picks the format an Accept header asks for.
+//
+// Accept is ranked, not ordered: a caller listing text/html first at q=0.1 and
+// the clicky envelope at q=0.9 is asking for the envelope. Reading the first
+// recognised entry answers with the one it weighted lowest — and a q=0 is a
+// refusal, not a low preference. Ties keep the earlier entry, which is the
+// order the caller wrote them in.
+func acceptedFormat(accept string) string {
+	best, bestQuality := "json", -1.0
+	for _, part := range strings.Split(accept, ",") {
+		fields := strings.Split(part, ";")
+		format, ok := formatForMediaType(strings.ToLower(strings.TrimSpace(fields[0])))
+		if !ok {
+			continue
+		}
+		quality := 1.0
+		for _, parameter := range fields[1:] {
+			name, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
+			if !found || strings.ToLower(strings.TrimSpace(name)) != "q" {
+				continue
+			}
+			parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+			if err != nil {
+				continue
+			}
+			quality = parsed
+		}
+		if quality <= 0 || quality <= bestQuality {
+			continue
+		}
+		best, bestQuality = format, quality
+	}
+	return best
+}
+
+func formatForMediaType(media string) (string, bool) {
+	switch media {
+	case "application/json+clicky", "application/clicky+json":
+		return "clicky-json", true
+	case "application/x-ndjson", "application/ndjson":
+		return "ndjson", true
+	case "application/yaml", "application/x-yaml", "text/yaml":
+		return "yaml", true
+	case "text/csv", "application/csv":
+		return "csv", true
+	case "text/markdown":
+		return "markdown", true
+	case "text/html":
+		return "html", true
+	case "application/pdf":
+		return "pdf", true
+	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+		return "excel", true
+	case "application/json":
+		return "json", true
+	default:
+		return "", false
 	}
 }
 
