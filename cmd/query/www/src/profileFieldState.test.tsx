@@ -4,8 +4,10 @@ import { ProfileEditorPreview } from "./profileEditorPreview";
 import { ProfileFieldGrid } from "./profileFieldGrid";
 import { useProfileFieldState } from "./profileFieldState";
 import {
+  applyVisibleFieldSelection,
   availableProfileFields,
   renameProfileField,
+  reorderProfileColumns,
   type ProfileColumn,
 } from "./profileWizardModel";
 
@@ -111,6 +113,22 @@ describe("column configuration in the field grid", () => {
     ]);
   });
 
+  it("offers a drag handle on configured fields and withholds it from deleted ones", () => {
+    const html = renderToStaticMarkup(
+      <GridProbe configured={[{ name: "created_at", type: "datetime" }]} />,
+    );
+
+    /** The opening tag of the reorder handle for `name`. */
+    const handle = (name: string) => {
+      const at = html.indexOf(`aria-label="Reorder ${name}"`);
+      expect(at, `no reorder handle for ${name}`).toBeGreaterThan(-1);
+      return html.slice(html.lastIndexOf("<", at), html.indexOf(">", at));
+    };
+
+    expect(handle("created_at")).not.toMatch(/\sdisabled=/);
+    expect(handle("body")).toMatch(/\sdisabled=/);
+  });
+
   it("records the original provider key when a direct field is renamed", () => {
     expect(renameProfileField({ name: "created_at", type: "datetime" }, "created"))
       .toEqual({ name: "created", source: "created_at", type: "datetime" });
@@ -135,5 +153,57 @@ describe("column configuration in the field grid", () => {
     expect(html).toContain(">created</th>");
     expect(html).toContain(">2026-08-04</td>");
     expect(html).not.toContain(">created_at</th>");
+  });
+});
+
+/** Reordering is what a row drag writes, so these cover the order the grid then
+ *  shows and the order the profile saves. */
+describe("column order", () => {
+  const columns: ProfileColumn[] = [
+    { name: "created_at" },
+    { name: "body" },
+    { name: "level" },
+  ];
+
+  it("drops a dragged column onto the target position, shifting the ones between", () => {
+    expect(reorderProfileColumns(columns, "level", "created_at").map((c) => c.name))
+      .toEqual(["level", "created_at", "body"]);
+    expect(reorderProfileColumns(columns, "created_at", "level").map((c) => c.name))
+      .toEqual(["body", "level", "created_at"]);
+  });
+
+  it("leaves the order alone when either end of the drag is not configured", () => {
+    expect(reorderProfileColumns(columns, "missing", "body")).toBe(columns);
+    expect(reorderProfileColumns(columns, "body", "missing")).toBe(columns);
+    expect(reorderProfileColumns(columns, "body", "body")).toBe(columns);
+  });
+
+  it("shows the grid the configured order, not the order the source reported", () => {
+    expect(
+      availableProfileFields(discovered, [
+        { name: "body", type: "string" },
+        { name: "created_at", type: "datetime" },
+      ]).map((field) => field.name),
+    ).toEqual(["body", "created_at"]);
+  });
+
+  it("keeps a deleted field where the grid last showed it, after its sample neighbour", () => {
+    expect(
+      availableProfileFields(
+        [{ name: "created_at" }, { name: "body" }, { name: "level" }],
+        [{ name: "level" }, { name: "created_at" }],
+      ).map((field) => field.name),
+    ).toEqual(["level", "created_at", "body"]);
+  });
+
+  it("survives a deletion, which must not resort the rest into sample order", () => {
+    expect(
+      applyVisibleFieldSelection(
+        [{ name: "created_at" }, { name: "body" }, { name: "level" }],
+        [{ name: "level" }, { name: "created_at" }, { name: "body" }],
+        new Set(["body"]),
+        false,
+      ).map((field) => field.name),
+    ).toEqual(["level", "created_at"]);
   });
 });

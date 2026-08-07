@@ -29,6 +29,8 @@ export type ProfileColumn = {
   unit?: string;
   width?: number;
   cel?: string;
+  /** Path computing the value, rooted at the row or at `source` when set. */
+  jsonpath?: string;
   hidden?: boolean;
   filter?: ProfileColumnFilter;
   [key: string]: unknown;
@@ -152,11 +154,16 @@ export function filterProfileFields(
 }
 
 /**
- * Every field the editors can show, in discovered order but each in its
- * configured form. A discovered field is a snapshot of what the source reported
- * — the configured one carries the user's edits, so it is the only version safe
- * to render into a control or to patch on top of. Fields that exist only in the
- * configuration (hand-added, or gone from a later sample) follow.
+ * Every field the editors can show, each in its configured form. A discovered
+ * field is a snapshot of what the source reported — the configured one carries
+ * the user's edits, so it is the only version safe to render into a control or
+ * to patch on top of.
+ *
+ * The configuration owns the order, because it is the order the profile renders
+ * its columns in and the one the user drags rows into. A discovered field that
+ * was never configured (not selected, or dropped from the profile) has no place
+ * of its own, so it keeps the one it had: it is anchored just after whichever
+ * configured field preceded it in the sample.
  */
 export function availableProfileFields(
   discovered: ProfileColumn[],
@@ -170,43 +177,60 @@ export function availableProfileFields(
       .filter((field) => field.source)
       .map((field) => [field.source as string, field]),
   );
-  const discoveredNames = new Set(discovered.map((field) => field.name));
-  return [
-    ...discovered.map(
-      (field) =>
-        configuredByName.get(field.name) ??
-        configuredBySource.get(field.name) ??
-        field,
-    ),
-    ...configured.filter(
-      (field) =>
-        !discoveredNames.has(field.name) &&
-        !discoveredNames.has(field.source ?? ""),
-    ),
-  ];
+  const ordered = [...configured];
+  let anchor = 0;
+  for (const field of discovered) {
+    const match =
+      configuredByName.get(field.name) ?? configuredBySource.get(field.name);
+    if (match) {
+      anchor = ordered.indexOf(match) + 1;
+      continue;
+    }
+    ordered.splice(anchor, 0, field);
+    anchor += 1;
+  }
+  return ordered;
 }
 
+/**
+ * Moves the named column onto the target's position, shifting the columns
+ * between them — the drop semantics the field grid's row drag needs. Columns
+ * are addressed by name because a drag only ever carries the row's identity.
+ * A name that is not configured has no position, so the order is returned
+ * unchanged rather than guessed at.
+ */
+export function reorderProfileColumns(
+  columns: ProfileColumn[],
+  sourceName: string,
+  targetName: string,
+): ProfileColumn[] {
+  const from = columns.findIndex((column) => column.name === sourceName);
+  const to = columns.findIndex((column) => column.name === targetName);
+  if (from < 0 || to < 0 || from === to) return columns;
+  const next = [...columns];
+  next.splice(to, 0, ...next.splice(from, 1));
+  return next;
+}
+
+/**
+ * Selects or deselects the named fields, keeping the configured order intact —
+ * a re-selected field returns to where the grid already showed it rather than
+ * to the back of the list or to its position in the sample.
+ */
 export function applyVisibleFieldSelection(
   discovered: ProfileColumn[],
   configured: ProfileColumn[],
   visibleNames: Set<string>,
   selected: boolean,
 ): ProfileColumn[] {
-  const configuredByName = new Map(
-    configured.map((field) => [field.name, field]),
-  );
-  const selectedNames = new Set(configuredByName.keys());
+  const selectedNames = new Set(configured.map((field) => field.name));
   for (const name of visibleNames) {
     if (selected) selectedNames.add(name);
     else selectedNames.delete(name);
   }
-  const discoveredNames = new Set(discovered.map((field) => field.name));
-  return [
-    ...discovered
-      .filter((field) => selectedNames.has(field.name))
-      .map((field) => configuredByName.get(field.name) ?? field),
-    ...configured.filter((field) => !discoveredNames.has(field.name)),
-  ];
+  return availableProfileFields(discovered, configured).filter((field) =>
+    selectedNames.has(field.name),
+  );
 }
 
 /** The control kinds a column filter can render as, with the server's own
