@@ -186,6 +186,9 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 		if def.Lookup != nil {
 			binding.Lookup = *def.Lookup
 		}
+		if def.Limit != nil {
+			binding.Limit = *def.Limit
+		}
 	}
 	// Enumerated values are the answer the lookup would go and fetch, so asking
 	// for them again would be a round trip whose result is already here.

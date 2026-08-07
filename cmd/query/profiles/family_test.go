@@ -101,11 +101,15 @@ func newProfileFamilyTest(t *testing.T, profiles ...query.Profile) (http.Handler
 }
 
 // lookupFilter is the part of clicky's lookup envelope the filter bar reads.
+// Truncated and Total are what decide between a list to scroll and a box to type
+// into, so they are as load-bearing as the options themselves.
 type lookupFilter struct {
-	Label   string                    `json:"label"`
-	Type    string                    `json:"type"`
-	Multi   bool                      `json:"multi"`
-	Options map[string]map[string]any `json:"options"`
+	Label     string                    `json:"label"`
+	Type      string                    `json:"type"`
+	Multi     bool                      `json:"multi"`
+	Options   map[string]map[string]any `json:"options"`
+	Truncated bool                      `json:"truncated"`
+	Total     int                       `json:"total"`
 }
 
 func requestLookup(t *testing.T, handler http.Handler, target string) map[string]lookupFilter {

@@ -314,6 +314,7 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 			entity.RegisterFilter(entity.NamedFilter{
 				Name:  profileFilterName(resolved.Profile.Name, binding.Column),
 				Label: binding.Label, Type: binding.Kind.ControlType(), Multi: binding.Multi,
+				Limit:  filterLookupLimit(binding),
 				Source: source,
 			})
 		}
@@ -328,6 +329,7 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 			}
 			entity.RegisterFilter(entity.NamedFilter{
 				Name: filterName, Label: binding.Label, Type: "multi-filter", Multi: true,
+				Limit:  filterLookupLimit(binding),
 				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
 			})
 		}

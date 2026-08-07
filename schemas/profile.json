@@ -3146,6 +3146,14 @@
                   "time": "Time range"
                 }
               },
+              "limit": {
+                "default": 50,
+                "description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup",
+                "maximum": 200,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
               "lookup": {
                 "default": true,
                 "description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked",

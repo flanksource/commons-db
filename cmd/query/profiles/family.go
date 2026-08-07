@@ -146,6 +146,7 @@ func (s *Service) profileFilter(profileName string, binding query.ColumnFilterBi
 		Type:       binding.Kind.ControlType(),
 		Multi:      binding.Multi,
 		Searchable: binding.Lookup,
+		Limit:      filterLookupLimit(binding),
 		Options: func(ctx context.Context, flags map[string]string, search string, limit int) (map[string]api.Textable, int, error) {
 			return source.Options(filterContext(ctx, flags), search, limit)
 		},
@@ -157,6 +158,20 @@ func (s *Service) profileFilter(profileName string, binding query.ColumnFilterBi
 			return source.Resolve(filterContext(ctx, flags), values)
 		},
 	}
+}
+
+// filterLookupLimit is how many values this filter offers before the rest have
+// to be typed for.
+//
+// The default lives here rather than on the binding because a binding that
+// declared nothing means "whoever asks decides" — which is what lets the
+// connection browser keep choosing its own size — and a profile surface is the
+// one asking here.
+func filterLookupLimit(binding query.ColumnFilterBinding) int {
+	if binding.Limit > 0 {
+		return binding.Limit
+	}
+	return query.DefaultFilterLookupLimit
 }
 
 // bindingSource decides where a binding's options come from: the backend for a
