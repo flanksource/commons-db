@@ -37,6 +37,7 @@ import {
 import { ProfileFieldFilters, ProfileFieldGrid } from "./profileFieldGrid";
 import { useProfileFieldState } from "./profileFieldState";
 import type { ProfileSample } from "./profileWizardQueryStep";
+import { JsonPathProfileProvider } from "./jsonPathSampleRow";
 import type { ProfileColumn, ProfileWizardDraft } from "./profileWizardModel";
 
 const ProfileEditorRaw = lazy(() =>
@@ -349,7 +350,7 @@ export function ProfileEditor({
   const leave = () => (dirty ? setConfirmDiscard(true) : onClose());
 
   return (
-    <>
+    <JsonPathProfileProvider profile={draft}>
       <div className="grid h-full min-h-0 grid-rows-[auto_minmax(0,1fr)] bg-background">
         <header className="flex items-center gap-3 border-b border-border px-4 py-2.5">
           <nav className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
@@ -460,7 +461,7 @@ export function ProfileEditor({
           </p>
         </Modal>
       ) : null}
-    </>
+    </JsonPathProfileProvider>
   );
 }
 
