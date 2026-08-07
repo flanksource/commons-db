@@ -372,23 +372,23 @@ func partitionProfileInput(profile Profile, input map[string]any) (map[string]an
 	return params, filters, nil
 }
 
-func LookupFilterValues(ctx context.Context, profile Profile, input map[string]any, key, search string, limit int) ([]FilterOption, int, error) {
+func LookupFilterValues(ctx context.Context, profile Profile, input map[string]any, key, search string, limit int) ([]FilterOption, *Total, error) {
 	if err := profile.Validate(); err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	if profile.Namespace != "" {
 		ctx = ctx.WithNamespace(profile.Namespace)
 	}
 	resolved, filters, err := resolveProfileInput(profile, input)
 	if err != nil {
-		return nil, 0, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
 	binding, err := profile.filterBinding(key)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	if !binding.Kind.Lookupable() {
-		return nil, 0, fmt.Errorf("filter %q is a %s filter and has no values to list", key, binding.Kind.Normalized())
+		return nil, nil, fmt.Errorf("filter %q is a %s filter and has no values to list", key, binding.Kind.Normalized())
 	}
 	// An enumerated filter already carries the answer, so asking the backend
 	// would be a round trip whose result is sitting in the profile.
@@ -399,7 +399,9 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 				options = append(options, FilterOption{Value: option})
 			}
 		}
-		return options, len(options), nil
+		// An enumerated filter is the whole set by construction, so the count is
+		// the number and not an estimate of it.
+		return options, &Total{Value: int64(len(options)), Exact: true}, nil
 	}
 	// The filter being looked up must not narrow its own options, or a chosen
 	// value would hide every alternative. Every other active selection — column
@@ -412,15 +414,15 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 	}
 	provider, err := GetProvider(profile.Provider.Type)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, err
 	}
 	lookup, ok := provider.(FilterLookupProvider)
 	if !ok {
-		return nil, 0, fmt.Errorf("provider %q does not support column filter lookups", profile.Provider.Type)
+		return nil, nil, fmt.Errorf("provider %q does not support column filter lookups", profile.Provider.Type)
 	}
 	req, err := buildProviderRequest(ctx, profile.Provider, profile.Query, profile.Params, resolved)
 	if err != nil {
-		return nil, 0, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
 	req.Filters = siblings
 	return lookup.LookupFilterValues(ctx, req, binding, search, limit)

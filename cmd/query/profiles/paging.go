@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 )
@@ -22,6 +23,10 @@ type exportRequest struct {
 	// maxRows is the profile's export ceiling, resolved alongside the page so
 	// every response reports and enforces the same number.
 	maxRows int
+
+	// pageable reports whether the profile can serve a position past its first
+	// page. A response that cannot must not report one as available.
+	pageable bool
 }
 
 // pageRequest renders the transport request as the engine's page.
@@ -30,7 +35,20 @@ func (r exportRequest) pageRequest() query.PageRequest {
 	if r.scope == "all" {
 		// An export reads forward to the ceiling and never jumps, so it takes
 		// the strategy that does not get more expensive the further it goes.
-		page = query.PageRequest{Limit: query.DefaultMaxPageSize, Strategy: query.PagingCursor}
+		//
+		// It also waives the exact total and states its ceiling. Both exist for
+		// the same reason: a backend asked for the size of the whole result has
+		// to produce the whole result first, which is the difference between an
+		// export that streams and one that hangs until the last row is found.
+		// What is lost is X-Total-Count on a download — the trailer still reports
+		// whether the ceiling bit, and X-Total-Relation says "unknown" rather
+		// than implying a count nobody stated.
+		page = query.PageRequest{
+			Limit:     query.DefaultMaxPageSize,
+			Strategy:  query.PagingCursor,
+			Ceiling:   r.maxRows,
+			SkipTotal: true,
+		}
 	}
 	return page
 }
@@ -71,6 +89,14 @@ func exportRows(
 	if err != nil {
 		return exportResponse{}, err
 	}
+	// Streamable asks about the profile — a Top or a whole-result processor needs
+	// every row before any row is correct. It does not ask whether the provider
+	// underneath can hand back a page without producing the whole result, and a
+	// walk is only forward if both are true. Getting this wrong is not cosmetic:
+	// an all-row export of a provider that cannot page is a cursor walk it has to
+	// refuse outright, and a page of one reports itself as a page that was read
+	// when the whole query ran and the result was sliced.
+	streamable = streamable && query.PagesNatively(p.Provider.Type)
 
 	if request.scope == "all" {
 		return exportAll(ctx, p, params, request, streamable)
@@ -155,12 +181,20 @@ func exportAll(
 	if err != nil {
 		return exportResponse{}, err
 	}
+	// A backend that states its total has already answered whether the ceiling
+	// will bite: it is arithmetic, not something to be discovered by reading to
+	// the end. Doing it here is what turns the answer into a header the caller
+	// can read rather than a trailer no browser exposes.
+	truncated := first.Truncated
+	if first.Total != nil && request.maxRows > 0 && first.Total.Value > int64(request.maxRows) {
+		truncated = true
+	}
 	return exportResponse{
 		rows:      query.Rows(pages),
 		ceiling:   request.maxRows,
 		mode:      "streaming",
 		total:     first.Total,
-		truncated: first.Truncated,
+		truncated: truncated,
 	}, nil
 }
 
@@ -265,50 +299,111 @@ func (i *profileClickyRows) Row() map[string]any { return i.row }
 func (i *profileClickyRows) Err() error          { return i.err }
 func (i *profileClickyRows) Close() error        { i.stop(); return nil }
 
-// exportHeaders are the paging facts a response carries. They are listed once so
-// the Access-Control-Expose-Headers value cannot drift from the headers that are
-// actually set — a header a browser cannot read is a header that does not exist.
-var exportHeaders = []string{
-	"Content-Disposition",
-	"X-Export-Mode",
-	"X-Page-Limit",
-	"X-Page-Offset",
-	"X-Total-Count",
-	"X-Total-Relation",
-	"X-Has-More",
-	"X-Next-Cursor",
-	"X-Truncated",
-	"X-Max-Rows",
+// exportHeader is one paging fact a response carries, described once.
+//
+// Three consumers read this list and none of them may disagree: the
+// Access-Control-Expose-Headers value (a header a browser cannot read is a
+// header that does not exist), the OpenAPI response documentation (a contract
+// only clicky-ui knows is a contract no generated client can honour), and the
+// setters below.
+type exportHeader struct {
+	name        string
+	description string
+	kind        string
+}
+
+var exportHeaderSpecs = []exportHeader{
+	{"Content-Disposition", "Attachment filename; present when ?_download or ?filename is given", "string"},
+	{"X-Export-Mode", "How the rows were produced: page, buffered or streaming. Orthogonal to scope — a scope=page request against a profile that cannot stream reports buffered", "string"},
+	{"X-Page-Limit", "Rows this page was limited to. Present when scope=page", "integer"},
+	{"X-Page-Offset", "Rows skipped before this page. Present when scope=page and the profile can be paged", "integer"},
+	{"X-Total-Count", "Size of the whole result set. Absent when the backend does not report one — read X-Total-Relation to tell that from zero", "integer"},
+	{"X-Total-Relation", "How to read X-Total-Count: eq (exact), gte (lower bound), or unknown (the backend states no total)", "string"},
+	{"X-Has-More", "Whether a further page can be requested. False for a profile with no total order, which serves its first page and refuses every page after it", "boolean"},
+	{"X-Next-Cursor", "Opaque position resuming after this page. Present when scope=page and the provider issued one", "string"},
+	{"X-Truncated", "The rows were cut short. Present when scope=all and the cut is known before the body; otherwise sent as the declared trailer", "boolean"},
+	{"X-Max-Rows", "Ceiling this export was bounded by. Present when scope=all; a PDF reports its own lower ceiling", "integer"},
+}
+
+// exportHeaders are the header names, for Access-Control-Expose-Headers.
+var exportHeaders = func() []string {
+	names := make([]string, 0, len(exportHeaderSpecs))
+	for _, spec := range exportHeaderSpecs {
+		names = append(names, spec.name)
+	}
+	return names
+}()
+
+// exportResponseHeaders documents the same headers for the OpenAPI response.
+func exportResponseHeaders() map[string]rpc.OpenAPIHeader {
+	headers := make(map[string]rpc.OpenAPIHeader, len(exportHeaderSpecs))
+	for _, spec := range exportHeaderSpecs {
+		headers[spec.name] = rpc.OpenAPIHeader{
+			Description: spec.description,
+			Schema:      &rpc.OpenAPISchema{Type: spec.kind},
+		}
+	}
+	return headers
+}
+
+// setCORSHeaders permits a cross-origin caller to read this response, whatever
+// it turns out to be.
+//
+// It is deliberately independent of the response: none of it depends on the
+// rows, so it is set before the first thing that can fail. Setting it only on
+// success is what makes an error body unreadable in a browser — and an error
+// nobody can read is worse than the one it describes.
+func setCORSHeaders(w http.ResponseWriter) {
+	header := w.Header()
+	header.Set("Access-Control-Allow-Origin", "*")
+	header.Set("Access-Control-Expose-Headers", strings.Join(exportHeaders, ", "))
 }
 
 func setExportHeaders(w http.ResponseWriter, r *http.Request, profileName string, request exportRequest, response exportResponse) {
 	header := w.Header()
-	header.Set("Access-Control-Allow-Origin", "*")
-	header.Set("Access-Control-Expose-Headers", strings.Join(exportHeaders, ", "))
+	setCORSHeaders(w)
 	header.Set("Content-Type", exportContentType(request.format))
 	header.Set("X-Export-Mode", response.mode)
 
 	if request.scope == "page" {
 		header.Set("X-Page-Limit", strconv.Itoa(request.limit))
-		header.Set("X-Page-Offset", strconv.Itoa(request.offset))
-		header.Set("X-Has-More", strconv.FormatBool(response.hasMore))
-		if response.next != "" {
-			header.Set("X-Next-Cursor", string(response.next))
+		// A profile with no total order serves its first page and refuses every
+		// page after it. Reporting rows behind that page would be true and
+		// useless: the only request it invites is one this server answers 400.
+		// Offset is withheld for the same reason — it names a position that
+		// cannot be asked for.
+		if request.pageable {
+			header.Set("X-Page-Offset", strconv.Itoa(request.offset))
+			header.Set("X-Has-More", strconv.FormatBool(response.hasMore))
+			if response.next != "" {
+				header.Set("X-Next-Cursor", string(response.next))
+			}
+		} else {
+			header.Set("X-Has-More", "false")
 		}
 	} else {
 		header.Set("X-Max-Rows", strconv.Itoa(request.maxRows))
-		// The ceiling is only known to have bitten once the rows have been read,
-		// which is after the headers are gone. Declaring the trailer is what
-		// keeps that answer reportable at all.
-		header.Set("Trailer", "X-Truncated")
+		// Only a ceiling that might still bite needs a trailer. A buffered export
+		// has none to hit, and one already known to have been cut has its answer
+		// in the headers below — declaring a trailer for either costs the
+		// response its Content-Length and promises an answer that never comes.
+		//
+		// A trailer is a poor last resort: browsers do not expose them, so this
+		// reaches CLI and library callers only. It is kept for the one case that
+		// is genuinely unknowable up front — a stream whose backend states no
+		// total — rather than as the primary channel.
+		if response.ceiling > 0 && !response.truncated {
+			header.Set("Trailer", "X-Truncated")
+		}
 	}
 
+	// A total the backend could not state exactly is a lower bound, and a caller
+	// rendering it as a count would be reporting a number nobody promised. No
+	// total at all is a third answer: without it, a missing X-Total-Count reads
+	// the same as a zero one, so the relation is always stated.
+	header.Set("X-Total-Relation", response.total.Relation())
 	if response.total != nil {
 		header.Set("X-Total-Count", strconv.FormatInt(response.total.Value, 10))
-		// A total the backend could not state exactly is a lower bound, and a
-		// caller rendering it as a count would be reporting a number nobody
-		// promised.
-		header.Set("X-Total-Relation", totalRelation(response.total.Exact))
 	}
 	if response.truncated {
 		header.Set("X-Truncated", "true")
@@ -323,9 +418,3 @@ func setExportHeaders(w http.ResponseWriter, r *http.Request, profileName string
 	}
 }
 
-func totalRelation(exact bool) string {
-	if exact {
-		return "eq"
-	}
-	return "gte"
-}

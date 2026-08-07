@@ -110,7 +110,13 @@ type profileListOpts struct{}
 // handlers so the nested profile body (provider/params/columns) survives via
 // rpc.RequestFromContext instead of the executor's flag-flattening. Execution
 // (GET /{name}?params) is served by execHandler and schemas by schemaHandler.
+//
+// It also registers the profile family, which is the route each individual
+// profile answers on — see RegisterFamily. The family reads the store through
+// the same provider this service does, so swapping the YAML store for the
+// database one at serve time needs no re-registration.
 func (s *Service) RegisterClicky() {
+	s.RegisterFamily()
 	clicky.NewEntity[profileItem, profileListOpts, profileItem]("profiles").
 		List(func(profileListOpts) ([]profileItem, error) {
 			store, err := s.store()
@@ -254,12 +260,14 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	return store.Delete(ctx, name)
 }
 
-// registerProfileEntities registers one clicky dynamic entity per stored profile
-// so each profile appears as its own sidebar surface (with a provider-derived
-// icon) and is executable: the entity's List runs the profile and returns its
-// rows. Entities are snapshotted at startup; a newly created profile needs a
-// restart to appear as its own surface (it still executes via execHandler and
-// shows in the aggregate list until then).
+// RegisterDynamic registers one clicky dynamic entity per stored profile, which
+// is what puts each profile in the generated CLI: GenerateCLI walks the entity
+// registry, so a profile absent from it has no `query profile-<slug>` command.
+//
+// The registry is a startup snapshot and cannot be otherwise — GenerateCLI has
+// already run by the time a profile is created. That is what RegisterFamily is
+// for: over HTTP a profile is resolved per request and needs no entry here. The
+// two are not alternatives, they serve different consumers.
 func (s *Service) RegisterDynamic(ctx context.Context) error {
 	store, err := s.store()
 	if err != nil {
@@ -323,7 +331,7 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
 			})
 		}
-		builder := entity.NewDynamicEntity("profile-"+slugify(name), schemaJSON)
+		builder := entity.NewDynamicEntity(profileSurfaceKey(name), schemaJSON)
 		// A param filters on an input the rows never carry, so it has no schema
 		// property to bind through; it is offered by key instead.
 		for _, binding := range resolved.Profile.ParamFilterBindings() {
@@ -508,7 +516,13 @@ func (source profileFilterSource) Options(fc entity.FilterContext, search string
 	for _, option := range options {
 		result[option.Value] = api.Text{Content: option.Value}
 	}
-	return result, total, nil
+	// This lookup surface takes a plain count; a backend that stated no total is
+	// reported as none rather than as zero options behind the ones listed.
+	count := 0
+	if total != nil {
+		count = int(total.Value)
+	}
+	return result, count, nil
 }
 
 func filterLookupParams(profile query.Profile, values map[string]string) map[string]any {

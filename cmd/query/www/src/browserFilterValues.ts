@@ -14,6 +14,13 @@ import { fetchJSON } from "./connectionBrowserModel";
 type FilterValuesResponse = {
   options: { value: string; label?: string; count?: number }[];
   total?: number;
+  /**
+   * How to read `total`, in the same vocabulary the profile export headers use.
+   * OpenSearch counts distinct values with a cardinality aggregation, which is
+   * an estimate past its precision threshold — so "gte" means the number is a
+   * bound and not a count.
+   */
+  totalRelation?: "eq" | "gte" | "unknown";
   truncated?: boolean;
 };
 

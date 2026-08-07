@@ -54,13 +54,14 @@ func TestMergeStoredProfilesTracksStoreImmediately(t *testing.T) {
 	for _, param := range op.Parameters {
 		roles[string(param.Clicky.Role)] = true
 	}
-	if !roles["limit"] || !roles["offset"] {
-		t.Fatalf("profile pagination parameters missing: %+v", op.Parameters)
+	if !roles["limit"] {
+		t.Fatalf("limit is valid without an order and must be offered: %+v", op.Parameters)
 	}
-	// This profile declares no order, so there is no position a cursor could
-	// name and none is offered.
-	if roles["cursor"] {
-		t.Fatalf("cursor offered on a profile that declares no order: %+v", op.Parameters)
+	// This profile declares no order, so there is no position either a cursor or
+	// an offset could name, and neither is offered. Advertising one would put a
+	// pager in the UI whose every click is a 400.
+	if roles["cursor"] || roles["offset"] {
+		t.Fatalf("position parameter offered on a profile that declares no order: %+v", op.Parameters)
 	}
 	if got := op.Parameters[0].Schema.Enum; len(got) != 2 || got[0] != "US" {
 		t.Fatalf("profile enum missing: %+v", got)
@@ -149,8 +150,10 @@ func TestProfileOpenAPIAdvertisesNativeColumnFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Two column filters plus limit. This profile declares no order, so no
+	// offset or cursor is advertised.
 	op := spec.Paths["/api/v1/profile/profile-logs"]["get"]
-	if len(op.Parameters) != 4 {
+	if len(op.Parameters) != 3 {
 		t.Fatalf("column filters plus pagination missing: %+v", op.Parameters)
 	}
 	for i, key := range []string{"filter.service", "filter.payload.user"} {

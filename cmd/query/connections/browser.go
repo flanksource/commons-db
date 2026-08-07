@@ -256,7 +256,12 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 		return
 	}
 	var request browserQueryRequest
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+	decoder := json.NewDecoder(r.Body)
+	// Same strictness as the sibling /compile and /values endpoints: a field
+	// this endpoint does not know is a caller's mistake, and silently dropping
+	// it turns a typo into a query that quietly ignores what was asked for.
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
 		http.Error(w, "decode browser query: "+err.Error(), http.StatusBadRequest)
 		return
 	}
