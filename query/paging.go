@@ -66,6 +66,23 @@ type PageRequest struct {
 	// means offset, which is the strategy a caller gets by not thinking about
 	// it — and the one that can jump to an arbitrary page.
 	Strategy PagingMode
+
+	// Ceiling bounds the whole walk rather than one page: an export reads
+	// forward to it and stops. Zero leaves the walk unbounded. A provider that
+	// can push it down to the backend should, so the read stops where the export
+	// does instead of continuing past it into rows nobody will receive.
+	Ceiling int
+
+	// SkipTotal releases the provider from reporting the size of the whole
+	// result, and a provider that takes it up must report no total rather than a
+	// zero one — Total.Relation tells those apart, and a caller reading "exactly
+	// 0" while rows stream past is worse served than one reading "unknown".
+	//
+	// It exists because stating an exact total can cost the whole result: see
+	// buildPagedSQL, where it is the difference between a walk that streams and
+	// one that materializes. A page cannot waive it — a table has to say what it
+	// is a page of — so this is an export's trade to make.
+	SkipTotal bool
 }
 
 // Mode reports which strategy this request asks for.
@@ -92,6 +109,9 @@ func (r PageRequest) Validate() error {
 	if r.Mode() == PagingCursor && r.Offset != 0 {
 		return fmt.Errorf("a cursor already says where to resume, so it cannot be combined with offset %d", r.Offset)
 	}
+	if r.Ceiling < 0 {
+		return fmt.Errorf("page ceiling must be zero or greater, got %d", r.Ceiling)
+	}
 	return nil
 }
 
@@ -104,6 +124,24 @@ func (r PageRequest) Validate() error {
 type Total struct {
 	Value int64
 	Exact bool
+}
+
+// Relation names how a caller may read Value: "eq" when the number is the
+// count, "gte" when it is a lower bound, and "unknown" when there is no total
+// at all.
+//
+// The nil case is the reason this is a method rather than a field: a missing
+// total and a total of zero are different facts that serialize identically, and
+// every surface that reports one has to say which it means.
+func (t *Total) Relation() string {
+	switch {
+	case t == nil:
+		return "unknown"
+	case t.Exact:
+		return "eq"
+	default:
+		return "gte"
+	}
 }
 
 // Page is one batch of an ordered result set together with the position that

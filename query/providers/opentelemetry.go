@@ -46,14 +46,7 @@ func (openTelemetryProvider) PagingModes() query.PagingMode {
 }
 
 func (p openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	var result []query.Row
-	for page, err := range p.Pages(ctx, req, query.PageRequest{Limit: openSearchWalkBatch}) {
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, page.Rows...)
-	}
-	return result, nil
+	return drainOpenSearch(ctx, p, req)
 }
 
 // Pages walks the trace index the same way the OpenSearch provider walks a log

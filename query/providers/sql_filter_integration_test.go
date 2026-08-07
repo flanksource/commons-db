@@ -174,7 +174,7 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 	})
 
 	Describe("value lookup", func() {
-		lookup := func(key, search string, params map[string]any) ([]query.FilterOption, int) {
+		lookup := func(key, search string, params map[string]any) ([]query.FilterOption, *query.Total) {
 			GinkgoHelper()
 			options, total, err := query.LookupFilterValues(
 				context.New(), profileFor(selectOrders), params, key, search, 20)
@@ -185,7 +185,8 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 		It("lists distinct values with their counts, most common first", func() {
 			options, total := lookup("filter.region", "", nil)
 			Expect(options[0]).To(Equal(query.FilterOption{Value: "us-east", Count: 2}))
-			Expect(total).To(Equal(5))
+			// SQL counts the grouped set, so the number is the number.
+			Expect(total).To(Equal(&query.Total{Value: 5, Exact: true}))
 		})
 
 		It("offers no NULL, which is not a value anyone can select", func() {
@@ -242,5 +243,74 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 			}
 		}
 		Expect(pages).To(Equal([][]int{{1}, {4}}), fmt.Sprintf("pages: %v", pages))
+	})
+
+	// A page that cannot say how many rows are behind it leaves the caller
+	// unable to render anything but "next" — and a table that cannot say how
+	// much it is showing of what is the same as one showing an unknown slice.
+	It("reports the total alongside every page", func() {
+		profile := profileFor(selectOrders)
+		profile.Order = query.Order{{Column: "id", Unique: true}}
+
+		var totals []query.Total
+		for page, err := range query.ExecutePages(context.New(), profile, query.PageRequest{Limit: 2}) {
+			Expect(err).ToNot(HaveOccurred())
+			Expect(page.Total).ToNot(BeNil(), "every page carries the total")
+			totals = append(totals, *page.Total)
+			if !page.HasMore {
+				break
+			}
+		}
+		// COUNT(*) OVER () counts the wrapped statement in the same snapshot the
+		// rows come from, so the number is the table's six rows and does not
+		// drift as the walk advances.
+		Expect(totals).To(Equal([]query.Total{
+			{Value: 6, Exact: true}, {Value: 6, Exact: true}, {Value: 6, Exact: true},
+		}), fmt.Sprintf("totals: %v", totals))
+	})
+
+	// The count is of the rows the caller asked for, so a filter narrows it.
+	It("counts the filtered result rather than the whole table", func() {
+		profile := profileFor(selectOrders)
+		profile.Order = query.Order{{Column: "id", Unique: true}}
+
+		for page, err := range query.ExecutePages(context.New(), profile,
+			query.PageRequest{Limit: 1}, map[string]any{"filter.region": "us-east"}) {
+			Expect(err).ToNot(HaveOccurred())
+			Expect(page.Total).To(Equal(&query.Total{Value: 2, Exact: true}))
+			break
+		}
+	})
+
+	// The counting column is the server's bookkeeping and must not surface as a
+	// column the caller sees, or every consumer inherits it.
+	It("keeps the counting column out of the rows", func() {
+		profile := profileFor(selectOrders)
+		profile.Order = query.Order{{Column: "id", Unique: true}}
+
+		for page, err := range query.ExecutePages(context.New(), profile, query.PageRequest{Limit: 1}) {
+			Expect(err).ToNot(HaveOccurred())
+			Expect(page.Rows).To(HaveLen(1))
+			for key := range page.Rows[0] {
+				Expect(key).ToNot(HavePrefix("__cdb_"), "internal column leaked into a row")
+			}
+			break
+		}
+	})
+
+	// An empty result is a known total, not an unknown one: zero rows is a fact
+	// the count established, and reporting it as "no total" would read the same
+	// as a backend that cannot count.
+	It("reports zero as an exact total", func() {
+		profile := profileFor(selectOrders)
+		profile.Order = query.Order{{Column: "id", Unique: true}}
+
+		for page, err := range query.ExecutePages(context.New(), profile,
+			query.PageRequest{Limit: 5}, map[string]any{"filter.region": "nowhere"}) {
+			Expect(err).ToNot(HaveOccurred())
+			Expect(page.Rows).To(BeEmpty())
+			Expect(page.Total).To(Equal(&query.Total{Value: 0, Exact: true}))
+			break
+		}
 	})
 })

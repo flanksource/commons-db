@@ -54,18 +54,14 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	if err != nil {
 		return nil, err
 	}
-	started := time.Now()
-	rows, err := provider.Execute(ctx, req)
-	duration := time.Since(started)
-	if err != nil {
-		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
-	}
 	if limit <= 0 {
 		limit = DefaultSampleLimit
 	}
-	truncated := len(rows) > limit
-	if truncated {
-		rows = rows[:limit]
+	started := time.Now()
+	rows, truncated, err := sampleRows(ctx, provider, req, limit)
+	duration := time.Since(started)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
 	}
 	if rows == nil {
 		rows = []Row{}
@@ -80,6 +76,43 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 		Truncated:     truncated,
 		DurationMS:    float64(duration) / float64(time.Millisecond),
 	}, nil
+}
+
+// sampleRows reads at most limit rows, and reports whether the source held more.
+//
+// It asks a paging provider for one page of exactly that size rather than for
+// everything, because a sample is a look at the shape of the data and not a
+// read of it: draining an index of millions to show a hundred rows costs the
+// whole index, and past OpenSearch's result window it does not even succeed —
+// a from/size walk is refused there, so sampling a large index returned
+// "reading past row 10000 needs a cursor" instead of a sample.
+//
+// A provider with no native paging has no page to ask for, so its whole result
+// is read and cut here.
+func sampleRows(ctx context.Context, provider Provider, req ProviderRequest, limit int) ([]Row, bool, error) {
+	paging, ok := provider.(PagingProvider)
+	if !ok {
+		rows, err := provider.Execute(ctx, req)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(rows) > limit {
+			return rows[:limit], true, nil
+		}
+		return rows, false, nil
+	}
+
+	// Ending the range after the first page is what releases the backend cursor.
+	for page, err := range paging.Pages(ctx, req, PageRequest{Limit: limit}) {
+		if err != nil {
+			return nil, false, err
+		}
+		if len(page.Rows) > limit {
+			return page.Rows[:limit], true, nil
+		}
+		return page.Rows, page.HasMore || page.Truncated, nil
+	}
+	return nil, false, nil
 }
 
 func validateSampleReadOnly(providerType, query string, options map[string]any) error {

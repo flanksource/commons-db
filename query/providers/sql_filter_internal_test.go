@@ -200,3 +200,58 @@ var _ = Describe("buildFilteredSQL", func() {
 		})
 	})
 })
+
+// An export takes everything, so the size of the whole result is a nicety it can
+// trade for a backend that actually streams. A table cannot make that trade — it
+// has to say what it is a page of — so the window function stays for scope=page.
+var _ = Describe("buildPagedSQL", func() {
+	pageOrder := query.Order{{Column: "id", Unique: true}}
+
+	It("counts the whole result on every row when a total is wanted", func() {
+		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder,
+			query.PageRequest{Limit: 50})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).To(ContainSubstring(`COUNT(*) OVER () AS "__cdb_total"`))
+	})
+
+	// COUNT(*) OVER () with no PARTITION BY is a whole-partition window aggregate:
+	// the database buffers the entire filtered result into a tuplestore before it
+	// emits the first row. Leaving it in is what makes time-to-first-byte equal
+	// full-scan time, and makes the export ceiling bound the client but not the
+	// server.
+	It("omits the window aggregate when the caller waived the total", func() {
+		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder,
+			query.PageRequest{Limit: 50, SkipTotal: true})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).ToNot(ContainSubstring("COUNT(*) OVER ()"))
+		Expect(statement).ToNot(ContainSubstring("__cdb_total"))
+		Expect(statement).To(ContainSubstring(`SELECT "__cdb_base".* FROM "__cdb_base"`))
+	})
+
+	// One past the ceiling, for the same reason a page reads one past its limit:
+	// proving a further row exists is what separates a finished export from one
+	// that stopped.
+	It("stops the backend where the export stops", func() {
+		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder,
+			query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).To(HaveSuffix("LIMIT 101"))
+	})
+
+	It("renders the ceiling in the dialect's own spelling", func() {
+		statement, _, err := buildPagedSQL(dialectSQLServer, ordersQuery, nil, pageOrder,
+			query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).To(HaveSuffix("OFFSET 0 ROWS FETCH NEXT 101 ROWS ONLY"))
+	})
+
+	// SQL Server refuses OFFSET/FETCH without an ORDER BY, and an unordered
+	// ceiling would in any case take an arbitrary hundred rows rather than the
+	// first hundred.
+	It("pushes no ceiling into an unordered statement", func() {
+		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, nil,
+			query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).ToNot(ContainSubstring("LIMIT"))
+	})
+})

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"iter"
 	"slices"
+	"strconv"
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/db"
@@ -81,7 +82,7 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 			yield(query.Page{}, err)
 			return
 		}
-		rows, client, scanner, err := p.open(ctx, req)
+		rows, client, scanner, err := p.open(ctx, req, page)
 		if err != nil {
 			yield(query.Page{}, err)
 			return
@@ -94,16 +95,31 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 		// Offset is served by reading and discarding. The statement is the
 		// author's, so there is nowhere to put an OFFSET the backend could
 		// honour — which is the whole cost that a keyset cursor avoids.
+		// An offset past the end still knows the size of what it ran off, so the
+		// skipped rows are read for their count before the empty page is served.
+		skippedTotal := query.Total{Exact: true}
 		for skipped := 0; skipped < page.Offset; skipped++ {
 			if !scanner.Next() {
 				if err := scanner.Err(); err != nil {
 					yield(query.Page{}, fmt.Errorf("failed to read sql rows: %w", err))
 					return
 				}
-				yield(query.Page{}, nil)
+				empty := query.Page{}
+				if !page.SkipTotal {
+					empty.Total = &skippedTotal
+				}
+				yield(empty, nil)
 				return
 			}
+			if counted, ok := takeRowTotal(query.Row(scanner.Row())); ok {
+				skippedTotal.Value = counted
+			}
 		}
+
+		// Unless the caller waived it, every row carries COUNT(*) OVER (), so the
+		// total is known from the
+		// first row read — including a row that was skipped to serve an offset.
+		total := skippedTotal
 
 		var carry []query.Row
 		for {
@@ -112,7 +128,11 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 			batch := carry
 			carry = nil
 			for len(batch) <= page.Limit && scanner.Next() {
-				batch = append(batch, query.Row(scanner.Row()))
+				row := query.Row(scanner.Row())
+				if counted, ok := takeRowTotal(row); ok {
+					total.Value = counted
+				}
+				batch = append(batch, row)
 			}
 			if err := scanner.Err(); err != nil {
 				yield(query.Page{}, fmt.Errorf("failed to read sql rows: %w", err))
@@ -125,7 +145,14 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 				batch = batch[:page.Limit]
 			}
 
+			// A waived total is reported as absent, never as zero. The rows carry
+			// no __cdb_total to read, and "exactly 0" alongside a page of rows is
+			// a worse answer than "unknown" — which is what a nil Total means.
 			current := query.Page{Rows: batch, HasMore: more}
+			if !page.SkipTotal {
+				counted := total
+				current.Total = &counted
+			}
 			if keyed && len(batch) > 0 {
 				keys, err := orderKeys(batch[len(batch)-1], req.Order)
 				if err != nil {
@@ -196,7 +223,40 @@ func sqlExecError(dialect sqlDialect, filters []query.ColumnFilterValue, err err
 	return fmt.Errorf("failed to execute sql query: %w", err)
 }
 
-func (p sqlProvider) open(ctx context.Context, req query.ProviderRequest) (*sql.Rows, *sql.DB, *db.RowScanner, error) {
+// takeRowTotal removes the counting column from a row and returns what it held.
+//
+// It is removed rather than ignored: it is the server's bookkeeping, and a row
+// that carried it onward would put an internal column into every consumer —
+// exports, CEL expressions, the rendered table.
+func takeRowTotal(row query.Row) (int64, bool) {
+	value, ok := row[sqlTotalColumn]
+	if !ok {
+		return 0, false
+	}
+	delete(row, sqlTotalColumn)
+	// Drivers spell an integer several ways depending on the column type they
+	// inferred, so the count is read by value rather than by asserting one.
+	switch typed := value.(type) {
+	case int64:
+		return typed, true
+	case int32:
+		return int64(typed), true
+	case int:
+		return int64(typed), true
+	case float64:
+		return int64(typed), true
+	case []byte:
+		parsed, err := strconv.ParseInt(string(typed), 10, 64)
+		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseInt(typed, 10, 64)
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func (p sqlProvider) open(ctx context.Context, req query.ProviderRequest, page query.PageRequest) (*sql.Rows, *sql.DB, *db.RowScanner, error) {
 	if req.Query == "" {
 		return nil, nil, nil, fmt.Errorf("sql query is required")
 	}
@@ -215,7 +275,11 @@ func (p sqlProvider) open(ctx context.Context, req query.ProviderRequest) (*sql.
 
 	// The dialect is only knowable here, once the connection has been hydrated,
 	// so the statement is built here rather than by the caller.
-	statement, args, err := buildFilteredSQL(dialect, req.Query, req.Filters)
+	//
+	// open serves paging, which is the one caller that needs the size of the
+	// whole result: a page that cannot say what it is a page of leaves the table
+	// showing an unknown slice.
+	statement, args, err := buildPagedSQL(dialect, req.Query, req.Filters, req.Order, page)
 	if err != nil {
 		_ = client.Close()
 		return nil, nil, nil, err
