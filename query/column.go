@@ -23,10 +23,30 @@ const (
 	ColumnTypeBytes     ColumnType = "bytes"
 	ColumnTypeStatus    ColumnType = "status"
 	ColumnTypeHealth    ColumnType = "health"
+	ColumnTypeUUID      ColumnType = "uuid"
 	ColumnTypeKeyValue  ColumnType = "key_value"
 	ColumnTypeKeyValues ColumnType = "key_values"
 	ColumnTypeJSON      ColumnType = "json"
 )
+
+// ColumnTypeValues returns every type an author may declare, for the profile
+// schema's enum.
+func ColumnTypeValues() []string {
+	return []string{
+		string(ColumnTypeString), string(ColumnTypeNumber), string(ColumnTypeBoolean),
+		string(ColumnTypeDateTime), string(ColumnTypeDuration), string(ColumnTypeBytes),
+		string(ColumnTypeStatus), string(ColumnTypeHealth), string(ColumnTypeUUID),
+		string(ColumnTypeKeyValue), string(ColumnTypeKeyValues), string(ColumnTypeJSON),
+	}
+}
+
+// Enumerable reports whether asking the backend to list this column's distinct
+// values would answer anything. An identifier is unique per row, so its value
+// list is a list of the rows — a scan of the whole result to offer twenty
+// values nobody recognizes. Such a column is typed into, not picked from.
+func (t ColumnType) Enumerable() bool {
+	return t != ColumnTypeUUID
+}
 
 // ColumnKind enables semantic table behavior beyond value formatting.
 type ColumnKind string
@@ -70,10 +90,22 @@ type ColumnDef struct {
 	// The row is exposed as `row` in the CEL environment.
 	CEL string `json:"cel,omitempty" yaml:"cel,omitempty"`
 
+	// JSONPath is an optional path computing the cell value. It is rooted at the
+	// row, or at Source when that is set — and a Source holding JSON as a string
+	// is parsed first, so an encoded and a native column read the same way. A
+	// path matching nothing yields nil: on a scan, a row that lacks the field is
+	// ordinary rather than exceptional. Alternative to CEL, not a companion.
+	//
+	// Source names the root here; it does not rename. Several columns read one
+	// JSON column, and that column stays in the row rather than being consumed
+	// by whichever of them ran first.
+	JSONPath string `json:"jsonpath,omitempty" yaml:"jsonpath,omitempty"`
+
 	// Filter overrides how this column is filtered at the backend. Direct
-	// columns and simple row/span CEL lookups infer the field automatically and
-	// Type infers the control; computed CEL and JSONPath columns need an
-	// explicit field to be filterable at all.
+	// columns, simple row/span CEL lookups and literal-key-chain JSONPaths infer
+	// the field automatically and Type infers the control; computed CEL, and a
+	// JSONPath that selects rather than addresses, need an explicit field to be
+	// filterable at all.
 	Filter *ColumnFilterDef `json:"filter,omitempty" yaml:"filter,omitempty"`
 
 	// Hidden excludes the column from rendered output while keeping it available
@@ -105,6 +137,14 @@ func (c ColumnDef) clickyFormat() string {
 func (c ColumnDef) Validate() error {
 	if c.Source != "" && c.CEL != "" {
 		return fmt.Errorf("column %q cannot set both source and cel", c.Name)
+	}
+	if c.CEL != "" && c.JSONPath != "" {
+		return fmt.Errorf("column %q cannot set both cel and jsonpath", c.Name)
+	}
+	if c.JSONPath != "" {
+		if _, err := compileColumnJSONPath(c); err != nil {
+			return err
+		}
 	}
 	if c.Filter != nil {
 		if err := c.Filter.Validate(c.Name); err != nil {

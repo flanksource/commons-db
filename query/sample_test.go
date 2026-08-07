@@ -87,6 +87,46 @@ func TestInferSampleColumnsStructuredTypes(t *testing.T) {
 	}
 }
 
+// An OpenSearch mapping has no type for an identifier — a UUID field is
+// `keyword` like every other string — so the shape of the values is the only
+// signal both providers share.
+func TestInferSampleColumnsIdentifiers(t *testing.T) {
+	columns := InferSampleColumns([]Row{
+		{
+			"id":     "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+			"digest": "9e107d9d372bb6826bd81d3542a419d6",
+			"region": "eu-west-1",
+			"mixed":  "6ba7b810-9dad-11d1-80b4-00c04fd430c8",
+		},
+		{
+			"id":     "6ba7b811-9dad-11d1-80b4-00c04fd430c8",
+			"digest": "e4d909c290d0fb1ca068ffaddf22cbd0",
+			"region": "us-east-1",
+			"mixed":  "not-an-identifier",
+		},
+	})
+	want := map[string]ColumnType{
+		// 32 bare hex digits is equally an MD5 digest, and a digest is a value
+		// someone might well want to pick from a list.
+		"digest": ColumnTypeString,
+		"id":     ColumnTypeUUID,
+		"mixed":  ColumnTypeString,
+		"region": ColumnTypeString,
+	}
+	got := map[string]ColumnType{}
+	for _, column := range columns {
+		got[column.Name] = column.Type
+	}
+	if len(got) != len(want) {
+		t.Fatalf("columns = %#v", columns)
+	}
+	for name, expected := range want {
+		if got[name] != expected {
+			t.Errorf("column %q type = %q, want %q", name, got[name], expected)
+		}
+	}
+}
+
 func TestSampleRejectsUnsafeRequests(t *testing.T) {
 	tests := []struct {
 		provider, query string

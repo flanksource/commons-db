@@ -19,6 +19,9 @@ var _ = Describe("column filter kind", func() {
 		Entry("bytes", ColumnTypeBytes, ColumnFilterKindRange),
 		Entry("datetime", ColumnTypeDateTime, ColumnFilterKindTime),
 		Entry("boolean", ColumnTypeBoolean, ColumnFilterKindBoolean),
+		// An identifier compares exactly like a string; only its option list
+		// differs, and that is Enumerable's business rather than the kind's.
+		Entry("uuid", ColumnTypeUUID, ColumnFilterKindTerms),
 		Entry("key_value", ColumnTypeKeyValue, ColumnFilterKindNone),
 		Entry("key_values", ColumnTypeKeyValues, ColumnFilterKindNone),
 		Entry("json", ColumnTypeJSON, ColumnFilterKindNone),
@@ -63,9 +66,38 @@ var _ = Describe("column filter kind", func() {
 		},
 		Entry("terms", ColumnFilterKindTerms, "multi-filter"),
 		Entry("range", ColumnFilterKindRange, "number"),
-		Entry("time", ColumnFilterKindTime, "date"),
+		// Not "date": a time bound carries both edges under one key, and "date"
+		// is clicky's single-instant input.
+		Entry("time", ColumnFilterKindTime, "date-range"),
 		Entry("boolean", ColumnFilterKindBoolean, "bool"),
 		Entry("text", ColumnFilterKindText, ""),
+	)
+
+	// Enumerating a column is only worth a round trip when its values repeat.
+	DescribeTable("reports which column types are worth enumerating",
+		func(columnType ColumnType, enumerable bool) {
+			Expect(columnType.Enumerable()).To(Equal(enumerable))
+		},
+		Entry("an undeclared type", ColumnType(""), true),
+		Entry("string", ColumnTypeString, true),
+		Entry("status", ColumnTypeStatus, true),
+		Entry("uuid", ColumnTypeUUID, false),
+	)
+
+	// The control depends on whether there is anything to enumerate, which the
+	// kind alone does not say.
+	DescribeTable("refines the control from the binding",
+		func(binding ColumnFilterBinding, control string) {
+			Expect(binding.ControlType()).To(Equal(control))
+		},
+		Entry("a selection the backend can enumerate",
+			ColumnFilterBinding{Kind: ColumnFilterKindTerms, Lookup: true}, "multi-filter"),
+		Entry("a selection the profile enumerates itself",
+			ColumnFilterBinding{Kind: ColumnFilterKindTerms, Options: []string{"eu"}}, "multi-filter"),
+		Entry("a selection with nothing to enumerate",
+			ColumnFilterBinding{Kind: ColumnFilterKindTerms}, "value"),
+		Entry("a time bound", ColumnFilterBinding{Kind: ColumnFilterKindTime}, "date-range"),
+		Entry("a range", ColumnFilterBinding{Kind: ColumnFilterKindRange}, "number"),
 	)
 
 	DescribeTable("rejects an enumerated value the wire form cannot carry",

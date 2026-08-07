@@ -9,6 +9,8 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
+
 	"github.com/flanksource/commons-db/context"
 )
 
@@ -342,6 +344,9 @@ func sampleColumnType(value any) ColumnType {
 		if _, err := time.Parse(time.RFC3339Nano, value); err == nil {
 			return ColumnTypeDateTime
 		}
+		if isSampleUUID(value) {
+			return ColumnTypeUUID
+		}
 		return ColumnTypeString
 	case time.Duration:
 		return ColumnTypeDuration
@@ -367,6 +372,22 @@ func sampleColumnType(value any) ColumnType {
 		}
 		return ColumnTypeString
 	}
+}
+
+// isSampleUUID recognizes an identifier by its shape rather than by its name,
+// because the backends disagree on names and only one of them has a type for
+// it: a postgres column reports "UUID" but an OpenSearch field holding the same
+// values is mapped `keyword` like every other string.
+//
+// Only the canonical hyphenated form counts. uuid.Parse also accepts 32 bare
+// hex digits, which is equally the shape of an MD5 digest — and a digest is a
+// value someone might well want to pick from a list.
+func isSampleUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	_, err := uuid.Parse(value)
+	return err == nil
 }
 
 func isStructuredSampleType(kind ColumnType) bool {

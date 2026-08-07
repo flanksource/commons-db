@@ -531,8 +531,13 @@ var _ = Describe("Profile column editor schema", func() {
 		Expect(props["name"].(schema.Schema)["x-clicky-order"]).To(Equal(1))
 		Expect(props["source"].(schema.Schema)["x-clicky-order"]).To(Equal(2))
 		Expect(props["type"].(schema.Schema)["x-clicky-order"]).To(Equal(3))
+		jsonPath := props["jsonpath"].(schema.Schema)
+		Expect(jsonPath["x-clicky-order"]).To(Equal(9))
+		Expect(jsonPath["x-clicky-component"]).To(Equal("jsonpath-picker"))
+		Expect(props["cel"].(schema.Schema)["x-clicky-order"]).To(Equal(8))
+		Expect(props["hidden"].(schema.Schema)["x-clicky-order"]).To(Equal(11))
 		filter := props["filter"].(schema.Schema)
-		Expect(filter["x-clicky-order"]).To(Equal(9))
+		Expect(filter["x-clicky-order"]).To(Equal(10))
 		filterProps := filter["properties"].(schema.Schema)
 		// The field is optional now: a column whose own definition names a
 		// backend field does not restate it, and an enumerated filter names none.

@@ -153,13 +153,14 @@ func ProfileSource() Schema {
 			"type": Schema{
 				"type":           "string",
 				"title":          "Type",
-				"enum":           []string{"string", "number", "boolean", "datetime", "duration", "bytes", "status", "health", "key_value", "key_values", "json"},
+				"enum":           query.ColumnTypeValues(),
 				"description":    "Value shape and default formatting; independent of Role",
 				"x-clicky-order": 3,
 				"x-enum-labels": map[string]string{
 					"key_value":  "KeyValue{}",
 					"key_values": "[]KeyValue",
 					"json":       "JSON",
+					"uuid":       "UUID",
 				},
 			},
 			"kind": Schema{
@@ -184,8 +185,14 @@ func ProfileSource() Schema {
 			},
 			"width": Schema{"type": "integer", "title": "Width", "description": "Maximum rendered width in characters", "x-clicky-order": 7},
 			"cel":   Schema{"type": "string", "title": "CEL", "description": "Expression computing the cell value from `row`", "x-clicky-order": 8},
+			"jsonpath": Schema{
+				"type": "string", "title": "JSONPath",
+				"description":        "Path computing the cell value, rooted at the row or at Source when it is set; an alternative to CEL",
+				"x-clicky-component": "jsonpath-picker",
+				"x-clicky-order":     9,
+			},
 			"filter": Schema{
-				"type": "object", "title": "Filter", "x-clicky-order": 9,
+				"type": "object", "title": "Filter", "x-clicky-order": 10,
 				"description": "How this column is filtered at the backend; a direct column or simple CEL infers the field, and Type infers the control",
 				"properties": Schema{
 					"field": Schema{
@@ -229,7 +236,7 @@ func ProfileSource() Schema {
 					},
 				},
 			},
-			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for CEL and processors", "x-clicky-order": 10},
+			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for CEL and processors", "x-clicky-order": 11},
 		},
 	}
 	aliasDef := Schema{

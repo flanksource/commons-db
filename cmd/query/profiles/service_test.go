@@ -288,7 +288,7 @@ func TestRegisterProfileEntitiesRegistersEveryFilterKind(t *testing.T) {
 	}
 
 	for column, want := range map[string]string{
-		"region": "multi-filter", "latency_ms": "number", "created_at": "date", "deleted": "bool",
+		"region": "multi-filter", "latency_ms": "number", "created_at": "date-range", "deleted": "bool",
 	} {
 		registered, ok := entity.GetFilter(profileFilterName(profileName, column))
 		if !ok {
