@@ -32,10 +32,10 @@ require (
 	github.com/eko/gocache/store/go_cache/v4 v4.2.2
 	github.com/exaring/otelpgx v0.9.3
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.48
-	github.com/flanksource/commons v1.54.0
-	github.com/flanksource/deps v1.0.36
-	github.com/flanksource/gomplate/v3 v3.24.84
+	github.com/flanksource/clicky v1.21.54
+	github.com/flanksource/commons v1.55.0
+	github.com/flanksource/deps v1.0.38
+	github.com/flanksource/gomplate/v3 v3.24.86
 	github.com/flanksource/is-healthy v1.0.88
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.1
