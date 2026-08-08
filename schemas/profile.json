@@ -3166,6 +3166,12 @@
                 "title": "Multi",
                 "type": "boolean"
               },
+              "nested": {
+                "description": "The `nested` mapping the field lives inside; a selection on such a field is compiled inside a nested query, and a flat clause on one matches nothing",
+                "title": "Nested",
+                "type": "string",
+                "x-clicky-component": "es-param-field"
+              },
               "options": {
                 "description": "Selectable values; leave empty to ask the backend for its own distinct values",
                 "items": {
@@ -3173,6 +3179,15 @@
                 },
                 "title": "Options",
                 "type": "array",
+                "x-col-span": "full"
+              },
+              "where": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Constants the selection also requires, keyed by backend field — the key of a key/value tag list, whose value is what the operator picks; requires Nested",
+                "title": "Where",
+                "type": "object",
                 "x-col-span": "full"
               }
             },

@@ -200,6 +200,16 @@ func ProfileSource() Schema {
 						"description":        "Backend field the selection applies to — the indexed field for a document store, the result column for SQL; required only when the column implies none",
 						"x-clicky-component": "es-param-field",
 					},
+					"nested": Schema{
+						"type": "string", "title": "Nested",
+						"description":        "The `nested` mapping the field lives inside; a selection on such a field is compiled inside a nested query, and a flat clause on one matches nothing",
+						"x-clicky-component": "es-param-field",
+					},
+					"where": Schema{
+						"type": "object", "title": "Where", "x-col-span": "full",
+						"additionalProperties": Schema{"type": "string"},
+						"description":          "Constants the selection also requires, keyed by backend field — the key of a key/value tag list, whose value is what the operator picks; requires Nested",
+					},
 					"kind": Schema{
 						"type": "string", "title": "Kind", "enum": query.ColumnFilterKindValues(),
 						"x-enum-labels": map[string]string{

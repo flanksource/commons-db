@@ -289,6 +289,13 @@ func mergeRange(into *query.ColumnFilterValue, next query.ColumnFilterValue) err
 
 // sqlFieldPredicate is the clause one backend field contributes.
 func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squirrel.Sqlizer, error) {
+	// A SQL result is rows of columns; there is no entry inside a row to scope a
+	// selection to. Dropping the container silently would widen the selection to
+	// the whole row, which is the wrong rows rather than fewer of them.
+	if filter.Nested != "" {
+		return nil, fmt.Errorf(
+			"field %q is scoped to nested %q, which SQL has no equivalent of", filter.Field, filter.Nested)
+	}
 	column, err := dialect.quote(filter.Field)
 	if err != nil {
 		return nil, err

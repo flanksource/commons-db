@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -240,6 +241,7 @@ func (h *connectionBrowserHandler) browserFilterColumns(
 	descriptor browserDescriptor,
 	options map[string]any,
 	echoed []browserColumn,
+	requested []string,
 ) ([]query.ColumnDef, error) {
 	if descriptor.Provider != "opensearch" {
 		return browserColumnDefs(echoed), nil
@@ -256,7 +258,22 @@ func (h *connectionBrowserHandler) browserFilterColumns(
 	if err != nil {
 		return nil, err
 	}
-	return openSearchFilterColumns(fields), nil
+	shape, err := h.openSearchSampleShape(r.Context(), searcher, index, fields)
+	if err != nil {
+		return nil, err
+	}
+	return openSearchFilterColumns(fields, shape, requested), nil
+}
+
+// browserFilterColumnNames reads the columns a selection binds to out of its
+// request keys, which carry the same "filter." prefix a stored profile's do.
+func browserFilterColumnNames(filters map[string]string) []string {
+	names := make([]string, 0, len(filters))
+	for key := range filters {
+		names = append(names, strings.TrimPrefix(key, "filter."))
+	}
+	sort.Strings(names)
+	return names
 }
 
 // browserFilterInput turns the browser's flat selection into the input the
@@ -327,7 +344,8 @@ func (h *connectionBrowserHandler) serveFilterValues(w http.ResponseWriter, r *h
 		delete(request.Options, key)
 	}
 
-	columns, err := h.browserFilterColumns(r, conn, descriptor, request.Options, request.Columns)
+	requested := append(browserFilterColumnNames(request.Filters), strings.TrimPrefix(request.FilterKey, "filter."))
+	columns, err := h.browserFilterColumns(r, conn, descriptor, request.Options, request.Columns, requested)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return

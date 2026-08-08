@@ -149,17 +149,31 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 		return ColumnFilterBinding{}, false, nil
 	}
 
-	field, declared, ok, err := columnFilterField(column)
+	target, declared, ok, err := columnFilterTarget(column)
 	if err != nil {
 		return ColumnFilterBinding{}, false, err
 	}
 	if !ok {
 		return ColumnFilterBinding{}, false, nil
 	}
+	nested, where, nestable, err := resolveColumnNesting(column, target)
+	if err != nil {
+		return ColumnFilterBinding{}, false, err
+	}
+	// A path that picks an entry of a container nobody declared as nested cannot
+	// be pushed down at all — see resolveColumnNesting.
+	if !nestable {
+		return ColumnFilterBinding{}, false, nil
+	}
+	owner := fmt.Sprintf("column %q", column.Name)
+	if err := validateNestedProvider(profile.Provider.Type, owner, nested); err != nil {
+		return ColumnFilterBinding{}, false, err
+	}
+	field := target.Field
 	// A declared field is taken as written; only an inferred one still passes
 	// through the provider's own naming.
 	if declared {
-		if err := validateSQLFilterField(profile.Provider.Type, fmt.Sprintf("column %q", column.Name), field); err != nil {
+		if err := validateSQLFilterField(profile.Provider.Type, owner, field); err != nil {
 			return ColumnFilterBinding{}, false, err
 		}
 	} else {
@@ -170,6 +184,9 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 			return ColumnFilterBinding{}, false, nil
 		}
 	}
+	if err := validateNestedField(column.Name, field, nested); err != nil {
+		return ColumnFilterBinding{}, false, err
+	}
 
 	label := column.Label
 	if label == "" {
@@ -179,6 +196,8 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 		Column: column.Name,
 		Key:    columnFilterPrefix + column.Name,
 		Field:  field,
+		Nested: nested,
+		Where:  where,
 		Label:  label,
 		Kind:   kind.Normalized(),
 		// Only a value selection holds several values. A range, a time bound, a

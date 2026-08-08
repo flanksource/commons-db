@@ -131,11 +131,15 @@ export function ProfileFieldEditorForm({
             value={field.jsonpath ?? ""}
             onChange={(next) => onChange({ jsonpath: next || undefined })}
             // This editor owns the whole column, so a path picked out of a
-            // JSON-encoded column can set the Source it needs in the same edit
-            // rather than leaving the author to pair the two by hand.
+            // JSON-encoded column sets the Source it needs in the same edit
+            // rather than leaving the author to pair the two by hand. A path
+            // picked outside one clears it: alongside a jsonpath, Source is the
+            // root, and a stale root re-roots the new path at a column it was
+            // never written against.
             onSelectPath={(next, { root }) =>
-              onChange({ jsonpath: next || undefined, ...(root ? { source: root } : {}) })
+              onChange({ jsonpath: next || undefined, source: root })
             }
+            {...(field.source ? { source: field.source } : {})}
             {...(rows.length === 0 ? {} : { json: rows[0], rows })}
             evaluate={evaluateJsonPath}
           />

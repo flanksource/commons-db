@@ -342,3 +342,115 @@ var _ = Describe("FilterOpenSearch", func() {
 		Expect(err).To(MatchError(ContainSubstring("decode OpenSearch query")))
 	})
 })
+
+// A `nested` field's entries are indexed as separate documents. A flat clause on
+// one matches no parent document at all, and a pair of flat clauses on a plain
+// array of objects matches documents carrying the key on one entry and the value
+// on another — so the wrapper is not a refinement, it is the difference between
+// the right rows and no rows or the wrong ones.
+var _ = Describe("nested column filters", func() {
+	tagFilter := func(values ...string) query.ColumnFilterValue {
+		return query.ColumnFilterValue{
+			Field: "tags.value", Nested: "tags", Where: map[string]string{"tags.key": "app"},
+			Kind: query.ColumnFilterKindTerms, Include: values,
+		}
+	}
+
+	It("pins the entry beside the selection inside one nested query", func() {
+		filtered, err := FilterOpenSearch("", []query.ColumnFilterValue{tagFilter("web", "api")})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(filtered).To(MatchJSON(`{"query":{"bool":{"filter":[
+			{"match_all":{}},
+			{"nested":{"path":"tags","query":{"bool":{"filter":[
+				{"term":{"tags.key":"app"}},
+				{"terms":{"tags.value":["web","api"]}}
+			]}}}}
+		]}}}`))
+	})
+
+	// "not app=legacy" is a statement about the document: no entry of it is
+	// app=legacy. Inverting inside the wrapper would ask for an entry that is not,
+	// which every document with a second tag satisfies.
+	It("inverts the whole wrapper for an exclusion", func() {
+		excluded := tagFilter()
+		excluded.Exclude = []string{"legacy"}
+		filtered, err := FilterOpenSearch("", []query.ColumnFilterValue{excluded})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(filtered).To(MatchJSON(`{"query":{"bool":{
+			"filter":[{"match_all":{}}],
+			"must_not":[{"nested":{"path":"tags","query":{"bool":{"filter":[
+				{"term":{"tags.key":"app"}},
+				{"terms":{"tags.value":["legacy"]}}
+			]}}}}]
+		}}}`))
+	})
+
+	// One entry cannot be keyed both "app" and "env", so folding these into one
+	// wrapper would ask for a tag that cannot exist.
+	It("gives two entries of one container a wrapper each", func() {
+		env := tagFilter()
+		env.Where = map[string]string{"tags.key": "env"}
+		env.Include = []string{"prod"}
+		filtered, err := FilterOpenSearch("", []query.ColumnFilterValue{tagFilter("web"), env})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(filtered).To(MatchJSON(`{"query":{"bool":{"filter":[
+			{"match_all":{}},
+			{"nested":{"path":"tags","query":{"bool":{"filter":[
+				{"term":{"tags.key":"app"}},{"terms":{"tags.value":["web"]}}
+			]}}}},
+			{"nested":{"path":"tags","query":{"bool":{"filter":[
+				{"term":{"tags.key":"env"}},{"terms":{"tags.value":["prod"]}}
+			]}}}}
+		]}}}`))
+	})
+
+	It("merges two selections that pin the same entry", func() {
+		second := tagFilter("api")
+		filtered, err := FilterOpenSearch("", []query.ColumnFilterValue{tagFilter("web"), second})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(filtered).To(MatchJSON(`{"query":{"bool":{"filter":[
+			{"match_all":{}},
+			{"nested":{"path":"tags","query":{"bool":{"filter":[
+				{"term":{"tags.key":"app"}},{"terms":{"tags.value":["web","api"]}}
+			]}}}}
+		]}}}`))
+	})
+
+	It("leaves a flat selection beside a nested one unwrapped", func() {
+		filtered, err := FilterOpenSearch("", []query.ColumnFilterValue{
+			tagFilter("web"),
+			{Field: "region", Kind: query.ColumnFilterKindTerms, Include: []string{"eu"}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(filtered).To(MatchJSON(`{"query":{"bool":{"filter":[
+			{"match_all":{}},
+			{"nested":{"path":"tags","query":{"bool":{"filter":[
+				{"term":{"tags.key":"app"}},{"terms":{"tags.value":["web"]}}
+			]}}}},
+			{"terms":{"region":["eu"]}}
+		]}}}`))
+	})
+
+	It("wraps a range the same way a value selection is wrapped", func() {
+		filtered, err := FilterOpenSearch("", []query.ColumnFilterValue{{
+			Field: "tags.weight", Nested: "tags", Where: map[string]string{"tags.key": "load"},
+			Kind:  query.ColumnFilterKindRange,
+			Range: &query.FilterRange{Min: &query.FilterBound{Value: 3.0, Inclusive: true}},
+		}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(filtered).To(MatchJSON(`{"query":{"bool":{"filter":[
+			{"match_all":{}},
+			{"nested":{"path":"tags","query":{"bool":{"filter":[
+				{"term":{"tags.key":"load"}},
+				{"range":{"tags.weight":{"gte":3}}}
+			]}}}}
+		]}}}`))
+	})
+
+	It("refuses a field its container does not hold", func() {
+		_, err := FilterOpenSearch("", []query.ColumnFilterValue{{
+			Field: "labels.app", Nested: "tags", Kind: query.ColumnFilterKindTerms, Include: []string{"web"},
+		}})
+		Expect(err).To(MatchError(ContainSubstring(`field "labels.app" is not inside nested "tags"`)))
+	})
+})

@@ -66,6 +66,20 @@ func TermsClause(field string, values []any) map[string]any {
 	return map[string]any{"terms": map[string]any{field: values}}
 }
 
+// NestedClause scopes clauses to one entry of a `nested` field.
+//
+// Everything inside has to be satisfied by the same entry, which is the whole
+// point: it is what keeps the key and the value of a tag from being matched
+// against different tags of the same document. A clause on such a field written
+// without this wrapper is not merely less precise — it matches nothing at all,
+// because OpenSearch indexes each entry as its own hidden document.
+func NestedClause(path string, clauses []any) map[string]any {
+	return map[string]any{"nested": map[string]any{
+		"path":  path,
+		"query": map[string]any{"bool": map[string]any{"filter": clauses}},
+	}}
+}
+
 func RangeClause(field string, bounds RangeBounds) map[string]any {
 	body := map[string]any{}
 	for _, bound := range []struct {

@@ -138,6 +138,128 @@ func TestOpenSearchRefusesToFilterFieldsThatMeanTwoThings(t *testing.T) {
 	}
 }
 
+func contained(name, kind, container, containerType string, searchable, aggregatable bool) opensearchinspect.Field {
+	field := mapping(name, kind, searchable, aggregatable)
+	field.Container, field.ContainerType = container, containerType
+	return field
+}
+
+func filterOf(columns []query.ColumnDef, name string) *query.ColumnFilterDef {
+	for _, column := range columns {
+		if column.Name == name {
+			return column.Filter
+		}
+	}
+	return nil
+}
+
+// The leaves of a `nested` tag list and of a plain array of objects are reported
+// identically by the mapping. Their parents are not, and that is the whole of
+// the difference: one can be narrowed correlatedly, the other cannot be narrowed
+// at all.
+func TestOpenSearchContainersDecideWhatALeafCanBeNarrowedBy(t *testing.T) {
+	fields := []opensearchinspect.Field{
+		mapping("tags", "nested", false, false),
+		contained("tags.key", "keyword", "tags", opensearchinspect.ContainerNested, true, true),
+		contained("tags.value", "keyword", "tags", opensearchinspect.ContainerNested, true, true),
+		mapping("otel", "object", false, false),
+		contained("otel.key", "keyword", "otel", opensearchinspect.ContainerObject, true, true),
+		contained("otel.value", "keyword", "otel", opensearchinspect.ContainerObject, true, true),
+		mapping("labels", "object", false, false),
+		contained("labels.app", "keyword", "labels", opensearchinspect.ContainerObject, true, true),
+	}
+	rows := []query.Row{{
+		"tags":   []any{map[string]any{"key": "app", "value": "web"}},
+		"otel":   []any{map[string]any{"key": "app", "value": "web"}},
+		"labels": map[string]any{"app": "web"},
+	}}
+	columns := openSearchFilterColumns(fields, openSearchDocumentShape(rows, fields), nil)
+
+	if got := filterOf(columns, "tags.value"); got == nil || got.Disabled || got.Nested != "tags" {
+		t.Errorf("a nested leaf must be narrowed inside its container, got %+v", got)
+	}
+	// Two selections here would be matched against different entries of the same
+	// document, so it answers with the wrong rows rather than fewer of them.
+	if got := filterOf(columns, "otel.key"); got == nil || !got.Disabled {
+		t.Errorf("a leaf of a repeated object must offer no filter, got %+v", got)
+	}
+	// The same mapping, but the documents hold one object rather than a list of
+	// them, so its leaves address the document directly.
+	if got := filterOf(columns, "labels.app"); got == nil || got.Disabled || got.Nested != "" {
+		t.Errorf("a leaf of a plain object stays filterable, got %+v", got)
+	}
+}
+
+// A flat_object reports only its root: the sub-keys are in no mapping, and
+// asking for one by name reports it present whether or not any document has it.
+// So the documents are the only source for which sub-keys exist, and the root is
+// the only field the mapping can speak for.
+func TestOpenSearchFlatObjectSubKeysComeFromTheDocuments(t *testing.T) {
+	fields := []opensearchinspect.Field{
+		mapping("attrs", "flat_object", true, false),
+		mapping("service", "keyword", true, true),
+	}
+	rows := []query.Row{{
+		"service": "payments",
+		"attrs":   map[string]any{"app": "web", "code": 200, "http": map[string]any{"method": "GET"}},
+	}}
+	columns := openSearchBrowserColumns(rows, fields)
+
+	// The root asks whether any value in the subtree matches — the one question a
+	// whole tag map can answer, since it has no doc values of its own.
+	root := filterOf(columns, "attrs")
+	if root == nil || root.Disabled || root.Kind != query.ColumnFilterKindTerms {
+		t.Fatalf("the flat_object root must offer a value selection, got %+v", root)
+	}
+	if root.Lookup == nil || *root.Lookup {
+		t.Errorf("a flat_object cannot be enumerated, got lookup %v", root.Lookup)
+	}
+
+	for name, path := range map[string]string{
+		"attrs.app":         `$["app"]`,
+		"attrs.code":        `$["code"]`,
+		"attrs.http.method": `$["http"]["method"]`,
+	} {
+		var found *query.ColumnDef
+		for i := range columns {
+			if columns[i].Name == name {
+				found = &columns[i]
+			}
+		}
+		if found == nil {
+			t.Errorf("sub-key %q was not discovered", name)
+			continue
+		}
+		if found.Source != "attrs" || found.JSONPath != path {
+			t.Errorf("%s reads %q from %q, want %q from \"attrs\"", name, found.JSONPath, found.Source, path)
+		}
+		// The jsonpath is what infers the backend field, and for a flat_object
+		// sub-key the dotted path and the indexed name are the same string.
+		target, ok := query.FilterTargetForJSONPath(found.JSONPath, found.Source)
+		if !ok || target.Field != name {
+			t.Errorf("%s infers field %q, want %q", name, target.Field, name)
+		}
+		if found.Filter == nil || found.Filter.Lookup == nil || *found.Filter.Lookup {
+			t.Errorf("%s must not offer a value list, got %+v", name, found.Filter)
+		}
+	}
+}
+
+// The console offers a sub-key it learned from a document and then names it
+// back. Refusing it at resolution time would withdraw the filter it was just
+// handed, so a name under a flat_object root is taken at face value.
+func TestOpenSearchResolvesARequestedFlatObjectSubKey(t *testing.T) {
+	fields := []opensearchinspect.Field{mapping("attrs", "flat_object", true, false)}
+	columns := openSearchFilterColumns(fields, openSearchShape{}, []string{"attrs.app", "nowhere.app"})
+
+	if got := filterOf(columns, "attrs.app"); got == nil || got.Disabled {
+		t.Errorf("a sub-key of a flat_object resolves, got %+v", got)
+	}
+	if got := filterOf(columns, "nowhere.app"); got == nil || !got.Disabled {
+		t.Errorf("a name under no mapped root offers no filter, got %+v", got)
+	}
+}
+
 // openSearchBackend answers a search and a field-caps lookup, recording the
 // query body it was searched with.
 func openSearchBackend(t *testing.T, fieldCaps string) (*httptest.Server, *map[string]any) {

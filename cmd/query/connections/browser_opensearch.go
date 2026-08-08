@@ -231,11 +231,23 @@ func (h *connectionBrowserHandler) executeOpenSearch(
 		return browserQueryResult{}, err
 	}
 
+	// Resolving a selection needs what the mapping cannot say — whether the
+	// container it names is repeated, and whether a flat_object really holds the
+	// sub-key it names — which is read from the documents. An unfiltered run
+	// resolves nothing, so it does not pay for the sample.
+	shape := openSearchShape{}
+	if len(request.Filters) > 0 {
+		if shape, err = h.openSearchSampleShape(r.Context(), searcher, index, fields); err != nil {
+			return browserQueryResult{}, err
+		}
+	}
+
 	// A selection narrows the query's result, so it is merged into the body the
 	// author already wrote rather than replacing it — the same merge a stored
 	// profile's filters go through, so the console and a profile cannot disagree
 	// about what a filter means.
-	profile := browserProfile(descriptor, conn, request.Query, request.Options, openSearchFilterColumns(fields))
+	profile := browserProfile(descriptor, conn, request.Query, request.Options,
+		openSearchFilterColumns(fields, shape, browserFilterColumnNames(request.Filters)))
 	filters, err := resolveBrowserFilters(profile, request.Filters)
 	if err != nil {
 		return browserQueryResult{}, err

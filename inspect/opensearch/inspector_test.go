@@ -47,6 +47,74 @@ func TestInspectorTargetsAndFields(t *testing.T) {
 	}
 }
 
+// The mapping is the only thing that tells a nested tag list apart from a plain
+// array of objects: their leaves are reported identically, and a selection that
+// reads one as the other either matches nothing or matches the wrong documents.
+func TestInspectorCarriesContainerToLeaves(t *testing.T) {
+	const caps = `{"fields":{
+		"tags":{"nested":{"searchable":false,"aggregatable":false}},
+		"tags.key":{"keyword":{"searchable":true,"aggregatable":true}},
+		"tags.value":{"keyword":{"searchable":true,"aggregatable":true}},
+		"otel":{"object":{"searchable":false,"aggregatable":false}},
+		"otel.key":{"keyword":{"searchable":true,"aggregatable":true}},
+		"labels":{"object":{"searchable":false,"aggregatable":false}},
+		"labels.app":{"text":{"searchable":true,"aggregatable":false}},
+		"labels.app.keyword":{"keyword":{"searchable":true,"aggregatable":true}},
+		"attrs":{"flat_object":{"searchable":true,"aggregatable":false}},
+		"spans":{"nested":{"searchable":false,"aggregatable":false}},
+		"spans.process":{"object":{"searchable":false,"aggregatable":false}},
+		"spans.process.name":{"keyword":{"searchable":true,"aggregatable":true}},
+		"mixed":{"object":{"searchable":false,"aggregatable":false},"nested":{"searchable":false,"aggregatable":false}},
+		"mixed.key":{"keyword":{"searchable":true,"aggregatable":true}},
+		"message":{"text":{"searchable":true,"aggregatable":false}}
+	}}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/logs/_field_caps" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(caps))
+	}))
+	defer server.Close()
+	client, err := opensearch.NewClient(opensearch.Config{Addresses: []string{server.URL}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspector, err := New(client, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := inspector.Fields(context.Background(), Target{Name: "logs", Kind: "index"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byName := make(map[string]Field, len(catalog.Fields))
+	for _, field := range catalog.Fields {
+		byName[field.Name] = field
+	}
+
+	for name, want := range map[string]Field{
+		"tags.key":           {Container: "tags", ContainerType: ContainerNested},
+		"otel.key":           {Container: "otel", ContainerType: ContainerObject},
+		"labels.app":         {Container: "labels", ContainerType: ContainerObject},
+		"labels.app.keyword": {Container: "labels", ContainerType: ContainerObject},
+		"spans.process.name": {Container: "spans.process", ContainerType: ContainerObject},
+		"mixed.key":          {Container: "", ContainerType: ""},
+		"message":            {Container: "", ContainerType: ""},
+		"attrs":              {Container: "", ContainerType: ""},
+	} {
+		got := byName[name]
+		if got.Container != want.Container || got.ContainerType != want.ContainerType {
+			t.Errorf("%s: container = %q/%q, want %q/%q",
+				name, got.Container, got.ContainerType, want.Container, want.ContainerType)
+		}
+	}
+	if !byName["tags.key"].Nested() || byName["otel.key"].Nested() {
+		t.Errorf("only a leaf under a nested mapping is nested: %#v %#v", byName["tags.key"], byName["otel.key"])
+	}
+}
+
 func TestInspectorRejectsInvalidTarget(t *testing.T) {
 	client, _ := opensearch.NewClient(opensearch.Config{Addresses: []string{"http://127.0.0.1:1"}})
 	inspector, _ := New(client, Options{})

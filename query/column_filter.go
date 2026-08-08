@@ -4,8 +4,6 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-
-	"github.com/flanksource/commons-db/context"
 )
 
 const columnFilterPrefix = "filter."
@@ -40,6 +38,26 @@ type ColumnFilterDef struct {
 	// store it is the indexed field; for SQL it is the result column the query
 	// returns. Required only when the column's own definition implies none.
 	Field string `json:"field,omitempty" yaml:"field,omitempty"`
+
+	// Nested names the `nested` mapping Field lives inside. A document store
+	// indexes each element of such a field as its own document, so a selection on
+	// one has to be compiled inside a nested query; a flat clause on it matches no
+	// document at all, and says nothing about why.
+	//
+	// It cannot be inferred from the column, because a tag list mapped `nested`
+	// and a plain array of objects report identical fields — only the index
+	// mapping tells them apart. Declare it for a profile; the connection browser
+	// reads it from the mapping itself.
+	Nested string `json:"nested,omitempty" yaml:"nested,omitempty"`
+
+	// Where pins the constants the selection also requires, keyed by backend
+	// field. It is what narrows to one entry of a key/value tag list: the key is
+	// fixed here and the value is what the operator picks.
+	//
+	// It requires Nested. Outside a nested query the two clauses are ANDed across
+	// the whole document, which matches a document carrying the key on one entry
+	// and the value on another — the wrong rows, returned confidently.
+	Where map[string]string `json:"where,omitempty" yaml:"where,omitempty"`
 
 	// Kind overrides the control and the value grammar. Empty derives it from
 	// Type: string, status and health select values; number, duration and bytes
@@ -81,6 +99,9 @@ func (d ColumnFilterDef) Validate(column string) error {
 	if !d.Kind.Valid() {
 		return fmt.Errorf("column %q filter kind %q is unsupported", column, d.Kind)
 	}
+	if err := d.validateNesting(column); err != nil {
+		return err
+	}
 	if d.Limit != nil {
 		if kind := d.Kind.Normalized(); kind != ColumnFilterKindTerms {
 			return fmt.Errorf("column %q filter limit requires a %q filter, not %q", column, ColumnFilterKindTerms, kind)
@@ -103,6 +124,41 @@ func (d ColumnFilterDef) Validate(column string) error {
 	return nil
 }
 
+// validateNesting rejects a nesting declaration no backend could apply. The
+// field/container relationship is checked here rather than at binding time
+// because both sides are the author's own words; the inferred field is checked
+// against them later, once it is known.
+func (d ColumnFilterDef) validateNesting(column string) error {
+	nested := strings.TrimSpace(d.Nested)
+	if nested == "" {
+		if len(d.Where) > 0 {
+			return fmt.Errorf(
+				"column %q filter sets where without nested; outside a nested query the constants are matched against the whole document rather than one entry of it",
+				column)
+		}
+		return nil
+	}
+	if field := strings.TrimSpace(d.Field); field != "" && !underNested(field, nested) {
+		return fmt.Errorf("column %q filter field %q is not inside nested %q", column, field, nested)
+	}
+	for field, value := range d.Where {
+		if !underNested(field, nested) {
+			return fmt.Errorf("column %q filter where field %q is not inside nested %q", column, field, nested)
+		}
+		if strings.TrimSpace(value) == "" {
+			return fmt.Errorf("column %q filter where field %q pins an empty value", column, field)
+		}
+	}
+	return nil
+}
+
+// underNested reports whether field is addressed through container. A document
+// store names a nested field's members by prefix, so the prefix is the whole
+// test — and the container itself is not one of its own members.
+func underNested(field, container string) bool {
+	return strings.HasPrefix(field, container+".")
+}
+
 // ColumnFilterBinding is one filterable column or param as every consumer sees
 // it: the request key it answers to, the backend field it applies to, and the
 // control it offers.
@@ -115,6 +171,10 @@ type ColumnFilterBinding struct {
 	Options []string
 	Lookup  bool
 	Multi   bool
+	// Nested and Where carry the container the selection is compiled inside and
+	// the constants that address one entry of it. See ColumnFilterDef.
+	Nested string
+	Where  map[string]string
 	// Limit is the author's declared cap on the lookup, or zero when they
 	// declared none. Zero is not "no values": it is what leaves the choice to
 	// whoever asks, which is why an inferred binding never fills it in.
@@ -155,6 +215,11 @@ type ColumnFilterValue struct {
 	Column string
 	Key    string
 	Field  string
+
+	// Nested and Where carry the container this selection is compiled inside and
+	// the constants that address one entry of it. See ColumnFilterDef.
+	Nested string
+	Where  map[string]string
 
 	// Kind is the grammar the value was parsed under and the one a provider
 	// compiles it back out of. Empty means a value selection.
@@ -294,215 +359,4 @@ func (p Profile) ColumnFilterKeys() (map[string]string, error) {
 		keys[binding.Column] = binding.Key
 	}
 	return keys, nil
-}
-
-// columnFilterField infers the backend field a column filters on and reports
-// whether the profile declared it outright. A declared field is taken as
-// written; an inferred one still passes through the provider's own naming.
-//
-// A column whose value is computed resolves to nothing and is silently left
-// unfilterable: the value exists only after the row was read, so there is no
-// backend field to push the selection down to, and an author who wants one says
-// so with filter.field. That covers a CEL expression which is not a plain row
-// lookup, and a JSONPath which selects rather than addresses — see
-// FilterFieldForJSONPath, which does reach the literal-key-chain paths.
-func columnFilterField(column ColumnDef) (field string, declared bool, ok bool, err error) {
-	if column.Filter != nil {
-		if declaredField := strings.TrimSpace(column.Filter.Field); declaredField != "" {
-			return declaredField, true, true, nil
-		}
-	}
-	if column.JSONPath != "" {
-		if field, ok := FilterFieldForJSONPath(column.JSONPath, column.Source); ok {
-			return field, false, true, nil
-		}
-		return "", false, false, nil
-	}
-	if column.Source != "" {
-		return column.Source, false, true, nil
-	}
-	expression := strings.TrimSpace(column.CEL)
-	if expression == "" {
-		if column.Name == "" {
-			return "", false, false, fmt.Errorf("column filter requires a name or an explicit filter field")
-		}
-		return column.Name, false, true, nil
-	}
-	if matches := directCELField.FindStringSubmatch(expression); len(matches) == 2 {
-		return matches[1], false, true, nil
-	}
-	if matches := indexedCELField.FindStringSubmatch(expression); len(matches) == 2 {
-		return matches[1], false, true, nil
-	}
-	return "", false, false, nil
-}
-
-func openTelemetryFilterField(profile Profile, inferred string) string {
-	if profile.Provider.Type != "opentelemetry" {
-		return inferred
-	}
-	defaults := map[string]string{
-		"timestamp":      "@timestamp",
-		"trace_id":       "trace_id",
-		"span_id":        "span_id",
-		"parent_id":      "parent_id",
-		"service":        "service_name",
-		"service_name":   "service_name",
-		"operation":      "operation_name",
-		"operation_name": "operation_name",
-	}
-	optionNames := map[string]string{
-		"timestamp":      "dateField",
-		"trace_id":       "traceIdField",
-		"span_id":        "spanIdField",
-		"parent_id":      "parentIdField",
-		"service":        "serviceField",
-		"service_name":   "serviceField",
-		"operation":      "operationField",
-		"operation_name": "operationField",
-	}
-	optionName, known := optionNames[inferred]
-	if !known {
-		return inferred
-	}
-	if configured, ok := profile.Provider.Options[optionName].(string); ok && strings.TrimSpace(configured) != "" {
-		return configured
-	}
-	return defaults[inferred]
-}
-
-// resolveProfileInput turns one request's input into the values exposed to the
-// query template and the native include/exclude clauses the provider applies.
-// Column filters (filter.<column>) and tri-state list params both land in the
-// same []ColumnFilterValue, so an exclusion has exactly one transport whichever
-// end of the profile declared it. Column filters come first, then params in
-// declaration order, so a request builds the same body every time.
-func resolveProfileInput(profile Profile, input map[string]any) (map[string]any, []ColumnFilterValue, error) {
-	profileParams, filters, err := partitionProfileInput(profile, input)
-	if err != nil {
-		return nil, nil, err
-	}
-	resolved, paramFilters, err := resolveParams(profile.Params, profileParams)
-	if err != nil {
-		return nil, nil, err
-	}
-	return resolved, append(filters, paramFilters...), nil
-}
-
-func partitionProfileInput(profile Profile, input map[string]any) (map[string]any, []ColumnFilterValue, error) {
-	bindings, err := profile.ColumnFilterBindings()
-	if err != nil {
-		return nil, nil, err
-	}
-	byKey := make(map[string]ColumnFilterBinding, len(bindings))
-	for _, binding := range bindings {
-		byKey[binding.Key] = binding
-	}
-	params := make(map[string]any, len(input))
-	values := make(map[string]ColumnFilterValue, len(bindings))
-	for key, value := range input {
-		if !strings.HasPrefix(key, columnFilterPrefix) {
-			params[key] = value
-			continue
-		}
-		binding, ok := byKey[key]
-		if !ok {
-			return nil, nil, fmt.Errorf("column filter %q is not supported by profile %q", key, profile.Name)
-		}
-		selection, err := parseColumnFilterSelection(binding.Kind, value)
-		if err != nil {
-			return nil, nil, fmt.Errorf("column filter %q: %w", key, err)
-		}
-		if selection.IsZero() {
-			continue
-		}
-		selection.Column, selection.Key, selection.Field = binding.Column, binding.Key, binding.Field
-		values[key] = selection
-	}
-	filters := make([]ColumnFilterValue, 0, len(values))
-	for _, binding := range bindings {
-		if value, ok := values[binding.Key]; ok {
-			filters = append(filters, value)
-		}
-	}
-	return params, filters, nil
-}
-
-func LookupFilterValues(ctx context.Context, profile Profile, input map[string]any, key, search string, limit int) ([]FilterOption, *Total, error) {
-	if err := profile.Validate(); err != nil {
-		return nil, nil, err
-	}
-	if profile.Namespace != "" {
-		ctx = ctx.WithNamespace(profile.Namespace)
-	}
-	resolved, filters, err := resolveProfileInput(profile, input)
-	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
-	}
-	binding, err := profile.filterBinding(key)
-	if err != nil {
-		return nil, nil, err
-	}
-	if !binding.Kind.Lookupable() {
-		return nil, nil, fmt.Errorf("filter %q is a %s filter and has no values to list", key, binding.Kind.Normalized())
-	}
-	// A declared limit narrows what the caller asked for; it never widens it.
-	// The guard is on the binding rather than the caller because a binding
-	// nobody declared — every inferred one, and every one the connection browser
-	// builds — must keep answering the size its caller chose.
-	if binding.Limit > 0 && (limit <= 0 || binding.Limit < limit) {
-		limit = binding.Limit
-	}
-	// An enumerated filter already carries the answer, so asking the backend
-	// would be a round trip whose result is sitting in the profile. It is
-	// deliberately served whole: `options` names the values that exist, so
-	// withholding some of them would answer a different question than the one
-	// the author wrote.
-	if len(binding.Options) > 0 {
-		options := make([]FilterOption, 0, len(binding.Options))
-		for _, option := range binding.Options {
-			if search == "" || strings.Contains(strings.ToLower(option), strings.ToLower(search)) {
-				options = append(options, FilterOption{Value: option})
-			}
-		}
-		// An enumerated filter is the whole set by construction, so the count is
-		// the number and not an estimate of it.
-		return options, &Total{Value: int64(len(options)), Exact: true}, nil
-	}
-	// The filter being looked up must not narrow its own options, or a chosen
-	// value would hide every alternative. Every other active selection — column
-	// or param — still scopes the question.
-	siblings := make([]ColumnFilterValue, 0, len(filters))
-	for _, filter := range filters {
-		if filter.Key != key {
-			siblings = append(siblings, filter)
-		}
-	}
-	provider, err := GetProvider(profile.Provider.Type)
-	if err != nil {
-		return nil, nil, err
-	}
-	lookup, ok := provider.(FilterLookupProvider)
-	if !ok {
-		return nil, nil, fmt.Errorf("provider %q does not support column filter lookups", profile.Provider.Type)
-	}
-	req, err := buildProviderRequest(ctx, profile.Provider, profile.Query, profile.Params, resolved)
-	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
-	}
-	req.Filters = siblings
-	return lookup.LookupFilterValues(ctx, req, binding, search, limit)
-}
-
-// ResolveColumnFilters resolves filter.<column> request values against a
-// profile's columns, for a caller that assembled the profile itself rather than
-// loading a stored one — the connection browser, which infers its columns from
-// the rows a first, unfiltered run returned. Params are not resolved here: an
-// assembled profile declares none.
-func ResolveColumnFilters(profile Profile, input map[string]any) ([]ColumnFilterValue, error) {
-	_, filters, err := partitionProfileInput(profile, input)
-	if err != nil {
-		return nil, err
-	}
-	return filters, nil
 }
