@@ -65,7 +65,32 @@ type Field struct {
 	Searchable   bool     `json:"searchable"`
 	Aggregatable bool     `json:"aggregatable"`
 	Conflicting  bool     `json:"conflicting,omitempty"`
+
+	// Container names the innermost object, nested or flat_object ancestor this
+	// field sits inside, and ContainerType is how that ancestor is mapped.
+	//
+	// They are carried down because the leaf alone cannot say how a selection on
+	// it behaves: `_field_caps` reports the key of a `nested` tag list and the key
+	// of a plain array of objects identically — both `keyword`, both searchable,
+	// both aggregatable — and the two need opposite treatment. Only the ancestor's
+	// own entry distinguishes them.
+	Container     string `json:"container,omitempty"`
+	ContainerType string `json:"containerType,omitempty"`
 }
+
+// Container mapping types. A field's ancestor is reduced to one of these, or to
+// the empty string when the field sits at the root of the document.
+const (
+	ContainerObject     = "object"
+	ContainerNested     = "nested"
+	ContainerFlatObject = "flat_object"
+)
+
+// Nested reports that a selection on this field must be compiled inside a nested
+// query to mean anything: OpenSearch indexes each element of a `nested` field as
+// its own document, so a flat clause on `tags.key` matches no parent document at
+// all — silently, with no error to read.
+func (f Field) Nested() bool { return f.ContainerType == ContainerNested }
 
 type FieldCatalog struct {
 	Target         Target  `json:"target"`
@@ -180,6 +205,17 @@ func (i *Inspector) Fields(ctx context.Context, target Target) (FieldCatalog, er
 		names = append(names, name)
 	}
 	sort.Strings(names)
+	// The container index is built from every field the mapping reports, not from
+	// the ones that survive the limit: a truncated ancestor would leave its leaves
+	// looking like root fields, which is the one reading that makes a nested tag
+	// list compile to a clause that matches nothing.
+	containers := containerTypes(names, func(name string) []string {
+		types := make([]string, 0, len(payload.Fields[name]))
+		for typ := range payload.Fields[name] {
+			types = append(types, typ)
+		}
+		return types
+	})
 	catalog := FieldCatalog{Target: target, Fields: make([]Field, 0, min(len(names), i.maxFields))}
 	for _, name := range names {
 		if len(catalog.Fields) >= i.maxFields {
@@ -196,9 +232,44 @@ func (i *Inspector) Fields(ctx context.Context, target Target) (FieldCatalog, er
 			aggregatable = aggregatable && capability.Aggregatable
 		}
 		sort.Strings(types)
-		catalog.Fields = append(catalog.Fields, Field{Name: name, Types: types, Searchable: searchable, Aggregatable: aggregatable, Conflicting: len(types) > 1})
+		field := Field{Name: name, Types: types, Searchable: searchable, Aggregatable: aggregatable, Conflicting: len(types) > 1}
+		field.Container, field.ContainerType = innermostContainer(name, containers)
+		catalog.Fields = append(catalog.Fields, field)
 	}
 	return catalog, nil
+}
+
+// containerTypes indexes the fields that hold other fields by how they are
+// mapped. A field reporting several types is left out: an ancestor that is a
+// nested list in one index behind a pattern and a plain object in another has no
+// single answer, and guessing one is how a selection ends up meaning different
+// things per index.
+func containerTypes(names []string, typesOf func(string) []string) map[string]string {
+	containers := make(map[string]string)
+	for _, name := range names {
+		types := typesOf(name)
+		if len(types) != 1 {
+			continue
+		}
+		switch types[0] {
+		case ContainerObject, ContainerNested, ContainerFlatObject:
+			containers[name] = types[0]
+		}
+	}
+	return containers
+}
+
+// innermostContainer names the closest ancestor of name that holds other fields.
+// Closest rather than outermost: `a.b.c` inside `a` (object) and `a.b` (nested)
+// is reached through the nested one, and it is the nested one that decides how a
+// clause on it must be written.
+func innermostContainer(name string, containers map[string]string) (string, string) {
+	for cut := strings.LastIndex(name, "."); cut > 0; cut = strings.LastIndex(name[:cut], ".") {
+		if kind, ok := containers[name[:cut]]; ok {
+			return name[:cut], kind
+		}
+	}
+	return "", ""
 }
 
 // kindRank orders the target kinds from most to least useful to pick.

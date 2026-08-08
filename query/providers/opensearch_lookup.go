@@ -41,6 +41,12 @@ func lookupOpenSearchFilterValues(ctx context.Context, searcher *opensearch.Sear
 		Search: search,
 		Limit:  limit,
 		Body:   body,
+		// A nested field's values live in entries the parent document does not
+		// carry, so the lookup has to descend the same way the filter does — and
+		// pin the same entry, or it would offer the values of every other tag as
+		// choices for this one.
+		Nested: binding.Nested,
+		Where:  binding.Where,
 	})
 	if err != nil {
 		return nil, nil, err

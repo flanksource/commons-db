@@ -129,6 +129,62 @@ func TestDistinctValuesScopesToTheRequestBody(t *testing.T) {
 	}
 }
 
+// A nested field's values live in entries the parent document does not carry, so
+// an aggregation that stays at the parent returns nothing at all — and one that
+// descends without pinning the entry offers the values of every other tag as
+// choices for this one.
+func TestDistinctValuesDescendsIntoOneEntryOfANestedField(t *testing.T) {
+	server, recorded := valuesServer(t, `{
+		"__clicky_values":{"doc_count":4,"__clicky_scope":{"doc_count":2,"__clicky_scope":{
+			"buckets":[{"key":"web","doc_count":9},{"key":"api","doc_count":4}]}}},
+		"__clicky_total":{"doc_count":4,"__clicky_scope":{"doc_count":2,"__clicky_scope":{"value":2}}}
+	}`)
+	defer server.Close()
+
+	searcher, ctx := newTestSearcher(t, server.URL)
+	result, err := searcher.DistinctValues(ctx, ValuesRequest{
+		Index: "traces-*", Field: "tags.value", Limit: 25,
+		Nested: "tags", Where: map[string]string{"tags.key": "app"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := ValuesResult{Values: []Value{{Value: "web", Count: 9}, {Value: "api", Count: 4}}, Total: 2}
+	if !reflect.DeepEqual(result, want) {
+		t.Fatalf("got %#v, want %#v", result, want)
+	}
+
+	values := (*recorded)["aggregations"].(map[string]any)["__clicky_values"].(map[string]any)
+	nested, ok := values["nested"].(map[string]any)
+	if !ok || nested["path"] != "tags" {
+		t.Fatalf("the aggregation must descend into the nested field, got %v", values)
+	}
+	entry := values["aggregations"].(map[string]any)["__clicky_scope"].(map[string]any)
+	pinned := entry["filter"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
+	if len(pinned) != 1 || !reflect.DeepEqual(pinned[0], map[string]any{
+		"term": map[string]any{"tags.key": "app"},
+	}) {
+		t.Fatalf("the entry must be pinned by the constants, got %v", pinned)
+	}
+	terms := entry["aggregations"].(map[string]any)["__clicky_scope"].(map[string]any)["terms"].(map[string]any)
+	if terms["field"] != "tags.value" || terms["size"] != float64(25) {
+		t.Fatalf("unexpected terms aggregation: %v", terms)
+	}
+}
+
+func TestDistinctValuesRejectsPinningWithoutANestedField(t *testing.T) {
+	server, _ := valuesServer(t, `{}`)
+	defer server.Close()
+
+	searcher, ctx := newTestSearcher(t, server.URL)
+	_, err := searcher.DistinctValues(ctx, ValuesRequest{
+		Index: "traces-*", Field: "tags.value", Where: map[string]string{"tags.key": "app"},
+	})
+	if err == nil {
+		t.Fatal("expected an error for constants with no entry to scope them to")
+	}
+}
+
 func TestDistinctValuesRejectsAnEmptyField(t *testing.T) {
 	server, _ := valuesServer(t, `{}`)
 	defer server.Close()

@@ -31,10 +31,18 @@ type sampleJSONPathRequest struct {
 // Matches carries every match rather than the 0/1/N collapse a column cell gets,
 // so an author can tell "selected nothing" from "selected one null".
 type sampleJSONPathResponse struct {
-	Matches     []any  `json:"matches"`
-	Count       int    `json:"count"`
-	Error       string `json:"error,omitempty"`
-	FilterField string `json:"filterField,omitempty"`
+	Matches []any  `json:"matches"`
+	Count   int    `json:"count"`
+	Error   string `json:"error,omitempty"`
+
+	// FilterField, FilterNested and FilterWhere are the pushdown the path buys.
+	// A path that picks one entry of a repeated field reports the container it
+	// picks from, because the author has to declare that container as `nested`
+	// before the selection can be applied — the preview is where they find that
+	// out, rather than after saving a column whose filter silently went missing.
+	FilterField  string            `json:"filterField,omitempty"`
+	FilterNested string            `json:"filterNested,omitempty"`
+	FilterWhere  map[string]string `json:"filterWhere,omitempty"`
 }
 
 func newSampleJSONPathHandler(prefix string, next http.Handler) *sampleJSONPathHandler {
@@ -70,8 +78,10 @@ func (h *sampleJSONPathHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	} else {
 		response.Matches = matches
 		response.Count = len(matches)
-		if field, ok := query.FilterFieldForJSONPath(expression, request.Source); ok {
-			response.FilterField = field
+		if target, ok := query.FilterTargetForJSONPath(expression, request.Source); ok {
+			response.FilterField = target.Field
+			response.FilterNested = target.Container
+			response.FilterWhere = target.Where
 		}
 	}
 

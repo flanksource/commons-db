@@ -3,6 +3,7 @@ package providers
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/flanksource/commons-db/query"
@@ -137,26 +138,60 @@ type openSearchFieldFilter struct {
 	kind query.ColumnFilterKind
 }
 
+// openSearchScope is the selections that share one compilation context: the
+// whole document, or one entry of a `nested` field picked out by the constants
+// in where.
+//
+// Two selections on the same nested path that pin different entries are separate
+// scopes, because one entry cannot carry both — folding them together would ask
+// for a tag whose key is at once "app" and "env" and match nothing.
+type openSearchScope struct {
+	nested string
+	where  map[string]string
+	order  []string
+	fields map[string]*openSearchFieldFilter
+}
+
+// scopeKey identifies the compilation context a selection belongs to. The where
+// constants are sorted into it so two selections that pin the same entry share a
+// scope however their maps happened to be ordered.
+func scopeKey(filter query.ColumnFilterValue) string {
+	if filter.Nested == "" {
+		return ""
+	}
+	pinned := make([]string, 0, len(filter.Where))
+	for field, value := range filter.Where {
+		pinned = append(pinned, field+"="+value)
+	}
+	sort.Strings(pinned)
+	return filter.Nested + "\x00" + strings.Join(pinned, "\x00")
+}
+
 // openSearchFilterClauses folds the selections into bool clauses grouped by
-// field, in first-seen order so a body is byte-stable across runs. Every field
-// contributes at most one filter clause and at most one must_not clause,
-// whatever kind it was selected under.
+// scope and then by field, in first-seen order so a body is byte-stable across
+// runs. Every field contributes at most one filter clause and at most one
+// must_not clause, whatever kind it was selected under.
 func openSearchFilterClauses(filters []query.ColumnFilterValue) (includes, excludes []any, err error) {
 	order := make([]string, 0, len(filters))
-	byField := make(map[string]*openSearchFieldFilter, len(filters))
+	scopes := make(map[string]*openSearchScope, len(filters))
 	for _, filter := range filters {
-		accumulated, seen := byField[filter.Field]
+		key := scopeKey(filter)
+		scope, seen := scopes[key]
 		if !seen {
-			accumulated = &openSearchFieldFilter{field: filter.Field, kind: filter.Kind}
-			byField[filter.Field] = accumulated
-			order = append(order, filter.Field)
+			scope = &openSearchScope{
+				nested: filter.Nested,
+				where:  filter.Where,
+				fields: make(map[string]*openSearchFieldFilter),
+			}
+			scopes[key] = scope
+			order = append(order, key)
 		}
-		if err := accumulated.add(filter); err != nil {
+		if err := scope.add(filter); err != nil {
 			return nil, nil, err
 		}
 	}
-	for _, field := range order {
-		include, exclude, err := byField[field].clauses()
+	for _, key := range order {
+		include, exclude, err := scopes[key].clauses()
 		if err != nil {
 			return nil, nil, err
 		}
@@ -164,6 +199,66 @@ func openSearchFilterClauses(filters []query.ColumnFilterValue) (includes, exclu
 		excludes = append(excludes, exclude...)
 	}
 	return includes, excludes, nil
+}
+
+func (s *openSearchScope) add(filter query.ColumnFilterValue) error {
+	if s.nested != "" && !strings.HasPrefix(filter.Field, s.nested+".") {
+		return fmt.Errorf("field %q is not inside nested %q", filter.Field, s.nested)
+	}
+	accumulated, seen := s.fields[filter.Field]
+	if !seen {
+		accumulated = &openSearchFieldFilter{field: filter.Field, kind: filter.Kind}
+		s.fields[filter.Field] = accumulated
+		s.order = append(s.order, filter.Field)
+	}
+	return accumulated.add(filter)
+}
+
+// clauses renders the scope, wrapping each clause in a nested query when it
+// selects inside a repeated field.
+//
+// The wrapping is per clause rather than around the lot: a nested query asks
+// whether *one* entry satisfies everything inside it, so two include clauses in
+// one wrapper would demand a single entry carrying both, while two wrappers ask
+// for an entry each — which is what two filters on one document mean everywhere
+// else. Exclusions invert the whole wrapper, so "not app=legacy" reads as "no
+// entry of this document is app=legacy" rather than "some entry is not".
+func (s *openSearchScope) clauses() (includes, excludes []any, err error) {
+	for _, field := range s.order {
+		include, exclude, err := s.fields[field].clauses()
+		if err != nil {
+			return nil, nil, err
+		}
+		includes = append(includes, include...)
+		excludes = append(excludes, exclude...)
+	}
+	if s.nested == "" {
+		return includes, excludes, nil
+	}
+	pinned := s.pinnedClauses()
+	wrap := func(clauses []any) []any {
+		wrapped := make([]any, 0, len(clauses))
+		for _, clause := range clauses {
+			wrapped = append(wrapped, esdsl.NestedClause(s.nested, append(append([]any{}, pinned...), clause)))
+		}
+		return wrapped
+	}
+	return wrap(includes), wrap(excludes), nil
+}
+
+// pinnedClauses renders the constants that pick the entry, in field order so a
+// body is byte-stable across runs.
+func (s *openSearchScope) pinnedClauses() []any {
+	fields := make([]string, 0, len(s.where))
+	for field := range s.where {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+	pinned := make([]any, 0, len(fields))
+	for _, field := range fields {
+		pinned = append(pinned, esdsl.TermClause(field, s.where[field]))
+	}
+	return pinned
 }
 
 func (f *openSearchFieldFilter) add(filter query.ColumnFilterValue) error {

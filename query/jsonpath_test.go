@@ -7,29 +7,69 @@ import (
 	"github.com/flanksource/commons-db/query"
 )
 
-var _ = DescribeTable("FilterFieldForJSONPath",
-	func(source, path, expected string) {
-		field, ok := query.FilterFieldForJSONPath(path, source)
-		Expect(ok).To(Equal(expected != ""))
-		Expect(field).To(Equal(expected))
+var _ = DescribeTable("FilterTargetForJSONPath",
+	func(source, path string, expected query.JSONPathFilterTarget) {
+		target, ok := query.FilterTargetForJSONPath(path, source)
+		Expect(ok).To(Equal(expected.Field != ""))
+		Expect(target).To(Equal(expected))
 	},
 	Entry("a row-rooted literal chain names the nested field",
-		"", "$.metadata.user.email", "metadata.user.email"),
+		"", "$.metadata.user.email", query.JSONPathFilterTarget{Field: "metadata.user.email"}),
 	Entry("a source-rooted literal chain is prefixed by the source",
-		"metadata", "$.user.email", "metadata.user.email"),
+		"metadata", "$.user.email", query.JSONPathFilterTarget{Field: "metadata.user.email"}),
 	Entry("bracket notation reads the same as dotted notation",
-		"", `$["metadata"]["user"]["email"]`, "metadata.user.email"),
+		"", `$["metadata"]["user"]["email"]`, query.JSONPathFilterTarget{Field: "metadata.user.email"}),
 	Entry("a single-segment path under a source names one nested field",
-		"payload", "$.status", "payload.status"),
+		"payload", "$.status", query.JSONPathFilterTarget{Field: "payload.status"}),
 	Entry("a bare root under a source is the source itself",
-		"payload", "$", "payload"),
-	Entry("a filter expression selects rows rather than naming a field",
-		"tags", "$[?(@.key == 'http.status')].value", ""),
-	Entry("a wildcard names no single field", "", "$.metadata.*", ""),
-	Entry("a descent names no single field", "", "$..email", ""),
-	Entry("an array index names no backend field", "tags", "$[0].value", ""),
-	Entry("a bare root with no source names nothing", "", "$", ""),
-	Entry("an unparseable path names nothing", "", "$.[", ""),
+		"payload", "$", query.JSONPathFilterTarget{Field: "payload"}),
+
+	Entry("a key equality addresses one entry of a tag list",
+		"", "$.tags[?(@.key == 'http.status')].value", query.JSONPathFilterTarget{
+			Field: "tags.value", Container: "tags",
+			Where: map[string]string{"tags.key": "http.status"},
+		}),
+	Entry("the tag list may be the source column",
+		"tags", "$[?(@.key == 'env')].value", query.JSONPathFilterTarget{
+			Field: "tags.value", Container: "tags",
+			Where: map[string]string{"tags.key": "env"},
+		}),
+	Entry("the literal may be written on the left",
+		"", "$.tags[?('env' == @.key)].value", query.JSONPathFilterTarget{
+			Field: "tags.value", Container: "tags",
+			Where: map[string]string{"tags.key": "env"},
+		}),
+	Entry("a conjunction pins every constant it names",
+		"", "$.tags[?(@.key == 'env' && @.type == 'str')].value", query.JSONPathFilterTarget{
+			Field: "tags.value", Container: "tags",
+			Where: map[string]string{"tags.key": "env", "tags.type": "str"},
+		}),
+	Entry("a deep container is addressed by its full path",
+		"", "$.process.tags[?(@.key == 'host')].value", query.JSONPathFilterTarget{
+			Field: "process.tags.value", Container: "process.tags",
+			Where: map[string]string{"process.tags.key": "host"},
+		}),
+
+	Entry("a filter selecting whole entries names no field",
+		"", "$.tags[?(@.key == 'env')]", query.JSONPathFilterTarget{}),
+	Entry("an inequality selects a range rather than one entry",
+		"", "$.tags[?(@.weight > 3)].value", query.JSONPathFilterTarget{}),
+	Entry("a disjunction selects more entries than the value came from",
+		"", "$.tags[?(@.key == 'env' || @.key == 'team')].value", query.JSONPathFilterTarget{}),
+	Entry("a filter with nothing ahead of it has no container",
+		"", "$[?(@.key == 'env')].value", query.JSONPathFilterTarget{}),
+	Entry("a second filter picks an entry of an entry",
+		"", "$.a[?(@.k == 'x')].b[?(@.k == 'y')].c", query.JSONPathFilterTarget{}),
+	Entry("a non-literal operand is not a constant",
+		"", "$.tags[?(@.key == @.value)].value", query.JSONPathFilterTarget{}),
+	Entry("a deep relative path is not a key of the entry",
+		"", "$.tags[?(@.meta.key == 'env')].value", query.JSONPathFilterTarget{}),
+
+	Entry("a wildcard names no single field", "", "$.metadata.*", query.JSONPathFilterTarget{}),
+	Entry("a descent names no single field", "", "$..email", query.JSONPathFilterTarget{}),
+	Entry("an array index names no backend field", "tags", "$[0].value", query.JSONPathFilterTarget{}),
+	Entry("a bare root with no source names nothing", "", "$", query.JSONPathFilterTarget{}),
+	Entry("an unparseable path names nothing", "", "$.[", query.JSONPathFilterTarget{}),
 )
 
 var _ = Describe("EvalJSONPath", func() {

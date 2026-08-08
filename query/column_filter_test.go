@@ -58,6 +58,77 @@ var _ = Describe("OpenSearch column filters", func() {
 		}))
 	})
 
+	Describe("a tag column reading one entry of a repeated field", func() {
+		tagColumn := func(filter *query.ColumnFilterDef) query.Profile {
+			return query.Profile{
+				Provider: query.ProviderConfig{Type: "opensearch"},
+				Columns: []query.ColumnDef{
+					{Name: "app", JSONPath: "$.tags[?(@.key == 'app')].value", Filter: filter},
+				},
+			}
+		}
+
+		It("pushes the selection down when the container is declared nested", func() {
+			bindings, err := tagColumn(&query.ColumnFilterDef{Nested: "tags"}).ColumnFilterBindings()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bindings).To(Equal([]query.ColumnFilterBinding{{
+				Column: "app", Key: "filter.app", Field: "tags.value", Label: "app",
+				Nested: "tags", Where: map[string]string{"tags.key": "app"},
+				Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true,
+			}}))
+		})
+
+		// Without a nested mapping the key and the value are matched against the
+		// whole document, so a document tagged app=web and env=prod would answer a
+		// request for app=prod. Offering no filter is the only honest reading.
+		It("offers no filter when the container is not declared nested", func() {
+			bindings, err := tagColumn(nil).ColumnFilterBindings()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bindings).To(BeEmpty())
+		})
+
+		It("refuses a nested declaration naming a different container", func() {
+			_, err := tagColumn(&query.ColumnFilterDef{Nested: "process.tags"}).ColumnFilterBindings()
+			Expect(err).To(MatchError(ContainSubstring(`declares nested "process.tags" but its jsonpath picks an entry of "tags"`)))
+		})
+
+		It("refuses a where beside a path that already pins one", func() {
+			_, err := tagColumn(&query.ColumnFilterDef{
+				Nested: "tags", Where: map[string]string{"tags.key": "env"},
+			}).ColumnFilterBindings()
+			Expect(err).To(MatchError(ContainSubstring("already pins tags.key")))
+		})
+
+		It("refuses a container on a provider with no notion of one", func() {
+			profile := query.Profile{
+				Provider: query.ProviderConfig{Type: "postgres"},
+				Columns: []query.ColumnDef{
+					{Name: "app", Filter: &query.ColumnFilterDef{Field: "tags.value", Nested: "tags"}},
+				},
+			}
+			_, err := profile.ColumnFilterBindings()
+			Expect(err).To(MatchError(ContainSubstring(`nested "tags", which provider "postgres" has no equivalent of`)))
+		})
+
+		It("refuses a field its declared container does not hold", func() {
+			profile := query.Profile{
+				Provider: query.ProviderConfig{Type: "opensearch"},
+				Columns: []query.ColumnDef{
+					{Name: "app", Filter: &query.ColumnFilterDef{Field: "labels.app", Nested: "tags"}},
+				},
+			}
+			_, err := profile.ColumnFilterBindings()
+			Expect(err).To(MatchError(ContainSubstring(`field "labels.app" is not inside nested "tags"`)))
+		})
+
+		It("refuses a where with no container to be scoped to", func() {
+			err := query.ColumnFilterDef{
+				Field: "tags.value", Where: map[string]string{"tags.key": "app"},
+			}.Validate("app")
+			Expect(err).To(MatchError(ContainSubstring("sets where without nested")))
+		})
+	})
+
 	It("keeps the provider's inferred field for a filter that only enumerates values", func() {
 		// The OpenTelemetry naming table applies to an inferred field, so a
 		// filter that declares options but no field must not lose it.
