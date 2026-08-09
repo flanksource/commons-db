@@ -1,5 +1,324 @@
 {
   "$defs": {
+    "azureloganalytics": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "opentelemetry": [
+                  "opentelemetry"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "end": {
+              "description": "Date math, for example now",
+              "title": "End",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Maximum number of rows",
+              "title": "Limit",
+              "type": "string"
+            },
+            "mapping": {
+              "description": "Maps source columns onto the canonical log fields",
+              "properties": {
+                "host": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Host",
+                  "type": "array"
+                },
+                "id": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Id",
+                  "type": "array"
+                },
+                "ignore": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Ignore",
+                  "type": "array"
+                },
+                "message": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Message",
+                  "type": "array"
+                },
+                "severity": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Severity",
+                  "type": "array"
+                },
+                "source": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Source",
+                  "type": "array"
+                },
+                "timestamp": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Timestamp",
+                  "type": "array"
+                }
+              },
+              "title": "Field mapping",
+              "type": "object"
+            },
+            "start": {
+              "description": "Date math, for example now-1h",
+              "title": "Start",
+              "type": "string"
+            },
+            "workspaceID": {
+              "description": "Log Analytics workspace the KQL query runs against",
+              "title": "Workspace ID",
+              "type": "string"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "azureloganalytics",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: azureloganalytics",
+      "type": "object"
+    },
+    "bigquery": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "opentelemetry": [
+                  "opentelemetry"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "mapping": {
+              "description": "Maps source columns onto the canonical log fields",
+              "properties": {
+                "host": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Host",
+                  "type": "array"
+                },
+                "id": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Id",
+                  "type": "array"
+                },
+                "ignore": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Ignore",
+                  "type": "array"
+                },
+                "message": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Message",
+                  "type": "array"
+                },
+                "severity": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Severity",
+                  "type": "array"
+                },
+                "source": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Source",
+                  "type": "array"
+                },
+                "timestamp": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Timestamp",
+                  "type": "array"
+                }
+              },
+              "title": "Field mapping",
+              "type": "object"
+            },
+            "project": {
+              "description": "Overrides the project on the connection",
+              "title": "Project",
+              "type": "string"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "bigquery",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: bigquery",
+      "type": "object"
+    },
     "clickhouse": {
       "properties": {
         "connection": {
@@ -12,14 +331,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -88,6 +422,352 @@
       "title": "Query provider: clickhouse",
       "type": "object"
     },
+    "cloudwatch": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "opentelemetry": [
+                  "opentelemetry"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "end": {
+              "description": "Date math, for example now",
+              "title": "End",
+              "type": "string"
+            },
+            "endpoint": {
+              "description": "Inline CloudWatch endpoint used instead of the region's AWS endpoint",
+              "title": "Endpoint",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            },
+            "limit": {
+              "description": "Maximum number of log lines",
+              "title": "Limit",
+              "type": "string"
+            },
+            "logGroup": {
+              "description": "Log group the Insights query runs against",
+              "title": "Log group",
+              "type": "string"
+            },
+            "mapping": {
+              "description": "Maps source columns onto the canonical log fields",
+              "properties": {
+                "host": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Host",
+                  "type": "array"
+                },
+                "id": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Id",
+                  "type": "array"
+                },
+                "ignore": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Ignore",
+                  "type": "array"
+                },
+                "message": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Message",
+                  "type": "array"
+                },
+                "severity": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Severity",
+                  "type": "array"
+                },
+                "source": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Source",
+                  "type": "array"
+                },
+                "timestamp": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Timestamp",
+                  "type": "array"
+                }
+              },
+              "title": "Field mapping",
+              "type": "object"
+            },
+            "region": {
+              "description": "Overrides the region on the connection",
+              "title": "Region",
+              "type": "string"
+            },
+            "start": {
+              "description": "Date math, for example now-1h. Defaults to now-1h — Insights requires a bounded range",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "cloudwatch",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: cloudwatch",
+      "type": "object"
+    },
+    "gcpcloudlogging": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "opentelemetry": [
+                  "opentelemetry"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "end": {
+              "description": "Date math, for example now",
+              "title": "End",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Maximum number of log entries",
+              "title": "Limit",
+              "type": "string"
+            },
+            "mapping": {
+              "description": "Maps source columns onto the canonical log fields",
+              "properties": {
+                "host": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Host",
+                  "type": "array"
+                },
+                "id": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Id",
+                  "type": "array"
+                },
+                "ignore": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Ignore",
+                  "type": "array"
+                },
+                "message": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Message",
+                  "type": "array"
+                },
+                "severity": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Severity",
+                  "type": "array"
+                },
+                "source": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Source",
+                  "type": "array"
+                },
+                "timestamp": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "title": "Timestamp",
+                  "type": "array"
+                }
+              },
+              "title": "Field mapping",
+              "type": "object"
+            },
+            "project": {
+              "description": "Overrides the project on the connection",
+              "title": "Project",
+              "type": "string"
+            },
+            "start": {
+              "description": "Date math, for example now-1h",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "gcpcloudlogging",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: gcpcloudlogging",
+      "type": "object"
+    },
     "http": {
       "properties": {
         "connection": {
@@ -100,14 +780,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -204,14 +899,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -311,6 +1021,153 @@
       "title": "Query provider: jaeger",
       "type": "object"
     },
+    "k8s": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch"
+                ],
+                "opentelemetry": [
+                  "opentelemetry"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "apiVersion": {
+              "title": "API version",
+              "type": "string"
+            },
+            "containers": {
+              "description": "Match expressions picking which containers of each pod are read",
+              "items": {
+                "type": "string"
+              },
+              "title": "Containers",
+              "type": "array"
+            },
+            "end": {
+              "description": "Date math, for example now",
+              "title": "End",
+              "type": "string"
+            },
+            "kind": {
+              "description": "Workload to read logs from; a workload resolves to its current pods",
+              "enum": [
+                "Pod",
+                "Deployment",
+                "StatefulSet",
+                "DaemonSet"
+              ],
+              "title": "Kind",
+              "type": "string"
+            },
+            "limit": {
+              "description": "Maximum number of log lines",
+              "title": "Limit",
+              "type": "string"
+            },
+            "name": {
+              "description": "Name of the workload",
+              "title": "Name",
+              "type": "string"
+            },
+            "namespace": {
+              "description": "Namespace of the workload",
+              "title": "Namespace",
+              "type": "string"
+            },
+            "pods": {
+              "description": "Resource selectors narrowing which of the workload's pods are read",
+              "items": {
+                "type": "object"
+              },
+              "title": "Pods",
+              "type": "array"
+            },
+            "start": {
+              "description": "Date math, for example now-1h",
+              "title": "Start",
+              "type": "string"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "k8s",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: k8s",
+      "type": "object"
+    },
     "loki": {
       "properties": {
         "connection": {
@@ -323,14 +1180,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -434,14 +1306,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -522,14 +1409,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -1544,14 +2446,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -2606,14 +3523,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -2694,14 +3626,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -2782,14 +3729,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -2893,14 +3855,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -2998,14 +3975,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -3574,6 +4566,7 @@
             "description": "Registered processor key; leave blank when a library processor is chosen",
             "enum": [
               "cel.batch",
+              "cel.dedupe",
               "sqlite.merge",
               "sqlite.recon"
             ],
@@ -3582,16 +4575,18 @@
             "x-clicky-order": 1
           },
           "use": {
-            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.",
+            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.\n- `logs.dedupe`: Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.",
             "enum": [
-              "java.stacktrace"
+              "java.stacktrace",
+              "logs.dedupe"
             ],
             "title": "Library processor",
             "type": "string",
             "x-clicky-order": 0,
             "x-enum-display": "combobox",
             "x-enum-labels": {
-              "java.stacktrace": "Java stack trace merge"
+              "java.stacktrace": "Java stack trace merge",
+              "logs.dedupe": "Collapse repeated log lines"
             }
           }
         },
@@ -3788,6 +4783,81 @@
           "then": {
             "$ref": "#/$defs/opentelemetry"
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cloudwatch"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/cloudwatch"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "gcpcloudlogging"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/gcpcloudlogging"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "bigquery"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/bigquery"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "k8s"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/k8s"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "azureloganalytics"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/azureloganalytics"
+          }
         }
       ],
       "properties": {
@@ -3801,14 +4871,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -3864,15 +4949,25 @@
             "loki",
             "opensearch",
             "jaeger",
-            "opentelemetry"
+            "opentelemetry",
+            "cloudwatch",
+            "gcpcloudlogging",
+            "bigquery",
+            "k8s",
+            "azureloganalytics"
           ],
           "title": "Type",
           "type": "string",
           "x-enum-display": "combobox",
           "x-enum-icons": {
+            "azureloganalytics": "azure",
+            "bigquery": "google-cloud",
             "clickhouse": "clickhouse",
+            "cloudwatch": "aws",
+            "gcpcloudlogging": "google-cloud",
             "http": "globe",
             "jaeger": "activity",
+            "k8s": "kubernetes",
             "loki": "grafana",
             "mysql": "mysql",
             "opensearch": "opensearch",
@@ -4026,14 +5121,29 @@
                 "scope": {
                   "from": "provider.type",
                   "map": {
+                    "azureloganalytics": [
+                      "azure"
+                    ],
+                    "bigquery": [
+                      "google_cloud"
+                    ],
                     "clickhouse": [
                       "clickhouse"
+                    ],
+                    "cloudwatch": [
+                      "aws"
+                    ],
+                    "gcpcloudlogging": [
+                      "google_cloud"
                     ],
                     "http": [
                       "http"
                     ],
                     "jaeger": [
                       "jaeger"
+                    ],
+                    "k8s": [
+                      "kubernetes"
                     ],
                     "loki": [
                       "loki"

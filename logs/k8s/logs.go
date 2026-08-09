@@ -3,6 +3,7 @@ package k8s
 import (
 	"bufio"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -125,11 +126,22 @@ func fetchPodsLogs(ctx context.Context, client kubernetes.Interface, selector st
 	return logGroups, nil
 }
 
+// podSelectable exposes a pod to the resource-selector machinery.
+//
+// id and name are always set: ResourceSelectableMap reads them with a bare type
+// assertion, so a missing key panics rather than failing to match.
+func podSelectable(pod corev1.Pod) types.ResourceSelectableMap {
+	return types.ResourceSelectableMap{
+		"id":        string(pod.UID),
+		"name":      pod.Name,
+		"namespace": pod.Namespace,
+		"labels":    map[string]string(pod.Labels),
+	}
+}
+
 func fetchPodLogs(ctx context.Context, client kubernetes.Interface, pod corev1.Pod, request Request) ([]logs.LogResult, error) {
-	if len(request.Pods) > 0 {
-		// TODO: ConfigItem filtering not available in commons-db
-		// This functionality requires application-specific models
-		ctx.Logger.Warnf("Pod filtering via ResourceSelectors not yet supported in commons-db")
+	if len(request.Pods) > 0 && !request.Pods.Matches(podSelectable(pod)) {
+		return nil, nil
 	}
 
 	var logGroups []logs.LogResult
@@ -179,7 +191,25 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, pod co
 	}
 	defer podLogs.Close()
 
-	var output logs.LogResult
+	// Search returns one LogResult per container, so without this the caller
+	// cannot tell which pod or container a line came from — Host carries the
+	// pod name, but namespace and container would be lost entirely.
+	//
+	// An unspecified container is not an unknown one: the kubelet serves the
+	// pod's first, so report that rather than leaving every line of a
+	// single-container pod unattributed.
+	reportedContainer := containerName
+	if reportedContainer == "" && len(pod.Spec.Containers) > 0 {
+		reportedContainer = pod.Spec.Containers[0].Name
+	}
+
+	output := logs.LogResult{
+		Metadata: map[string]any{
+			"pod":       pod.Name,
+			"namespace": pod.Namespace,
+			"container": reportedContainer,
+		},
+	}
 	scanner := bufio.NewScanner(podLogs)
 	for scanner.Scan() {
 		parts := strings.SplitN(scanner.Text(), " ", 2)
@@ -193,9 +223,12 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, pod co
 		}
 
 		line := &logs.LogLine{
-			Count:         1,
-			Message:       parts[1],
-			Labels:        pod.Labels,
+			Count:   1,
+			Message: parts[1],
+			// Cloned: pod.Labels belongs to the client-go object and is shared
+			// by every line, so handing it out unowned lets one line's edit
+			// reach all of them and the API response besides.
+			Labels:        maps.Clone(pod.Labels),
 			Host:          pod.Name,
 			FirstObserved: t,
 		}

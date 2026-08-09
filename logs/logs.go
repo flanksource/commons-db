@@ -26,23 +26,45 @@ func (t *LogLine) SetHash() {
 	t.Hash = tokenizer.Tokenize(t.Message)
 }
 
-func (t LogLine) GetDedupKey(fields ...string) string {
+func (t LogLine) GetFieldKey(fields []string, messageFields ...string) string {
 	if len(fields) == 0 {
 		return ""
 	}
 
 	values := make([]string, len(fields))
 	for i, field := range fields {
-		values[i] = t.GetDedupField(field)
+		values[i] = t.GetFieldValue(field, messageFields...)
 	}
 
 	return strings.Join(values, "\u0000")
 }
 
-func (t LogLine) GetDedupField(field string) string {
+var DefaultMessageFields = []string{"msg", "message"}
+
+// EffectiveMessage is the line's message, falling back to the label a shipper
+// may have carried it in when the body itself came through empty.
+func (t LogLine) EffectiveMessage(messageFields ...string) string {
+	if t.Message != "" {
+		return t.Message
+	}
+	if t.Labels == nil {
+		return ""
+	}
+	if len(messageFields) == 0 {
+		messageFields = DefaultMessageFields
+	}
+	for _, field := range messageFields {
+		if msg := t.Labels[field]; msg != "" {
+			return msg
+		}
+	}
+	return ""
+}
+
+func (t LogLine) GetFieldValue(field string, messageFields ...string) string {
 	switch field {
 	case "message":
-		return fmt.Sprintf("msg::%s", t.Message)
+		return fmt.Sprintf("msg::%s", t.EffectiveMessage(messageFields...))
 	case "hash":
 		return fmt.Sprintf("hash::%s", t.Hash)
 	case "severity":
@@ -63,25 +85,26 @@ func (t LogLine) GetDedupField(field string) string {
 	case "id":
 		return fmt.Sprintf("id::%s", t.ID)
 	default:
+		// A bare name and a "label."-prefixed one address the same label, so
+		// normalize before the lookup — otherwise a bare field name matches
+		// nothing and every line keys identically.
+		labelKey := strings.TrimPrefix(field, "label.")
+
 		if t.Labels == nil {
-			return fmt.Sprintf("label.%s=unknown", field)
+			return fmt.Sprintf("label.%s=unknown", labelKey)
 		}
 
-		if strings.HasPrefix(field, "label.") {
-			return fmt.Sprintf("label.%s=%s", strings.TrimPrefix(field, "label."), t.Labels[strings.TrimPrefix(field, "label.")])
-		}
-
-		return ""
+		return fmt.Sprintf("label.%s=%s", labelKey, t.Labels[labelKey])
 	}
 }
 
-func (t *LogLine) TemplateContext() map[string]any {
+func (t *LogLine) TemplateContext(messageFields ...string) map[string]any {
 	return map[string]any{
 		"id":            t.ID,
 		"firstObserved": t.FirstObserved,
 		"lastObserved":  t.LastObserved,
 		"count":         t.Count,
-		"message":       t.Message,
+		"message":       t.EffectiveMessage(messageFields...),
 		"hash":          t.Hash,
 		"severity":      t.Severity,
 		"source":        t.Source,

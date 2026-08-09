@@ -1,5 +1,5 @@
 {
-  "$id": "prometheus.json",
+  "$id": "azureloganalytics.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "connection": {
@@ -75,47 +75,88 @@
     },
     "options": {
       "properties": {
-        "range": {
+        "end": {
+          "description": "Date math, for example now",
+          "title": "End",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum number of rows",
+          "title": "Limit",
+          "type": "string"
+        },
+        "mapping": {
+          "description": "Maps source columns onto the canonical log fields",
           "properties": {
-            "end": {
-              "description": "Date math, for example now",
-              "title": "End",
-              "type": "string"
+            "host": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Host",
+              "type": "array"
             },
-            "start": {
-              "description": "Date math, for example now-1h",
-              "title": "Start",
-              "type": "string"
+            "id": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Id",
+              "type": "array"
             },
-            "step": {
-              "description": "Sample step, for example 30s",
-              "title": "Step",
-              "type": "string"
+            "ignore": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Ignore",
+              "type": "array"
+            },
+            "message": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Message",
+              "type": "array"
+            },
+            "severity": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Severity",
+              "type": "array"
+            },
+            "source": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Source",
+              "type": "array"
+            },
+            "timestamp": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Timestamp",
+              "type": "array"
             }
           },
-          "title": "Range",
+          "title": "Field mapping",
           "type": "object"
         },
-        "selectLabels": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Select labels",
-          "type": "array"
+        "start": {
+          "description": "Date math, for example now-1h",
+          "title": "Start",
+          "type": "string"
         },
-        "url": {
-          "description": "Inline Prometheus URL used instead of a saved connection",
-          "title": "URL",
-          "type": "string",
-          "x-clicky-component": "k8s-url-selector",
-          "x-clicky-default-source": "value"
+        "workspaceID": {
+          "description": "Log Analytics workspace the KQL query runs against",
+          "title": "Workspace ID",
+          "type": "string"
         }
       },
       "title": "Options",
       "type": "object"
     },
     "type": {
-      "const": "prometheus",
+      "const": "azureloganalytics",
       "title": "Type",
       "type": "string"
     }
@@ -123,6 +164,6 @@
   "required": [
     "type"
   ],
-  "title": "Query provider: prometheus",
+  "title": "Query provider: azureloganalytics",
   "type": "object"
 }
