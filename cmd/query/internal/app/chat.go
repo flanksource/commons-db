@@ -37,8 +37,8 @@ func newQueryChatServer(root *cobra.Command) (*capchat.Service, error) {
 
 // isQueryChatTool removes query's process-management and long-running
 // interactive commands from the tool catalog. Starting another server,
-// printing schemas, or blocking on a live trace/top stream is useful on the
-// CLI but is not a meaningful operation for the in-app assistant (sessions are
+// printing schemas or build metadata, and blocking on a live trace/top stream,
+// are useful on the CLI but not meaningful for the in-app assistant (sessions are
 // managed via the REST API instead).
 func isQueryChatTool(tool captools.ToolInfo) bool {
 	name := strings.ToLower(strings.TrimSpace(tool.Annotation("clicky/operation")))
@@ -46,7 +46,7 @@ func isQueryChatTool(tool captools.ToolInfo) bool {
 		name = strings.ToLower(strings.TrimSpace(tool.Name))
 	}
 	switch name {
-	case "serve", "schema", "trace", "top":
+	case "serve", "schema", "trace", "top", "version":
 		return false
 	default:
 		return true

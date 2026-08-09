@@ -89,10 +89,31 @@ type KubernetesProvider struct {
 }
 
 // GCPProvider models a Google Cloud connection: optional endpoint + the required
-// service account JSON.
+// service account JSON. Every GCP client is scoped to a project, so the
+// connection carries one rather than making each query repeat it.
 type GCPProvider struct {
 	URL         types.EnvVar `json:"url"         clicky:"type=k8s-url-selector,title=Endpoint,source=value,order=2"`
 	Certificate types.EnvVar `json:"certificate" clicky:"type=k8s-secret-selector,title=Service Account JSON,source=secret,required,order=6"`
+	Project     string       `json:"project"     clicky:"property=project,title=Project,order=7,desc=Default project for queries on this connection"`
+}
+
+// AWSProvider models an AWS connection: static credentials plus the region and
+// optional role the SDK needs. Leaving the keys empty falls back to the ambient
+// credential chain.
+type AWSProvider struct {
+	URL         types.EnvVar `json:"url"          clicky:"type=k8s-url-selector,title=Endpoint,source=value,order=2,desc=Overrides the region's AWS endpoint"`
+	InsecureTLS bool         `json:"insecure_tls" clicky:"title=Insecure TLS,order=3"`
+	AccessKey   types.EnvVar `json:"username"     clicky:"type=k8s-secret-selector,title=Access Key ID,source=value,order=4"`
+	SecretKey   types.EnvVar `json:"password"     clicky:"type=k8s-secret-selector,title=Secret Access Key,format=password,source=secret,order=5"`
+	Region      string       `json:"region"       clicky:"property=region,title=Region,order=7"`
+	AssumeRole  string       `json:"assumeRole"   clicky:"property=assumeRole,title=Assume Role ARN,order=8"`
+}
+
+// AzureProvider models an Azure service-principal connection.
+type AzureProvider struct {
+	ClientID     types.EnvVar `json:"username" clicky:"type=k8s-secret-selector,title=Client ID,source=value,required,order=4"`
+	ClientSecret types.EnvVar `json:"password" clicky:"type=k8s-secret-selector,title=Client Secret,format=password,source=secret,required,order=5"`
+	TenantID     string       `json:"tenant"   clicky:"property=tenant,title=Tenant ID,required,order=7"`
 }
 
 // GCSProvider models a Google Cloud Storage connection.
@@ -134,6 +155,8 @@ var tailoredProviders = map[string]any{
 	models.ConnectionTypeRedis:         RedisProvider{},
 	models.ConnectionTypeKubernetes:    KubernetesProvider{},
 	models.ConnectionTypeGCP:           GCPProvider{},
+	models.ConnectionTypeAWS:           AWSProvider{},
+	models.ConnectionTypeAzure:         AzureProvider{},
 	models.ConnectionTypeGCS:           GCSProvider{},
 	models.ConnectionTypeGCPKMS:        GCPKMSProvider{},
 	models.ConnectionTypeGit:           GitProvider{},

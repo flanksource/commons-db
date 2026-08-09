@@ -21,6 +21,7 @@ func TestIsQueryChatTool(t *testing.T) {
 		{name: "dynamic profile", tool: captools.ToolInfo{Name: "profile-orders"}, want: true},
 		{name: "serve", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/operation": "serve"}}, want: false},
 		{name: "schema fallback name", tool: captools.ToolInfo{Name: "schema"}, want: false},
+		{name: "version", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/operation": "version"}}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -63,6 +64,7 @@ func TestQueryChatServerCatalogFiltersProcessCommands(t *testing.T) {
 		&cobra.Command{Use: "connection", Run: func(*cobra.Command, []string) {}},
 		&cobra.Command{Use: "serve", Run: func(*cobra.Command, []string) {}},
 		&cobra.Command{Use: "schema", Run: func(*cobra.Command, []string) {}},
+		&cobra.Command{Use: "version", Run: func(*cobra.Command, []string) {}},
 	)
 	chat, err := newQueryChatServer(root)
 	if err != nil {

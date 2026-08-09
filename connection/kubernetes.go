@@ -31,7 +31,9 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 			return nil, nil, fmt.Errorf("connection[%s] not found", t.ConnectionName)
 		}
 
-		t.Kubeconfig.ValueStatic = connection.Certificate
+		// Assigned rather than written through: a caller naming a connection has
+		// no kubeconfig of its own, so there is no EnvVar here to overwrite.
+		t.Kubeconfig = &types.EnvVar{ValueStatic: connection.Certificate}
 	}
 
 	if t.Kubeconfig != nil && !t.Kubeconfig.IsEmpty() {

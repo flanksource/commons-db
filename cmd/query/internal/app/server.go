@@ -145,7 +145,10 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	mux.Handle("/", ui)
 
 	kube := func() (kubernetes.Interface, error) { return queryContext.LocalKubernetes() }
-	base := newSecretsHandler("/api/v1", queryContext, kube, newSchemaHandler("/api/v1", databaseProfiles, mux))
+	base := newSecretsHandler(secretsHandlerOptions{
+		Prefix: "/api/v1", Context: queryContext, Kube: kube,
+		Next: newSchemaHandler("/api/v1", databaseProfiles, mux),
+	})
 	connectionHandler := a.Connections.Handler("/api/v1", base)
 	profileHandler, err := a.Profiles.Handler("/api/v1", connectionHandler)
 	if err != nil {
