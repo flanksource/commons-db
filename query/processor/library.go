@@ -27,7 +27,35 @@ const javaExceptionCEL = `
 // dyn() is required to iterate the batch — see BatchConfig.Set.
 const javaMessageCEL = `dyn(batch).map(line, line.message + "").join("\n")`
 
+// dedupeLastSeenCEL is the timestamp of the newest row that collapsed into the
+// group. Rows keep arrival order within a group, so with the newest-first shape
+// of a log query that is the first row, not the last.
+const dedupeLastSeenCEL = `dyn(batch)[0].timestamp`
+
+// dedupeFirstSeenCEL is the other end of the same span.
+const dedupeFirstSeenCEL = `dyn(batch)[count - 1].timestamp`
+
 func init() {
+	query.RegisterNamedProcessor(query.NamedProcessor{
+		Name:  "logs.dedupe",
+		Title: "Collapse repeated log lines",
+		Description: "Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying " +
+			"`count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. " +
+			"Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.",
+		Spec: query.ProcessorSpec{
+			Type: "cel.dedupe",
+			Config: map[string]any{
+				"partition": []any{"hash"},
+				"keep":      KeepFirst,
+				"set": map[string]any{
+					"count":     "count",
+					"lastSeen":  dedupeLastSeenCEL,
+					"firstSeen": dedupeFirstSeenCEL,
+				},
+			},
+		},
+	})
+
 	query.RegisterNamedProcessor(query.NamedProcessor{
 		Name:  "java.stacktrace",
 		Title: "Java stack trace merge",
