@@ -234,6 +234,28 @@ func descriptorForConnection(connType string) (browserDescriptor, bool) {
 	case models.ConnectionTypeJaeger:
 		d.Provider, d.Language, d.QueryLabel, d.ResultView = "jaeger", "text", "Trace ID (optional)", "table"
 		d.InitialOptions = map[string]any{"lookback": "1h", "limit": "20"}
+	case models.ConnectionTypeAWS:
+		d.Provider, d.Language, d.QueryLabel, d.ResultView = "cloudwatch", "text", "Logs Insights query", "logs"
+		d.DefaultQuery = "fields @timestamp, @message | sort @timestamp desc | limit 100"
+		d.TargetLabel = "Log group"
+		d.InitialOptions = map[string]any{"start": "now-1h", "limit": "200"}
+	case models.ConnectionTypeGCP:
+		// One connection type, two providers: Cloud Logging is the log browser,
+		// so BigQuery stays reachable from a profile rather than from here.
+		d.Provider, d.Language, d.QueryLabel, d.ResultView = "gcpcloudlogging", "text", "Cloud Logging filter", "logs"
+		d.DefaultQuery = `severity >= "WARNING"`
+		d.InitialOptions = map[string]any{"start": "now-1h", "limit": "200"}
+	case models.ConnectionTypeAzure:
+		d.Provider, d.Language, d.QueryLabel, d.ResultView = "azureloganalytics", "text", "KQL", "logs"
+		d.DefaultQuery = "AzureActivity | top 100 by TimeGenerated"
+		d.TargetLabel = "Workspace"
+		d.InitialOptions = map[string]any{"start": "now-1h", "limit": "200"}
+	case models.ConnectionTypeKubernetes:
+		// No query language — a pod-log request is entirely structural, so the
+		// browser drives it from options alone.
+		d.Provider, d.ResultView = "k8s", "logs"
+		d.TargetLabel = "Workload"
+		d.InitialOptions = map[string]any{"kind": "Deployment", "limit": "200"}
 	case models.ConnectionTypeRedis:
 		return browserDescriptor{Kind: "cache"}, true
 	default:
@@ -268,11 +290,13 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 	// A structured OpenSearch search stands in for the query text: the builder
 	// sends the specification and lets the server compile it.
 	structured := descriptor.Provider == "opensearch" && request.Options["search"] != nil
-	if strings.TrimSpace(request.Query) == "" && descriptor.Provider != "jaeger" && !structured {
+	// k8s has no query language at all; jaeger's is optional.
+	queryless := descriptor.Provider == "jaeger" || descriptor.Provider == "k8s"
+	if strings.TrimSpace(request.Query) == "" && !queryless && !structured {
 		http.Error(w, "query is required", http.StatusBadRequest)
 		return
 	}
-	for _, key := range []string{"url", "address", "type"} {
+	for _, key := range []string{"url", "address", "type", "endpoint"} {
 		delete(request.Options, key)
 	}
 	if descriptor.Provider == "http" {

@@ -34,6 +34,12 @@ func TestDescriptorForConnection(t *testing.T) {
 		{models.ConnectionTypeLoki, "query", "loki", false},
 		{models.ConnectionTypeOpenSearch, "query", "opensearch", true},
 		{models.ConnectionTypeJaeger, "query", "jaeger", false},
+		{models.ConnectionTypeAWS, "query", "cloudwatch", false},
+		// One connection type, two providers: Cloud Logging is the log browser
+		// and BigQuery stays profile-only.
+		{models.ConnectionTypeGCP, "query", "gcpcloudlogging", false},
+		{models.ConnectionTypeAzure, "query", "azureloganalytics", false},
+		{models.ConnectionTypeKubernetes, "query", "k8s", false},
 		{models.ConnectionTypeRedis, "cache", "", false},
 	}
 	for _, tt := range tests {
@@ -57,7 +63,7 @@ func TestDescriptorForConnection(t *testing.T) {
 					t.Fatalf("row limits = %#v", descriptor.RowLimits)
 				}
 				props, _ := descriptor.OptionsSchema["properties"].(queryschema.Schema)
-				for _, override := range []string{"url", "address", "type"} {
+				for _, override := range []string{"url", "address", "type", "endpoint"} {
 					if _, found := props[override]; found {
 						t.Errorf("browser options expose forbidden override %q", override)
 					}

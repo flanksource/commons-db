@@ -21,6 +21,8 @@ const onePasswordTokenProperty = "1password.service-account-token"
 // a package var so tests can substitute a fake for the `op` CLI.
 var opReadFunc = opRead
 
+var onePasswordCommandFunc = runOnePasswordCommand
+
 // onePasswordFingerprintKey makes token fingerprints process-local. The cache
 // is also process-local, so fingerprints only need to remain stable for the
 // lifetime of this process.
@@ -80,13 +82,21 @@ func opRead(ctx Context, ref, token string) (string, error) {
 	if err := validateOnePasswordReference(ref); err != nil {
 		return "", err
 	}
-	if _, err := exec.LookPath("op"); err != nil {
-		return "", fmt.Errorf("1password CLI (op) not found in PATH: %w", err)
+	stdout, err := onePasswordCommandFunc(ctx, token, "read", "--no-newline", "--", ref)
+	if err != nil {
+		return "", err
 	}
-	// The reference is a validated op:// URI and follows `--`, so the CLI cannot
-	// reinterpret any part of it as an option.
+	return string(stdout), nil
+}
+
+func runOnePasswordCommand(ctx Context, token string, args ...string) ([]byte, error) {
+	if _, err := exec.LookPath("op"); err != nil {
+		return nil, fmt.Errorf("1password CLI (op) not found in PATH: %w", err)
+	}
+	// Callers validate every user-controlled reference and resource ID before
+	// invoking this fixed executable.
 	// codeql[go/command-injection]
-	cmd := exec.CommandContext(ctx, "op", "read", "--no-newline", "--", ref)
+	cmd := exec.CommandContext(ctx, "op", args...)
 	cmd.Env = os.Environ()
 	if token != "" {
 		cmd.Env = append(cmd.Env, "OP_SERVICE_ACCOUNT_TOKEN="+token)
@@ -95,9 +105,9 @@ func opRead(ctx Context, ref, token string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("op read %q failed: %w: %s", ref, err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("op %s failed: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return stdout.String(), nil
+	return stdout.Bytes(), nil
 }
 
 func validateOnePasswordReference(ref string) error {
