@@ -13,23 +13,47 @@
       "x-clicky-component": "k8s-namespace-selector",
       "x-clicky-order": 1
     },
+    "password": {
+      "format": "password",
+      "title": "Client Secret",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "secret",
+      "x-clicky-order": 5
+    },
     "properties": {
-      "additionalProperties": {
-        "type": "string"
+      "properties": {
+        "tenant": {
+          "title": "Tenant ID",
+          "type": "string",
+          "x-clicky-order": 7
+        }
       },
+      "required": [
+        "tenant"
+      ],
       "title": "Properties",
-      "type": "object",
-      "x-clicky-order": 7
+      "type": "object"
     },
     "type": {
       "const": "azure",
       "title": "Type",
       "type": "string"
+    },
+    "username": {
+      "title": "Client ID",
+      "type": "string",
+      "x-clicky-component": "k8s-secret-selector",
+      "x-clicky-default-source": "value",
+      "x-clicky-order": 4
     }
   },
   "required": [
     "name",
-    "type"
+    "type",
+    "username",
+    "password",
+    "properties"
   ],
   "title": "Connection: azure",
   "type": "object"

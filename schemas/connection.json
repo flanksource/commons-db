@@ -36,6 +36,11 @@
     },
     "aws": {
       "properties": {
+        "insecure_tls": {
+          "title": "Insecure TLS",
+          "type": "boolean",
+          "x-clicky-order": 3
+        },
         "name": {
           "title": "Name",
           "type": "string",
@@ -47,18 +52,49 @@
           "x-clicky-component": "k8s-namespace-selector",
           "x-clicky-order": 1
         },
+        "password": {
+          "format": "password",
+          "title": "Secret Access Key",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-default-source": "secret",
+          "x-clicky-order": 5
+        },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "assumeRole": {
+              "title": "Assume Role ARN",
+              "type": "string",
+              "x-clicky-order": 8
+            },
+            "region": {
+              "title": "Region",
+              "type": "string",
+              "x-clicky-order": 7
+            }
           },
           "title": "Properties",
-          "type": "object",
-          "x-clicky-order": 7
+          "type": "object"
         },
         "type": {
           "const": "aws",
           "title": "Type",
           "type": "string"
+        },
+        "url": {
+          "description": "Overrides the region's AWS endpoint",
+          "title": "Endpoint",
+          "type": "string",
+          "x-clicky-component": "k8s-url-selector",
+          "x-clicky-default-source": "value",
+          "x-clicky-order": 2
+        },
+        "username": {
+          "title": "Access Key ID",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-default-source": "value",
+          "x-clicky-order": 4
         }
       },
       "required": [
@@ -115,23 +151,47 @@
           "x-clicky-component": "k8s-namespace-selector",
           "x-clicky-order": 1
         },
+        "password": {
+          "format": "password",
+          "title": "Client Secret",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-default-source": "secret",
+          "x-clicky-order": 5
+        },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "tenant": {
+              "title": "Tenant ID",
+              "type": "string",
+              "x-clicky-order": 7
+            }
           },
+          "required": [
+            "tenant"
+          ],
           "title": "Properties",
-          "type": "object",
-          "x-clicky-order": 7
+          "type": "object"
         },
         "type": {
           "const": "azure",
           "title": "Type",
           "type": "string"
+        },
+        "username": {
+          "title": "Client ID",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-default-source": "value",
+          "x-clicky-order": 4
         }
       },
       "required": [
         "name",
-        "type"
+        "type",
+        "username",
+        "password",
+        "properties"
       ],
       "title": "Connection: azure",
       "type": "object"
@@ -785,12 +845,16 @@
           "x-clicky-order": 1
         },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "project": {
+              "description": "Default project for queries on this connection",
+              "title": "Project",
+              "type": "string",
+              "x-clicky-order": 7
+            }
           },
           "title": "Properties",
-          "type": "object",
-          "x-clicky-order": 7
+          "type": "object"
         },
         "type": {
           "const": "google_cloud",

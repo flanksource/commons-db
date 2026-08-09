@@ -1,5 +1,5 @@
 {
-  "$id": "prometheus.json",
+  "$id": "k8s.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "connection": {
@@ -75,47 +75,68 @@
     },
     "options": {
       "properties": {
-        "range": {
-          "properties": {
-            "end": {
-              "description": "Date math, for example now",
-              "title": "End",
-              "type": "string"
-            },
-            "start": {
-              "description": "Date math, for example now-1h",
-              "title": "Start",
-              "type": "string"
-            },
-            "step": {
-              "description": "Sample step, for example 30s",
-              "title": "Step",
-              "type": "string"
-            }
-          },
-          "title": "Range",
-          "type": "object"
+        "apiVersion": {
+          "title": "API version",
+          "type": "string"
         },
-        "selectLabels": {
+        "containers": {
+          "description": "Match expressions picking which containers of each pod are read",
           "items": {
             "type": "string"
           },
-          "title": "Select labels",
+          "title": "Containers",
           "type": "array"
         },
-        "url": {
-          "description": "Inline Prometheus URL used instead of a saved connection",
-          "title": "URL",
-          "type": "string",
-          "x-clicky-component": "k8s-url-selector",
-          "x-clicky-default-source": "value"
+        "end": {
+          "description": "Date math, for example now",
+          "title": "End",
+          "type": "string"
+        },
+        "kind": {
+          "description": "Workload to read logs from; a workload resolves to its current pods",
+          "enum": [
+            "Pod",
+            "Deployment",
+            "StatefulSet",
+            "DaemonSet"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "limit": {
+          "description": "Maximum number of log lines",
+          "title": "Limit",
+          "type": "string"
+        },
+        "name": {
+          "description": "Name of the workload",
+          "title": "Name",
+          "type": "string"
+        },
+        "namespace": {
+          "description": "Namespace of the workload",
+          "title": "Namespace",
+          "type": "string"
+        },
+        "pods": {
+          "description": "Resource selectors narrowing which of the workload's pods are read",
+          "items": {
+            "type": "object"
+          },
+          "title": "Pods",
+          "type": "array"
+        },
+        "start": {
+          "description": "Date math, for example now-1h",
+          "title": "Start",
+          "type": "string"
         }
       },
       "title": "Options",
       "type": "object"
     },
     "type": {
-      "const": "prometheus",
+      "const": "k8s",
       "title": "Type",
       "type": "string"
     }
@@ -123,6 +144,6 @@
   "required": [
     "type"
   ],
-  "title": "Query provider: prometheus",
+  "title": "Query provider: k8s",
   "type": "object"
 }

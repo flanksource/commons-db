@@ -498,6 +498,7 @@
             "description": "Registered processor key; leave blank when a library processor is chosen",
             "enum": [
               "cel.batch",
+              "cel.dedupe",
               "sqlite.merge",
               "sqlite.recon"
             ],
@@ -506,16 +507,18 @@
             "x-clicky-order": 1
           },
           "use": {
-            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.",
+            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.\n- `logs.dedupe`: Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.",
             "enum": [
-              "java.stacktrace"
+              "java.stacktrace",
+              "logs.dedupe"
             ],
             "title": "Library processor",
             "type": "string",
             "x-clicky-order": 0,
             "x-enum-display": "combobox",
             "x-enum-labels": {
-              "java.stacktrace": "Java stack trace merge"
+              "java.stacktrace": "Java stack trace merge",
+              "logs.dedupe": "Collapse repeated log lines"
             }
           }
         },
@@ -712,6 +715,81 @@
           "then": {
             "$ref": "profiles/opentelemetry.json"
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cloudwatch"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/cloudwatch.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "gcpcloudlogging"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/gcpcloudlogging.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "bigquery"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/bigquery.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "k8s"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/k8s.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "azureloganalytics"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/azureloganalytics.json"
+          }
         }
       ],
       "properties": {
@@ -725,14 +803,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -788,15 +881,25 @@
             "loki",
             "opensearch",
             "jaeger",
-            "opentelemetry"
+            "opentelemetry",
+            "cloudwatch",
+            "gcpcloudlogging",
+            "bigquery",
+            "k8s",
+            "azureloganalytics"
           ],
           "title": "Type",
           "type": "string",
           "x-enum-display": "combobox",
           "x-enum-icons": {
+            "azureloganalytics": "azure",
+            "bigquery": "google-cloud",
             "clickhouse": "clickhouse",
+            "cloudwatch": "aws",
+            "gcpcloudlogging": "google-cloud",
             "http": "globe",
             "jaeger": "activity",
+            "k8s": "kubernetes",
             "loki": "grafana",
             "mysql": "mysql",
             "opensearch": "opensearch",
@@ -950,14 +1053,29 @@
                 "scope": {
                   "from": "provider.type",
                   "map": {
+                    "azureloganalytics": [
+                      "azure"
+                    ],
+                    "bigquery": [
+                      "google_cloud"
+                    ],
                     "clickhouse": [
                       "clickhouse"
+                    ],
+                    "cloudwatch": [
+                      "aws"
+                    ],
+                    "gcpcloudlogging": [
+                      "google_cloud"
                     ],
                     "http": [
                       "http"
                     ],
                     "jaeger": [
                       "jaeger"
+                    ],
+                    "k8s": [
+                      "kubernetes"
                     ],
                     "loki": [
                       "loki"

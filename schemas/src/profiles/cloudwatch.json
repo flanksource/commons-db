@@ -1,5 +1,5 @@
 {
-  "$id": "jaeger.json",
+  "$id": "cloudwatch.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "connection": {
@@ -76,54 +76,99 @@
     "options": {
       "properties": {
         "end": {
+          "description": "Date math, for example now",
           "title": "End",
           "type": "string"
         },
-        "limit": {
-          "title": "Limit",
-          "type": "string"
-        },
-        "lookback": {
-          "title": "Lookback",
-          "type": "string"
-        },
-        "maxDuration": {
-          "title": "max Duration",
-          "type": "string"
-        },
-        "minDuration": {
-          "title": "min Duration",
-          "type": "string"
-        },
-        "operation": {
-          "title": "Operation",
-          "type": "string"
-        },
-        "service": {
-          "title": "Service",
-          "type": "string"
-        },
-        "start": {
-          "title": "Start",
-          "type": "string"
-        },
-        "tags": {
-          "title": "Tags",
-          "type": "string"
-        },
-        "url": {
-          "description": "Inline Jaeger query URL used instead of a saved connection",
-          "title": "URL",
+        "endpoint": {
+          "description": "Inline CloudWatch endpoint used instead of the region's AWS endpoint",
+          "title": "Endpoint",
           "type": "string",
           "x-clicky-component": "k8s-url-selector",
           "x-clicky-default-source": "value"
+        },
+        "limit": {
+          "description": "Maximum number of log lines",
+          "title": "Limit",
+          "type": "string"
+        },
+        "logGroup": {
+          "description": "Log group the Insights query runs against",
+          "title": "Log group",
+          "type": "string"
+        },
+        "mapping": {
+          "description": "Maps source columns onto the canonical log fields",
+          "properties": {
+            "host": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Host",
+              "type": "array"
+            },
+            "id": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Id",
+              "type": "array"
+            },
+            "ignore": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Ignore",
+              "type": "array"
+            },
+            "message": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Message",
+              "type": "array"
+            },
+            "severity": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Severity",
+              "type": "array"
+            },
+            "source": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Source",
+              "type": "array"
+            },
+            "timestamp": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Timestamp",
+              "type": "array"
+            }
+          },
+          "title": "Field mapping",
+          "type": "object"
+        },
+        "region": {
+          "description": "Overrides the region on the connection",
+          "title": "Region",
+          "type": "string"
+        },
+        "start": {
+          "description": "Date math, for example now-1h. Defaults to now-1h — Insights requires a bounded range",
+          "title": "Start",
+          "type": "string"
         }
       },
       "title": "Options",
       "type": "object"
     },
     "type": {
-      "const": "jaeger",
+      "const": "cloudwatch",
       "title": "Type",
       "type": "string"
     }
@@ -131,6 +176,6 @@
   "required": [
     "type"
   ],
-  "title": "Query provider: jaeger",
+  "title": "Query provider: cloudwatch",
   "type": "object"
 }

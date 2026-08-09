@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	netHTTP "net/http"
 	"net/url"
 	"strconv"
@@ -77,6 +78,13 @@ func (t *lokiSearcher) Search(ctx context.Context, request Request) (*logs.LogRe
 	}
 
 	result := lokiResp.ToLogResult(mappingConfig)
+
+	// ToLogResult seeds Metadata from Loki's stats, which are absent on a query
+	// that matched nothing — hence the guard.
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	result.Metadata["query"] = request.Query
 
 	return &result, nil
 }
@@ -165,7 +173,10 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 							Count:         1,
 							FirstObserved: time.Unix(0, firstObserved),
 							Message:       v[1],
-							Labels:        stream.Stream,
+							// Cloned: every line of a stream would otherwise
+							// share one map, so editing one line's labels
+							// would edit them all.
+							Labels: maps.Clone(stream.Stream),
 						}
 
 						for k, val := range stream.Stream {
@@ -191,6 +202,6 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 }
 
 var DefaultFieldMappingConfig = logs.FieldMappingConfig{
-	Severity: []string{"detected_level"},
+	Severity: []string{"detected_level", "level"},
 	Host:     []string{"pod"},
 }
