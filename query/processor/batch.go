@@ -134,21 +134,23 @@ func (c BatchConfig) batchLimit() int {
 // compiledBatch is a BatchConfig with its expressions compiled once and its
 // timestamp column resolved against the actual rows.
 type compiledBatch struct {
+	*merger
 	config       BatchConfig
 	column       string
 	boundary     *query.RowExpr
 	continuation *query.RowExpr
-	when         *query.RowExpr
-	emit         *query.RowExpr
-	set          map[string]*query.RowExpr
-	setOrder     []string
 }
 
 func compileBatch(ctx context.Context, cfg BatchConfig, rows []query.Row) (*compiledBatch, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	compiled := &compiledBatch{config: cfg, set: map[string]*query.RowExpr{}}
+
+	merge, err := compileMerger(ctx, cfg.Keep, cfg.When, cfg.Emit, cfg.Set)
+	if err != nil {
+		return nil, err
+	}
+	compiled := &compiledBatch{merger: merge, config: cfg}
 
 	for _, expression := range []struct {
 		source string
@@ -156,8 +158,6 @@ func compileBatch(ctx context.Context, cfg BatchConfig, rows []query.Row) (*comp
 	}{
 		{cfg.Boundary, &compiled.boundary},
 		{cfg.Continuation, &compiled.continuation},
-		{cfg.When, &compiled.when},
-		{cfg.Emit, &compiled.emit},
 	} {
 		if expression.source == "" {
 			continue
@@ -167,18 +167,6 @@ func compileBatch(ctx context.Context, cfg BatchConfig, rows []query.Row) (*comp
 			return nil, err
 		}
 		*expression.target = expr
-	}
-
-	for name := range cfg.Set {
-		compiled.setOrder = append(compiled.setOrder, name)
-	}
-	sort.Strings(compiled.setOrder)
-	for _, name := range compiled.setOrder {
-		expr, err := query.CompileRowExpr(ctx, cfg.Set[name])
-		if err != nil {
-			return nil, fmt.Errorf("set %q: %w", name, err)
-		}
-		compiled.set[name] = expr
 	}
 
 	if compiled.boundary == nil {
@@ -248,7 +236,7 @@ func ApplyBatch(ctx context.Context, rows []query.Row, cfg BatchConfig) ([]query
 
 	out := make([]query.Row, 0, len(batches))
 	for index, batch := range batches {
-		transformed, err := compiled.transform(batch)
+		transformed, err := compiled.collapse(batch)
 		if err != nil {
 			return nil, fmt.Errorf("batch %d (%d rows): %w", index, len(batch), err)
 		}
@@ -324,77 +312,6 @@ func (c *compiledBatch) timestampChanged(row, previous query.Row) (bool, error) 
 		return false, err
 	}
 	return !current.Equal(before), nil
-}
-
-// transform collapses one batch. A batch the When gate rejects passes through
-// untouched, which is how `count > 1` leaves ordinary single-line logs alone.
-func (c *compiledBatch) transform(batch []query.Row) ([]query.Row, error) {
-	scope := batchScope(batch, c.config.Keep)
-	if c.when != nil {
-		selected, err := c.when.Bool(scope)
-		if err != nil {
-			return nil, err
-		}
-		if !selected {
-			return batch, nil
-		}
-	}
-	if c.emit != nil {
-		return c.emit.Rows(scope)
-	}
-
-	// Every expression sees the kept row as it arrived, so the merged row does
-	// not depend on the order Set happens to be walked in.
-	values := make(map[string]any, len(c.set))
-	for _, name := range c.setOrder {
-		value, err := c.set[name].Eval(scope)
-		if err != nil {
-			return nil, fmt.Errorf("set %q: %w", name, err)
-		}
-		values[name] = value
-	}
-
-	merged := make(query.Row, len(batch[0])+len(values))
-	for key, value := range keptRow(batch, c.config.Keep) {
-		merged[key] = value
-	}
-	for name, value := range values {
-		merged[name] = value
-	}
-	return []query.Row{merged}, nil
-}
-
-// batchScope is the CEL environment a batch expression is evaluated in.
-func batchScope(batch []query.Row, keep string) map[string]any {
-	rows := make([]any, len(batch))
-	for index, row := range batch {
-		rows[index] = map[string]any(row)
-	}
-	return map[string]any{
-		"batch": rows,
-		"first": map[string]any(batch[0]),
-		"last":  map[string]any(batch[len(batch)-1]),
-		"count": len(batch),
-		"row":   map[string]any(keptRow(batch, keep)),
-	}
-}
-
-func keptRow(batch []query.Row, keep string) query.Row {
-	if keep == KeepLast {
-		return batch[len(batch)-1]
-	}
-	return batch[0]
-}
-
-func partitionKey(row query.Row, columns []string) string {
-	if len(columns) == 0 {
-		return ""
-	}
-	parts := make([]string, len(columns))
-	for index, column := range columns {
-		parts[index] = query.NormalizeKeyValue(row[column])
-	}
-	return fmt.Sprint(parts)
 }
 
 // --- Processor wrapper ------------------------------------------------------
