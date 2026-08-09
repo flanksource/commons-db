@@ -299,7 +299,7 @@ var _ = Describe("Profile schema", func() {
 		Expect(provider["x-discriminator"]).To(Equal("type"))
 		typeProp := provider["properties"].(schema.Schema)["type"].(schema.Schema)
 		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
-		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(12))
+		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(17))
 	})
 
 	It("exposes the reconcile block a profile stores its habitual join in", func() {
@@ -326,14 +326,14 @@ var _ = Describe("Profile schema", func() {
 	})
 
 	It("bundles every provider component and enriches inline URLs", func() {
-		Expect(schema.ProfileComponents()).To(HaveLen(12))
+		Expect(schema.ProfileComponents()).To(HaveLen(17))
 		source := schema.ProfileSource()
 		provider := source["properties"].(schema.Schema)["provider"].(schema.Schema)
 		firstSourceBranch := provider["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("profiles/"))
 
 		bundled := schema.Profile()
-		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(12))
+		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(17))
 		http := bundled["$defs"].(schema.Schema)["http"].(schema.Schema)
 		options := http["properties"].(schema.Schema)["options"].(schema.Schema)
 		url := options["properties"].(schema.Schema)["url"].(schema.Schema)

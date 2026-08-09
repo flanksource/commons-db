@@ -40,7 +40,8 @@ var (
 var providerTypes = []string{
 	"sql", "postgres", "mysql", "sqlserver", "clickhouse",
 	"http", "prometheus", "postgrest", "loki", "opensearch", "jaeger",
-	"opentelemetry",
+	"opentelemetry", "cloudwatch", "gcpcloudlogging", "bigquery", "k8s",
+	"azureloganalytics",
 }
 
 // providerConnectionTypes maps each profile provider type to the connection
@@ -63,6 +64,12 @@ var providerConnectionTypes = map[string][]string{
 	"opensearch":    {models.ConnectionTypeOpenSearch},
 	"opentelemetry": {models.ConnectionTypeOpenTelemetry},
 	"jaeger":        {models.ConnectionTypeJaeger},
+
+	"cloudwatch":        {models.ConnectionTypeAWS},
+	"bigquery":          {models.ConnectionTypeGCP},
+	"gcpcloudlogging":   {models.ConnectionTypeGCP},
+	"k8s":               {models.ConnectionTypeKubernetes},
+	"azureloganalytics": {models.ConnectionTypeAzure},
 }
 
 // ProfileSource returns the externally referenced profile form schema. Each

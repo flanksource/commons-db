@@ -1,0 +1,58 @@
+# Pod logs read straight from the Kubernetes API, as opposed to k8s-logs.yaml
+# which reads the same lines after a shipper has put them in Loki. Reading
+# directly needs no log stack, but only reaches pods that still exist.
+#
+# This provider has no query language: a pod-log request is entirely structural,
+# so everything is an option and there is no `query`.
+#
+# The pod/namespace/container columns come from the provider, which tags each
+# line with the container it was read from — Host carries only the pod name, so
+# a multi-container pod would otherwise be unattributable.
+#
+# logs.dedupe collapses lines whose message matches once ids and durations are
+# tokenized out, which turns a crashlooping container's repeated stack into one
+# row with a count. It reads every row before any count is final, so a profile
+# using it is not served page by page.
+profile: Kubernetes Pod Logs
+render: logs
+provider:
+  type: k8s
+  connection: connection://kubernetes
+  options:
+    kind: "{{.params.kind}}"
+    namespace: "{{.params.namespace}}"
+    name: "{{.params.name}}"
+    limit: "500"
+processors:
+  - use: logs.dedupe
+params:
+  - name: namespace
+    label: Namespace
+    type: string
+    required: true
+  - name: kind
+    label: Kind
+    type: enum
+    default: Deployment
+    options:
+      - Pod
+      - Deployment
+      - StatefulSet
+      - DaemonSet
+  - name: name
+    label: Name
+    type: string
+    required: true
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+  - name: pod
+    label: Pod
+  - name: container
+    label: Container
+  - name: count
+    label: Seen
+    type: number
+  - name: message
+    label: Message
