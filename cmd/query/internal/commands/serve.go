@@ -13,9 +13,16 @@ func newServe(application *app.App) *cobra.Command {
 		Use:   "serve",
 		Short: "Start the query web app (connections, profiles, execution)",
 		RunE: func(command *cobra.Command, _ []string) error {
-			configDir, err := command.Root().PersistentFlags().GetString("config-dir")
+			persistent := command.Root().PersistentFlags()
+			configDir, err := persistent.GetString("config-dir")
 			if err != nil {
 				return fmt.Errorf("read config-dir: %w", err)
+			}
+			if options.DatabaseURL, err = persistent.GetString("db"); err != nil {
+				return fmt.Errorf("read db: %w", err)
+			}
+			if options.DataDir, err = persistent.GetString("data-dir"); err != nil {
+				return fmt.Errorf("read data-dir: %w", err)
 			}
 			return application.Serve(command.Context(), command.Root(), configDir, options)
 		},
@@ -23,7 +30,6 @@ func newServe(application *app.App) *cobra.Command {
 	flags := command.Flags()
 	flags.StringVar(&options.Host, "host", options.Host, "Host to bind")
 	flags.IntVarP(&options.Port, "port", "p", options.Port, "Port to bind")
-	flags.StringVar(&options.DataDir, "data-dir", options.DataDir, "Embedded postgres data directory (default: <config-dir>/postgres)")
 	flags.BoolVar(&options.Dev, "dev", options.Dev, "Spawn a Vite dev server and proxy the UI to it")
 	flags.IntVar(&options.MaxSessions, "max-sessions", options.MaxSessions, "Maximum concurrently running trace/top sessions")
 	flags.DurationVar(&options.MaxSessionDuration, "max-session-duration", options.MaxSessionDuration, "Upper bound on any trace/top session; profiles can only lower it")

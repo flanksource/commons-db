@@ -365,7 +365,7 @@ func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, 
 		}
 		request.offset = offset
 	}
-	if value := r.URL.Query().Get(profile.ParamNameForRole(query.ParamRoleCursor, "cursor")); value != "" {
+	if value := r.URL.Query().Get("cursor"); value != "" {
 		request.cursor = query.Cursor(value)
 	}
 	if request.scope == "all" {

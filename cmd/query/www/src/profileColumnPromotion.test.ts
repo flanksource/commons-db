@@ -1,15 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   OperationsApiClient,
   ResolvedOperation,
 } from "@flanksource/clicky-ui";
-import { promoteProfileColumns } from "./profileColumnPromotion";
+import { loadProfileDocument, promoteProfileColumns } from "./profileColumnPromotion";
 
-const getAction: ResolvedOperation = {
-  path: "/api/v1/profiles/{id}",
-  method: "get",
-  operation: { responses: {}, "x-clicky": { surface: "profiles", verb: "get", scope: "entity" } },
-};
+afterEach(() => vi.unstubAllGlobals());
 
 const updateAction: ResolvedOperation = {
   path: "/api/v1/profiles",
@@ -25,25 +21,41 @@ const updateAction: ResolvedOperation = {
   },
 };
 
+it("loads the stored document from the profile collection instead of executing the profile", async () => {
+  const document = {
+    profile: "ClickHouse Logs",
+    provider: { type: "clickhouse", connection: "connection://warehouse" },
+  };
+  const fetch = vi.fn(async () => ({
+    ok: true,
+    json: async () => [document],
+  }));
+  vi.stubGlobal("fetch", fetch);
+
+  await expect(loadProfileDocument("profile-clickhouse-logs")).resolves.toBe(document);
+  expect(fetch).toHaveBeenCalledWith("/api/v1/profiles", {
+    headers: { Accept: "application/json" },
+  });
+});
+
 describe("profile column promotion persistence", () => {
   it("loads the latest profile and appends columns without dropping fields", async () => {
-    const executeCommand = vi.fn(async () => ({
-      success: true,
-      exitCode: 0,
-      parsed: {
+    const fetch = vi.fn(async () => ({
+      ok: true,
+      json: async () => [{
         profile: "OS",
         query: "match all",
         provider: { type: "opensearch", connection: "connection://OS" },
         columns: [{ name: "message", type: "string" }],
         opaque: { preserved: true },
-      },
+      }],
     }));
+    vi.stubGlobal("fetch", fetch);
     const submitForm = vi.fn(async () => ({ success: true, exitCode: 0 }));
-    const client = { executeCommand, submitForm } as unknown as OperationsApiClient;
+    const client = { submitForm } as unknown as OperationsApiClient;
 
     await promoteProfileColumns({
       client,
-      getAction,
       updateAction,
       surfaceKey: "profile-os",
       additions: [
@@ -55,12 +67,9 @@ describe("profile column promotion persistence", () => {
       ],
     });
 
-    expect(executeCommand).toHaveBeenCalledWith(
-      "/api/v1/profiles/{id}",
-      "get",
-      { id: "profile-os" },
-      { Accept: "application/json" },
-    );
+    expect(fetch).toHaveBeenCalledWith("/api/v1/profiles", {
+      headers: { Accept: "application/json" },
+    });
     expect(submitForm).toHaveBeenCalledWith(
       "/api/v1/profiles",
       "put",
@@ -84,16 +93,15 @@ describe("profile column promotion persistence", () => {
   });
 
   it("surfaces update failures", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => [{
+        profile: "OS",
+        provider: { type: "opensearch" },
+        columns: [],
+      }],
+    })));
     const client = {
-      executeCommand: vi.fn(async () => ({
-        success: true,
-        exitCode: 0,
-        parsed: {
-          profile: "OS",
-          provider: { type: "opensearch" },
-          columns: [],
-        },
-      })),
       submitForm: vi.fn(async () => ({
         success: false,
         exitCode: 1,
@@ -104,7 +112,6 @@ describe("profile column promotion persistence", () => {
     await expect(
       promoteProfileColumns({
         client,
-        getAction,
         updateAction,
         surfaceKey: "profile-os",
         additions: [{ name: "enabled", type: "boolean", cel: "jsonpath(...)" }],

@@ -63,11 +63,10 @@ tasks:
       - go -C cmd/query install -ldflags "{{.LDFLAGS}}" .
 
   www:install:
-    desc: Install the query web UI dependencies from the npm registry
+    desc: Install the query web UI dependencies
     dir: cmd/query/www
     cmds:
-      # @flanksource/clicky-ui resolves from npm — never a link: override to a
-      # sibling checkout, whose branch/dist state would silently decide the build.
+      # The workspace configuration temporarily links the sibling Clicky UI checkout.
       - pnpm install --no-frozen-lockfile
 
   www:build:

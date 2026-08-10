@@ -46,7 +46,7 @@ func ProfileComponents() map[string]Schema {
 			},
 			"properties": Schema{
 				"type":       Schema{"type": "string", "title": "Type", "const": typ},
-				"connection": connectionProp(),
+				"connection": connectionProp(typ),
 				"options":    providerOptions(typ),
 			},
 		}

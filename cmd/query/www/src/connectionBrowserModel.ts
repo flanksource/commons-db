@@ -10,7 +10,9 @@ import type {
   ComboboxOption,
   JsonSchemaObject,
   QueryBrowserCompletion,
+  QueryBrowserDiagnostics,
 } from "@flanksource/clicky-ui";
+import { QueryBrowserExecutionError } from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, type ReactNode } from "react";
 
@@ -130,7 +132,19 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
   const response = await fetch(url, init);
   if (!response.ok) {
     const body = await response.text();
-    throw new Error(body.trim() || `request failed: ${response.status}`);
+    const fallback = body.trim() || `request failed: ${response.status}`;
+    try {
+      const parsed = JSON.parse(body) as {
+        error?: unknown;
+        diagnostics?: QueryBrowserDiagnostics;
+      };
+      if (typeof parsed.error === "string") {
+        throw new QueryBrowserExecutionError(parsed.error, parsed.diagnostics);
+      }
+    } catch (error) {
+      if (error instanceof QueryBrowserExecutionError) throw error;
+    }
+    throw new Error(fallback);
   }
   return response.json() as Promise<T>;
 }

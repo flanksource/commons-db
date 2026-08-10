@@ -28,8 +28,9 @@ const (
 )
 
 // ParamRole assigns a profile parameter to a first-class table control. Filter
-// is the default; limit/offset/cursor drive the pager and time-from/time-to are
-// paired into the table's date-range control.
+// is the default; limit/offset drive the pager and time-from/time-to are paired
+// into the table's date-range control. Cursor is a reserved transport parameter
+// because its provider-owned position must never be rendered into query text.
 type ParamRole string
 
 const (
@@ -38,15 +39,6 @@ const (
 	ParamRoleOffset   ParamRole = "offset"
 	ParamRoleTimeFrom ParamRole = "time-from"
 	ParamRoleTimeTo   ParamRole = "time-to"
-
-	// ParamRoleCursor carries a keyset position into a query that pages by one.
-	// It is the role that makes cursor paging reachable on a backend whose
-	// query text this package will not rewrite: the server decodes the opaque
-	// cursor and exposes its key values as `params.<name>.<column>`, so the
-	// author writes their own resume predicate — `WHERE (created_at, id) >
-	// ({{.params.cursor.created_at}}, {{.params.cursor.id}})` — against the
-	// order they declared.
-	ParamRoleCursor ParamRole = "cursor"
 )
 
 // ParamDef declares one server-side filter parameter of a Profile. Supplied

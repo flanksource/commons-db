@@ -36,10 +36,9 @@ func (gcp *cloudLogging) Close() error {
 }
 
 func New(ctx context.Context, conn connection.GCPConnection, mappingConfig *logs.FieldMappingConfig) (*cloudLogging, error) {
+	// The connection arrives hydrated — the provider is the single hydration
+	// point, so nothing here re-reads the row or re-resolves its secret.
 	var opts []option.ClientOption
-	if err := conn.HydrateConnection(ctx); err != nil {
-		return nil, fmt.Errorf("failed to hydrate connection: %w", err)
-	}
 
 	if conn.Credentials != nil && !conn.Credentials.IsEmpty() {
 		c, err := google.CredentialsFromJSON(ctx, []byte(conn.Credentials.ValueStatic))
@@ -47,6 +46,12 @@ func New(ctx context.Context, conn connection.GCPConnection, mappingConfig *logs
 			return nil, fmt.Errorf("%w", err)
 		}
 		opts = append(opts, option.WithCredentials(c))
+	}
+	// Absent credentials are not an error: the client falls through to the
+	// ambient application-default chain.
+
+	if conn.Endpoint != "" {
+		opts = append(opts, option.WithEndpoint(conn.Endpoint))
 	}
 
 	adminClient, err := logadmin.NewClient(ctx, conn.Project, opts...)

@@ -208,10 +208,49 @@ var _ = Describe("buildPagedSQL", func() {
 	pageOrder := query.Order{{Column: "id", Unique: true}}
 
 	It("counts the whole result on every row when a total is wanted", func() {
-		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder,
+		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder, query.CursorPosition{},
 			query.PageRequest{Limit: 50})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).To(ContainSubstring(`COUNT(*) OVER () AS "__cdb_total"`))
+	})
+
+	It("pushes one row past the requested page into the backend", func() {
+		statement, _, err := buildPagedSQL(dialectClickHouse, ordersQuery, nil, pageOrder, query.CursorPosition{},
+			query.PageRequest{Limit: 50})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).To(HaveSuffix("LIMIT 51"))
+	})
+
+	It("binds a mixed-direction keyset after the whole-result count", func() {
+		order := query.Order{
+			{Column: "region"},
+			{Column: "id", Desc: true, Unique: true},
+		}
+		statement, args, err := buildPagedSQL(
+			dialectPostgres,
+			ordersQuery,
+			[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)},
+			order,
+			query.CursorPosition{Keys: []any{"eu", int64(42)}},
+			query.PageRequest{Limit: 25, Strategy: query.PagingCursor},
+		)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).To(ContainSubstring(`COUNT(*) OVER () AS "__cdb_total"`))
+		Expect(statement).To(ContainSubstring(`WHERE ("region" > $2 OR ("region" = $3 AND "id" < $4))`))
+		Expect(statement).To(HaveSuffix("LIMIT 26"))
+		Expect(args).To(Equal([]any{"prod", "eu", "eu", int64(42)}))
+	})
+
+	It("rejects a null cursor key instead of changing its ordering semantics", func() {
+		_, _, err := buildPagedSQL(
+			dialectClickHouse,
+			ordersQuery,
+			nil,
+			pageOrder,
+			query.CursorPosition{Keys: []any{nil}},
+			query.PageRequest{Limit: 25, Strategy: query.PagingCursor},
+		)
+		Expect(err).To(MatchError(ContainSubstring("null")))
 	})
 
 	// COUNT(*) OVER () with no PARTITION BY is a whole-partition window aggregate:
@@ -220,7 +259,7 @@ var _ = Describe("buildPagedSQL", func() {
 	// full-scan time, and makes the export ceiling bound the client but not the
 	// server.
 	It("omits the window aggregate when the caller waived the total", func() {
-		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder,
+		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder, query.CursorPosition{},
 			query.PageRequest{Limit: 50, SkipTotal: true})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).ToNot(ContainSubstring("COUNT(*) OVER ()"))
@@ -228,30 +267,51 @@ var _ = Describe("buildPagedSQL", func() {
 		Expect(statement).To(ContainSubstring(`SELECT "__cdb_base".* FROM "__cdb_base"`))
 	})
 
-	// One past the ceiling, for the same reason a page reads one past its limit:
-	// proving a further row exists is what separates a finished export from one
-	// that stopped.
-	It("stops the backend where the export stops", func() {
-		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder,
+	// A full export is a sequence of bounded backend reads. Each read asks one
+	// past its page, while the provider tracks the whole-walk ceiling.
+	It("bounds each backend read during an export", func() {
+		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, pageOrder, query.CursorPosition{},
 			query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).To(HaveSuffix("LIMIT 101"))
+		Expect(statement).To(HaveSuffix("LIMIT 51"))
 	})
 
 	It("renders the ceiling in the dialect's own spelling", func() {
-		statement, _, err := buildPagedSQL(dialectSQLServer, ordersQuery, nil, pageOrder,
+		statement, _, err := buildPagedSQL(dialectSQLServer, ordersQuery, nil, pageOrder, query.CursorPosition{},
 			query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).To(HaveSuffix("OFFSET 0 ROWS FETCH NEXT 101 ROWS ONLY"))
+		Expect(statement).To(HaveSuffix("OFFSET 0 ROWS FETCH NEXT 51 ROWS ONLY"))
 	})
 
-	// SQL Server refuses OFFSET/FETCH without an ORDER BY, and an unordered
-	// ceiling would in any case take an arbitrary hundred rows rather than the
-	// first hundred.
-	It("pushes no ceiling into an unordered statement", func() {
-		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, nil,
+	It("bounds an unordered sample without claiming a stable position", func() {
+		statement, _, err := buildPagedSQL(dialectPostgres, ordersQuery, nil, nil, query.CursorPosition{},
 			query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).ToNot(ContainSubstring("LIMIT"))
+		Expect(statement).To(HaveSuffix("LIMIT 51"))
+	})
+
+	It("bounds an unordered SQL Server page with an explicit arbitrary order", func() {
+		statement, _, err := buildPagedSQL(dialectSQLServer, ordersQuery, nil, nil, query.CursorPosition{},
+			query.PageRequest{Limit: 50, Offset: 100})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).To(HaveSuffix("ORDER BY (SELECT NULL)\nOFFSET 100 ROWS FETCH NEXT 51 ROWS ONLY"))
+	})
+})
+
+var _ = Describe("takeRowTotal", func() {
+	It("reads ClickHouse UInt64 totals", func() {
+		row := query.Row{sqlTotalColumn: uint64(17), "id": "row-1"}
+		total, ok, err := takeRowTotal(row)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(ok).To(BeTrue())
+		Expect(total).To(Equal(int64(17)))
+		Expect(row).ToNot(HaveKey(sqlTotalColumn))
+	})
+
+	It("refuses totals that exceed the public signed count", func() {
+		row := query.Row{sqlTotalColumn: uint64(1<<63 + 1)}
+		_, ok, err := takeRowTotal(row)
+		Expect(ok).To(BeFalse())
+		Expect(err).To(MatchError(ContainSubstring("exceeds the supported maximum")))
 	})
 })

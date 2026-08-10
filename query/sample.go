@@ -17,17 +17,25 @@ import (
 // SampleResult is the raw, pre-column/pre-processor output used by profile
 // authoring tools. Columns are inferred only from top-level row keys.
 type SampleResult struct {
-	Rows          []Row       `json:"rows"`
-	Columns       []ColumnDef `json:"columns"`
-	RenderedQuery string      `json:"renderedQuery"`
-	Truncated     bool        `json:"truncated,omitempty"`
-	DurationMS    float64     `json:"durationMs"`
+	Rows          []Row                `json:"rows"`
+	Columns       []ColumnDef          `json:"columns"`
+	RenderedQuery string               `json:"renderedQuery"`
+	Truncated     bool                 `json:"truncated,omitempty"`
+	DurationMS    float64              `json:"durationMs"`
+	Pagination    PageInfo             `json:"pagination"`
+	Diagnostics   *ProviderDiagnostics `json:"diagnostics,omitempty"`
+}
+
+type SampleOptions struct {
+	Params map[string]any
+	Page   PageRequest
+	Debug  bool
 }
 
 // Sample renders and executes a profile through its provider while bypassing
 // context queries and processors. Configured row transforms still shape the
 // preview, and only providers whose request can be proven read-only are allowed.
-func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*SampleResult, error) {
+func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResult, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
 	}
@@ -37,7 +45,7 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
-	resolved, filters, err := resolveProfileInput(p, params)
+	resolved, filters, err := resolveProfileInput(p, options.Params)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
@@ -52,69 +60,47 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	if err := validateSampleReadOnly(p.Provider.Type, req.Query, req.Options); err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	provider, err := GetProvider(p.Provider.Type)
-	if err != nil {
-		return nil, err
+	pageRequest := options.Page
+	if pageRequest.Limit <= 0 {
+		pageRequest.Limit = DefaultSampleLimit
 	}
-	if limit <= 0 {
-		limit = DefaultSampleLimit
+	if maximum := p.RowLimits().MaxPageSize; pageRequest.Limit > maximum {
+		return nil, fmt.Errorf("profile %q: requested page size %d exceeds maximum page size %d", p.Name, pageRequest.Limit, maximum)
+	}
+	if pageRequest.Strategy == 0 && p.Pageable() == nil && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
+		pageRequest.Strategy = PagingCursor
+	}
+	var diagnostics *ProviderDiagnostics
+	if options.Debug {
+		diagnostics = NewProviderDiagnostics(p.Provider.Type, req.Query, req.Options)
+		pageRequest.Diagnostics = diagnostics
 	}
 	started := time.Now()
-	rows, truncated, err := sampleRows(ctx, provider, req, limit)
+	page, err := samplePage(ctx, p, options.Params, pageRequest)
 	duration := time.Since(started)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
+		return nil, WithDiagnostics(fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err), diagnostics)
 	}
+	rows := page.Rows
 	if rows == nil {
 		rows = []Row{}
-	}
-	if err := applyRowTransforms(ctx, p, rows); err != nil {
-		return nil, fmt.Errorf("profile %q: apply row transforms: %w", p.Name, err)
 	}
 	return &SampleResult{
 		Rows:          rows,
 		Columns:       InferSampleColumns(rows),
 		RenderedQuery: req.Query,
-		Truncated:     truncated,
+		Truncated:     page.Truncated,
 		DurationMS:    float64(duration) / float64(time.Millisecond),
+		Pagination:    NewPageInfo(pageRequest, page),
+		Diagnostics:   diagnostics.Snapshot(),
 	}, nil
 }
 
-// sampleRows reads at most limit rows, and reports whether the source held more.
-//
-// It asks a paging provider for one page of exactly that size rather than for
-// everything, because a sample is a look at the shape of the data and not a
-// read of it: draining an index of millions to show a hundred rows costs the
-// whole index, and past OpenSearch's result window it does not even succeed —
-// a from/size walk is refused there, so sampling a large index returned
-// "reading past row 10000 needs a cursor" instead of a sample.
-//
-// A provider with no native paging has no page to ask for, so its whole result
-// is read and cut here.
-func sampleRows(ctx context.Context, provider Provider, req ProviderRequest, limit int) ([]Row, bool, error) {
-	paging, ok := provider.(PagingProvider)
-	if !ok {
-		rows, err := provider.Execute(ctx, req)
-		if err != nil {
-			return nil, false, err
-		}
-		if len(rows) > limit {
-			return rows[:limit], true, nil
-		}
-		return rows, false, nil
+func samplePage(ctx context.Context, profile Profile, params map[string]any, request PageRequest) (Page, error) {
+	for page, err := range ExecutePages(ctx, profile, request, params) {
+		return page, err
 	}
-
-	// Ending the range after the first page is what releases the backend cursor.
-	for page, err := range paging.Pages(ctx, req, PageRequest{Limit: limit}) {
-		if err != nil {
-			return nil, false, err
-		}
-		if len(page.Rows) > limit {
-			return page.Rows[:limit], true, nil
-		}
-		return page.Rows, page.HasMore || page.Truncated, nil
-	}
-	return nil, false, nil
+	return Page{}, nil
 }
 
 func validateSampleReadOnly(providerType, query string, options map[string]any) error {

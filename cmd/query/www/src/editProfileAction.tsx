@@ -11,6 +11,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { ProfileEditor } from "./profileEditor";
 import { profileEditRoute, profileRoute } from "./profileEditorModel";
+import { loadProfileDocument } from "./profileColumnPromotion";
 import { PROFILES_QUERY_KEY } from "./profilesQuery";
 
 export function isProfileSurface(surfaceKey?: string): boolean {
@@ -30,19 +31,6 @@ export function findProfileUpdateOperation(
   });
 }
 
-export function findProfileGetOperation(
-  operations: ResolvedOperation[],
-): ResolvedOperation | undefined {
-  return operations.find((operation) => {
-    const metadata = operation.operation["x-clicky"];
-    return (
-      metadata?.surface === "profiles" &&
-      metadata.scope === "entity" &&
-      metadata.verb === "get"
-    );
-  });
-}
-
 /** Opens the editor route, so the edit surface is deep-linkable and survives a
  *  refresh — it used to be a dialog with no address of its own. */
 export function EditProfileButton({
@@ -54,9 +42,7 @@ export function EditProfileButton({
 }) {
   const router = useRouter();
   const { operations, isLoading } = useOperations(client);
-  const available = Boolean(
-    findProfileGetOperation(operations) && findProfileUpdateOperation(operations),
-  );
+  const available = Boolean(findProfileUpdateOperation(operations));
 
   return (
     <Button
@@ -86,23 +72,9 @@ export function ProfileEditorPage({
   const router = useRouter();
   const { operations, isLoading } = useOperations(client);
   const updateAction = findProfileUpdateOperation(operations);
-  const getAction = findProfileGetOperation(operations);
   const profile = useQuery({
     queryKey: ["profile-editor", surfaceKey],
-    enabled: getAction != null,
-    queryFn: async () => {
-      if (!getAction) throw new Error("Profile lookup operation is unavailable");
-      const response = await client.executeCommand(
-        getAction.path,
-        getAction.method,
-        { id: surfaceKey },
-        { Accept: "application/json" },
-      );
-      if (!isRecord(response.parsed)) {
-        throw new Error(`Profile ${surfaceKey} returned an invalid document`);
-      }
-      return response.parsed;
-    },
+    queryFn: () => loadProfileDocument(surfaceKey),
     retry: 0,
   });
 
@@ -158,8 +130,4 @@ function ProfileEditorMessage({
       {children}
     </div>
   );
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

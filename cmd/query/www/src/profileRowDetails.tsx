@@ -19,7 +19,7 @@ import {
 import { UiColumns } from "@flanksource/clicky-ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { isValidElement, useMemo, useState, type ReactNode } from "react";
-import { findProfileGetOperation, findProfileUpdateOperation } from "./editProfileAction";
+import { findProfileUpdateOperation } from "./editProfileAction";
 import {
   loadProfileDocument,
   profileColumns,
@@ -27,6 +27,7 @@ import {
 } from "./profileColumnPromotion";
 import { ProfileJsonFieldPicker } from "./profileJsonFieldPicker";
 import { discoverJsonFieldCandidates } from "./profileJsonFields";
+import { PROFILES_QUERY_KEY } from "./profilesQuery";
 import type { ProfileColumn } from "./profileWizardModel";
 
 type ClickyTableNode = ClickyNode & {
@@ -115,7 +116,6 @@ function ProfileRowDetailsTable({
 }) {
   const queryClient = useQueryClient();
   const { operations, isLoading: operationsLoading } = useOperations(client);
-  const getAction = findProfileGetOperation(operations);
   const updateAction = findProfileUpdateOperation(operations);
   const [detailRow, setDetailRow] = useState<ClickyRow | null>(null);
   const [promotionOpen, setPromotionOpen] = useState(false);
@@ -128,10 +128,9 @@ function ProfileRowDetailsTable({
   );
   const profile = useQuery({
     queryKey: ["profile-json-fields", surfaceKey],
-    enabled: promotionOpen && getAction != null,
+    enabled: promotionOpen,
     queryFn: async () => {
-      if (!getAction) throw new Error("Profile lookup operation is unavailable");
-      const document = await loadProfileDocument(client, getAction, surfaceKey);
+      const document = await loadProfileDocument(surfaceKey);
       return profileColumns(document);
     },
     retry: 0,
@@ -145,14 +144,14 @@ function ProfileRowDetailsTable({
   };
 
   const saveColumns = async (additions: ProfileColumn[]) => {
-    if (!getAction || !updateAction) {
+    if (!updateAction) {
       setPromotionError("Profile update operations are unavailable");
       return;
     }
     setSaving(true);
     setPromotionError(undefined);
     try {
-      await promoteProfileColumns({ client, getAction, updateAction, surfaceKey, additions });
+      await promoteProfileColumns({ client, updateAction, surfaceKey, additions });
       setPromotionOpen(false);
       setSuccess(`Added ${additions.length} ${additions.length === 1 ? "column" : "columns"}`);
       await Promise.all([
@@ -161,6 +160,7 @@ function ProfileRowDetailsTable({
         queryClient.invalidateQueries({ queryKey: ["profile-editor", surfaceKey] }),
         queryClient.invalidateQueries({ queryKey: ["profile-json-fields", surfaceKey] }),
         queryClient.invalidateQueries({ queryKey: ["logs-entity-names"] }),
+        queryClient.invalidateQueries({ queryKey: PROFILES_QUERY_KEY }),
       ]);
     } catch (cause) {
       setPromotionError(cause instanceof Error ? cause.message : "Profile update failed");
@@ -220,8 +220,8 @@ function ProfileRowDetailsTable({
                   type="button"
                   variant="outline"
                   size="sm"
-                  disabled={operationsLoading || !getAction || !updateAction}
-                  title={getAction && updateAction ? "Add fields from JSON columns" : "Profile updates are unavailable"}
+                  disabled={operationsLoading || !updateAction}
+                  title={updateAction ? "Add fields from JSON columns" : "Profile updates are unavailable"}
                   onClick={() => setPromotionOpen(true)}
                 >
                   <Icon icon={UiColumns} className="size-4" />

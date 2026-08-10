@@ -3,7 +3,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "connection": {
-      "description": "Pick a saved connection or type an inline DSN/URL",
+      "description": "Pick a saved connection. Leave empty to use the ambient Azure identity (environment, workload or managed identity, or az login)",
       "title": "Connection",
       "type": "string",
       "x-clicky-lookup": {

@@ -19,9 +19,10 @@ go -C cmd/query run . serve --port 8080 --profiles-dir ../../profiles
    clicky-ui `SecretKeySelector` (Secret / ConfigMap / Value) backed by
    `GET /api/v1/secrets[/preview]`; the chosen reference is stored as an
    `EnvVar` string (`secret://<name>/<key>`) and resolved at runtime.
-2. **Create profiles** — stored in the migrated PostgreSQL `profiles` table under
-   `query serve`; standalone CLI commands continue to use YAML under
-   `--profiles-dir`. Existing YAML profiles are imported without overwriting
+2. **Create profiles** — stored in the migrated PostgreSQL `profiles` table. Every
+   command resolves its store from the root `--db` flag, so the CLI reads what the
+   web app wrote; `--db=` opts out and falls back to YAML under `--profiles-dir`.
+   Existing YAML profiles are imported without overwriting
    database rows. The form is driven by the profile-setup schema. A profile
    declares a `provider`, a `query`, server-side filter `params`, and output
    `columns`.
@@ -107,6 +108,19 @@ the root with `--config-dir` or `QUERY_CONFIG_DIR`; the existing
 `--data-dir`/`QUERY_DATA_DIR` and `--profiles-dir`/`QUERY_PROFILES_DIR`
 overrides remain available. Existing `.query/pg` and `./profiles` directories
 are not migrated automatically.
+
+`--db`/`QUERY_DB_URL` picks the store for `serve` and every sub-command alike:
+
+| Value | Store |
+| --- | --- |
+| `embedded` (default) | the cluster under `--data-dir`, started or reused |
+| a PostgreSQL DSN | that database, migrated on connect |
+| empty (`--db=`) | no database — YAML profiles, and `query connection` errors |
+
+Connecting is deferred until a command needs the store, so `--help`, `version`,
+`schema` and shell completion never start PostgreSQL. A cluster started by a
+sub-command is left running for the next invocation; `serve` stops the one it
+starts.
 
 The toolbar exposes explicit **Add Connection** and **Add Profile** actions.
 Connections and profiles are persisted in the embedded database. Private YAML

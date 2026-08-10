@@ -105,7 +105,7 @@ func (w openSearchWalk) byOffset(
 			Total:     openSearchTotal(raw),
 			Truncated: capped,
 		}
-		if len(req.Order) > 0 && len(rows) > 0 {
+		if current.HasMore && len(req.Order) > 0 && len(rows) > 0 {
 			keys, err := openSearchSortKeys(raw, req.Order)
 			if err != nil {
 				yield(query.Page{}, err)
@@ -140,6 +140,7 @@ func (w openSearchWalk) byCursor(
 	yield func(query.Page, error) bool,
 ) {
 	pit := req.Position.PIT
+	releasePIT := false
 	if pit == "" {
 		opened, err := w.searcher.OpenPIT(ctx, w.index, opensearch.DefaultPITKeepAlive)
 		if err != nil {
@@ -148,22 +149,22 @@ func (w openSearchWalk) byCursor(
 		}
 		pit = opened
 
-		// The walk that opened the point-in-time owns it, so ending the range
-		// releases it even when the consumer stopped after one page. A resumed
-		// walk was handed its PIT and leaves it alone.
-		defer func() {
+	}
+	defer func() {
+		if releasePIT {
 			cleanup, cancel := context.NewContext(stdcontext.WithoutCancel(ctx.Context)).WithTimeout(10 * time.Second)
 			defer cancel()
 			if err := w.searcher.ClosePIT(cleanup, pit); err != nil {
 				ctx.Warnf("failed to close opensearch point-in-time: %v", err)
 			}
-		}()
-	}
+		}
+	}()
 
 	after := req.Position.Keys
 	for {
 		raw, rows, capped, err := w.search(ctx, openSearchPage{size: page.Limit, after: after, pit: pit})
 		if err != nil {
+			releasePIT = true
 			yield(query.Page{}, err)
 			return
 		}
@@ -181,10 +182,16 @@ func (w openSearchWalk) byCursor(
 				return
 			}
 			after = keys
-			current.NextKeys = keys
 			current.HasMore = len(rows) == page.Limit
+			if current.HasMore {
+				current.NextKeys = keys
+			}
 		}
-		if !yield(current, nil) || !current.HasMore {
+		releasePIT = !current.HasMore
+		if !yield(current, nil) {
+			return
+		}
+		if !current.HasMore {
 			return
 		}
 	}
@@ -214,6 +221,10 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 	})
 	if err != nil {
 		return opensearch.Response{}, nil, false, err
+	}
+	if position.size > 0 && len(raw.Hits.Hits) > position.size {
+		raw.Hits.Hits = raw.Hits.Hits[:position.size]
+		built.capped = true
 	}
 	rows := w.mapRows(raw)
 

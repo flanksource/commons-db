@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -256,8 +257,12 @@ func (h *connectionBrowserHandler) executeOpenSearch(
 		return browserQueryResult{}, err
 	}
 
+	request.diagnostics.RecordRequest(body, nil, map[string]any{"index": index, "limit": limit})
+	started := time.Now()
 	raw, err := searcher.SearchRaw(requestCtx, opensearch.Request{Index: index, Query: body, Limit: limit})
 	if err != nil {
+		request.diagnostics.RecordError(err)
+		request.diagnostics.RecordResponse(started, 0, map[string]any{"index": index})
 		return browserQueryResult{}, err
 	}
 	rows := make([]query.Row, 0, len(raw.Hits.Hits))
@@ -268,6 +273,11 @@ func (h *connectionBrowserHandler) executeOpenSearch(
 		}
 		rows = append(rows, row)
 	}
+	request.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
+	request.diagnostics.RecordResponse(started, len(rows), map[string]any{
+		"index": index, "total": raw.Hits.Total.Value, "relation": raw.Hits.Total.Relation,
+		"took": raw.Took, "timedOut": raw.TimedOut,
+	})
 	// The hits are the display set and the mapping says how each of them can be
 	// narrowed, so a filtered run keeps offering the filters that produced it.
 	profile.Columns = openSearchBrowserColumns(rows, fields)

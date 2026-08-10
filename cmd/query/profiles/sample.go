@@ -26,8 +26,15 @@ type profileSampleHandler struct {
 }
 
 type profileSampleRequest struct {
-	Profile query.Profile  `json:"profile"`
-	Params  map[string]any `json:"params,omitempty"`
+	Profile    query.Profile           `json:"profile"`
+	Params     map[string]any          `json:"params,omitempty"`
+	Pagination samplePaginationRequest `json:"pagination,omitempty"`
+	Debug      bool                    `json:"debug,omitempty"`
+}
+
+type samplePaginationRequest struct {
+	Limit  int          `json:"limit,omitempty"`
+	Cursor query.Cursor `json:"cursor,omitempty"`
 }
 
 func newProfileSampleHandler(prefix string, ctx dbcontext.Context, next http.Handler) *profileSampleHandler {
@@ -56,17 +63,32 @@ func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := h.ctx.WithTimeout(profileSampleTimeout)
 	defer cancel()
-	result, err := query.Sample(ctx.WithName("sample"), request.Profile, request.Params, query.DefaultSampleLimit)
+	result, err := query.Sample(ctx.WithName("sample"), request.Profile, query.SampleOptions{
+		Params: request.Params,
+		Page: query.PageRequest{
+			Limit: request.Pagination.Limit, Cursor: request.Pagination.Cursor,
+		},
+		Debug: request.Debug,
+	})
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, stdcontext.DeadlineExceeded) {
 			status = http.StatusGatewayTimeout
 		}
-		http.Error(w, err.Error(), status)
+		writeSampleError(w, status, err)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(result); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+func writeSampleError(w http.ResponseWriter, status int, err error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"error":       err.Error(),
+		"diagnostics": query.DiagnosticsFromError(err),
+	})
 }

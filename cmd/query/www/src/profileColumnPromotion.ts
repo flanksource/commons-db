@@ -4,33 +4,24 @@ import type {
 } from "@flanksource/clicky-ui";
 import type { ProfileColumn } from "./profileWizardModel";
 import { mergePromotedColumns } from "./profileJsonFields";
+import { fetchProfiles } from "./profilesQuery";
+import { profileForSurface } from "./reconcileModel";
 
 type PromoteProfileColumnsOptions = {
   client: OperationsApiClient;
-  getAction: ResolvedOperation;
   updateAction: ResolvedOperation;
   surfaceKey: string;
   additions: ProfileColumn[];
 };
 
 export async function loadProfileDocument(
-  client: OperationsApiClient,
-  getAction: ResolvedOperation,
   surfaceKey: string,
 ): Promise<Record<string, unknown>> {
-  const response = await client.executeCommand(
-    getAction.path,
-    getAction.method,
-    { id: surfaceKey },
-    { Accept: "application/json" },
-  );
-  if (!response.success) {
-    throw new Error(response.error ?? response.message ?? `Unable to load profile ${surfaceKey}`);
+  const document = profileForSurface(await fetchProfiles(), surfaceKey);
+  if (!document) {
+    throw new Error(`Profile ${surfaceKey} was not found in the profile collection`);
   }
-  if (!isRecord(response.parsed)) {
-    throw new Error(`Profile ${surfaceKey} returned an invalid document`);
-  }
-  return response.parsed;
+  return document;
 }
 
 export function profileColumns(document: Record<string, unknown>): ProfileColumn[] {
@@ -43,7 +34,6 @@ export function profileColumns(document: Record<string, unknown>): ProfileColumn
 
 export async function promoteProfileColumns({
   client,
-  getAction,
   updateAction,
   surfaceKey,
   additions,
@@ -51,7 +41,7 @@ export async function promoteProfileColumns({
   if (!client.submitForm) {
     throw new Error("Profile updates are unavailable");
   }
-  const profile = await loadProfileDocument(client, getAction, surfaceKey);
+  const profile = await loadProfileDocument(surfaceKey);
   const idParam = updateAction.operation["x-clicky"]?.idParam ?? "id";
   const body = {
     ...profile,
@@ -68,8 +58,4 @@ export async function promoteProfileColumns({
     throw new Error(response.error ?? response.message ?? "Profile update failed");
   }
   return body;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }

@@ -1,10 +1,13 @@
 package providers_test
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"sync"
 
 	"github.com/glebarez/sqlite"
@@ -196,6 +199,80 @@ var _ = Describe("cloudwatch provider", func() {
 	})
 })
 
+// --- Loki --------------------------------------------------------------------
+
+var _ = Describe("loki provider authentication", func() {
+	const lokiResponse = `{"status":"success","data":{"resultType":"streams","result":[` +
+		`{"stream":{"app":"checkout"},"values":[["1700000000000000000","payment failed"]]}]}}`
+
+	// The connection form stores an HTTP-family backend's credentials under
+	// Properties, keyed by authType. A Loki connection configured that way used
+	// to query unauthenticated, because only the username/password columns were
+	// read.
+	query1 := func(properties types.JSONStringMap) string {
+		var authorization string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authorization = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, err := fmt.Fprint(w, lokiResponse)
+			Expect(err).ToNot(HaveOccurred())
+		}))
+		DeferCleanup(server.Close)
+
+		ctx := dbcontext.New().WithDB(connectionsDB(models.Connection{
+			ID: uuid.New(), Name: "loki", Type: models.ConnectionTypeLoki,
+			URL: server.URL, Properties: properties,
+		}), nil)
+
+		provider, err := query.GetProvider("loki")
+		Expect(err).ToNot(HaveOccurred())
+		rows, err := provider.Execute(ctx, query.ProviderRequest{
+			Connection: "connection://loki", Query: `{app="checkout"}`,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rows).To(HaveLen(1))
+		return authorization
+	}
+
+	It("sends the basic credentials the form stored under properties", func() {
+		Expect(query1(types.JSONStringMap{
+			"authType": "basic", "username": "api-user", "password": "api-password",
+		})).To(Equal("Basic " + base64.StdEncoding.EncodeToString([]byte("api-user:api-password"))))
+	})
+
+	It("still honours credentials on the legacy username/password columns", func() {
+		var authorization string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authorization = r.Header.Get("Authorization")
+			w.Header().Set("Content-Type", "application/json")
+			_, err := fmt.Fprint(w, lokiResponse)
+			Expect(err).ToNot(HaveOccurred())
+		}))
+		DeferCleanup(server.Close)
+
+		ctx := dbcontext.New().WithDB(connectionsDB(models.Connection{
+			ID: uuid.New(), Name: "loki", Type: models.ConnectionTypeLoki,
+			URL: server.URL, Username: "column-user", Password: "column-password",
+		}), nil)
+
+		provider, err := query.GetProvider("loki")
+		Expect(err).ToNot(HaveOccurred())
+		_, err = provider.Execute(ctx, query.ProviderRequest{
+			Connection: "connection://loki", Query: `{app="checkout"}`,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(authorization).To(Equal("Basic " + base64.StdEncoding.EncodeToString([]byte("column-user:column-password"))))
+	})
+
+	It("sends a bearer token when that is what the connection carries", func() {
+		Expect(query1(types.JSONStringMap{"bearer": "tok-123"})).To(Equal("Bearer tok-123"))
+	})
+
+	It("sends nothing when the connection is anonymous", func() {
+		Expect(query1(types.JSONStringMap{"authType": "none"})).To(BeEmpty())
+	})
+})
+
 // --- Options and connection validation --------------------------------------
 
 var _ = Describe("log provider option validation", func() {
@@ -340,6 +417,36 @@ var _ = Describe("k8s logs provider", func() {
 		Expect(logRequests).To(HaveLen(1))
 		Expect(logRequests[0]).To(ContainSubstring("billing-1"))
 		Expect(logRequests[0]).To(ContainSubstring("container=sidecar"))
+	})
+
+	// A profile that names no connection reads the ambient cluster. When there
+	// is none, NewClient hands back an empty fake clientset — which would read
+	// as a healthy cluster with no pods, so every query returns zero rows and no
+	// error. Saying so is the only useful answer.
+	It("fails loudly when no connection is named and there is no ambient cluster", func() {
+		GinkgoT().Setenv("KUBECONFIG", filepath.Join(GinkgoT().TempDir(), "absent.yaml"))
+		GinkgoT().Setenv("HOME", GinkgoT().TempDir())
+
+		provider, err := query.GetProvider("k8s")
+		Expect(err).ToNot(HaveOccurred())
+		_, err = provider.Execute(ctx, query.ProviderRequest{Options: map[string]any{
+			"kind": "Deployment", "namespace": "prod", "name": "billing",
+		}})
+		Expect(err).To(MatchError(ContainSubstring("no kubernetes cluster configured")))
+	})
+
+	It("reads the ambient cluster when no connection is named", func() {
+		kubeconfig := filepath.Join(GinkgoT().TempDir(), "config.yaml")
+		Expect(os.WriteFile(kubeconfig, []byte(kubeconfigFor(server.URL)), 0o600)).To(Succeed())
+		GinkgoT().Setenv("KUBECONFIG", kubeconfig)
+
+		provider, err := query.GetProvider("k8s")
+		Expect(err).ToNot(HaveOccurred())
+		rows, err := provider.Execute(ctx, query.ProviderRequest{Options: map[string]any{
+			"kind": "Deployment", "namespace": "prod", "name": "billing",
+		}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rows).To(HaveLen(4))
 	})
 
 	It("narrows a workload's pods with a resource selector", func() {

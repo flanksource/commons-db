@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	_ "github.com/ClickHouse/clickhouse-go/v2"
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	mysql "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/microsoft/go-mssqldb"
@@ -87,6 +87,16 @@ func (s *SQLConnection) Client(ctx context.Context) (*databasesql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if s.Type == models.ConnectionTypeClickHouse {
+		options, err := clickhouse.ParseDSN(connectionString)
+		if err != nil {
+			return nil, fmt.Errorf("invalid clickhouse connection string: %w", err)
+		}
+		if options.Protocol == clickhouse.HTTP && options.TLS != nil && options.Auth.Password == "" {
+			options.HttpHeaders = map[string]string{"X-ClickHouse-SSL-Certificate-Auth": "off"}
+		}
+		return clickhouse.OpenDB(options), nil
+	}
 
 	client, err := databasesql.Open(driverName, connectionString)
 	if err != nil {
@@ -162,7 +172,7 @@ func (s SQLConnection) connectionString() (string, error) {
 	raw := s.URL.ValueStatic
 	username := s.Username.ValueStatic
 	password := s.Password.ValueStatic
-	if username == "" && password == "" {
+	if username == "" && password == "" && s.Type != models.ConnectionTypeClickHouse {
 		return raw, nil
 	}
 
@@ -203,10 +213,31 @@ func (s SQLConnection) connectionString() (string, error) {
 		}
 		return cfg.URL().String(), nil
 	case models.ConnectionTypeClickHouse:
-		return applyURLCredentials(raw, username, password)
+		if username != "" || password != "" {
+			var err error
+			raw, err = applyURLCredentials(raw, username, password)
+			if err != nil {
+				return "", err
+			}
+		}
+		return enableClickHouseTLS(raw)
 	default:
 		return raw, nil
 	}
+}
+
+func enableClickHouseTLS(raw string) (string, error) {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid clickhouse connection URL: %w", err)
+	}
+	params := parsed.Query()
+	if !strings.EqualFold(parsed.Scheme, "https") || params.Has("secure") {
+		return raw, nil
+	}
+	params.Set("secure", "true")
+	parsed.RawQuery = params.Encode()
+	return parsed.String(), nil
 }
 
 func applyURLCredentials(raw, username, password string) (string, error) {

@@ -17,7 +17,6 @@ import (
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
-	"github.com/flanksource/commons-db/db"
 	opensearchinspect "github.com/flanksource/commons-db/inspect/opensearch"
 	sqlinspect "github.com/flanksource/commons-db/inspect/sql"
 	"github.com/flanksource/commons-db/models"
@@ -66,8 +65,10 @@ type browserRowLimits struct {
 }
 
 type browserQueryRequest struct {
-	Query   string         `json:"query"`
-	Options map[string]any `json:"options,omitempty"`
+	Query      string                   `json:"query"`
+	Options    map[string]any           `json:"options,omitempty"`
+	Pagination browserPaginationRequest `json:"pagination,omitempty"`
+	Debug      bool                     `json:"debug,omitempty"`
 
 	// Columns is the column set a previous run returned, echoed back verbatim so
 	// a filter binds to the field and kind the console offered rather than to
@@ -79,6 +80,27 @@ type browserQueryRequest struct {
 	// same encoding a stored profile's filter bar sends, so one console reads
 	// both surfaces.
 	Filters map[string]string `json:"filters,omitempty"`
+
+	diagnostics *query.ProviderDiagnostics
+}
+
+type browserPaginationRequest struct {
+	Limit  int `json:"limit,omitempty"`
+	Offset int `json:"offset,omitempty"`
+}
+
+func (r browserPaginationRequest) PageRequest() (query.PageRequest, error) {
+	if r.Limit == 0 {
+		r.Limit = query.DefaultPageSize
+	}
+	if r.Limit > query.DefaultMaxPageSize {
+		return query.PageRequest{}, fmt.Errorf("page limit must be at most %d, got %d", query.DefaultMaxPageSize, r.Limit)
+	}
+	page := query.PageRequest{Limit: r.Limit, Offset: r.Offset, Strategy: query.PagingOffset}
+	if err := page.Validate(); err != nil {
+		return query.PageRequest{}, err
+	}
+	return page, nil
 }
 
 type browserQueryResult struct {
@@ -96,7 +118,9 @@ type browserQueryResult struct {
 	Truncated bool `json:"truncated,omitempty"`
 	Limit     int  `json:"limit,omitempty"`
 
-	Metadata map[string]any `json:"metadata,omitempty"`
+	Metadata    map[string]any             `json:"metadata,omitempty"`
+	Pagination  *query.PageInfo            `json:"pagination,omitempty"`
+	Diagnostics *query.ProviderDiagnostics `json:"diagnostics,omitempty"`
 }
 
 type browserColumn struct {
@@ -306,6 +330,9 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
+	if request.Debug {
+		request.diagnostics = query.NewProviderDiagnostics(descriptor.Provider, request.Query, request.Options)
+	}
 
 	started := time.Now()
 	var result browserQueryResult
@@ -320,17 +347,38 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 		var provider query.Provider
 		provider, err = query.GetProvider(descriptor.Provider)
 		if err == nil {
+			providerStarted := time.Now()
 			result.Rows, err = provider.Execute(h.ctx, query.ProviderRequest{
-				Connection: conn.ID.String(), Query: request.Query, Options: request.Options,
+				Provider: descriptor.Provider, Connection: conn.ID.String(), Query: request.Query,
+				Options: request.Options, Diagnostics: request.diagnostics,
 			})
+			if len(result.Rows) > 0 {
+				request.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(result.Rows))
+			}
+			request.diagnostics.RecordResponse(providerStarted, len(result.Rows), nil)
 		}
 	}
 	result.DurationMS = float64(time.Since(started).Microseconds()) / 1000
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		writeBrowserQueryError(w, err, request.diagnostics, http.StatusUnprocessableEntity)
 		return
 	}
+	result.Diagnostics = request.diagnostics.Snapshot()
 	writeJSON(w, result)
+}
+
+func writeBrowserQueryError(w http.ResponseWriter, err error, diagnostics *query.ProviderDiagnostics, status int) {
+	if fromError := query.DiagnosticsFromError(err); fromError != nil {
+		diagnostics = fromError
+	} else if diagnostics != nil {
+		diagnostics.RecordError(err)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(struct {
+		Error       string                     `json:"error"`
+		Diagnostics *query.ProviderDiagnostics `json:"diagnostics,omitempty"`
+	}{Error: err.Error(), Diagnostics: diagnostics.Snapshot()})
 }
 
 func (h *connectionBrowserHandler) executeSQL(
@@ -341,6 +389,10 @@ func (h *connectionBrowserHandler) executeSQL(
 	database string,
 ) (browserQueryResult, error) {
 	statement := request.Query
+	pageRequest, err := request.Pagination.PageRequest()
+	if err != nil {
+		return browserQueryResult{}, err
+	}
 	client, err := h.sqlClient(r.Context(), conn, database)
 	if err != nil {
 		return browserQueryResult{}, err
@@ -356,78 +408,55 @@ func (h *connectionBrowserHandler) executeSQL(
 	if err != nil {
 		return browserQueryResult{}, err
 	}
-	var args []any
-	if len(filters) > 0 {
-		statement, args, err = providers.FilterSQL(conn.Type, statement, filters)
-		if err != nil {
-			return browserQueryResult{}, err
-		}
-	}
-
 	if !sqlReturnsRows(statement) {
+		if len(filters) > 0 {
+			return browserQueryResult{}, fmt.Errorf("column filters can only be applied to a row-producing SQL query")
+		}
+		started := time.Now()
+		request.diagnostics.RecordRequest(statement, nil, map[string]any{"dialect": conn.Type, "operation": "exec"})
 		// The connection browser intentionally accepts a complete operator-authored
 		// statement; no request value is interpolated into another SQL command.
 		// codeql[go/sql-injection]
 		res, err := client.ExecContext(r.Context(), statement)
 		if err != nil {
+			request.diagnostics.RecordError(err)
+			request.diagnostics.RecordResponse(started, 0, map[string]any{"dialect": conn.Type, "operation": "exec"})
 			return browserQueryResult{}, err
 		}
 		affected, err := res.RowsAffected()
 		if err != nil {
+			request.diagnostics.RecordResponse(started, 0, map[string]any{"dialect": conn.Type, "operation": "exec"})
 			return browserQueryResult{Message: "Statement executed successfully"}, nil
 		}
+		request.diagnostics.RecordResponse(started, 0, map[string]any{
+			"dialect": conn.Type, "operation": "exec", "affectedRows": affected,
+		})
 		return browserQueryResult{AffectedRows: &affected, Message: "Statement executed successfully"}, nil
 	}
 
-	// The connection browser intentionally accepts a complete operator-authored
-	// statement; no request value is interpolated into another SQL query. When a
-	// filter is active the statement is that same query wrapped in a CTE built
-	// from constant syntax, and every filter value travels as a bound arg.
-	// codeql[go/sql-injection]
-	rows, err := client.QueryContext(r.Context(), statement, args...)
+	page, err := providers.ReadSQLPage(r.Context(), client, conn.Type, providers.SQLPageRequest{
+		Query: statement, Filters: filters, Page: pageRequest, Diagnostics: request.diagnostics,
+	})
 	if err != nil {
 		return browserQueryResult{}, err
 	}
-	defer rows.Close()
-	columnTypes, err := rows.ColumnTypes()
-	if err != nil {
-		return browserQueryResult{}, err
-	}
-	databaseTypes := make(map[string]string, len(columnTypes))
-	for _, column := range columnTypes {
+	databaseTypes := make(map[string]string, len(page.ColumnTypes))
+	for _, column := range page.ColumnTypes {
 		if name := sqlColumnTypeName(column.DatabaseTypeName()); name != "" {
 			databaseTypes[column.Name()] = name
 		}
 	}
 	// The result's own columns describe it, so a filtered run keeps offering the
 	// filters that produced it.
-	described := browserProfile(descriptor, conn, request.Query, request.Options, sqlBrowserColumns(columnTypes))
+	described := browserProfile(descriptor, conn, request.Query, request.Options, sqlBrowserColumns(page.ColumnTypes))
 	columns, err := describeBrowserColumns(described, databaseTypes)
 	if err != nil {
 		return browserQueryResult{}, err
 	}
-	// The console is interactive, so it reads a page rather than a table. One
-	// row past the page is read and discarded to tell "this is all of it" from
-	// "this is the start of it" — a console that silently shows a slice cannot
-	// be used to decide anything.
-	ceiling := query.DefaultPageSize
-	values := make([]query.Row, 0, ceiling)
-	scanner, err := db.NewRowScanner(rows)
-	if err != nil {
-		return browserQueryResult{}, err
-	}
-	for len(values) < ceiling && scanner.Next() {
-		values = append(values, query.Row(scanner.Row()))
-	}
-	if err := scanner.Err(); err != nil {
-		return browserQueryResult{}, err
-	}
-	truncated := scanner.Next()
-	if err := scanner.Err(); err != nil {
-		return browserQueryResult{}, err
-	}
+	pageInfo := query.NewPageInfo(pageRequest, query.Page{HasMore: page.HasMore, Total: page.Total})
 	return browserQueryResult{
-		Rows: values, Columns: columns, Truncated: truncated, Limit: ceiling,
+		Rows: page.Rows, Columns: columns,
+		Pagination: &pageInfo,
 	}, nil
 }
 
@@ -442,7 +471,7 @@ func sqlReturnsRows(statement string) bool {
 }
 
 func (h *connectionBrowserHandler) serveInspection(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	ctx, cancel := inspectionContext(r.Context(), conn.Type, 15*time.Second)
 	defer cancel()
 	inspection, err := h.inspectConnection(ctx, conn, r.URL.Query().Get("database"), r.URL.Query().Get("target"), r.URL.Query().Get("targetKind"))
 	if err != nil {
@@ -450,6 +479,25 @@ func (h *connectionBrowserHandler) serveInspection(w http.ResponseWriter, r *htt
 		return
 	}
 	writeJSON(w, inspection)
+}
+
+func inspectionContext(parent context.Context, connectionType string, timeout time.Duration) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	if connectionType == models.ConnectionTypeClickHouse {
+		return contextWithoutDeadline{Context: ctx}, cancel
+	}
+	return ctx, cancel
+}
+
+// WORKAROUND(clickhouse-readonly-deadline): Hide the deadline so clickhouse-go does not send max_execution_time to read-only users.
+// Correct fix: clickhouse-go should expose a way to disable deadline-derived server settings while preserving client cancellation.
+// Ref: https://github.com/ClickHouse/clickhouse-go/blob/v2.46.0/context.go#L222-L241
+type contextWithoutDeadline struct {
+	context.Context
+}
+
+func (contextWithoutDeadline) Deadline() (time.Time, bool) {
+	return time.Time{}, false
 }
 
 func (h *connectionBrowserHandler) inspectConnection(ctx context.Context, conn *models.Connection, database, targetName, targetKind string) (browserInspection, error) {

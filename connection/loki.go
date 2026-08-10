@@ -1,52 +1,27 @@
 package connection
 
-import (
-	"fmt"
-
-	"github.com/flanksource/commons-db/types"
-)
-
+// Loki is an HTTP endpoint like any other, and the connection form stores its
+// credentials under the shared HTTP authentication contract (Properties keyed
+// by authType). Embedding HTTPConnection is what makes basic, OAuth, bearer and
+// mTLS all reachable, the same way PrometheusConnection does it.
+//
 // +kubebuilder:object:generate=true
 type Loki struct {
-	ConnectionName string `json:"connection,omitempty"`
-
-	URL      string        `json:"url,omitempty"`
-	Username *types.EnvVar `json:"username,omitempty"`
-	Password *types.EnvVar `json:"password,omitempty"`
+	HTTPConnection `json:",inline" yaml:",inline"`
 }
 
 func (c *Loki) Populate(ctx ConnectionContext) error {
-	if c.ConnectionName != "" {
-		conn, err := ctx.HydrateConnectionByURL(c.ConnectionName)
-		if err != nil {
-			return fmt.Errorf("could not hydrate connection[%s]: %w", c.ConnectionName, err)
-		} else if conn == nil {
-			return fmt.Errorf("connection[%s] not found", c.ConnectionName)
-		}
+	// An inline URL is the caller's own endpoint. A stored connection that names
+	// one overrides it, but hydrating against a row without a URL must not blank
+	// it — that is the only endpoint such a caller has.
+	inlineURL := c.URL
 
-		if conn.URL != "" {
-			c.URL = conn.URL
-		}
-
-		c.Username = &types.EnvVar{ValueStatic: conn.Username}
-		c.Password = &types.EnvVar{ValueStatic: conn.Password}
+	if _, err := c.Hydrate(ctx, ctx.GetNamespace()); err != nil {
+		return err
 	}
 
-	if c.Username != nil && !c.Username.IsEmpty() {
-		if v, err := ctx.GetEnvValueFromCache(*c.Username, ctx.GetNamespace()); err != nil {
-			return fmt.Errorf("could not get username from env var: %w", err)
-		} else {
-			c.Username.ValueStatic = v
-		}
+	if c.URL == "" {
+		c.URL = inlineURL
 	}
-
-	if c.Password != nil && !c.Password.IsEmpty() {
-		if v, err := ctx.GetEnvValueFromCache(*c.Password, ctx.GetNamespace()); err != nil {
-			return fmt.Errorf("could not get password from env var: %w", err)
-		} else {
-			c.Password.ValueStatic = v
-		}
-	}
-
 	return nil
 }

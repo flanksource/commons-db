@@ -330,6 +330,10 @@ export function ProfileBuilderWorkspace({
                       },
                     },
                     params: sampleParams,
+                    ...(request.pagination
+                      ? { pagination: request.pagination }
+                      : {}),
+                    ...(request.debug ? { debug: true } : {}),
                   }),
                 },
               );

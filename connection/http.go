@@ -231,7 +231,7 @@ func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.
 		if !ok {
 			return nil, fmt.Errorf("cannot configure TLS on transport %T", base)
 		}
-		tlsConfig, err := conn.TLS.transportConfig()
+		tlsConfig, err := conn.TLS.TLSClientConfig()
 		if err != nil {
 			return nil, err
 		}
@@ -258,7 +258,10 @@ func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.
 	return base.RoundTrip(req)
 }
 
-func (t TLSConfig) transportConfig() (*tls.Config, error) {
+// TLSClientConfig builds the tls.Config this connection describes. Exported
+// because not every client is an http.RoundTripper — the Loki tail stream needs
+// the same certificates on a websocket dialer.
+func (t TLSConfig) TLSClientConfig() (*tls.Config, error) {
 	config := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify} //nolint:gosec // explicit per-connection opt-in
 	if !t.CA.IsEmpty() {
 		roots, err := x509.SystemCertPool()

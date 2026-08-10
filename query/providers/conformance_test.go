@@ -29,8 +29,9 @@ type pagingFixture struct {
 	ctx     func() context.Context
 	key     func(query.Row) string
 
-	// released reports whether stopping a walk early let go of whatever the
-	// backend was holding. Nil for a backend that holds nothing.
+	// released reports whether exhausting a resumed cursor released whatever
+	// backend snapshot kept that cursor valid. Nil for a backend that holds
+	// nothing.
 	released func() bool
 }
 
@@ -106,18 +107,9 @@ func runPagingConformance(f pagingFixture) {
 			ids, _ := f.walk(query.PageRequest{Limit: 2, Cursor: first.Next})
 			// Resuming after the first page must neither repeat nor skip a row.
 			Expect(ids).To(Equal(conformanceIDs[2:]))
-		})
-
-		It("releases the backend when the consumer stops early", func() {
-			if f.released == nil {
-				Skip(f.name + " holds no backend resource across a walk")
+			if f.released != nil {
+				Expect(f.released()).To(BeTrue(), "the exhausted cursor still holds its backend snapshot")
 			}
-			for _, err := range query.ExecutePages(f.ctx(), f.profile(),
-				query.PageRequest{Limit: 2, Strategy: query.PagingCursor}) {
-				Expect(err).ToNot(HaveOccurred())
-				break
-			}
-			Expect(f.released()).To(BeTrue())
 		})
 	})
 }
@@ -232,8 +224,8 @@ var _ = Describe("provider paging contract", func() {
 					Order: query.Order{{Column: "seq", Unique: true}},
 				}
 			},
-			// The point-in-time is the resource a cursor walk holds, so closing
-			// it is what "the consumer stopped early" has to mean.
+			// The point-in-time is the resource that keeps a returned cursor
+			// resumable, so it is released only when that cursor is exhausted.
 			released: func() bool { return stub.closedPITs == stub.openedPITs && stub.openedPITs > 0 },
 		})
 	})
@@ -266,9 +258,9 @@ var _ = Describe("provider paging contract", func() {
 		})
 	})
 
-	// The SQL fixture writes its own resume predicate against its declared
-	// order, which is the only way a cursor reaches a backend whose statement
-	// belongs to the author.
+	// SQL cursor predicates are compiled by the provider around the author's
+	// statement, so values are bound and every ordered profile gets the same
+	// paging semantics without writing transport logic into its query.
 	Context("sql", Ordered, func() {
 		var dsn string
 		BeforeAll(func() {
@@ -290,13 +282,8 @@ var _ = Describe("provider paging contract", func() {
 						Type:    "sql",
 						Options: map[string]any{"type": "postgres", "url": dsn},
 					},
-					Params: []query.ParamDef{{Name: "cursor", Role: query.ParamRoleCursor}},
-					// The guard is what makes the predicate renderable on the
-					// first page, which carries no position to resume from.
 					Query: fmt.Sprintf(
-						`select seq, message from (values %s) as t(seq, message)
-						 {{if .params.cursor}} where seq > {{.params.cursor.seq}} {{end}}
-						 order by seq`,
+						`select seq, message from (values %s) as t(seq, message)`,
 						strings.Join(values, ", ")),
 					Order: query.Order{{Column: "seq", Unique: true}},
 				}
