@@ -217,7 +217,9 @@ var _ = Describe("Profile schema", func() {
 		param := params["items"].(schema.Schema)
 		Expect(param["x-clicky-component"]).To(Equal("es-param"))
 		Expect(param["properties"].(schema.Schema)["field"].(schema.Schema)["x-clicky-component"]).To(Equal("es-param-field"))
-		Expect(param["properties"].(schema.Schema)["role"].(schema.Schema)["enum"]).To(ContainElements("limit", "offset", "time-from", "time-to"))
+		roles := param["properties"].(schema.Schema)["role"].(schema.Schema)["enum"]
+		Expect(roles).To(ContainElements("limit", "offset", "time-from", "time-to"))
+		Expect(roles).ToNot(ContainElement("cursor"))
 		column := props["columns"].(schema.Schema)["items"].(schema.Schema)
 		columnProps := column["properties"].(schema.Schema)
 		Expect(columnProps["kind"].(schema.Schema)["enum"]).To(ContainElement("timestamp"))

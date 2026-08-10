@@ -75,13 +75,24 @@ func buildPagedSQL(
 	statement string,
 	filters []query.ColumnFilterValue,
 	order query.Order,
+	position query.CursorPosition,
 	page query.PageRequest,
 ) (string, []any, error) {
 	where, args, err := filterClause(dialect, filters)
 	if err != nil {
 		return "", nil, err
 	}
+	resume, resumeArgs, err := keysetClause(dialect, order, position)
+	if err != nil {
+		return "", nil, err
+	}
+	resume = offsetPlaceholders(dialect, resume, len(args))
+	args = append(args, resumeArgs...)
 	total, err := dialect.quote(sqlTotalColumn)
+	if err != nil {
+		return "", nil, err
+	}
+	pageAlias, err := dialect.quote("__cdb_page")
 	if err != nil {
 		return "", nil, err
 	}
@@ -90,31 +101,89 @@ func buildPagedSQL(
 		return "", nil, err
 	}
 	wrapped, err := wrapAsBaseCTE(dialect, statement, func(base string) string {
-		selection := fmt.Sprintf("SELECT %s.*, COUNT(*) OVER () AS %s FROM %s", base, total, base)
-		if page.SkipTotal {
-			selection = fmt.Sprintf("SELECT %s.* FROM %s", base, base)
+		selection := fmt.Sprintf("SELECT %s.* FROM %s", base, base)
+		if where != "" {
+			selection += "\nWHERE " + where
+		}
+		if !page.SkipTotal {
+			selection = fmt.Sprintf(
+				"SELECT %s.* FROM (\nSELECT %s.*, COUNT(*) OVER () AS %s FROM %s%s\n) AS %s",
+				pageAlias,
+				base,
+				total,
+				base,
+				whereTail(where),
+				pageAlias,
+			)
 		}
 		clauses := []string{selection}
-		if where != "" {
-			clauses = append(clauses, "WHERE "+where)
+		if resume != "" {
+			if page.SkipTotal && where != "" {
+				clauses[len(clauses)-1] += "\nAND " + resume
+			} else {
+				clauses = append(clauses, "WHERE "+resume)
+			}
 		}
 		if ordering != "" {
 			clauses = append(clauses, "ORDER BY "+ordering)
+		} else if dialect == dialectSQLServer {
+			clauses = append(clauses, "ORDER BY (SELECT NULL)")
 		}
-		// One past the ceiling, for the same reason a page reads one past its
-		// limit: proving a further row exists is what separates a finished export
-		// from one that stopped. Only an ordered statement takes it — SQL Server
-		// refuses OFFSET/FETCH without an ORDER BY, and an unordered ceiling would
-		// take an arbitrary N rows rather than the first N.
-		if page.Ceiling > 0 && ordering != "" {
-			clauses = append(clauses, dialect.limitTail(page.Ceiling+1))
+		fetch := page.Limit + 1
+		if page.Ceiling > 0 && page.Ceiling < page.Limit {
+			fetch = page.Ceiling + 1
 		}
+		clauses = append(clauses, dialect.pageTail(fetch, page.Offset))
 		return strings.Join(clauses, "\n")
 	})
 	if err != nil {
 		return "", nil, err
 	}
 	return wrapped, args, nil
+}
+
+func whereTail(where string) string {
+	if where == "" {
+		return ""
+	}
+	return "\nWHERE " + where
+}
+
+func keysetClause(dialect sqlDialect, order query.Order, position query.CursorPosition) (string, []any, error) {
+	if position.IsZero() {
+		return "", nil, nil
+	}
+	if len(position.Keys) != len(order) {
+		return "", nil, fmt.Errorf("cursor has %d keys for a %d-column order", len(position.Keys), len(order))
+	}
+	alternatives := squirrel.Or{}
+	for index, by := range order {
+		conditions := squirrel.And{}
+		for prefix := 0; prefix < index; prefix++ {
+			if position.Keys[prefix] == nil {
+				return "", nil, fmt.Errorf("cursor key %d for column %q is null; cursor columns must be non-null", prefix, order[prefix].Column)
+			}
+			column, err := dialect.quote(order[prefix].Column)
+			if err != nil {
+				return "", nil, err
+			}
+			conditions = append(conditions, squirrel.Eq{column: position.Keys[prefix]})
+		}
+		if position.Keys[index] == nil {
+			return "", nil, fmt.Errorf("cursor key %d for column %q is null; cursor columns must be non-null", index, by.Column)
+		}
+		column, err := dialect.quote(by.Column)
+		if err != nil {
+			return "", nil, err
+		}
+		if by.Desc {
+			conditions = append(conditions, squirrel.Lt{column: position.Keys[index]})
+		} else {
+			conditions = append(conditions, squirrel.Gt{column: position.Keys[index]})
+		}
+		alternatives = append(alternatives, unwrapSingle(conditions))
+	}
+	return renderClause(dialect, alternatives)
 }
 
 // orderClause renders a declared order for the wrapper. An undeclared order

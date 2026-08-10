@@ -212,6 +212,7 @@ func buildProviderRequest(ctx context.Context, cfg ProviderConfig, rawQuery stri
 		return ProviderRequest{}, err
 	}
 	return ProviderRequest{
+		Provider:        cfg.Type,
 		Connection:      connection,
 		Query:           query,
 		Options:         options,

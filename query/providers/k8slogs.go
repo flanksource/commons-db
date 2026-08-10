@@ -21,6 +21,10 @@ func init() {
 // It is the one log provider with no query language: there is nothing to send
 // the kubelet but a workload to read from, so the whole request is structural
 // and req.Query is unused.
+//
+// A request that names no connection reads the ambient cluster — $KUBECONFIG,
+// ~/.kube/config, or the in-cluster service account — and fails if there is
+// none.
 type k8sLogsProvider struct{}
 
 func (k8sLogsProvider) Type() string { return "k8s" }

@@ -165,7 +165,9 @@ var _ = Describe("opensearch provider", func() {
 		})
 		defer stub.server.Close()
 
-		result, err := query.Sample(context.New(), stub.profile("sampled", nil), nil, 10)
+		result, err := query.Sample(context.New(), stub.profile("sampled", nil), query.SampleOptions{
+			Page: query.PageRequest{Limit: 10},
+		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Rows).To(HaveLen(10))
 		Expect(result.Truncated).To(BeTrue())
@@ -253,9 +255,12 @@ var _ = Describe("opensearch provider", func() {
 			Expect(stub.bodies[1]["search_after"]).To(Equal([]any{float64(2), "two"}))
 		})
 
-		It("hands back a cursor that resumes the walk", func() {
-			stub := newOpenSearchStub(func(int) string {
-				return response(9, "eq", hit("one", 1, "one"), hit("two", 2, "two"))
+		It("hands back a cursor that resumes the same point-in-time", func() {
+			stub := newOpenSearchStub(func(call int) string {
+				if call == 0 {
+					return response(3, "eq", hit("one", 1, "one"), hit("two", 2, "two"))
+				}
+				return response(3, "eq", hit("three", 3, "three"))
 			})
 			defer stub.server.Close()
 
@@ -266,16 +271,24 @@ var _ = Describe("opensearch provider", func() {
 				break
 			}
 			Expect(next).ToNot(BeEmpty())
+			Expect(stub.closedPITs).To(BeZero())
 
-			position, err := query.DecodeCursor(next, query.CursorScope{Profile: "cursored", Order: order})
-			Expect(err).ToNot(HaveOccurred())
-			Expect(position.Keys).To(Equal([]any{float64(2), "two"}))
-			Expect(position.PIT).To(Equal("pit-1"))
+			for page, err := range query.ExecutePages(context.New(), stub.profile("cursored", order), query.PageRequest{Limit: 2, Cursor: next}) {
+				Expect(err).ToNot(HaveOccurred())
+				Expect(page.Rows).To(HaveLen(1))
+				Expect(page.Rows[0]).To(HaveKeyWithValue("message", "three"))
+				Expect(page.Next).To(BeEmpty())
+			}
+			Expect(stub.bodies).To(HaveLen(2))
+			Expect(stub.bodies[1]["search_after"]).To(Equal([]any{float64(2), "two"}))
+			Expect(stub.bodies[1]["pit"]).To(Equal(map[string]any{"id": "pit-1", "keep_alive": "60s"}))
+			Expect(stub.closedPITs).To(Equal(1))
 		})
 
-		// Ending the range is what releases the point-in-time; a walk stopped
-		// after one page must not leave the cluster holding segments open.
-		It("closes the point-in-time when the consumer stops early", func() {
+		// A page carrying a cursor must leave its point-in-time alive, or the
+		// cursor it just returned cannot be resumed. An abandoned cursor expires
+		// under the PIT keepalive.
+		It("keeps the point-in-time alive while a returned cursor can resume it", func() {
 			stub := newOpenSearchStub(func(int) string {
 				return response(9, "eq", hit("one", 1, "one"), hit("two", 2, "two"))
 			})
@@ -285,7 +298,7 @@ var _ = Describe("opensearch provider", func() {
 				Expect(err).ToNot(HaveOccurred())
 				break
 			}
-			Expect(stub.closedPITs).To(Equal(1))
+			Expect(stub.closedPITs).To(BeZero())
 		})
 
 		It("refuses a cursor on a profile that declares no order", func() {

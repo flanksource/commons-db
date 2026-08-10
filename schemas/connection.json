@@ -1346,6 +1346,7 @@
     "kubernetes": {
       "properties": {
         "certificate": {
+          "description": "Leave empty to use the ambient cluster ($KUBECONFIG or the in-cluster service account)",
           "title": "Kubeconfig",
           "type": "string",
           "x-clicky-component": "k8s-secret-selector",

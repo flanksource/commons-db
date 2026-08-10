@@ -101,29 +101,28 @@ func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...ma
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}
 
-	scope := CursorScope{
-		Profile: p.Name,
-		Order:   p.Order,
-		Params:  resolved,
-		Roles:   paramRoles(p.Params),
-		Filters: filters,
-	}
-	position, err := DecodeCursor(page.Cursor, scope)
-	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
-	}
-	// A keyset profile writes its own resume predicate, so the decoded position
-	// has to reach the template before the query is rendered.
-	if name := p.ParamNameForRole(ParamRoleCursor, ""); name != "" {
-		resolved[name] = position.CursorParams(p.Order)
-	}
-
 	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}
 	req.Filters = filters
 	req.Order = p.Order
+	req.Diagnostics = page.Diagnostics
+	scope := CursorScope{
+		Profile:    p.Name,
+		Provider:   p.Provider.Type,
+		Connection: req.Connection,
+		Query:      req.Query,
+		Options:    req.Options,
+		Order:      p.Order,
+		Params:     resolved,
+		Roles:      paramRoles(p.Params),
+		Filters:    filters,
+	}
+	position, err := DecodeCursor(page.Cursor, scope)
+	if err != nil {
+		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+	}
 	req.Position = position
 
 	return withCursors(scope, withRowTransforms(ctx, p, providerPages(ctx, p, req, page)))

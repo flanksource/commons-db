@@ -66,6 +66,9 @@ func ListOnePasswordItems(ctx Context, vaultID string) ([]OnePasswordItem, error
 	}
 	items := make([]OnePasswordItem, 0, len(records))
 	for _, record := range records {
+		if record.Title == "" {
+			continue
+		}
 		if err := validateOnePasswordCatalogEntry("item", record.ID, record.Title); err != nil {
 			return nil, err
 		}

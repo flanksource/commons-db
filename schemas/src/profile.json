@@ -378,12 +378,11 @@
             "x-clicky-order": 7
           },
           "role": {
-            "description": "Map this parameter to filtering, paging, or a date-range edge; a cursor parameter exposes params.\u003cname\u003e.\u003ccolumn\u003e for a keyset resume predicate",
+            "description": "Map this parameter to filtering, paging, or a date-range edge; cursors are provider-owned transport values",
             "enum": [
               "filter",
               "limit",
               "offset",
-              "cursor",
               "time-from",
               "time-to"
             ],
@@ -392,7 +391,6 @@
             "x-clicky-order": 3,
             "x-enum-display": "combobox",
             "x-enum-icons": {
-              "cursor": "bookmark",
               "filter": "filter",
               "limit": "list-ordered",
               "offset": "arrow-right",
@@ -400,7 +398,6 @@
               "time-to": "timer"
             },
             "x-enum-labels": {
-              "cursor": "resumes after",
               "filter": "filters",
               "limit": "row limit",
               "offset": "offset",

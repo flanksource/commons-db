@@ -244,6 +244,10 @@ export function ProfileWizardQueryStep({
                 profile: nextDraft.profile || "sample",
               },
               params: {},
+              ...(request.pagination
+                ? { pagination: request.pagination }
+                : {}),
+              ...(request.debug ? { debug: true } : {}),
             }),
           });
           onSample({

@@ -49,7 +49,7 @@ var _ = Describe("buildPagedSQL against postgres", Ordered, func() {
 	const wideQuery = "SELECT id, region FROM wide"
 
 	It("materializes the whole result to state an exact total", func() {
-		statement, _, err := buildPagedSQL(dialectPostgres, wideQuery, nil, pageOrder,
+		statement, _, err := buildPagedSQL(dialectPostgres, wideQuery, nil, pageOrder, query.CursorPosition{},
 			query.PageRequest{Limit: 50})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(explain(statement)).To(ContainSubstring("WindowAgg"))
@@ -59,15 +59,15 @@ var _ = Describe("buildPagedSQL against postgres", Ordered, func() {
 	// down, the plan has no buffering aggregate and the server stops where the
 	// export stops instead of scanning past it into rows nobody receives.
 	It("neither buffers nor overruns the ceiling when the total is waived", func() {
-		statement, _, err := buildPagedSQL(dialectPostgres, wideQuery, nil, pageOrder,
+		statement, _, err := buildPagedSQL(dialectPostgres, wideQuery, nil, pageOrder, query.CursorPosition{},
 			query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100})
 		Expect(err).ToNot(HaveOccurred())
 
 		plan := explain(statement)
 		Expect(plan).ToNot(ContainSubstring("WindowAgg"))
 		Expect(plan).To(ContainSubstring("Limit"))
-		// 101 rows for a 5000-row table: one past the ceiling, to prove a further
-		// row exists without reading the rest of the table to find out.
-		Expect(plan).To(MatchRegexp(`Limit .*rows=101`))
+		// Each backend read is one page plus one row to prove continuation. The
+		// provider, not one unbounded statement, enforces the whole-walk ceiling.
+		Expect(plan).To(MatchRegexp(`Limit .*rows=51`))
 	})
 })

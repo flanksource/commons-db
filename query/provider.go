@@ -37,6 +37,10 @@ type FilterLookupProvider interface {
 
 // ProviderRequest is the resolved input handed to a Provider by the engine.
 type ProviderRequest struct {
+	// Provider is the resolved registry key. It is carried so optional
+	// diagnostics can identify the native backend without re-deriving it.
+	Provider string
+
 	// Connection references a connection (connection://name) or an inline DSN/URL.
 	Connection string
 
@@ -73,6 +77,11 @@ type ProviderRequest struct {
 	// start of a walk. The engine validates and decodes it, so a provider works
 	// in key values and never in the token format.
 	Position CursorPosition
+
+	// Diagnostics is populated only for an explicitly requested debug run.
+	// Providers record their final native request and response details here so
+	// failures can return the same evidence as successful executions.
+	Diagnostics *ProviderDiagnostics
 }
 
 var providerRegistry = map[string]Provider{}

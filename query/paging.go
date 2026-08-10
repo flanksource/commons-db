@@ -83,6 +83,10 @@ type PageRequest struct {
 	// one that materializes. A page cannot waive it — a table has to say what it
 	// is a page of — so this is an export's trade to make.
 	SkipTotal bool
+
+	// Diagnostics is non-nil only for an explicit debug execution. It is not a
+	// paging input and is excluded from cursor scope.
+	Diagnostics *ProviderDiagnostics `json:"-"`
 }
 
 // Mode reports which strategy this request asks for.
@@ -191,6 +195,34 @@ type Page struct {
 	// Truncated says the source already decided not to give it. A caller that
 	// asked for everything needs to know the difference.
 	Truncated bool
+}
+
+type PageInfo struct {
+	Mode          string `json:"mode"`
+	Limit         int    `json:"limit"`
+	Offset        int    `json:"offset,omitempty"`
+	Cursor        Cursor `json:"cursor,omitempty"`
+	NextCursor    Cursor `json:"nextCursor,omitempty"`
+	HasMore       bool   `json:"hasMore"`
+	Total         *int64 `json:"total,omitempty"`
+	TotalRelation string `json:"totalRelation"`
+	Consistency   string `json:"consistency"`
+}
+
+func NewPageInfo(request PageRequest, page Page) PageInfo {
+	info := PageInfo{
+		Mode: request.Mode().String(), Limit: request.Limit, Offset: request.Offset,
+		Cursor: request.Cursor, NextCursor: page.Next, HasMore: page.HasMore,
+		TotalRelation: page.Total.Relation(), Consistency: "live",
+	}
+	if page.Total != nil {
+		total := page.Total.Value
+		info.Total = &total
+	}
+	if page.PIT != "" {
+		info.Consistency = "snapshot"
+	}
+	return info
 }
 
 // PagingProvider is the result contract implemented by every provider that can

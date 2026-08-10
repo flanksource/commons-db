@@ -9,8 +9,9 @@ import (
 
 var _ = ginkgo.Describe("1Password metadata catalog", func() {
 	const (
-		vaultID = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
-		itemID  = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
+		vaultID        = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+		itemID         = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
+		untitledItemID = "cccccccccccccccccccccccccc"
 	)
 
 	ginkgo.BeforeEach(func() {
@@ -19,7 +20,7 @@ var _ = ginkgo.Describe("1Password metadata catalog", func() {
 			case len(args) == 3 && args[0] == "vault":
 				return []byte(`[{"id":"` + vaultID + `","name":"Production"}]`), nil
 			case len(args) == 5 && args[0] == "item" && args[1] == "list":
-				return []byte(`[{"id":"` + itemID + `","title":"Database"}]`), nil
+				return []byte(`[{"id":"` + untitledItemID + `","title":""},{"id":"` + itemID + `","title":"Database"}]`), nil
 			case len(args) == 6 && args[0] == "item" && args[1] == "get":
 				return []byte(`{"fields":[{"id":"notesPlain","label":"notesPlain","reference":"","value":"must-not-escape"},{"id":"password","label":"Password","reference":"op://Production/Database/password","value":"must-not-escape","section":{"label":"Credentials"}}]}`), nil
 			default:
@@ -33,7 +34,7 @@ var _ = ginkgo.Describe("1Password metadata catalog", func() {
 		onePasswordCommandFunc = runOnePasswordCommand
 	})
 
-	ginkgo.It("lists sorted vault and item metadata", func() {
+	ginkgo.It("omits untitled items while listing sorted metadata", func() {
 		vaults, err := ListOnePasswordVaults(newOnePasswordTestContext())
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		gomega.Expect(vaults).To(gomega.Equal([]OnePasswordVault{{ID: vaultID, Name: "Production"}}))

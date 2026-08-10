@@ -30,34 +30,9 @@ func startViteDevProxy(ctx context.Context, apiHost string, apiPort int) (http.H
 	// `--strictPort` makes the port we picked the only one Vite will accept — if
 	// anything raced into it between the listen probe and exec, Vite errors out
 	// loudly instead of silently falling back to another port.
-	cmd := exec.CommandContext(ctx, "pnpm", "exec", "vite",
-		"--strictPort",
-		"--host", "127.0.0.1",
-		"--port", fmt.Sprintf("%d", vitePort),
-	)
-	cmd.Dir = "cmd/query/www"
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd := viteDevCommand(ctx, vitePort, apiHost, apiPort)
 
-	// Raise Node's HTTP header size cap so Vite's dev server accepts browser
-	// headers forwarded through our reverse proxy. The 8 KB default is often
-	// exceeded by modern Chrome + dev cookies, producing opaque 431 responses.
-	// https://vite.dev/guide/troubleshooting.html#_431-request-header-fields-too-large
-	const headerFlag = "--max-http-header-size=65536"
-	nodeOpts := os.Getenv("NODE_OPTIONS")
-	if !strings.Contains(nodeOpts, "--max-http-header-size") {
-		if nodeOpts != "" {
-			nodeOpts += " "
-		}
-		nodeOpts += headerFlag
-	}
-	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("QUERY_API_URL=http://%s:%d", apiHost, apiPort),
-		"NODE_OPTIONS="+nodeOpts,
-	)
-
-	fmt.Printf("🔧 starting Vite dev server (pnpm exec vite --port %d) in cmd/query/www, API → http://%s:%d\n", vitePort, apiHost, apiPort)
+	fmt.Printf("🔧 starting Vite dev server (pnpm --dir www exec vite --port %d), API → http://%s:%d\n", vitePort, apiHost, apiPort)
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("start vite: %w", err)
 	}
@@ -80,6 +55,35 @@ func startViteDevProxy(ctx context.Context, apiHost string, apiPort int) (http.H
 		stopProcessGroup(cmd)
 	}
 	return proxy, cleanup, nil
+}
+
+func viteDevCommand(ctx context.Context, vitePort int, apiHost string, apiPort int) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "pnpm", "--dir", "www", "exec", "vite",
+		"--strictPort",
+		"--host", "127.0.0.1",
+		"--port", fmt.Sprintf("%d", vitePort),
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	// Raise Node's HTTP header size cap so Vite's dev server accepts browser
+	// headers forwarded through our reverse proxy. The 8 KB default is often
+	// exceeded by modern Chrome + dev cookies, producing opaque 431 responses.
+	// https://vite.dev/guide/troubleshooting.html#_431-request-header-fields-too-large
+	const headerFlag = "--max-http-header-size=65536"
+	nodeOpts := os.Getenv("NODE_OPTIONS")
+	if !strings.Contains(nodeOpts, "--max-http-header-size") {
+		if nodeOpts != "" {
+			nodeOpts += " "
+		}
+		nodeOpts += headerFlag
+	}
+	cmd.Env = append(os.Environ(),
+		fmt.Sprintf("QUERY_API_URL=http://%s:%d", apiHost, apiPort),
+		"NODE_OPTIONS="+nodeOpts,
+	)
+	return cmd
 }
 
 // pickFreePort asks the kernel for an unused TCP port on 127.0.0.1, closes the

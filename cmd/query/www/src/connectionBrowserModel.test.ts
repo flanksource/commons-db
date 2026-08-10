@@ -1,5 +1,38 @@
-import { describe, expect, it } from "vitest";
-import { mergeProviderOptions } from "./connectionBrowserModel";
+import { QueryBrowserExecutionError } from "@flanksource/clicky-ui";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { fetchJSON, mergeProviderOptions } from "./connectionBrowserModel";
+
+afterEach(() => vi.unstubAllGlobals());
+
+it("preserves provider diagnostics from a failed JSON request", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: "query failed",
+          diagnostics: {
+            provider: "clickhouse",
+            request: { query: "SELECT broken" },
+            error: "unknown identifier broken",
+          },
+        }),
+        { status: 422, headers: { "Content-Type": "application/json" } },
+      ),
+    ),
+  );
+
+  try {
+    await fetchJSON("/query");
+    throw new Error("expected fetchJSON to reject");
+  } catch (error) {
+    expect(error).toBeInstanceOf(QueryBrowserExecutionError);
+    expect((error as QueryBrowserExecutionError).message).toBe("query failed");
+    expect((error as QueryBrowserExecutionError).diagnostics?.request.query).toBe(
+      "SELECT broken",
+    );
+  }
+});
 
 describe("provider option layering", () => {
   const stored = { index: "logs-2024", limit: "100" };

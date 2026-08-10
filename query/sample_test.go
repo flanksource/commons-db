@@ -30,15 +30,18 @@ func TestSampleRendersCapsAndInfersRawRows(t *testing.T) {
 		Aliases: []AliasDef{{Name: "active_copy", CEL: "row.active"}},
 		Ignore:  []string{"started"},
 		Columns: []ColumnDef{{Name: "computed", CEL: "row.count + 1"}},
-	}, map[string]any{"owner": "alice"}, 1)
+	}, SampleOptions{
+		Params: map[string]any{"owner": "alice"},
+		Page:   PageRequest{Limit: 1},
+	})
 	if err != nil {
 		t.Fatalf("Sample: %v", err)
 	}
 	if result.RenderedQuery != "SELECT * FROM jobs WHERE owner = 'alice'" {
 		t.Fatalf("rendered query = %q", result.RenderedQuery)
 	}
-	if !result.Truncated || len(result.Rows) != 1 {
-		t.Fatalf("expected one truncated row, got %#v", result)
+	if result.Truncated || !result.Pagination.HasMore || len(result.Rows) != 1 {
+		t.Fatalf("expected one pageable row with more available, got %#v", result)
 	}
 	want := []ColumnDef{
 		{Name: "active", Type: ColumnTypeBoolean}, {Name: "active_copy", Type: ColumnTypeBoolean}, {Name: "computed", Type: ColumnTypeNumber}, {Name: "count", Type: ColumnTypeNumber},
@@ -61,6 +64,39 @@ func TestSampleRendersCapsAndInfersRawRows(t *testing.T) {
 	}
 	if _, ok := result.Rows[0]["started"]; ok {
 		t.Fatalf("ignored sample field survived: %#v", result.Rows[0])
+	}
+}
+
+func TestSampleRejectsPageAboveProfileMaximum(t *testing.T) {
+	original := providerRegistry["postgres"]
+	providerRegistry["postgres"] = sampleTestProvider{rows: []Row{{"value": 1}}}
+	t.Cleanup(func() { providerRegistry["postgres"] = original })
+
+	_, err := Sample(dbcontext.New(), Profile{
+		Name: "bounded", Provider: ProviderConfig{Type: "postgres"}, Query: "SELECT 1",
+		Limits: &RowLimits{PageSize: 25, MaxPageSize: 25},
+	}, SampleOptions{Page: PageRequest{Limit: 26}})
+	if err == nil || !strings.Contains(err.Error(), "maximum page size 25") {
+		t.Fatalf("error = %v, want maximum page size", err)
+	}
+}
+
+func TestSampleAppliesRowTransformsOnce(t *testing.T) {
+	original := providerRegistry["postgres"]
+	providerRegistry["postgres"] = sampleTestProvider{rows: []Row{{"value": 1}}}
+	t.Cleanup(func() { providerRegistry["postgres"] = original })
+
+	result, err := Sample(dbcontext.New(), Profile{
+		Name:     "single-transform",
+		Provider: ProviderConfig{Type: "postgres"},
+		Query:    "SELECT 1 AS value",
+		Columns:  []ColumnDef{{Name: "value", CEL: "row.value + 1"}},
+	}, SampleOptions{Page: PageRequest{Limit: 1}})
+	if err != nil {
+		t.Fatalf("Sample: %v", err)
+	}
+	if got := result.Rows[0]["value"]; got != int64(2) {
+		t.Fatalf("transformed value = %v (%T), want 2", got, got)
 	}
 }
 
@@ -141,7 +177,9 @@ func TestSampleRejectsUnsafeRequests(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.provider+"-"+strings.Fields(tt.query)[0], func(t *testing.T) {
-			_, err := Sample(dbcontext.New(), Profile{Name: "unsafe", Query: tt.query, Provider: ProviderConfig{Type: tt.provider, Options: tt.options}}, nil, 100)
+			_, err := Sample(dbcontext.New(), Profile{Name: "unsafe", Query: tt.query, Provider: ProviderConfig{Type: tt.provider, Options: tt.options}}, SampleOptions{
+				Page: PageRequest{Limit: 100},
+			})
 			if err == nil || !strings.Contains(err.Error(), "read-only") {
 				t.Fatalf("expected read-only rejection, got %v", err)
 			}
@@ -180,7 +218,10 @@ func TestSampleRejectsUnsafeTemplatedRequests(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := Sample(dbcontext.New(), tt.profile, tt.params, 100)
+			_, err := Sample(dbcontext.New(), tt.profile, SampleOptions{
+				Params: tt.params,
+				Page:   PageRequest{Limit: 100},
+			})
 			if err == nil || !strings.Contains(err.Error(), "read-only") {
 				t.Fatalf("expected read-only rejection, got %v", err)
 			}

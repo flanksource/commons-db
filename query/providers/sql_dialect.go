@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/Masterminds/squirrel"
@@ -131,6 +132,46 @@ func (d sqlDialect) limitTail(limit int) string {
 		return fmt.Sprintf("OFFSET 0 ROWS FETCH NEXT %d ROWS ONLY", limit)
 	}
 	return fmt.Sprintf("LIMIT %d", limit)
+}
+
+func (d sqlDialect) pageTail(limit, offset int) string {
+	if d == dialectSQLServer {
+		return fmt.Sprintf("OFFSET %d ROWS FETCH NEXT %d ROWS ONLY", offset, limit)
+	}
+	if offset > 0 {
+		return fmt.Sprintf("LIMIT %d OFFSET %d", limit, offset)
+	}
+	return fmt.Sprintf("LIMIT %d", limit)
+}
+
+var (
+	postgresPlaceholder  = regexp.MustCompile(`\$\d+`)
+	sqlServerPlaceholder = regexp.MustCompile(`@p\d+`)
+)
+
+func offsetPlaceholders(dialect sqlDialect, clause string, offset int) string {
+	if offset == 0 || clause == "" {
+		return clause
+	}
+	var marker *regexp.Regexp
+	prefix := ""
+	switch dialect {
+	case dialectPostgres:
+		marker = postgresPlaceholder
+		prefix = "$"
+	case dialectSQLServer:
+		marker = sqlServerPlaceholder
+		prefix = "@p"
+	default:
+		return clause
+	}
+	return marker.ReplaceAllStringFunc(clause, func(raw string) string {
+		value, err := strconv.Atoi(strings.TrimPrefix(raw, prefix))
+		if err != nil {
+			panic(fmt.Sprintf("offset SQL placeholder %q: %v", raw, err))
+		}
+		return prefix + strconv.Itoa(value+offset)
+	})
 }
 
 // likeEscapeChar is "!" rather than "\" because MySQL's NO_BACKSLASH_ESCAPES

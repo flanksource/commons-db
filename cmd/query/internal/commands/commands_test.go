@@ -38,6 +38,53 @@ var _ = Describe("New", Ordered, func() {
 		}
 		Expect(root.PersistentFlags().Lookup("config-dir").DefValue).To(Equal(configDir))
 		Expect(root.PersistentFlags().Lookup("profiles-dir").DefValue).To(Equal(profilesDir))
+		// --db and --data-dir are persistent so `serve` and every sub-command name
+		// the same store; serve must not shadow --data-dir with its own copy.
+		Expect(root.PersistentFlags().Lookup("db").DefValue).To(Equal("embedded"))
+		Expect(root.PersistentFlags().Lookup("data-dir").DefValue).To(Equal(filepath.Join(configDir, "postgres")))
+		serve, _, err := root.Find([]string{"serve"})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(serve.Flags().Lookup("data-dir")).To(BeNil())
+	})
+
+	DescribeTable("builds the command tree without starting postgres",
+		func(args []string) {
+			configDir := filepath.Join(GinkgoT().TempDir(), "config")
+			root, err := commands.New(commands.Options{
+				Args: append([]string{
+					"--config-dir", configDir,
+					"--profiles-dir", filepath.Join(GinkgoT().TempDir(), "profiles"),
+				}, args...),
+				Stdout: io.Discard, Stderr: io.Discard, BuildInfo: build,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(root).NotTo(BeNil())
+
+			// The embedded cluster lives at <config-dir>/postgres. Its absence is
+			// what proves a metadata-only invocation never opened the database.
+			Expect(filepath.Join(configDir, "postgres")).NotTo(BeAnExistingFile())
+		},
+		Entry("with no command", []string{}),
+		Entry("with --help", []string{"--help"}),
+		Entry("with -h", []string{"-h"}),
+		Entry("from the help command", []string{"help"}),
+		Entry("from the schema command", []string{"schema", "--out", "/dev/null"}),
+		Entry("from shell completion", []string{"__complete", ""}),
+	)
+
+	It("falls back to the file store when --db is explicitly empty", func() {
+		configDir := filepath.Join(GinkgoT().TempDir(), "config")
+		root, err := commands.New(commands.Options{
+			Args: []string{
+				"--config-dir", configDir,
+				"--profiles-dir", filepath.Join(GinkgoT().TempDir(), "profiles"),
+				"--db=", "profiles",
+			},
+			Stdout: io.Discard, Stderr: io.Discard, BuildInfo: build,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(root).NotTo(BeNil())
+		Expect(filepath.Join(configDir, "postgres")).NotTo(BeAnExistingFile())
 	})
 
 	DescribeTable("prints the injected build information without initializing application state",

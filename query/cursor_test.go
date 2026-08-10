@@ -13,14 +13,15 @@ var pageableOrder = query.Order{
 
 func scopeWith(params map[string]any) query.CursorScope {
 	return query.CursorScope{
-		Profile: "orders",
-		Order:   pageableOrder,
-		Params:  params,
+		Profile:  "orders",
+		Provider: "clickhouse",
+		Query:    "SELECT created_at, id FROM orders",
+		Order:    pageableOrder,
+		Params:   params,
 		Roles: map[string]query.ParamRole{
 			"tenant": query.ParamRoleFilter,
 			"limit":  query.ParamRoleLimit,
 			"offset": query.ParamRoleOffset,
-			"cursor": query.ParamRoleCursor,
 		},
 	}
 }
@@ -98,6 +99,16 @@ var _ = Describe("Cursor", func() {
 		Expect(position.PIT).To(Equal("pit-1"))
 	})
 
+	It("round-trips unsigned keys above JSON's exact integer range", func() {
+		large := uint64(1<<63 + 17)
+		cursor, err := query.EncodeCursor(scope, []any{"2026-01-01T00:00:00Z", large}, "")
+		Expect(err).ToNot(HaveOccurred())
+
+		position, err := query.DecodeCursor(cursor, scope)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(position.Keys).To(Equal([]any{"2026-01-01T00:00:00Z", large}))
+	})
+
 	// A cursor holds one key per ordered column; anything else would resume from
 	// a position the order cannot locate.
 	It("refuses to issue a cursor whose keys do not match the order", func() {
@@ -110,17 +121,6 @@ var _ = Describe("Cursor", func() {
 		unordered.Order = query.Order{{Column: "created_at"}}
 		_, err := query.EncodeCursor(unordered, []any{"x"}, "")
 		Expect(err).To(MatchError(ContainSubstring("not declared unique")))
-	})
-
-	// The keys are handed back to the author's template under the column names
-	// they declared the order in.
-	It("exposes the position to a keyset query by order column", func() {
-		position := query.CursorPosition{Keys: keys}
-		Expect(position.CursorParams(pageableOrder)).To(Equal(map[string]any{
-			"created_at": "2026-01-01T00:00:00Z",
-			"id":         "row-9",
-		}))
-		Expect(query.CursorPosition{}.CursorParams(pageableOrder)).To(BeNil())
 	})
 
 	Describe("staleness", func() {
@@ -147,6 +147,14 @@ var _ = Describe("Cursor", func() {
 			Expect(err).To(MatchError(query.ErrCursorStale))
 		})
 
+		It("rejects a cursor after the rendered provider query changes", func() {
+			changed := scope
+			changed.Query = "SELECT created_at, id FROM archived_orders"
+			_, err := query.DecodeCursor(cursor, changed)
+			Expect(err).To(MatchError(query.ErrCursorStale))
+			Expect(err).To(MatchError(ContainSubstring("query inputs changed")))
+		})
+
 		It("rejects a cursor it did not issue", func() {
 			_, err := query.DecodeCursor("not-a-cursor!!", scope)
 			Expect(err).To(MatchError(query.ErrCursorStale))
@@ -167,20 +175,4 @@ var _ = Describe("Cursor", func() {
 		Expect(position.Keys).To(Equal(keys))
 	})
 
-	// A keyset profile templates the cursor's own keys into its resume
-	// predicate, so the cursor param differs on every page of one walk. Scoping
-	// on it would make each cursor invalidate the request it was issued for.
-	It("survives its own keys reaching the next request as a param", func() {
-		first := scopeWith(map[string]any{"tenant": "acme"})
-		second := scopeWith(map[string]any{
-			"tenant": "acme",
-			"cursor": map[string]any{"created_at": "2026-01-01T00:00:00Z", "id": "row-9"},
-		})
-
-		cursor, err := query.EncodeCursor(first, keys, "")
-		Expect(err).ToNot(HaveOccurred())
-
-		_, err = query.DecodeCursor(cursor, second)
-		Expect(err).ToNot(HaveOccurred())
-	})
 })

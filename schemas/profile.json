@@ -3,7 +3,7 @@
     "azureloganalytics": {
       "properties": {
         "connection": {
-          "description": "Pick a saved connection or type an inline DSN/URL",
+          "description": "Pick a saved connection. Leave empty to use the ambient Azure identity (environment, workload or managed identity, or az login)",
           "title": "Connection",
           "type": "string",
           "x-clicky-lookup": {
@@ -170,7 +170,7 @@
     "bigquery": {
       "properties": {
         "connection": {
-          "description": "Pick a saved connection or type an inline DSN/URL",
+          "description": "Pick a saved connection. Leave empty to use the ambient Google application default credentials",
           "title": "Connection",
           "type": "string",
           "x-clicky-lookup": {
@@ -425,7 +425,7 @@
     "cloudwatch": {
       "properties": {
         "connection": {
-          "description": "Pick a saved connection or type an inline DSN/URL",
+          "description": "Pick a saved connection. Leave empty to use the ambient AWS credentials (environment, IRSA, or instance profile)",
           "title": "Connection",
           "type": "string",
           "x-clicky-lookup": {
@@ -604,7 +604,7 @@
     "gcpcloudlogging": {
       "properties": {
         "connection": {
-          "description": "Pick a saved connection or type an inline DSN/URL",
+          "description": "Pick a saved connection. Leave empty to use the ambient Google application default credentials",
           "title": "Connection",
           "type": "string",
           "x-clicky-lookup": {
@@ -1024,7 +1024,7 @@
     "k8s": {
       "properties": {
         "connection": {
-          "description": "Pick a saved connection or type an inline DSN/URL",
+          "description": "Pick a saved connection. Leave empty to use the ambient cluster ($KUBECONFIG, ~/.kube/config, or the in-cluster service account)",
           "title": "Connection",
           "type": "string",
           "x-clicky-lookup": {
@@ -4446,12 +4446,11 @@
             "x-clicky-order": 7
           },
           "role": {
-            "description": "Map this parameter to filtering, paging, or a date-range edge; a cursor parameter exposes params.\u003cname\u003e.\u003ccolumn\u003e for a keyset resume predicate",
+            "description": "Map this parameter to filtering, paging, or a date-range edge; cursors are provider-owned transport values",
             "enum": [
               "filter",
               "limit",
               "offset",
-              "cursor",
               "time-from",
               "time-to"
             ],
@@ -4460,7 +4459,6 @@
             "x-clicky-order": 3,
             "x-enum-display": "combobox",
             "x-enum-icons": {
-              "cursor": "bookmark",
               "filter": "filter",
               "limit": "list-ordered",
               "offset": "arrow-right",
@@ -4468,7 +4466,6 @@
               "time-to": "timer"
             },
             "x-enum-labels": {
-              "cursor": "resumes after",
               "filter": "filters",
               "limit": "row limit",
               "offset": "offset",

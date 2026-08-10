@@ -25,13 +25,13 @@ var (
 	}
 	paramRoleIcons = map[string]string{
 		"filter": "filter", "limit": "list-ordered", "offset": "arrow-right",
-		"time-from": "clock", "time-to": "timer", "cursor": "bookmark",
+		"time-from": "clock", "time-to": "timer",
 	}
 	// The role says what the parameter does to the query; the verb phrase reads
 	// better than the bare code in the collapsed row's chip.
 	paramRoleLabels = map[string]string{
 		"filter": "filters", "limit": "row limit", "offset": "offset",
-		"time-from": "time from", "time-to": "time to", "cursor": "resumes after",
+		"time-from": "time from", "time-to": "time to",
 	}
 )
 
@@ -108,11 +108,11 @@ func ProfileSource() Schema {
 			},
 			"role": Schema{
 				"type": "string", "title": "Role", "x-clicky-order": 3,
-				"enum":           []string{"filter", "limit", "offset", "cursor", "time-from", "time-to"},
+				"enum":           []string{"filter", "limit", "offset", "time-from", "time-to"},
 				"x-enum-labels":  paramRoleLabels,
 				"x-enum-icons":   paramRoleIcons,
 				"x-enum-display": "combobox",
-				"description":    "Map this parameter to filtering, paging, or a date-range edge; a cursor parameter exposes params.<name>.<column> for a keyset resume predicate",
+				"description":    "Map this parameter to filtering, paging, or a date-range edge; cursors are provider-owned transport values",
 			},
 			"field": Schema{
 				"type": "string", "title": "Field", "x-clicky-order": 4,
@@ -274,7 +274,7 @@ func ProfileSource() Schema {
 				"x-enum-icons":   providerTypeIcons,
 				"x-enum-display": "combobox",
 			},
-			"connection": connectionProp(),
+			"connection": connectionProp(""),
 			"options":    Schema{"type": "object", "title": "Options"},
 		},
 	}
@@ -442,7 +442,7 @@ func replaySpec() Schema {
 				"type":               "object",
 				"title":              "Target",
 				"description":        "Connection the request is sent to; required for a relative URL",
-				"properties":         Schema{"connection": connectionProp(), "url": strProp("URL", "Base URL")},
+				"properties":         Schema{"connection": connectionProp(""), "url": strProp("URL", "Base URL")},
 				"x-clicky-order":     2,
 				"x-clicky-component": "connection-http",
 			},
@@ -556,11 +556,28 @@ func profileRefLookup(multi bool) Schema {
 	}
 }
 
-func connectionProp() Schema {
+// ambientConnectionHints name, per provider, the identity a query runs as when
+// no connection is picked. Every one of these backends falls through to its
+// platform's own credential chain, so leaving the field empty is a supported
+// choice rather than an omission — the form has to say which identity that is.
+var ambientConnectionHints = map[string]string{
+	"cloudwatch":        "Leave empty to use the ambient AWS credentials (environment, IRSA, or instance profile)",
+	"gcpcloudlogging":   "Leave empty to use the ambient Google application default credentials",
+	"bigquery":          "Leave empty to use the ambient Google application default credentials",
+	"azureloganalytics": "Leave empty to use the ambient Azure identity (environment, workload or managed identity, or az login)",
+	"k8s":               "Leave empty to use the ambient cluster ($KUBECONFIG, ~/.kube/config, or the in-cluster service account)",
+}
+
+func connectionProp(providerType string) Schema {
+	description := "Pick a saved connection or type an inline DSN/URL"
+	if hint, ok := ambientConnectionHints[providerType]; ok {
+		description = "Pick a saved connection. " + hint
+	}
+
 	return Schema{
 		"type":        "string",
 		"title":       "Connection",
-		"description": "Pick a saved connection or type an inline DSN/URL",
+		"description": description,
 		"x-clicky-lookup": Schema{
 			"url":         "/api/v1/connection",
 			"filter":      "connection",

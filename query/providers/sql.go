@@ -9,11 +9,10 @@ import (
 	"database/sql"
 	"fmt"
 	"iter"
-	"slices"
+	"math"
 	"strconv"
 
 	"github.com/flanksource/commons-db/context"
-	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 )
@@ -51,12 +50,9 @@ type sqlOptions struct {
 	Database string `json:"database,omitempty"`
 }
 
-// PagingModes reports both strategies, but they are not equally good and the
-// difference is the author's to close. Offset is always available and always
-// costs a row read per row skipped, because the statement belongs to whoever
-// wrote it and is never rewritten to carry a LIMIT/OFFSET. Cursor paging is
-// available to a profile that declares a cursor-role param and writes its own
-// resume predicate against its declared order.
+// PagingModes reports the two strategies compiled around an author's query.
+// Offset supports direct page jumps; cursor paging binds a provider-owned
+// keyset predicate against the declared total order.
 func (p sqlProvider) PagingModes() query.PagingMode {
 	return query.PagingOffset | query.PagingCursor
 }
@@ -77,123 +73,50 @@ func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]
 // taking a single page does not hold either.
 func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
 	return func(yield func(query.Page, error) bool) {
-		keyed, err := sqlCursorWiring(req)
+		client, dialect, err := p.connect(ctx, req)
 		if err != nil {
 			yield(query.Page{}, err)
 			return
 		}
-		rows, client, scanner, err := p.open(ctx, req, page)
-		if err != nil {
-			yield(query.Page{}, err)
-			return
-		}
-		defer func() {
-			_ = rows.Close()
-			_ = client.Close()
-		}()
+		defer func() { _ = client.Close() }()
 
-		// Offset is served by reading and discarding. The statement is the
-		// author's, so there is nowhere to put an OFFSET the backend could
-		// honour — which is the whole cost that a keyset cursor avoids.
-		// An offset past the end still knows the size of what it ran off, so the
-		// skipped rows are read for their count before the empty page is served.
-		skippedTotal := query.Total{Exact: true}
-		for skipped := 0; skipped < page.Offset; skipped++ {
-			if !scanner.Next() {
-				if err := scanner.Err(); err != nil {
-					yield(query.Page{}, fmt.Errorf("failed to read sql rows: %w", err))
-					return
-				}
-				empty := query.Page{}
-				if !page.SkipTotal {
-					empty.Total = &skippedTotal
-				}
-				yield(empty, nil)
-				return
-			}
-			if counted, ok := takeRowTotal(query.Row(scanner.Row())); ok {
-				skippedTotal.Value = counted
-			}
-		}
-
-		// Unless the caller waived it, every row carries COUNT(*) OVER (), so the
-		// total is known from the
-		// first row read — including a row that was skipped to serve an offset.
-		total := skippedTotal
-
-		var carry []query.Row
+		request := req
+		current := page
+		remaining := page.Ceiling
 		for {
-			// One row past the page proves there is another page, without
-			// inferring it from a batch that merely came up short.
-			batch := carry
-			carry = nil
-			for len(batch) <= page.Limit && scanner.Next() {
-				row := query.Row(scanner.Row())
-				if counted, ok := takeRowTotal(row); ok {
-					total.Value = counted
-				}
-				batch = append(batch, row)
+			if remaining > 0 && remaining < current.Limit {
+				current.Limit = remaining
 			}
-			if err := scanner.Err(); err != nil {
-				yield(query.Page{}, fmt.Errorf("failed to read sql rows: %w", err))
+			batch, total, more, err := p.readPage(ctx, client, dialect, request, current)
+			if err != nil {
+				yield(query.Page{}, err)
 				return
 			}
-
-			more := len(batch) > page.Limit
-			if more {
-				carry = append([]query.Row(nil), batch[page.Limit:]...)
-				batch = batch[:page.Limit]
-			}
-
-			// A waived total is reported as absent, never as zero. The rows carry
-			// no __cdb_total to read, and "exactly 0" alongside a page of rows is
-			// a worse answer than "unknown" — which is what a nil Total means.
-			current := query.Page{Rows: batch, HasMore: more}
-			if !page.SkipTotal {
-				counted := total
-				current.Total = &counted
-			}
-			if keyed && len(batch) > 0 {
-				keys, err := orderKeys(batch[len(batch)-1], req.Order)
+			capped := remaining > 0 && len(batch) >= remaining && more
+			result := query.Page{Rows: batch, HasMore: more && !capped, Total: total, Truncated: capped}
+			var keys []any
+			if result.HasMore && len(req.Order) > 0 {
+				keys, err = orderKeys(batch[len(batch)-1], req.Order)
 				if err != nil {
 					yield(query.Page{}, err)
 					return
 				}
-				current.NextKeys = keys
+				result.NextKeys = keys
 			}
-			if !yield(current, nil) || !more {
+			if !yield(result, nil) || !result.HasMore {
 				return
 			}
+			if remaining > 0 {
+				remaining -= len(batch)
+			}
+			if page.Mode() == query.PagingCursor {
+				request.Position = query.CursorPosition{Keys: keys}
+				current.Offset = 0
+			} else {
+				current.Offset += len(batch)
+			}
 		}
 	}
-}
-
-// sqlCursorWiring reports whether this profile can be cursored, and refuses a
-// position it would otherwise ignore.
-//
-// A cursor reaches a SQL backend only through the author's own resume
-// predicate. If a position arrives at a query that never templated it, the
-// query returns its first page again — and paging that repeats page one
-// forever is the kind of wrong that reads as working.
-func sqlCursorWiring(req query.ProviderRequest) (bool, error) {
-	var name string
-	for param, role := range req.ParamRoles {
-		if role == query.ParamRoleCursor {
-			name = param
-			break
-		}
-	}
-	templated := name != "" && slices.Contains(req.TemplatedParams, name)
-	if !req.Position.IsZero() && !templated {
-		if name == "" {
-			return false, fmt.Errorf(
-				"this profile has no parameter with `role: cursor`, so a cursor cannot reach its query; declare one and reference it in a resume predicate")
-		}
-		return false, fmt.Errorf(
-			"parameter %q has `role: cursor` but the query never references it, so the cursor would be ignored; add a resume predicate such as {{.params.%s.<column>}}",
-			name, name)
-	}
-	return templated && len(req.Order) > 0, nil
 }
 
 // orderKeys reads a row's position in the declared order, which is what the
@@ -228,77 +151,79 @@ func sqlExecError(dialect sqlDialect, filters []query.ColumnFilterValue, err err
 // It is removed rather than ignored: it is the server's bookkeeping, and a row
 // that carried it onward would put an internal column into every consumer —
 // exports, CEL expressions, the rendered table.
-func takeRowTotal(row query.Row) (int64, bool) {
+func takeRowTotal(row query.Row) (int64, bool, error) {
 	value, ok := row[sqlTotalColumn]
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 	delete(row, sqlTotalColumn)
 	// Drivers spell an integer several ways depending on the column type they
 	// inferred, so the count is read by value rather than by asserting one.
 	switch typed := value.(type) {
 	case int64:
-		return typed, true
+		return typed, true, nil
 	case int32:
-		return int64(typed), true
+		return int64(typed), true, nil
 	case int:
-		return int64(typed), true
+		return int64(typed), true, nil
+	case uint64:
+		if typed > math.MaxInt64 {
+			return 0, false, fmt.Errorf("sql result total %d exceeds the supported maximum %d", typed, int64(math.MaxInt64))
+		}
+		return int64(typed), true, nil
+	case uint32:
+		return int64(typed), true, nil
+	case uint16:
+		return int64(typed), true, nil
+	case uint8:
+		return int64(typed), true, nil
+	case uint:
+		if uint64(typed) > math.MaxInt64 {
+			return 0, false, fmt.Errorf("sql result total %d exceeds the supported maximum %d", typed, int64(math.MaxInt64))
+		}
+		return int64(typed), true, nil
 	case float64:
-		return int64(typed), true
+		return int64(typed), true, nil
 	case []byte:
 		parsed, err := strconv.ParseInt(string(typed), 10, 64)
-		return parsed, err == nil
+		if err != nil {
+			return 0, false, fmt.Errorf("sql result total %q is not an integer: %w", typed, err)
+		}
+		return parsed, true, nil
 	case string:
 		parsed, err := strconv.ParseInt(typed, 10, 64)
-		return parsed, err == nil
+		if err != nil {
+			return 0, false, fmt.Errorf("sql result total %q is not an integer: %w", typed, err)
+		}
+		return parsed, true, nil
 	default:
-		return 0, false
+		return 0, false, fmt.Errorf("sql result total has unsupported type %T", value)
 	}
 }
 
-func (p sqlProvider) open(ctx context.Context, req query.ProviderRequest, page query.PageRequest) (*sql.Rows, *sql.DB, *db.RowScanner, error) {
+func (p sqlProvider) connect(ctx context.Context, req query.ProviderRequest) (*sql.DB, sqlDialect, error) {
 	if req.Query == "" {
-		return nil, nil, nil, fmt.Errorf("sql query is required")
+		return nil, "", fmt.Errorf("sql query is required")
 	}
-
 	opts, err := query.DecodeOptions[sqlOptions](req.Options)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, "", err
 	}
-
-	client, dialect, err := sqlConnect(ctx, sqlConnectRequest{
+	return sqlConnect(ctx, sqlConnectRequest{
 		Connection: req.Connection, ConnType: p.connType, Options: opts,
 	})
-	if err != nil {
-		return nil, nil, nil, err
-	}
+}
 
-	// The dialect is only knowable here, once the connection has been hydrated,
-	// so the statement is built here rather than by the caller.
-	//
-	// open serves paging, which is the one caller that needs the size of the
-	// whole result: a page that cannot say what it is a page of leaves the table
-	// showing an unknown slice.
-	statement, args, err := buildPagedSQL(dialect, req.Query, req.Filters, req.Order, page)
-	if err != nil {
-		_ = client.Close()
-		return nil, nil, nil, err
-	}
-
-	// statement is the author's own query, unchanged, wrapped in a CTE built
-	// from constant syntax; every filter value travels as a bound arg and every
-	// filter identifier is validated against validSQLIdentifier before quoting.
-	// codeql[go/sql-injection]
-	rows, err := client.QueryContext(ctx, statement, args...)
-	if err != nil {
-		_ = client.Close()
-		return nil, nil, nil, sqlExecError(dialect, req.Filters, err)
-	}
-	scanner, err := db.NewRowScanner(rows)
-	if err != nil {
-		_ = rows.Close()
-		_ = client.Close()
-		return nil, nil, nil, fmt.Errorf("failed to prepare sql rows: %w", err)
-	}
-	return rows, client, scanner, nil
+func (p sqlProvider) readPage(
+	ctx context.Context,
+	client *sql.DB,
+	dialect sqlDialect,
+	req query.ProviderRequest,
+	page query.PageRequest,
+) (batch []query.Row, total *query.Total, more bool, err error) {
+	result, err := ReadSQLPage(ctx, client, string(dialect), SQLPageRequest{
+		Query: req.Query, Filters: req.Filters, Order: req.Order, Position: req.Position,
+		Page: page, Diagnostics: req.Diagnostics,
+	})
+	return result.Rows, result.Total, result.HasMore, err
 }
