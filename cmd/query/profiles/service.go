@@ -23,17 +23,19 @@ type ContextProvider func() dbcontext.Context
 type BodyDecoder func(context.Context, map[string]any) (map[string]any, error)
 
 type Options struct {
-	Store      StoreProvider
-	Context    ContextProvider
-	DecodeBody BodyDecoder
+	Store             StoreProvider
+	Context           ContextProvider
+	DecodeBody        BodyDecoder
+	OpenAPIExtensions []OpenAPIExtension
 }
 
 type Service struct {
-	store      StoreProvider
-	context    ContextProvider
-	decodeBody BodyDecoder
-	mu         sync.Mutex
-	registered map[string]struct{}
+	store             StoreProvider
+	context           ContextProvider
+	decodeBody        BodyDecoder
+	openAPIExtensions []OpenAPIExtension
+	mu                sync.Mutex
+	registered        map[string]struct{}
 }
 
 func New(options Options) (*Service, error) {
@@ -48,7 +50,8 @@ func New(options Options) (*Service, error) {
 	}
 	return &Service{
 		store: options.Store, context: options.Context, decodeBody: options.DecodeBody,
-		registered: map[string]struct{}{},
+		openAPIExtensions: append([]OpenAPIExtension(nil), options.OpenAPIExtensions...),
+		registered:        map[string]struct{}{},
 	}, nil
 }
 
@@ -410,7 +413,7 @@ func (s *Service) OpenAPIHandler(root *cobra.Command, config *rpc.Config) (http.
 	if err != nil {
 		return nil, err
 	}
-	return newProfileOpenAPIHandler(root, config, store), nil
+	return newProfileOpenAPIHandler(root, config, store, s.openAPIExtensions), nil
 }
 
 // profileEntitySchema builds the dynamic-entity JSON schema for a profile: its

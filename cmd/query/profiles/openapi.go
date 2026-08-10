@@ -14,20 +14,24 @@ import (
 )
 
 type profileOpenAPIHandler struct {
-	root      *cobra.Command
-	config    *rpc.Config
-	generator *rpc.OpenAPIGenerator
-	store     Store
+	root       *cobra.Command
+	config     *rpc.Config
+	generator  *rpc.OpenAPIGenerator
+	store      Store
+	extensions []OpenAPIExtension
 }
 
-func newProfileOpenAPIHandler(root *cobra.Command, config *rpc.Config, store Store) http.Handler {
+type OpenAPIExtension func(*rpc.OpenAPISpec)
+
+func newProfileOpenAPIHandler(root *cobra.Command, config *rpc.Config, store Store, extensions []OpenAPIExtension) http.Handler {
 	return &profileOpenAPIHandler{
 		root:   root,
 		config: config,
 		generator: rpc.NewOpenAPIGenerator(&rpc.OpenAPIConfig{
 			Title: "Query", Description: "Connections, profiles and execution", Version: "0.1.0",
 		}),
-		store: store,
+		store:      store,
+		extensions: extensions,
 	}
 }
 
@@ -46,6 +50,9 @@ func (h *profileOpenAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 	if err := mergeStoredProfiles(spec, h.store); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	for _, extend := range h.extensions {
+		extend(spec)
 	}
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(spec); err != nil {
@@ -175,8 +182,7 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	// needs a total order to name a position in, and a provider that resumes
 	// from one. Advertising it otherwise would put the UI into cursor mode
 	// against a server that refuses every cursor it sends.
-	if !roles[query.ParamRoleCursor] &&
-		profile.Pageable() == nil &&
+	if profile.Pageable() == nil &&
 		query.SupportsPaging(profile.Provider.Type).Supports(query.PagingCursor) {
 		parameters = append(parameters,
 			rpc.OpenAPIParameter{

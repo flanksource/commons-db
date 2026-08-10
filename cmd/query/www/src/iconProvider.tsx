@@ -1,5 +1,5 @@
 import type { ElementType } from "react";
-import { IconMap } from "@flanksource/icons/mi";
+import { Database, IconMap } from "@flanksource/icons/mi";
 import type { FallbackIconProps } from "@flanksource/clicky-ui";
 
 // FlanksourceIcon resolves a runtime icon name against @flanksource/icons' name
@@ -13,4 +13,15 @@ export function FlanksourceIcon({ name, className, size }: FallbackIconProps) {
   const Glyph = name ? icons[name] : undefined;
   if (!Glyph) return null;
   return <Glyph className={className} {...(size != null ? { width: size, height: size } : {})} />;
+}
+
+export function ConnectionTypeIcon({
+  type,
+  className,
+}: {
+  type: string;
+  className?: string;
+}) {
+  const Glyph = icons[type] ?? Database;
+  return <Glyph className={className} width={16} height={16} />;
 }
