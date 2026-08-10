@@ -15,6 +15,7 @@ import { namespaceFormExtensions } from "./namespacePicker";
 import { connectionFormActions } from "./connectionActions";
 import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
+import { connectionDashboardResultRenderer } from "./connectionDashboard";
 import { getMonacoWorker } from "./monacoWorkers";
 import { ChatWidget } from "./chatWidget";
 import { profileBuilderFormExtensions } from "./profileBuilder";
@@ -89,6 +90,8 @@ function Explorer() {
   const logsEntityNames = useLogsEntityNames();
   const renderLogsResult = logsResultRenderer(logsEntityNames);
   const renderResult = (context: ResultRenderContext) => {
+    const connectionResult = connectionDashboardResultRenderer(context);
+    if (connectionResult !== context.defaultView) return connectionResult;
     const defaultResult = renderLogsResult(context);
     const result =
       defaultResult === context.defaultView && isProfileSurface(context.surfaceKey)
