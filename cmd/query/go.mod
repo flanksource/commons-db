@@ -3,11 +3,11 @@ module github.com/flanksource/commons-db/cmd/query
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.26
-	github.com/flanksource/clicky v1.21.54
-	github.com/flanksource/clicky/aichat v1.21.54
-	github.com/flanksource/clicky/valkey v1.21.54
-	github.com/flanksource/commons v1.55.0
+	github.com/flanksource/captain v0.0.28
+	github.com/flanksource/clicky v1.21.55
+	github.com/flanksource/clicky/aichat v1.21.55
+	github.com/flanksource/clicky/valkey v1.21.55
+	github.com/flanksource/commons v1.56.0
 	github.com/flanksource/commons-db v0.1.27
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
@@ -61,6 +61,7 @@ require (
 	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
 	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
 	github.com/andybalholm/brotli v1.2.0 // indirect
+	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/antchfx/xmlquery v1.5.1 // indirect
 	github.com/antchfx/xpath v1.3.6 // indirect
 	github.com/anthropics/anthropic-sdk-go v1.26.0 // indirect
@@ -141,6 +142,7 @@ require (
 	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
 	github.com/glebarez/go-sqlite v1.21.2 // indirect
+	github.com/gliderlabs/ssh v0.3.8 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
 	github.com/go-faster/errors v0.7.1 // indirect
 	github.com/go-git/gcfg v1.5.1-0.20230307220236-3a3c6141e376 // indirect
