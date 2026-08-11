@@ -1,4 +1,7 @@
-import type { QueryBrowserResult } from "@flanksource/clicky-ui";
+import type {
+  QueryBrowserRequest,
+  QueryBrowserResult,
+} from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
@@ -15,6 +18,7 @@ import {
 } from "./connectionQueryWorkspace";
 import { defaultParamValues, paramRoles } from "./esQueryBuilder";
 import type { EsSearch } from "./esQueryBuilderModel";
+import { sampleRequestProfile } from "./jsonPathSampleRow";
 import {
   profileWizardErrorMessage,
   withProfileLimits,
@@ -34,6 +38,20 @@ export type ProfileSample = {
   rows: Record<string, unknown>[];
   sourceDraft: ProfileWizardDraft;
 };
+
+export function profileSamplePayload(
+  draft: ProfileWizardDraft,
+  request: QueryBrowserRequest,
+) {
+  const profile = sampleRequestProfile(draft);
+  if (!profile) throw new Error("Cannot sample a profile without a provider");
+  return {
+    profile,
+    params: {},
+    ...(request.pagination ? { pagination: request.pagination } : {}),
+    ...(request.debug ? { debug: true } : {}),
+  };
+}
 
 type ProfileWizardQueryStepProps = {
   connectionID: string;
@@ -141,8 +159,8 @@ export function ProfileWizardQueryStep({
   }
 
   return (
-    <div className="flex min-h-[32rem] flex-1 flex-col gap-3">
-      <div className="flex items-center justify-between gap-4 rounded-lg border bg-muted/30 px-4 py-3">
+    <div className="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden">
+      <div className="flex shrink-0 items-center justify-between gap-4 rounded-lg border bg-muted/30 px-4 py-3">
         <div>
           <p className="text-sm font-medium">Explore the source, then run a sample</p>
           <p className="text-xs text-muted-foreground">
@@ -195,7 +213,7 @@ export function ProfileWizardQueryStep({
         {...(draft.limits ? { limits: draft.limits } : {})}
         onLimitsChange={(limits) => onDraftChange(withProfileLimits(draft, limits))}
         compileBaseUrl={baseUrl}
-        className="min-h-0 flex-1"
+        className="h-full min-h-0 flex-1"
         onQueryChange={(nextQuery) => {
           setQuery(nextQuery);
           onDraftChange({ ...draft, query: nextQuery });
@@ -238,17 +256,7 @@ export function ProfileWizardQueryStep({
           const result = await fetchJSON<SampleResult>("/api/v1/profile/sample", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              profile: {
-                ...nextDraft,
-                profile: nextDraft.profile || "sample",
-              },
-              params: {},
-              ...(request.pagination
-                ? { pagination: request.pagination }
-                : {}),
-              ...(request.debug ? { debug: true } : {}),
-            }),
+            body: JSON.stringify(profileSamplePayload(nextDraft, request)),
           });
           onSample({
             columns: result.columns ?? [],

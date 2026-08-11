@@ -12,7 +12,10 @@ import type {
   QueryBrowserCompletion,
   QueryBrowserDiagnostics,
 } from "@flanksource/clicky-ui";
-import { QueryBrowserExecutionError } from "@flanksource/clicky-ui";
+import {
+  normalizeErrorDiagnostics,
+  QueryBrowserExecutionError,
+} from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, type ReactNode } from "react";
 
@@ -139,7 +142,12 @@ export async function fetchJSON<T>(url: string, init?: RequestInit): Promise<T> 
         diagnostics?: QueryBrowserDiagnostics;
       };
       if (typeof parsed.error === "string") {
-        throw new QueryBrowserExecutionError(parsed.error, parsed.diagnostics);
+        const errorDetails = normalizeErrorDiagnostics(parsed, parsed.error);
+        throw new QueryBrowserExecutionError(
+          errorDetails?.message ?? parsed.error,
+          parsed.diagnostics,
+          errorDetails ?? undefined,
+        );
       }
     } catch (error) {
       if (error instanceof QueryBrowserExecutionError) throw error;

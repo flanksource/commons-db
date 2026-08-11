@@ -164,7 +164,7 @@ var _ = Describe("Profile filters", func() {
 	It("unmarshals filters from YAML", func() {
 		var p query.Profile
 		Expect(yaml.Unmarshal([]byte(`
-profile: oipa logs
+profile: example logs
 provider:
   type: k8s
 filters:

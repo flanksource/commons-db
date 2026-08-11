@@ -215,7 +215,12 @@ export function ProfileWizard({
             {stepHelp[step.id]}
           </p>
         </div>
-        <div key={step.id} className="min-h-0 flex-1 overflow-auto">
+        <div
+          key={step.id}
+          className={`min-h-0 flex-1 ${
+            step.id === "query" ? "overflow-hidden" : "overflow-auto"
+          }`}
+        >
           {step.id === "source" ? (
             <SourceStep
               choices={connectionChoices}

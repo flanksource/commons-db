@@ -38,7 +38,7 @@ func TestLegacyTraceKind(t *testing.T) {
 // widening the result.
 func TestLegacyFiltersSurviveConversion(t *testing.T) {
 	source := `
-name: oipa app logs
+name: example app logs
 kubernetes:
   since: 24h
 aliases:
@@ -94,7 +94,7 @@ func TestLegacyKubernetesTargetBecomesK8sProvider(t *testing.T) {
 		wantKind string
 		wantName string
 	}{
-		{name: "deployment", source: "target: deployment/oipa", wantKind: "Deployment", wantName: "oipa"},
+		{name: "deployment", source: "target: deployment/example-app", wantKind: "Deployment", wantName: "example-app"},
 		{name: "pod shorthand", source: "target: po/cycle-0", wantKind: "Pod", wantName: "cycle-0"},
 		{name: "statefulset", source: "target: sts/cycle", wantKind: "StatefulSet", wantName: "cycle"},
 	}
@@ -140,7 +140,7 @@ func TestLegacyKubernetesSinceAndTail(t *testing.T) {
 }
 
 func TestLegacyKubernetesUnsupportedSettingsFailLoudly(t *testing.T) {
-	for _, unsupported := range []string{"selector: app=oipa", "container: oipa", "grep: ERROR", "previous: true"} {
+	for _, unsupported := range []string{"selector: app=example-app", "container: example-app", "grep: ERROR", "previous: true"} {
 		if _, err := convertLegacyTraceSource("name: logs\nkubernetes:\n  target: po/x\n  " + unsupported + "\n"); err == nil {
 			t.Errorf("converting kubernetes.%s should fail rather than silently widen the read", unsupported)
 		}

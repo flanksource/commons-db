@@ -11,6 +11,10 @@ it("preserves provider diagnostics from a failed JSON request", async () => {
       new Response(
         JSON.stringify({
           error: "query failed",
+          trace: "trace-query-1",
+          time: "2026-08-11T12:00:00Z",
+          context: { connection: "tenant-x" },
+          stacktrace: "query failed\n--- at example/query.go:42 runQuery",
           diagnostics: {
             provider: "clickhouse",
             request: { query: "SELECT broken" },
@@ -31,6 +35,25 @@ it("preserves provider diagnostics from a failed JSON request", async () => {
     expect((error as QueryBrowserExecutionError).diagnostics?.request.query).toBe(
       "SELECT broken",
     );
+    expect((error as QueryBrowserExecutionError).errorDetails).toEqual({
+      message: "query failed",
+      trace: "trace-query-1",
+      time: "2026-08-11T12:00:00Z",
+      context: [["connection", "tenant-x"]],
+      stacktrace: "query failed\n--- at example/query.go:42 runQuery",
+      raw: {
+        error: "query failed",
+        trace: "trace-query-1",
+        time: "2026-08-11T12:00:00Z",
+        context: { connection: "tenant-x" },
+        stacktrace: "query failed\n--- at example/query.go:42 runQuery",
+        diagnostics: {
+          provider: "clickhouse",
+          request: { query: "SELECT broken" },
+          error: "unknown identifier broken",
+        },
+      },
+    });
   }
 });
 
