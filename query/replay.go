@@ -1,6 +1,7 @@
 package query
 
 import (
+	"crypto/pbkdf2"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -27,6 +28,16 @@ const (
 	// defaultReplayBodySize caps both the previewed request body and the
 	// captured response body.
 	defaultReplayBodySize = 64 * 1024
+
+	// previewHashSalt domain-separates the preview digest, so a digest is only
+	// ever meaningful as the pin on a replay preview. It is a constant because
+	// preview and execute run as separate invocations and have to agree.
+	previewHashSalt = "commons-db/query/replay/preview-hash/v1"
+
+	// previewHashIterations is the stretching factor. The digest is computed
+	// once per preview and once per execute, so this is a one-off cost on a
+	// human-paced confirmation step rather than anything on a query path.
+	previewHashIterations = 100_000
 )
 
 // ReplaySpec describes how one result row becomes a replayable HTTP request.
@@ -260,6 +271,10 @@ func BuildReplayPreview(ctx context.Context, opts ReplayBuildOptions) (*ReplayPr
 	// reaching a fast hash that a leaked digest could be brute-forced against.
 	shownURL := sanitizeURLForDisplay(resolvedURL)
 	shownHeaders := sanitizeReplayHeaders(headers)
+	hash, err := previewHash(method, shownURL, shownHeaders, body)
+	if err != nil {
+		return nil, err
+	}
 	preview := ReplayPreview{
 		Profile:   opts.Profile.Name,
 		Row:       replayRowSummary(opts.Profile, row, index),
@@ -268,7 +283,7 @@ func BuildReplayPreview(ctx context.Context, opts ReplayBuildOptions) (*ReplayPr
 		URL:       shownURL,
 		Headers:   shownHeaders,
 		BodyBytes: len(body),
-		Hash:      previewHash(method, shownURL, shownHeaders, body),
+		Hash:      hash,
 		body:      body,
 		rawURL:    resolvedURL,
 		headers:   headers,
@@ -499,9 +514,16 @@ func resolveReplayURL(base, request string) string {
 	return strings.TrimRight(base, "/") + "/" + strings.TrimLeft(request, "/")
 }
 
+// sanitizeURLForDisplay drops any credentials embedded in raw. A URL that will
+// not parse is reported as unusable rather than echoed back: an unparseable URL
+// is exactly where an embedded credential would slip past the redaction, and it
+// could not have been requested anyway.
 func sanitizeURLForDisplay(raw string) string {
 	parsed, err := url.Parse(raw)
-	if err != nil || parsed.User == nil {
+	if err != nil {
+		return "(unparseable url)"
+	}
+	if parsed.User == nil {
 		return raw
 	}
 	parsed.User = nil
@@ -545,27 +567,38 @@ func truncateString(s string, max int) (string, bool) {
 }
 
 // previewHash covers the redacted request the caller was shown, with headers in
-// a stable order so the same request always hashes the same. Secret material is
-// redacted before it gets here, so the digest identifies a request without
-// carrying a credential.
-func previewHash(method, url string, headers map[string]string, body string) string {
+// a stable order so the same request always hashes the same.
+//
+// The digest is derived with PBKDF2 rather than a bare SHA-256. Preview and
+// execute are separate invocations that each recompute it, so it cannot be
+// salted per call — and the material it covers is not guaranteed to be free of
+// credentials, because the target URL is resolved through the secret cache and
+// a request body is whatever the profile's expression produced. A stretched
+// derivation is what keeps a leaked digest from being walked back to the
+// request it pins.
+func previewHash(method, url string, headers map[string]string, body string) (string, error) {
 	names := make([]string, 0, len(headers))
 	for name := range headers {
 		names = append(names, name)
 	}
 	sort.Strings(names)
 
-	digest := sha256.New()
-	_, _ = digest.Write([]byte(strings.ToUpper(method)))
-	_, _ = digest.Write([]byte{0})
-	_, _ = digest.Write([]byte(url))
+	var payload strings.Builder
+	payload.WriteString(strings.ToUpper(method))
+	payload.WriteByte(0)
+	payload.WriteString(url)
 	for _, name := range names {
-		_, _ = digest.Write([]byte{0})
-		_, _ = digest.Write([]byte(strings.ToLower(name)))
-		_, _ = digest.Write([]byte("="))
-		_, _ = digest.Write([]byte(headers[name]))
+		payload.WriteByte(0)
+		payload.WriteString(strings.ToLower(name))
+		payload.WriteString("=")
+		payload.WriteString(headers[name])
 	}
-	_, _ = digest.Write([]byte{0})
-	_, _ = digest.Write([]byte(body))
-	return hex.EncodeToString(digest.Sum(nil))
+	payload.WriteByte(0)
+	payload.WriteString(body)
+
+	digest, err := pbkdf2.Key(sha256.New, payload.String(), []byte(previewHashSalt), previewHashIterations, sha256.Size)
+	if err != nil {
+		return "", fmt.Errorf("failed to derive replay preview hash: %w", err)
+	}
+	return hex.EncodeToString(digest), nil
 }
