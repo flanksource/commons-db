@@ -4,12 +4,14 @@ import (
 	stdcontext "context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/samber/oops"
 )
 
 const profileSampleTimeout = 15 * time.Second
@@ -47,7 +49,11 @@ func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if r.Method != http.MethodPost {
-		http.Error(w, "profile sampling requires POST", http.StatusMethodNotAllowed)
+		writeSampleError(
+			w,
+			http.StatusMethodNotAllowed,
+			sampleError(h.ctx, errors.New("profile sampling requires POST")),
+		)
 		return
 	}
 	defer func() { _ = r.Body.Close() }()
@@ -55,7 +61,7 @@ func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2<<20))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
-		http.Error(w, "invalid profile sample request: "+err.Error(), http.StatusBadRequest)
+		writeSampleError(w, http.StatusBadRequest, sampleError(h.ctx, fmt.Errorf("invalid profile sample request: %w", err)))
 		return
 	}
 	if strings.TrimSpace(request.Profile.Name) == "" {
@@ -75,7 +81,7 @@ func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		if errors.Is(err, stdcontext.DeadlineExceeded) {
 			status = http.StatusGatewayTimeout
 		}
-		writeSampleError(w, status, err)
+		writeSampleError(w, status, sampleError(ctx, err))
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -84,11 +90,17 @@ func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 }
 
+func sampleError(ctx dbcontext.Context, err error) error {
+	return ctx.Oops().With("operation", "profile.sample").Wrap(err)
+}
+
 func writeSampleError(w http.ResponseWriter, status int, err error) {
+	payload := map[string]any{"error": err.Error()}
+	if oopsError, ok := oops.AsOops(err); ok {
+		payload = oopsError.ToMap()
+	}
+	payload["diagnostics"] = query.DiagnosticsFromError(err)
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(map[string]any{
-		"error":       err.Error(),
-		"diagnostics": query.DiagnosticsFromError(err),
-	})
+	_ = json.NewEncoder(w).Encode(payload)
 }

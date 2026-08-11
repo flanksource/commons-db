@@ -3,7 +3,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserDescriptor } from "./connectionBrowserModel";
 import type { EsCompileRequest } from "./esQueryPreview";
-import { ProfileWizardQueryStep } from "./profileWizardQueryStep";
+import {
+  ProfileWizardQueryStep,
+  profileSamplePayload,
+} from "./profileWizardQueryStep";
 import type { ProfileWizardDraft } from "./profileWizardModel";
 
 // The compile request only leaves the browser once effects run, which server
@@ -63,7 +66,7 @@ const renderStep = (params: ProfileWizardDraft["params"]) => {
   // The step renders nothing until the browser descriptor resolves, and server
   // rendering never fetches — so it is seeded rather than awaited.
   client.setQueryData(["profile-wizard-descriptor", connectionID], descriptor);
-  renderToStaticMarkup(
+  const html = renderToStaticMarkup(
     <QueryClientProvider client={client}>
       <ProfileWizardQueryStep
         connectionID={connectionID}
@@ -74,7 +77,7 @@ const renderStep = (params: ProfileWizardDraft["params"]) => {
       />
     </QueryClientProvider>,
   );
-  return compileInputs;
+  return { html, inputs: compileInputs };
 };
 
 // The editor's Source section previews through this step, and the preview is
@@ -83,7 +86,7 @@ const renderStep = (params: ProfileWizardDraft["params"]) => {
 // run produces.
 describe("ProfileWizardQueryStep compilation", () => {
   it("compiles the specification against the declared parameter defaults", () => {
-    const inputs = renderStep([
+    const { inputs } = renderStep([
       { name: "service", type: "enum", default: "payments" },
       { name: "since", type: "string", default: "now-1h", role: "time-from" },
     ]);
@@ -93,8 +96,63 @@ describe("ProfileWizardQueryStep compilation", () => {
   });
 
   it("sends no parameter values when the profile declares none", () => {
-    const inputs = renderStep(undefined);
+    const { inputs } = renderStep(undefined);
     expect(inputs.length).toBeGreaterThan(0);
     expect(inputs[0]?.params).toEqual({});
+  });
+});
+
+describe("ProfileWizardQueryStep layout", () => {
+  it("fills the modal viewport and leaves scrolling to the browser panes", () => {
+    const { html } = renderStep(undefined);
+
+    expect(html).toContain(
+      'class="flex h-full min-h-0 flex-1 flex-col gap-3 overflow-hidden"',
+    );
+    expect(html).toContain('class="h-full min-h-0 flex-1"');
+    expect(html).not.toContain("h-[calc(100vh-15rem)]");
+  });
+});
+
+describe("profile sample payload", () => {
+  it("keeps UI-only profile state out of the strict sample request", () => {
+    expect(
+      profileSamplePayload(
+        {
+          ...draft(undefined),
+          _id: "profile-record-1",
+          query: "{\"query\":{\"match_all\":{}}}",
+          columns: [{ name: "message", type: "string" }],
+        },
+        {
+          query: "{\"query\":{\"match_all\":{}}}",
+          options: { index: "logs" },
+          pagination: { limit: 25 },
+          debug: true,
+        },
+      ),
+    ).toEqual({
+      profile: {
+        profile: "kenya",
+        provider: {
+          type: "opensearch",
+          connection: `connection://${connectionID}`,
+          options: {
+            index: "logs",
+            search: {
+              query: {
+                op: "term",
+                field: "service.name",
+                value: "{{.params.service}}",
+              },
+            },
+          },
+        },
+        query: "{\"query\":{\"match_all\":{}}}",
+      },
+      params: {},
+      pagination: { limit: 25 },
+      debug: true,
+    });
   });
 });
