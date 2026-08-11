@@ -5,9 +5,14 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+
+	"github.com/flanksource/commons-db/pkg/allowlist"
 )
 
 var onePasswordID = regexp.MustCompile(`^[a-z0-9]{26}$`)
+
+// onePasswordIDAlphabet is every byte onePasswordID admits.
+const onePasswordIDAlphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 type OnePasswordVault struct {
 	ID   string `json:"id"`
@@ -50,10 +55,11 @@ func ListOnePasswordVaults(ctx Context) ([]OnePasswordVault, error) {
 }
 
 func ListOnePasswordItems(ctx Context, vaultID string) ([]OnePasswordItem, error) {
-	if err := validateOnePasswordID("vault", vaultID); err != nil {
+	vault, err := validateOnePasswordID("vault", vaultID)
+	if err != nil {
 		return nil, err
 	}
-	payload, err := onePasswordCommandFunc(ctx, onePasswordToken(ctx), "item", "list", "--vault", vaultID, "--format=json")
+	payload, err := onePasswordCommandFunc(ctx, onePasswordToken(ctx), "item", "list", "--vault", vault, "--format=json")
 	if err != nil {
 		return nil, fmt.Errorf("list 1password items in vault %q: %w", vaultID, err)
 	}
@@ -84,13 +90,15 @@ func ListOnePasswordItems(ctx Context, vaultID string) ([]OnePasswordItem, error
 }
 
 func ListOnePasswordFields(ctx Context, vaultID, itemID string) ([]OnePasswordField, error) {
-	if err := validateOnePasswordID("vault", vaultID); err != nil {
+	vault, err := validateOnePasswordID("vault", vaultID)
+	if err != nil {
 		return nil, err
 	}
-	if err := validateOnePasswordID("item", itemID); err != nil {
+	item, err := validateOnePasswordID("item", itemID)
+	if err != nil {
 		return nil, err
 	}
-	payload, err := onePasswordCommandFunc(ctx, onePasswordToken(ctx), "item", "get", itemID, "--vault", vaultID, "--format=json")
+	payload, err := onePasswordCommandFunc(ctx, onePasswordToken(ctx), "item", "get", item, "--vault", vault, "--format=json")
 	if err != nil {
 		return nil, fmt.Errorf("get 1password item %q: %w", itemID, err)
 	}
@@ -115,10 +123,11 @@ func ListOnePasswordFields(ctx Context, vaultID, itemID string) ([]OnePasswordFi
 		if field.ID == "" || field.Label == "" {
 			return nil, fmt.Errorf("invalid 1password field metadata: id and label are required")
 		}
-		if err := validateOnePasswordReference(field.Reference); err != nil {
+		reference, err := validateOnePasswordReference(field.Reference)
+		if err != nil {
 			return nil, fmt.Errorf("invalid 1password field %q reference: %w", field.ID, err)
 		}
-		metadata := OnePasswordField{ID: field.ID, Label: field.Label, Reference: field.Reference}
+		metadata := OnePasswordField{ID: field.ID, Label: field.Label, Reference: reference}
 		if field.Section != nil {
 			metadata.Section = field.Section.Label
 		}
@@ -136,15 +145,19 @@ func ListOnePasswordFields(ctx Context, vaultID, itemID string) ([]OnePasswordFi
 	return fields, nil
 }
 
-func validateOnePasswordID(kind, id string) error {
-	if !onePasswordID.MatchString(id) {
-		return fmt.Errorf("invalid 1password %s ID %q", kind, id)
+// validateOnePasswordID checks id and returns the ID to actually use, copied out
+// of onePasswordIDAlphabet. Returning the value rather than only an error keeps
+// a caller from validating one string and passing a different one to the CLI.
+func validateOnePasswordID(kind, id string) (string, error) {
+	checked, ok := allowlist.Copy(id, onePasswordIDAlphabet)
+	if !ok || !onePasswordID.MatchString(checked) {
+		return "", fmt.Errorf("invalid 1password %s ID %q", kind, id)
 	}
-	return nil
+	return checked, nil
 }
 
 func validateOnePasswordCatalogEntry(kind, id, name string) error {
-	if err := validateOnePasswordID(kind, id); err != nil {
+	if _, err := validateOnePasswordID(kind, id); err != nil {
 		return err
 	}
 	if name == "" {

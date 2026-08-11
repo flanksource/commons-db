@@ -10,6 +10,7 @@ catalog:
   "@codemirror/lang-sql": ^6.10.0
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
+  '@flanksource/clicky-ui': 0.3.19
   "@floating-ui/react": ^0.27.19
   "@mdxeditor/editor": ^4.0.4
   "@monaco-editor/react": ^4.7.0
@@ -78,9 +79,4 @@ catalogMode: prefer
 confirmModulesPurge: false
 
 linkWorkspacePackages: true
-# WORKAROUND(local-clicky-ui): Link the unreleased secret form extension API from the sibling checkout.
-# Correct fix: Publish the Clicky UI changes, update package.json to that release, and remove this override.
-# Ref: discussed with user 2026-08-10
-overrides:
-  "@flanksource/clicky-ui": link:../../../../clicky-ui/packages/ui
 preferWorkspacePackages: true

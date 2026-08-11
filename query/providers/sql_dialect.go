@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/pkg/allowlist"
 )
 
 // sqlDialect is the engine a statement is built for.
@@ -28,6 +29,14 @@ const (
 // mistake in the profile and worth reading as one rather than sanitised into
 // something that runs.
 var validSQLIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,127}$`)
+
+// sqlIdentifierAlphabet is every byte validSQLIdentifier admits. quote copies a
+// validated identifier out of this constant rather than passing the caller's
+// string through, so the bytes that end up inside a SQL fragment are ones this
+// package spelled out. It is the same allowlist the regexp states, applied a
+// second time per byte on the way out, which is what makes the quoting safe
+// without escaping: no quote character can survive the copy to be escaped.
+const sqlIdentifierAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_$"
 
 // sqlConnect resolves, hydrates and opens the request's connection, and reports
 // the dialect it resolved to.
@@ -94,18 +103,19 @@ type sqlConnectRequest struct {
 // second without the first, and a caller must not be able to reach for the
 // second alone.
 func (d sqlDialect) quote(identifier string) (string, error) {
-	if !validSQLIdentifier.MatchString(identifier) {
+	name, ok := allowlist.Copy(identifier, sqlIdentifierAlphabet)
+	if !ok || !validSQLIdentifier.MatchString(name) {
 		return "", fmt.Errorf(
 			"backend field %q is not a plain column name; a filtered column must name one column of the query's result",
 			identifier)
 	}
 	switch d {
 	case dialectMySQL:
-		return "`" + strings.ReplaceAll(identifier, "`", "``") + "`", nil
+		return "`" + name + "`", nil
 	case dialectSQLServer:
-		return "[" + strings.ReplaceAll(identifier, "]", "]]") + "]", nil
+		return "[" + name + "]", nil
 	default:
-		return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"`, nil
+		return `"` + name + `"`, nil
 	}
 }
 

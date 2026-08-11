@@ -57,8 +57,11 @@ func TestValidateOnePasswordReference(t *testing.T) {
 		"op://vault/item/section/field",
 		"op://vault/item/field/extra/path",
 	} {
-		if err := validateOnePasswordReference(ref); err != nil {
+		checked, err := validateOnePasswordReference(ref)
+		if err != nil {
 			t.Errorf("valid reference %q rejected: %v", ref, err)
+		} else if checked != ref {
+			t.Errorf("valid reference %q came back as %q", ref, checked)
 		}
 	}
 	for _, ref := range []string{
@@ -70,7 +73,7 @@ func TestValidateOnePasswordReference(t *testing.T) {
 		"op://vault/item/field#fragment",
 		"op://vault/item/field\n--format=json",
 	} {
-		if err := validateOnePasswordReference(ref); err == nil {
+		if _, err := validateOnePasswordReference(ref); err == nil {
 			t.Errorf("invalid reference %q accepted", ref)
 		}
 	}
