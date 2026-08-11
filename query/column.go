@@ -111,6 +111,12 @@ type ColumnDef struct {
 	// Hidden excludes the column from rendered output while keeping it available
 	// to CEL and processors.
 	Hidden bool `json:"hidden,omitempty" yaml:"hidden,omitempty"`
+
+	// Style is an optional CEL expression returning this cell's presentation
+	// classes (e.g. `level == "ERROR" ? "text-red-500" : ""`). It reads the row
+	// the same way CEL does and affects rendering only: the row itself is
+	// unchanged, so an export carries the value without the styling.
+	Style string `json:"style,omitempty" yaml:"style,omitempty"`
 }
 
 // clickyFormat returns the clicky format string for the column: the explicit

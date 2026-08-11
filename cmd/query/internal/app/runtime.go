@@ -2,11 +2,9 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sync"
 
-	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -184,13 +182,5 @@ func (r *Runtime) ProfileStore() (profiles.Store, error) {
 }
 
 func DecodeBody(ctx context.Context, fallback map[string]any) (map[string]any, error) {
-	request, ok := rpc.RequestFromContext(ctx)
-	if !ok || request.Body == nil {
-		return fallback, nil
-	}
-	var body map[string]any
-	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-		return nil, fmt.Errorf("decode request body: %w", err)
-	}
-	return body, nil
+	return profiles.DecodeRequestBody(ctx, fallback)
 }

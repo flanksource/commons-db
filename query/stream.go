@@ -83,12 +83,16 @@ func runTrace(ctx context.Context, cancel stdcontext.CancelFunc, sp StreamProvid
 	var emitErr error
 	var once sync.Once
 	err := sp.Stream(ctx, req, func(row Row) {
-		rows := []Row{row}
-		if cerr := applyRowTransforms(ctx, p, rows); cerr != nil {
+		rows, _, cerr := applyRowTransforms(ctx, p, []Row{row})
+		if cerr != nil {
 			once.Do(func() {
 				emitErr = fmt.Errorf("profile %q: %w", p.Name, cerr)
 				cancel()
 			})
+			return
+		}
+		// A filtered-out event is simply not emitted.
+		if len(rows) == 0 {
 			return
 		}
 		s.Emit(Event{Row: rows[0]})

@@ -22,6 +22,25 @@ type StoreProvider func() (Store, error)
 type ContextProvider func() dbcontext.Context
 type BodyDecoder func(context.Context, map[string]any) (map[string]any, error)
 
+// DecodeRequestBody is the BodyDecoder for a service hosted by clicky's RPC
+// layer: it reads the in-flight request's JSON body, falling back to the
+// arguments clicky already decoded when there is no request in context (a CLI
+// invocation, or a call made directly in a test).
+//
+// Every embedder needs exactly this, so it ships here rather than being
+// reimplemented — slightly differently — in each one.
+func DecodeRequestBody(ctx context.Context, fallback map[string]any) (map[string]any, error) {
+	request, ok := rpc.RequestFromContext(ctx)
+	if !ok || request.Body == nil {
+		return fallback, nil
+	}
+	var body map[string]any
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode request body: %w", err)
+	}
+	return body, nil
+}
+
 type Options struct {
 	Store             StoreProvider
 	Context           ContextProvider

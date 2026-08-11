@@ -150,6 +150,11 @@ func (p Profile) Validate() error {
 			return fmt.Errorf("profile %q %w", p.Name, err)
 		}
 	}
+	for index, filter := range p.Filters {
+		if err := filter.validate(index); err != nil {
+			return fmt.Errorf("profile %q: %w", p.Name, err)
+		}
+	}
 	bindings, err := p.ColumnFilterBindings()
 	if err != nil {
 		return fmt.Errorf("profile %q: %w", p.Name, err)

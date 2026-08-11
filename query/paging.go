@@ -158,6 +158,10 @@ func (t *Total) Relation() string {
 type Page struct {
 	Rows []Row
 
+	// Styles are the evaluated cell styles for Rows, positionally parallel to
+	// it. Nil when no column declares a Style.
+	Styles []map[string]string
+
 	// Next resumes after this Page's last row. Empty when the source is
 	// exhausted, and never set by a provider that cannot cursor.
 	//

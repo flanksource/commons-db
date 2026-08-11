@@ -181,6 +181,12 @@
             "type": "string",
             "x-clicky-order": 2
           },
+          "style": {
+            "description": "CEL returning this cell's presentation classes, e.g. level == \"ERROR\" ? \"text-red-500\" : \"\"",
+            "title": "Style",
+            "type": "string",
+            "x-clicky-order": 12
+          },
           "type": {
             "description": "Value shape and default formatting; independent of Role",
             "enum": [
@@ -252,6 +258,47 @@
       "title": "Columns",
       "type": "array",
       "x-layout": "table"
+    },
+    "filters": {
+      "items": {
+        "properties": {
+          "description": {
+            "description": "What this filter trims, for the tooltip",
+            "title": "Description",
+            "type": "string"
+          },
+          "exclude": {
+            "description": "Drop matching rows instead of keeping them",
+            "title": "Exclude",
+            "type": "boolean"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "CEL predicates keyed by label, AND-ed together",
+            "title": "Fields",
+            "type": "object"
+          },
+          "hidden": {
+            "description": "Always applied, rather than offered as a toggle",
+            "title": "Hidden",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Filter identity, shown in the UI",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      },
+      "title": "Filters",
+      "type": "array",
+      "x-array-display": "accordion"
     },
     "icon": {
       "description": "Overrides the glyph shown in the sidebar and pickers; blank uses the provider's own mark",

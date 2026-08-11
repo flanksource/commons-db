@@ -254,11 +254,26 @@ func ProfileSource() Schema {
 				},
 			},
 			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for CEL and processors", "x-clicky-order": 11},
+			"style":  Schema{"type": "string", "title": "Style", "description": `CEL returning this cell's presentation classes, e.g. level == "ERROR" ? "text-red-500" : ""`, "x-clicky-order": 12},
 		},
 	}
 	aliasDef := Schema{
 		"type": "object", "required": []string{"name", "cel"},
 		"properties": Schema{"name": strProp("Name", "Dotted output path"), "cel": strProp("CEL", "Ordered row projection")},
+	}
+	filterDef := Schema{
+		"type": "object", "required": []string{"fields"},
+		"properties": Schema{
+			"name":        strProp("Name", "Filter identity, shown in the UI"),
+			"description": strProp("Description", "What this filter trims, for the tooltip"),
+			"fields": Schema{
+				"type": "object", "title": "Fields",
+				"description":          "CEL predicates keyed by label, AND-ed together",
+				"additionalProperties": Schema{"type": "string"},
+			},
+			"exclude": Schema{"type": "boolean", "title": "Exclude", "description": "Drop matching rows instead of keeping them"},
+			"hidden":  Schema{"type": "boolean", "title": "Hidden", "description": "Always applied, rather than offered as a toggle"},
+		},
 	}
 
 	provider := Schema{
@@ -349,6 +364,7 @@ func ProfileSource() Schema {
 			"columns": Schema{"type": "array", "title": "Columns", "x-layout": "table", "items": columnDef},
 			"aliases": Schema{"type": "array", "title": "Aliases", "x-layout": "table", "items": aliasDef},
 			"ignore":  Schema{"type": "array", "title": "Ignore", "items": Schema{"type": "string"}},
+			"filters": Schema{"type": "array", "title": "Filters", "x-array-display": "accordion", "items": filterDef},
 			"order": Schema{
 				"type": "array", "title": "Order", "x-layout": "table", "items": orderBy,
 				"description": "Total order the rows are returned in, ending in a column marked unique. Paging past the first page requires it: without a tiebreaker, two runs of the same query may interleave tied rows differently and a second page can repeat or skip rows from the first.",
