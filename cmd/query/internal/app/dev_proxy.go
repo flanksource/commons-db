@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -9,10 +10,18 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 )
+
+type viteDevCommandOptions struct {
+	WebDir   string
+	VitePort int
+	APIHost  string
+	APIPort  int
+}
 
 // startViteDevProxy launches Vite in cmd/query/www on an OS-assigned free port
 // and returns an HTTP handler that reverse-proxies to it. apiHost and apiPort
@@ -21,6 +30,14 @@ import (
 // hardcoded :8080. The returned cleanup terminates the Vite process group; the
 // caller MUST invoke it on every shutdown path.
 func startViteDevProxy(ctx context.Context, apiHost string, apiPort int) (http.Handler, func(), error) {
+	workingDir, err := os.Getwd()
+	if err != nil {
+		return nil, nil, fmt.Errorf("get working directory for vite: %w", err)
+	}
+	webDir, err := resolveViteWebDir(workingDir)
+	if err != nil {
+		return nil, nil, err
+	}
 	vitePort, err := pickFreePort()
 	if err != nil {
 		return nil, nil, fmt.Errorf("allocate vite dev port: %w", err)
@@ -30,9 +47,11 @@ func startViteDevProxy(ctx context.Context, apiHost string, apiPort int) (http.H
 	// `--strictPort` makes the port we picked the only one Vite will accept — if
 	// anything raced into it between the listen probe and exec, Vite errors out
 	// loudly instead of silently falling back to another port.
-	cmd := viteDevCommand(ctx, vitePort, apiHost, apiPort)
+	cmd := viteDevCommand(ctx, viteDevCommandOptions{
+		WebDir: webDir, VitePort: vitePort, APIHost: apiHost, APIPort: apiPort,
+	})
 
-	fmt.Printf("🔧 starting Vite dev server (pnpm --dir www exec vite --port %d), API → http://%s:%d\n", vitePort, apiHost, apiPort)
+	fmt.Printf("🔧 starting Vite dev server (pnpm exec vite --port %d) in %s, API → http://%s:%d\n", vitePort, webDir, apiHost, apiPort)
 	if err := cmd.Start(); err != nil {
 		return nil, nil, fmt.Errorf("start vite: %w", err)
 	}
@@ -57,12 +76,13 @@ func startViteDevProxy(ctx context.Context, apiHost string, apiPort int) (http.H
 	return proxy, cleanup, nil
 }
 
-func viteDevCommand(ctx context.Context, vitePort int, apiHost string, apiPort int) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "pnpm", "--dir", "www", "exec", "vite",
+func viteDevCommand(ctx context.Context, options viteDevCommandOptions) *exec.Cmd {
+	cmd := exec.CommandContext(ctx, "pnpm", "exec", "vite",
 		"--strictPort",
 		"--host", "127.0.0.1",
-		"--port", fmt.Sprintf("%d", vitePort),
+		"--port", fmt.Sprintf("%d", options.VitePort),
 	)
+	cmd.Dir = options.WebDir
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -80,10 +100,35 @@ func viteDevCommand(ctx context.Context, vitePort int, apiHost string, apiPort i
 		nodeOpts += headerFlag
 	}
 	cmd.Env = append(os.Environ(),
-		fmt.Sprintf("QUERY_API_URL=http://%s:%d", apiHost, apiPort),
+		fmt.Sprintf("QUERY_API_URL=http://%s:%d", options.APIHost, options.APIPort),
 		"NODE_OPTIONS="+nodeOpts,
 	)
 	return cmd
+}
+
+func resolveViteWebDir(workingDir string) (string, error) {
+	workingDir, err := filepath.Abs(workingDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve working directory %q: %w", workingDir, err)
+	}
+	candidates := []string{
+		filepath.Join(workingDir, "cmd", "query", "www"),
+		filepath.Join(workingDir, "www"),
+	}
+	for _, candidate := range candidates {
+		packageJSON := filepath.Join(candidate, "package.json")
+		info, err := os.Stat(packageJSON)
+		if err == nil {
+			if info.IsDir() {
+				return "", fmt.Errorf("vite package marker %q is a directory", packageJSON)
+			}
+			return candidate, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", fmt.Errorf("inspect vite package marker %q: %w", packageJSON, err)
+		}
+	}
+	return "", fmt.Errorf("locate Query web app from %q: expected cmd/query/www/package.json or www/package.json", workingDir)
 }
 
 // pickFreePort asks the kernel for an unused TCP port on 127.0.0.1, closes the
