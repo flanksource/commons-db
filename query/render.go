@@ -29,9 +29,36 @@ func (r *Result) Table(columns []ColumnDef) api.TextTable {
 
 	providers := make([]rowProvider, len(r.Rows))
 	for i, row := range r.Rows {
-		providers[i] = rowProvider{cols: cols, row: row}
+		providers[i] = rowProvider{cols: cols, row: styledRow(row, r.styleFor(i))}
 	}
 	return api.NewTableFrom(providers)
+}
+
+// styleFor returns the cell styles for row index, or nil when the result
+// carries none.
+func (r *Result) styleFor(index int) map[string]string {
+	if index >= len(r.Styles) {
+		return nil
+	}
+	return r.Styles[index]
+}
+
+// styledRow wraps each styled cell as an api.Text so clicky renders the class
+// with the value. The original row is left alone — it is the same map an export
+// reads — and unstyled cells pass through untouched.
+func styledRow(row Row, styles map[string]string) Row {
+	if len(styles) == 0 {
+		return row
+	}
+	out := make(Row, len(row))
+	for name, value := range row {
+		if class, ok := styles[name]; ok {
+			out[name] = api.Text{Content: fmt.Sprint(value), Style: class}
+			continue
+		}
+		out[name] = value
+	}
+	return out
 }
 
 // Render formats the Result in the given clicky format (e.g. "table", "csv",

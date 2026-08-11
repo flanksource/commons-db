@@ -50,6 +50,11 @@ type Profile struct {
 	// Ignore removes provider fields after aliases have been evaluated.
 	Ignore []string `json:"ignore,omitempty" yaml:"ignore,omitempty"`
 
+	// Filters are named row predicates evaluated after aliases, dropping rows
+	// before they reach the columns. Hidden filters always apply; the rest are
+	// togglable and inert until named in FilterEnabledParam.
+	Filters []FilterDef `json:"filters,omitempty" yaml:"filters,omitempty"`
+
 	// Processors are post-query steps (e.g. sqlite merge/recon) applied in order.
 	Processors []ProcessorSpec `json:"processors,omitempty" yaml:"processors,omitempty"`
 

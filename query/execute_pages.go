@@ -213,11 +213,14 @@ func withRowTransforms(ctx context.Context, p Profile, pages iter.Seq2[Page, err
 				yield(Page{}, err)
 				return
 			}
-			if err := applyRowTransforms(ctx, p, page.Rows); err != nil {
-				yield(Page{}, fmt.Errorf("profile %q: rows %d-%d: %w", p.Name, index, index+len(page.Rows), err))
+			read := len(page.Rows)
+			kept, styles, err := applyRowTransforms(ctx, p, page.Rows)
+			if err != nil {
+				yield(Page{}, fmt.Errorf("profile %q: rows %d-%d: %w", p.Name, index, index+read, err))
 				return
 			}
-			index += len(page.Rows)
+			page.Rows, page.Styles = kept, styles
+			index += read
 			if !yield(page, nil) {
 				return
 			}

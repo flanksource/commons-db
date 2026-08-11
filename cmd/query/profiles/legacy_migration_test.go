@@ -33,6 +33,169 @@ func TestLegacyTraceKind(t *testing.T) {
 	}
 }
 
+// Legacy trace profiles carry noise filters that are the whole reason some of
+// them are readable, so conversion has to bring them across rather than quietly
+// widening the result.
+func TestLegacyFiltersSurviveConversion(t *testing.T) {
+	source := `
+name: oipa app logs
+kubernetes:
+  since: 24h
+aliases:
+  logger: 'map_string(_fields, "log.logger", "logger")'
+filters:
+  - name: drop-access-log-2xx
+    description: Drop successful HTTP access log lines
+    exclude: true
+    hidden: true
+    fields:
+      logger: 'logger == "AccessLog"'
+      status_2xx: 'string(message).contains("=> 2")'
+  - name: errors-and-warnings
+    fields:
+      level: 'level == "ERROR"'
+`
+	profile, err := convertLegacyTraceSource(source)
+	if err != nil {
+		t.Fatalf("convertLegacyTraceSource() error = %v", err)
+	}
+	if len(profile.Filters) != 2 {
+		t.Fatalf("got %d filters, want 2", len(profile.Filters))
+	}
+
+	dropped := profile.Filters[0]
+	if dropped.Name != "drop-access-log-2xx" {
+		t.Errorf("filter name = %q, want %q", dropped.Name, "drop-access-log-2xx")
+	}
+	if dropped.Description != "Drop successful HTTP access log lines" {
+		t.Errorf("filter description = %q", dropped.Description)
+	}
+	if !dropped.Exclude || !dropped.Hidden {
+		t.Errorf("exclude/hidden = %v/%v, want true/true", dropped.Exclude, dropped.Hidden)
+	}
+	want := map[string]string{
+		"logger":     `logger == "AccessLog"`,
+		"status_2xx": `string(message).contains("=> 2")`,
+	}
+	if !reflect.DeepEqual(dropped.Fields, want) {
+		t.Errorf("fields = %#v, want %#v", dropped.Fields, want)
+	}
+
+	if quick := profile.Filters[1]; quick.Hidden || quick.Exclude {
+		t.Errorf("quick filter should stay togglable and inclusive, got hidden=%v exclude=%v",
+			quick.Hidden, quick.Exclude)
+	}
+}
+
+func TestLegacyKubernetesTargetBecomesK8sProvider(t *testing.T) {
+	tests := []struct {
+		name     string
+		source   string
+		wantKind string
+		wantName string
+	}{
+		{name: "deployment", source: "target: deployment/oipa", wantKind: "Deployment", wantName: "oipa"},
+		{name: "pod shorthand", source: "target: po/cycle-0", wantKind: "Pod", wantName: "cycle-0"},
+		{name: "statefulset", source: "target: sts/cycle", wantKind: "StatefulSet", wantName: "cycle"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			profile, err := convertLegacyTraceSource("name: logs\nkubernetes:\n  " + tt.source + "\n")
+			if err != nil {
+				t.Fatalf("convertLegacyTraceSource() error = %v", err)
+			}
+			if profile.Provider.Type != "k8s" {
+				t.Fatalf("provider = %q, want k8s", profile.Provider.Type)
+			}
+			if got := profile.Provider.Options["kind"]; got != tt.wantKind {
+				t.Errorf("kind = %v, want %v", got, tt.wantKind)
+			}
+			if got := profile.Provider.Options["name"]; got != tt.wantName {
+				t.Errorf("name = %v, want %v", got, tt.wantName)
+			}
+			// The legacy reader took the namespace from the active kubecontext;
+			// the provider needs it stated, so it becomes a parameter.
+			if got := profile.Provider.Options["namespace"]; got != "{{.params.namespace}}" {
+				t.Errorf("namespace = %v, want the namespace parameter", got)
+			}
+		})
+	}
+}
+
+func TestLegacyKubernetesSinceAndTail(t *testing.T) {
+	profile, err := convertLegacyTraceSource("name: base\nkubernetes:\n  since: 24h\n  tail: 5000\n")
+	if err != nil {
+		t.Fatalf("convertLegacyTraceSource() error = %v", err)
+	}
+	if got := profile.Provider.Options["start"]; got != "now-24h" {
+		t.Errorf("start = %v, want now-24h", got)
+	}
+	if got := profile.Provider.Options["limit"]; got != "5000" {
+		t.Errorf("limit = %v, want \"5000\"", got)
+	}
+	// A base profile is imported, never run, so having no target is not an error.
+	if _, ok := profile.Provider.Options["name"]; ok {
+		t.Errorf("a target-less base profile should not set name")
+	}
+}
+
+func TestLegacyKubernetesUnsupportedSettingsFailLoudly(t *testing.T) {
+	for _, unsupported := range []string{"selector: app=oipa", "container: oipa", "grep: ERROR", "previous: true"} {
+		if _, err := convertLegacyTraceSource("name: logs\nkubernetes:\n  target: po/x\n  " + unsupported + "\n"); err == nil {
+			t.Errorf("converting kubernetes.%s should fail rather than silently widen the read", unsupported)
+		}
+	}
+}
+
+// A legacy column carries a per-cell style expression and a detail flag; both
+// have direct homes on the converted column.
+func TestLegacyColumnStyleAndDetail(t *testing.T) {
+	profile, err := convertLegacyTraceSource(`
+name: styled
+index: traces-*
+columns:
+  - name: Level
+    field: level
+    style: 'level == "ERROR" ? "text-red-500" : ""'
+  - name: StackTrace
+    field: exception
+    detail: true
+`)
+	if err != nil {
+		t.Fatalf("convertLegacyTraceSource() error = %v", err)
+	}
+	want := []query.ColumnDef{
+		{Name: "Level", CEL: "level", Style: `level == "ERROR" ? "text-red-500" : ""`},
+		{Name: "StackTrace", CEL: "exception", Hidden: true},
+	}
+	if !reflect.DeepEqual(profile.Columns, want) {
+		t.Fatalf("columns = %#v, want %#v", profile.Columns, want)
+	}
+}
+
+// Aliases appear in the wild both as a bare expression and as a mapping with a
+// cel key; the shorthand is the common one.
+func TestLegacyScalarAliasShorthand(t *testing.T) {
+	profile, err := convertLegacyTraceSource(`
+name: aliases
+index: traces-*
+aliases:
+  level: 'map_string(_fields, "log.level", "level")'
+  logger:
+    cel: 'map_string(_fields, "log.logger")'
+`)
+	if err != nil {
+		t.Fatalf("convertLegacyTraceSource() error = %v", err)
+	}
+	want := []query.AliasDef{
+		{Name: "level", CEL: `map_string(_fields, "log.level", "level")`},
+		{Name: "logger", CEL: `map_string(_fields, "log.logger")`},
+	}
+	if !reflect.DeepEqual(profile.Aliases, want) {
+		t.Fatalf("aliases = %#v, want %#v", profile.Aliases, want)
+	}
+}
+
 func TestLegacyOpenTelemetrySearch(t *testing.T) {
 	search, err := legacyOpenTelemetrySearch(map[string]legacyTraceParam{
 		"namespace": {Field: "process.serviceName"},

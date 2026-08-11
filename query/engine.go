@@ -54,12 +54,12 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	req.Filters = filters
 	req.Order = p.Order
 
-	rows, truncated, err := drainPages(ctx, p, req)
+	rows, styles, truncated, err := drainPages(ctx, p, req)
 	if err != nil {
 		return nil, err
 	}
 
-	result := &Result{Profile: p.Name, Rows: rows, Truncated: truncated}
+	result := &Result{Profile: p.Name, Rows: rows, Styles: styles, Truncated: truncated}
 
 	for name, sub := range p.Context {
 		subRows, err := executeSubQuery(ctx, sub, p.Params, resolved)
@@ -114,7 +114,7 @@ func sortAndLimit(rows []Row, sortBy string, limit int) ([]Row, bool) {
 // invisible — a backend default quietly limiting a read is otherwise
 // indistinguishable from a small table, which is how "read everything" came to
 // mean "read the first 500 and say nothing".
-func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, bool, error) {
+func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, []map[string]string, bool, error) {
 	maxRows := p.RowLimits().MaxExportRows
 	batch := walkBatchSize
 	if maxRows > 0 && maxRows < batch {
@@ -123,20 +123,27 @@ func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, boo
 	walk := walkRequest(p, batch)
 
 	var rows []Row
+	var styles []map[string]string
 	var truncated bool
 	for page, err := range withRowTransforms(ctx, p, providerPages(ctx, p, req, walk)) {
 		if err != nil {
-			return nil, false, err
+			return nil, nil, false, err
 		}
 		truncated = truncated || page.Truncated
 		rows = append(rows, page.Rows...)
+		styles = append(styles, page.Styles...)
 		if maxRows > 0 && len(rows) >= maxRows {
 			truncated = truncated || len(rows) > maxRows || page.HasMore
 			rows = rows[:maxRows]
+			// Styles stay positionally parallel to rows, so the cut applies to
+			// both or the colours slide onto the wrong lines.
+			if len(styles) > maxRows {
+				styles = styles[:maxRows]
+			}
 			break
 		}
 	}
-	return rows, truncated, nil
+	return rows, styles, truncated, nil
 }
 
 // compareRowValues orders numbers numerically and everything else by its
