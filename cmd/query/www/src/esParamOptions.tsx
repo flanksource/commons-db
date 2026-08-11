@@ -4,25 +4,26 @@ import {
   type PreExtension,
 } from "@flanksource/clicky-ui";
 import {
-  browserBaseUrl,
-  savedConnectionID,
-  useInspection,
-} from "./connectionBrowserModel";
-import { makeFieldValueLookup, valueLookupField } from "./esFieldValues";
-import { esQueryFields, paramRoles } from "./esQueryBuilder";
-import type { EsSearch } from "./esQueryBuilderModel";
-import {
   addParamMapping,
+  browserBaseUrl,
+  esQueryFields,
+  makeFieldValueLookup,
+  paramHasOptions,
   paramMappings,
+  paramRoles,
   reconcileParamMappings,
   removeParamMapping,
+  savedConnectionID,
+  useInspection,
+  ValuesCombobox,
+  valueLookupField,
+  type EsSearch,
+  type ParamDraft,
   type ParamMapping,
   type ParamMappingEdit,
-} from "./esParamMappingModel";
-import { ValuesCombobox } from "./esValueCombobox";
+  type ProfileDraft,
+} from "@flanksource/clicky-ui/profiles";
 import { ListValueFileButton } from "./listValuePicker";
-import type { ProfileDraft } from "./profileBuilderWorkspace";
-import { paramHasOptions, type ParamDraft } from "./profileWizardModel";
 
 const esParamsPre: PreExtension = (field, ctx) => {
   if (field.schema["x-clicky-component"] === "es-param-field") return null;

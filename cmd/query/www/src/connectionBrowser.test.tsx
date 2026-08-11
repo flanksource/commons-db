@@ -1,13 +1,13 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { CatalogTree } from "./catalogTree";
 import {
+  CatalogTree,
   completionForInspection,
   openSearchIndexOptions,
   openSearchTargetKind,
   queryBrowserOptionsSchema,
   withTarget,
-} from "./connectionBrowserModel";
+} from "@flanksource/clicky-ui/profiles";
 
 describe("connection browser inspection completion", () => {
   it("maps SQL inspection data to shared QueryBrowser completion", () => {

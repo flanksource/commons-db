@@ -4,7 +4,10 @@ import {
   type PostExtension,
   type PostExtensionContext,
 } from "@flanksource/clicky-ui";
-import { evaluateJsonPath, useJsonPathSample } from "./jsonPathSampleRow";
+import {
+  evaluateJsonPath,
+  useJsonPathSample,
+} from "@flanksource/clicky-ui/profiles";
 
 // The column schema tags the `jsonpath` field with this hint so the form renders
 // a browsable tree of a sample row instead of a bare text input.

@@ -2,6 +2,7 @@ import {
   EntityExplorerApp,
   RouterProvider,
   ThemeProvider,
+  createUnitFormExtensions,
   createOperationsApiClient,
   useBrowserRouter,
   useRouter,
@@ -18,8 +19,11 @@ import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./
 import { connectionDashboardResultRenderer } from "./connectionDashboard";
 import { getMonacoWorker } from "./monacoWorkers";
 import { ChatWidget } from "./chatWidget";
-import { profileBuilderFormExtensions } from "./profileBuilder";
-import { esQueryBuilderFormExtensions } from "./esQueryBuilder";
+import {
+  esQueryBuilderFormExtensions,
+  profileBuilderFormExtensions,
+  profileEditSurfaceKey,
+} from "@flanksource/clicky-ui/profiles";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
 import { jsonPathFormExtensions } from "./jsonPathPicker";
 import { BuildProfileButton } from "./buildProfileAction";
@@ -28,7 +32,6 @@ import {
   ProfileEditorPage,
   isProfileSurface,
 } from "./editProfileAction";
-import { profileEditSurfaceKey } from "./profileEditorModel";
 import { profileRowDetailsResult } from "./profileRowDetails";
 import { ReconcileButton } from "./reconcileAction";
 import { ReconcilePage } from "./reconcilePage";
@@ -38,12 +41,14 @@ import {
   useProfileConnectionMapping,
 } from "./profileConnectionMapping";
 
+const unitFormExtensions = createUnitFormExtensions();
+
 // Compose the form extensions: the namespace picker, the secret/workload url
 // selector (which reads the selected namespace from the form's root value), the
 // profile query builder, and the structured OpenSearch filter builder that
 // mounts on provider.options.search in both the create and the edit form.
 const formExtensions = {
-  pre: [...esParamOptionsFormExtensions.pre],
+  pre: [...unitFormExtensions.pre, ...esParamOptionsFormExtensions.pre],
   post: [
     ...namespaceFormExtensions.post,
     ...secretFormExtensions.post,
@@ -55,6 +60,7 @@ const formExtensions = {
 };
 
 configureProfileConnectionForm({
+  formPre: formExtensions.pre,
   formPost: formExtensions.post,
   footerActions: connectionFormActions,
 });

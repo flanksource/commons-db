@@ -2,7 +2,7 @@ import type {
   OperationsApiClient,
   ResolvedOperation,
 } from "@flanksource/clicky-ui";
-import type { ProfileColumn } from "./profileWizardModel";
+import type { ProfileColumn } from "@flanksource/clicky-ui/profiles";
 import { mergePromotedColumns } from "./profileJsonFields";
 import { fetchProfiles } from "./profilesQuery";
 import { profileForSurface } from "./reconcileModel";

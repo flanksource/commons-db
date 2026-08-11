@@ -3,7 +3,7 @@ import type {
   ClickyNode,
   ClickyRow,
 } from "@flanksource/clicky-ui/clicky";
-import type { ProfileColumn } from "./profileWizardModel";
+import type { ProfileColumn } from "@flanksource/clicky-ui/profiles";
 
 const structuredColumnTypes = new Set(["json", "key_value", "key_values"]);
 

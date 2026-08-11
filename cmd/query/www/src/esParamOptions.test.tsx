@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
-import type { ParamDraft } from "./profileWizardModel";
+import type { ParamDraft } from "@flanksource/clicky-ui/profiles";
 
 const [post] = esParamOptionsFormExtensions.post;
 const [pre] = esParamOptionsFormExtensions.pre;

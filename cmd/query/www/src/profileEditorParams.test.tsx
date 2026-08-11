@@ -1,7 +1,18 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
-import { ProfileSchemaSection } from "./profileEditorSections";
-import type { ProfileWizardDraft } from "./profileWizardModel";
+import {
+  configureProfiles,
+  ProfileSchemaSection,
+  type ProfileSchema,
+  type ProfileWizardDraft,
+} from "@flanksource/clicky-ui/profiles";
+import profileSchemaDocument from "../../../../schemas/profile.json";
+
+// The library takes its schema from the host at boot, so this test has to do
+// what main.tsx does before it can render anything from it.
+configureProfiles({
+  schema: profileSchemaDocument as unknown as ProfileSchema,
+});
 
 // Renders the real Parameters section against the committed schemas/profile.json,
 // so a schema regenerated without the accordion hints — or a clicky-ui that stops

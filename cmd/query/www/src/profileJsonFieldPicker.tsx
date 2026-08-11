@@ -6,7 +6,7 @@ import {
   promotedColumnsError,
   type JsonFieldCandidate,
 } from "./profileJsonFields";
-import type { ProfileColumn } from "./profileWizardModel";
+import type { ProfileColumn } from "@flanksource/clicky-ui/profiles";
 
 type ProfileJsonFieldPickerProps = {
   candidates: JsonFieldCandidate[];

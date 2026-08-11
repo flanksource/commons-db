@@ -28,7 +28,7 @@ import {
 import { ProfileJsonFieldPicker } from "./profileJsonFieldPicker";
 import { discoverJsonFieldCandidates } from "./profileJsonFields";
 import { PROFILES_QUERY_KEY } from "./profilesQuery";
-import type { ProfileColumn } from "./profileWizardModel";
+import type { ProfileColumn } from "@flanksource/clicky-ui/profiles";
 
 type ClickyTableNode = ClickyNode & {
   kind: "table";

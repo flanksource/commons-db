@@ -9,8 +9,11 @@ import {
 import { UiEdit } from "@flanksource/clicky-ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { ProfileEditor } from "./profileEditor";
-import { profileEditRoute, profileRoute } from "./profileEditorModel";
+import {
+  ProfileEditor,
+  profileEditRoute,
+  profileRoute,
+} from "@flanksource/clicky-ui/profiles";
 import { loadProfileDocument } from "./profileColumnPromotion";
 import { PROFILES_QUERY_KEY } from "./profilesQuery";
 

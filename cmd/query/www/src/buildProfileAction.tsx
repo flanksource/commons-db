@@ -8,7 +8,7 @@ import {
 import { UiMagicWand } from "@flanksource/clicky-ui/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { ProfileWizard } from "./profileWizard";
+import { ProfileWizard } from "@flanksource/clicky-ui/profiles";
 
 type BuildProfileButtonProps = {
   client: OperationsApiClient;

@@ -9,7 +9,7 @@ import type {
   QueryBrowserFilterLookup,
   QueryBrowserFilterLookupRequest,
 } from "@flanksource/clicky-ui";
-import { fetchJSON } from "./connectionBrowserModel";
+import { fetchJSON } from "@flanksource/clicky-ui/profiles";
 
 type FilterValuesResponse = {
   options: { value: string; label?: string; count?: number }[];

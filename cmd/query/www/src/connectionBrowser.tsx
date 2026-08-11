@@ -8,16 +8,16 @@ import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   browserBaseUrl,
+  ConnectionQueryWorkspace,
   fetchJSON,
   mergeProviderOptions,
   queryBrowserOptionsSchema,
   useInspection,
   type BrowserDescriptor,
   type ConnectionProfileActionRenderer,
-} from "./connectionBrowserModel";
+  type EsSearch,
+} from "@flanksource/clicky-ui/profiles";
 import { makeBrowserFilterLookup } from "./browserFilterValues";
-import { ConnectionQueryWorkspace } from "./connectionQueryWorkspace";
-import type { EsSearch } from "./esQueryBuilderModel";
 
 type ConnectionPresence = {
   configured: boolean;
