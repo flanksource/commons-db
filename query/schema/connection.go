@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/flanksource/clicky/rpc"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -155,6 +156,9 @@ func tailoredBranch(typ string, cfg any) Schema {
 
 	if len(propProps) > 0 {
 		properties := Schema{"type": "object", "title": "Properties", "properties": propProps}
+		if typ == models.ConnectionTypeClickHouse {
+			customizeClickHousePropertiesSchema(properties)
+		}
 		if len(propertyRequired) > 0 {
 			properties["required"] = propertyRequired
 			required = append(required, "properties")
@@ -179,6 +183,48 @@ func tailoredBranch(typ string, cfg any) Schema {
 			"required":   []string{"type"},
 		},
 		"then": then,
+	}
+}
+
+func customizeClickHousePropertiesSchema(properties Schema) {
+	properties["title"] = "Query limits"
+	properties["description"] = "Applied to every query opened through this connection. Missing values use these safe defaults."
+	properties["x-clicky-order"] = 7
+	properties["x-columns"] = 2
+	properties["x-column-min-width"] = "16rem"
+
+	fields := properties["properties"].(Schema)
+	numeric := map[string]struct {
+		defaultValue string
+		suffix       string
+		unitKind     string
+	}{
+		models.ClickHousePropertyMaxExecutionTime: {models.ClickHouseDefaultMaxExecutionTime, "seconds", ""},
+		models.ClickHousePropertyMaxRowsToRead:    {models.ClickHouseDefaultMaxRowsToRead, "rows", "count"},
+		models.ClickHousePropertyMaxBytesToRead:   {models.ClickHouseDefaultMaxBytesToRead, "", "bytes"},
+		models.ClickHousePropertyMaxMemoryUsage:   {models.ClickHouseDefaultMaxMemoryUsage, "", "bytes"},
+		models.ClickHousePropertyMaxThreads:       {models.ClickHouseDefaultMaxThreads, "threads", ""},
+	}
+	for key, metadata := range numeric {
+		field := fields[key].(Schema)
+		field["default"] = metadata.defaultValue
+		field["pattern"] = "^[1-9][0-9]*$"
+		if metadata.suffix != "" {
+			field["x-input-suffix"] = metadata.suffix
+		}
+		if metadata.unitKind != "" {
+			field["x-clicky-unit"] = metadata.unitKind
+		}
+	}
+	for key, defaultValue := range map[string]string{
+		models.ClickHousePropertyReadOverflowMode:    models.ClickHouseDefaultReadOverflowMode,
+		models.ClickHousePropertyTimeoutOverflowMode: models.ClickHouseDefaultTimeoutOverflowMode,
+	} {
+		field := fields[key].(Schema)
+		field["default"] = defaultValue
+		field["enum"] = []string{"throw", "break"}
+		field["x-enum-display"] = "segmented"
+		field["x-enum-labels"] = map[string]string{"throw": "Throw", "break": "Break"}
 	}
 }
 

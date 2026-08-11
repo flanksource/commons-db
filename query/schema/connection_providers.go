@@ -72,6 +72,13 @@ type SQLServerProvider struct {
 type ClickHouseProvider struct {
 	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=URL,source=value,required,order=2,desc=clickhouse://user:pass@host:9000/db"`
 	secretCreds
+	MaxExecutionTime    string `json:"max_execution_time"    clicky:"property=max_execution_time,title=Maximum execution time,order=0,desc=Server-side query execution limit in seconds"`
+	MaxRowsToRead       string `json:"max_rows_to_read"       clicky:"property=max_rows_to_read,title=Maximum rows to read,order=1,desc=Maximum source rows a query may scan"`
+	MaxBytesToRead      string `json:"max_bytes_to_read"      clicky:"property=max_bytes_to_read,title=Maximum bytes to read,order=2,desc=Maximum uncompressed source bytes a query may scan"`
+	MaxMemoryUsage      string `json:"max_memory_usage"      clicky:"property=max_memory_usage,title=Maximum memory usage,order=3,desc=Maximum memory in bytes for one query"`
+	MaxThreads          string `json:"max_threads"           clicky:"property=max_threads,title=Maximum threads,order=4,desc=Maximum worker threads available to one query"`
+	ReadOverflowMode    string `json:"read_overflow_mode"    clicky:"property=read_overflow_mode,title=Read overflow,order=5,desc=Action when a row or byte read limit is exceeded"`
+	TimeoutOverflowMode string `json:"timeout_overflow_mode" clicky:"property=timeout_overflow_mode,title=Timeout overflow,order=6,desc=Action when the execution time limit is exceeded"`
 }
 
 // RedisProvider models a Redis/Valkey endpoint. A URL may carry the database

@@ -3,8 +3,10 @@ package connection
 import (
 	databasesql "database/sql"
 	"fmt"
+	"maps"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
@@ -31,11 +33,12 @@ var supportedSQLTypes = []string{
 //
 // +kubebuilder:object:generate=true
 type SQLConnection struct {
-	ConnectionName string       `yaml:"connection,omitempty" json:"connection,omitempty"`
-	Type           string       `yaml:"type,omitempty" json:"type,omitempty"`
-	URL            types.EnvVar `yaml:"url,omitempty" json:"url,omitempty"`
-	Username       types.EnvVar `yaml:"username,omitempty" json:"username,omitempty"`
-	Password       types.EnvVar `yaml:"password,omitempty" json:"password,omitempty"`
+	ConnectionName string              `yaml:"connection,omitempty" json:"connection,omitempty"`
+	Type           string              `yaml:"type,omitempty" json:"type,omitempty"`
+	URL            types.EnvVar        `yaml:"url,omitempty" json:"url,omitempty"`
+	Username       types.EnvVar        `yaml:"username,omitempty" json:"username,omitempty"`
+	Password       types.EnvVar        `yaml:"password,omitempty" json:"password,omitempty"`
+	Properties     types.JSONStringMap `yaml:"properties,omitempty" json:"properties,omitempty"`
 }
 
 func (s *SQLConnection) FromModel(connection models.Connection) error {
@@ -48,6 +51,7 @@ func (s *SQLConnection) FromModel(connection models.Connection) error {
 	s.URL = types.EnvVar{ValueStatic: connection.URL}
 	s.Username = types.EnvVar{ValueStatic: connection.Username}
 	s.Password = types.EnvVar{ValueStatic: connection.Password}
+	s.Properties = maps.Clone(connection.Properties)
 	return nil
 }
 
@@ -58,11 +62,12 @@ func (s SQLConnection) ToModel() models.Connection {
 	}
 
 	return models.Connection{
-		Name:     s.ConnectionName,
-		Type:     connType,
-		URL:      s.URL.ValueStatic,
-		Username: s.Username.ValueStatic,
-		Password: s.Password.ValueStatic,
+		Name:       s.ConnectionName,
+		Type:       connType,
+		URL:        s.URL.ValueStatic,
+		Username:   s.Username.ValueStatic,
+		Password:   s.Password.ValueStatic,
+		Properties: maps.Clone(s.Properties),
 	}
 }
 
@@ -83,19 +88,17 @@ func (s *SQLConnection) Client(ctx context.Context) (*databasesql.DB, error) {
 		return nil, fmt.Errorf("sql connection url cannot be empty")
 	}
 
+	if s.Type == models.ConnectionTypeClickHouse {
+		options, err := s.clickHouseOptions()
+		if err != nil {
+			return nil, err
+		}
+		return clickhouse.OpenDB(options), nil
+	}
+
 	connectionString, err := s.connectionString()
 	if err != nil {
 		return nil, err
-	}
-	if s.Type == models.ConnectionTypeClickHouse {
-		options, err := clickhouse.ParseDSN(connectionString)
-		if err != nil {
-			return nil, fmt.Errorf("invalid clickhouse connection string: %w", err)
-		}
-		if options.Protocol == clickhouse.HTTP && options.TLS != nil && options.Auth.Password == "" {
-			options.HttpHeaders = map[string]string{"X-ClickHouse-SSL-Certificate-Auth": "off"}
-		}
-		return clickhouse.OpenDB(options), nil
 	}
 
 	client, err := databasesql.Open(driverName, connectionString)
@@ -104,6 +107,75 @@ func (s *SQLConnection) Client(ctx context.Context) (*databasesql.DB, error) {
 	}
 
 	return client, nil
+}
+
+var clickHousePositiveIntegerSettings = []struct {
+	key          string
+	defaultValue string
+}{
+	{models.ClickHousePropertyMaxExecutionTime, models.ClickHouseDefaultMaxExecutionTime},
+	{models.ClickHousePropertyMaxRowsToRead, models.ClickHouseDefaultMaxRowsToRead},
+	{models.ClickHousePropertyMaxBytesToRead, models.ClickHouseDefaultMaxBytesToRead},
+	{models.ClickHousePropertyMaxMemoryUsage, models.ClickHouseDefaultMaxMemoryUsage},
+	{models.ClickHousePropertyMaxThreads, models.ClickHouseDefaultMaxThreads},
+}
+
+var clickHouseOverflowSettings = []struct {
+	key          string
+	defaultValue string
+}{
+	{models.ClickHousePropertyReadOverflowMode, models.ClickHouseDefaultReadOverflowMode},
+	{models.ClickHousePropertyTimeoutOverflowMode, models.ClickHouseDefaultTimeoutOverflowMode},
+}
+
+func (s SQLConnection) clickHouseOptions() (*clickhouse.Options, error) {
+	connectionString, err := s.connectionString()
+	if err != nil {
+		return nil, err
+	}
+	options, err := clickhouse.ParseDSN(connectionString)
+	if err != nil {
+		return nil, fmt.Errorf("invalid clickhouse connection string: %w", err)
+	}
+	settings, err := clickHouseQuerySettings(s.Properties)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range settings {
+		options.Settings[key] = value
+	}
+	if options.Protocol == clickhouse.HTTP && options.TLS != nil && options.Auth.Password == "" {
+		options.HttpHeaders = map[string]string{"X-ClickHouse-SSL-Certificate-Auth": "off"}
+	}
+	return options, nil
+}
+
+func clickHouseQuerySettings(properties types.JSONStringMap) (clickhouse.Settings, error) {
+	settings := make(clickhouse.Settings, len(clickHousePositiveIntegerSettings)+len(clickHouseOverflowSettings))
+	for _, spec := range clickHousePositiveIntegerSettings {
+		value, configured := properties[spec.key]
+		if !configured {
+			value = spec.defaultValue
+		}
+		value = strings.TrimSpace(value)
+		parsed, err := strconv.ParseUint(value, 10, 64)
+		if err != nil || parsed == 0 {
+			return nil, fmt.Errorf("invalid clickhouse connection property %q: expected a positive integer, got %q", spec.key, value)
+		}
+		settings[spec.key] = strconv.FormatUint(parsed, 10)
+	}
+	for _, spec := range clickHouseOverflowSettings {
+		value, configured := properties[spec.key]
+		if !configured {
+			value = spec.defaultValue
+		}
+		value = strings.TrimSpace(value)
+		if value != "throw" && value != "break" {
+			return nil, fmt.Errorf("invalid clickhouse connection property %q: expected throw or break, got %q", spec.key, value)
+		}
+		settings[spec.key] = value
+	}
+	return settings, nil
 }
 
 // UseDatabase returns a copy of the connection scoped to database. Credentials
@@ -290,6 +362,9 @@ func (s *SQLConnection) HydrateConnection(ctx context.Context) error {
 		}
 		if !existing.Password.IsEmpty() {
 			s.Password = existing.Password
+		}
+		if existing.Properties != nil {
+			s.Properties = maps.Clone(existing.Properties)
 		}
 		if existing.Type != "" {
 			s.Type = existing.Type
