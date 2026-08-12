@@ -2,6 +2,7 @@ package esdsl
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -10,7 +11,7 @@ func compileLeaf(node bound, path string) (map[string]any, error) {
 	c := node.spec
 	switch c.Op {
 	case OpTerm:
-		return compileTerm(node)
+		return compileTerm(node, path)
 	case OpTerms:
 		return compileTerms(node)
 	case OpMatch:
@@ -93,8 +94,13 @@ func RangeClause(field string, bounds RangeBounds) map[string]any {
 	return map[string]any{"range": map[string]any{field: body}}
 }
 
-func compileTerm(node bound) (map[string]any, error) {
+func compileTerm(node bound, path string) (map[string]any, error) {
 	c := node.spec
+	if operandType := reflect.TypeOf(node.value.value); operandType != nil &&
+		(operandType.Kind() == reflect.Array || operandType.Kind() == reflect.Slice) {
+		return nil, fmt.Errorf("%s: operator %q requires a scalar value, got %T; use %q for multiple values",
+			path, c.Op, node.value.value, OpTerms)
+	}
 	body := map[string]any{"value": node.value.value}
 	addBoost(body, c.Boost)
 	addBool(body, "case_insensitive", c.CaseInsensitive)

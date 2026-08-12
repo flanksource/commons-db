@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"time"
 
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -17,9 +19,13 @@ import (
 // raw bytes are kept alongside the decoded body so a test can assert on the
 // exact JSON text where re-encoding would otherwise hide a difference.
 type openSearchCapture struct {
-	raw  string
-	body map[string]any
-	size string
+	raw           string
+	body          map[string]any
+	size          string
+	fieldCaps     int
+	fieldName     string
+	fieldType     string
+	fieldCapsBody string
 }
 
 // stubOpenSearch answers one search with no hits and captures the request.
@@ -27,6 +33,22 @@ func stubOpenSearch(capture *openSearchCapture) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodHead {
 			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+			capture.fieldCaps++
+			capture.fieldName = r.URL.Query().Get("fields")
+			if capture.fieldCapsBody != "" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, capture.fieldCapsBody)
+				return
+			}
+			fieldType := capture.fieldType
+			if fieldType == "" {
+				fieldType = "date"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"fields":{"%s":{"%s":{"searchable":true,"aggregatable":true}}}}`, capture.fieldName, fieldType)
 			return
 		}
 		raw, err := io.ReadAll(r.Body)
@@ -80,6 +102,7 @@ var _ = Describe("opensearch structured search", func() {
 		Expect(capture.body["sort"]).To(Equal([]any{
 			map[string]any{"@timestamp": map[string]any{"order": "desc"}},
 		}))
+		Expect(capture.fieldCaps).To(BeZero(), "a search without time-role params must not inspect mappings")
 	})
 
 	It("binds parameters structurally and folds the time range onto the time field", func() {
@@ -107,6 +130,8 @@ var _ = Describe("opensearch structured search", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(capture.size).To(Equal("75"))
+		Expect(capture.fieldCaps).To(Equal(1))
+		Expect(capture.fieldName).To(Equal("@timestamp"))
 		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
 			"filter": []any{
 				map[string]any{"term": map[string]any{"service": "prod-api"}},
@@ -114,6 +139,80 @@ var _ = Describe("opensearch structured search", func() {
 			},
 		}}))
 	})
+
+	It("encodes a date-only bound for a numeric timestamp field", func() {
+		capture := openSearchCapture{fieldType: "long"}
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"timeField":       "observed_at",
+				"timeFieldFormat": "epoch_millis",
+				"query":           map[string]any{"op": "match_all"},
+			},
+		})
+		profile.Params = []query.ParamDef{
+			{Name: "from", Role: query.ParamRoleTimeFrom},
+			{Name: "to", Role: query.ParamRoleTimeTo},
+		}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"from": "2026-08-12", "to": "2026-08-12",
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.fieldName).To(Equal("observed_at"))
+		dayStart := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{
+				"observed_at": map[string]any{
+					"gte": float64(dayStart.UnixMilli()),
+					"lt":  float64(dayStart.AddDate(0, 0, 1).UnixMilli()),
+				},
+			}}},
+		}}))
+	})
+
+	It("rejects a numeric timestamp mapping without an epoch unit", func() {
+		capture := openSearchCapture{fieldType: "long"}
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"timeField": "observed_at",
+				"query":     map[string]any{"op": "match_all"},
+			},
+		})
+		profile.Params = []query.ParamDef{{Name: "from", Role: query.ParamRoleTimeFrom}}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{"from": "2026-08-12"})
+		Expect(err).To(MatchError(ContainSubstring(`timeField "observed_at" is mapped as "long" and requires timeFieldFormat`)))
+		Expect(capture.raw).To(BeEmpty(), "mapping validation must fail before the search request")
+	})
+
+	DescribeTable("rejects an unusable timestamp mapping before searching",
+		func(fieldCapsBody, expected string) {
+			capture := openSearchCapture{fieldCapsBody: fieldCapsBody}
+			server := stubOpenSearch(&capture)
+			defer server.Close()
+
+			profile := openSearchProfile(server.URL, map[string]any{
+				"search": map[string]any{
+					"timeField": "observed_at",
+					"query":     map[string]any{"op": "match_all"},
+				},
+			})
+			profile.Params = []query.ParamDef{{Name: "from", Role: query.ParamRoleTimeFrom}}
+
+			_, err := query.Execute(context.New(), profile, map[string]any{"from": "2026-08-12"})
+			Expect(err).To(MatchError(ContainSubstring(expected)))
+			Expect(capture.raw).To(BeEmpty())
+		},
+		Entry("missing field", `{"fields":{}}`, `timeField "observed_at" is not mapped`),
+		Entry("conflicting field types", `{"fields":{"observed_at":{"date":{"searchable":true,"aggregatable":true},"long":{"searchable":true,"aggregatable":true}}}}`, `timeField "observed_at" has conflicting mapping types [date long]`),
+	)
 
 	// The tenant-x Prod regression: an operand that reaches its param textually was
 	// sent to the backend as the template text, and the specification then

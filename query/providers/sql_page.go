@@ -90,6 +90,19 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 	}
 	request.Diagnostics.RecordRequest(statement, args, requestDetails)
 
+	// A failure is the one moment the statement that ran is worth more than it
+	// costs to carry, so it travels on the error rather than only in a debug
+	// run's diagnostics — "column does not exist" names no column and no query.
+	// A debug run already hands its own diagnostics back to the caller.
+	defer func() {
+		if err == nil || request.Diagnostics != nil {
+			return
+		}
+		failure := query.NewProviderDiagnostics(string(dialect), request.Query, nil)
+		failure.RecordRequest(statement, args, requestDetails)
+		err = query.WithDiagnostics(err, failure)
+	}()
+
 	// statement is the author's own query, unchanged, wrapped in a CTE built
 	// from constant syntax; every filter value travels as a bound arg and every
 	// filter identifier is validated before quoting.

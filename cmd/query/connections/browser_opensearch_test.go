@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -48,10 +50,32 @@ func postBrowser(t *testing.T, handler *connectionBrowserHandler, path, body str
 	return recorder
 }
 
+func compileBackend(t *testing.T, field, fieldType string) *httptest.Server {
+	t.Helper()
+	return httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/_field_caps") {
+			http.NotFound(w, r)
+			return
+		}
+		if got := r.URL.Query().Get("fields"); got != field {
+			t.Errorf("field_caps fields = %q, want %q", got, field)
+		}
+		_, _ = fmt.Fprintf(w, `{"fields":{"%s":{"%s":{"searchable":true,"aggregatable":true}}}}`, field, fieldType)
+	}))
+}
+
 func TestServeCompile(t *testing.T) {
-	handler, base := browserHandlerFor(t, models.ConnectionTypeOpenSearch, "https://opensearch.test")
+	openSearch := compileBackend(t, "@timestamp", "date")
+	defer openSearch.Close()
+	handler, base := browserHandlerFor(t, models.ConnectionTypeOpenSearch, openSearch.URL)
 
 	recorder := postBrowser(t, handler, base+"/compile", `{
+		"index": "logs-*",
 		"search": {
 			"timeField": "@timestamp",
 			"size": 25,
@@ -98,6 +122,37 @@ func TestServeCompile(t *testing.T) {
 	if !strings.Contains(result.Query, "\n") {
 		t.Errorf("compiled query is not pretty-printed: %q", result.Query)
 	}
+}
+
+func TestServeCompileEncodesNumericTimestampFields(t *testing.T) {
+	openSearch := compileBackend(t, "observed_at", "long")
+	defer openSearch.Close()
+	handler, base := browserHandlerFor(t, models.ConnectionTypeOpenSearch, openSearch.URL)
+
+	recorder := postBrowser(t, handler, base+"/compile", `{
+		"index": "logs-*",
+		"search": {
+			"timeField": "observed_at",
+			"timeFieldFormat": "epoch_micros",
+			"query": {"op": "match_all"}
+		},
+		"params": {"since": "2026-08-12"},
+		"roles": {"since": "time-from"}
+	}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("compile status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var result browserCompileResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(result.Query), &body); err != nil {
+		t.Fatal(err)
+	}
+	dayStart := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	assertJSONEqual(t, "query", body["query"], fmt.Sprintf(
+		`{"bool":{"filter":[{"range":{"observed_at":{"gte":%d}}}]}}`, dayStart.UnixMicro()))
 }
 
 // The preview must show the DSL an execution produces, so a templated operand

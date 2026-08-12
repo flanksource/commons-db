@@ -24,6 +24,7 @@ import (
 // params have been interpolated into it, so the preview goes through the same
 // templating a profile does at execution time.
 type browserCompileRequest struct {
+	Index  string            `json:"index,omitempty"`
 	Search json.RawMessage   `json:"search"`
 	Params map[string]any    `json:"params,omitempty"`
 	Roles  map[string]string `json:"roles,omitempty"`
@@ -35,9 +36,8 @@ type browserCompileResult struct {
 	From  int    `json:"from"`
 }
 
-// serveCompile compiles a specification to DSL. It is a pure function of its
-// input — no backend is contacted — so the connection only scopes the route and
-// proves this type has a DSL browser at all.
+// serveCompile compiles a specification to DSL. Time-role parameters inspect
+// the selected index so the preview uses the field's actual mapping type.
 func (h *connectionBrowserHandler) serveCompile(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
 	if conn.Type != models.ConnectionTypeOpenSearch {
 		http.Error(w, fmt.Sprintf("connection type %q has no query DSL to compile", conn.Type), http.StatusBadRequest)
@@ -60,19 +60,41 @@ func (h *connectionBrowserHandler) serveCompile(w http.ResponseWriter, r *http.R
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	compiled, err := esdsl.Compile(esdsl.CompileRequest{
+	bindings := compileParamBindings(request.Params, request.Roles)
+	compileRequest := esdsl.CompileRequest{
 		Search: search,
-		Params: compileParamBindings(request.Params, request.Roles),
+		Params: bindings,
 		// A profile templates its params into the provider options and the
 		// connection as well as the specification, and only the specification is
 		// previewed here. Whether every declared param is referenced is therefore
 		// a question this route cannot answer — execution, which sees the whole
 		// profile, is where an unreferenced param is reported.
 		Referenced: suppliedParamNames(request.Params),
-	})
+	}
+	compiled, err := esdsl.Compile(compileRequest)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
+	}
+	if providers.NeedsOpenSearchTimeFieldMapping(bindings) {
+		requestCtx := h.ctx.Wrap(r.Context())
+		searcher, err := h.openSearchSearcher(requestCtx, conn)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		compileRequest.TimeFieldMapping, err = providers.ResolveOpenSearchTimeFieldMapping(
+			requestCtx, searcher, request.Index, search, bindings,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		compiled, err = esdsl.Compile(compileRequest)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
 	}
 	dsl, err := compiled.PrettyJSON()
 	if err != nil {
@@ -126,32 +148,37 @@ func (h *connectionBrowserHandler) serveValues(w http.ResponseWriter, r *http.Re
 	}
 
 	var body map[string]any
+	var search *esdsl.Search
+	var compileRequest esdsl.CompileRequest
+	var compiled esdsl.Compiled
 	if len(request.Search) > 0 {
 		rendered, _, err := query.RenderParamsJSON(h.ctx, request.Search, request.Params)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
-		search, err := decodeSearch(rendered)
+		decoded, err := decodeSearch(rendered)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		compiled, err := esdsl.Compile(esdsl.CompileRequest{
-			Search: search,
-			Params: compileParamBindings(request.Params, request.Roles),
+		bindings := compileParamBindings(request.Params, request.Roles)
+		search = &decoded
+		compileRequest = esdsl.CompileRequest{
+			Search: decoded,
+			Params: bindings,
 			// The scope is the author's specification with the condition being
 			// edited removed, so a param bound only by that condition is absent
 			// from it by construction. Unused-param detection is a profile-level
 			// guardrail and would reject every lookup here — the params consumed
 			// while templating are a subset of these.
 			Referenced: suppliedParamNames(request.Params),
-		})
+		}
+		compiled, err = esdsl.Compile(compileRequest)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
-		body = compiled.Body
 	}
 
 	requestCtx := h.ctx.Wrap(r.Context())
@@ -160,6 +187,24 @@ func (h *connectionBrowserHandler) serveValues(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
+	if search != nil {
+		compileRequest.TimeFieldMapping, err = providers.ResolveOpenSearchTimeFieldMapping(
+			requestCtx, searcher, request.Index, *search, compileRequest.Params,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+			return
+		}
+		if compileRequest.TimeFieldMapping != nil {
+			compiled, err = esdsl.Compile(compileRequest)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+				return
+			}
+		}
+		body = compiled.Body
+	}
+
 	result, err := searcher.DistinctValues(requestCtx, opensearch.ValuesRequest{
 		Index:  request.Index,
 		Field:  request.Field,

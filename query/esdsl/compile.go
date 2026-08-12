@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // CompileRequest is the input to Compile.
@@ -23,6 +24,16 @@ type CompileRequest struct {
 	// PageSize is how many hits the caller asked this page for. Zero leaves the
 	// specification's own size in place.
 	PageSize int
+
+	// TimeFieldMapping is the live OpenSearch mapping for Search.TimeField. A
+	// provider supplies it when role-carrying time parameters are present.
+	TimeFieldMapping *TimeFieldMapping
+}
+
+// TimeFieldMapping is runtime metadata and is never persisted in a profile.
+type TimeFieldMapping struct {
+	Type string
+	Now  time.Time
 }
 
 // Compiled is a search request ready to send.
@@ -77,7 +88,7 @@ func Compile(req CompileRequest) (Compiled, error) {
 	if err := req.Search.Validate(); err != nil {
 		return Compiled{}, err
 	}
-	root, size, from, paramUses, err := bindSearch(req.Search, req.Params, req.Referenced)
+	root, size, from, paramUses, err := bindSearch(req.Search, req.Params, req.Referenced, req.TimeFieldMapping)
 	if err != nil {
 		return Compiled{}, err
 	}

@@ -137,7 +137,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 
 	resolved, err := Resolve(r.Context(), h.store, name)
 	if err != nil {
-		writeExecError(w, http.StatusNotFound, "profile_not_found", err.Error())
+		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
 		return
 	}
 	p := resolved.Profile
@@ -148,18 +148,19 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 
 	params, err := executeParams(r, p)
 	if err != nil {
-		writeExecError(w, http.StatusBadRequest, "invalid_params", err.Error())
+		writeExecError(w, http.StatusBadRequest, "invalid_params", err)
 		return
 	}
 
 	export, err := parseExportRequest(r, p)
 	if err != nil {
-		writeExecError(w, http.StatusBadRequest, "invalid_export_request", err.Error())
+		writeExecError(w, http.StatusBadRequest, "invalid_export_request", err)
 		return
 	}
 
 	if export.scope == "all" && export.format == "clicky-json" {
-		writeExecError(w, http.StatusUnprocessableEntity, "format_not_exportable", "clicky-json is an interactive page format; choose an export format")
+		writeExecError(w, http.StatusUnprocessableEntity, "format_not_exportable",
+			errors.New("clicky-json is an interactive page format; choose an export format"))
 		return
 	}
 	// A tabular format flattens rows onto one column set, and a profile that
@@ -168,7 +169,8 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 	// page of a document-shaped backend is as heterogeneous as all of it. Refusing
 	// is the only answer that does not hand back a file which looks complete.
 	if len(p.Columns) == 0 && isTabularExport(export.format) {
-		writeExecError(w, http.StatusUnprocessableEntity, "columns_required", "tabular exports require declared profile columns")
+		writeExecError(w, http.StatusUnprocessableEntity, "columns_required",
+			errors.New("tabular exports require declared profile columns"))
 		return
 	}
 
@@ -178,27 +180,27 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		// A stale cursor is the caller's to fix by starting the walk again, so
 		// it is a 400 rather than a 500 — and it says which input moved.
 		if errors.Is(err, query.ErrCursorStale) {
-			writeExecError(w, http.StatusBadRequest, "cursor_stale", err.Error())
+			writeExecError(w, http.StatusBadRequest, "cursor_stale", err)
 			return
 		}
-		writeExecError(w, http.StatusBadRequest, "query_failed", err.Error())
+		writeExecError(w, http.StatusBadRequest, "query_failed", err)
 		return
 	}
 
 	if export.format == "clicky-json" {
 		page, err := query.CollectRows(response.rows)
 		if err != nil {
-			writeExecError(w, http.StatusInternalServerError, "query_failed", err.Error())
+			writeExecError(w, http.StatusInternalServerError, "query_failed", err)
 			return
 		}
 		filterKeys, err := p.ColumnFilterKeys()
 		if err != nil {
-			writeExecError(w, http.StatusInternalServerError, "render_failed", err.Error())
+			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
 			return
 		}
 		output, err := (&query.Result{Profile: p.Name, Rows: page, ColumnFilterKeys: filterKeys}).Render(p.Columns, "clicky-json")
 		if err != nil {
-			writeExecError(w, http.StatusInternalServerError, "render_failed", err.Error())
+			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
 			return
 		}
 		setExportHeaders(w, r, p.Name, export, response)
@@ -208,7 +210,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 
 	columns, err := query.ClickyColumns(p)
 	if err != nil {
-		writeExecError(w, http.StatusInternalServerError, "render_failed", err.Error())
+		writeExecError(w, http.StatusInternalServerError, "render_failed", err)
 		return
 	}
 	clickyRows := newProfileClickyRows(response.rows, columns, response.ceiling)
@@ -222,7 +224,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		export.maxRows = maxPDFRows
 		var output bytes.Buffer
 		if _, err := formatters.WriteTableStream(r.Context(), &output, clickyRows, opts); err != nil {
-			writeExecError(w, http.StatusUnprocessableEntity, "render_failed", err.Error())
+			writeExecError(w, http.StatusUnprocessableEntity, "render_failed", err)
 			return
 		}
 		// A PDF is buffered, so whether a ceiling bit is known before a byte is
@@ -256,15 +258,23 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 // that can branch on one code but has to string-match the rest is a client that
 // breaks when a message is reworded. Code is the stable part; Message is for a
 // person to read.
+// Diagnostics is present when the failure carried the provider request that
+// produced it — the statement, its bound arguments, the provider's own
+// details. A message alone says a query failed; this says which one.
 type execError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
+	Code        string                     `json:"code"`
+	Message     string                     `json:"message"`
+	Diagnostics *query.ProviderDiagnostics `json:"diagnostics,omitempty"`
 }
 
-func writeExecError(w http.ResponseWriter, status int, code, message string) {
+func writeExecError(w http.ResponseWriter, status int, code string, err error) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(execError{Code: code, Message: message})
+	_ = json.NewEncoder(w).Encode(execError{
+		Code:        code,
+		Message:     err.Error(),
+		Diagnostics: query.DiagnosticsFromError(err),
+	})
 }
 
 type connectionMappingRequest struct {

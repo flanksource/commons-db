@@ -658,6 +658,52 @@ func TestExecHandlerReturnsStructuredErrors(t *testing.T) {
 	}
 }
 
+// A failed query says which query failed. The provider attaches the statement
+// it ran to the error; a body that dropped it would leave the caller with
+// "column does not exist" and no column and no query to look at.
+func TestExecErrorBodyCarriesProviderDiagnostics(t *testing.T) {
+	diagnostics := query.NewProviderDiagnostics("postgres", "SELECT scheme, premum FROM policies", nil)
+	diagnostics.RecordRequest("SELECT scheme, premum FROM policies WHERE start >= $1", []any{"2026-07-01"}, nil)
+	failure := query.WithDiagnostics(
+		errors.New(`profile "om-malawi-scheme": failed to execute sql query: column "premum" does not exist`),
+		diagnostics,
+	)
+
+	rec := httptest.NewRecorder()
+	writeExecError(rec, http.StatusBadRequest, "query_failed", failure)
+
+	var body execError
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if body.Code != "query_failed" || body.Message != failure.Error() {
+		t.Fatalf("code=%q message=%q", body.Code, body.Message)
+	}
+	if body.Diagnostics == nil {
+		t.Fatal("a failure carrying provider diagnostics served a body without them")
+	}
+	if got := body.Diagnostics.Request.Query; !strings.Contains(got, "premum") {
+		t.Fatalf("diagnostics query=%q, want the statement that ran", got)
+	}
+	if got := body.Diagnostics.Request.Arguments; len(got) != 1 || got[0] != "2026-07-01" {
+		t.Fatalf("diagnostics arguments=%v, want the bound values", got)
+	}
+	if body.Diagnostics.Provider != "postgres" {
+		t.Fatalf("diagnostics provider=%q", body.Diagnostics.Provider)
+	}
+}
+
+// An error with nothing attached must not grow an empty diagnostics object: a
+// caller reading one would take it for a query that reported nothing.
+func TestExecErrorBodyOmitsAbsentDiagnostics(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeExecError(rec, http.StatusNotFound, "profile_not_found", errors.New("no such profile"))
+
+	if strings.Contains(rec.Body.String(), "diagnostics") {
+		t.Fatalf("error body invented diagnostics: %s", rec.Body.String())
+	}
+}
+
 // HEAD is how a caller reads the paging headers — X-Total-Count above all —
 // without paying for the rows. The schema handler on this same path already
 // answers HEAD, so refusing it here made one path disagree with itself.

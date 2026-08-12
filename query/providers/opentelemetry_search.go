@@ -7,7 +7,12 @@ import (
 
 // buildOpenTelemetryRequest compiles the profile's search specification and
 // composes the runtime column filters onto it.
-func buildOpenTelemetryRequest(req query.ProviderRequest, options openTelemetryOptions, page openSearchPage) (openSearchRequest, error) {
+func buildOpenTelemetryRequest(
+	req query.ProviderRequest,
+	options openTelemetryOptions,
+	page openSearchPage,
+	timeFieldMapping *esdsl.TimeFieldMapping,
+) (openSearchRequest, error) {
 	search := openTelemetrySearch(options)
 	// A declared order is the profile's, and it is what a cursor is cut from,
 	// so it wins over the trace-shaped default sort.
@@ -15,10 +20,11 @@ func buildOpenTelemetryRequest(req query.ProviderRequest, options openTelemetryO
 		search.Sort = nil
 	}
 	compiled, err := esdsl.Compile(esdsl.CompileRequest{
-		Search:     search,
-		Params:     openSearchParamBindings(req),
-		Referenced: openSearchReferencedParams(req),
-		PageSize:   page.size,
+		Search:           search,
+		Params:           openSearchParamBindings(req),
+		Referenced:       openSearchReferencedParams(req),
+		PageSize:         page.size,
+		TimeFieldMapping: timeFieldMapping,
 	})
 	if err != nil {
 		return openSearchRequest{}, err
@@ -46,6 +52,9 @@ func openTelemetrySearch(options openTelemetryOptions) esdsl.Search {
 	}
 	if search.TimeField == "" {
 		search.TimeField = options.DateField
+	}
+	if search.TimeFieldFormat == "" && options.Format == "jaeger" && search.TimeField == "startTimeMillis" {
+		search.TimeFieldFormat = esdsl.TimeFieldFormatEpochMillis
 	}
 	if len(options.SelectFields) > 0 && len(search.Fields) == 0 {
 		search.StoredFields = []string{"*"}

@@ -4,6 +4,7 @@ import (
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.ProviderRequest, binding query.ColumnFilterBinding, search string, limit int) ([]query.FilterOption, *query.Total, error) {
@@ -11,9 +12,18 @@ func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.Prov
 	if err != nil {
 		return nil, nil, err
 	}
+	var timeFieldMapping *esdsl.TimeFieldMapping
+	if options.Search != nil {
+		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(
+			ctx, searcher, options.Index, *options.Search, openSearchParamBindings(req),
+		)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	// A value lookup reads an aggregation rather than hits, so it wants the
 	// query body without a page position on it.
-	request, err := buildOpenSearchRequest(req, options, openSearchPage{})
+	request, err := buildOpenSearchRequest(req, options, openSearchPage{}, timeFieldMapping)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -25,7 +35,14 @@ func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.P
 	if err != nil {
 		return nil, nil, err
 	}
-	request, err := buildOpenTelemetryRequest(req, options, openSearchPage{})
+	structured := openTelemetrySearch(options)
+	timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(
+		ctx, searcher, options.Index, structured, openSearchParamBindings(req),
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	request, err := buildOpenTelemetryRequest(req, options, openSearchPage{}, timeFieldMapping)
 	if err != nil {
 		return nil, nil, err
 	}

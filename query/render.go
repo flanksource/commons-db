@@ -64,6 +64,11 @@ func styledRow(row Row, styles map[string]string) Row {
 // Render formats the Result in the given clicky format (e.g. "table", "csv",
 // "json", "xlsx", "html").
 func (r *Result) Render(columns []ColumnDef, format string) (string, error) {
+	for index, row := range r.Rows {
+		if err := validateAcyclicValue(row); err != nil {
+			return "", fmt.Errorf("row %d cannot be rendered: %w", index, err)
+		}
+	}
 	return clicky.Format(r.Table(columns), clicky.FormatOptions{Format: format})
 }
 

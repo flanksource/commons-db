@@ -38,12 +38,43 @@ func TestInspectorTargetsAndFields(t *testing.T) {
 	if len(targets.Targets) != 4 || targets.Targets[0].Kind != "alias" {
 		t.Fatalf("targets = %#v", targets)
 	}
-	fields, err := inspector.Fields(context.Background(), Target{Name: "logs", Kind: "alias"})
+	fields, err := inspector.Fields(context.Background(), FieldRequest{Target: Target{Name: "logs", Kind: "alias"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(fields.Fields) != 2 || !fields.Fields[0].Conflicting || fields.Fields[1].Name != "service.name" {
 		t.Fatalf("fields = %#v", fields)
+	}
+}
+
+func TestInspectorRequestsOnlyNamedFields(t *testing.T) {
+	var requested string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = r.URL.Query().Get("fields")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"fields":{"startTimeMillis":{"long":{"searchable":true,"aggregatable":true}}}}`))
+	}))
+	defer server.Close()
+	client, err := opensearch.NewClient(opensearch.Config{Addresses: []string{server.URL}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspector, err := New(client, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := inspector.Fields(context.Background(), FieldRequest{
+		Target: Target{Name: "traces-*", Kind: "pattern"},
+		Names:  []string{"startTimeMillis"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requested != "startTimeMillis" {
+		t.Fatalf("field_caps fields = %q, want startTimeMillis", requested)
+	}
+	if len(catalog.Fields) != 1 || catalog.Fields[0].Name != "startTimeMillis" || catalog.Fields[0].Types[0] != "long" {
+		t.Fatalf("catalog = %#v", catalog)
 	}
 }
 
@@ -85,7 +116,7 @@ func TestInspectorCarriesContainerToLeaves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	catalog, err := inspector.Fields(context.Background(), Target{Name: "logs", Kind: "index"})
+	catalog, err := inspector.Fields(context.Background(), FieldRequest{Target: Target{Name: "logs", Kind: "index"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,7 +149,7 @@ func TestInspectorCarriesContainerToLeaves(t *testing.T) {
 func TestInspectorRejectsInvalidTarget(t *testing.T) {
 	client, _ := opensearch.NewClient(opensearch.Config{Addresses: []string{"http://127.0.0.1:1"}})
 	inspector, _ := New(client, Options{})
-	if _, err := inspector.Fields(context.Background(), Target{Name: "*", Kind: "wildcard"}); err == nil {
+	if _, err := inspector.Fields(context.Background(), FieldRequest{Target: Target{Name: "*", Kind: "wildcard"}}); err == nil {
 		t.Fatal("invalid target must fail before making a request")
 	}
 }

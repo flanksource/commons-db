@@ -29,8 +29,13 @@ func searchSpecProp() Schema {
 		"x-es-occurs":        occurNames(),
 		"x-es-qualifiers":    qualifierOperators(),
 		"properties": Schema{
-			"query":     conditionSchema(searchSpecDepth),
-			"timeField": strProp("Time field", "Date field that time-from and time-to params bind to"),
+			"query": conditionSchema(searchSpecDepth),
+			"timeField": strProp("Time field",
+				"Date or integral epoch field that time-from and time-to params bind to"),
+			"timeFieldFormat": Schema{
+				"type": "string", "title": "Time field format", "enum": esdsl.TimeFieldFormats(),
+				"description": "Required epoch unit for a numeric time field; omit for date and date_nanos mappings",
+			},
 			"sort": Schema{
 				"type": "array", "title": "Sort", "x-layout": "table",
 				"items": Schema{

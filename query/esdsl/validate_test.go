@@ -103,6 +103,12 @@ var _ = Describe("Search.Validate", func() {
 			Search{Source: &Source{Includes: []string{`bad"`}}},
 			"source.includes:"),
 		Entry("invalid time field", Search{TimeField: "{{now}}"}, "timeField:"),
+		Entry("time format without field",
+			Search{TimeFieldFormat: TimeFieldFormatEpochMillis},
+			"timeFieldFormat requires timeField"),
+		Entry("unknown time format",
+			Search{TimeField: "observed", TimeFieldFormat: "unix"},
+			`unknown timeFieldFormat "unix"`),
 	)
 
 	It("accepts _score and _doc as sort fields", func() {

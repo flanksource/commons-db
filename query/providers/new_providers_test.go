@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"time"
 
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -43,6 +45,12 @@ var _ = Describe("opentelemetry provider", func() {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Method == http.MethodHead {
 				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+				Expect(r.URL.Query().Get("fields")).To(Equal("startTimeMillis"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"fields":{"startTimeMillis":{"long":{"searchable":true,"aggregatable":true}}}}`)
 				return
 			}
 			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
@@ -100,6 +108,12 @@ var _ = Describe("opentelemetry provider", func() {
 				w.WriteHeader(http.StatusOK)
 				return
 			}
+			if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+				Expect(r.URL.Query().Get("fields")).To(Equal("startTimeMillis"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"fields":{"startTimeMillis":{"long":{"searchable":true,"aggregatable":true}}}}`)
+				return
+			}
 			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
@@ -121,7 +135,7 @@ var _ = Describe("opentelemetry provider", func() {
 			},
 			Params: []query.ParamDef{{Name: "since", Role: query.ParamRoleTimeFrom}},
 		}
-		_, err := query.Execute(context.New().WithDB(database, nil), profile, map[string]any{"since": "now-2h"})
+		_, err := query.Execute(context.New().WithDB(database, nil), profile, map[string]any{"since": "2026-08-12"})
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(requestBody["sort"]).To(Equal([]any{
@@ -130,7 +144,7 @@ var _ = Describe("opentelemetry provider", func() {
 		// dateField still seeds timeField, so a time-from param folds into a range.
 		Expect(requestBody["query"]).To(Equal(map[string]any{"bool": map[string]any{
 			"filter": []any{map[string]any{"range": map[string]any{
-				"startTimeMillis": map[string]any{"gte": "now-2h"},
+				"startTimeMillis": map[string]any{"gte": float64(time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC).UnixMilli())},
 			}}},
 		}}))
 	})

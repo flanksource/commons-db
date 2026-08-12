@@ -417,6 +417,12 @@ var _ = Describe("Search specification schema", func() {
 		Expect(qualifiers["caseInsensitive"]).To(ConsistOf("term", "terms", "prefix", "wildcard", "regexp"))
 	})
 
+	It("offers every supported numeric time field format", func() {
+		properties := searchProp("opensearch")["properties"].(schema.Schema)
+		format := properties["timeFieldFormat"].(schema.Schema)
+		Expect(format["enum"]).To(Equal(esdsl.TimeFieldFormats()))
+	})
+
 	// Every enum the form offers must be one the compiler accepts, or the form
 	// would hand the author a value that fails on save.
 	It("offers only qualifier values the compiler accepts", func() {

@@ -58,11 +58,19 @@ func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequ
 			yield(query.Page{}, err)
 			return
 		}
+		search := openTelemetrySearch(options)
+		timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(
+			ctx, searcher, options.Index, search, openSearchParamBindings(req),
+		)
+		if err != nil {
+			yield(query.Page{}, err)
+			return
+		}
 		walk := openSearchWalk{
 			searcher: searcher,
 			index:    options.Index,
 			build: func(position openSearchPage) (openSearchRequest, error) {
-				return buildOpenTelemetryRequest(req, options, position)
+				return buildOpenTelemetryRequest(req, options, position, timeFieldMapping)
 			},
 			mapRows: func(raw opensearch.Response) []query.Row {
 				return openTelemetryRows(raw, options)

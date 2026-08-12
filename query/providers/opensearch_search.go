@@ -45,7 +45,12 @@ type openSearchRequest struct {
 // buildOpenSearchRequest renders the search body for req, from either the
 // structured specification or the profile's raw Query DSL, and composes the
 // runtime column filters and the page position onto it.
-func buildOpenSearchRequest(req query.ProviderRequest, opts opensearchOptions, page openSearchPage) (openSearchRequest, error) {
+func buildOpenSearchRequest(
+	req query.ProviderRequest,
+	opts opensearchOptions,
+	page openSearchPage,
+	timeFieldMapping *esdsl.TimeFieldMapping,
+) (openSearchRequest, error) {
 	raw := strings.TrimSpace(req.Query)
 	var built openSearchRequest
 	var err error
@@ -54,7 +59,7 @@ func buildOpenSearchRequest(req query.ProviderRequest, opts opensearchOptions, p
 		return openSearchRequest{}, fmt.Errorf(
 			"provider.options.search and the profile query are mutually exclusive; keep the structured search or the raw query, not both")
 	case opts.Search != nil:
-		built, err = compileOpenSearchSearch(req, opts, page)
+		built, err = compileOpenSearchSearch(req, opts, page, timeFieldMapping)
 	case raw != "":
 		built, err = buildOpenSearchRawRequest(req, opts, page)
 	default:
@@ -89,7 +94,12 @@ func buildOpenSearchRawRequest(req query.ProviderRequest, opts opensearchOptions
 // compileOpenSearchSearch compiles the structured specification. options.limit
 // seeds the hit cap only when the specification sets no size of its own, so the
 // precedence is search.size, then options.limit.
-func compileOpenSearchSearch(req query.ProviderRequest, opts opensearchOptions, page openSearchPage) (openSearchRequest, error) {
+func compileOpenSearchSearch(
+	req query.ProviderRequest,
+	opts opensearchOptions,
+	page openSearchPage,
+	timeFieldMapping *esdsl.TimeFieldMapping,
+) (openSearchRequest, error) {
 	search := *opts.Search
 	if search.Size == nil {
 		limit, err := openSearchLimit(opts.Limit)
@@ -106,10 +116,11 @@ func compileOpenSearchSearch(req query.ProviderRequest, opts opensearchOptions, 
 		search.Sort = nil
 	}
 	compiled, err := esdsl.Compile(esdsl.CompileRequest{
-		Search:     search,
-		Params:     openSearchParamBindings(req),
-		Referenced: openSearchReferencedParams(req),
-		PageSize:   page.size,
+		Search:           search,
+		Params:           openSearchParamBindings(req),
+		Referenced:       openSearchReferencedParams(req),
+		PageSize:         page.size,
+		TimeFieldMapping: timeFieldMapping,
 	})
 	if err != nil {
 		return openSearchRequest{}, err

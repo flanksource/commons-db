@@ -261,7 +261,7 @@ func (h *connectionBrowserHandler) openSearchFieldCatalog(
 	}
 	mappingCtx, cancel := context.WithTimeout(ctx, openSearchMappingTimeout)
 	defer cancel()
-	catalog, err := inspector.Fields(mappingCtx, openSearchFilterTarget(index))
+	catalog, err := inspector.Fields(mappingCtx, opensearchinspect.FieldRequest{Target: openSearchFilterTarget(index)})
 	if err != nil {
 		return nil, err
 	}

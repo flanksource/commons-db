@@ -98,6 +98,33 @@ var _ = Describe("CEL columns", func() {
 		Expect(result.Rows[1]["http.response.status_code"]).To(BeNumerically("==", 503))
 		Expect(result.Rows[2]).To(HaveKeyWithValue("http.response.status_code", ""))
 	})
+
+	DescribeTable("rejects projections that would make a row cyclic",
+		func(profile query.Profile, expectedContext string) {
+			query.RegisterProvider(&mockProvider{typ: "cyclic-projection", rows: []query.Row{{
+				"metadata": map[string]any{"service": "api"},
+			}}})
+			profile.Provider = query.ProviderConfig{Type: "cyclic-projection"}
+
+			_, err := query.Execute(context.New(), profile)
+			Expect(err).To(MatchError(And(
+				ContainSubstring(expectedContext),
+				ContainSubstring("references its destination container"),
+			)))
+		},
+		Entry("from a CEL column", query.Profile{
+			Name:    "cyclic-cel-column",
+			Columns: []query.ColumnDef{{Name: "snapshot", CEL: "row"}},
+		}, `row 0: column "snapshot"`),
+		Entry("from a root JSONPath column", query.Profile{
+			Name:    "cyclic-jsonpath-column",
+			Columns: []query.ColumnDef{{Name: "snapshot", JSONPath: "$"}},
+		}, `row 0: column "snapshot"`),
+		Entry("from a nested alias", query.Profile{
+			Name:    "cyclic-alias",
+			Aliases: []query.AliasDef{{Name: "metadata.snapshot", CEL: "row.metadata"}},
+		}, `row 0: alias "metadata.snapshot"`),
+	)
 })
 
 var _ = Describe("JSONPath columns", func() {
@@ -277,5 +304,16 @@ var _ = Describe("Result.Render", func() {
 		Expect(out).To(ContainSubstring(`"type": "key_value"`))
 		Expect(out).To(ContainSubstring(`"kind": "map"`))
 		Expect(out).To(ContainSubstring(`"language": "json"`))
+	})
+
+	It("rejects a cyclic row before handing it to Clicky", func() {
+		row := query.Row{"name": "alpha"}
+		row["snapshot"] = row
+
+		_, err := (&query.Result{Rows: []query.Row{row}}).Render(nil, "clicky-json")
+		Expect(err).To(MatchError(And(
+			ContainSubstring("row 0 cannot be rendered"),
+			ContainSubstring("value contains a cycle"),
+		)))
 	})
 })

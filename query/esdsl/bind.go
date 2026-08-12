@@ -2,9 +2,13 @@ package esdsl
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/flanksource/commons-db/query/datetime"
 )
 
 // ParamBinding is one resolved profile parameter handed to Compile. Role
@@ -42,7 +46,12 @@ type binder struct {
 // role-carrying parameters into native constructs, and reports the resolved
 // size and from. A nil root means "match every document". referenced names
 // parameters already consumed by the caller, which count as used here.
-func bindSearch(search Search, params []ParamBinding, referenced []string) (root *bound, size int, from int, uses []ParamUse, err error) {
+func bindSearch(
+	search Search,
+	params []ParamBinding,
+	referenced []string,
+	timeFieldMapping *TimeFieldMapping,
+) (root *bound, size int, from int, uses []ParamUse, err error) {
 	b := &binder{params: make(map[string]ParamBinding, len(params)), used: map[string]bool{}}
 	for _, name := range referenced {
 		b.used[name] = true
@@ -68,7 +77,7 @@ func bindSearch(search Search, params []ParamBinding, referenced []string) (root
 		}
 	}
 
-	timeRange, err := b.bindTimeRange(search.TimeField)
+	timeRange, err := b.bindTimeRange(search, timeFieldMapping)
 	if err != nil {
 		return nil, 0, 0, nil, err
 	}
@@ -112,26 +121,118 @@ func attachFilter(tree *bound, extra *bound) *bound {
 
 // bindTimeRange folds time-from and time-to parameters into one range clause on
 // the specification's time field.
-func (b *binder) bindTimeRange(timeField string) (*bound, error) {
+func (b *binder) bindTimeRange(search Search, mapping *TimeFieldMapping) (*bound, error) {
 	from, hasFrom := b.roleValue(RoleTimeFrom)
 	to, hasTo := b.roleValue(RoleTimeTo)
 	if !hasFrom && !hasTo {
 		return nil, nil
 	}
-	if timeField == "" {
+	if search.TimeField == "" {
 		return nil, fmt.Errorf("a time-from/time-to parameter requires timeField on the search specification")
 	}
-	if err := ValidateFieldName(timeField); err != nil {
+	if err := ValidateFieldName(search.TimeField); err != nil {
 		return nil, fmt.Errorf("timeField: %w", err)
 	}
-	node := &bound{spec: Condition{Op: OpRange, Field: timeField}}
+	node := &bound{spec: Condition{Op: OpRange, Field: search.TimeField}}
 	if hasFrom {
-		node.gte = &boundValue{value: from, fromParam: true}
+		value, _, err := normalizeTimeBound(from, RoleTimeFrom, search, mapping)
+		if err != nil {
+			return nil, err
+		}
+		node.gte = &boundValue{value: value, fromParam: true}
 	}
 	if hasTo {
-		node.lte = &boundValue{value: to, fromParam: true}
+		value, exclusive, err := normalizeTimeBound(to, RoleTimeTo, search, mapping)
+		if err != nil {
+			return nil, err
+		}
+		if exclusive {
+			node.lt = &boundValue{value: value, fromParam: true}
+		} else {
+			node.lte = &boundValue{value: value, fromParam: true}
+		}
 	}
 	return node, nil
+}
+
+func normalizeTimeBound(raw any, role string, search Search, mapping *TimeFieldMapping) (any, bool, error) {
+	if mapping == nil {
+		return raw, false, nil
+	}
+	if err := validateTimeFieldMapping(search, mapping.Type); err != nil {
+		return nil, false, err
+	}
+	input := fmt.Sprint(raw)
+	parsed, err := datetime.Parse(input, mapping.Now)
+	if err != nil {
+		return nil, false, fmt.Errorf("%s parameter for timeField %q: %w", role, search.TimeField, err)
+	}
+	exclusive := role == RoleTimeTo && parsed.DateOnly
+	if exclusive {
+		parsed.Time = parsed.Time.UTC().AddDate(0, 0, 1)
+	}
+	if mapping.Type == "date" || mapping.Type == "date_nanos" {
+		if parsed.DateMath {
+			return input, false, nil
+		}
+		return parsed.Time.UTC().Format(time.RFC3339Nano), exclusive, nil
+	}
+	encoded := encodeEpoch(parsed.Time, search.TimeFieldFormat)
+	if err := validateEpochRange(mapping.Type, encoded); err != nil {
+		return nil, false, fmt.Errorf("%s parameter for timeField %q: %w", role, search.TimeField, err)
+	}
+	return encoded, exclusive, nil
+}
+
+func validateTimeFieldMapping(search Search, mappedType string) error {
+	switch mappedType {
+	case "date", "date_nanos":
+		if search.TimeFieldFormat != "" {
+			return fmt.Errorf("timeField %q is mapped as %q and must not set timeFieldFormat", search.TimeField, mappedType)
+		}
+	case "byte", "short", "integer", "long", "unsigned_long":
+		if search.TimeFieldFormat == "" {
+			return fmt.Errorf("timeField %q is mapped as %q and requires timeFieldFormat", search.TimeField, mappedType)
+		}
+	default:
+		return fmt.Errorf("timeField %q has incompatible OpenSearch mapping type %q", search.TimeField, mappedType)
+	}
+	return nil
+}
+
+func encodeEpoch(value time.Time, format TimeFieldFormat) int64 {
+	switch format {
+	case TimeFieldFormatEpochSecond:
+		return value.Unix()
+	case TimeFieldFormatEpochMillis:
+		return value.UnixMilli()
+	case TimeFieldFormatEpochMicros:
+		return value.UnixMicro()
+	default:
+		return value.UnixNano()
+	}
+}
+
+func validateEpochRange(mappedType string, value int64) error {
+	switch mappedType {
+	case "byte":
+		if value < math.MinInt8 || value > math.MaxInt8 {
+			return fmt.Errorf("epoch value %d overflows byte", value)
+		}
+	case "short":
+		if value < math.MinInt16 || value > math.MaxInt16 {
+			return fmt.Errorf("epoch value %d overflows short", value)
+		}
+	case "integer":
+		if value < math.MinInt32 || value > math.MaxInt32 {
+			return fmt.Errorf("epoch value %d overflows integer", value)
+		}
+	case "unsigned_long":
+		if value < 0 {
+			return fmt.Errorf("epoch value %d is negative for unsigned_long", value)
+		}
+	}
+	return nil
 }
 
 // resolveCount returns the value of the role-carrying parameter when present,

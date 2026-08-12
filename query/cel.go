@@ -51,6 +51,9 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) ([]Row
 	kept := rows[:0]
 	var styles []map[string]string
 	for index, row := range rows {
+		if err := validateAcyclicValue(row); err != nil {
+			return nil, nil, fmt.Errorf("row %d: provider row: %w", index, err)
+		}
 		projected := make([]struct {
 			name  string
 			value any
@@ -64,7 +67,9 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) ([]Row
 			if err != nil {
 				return nil, nil, fmt.Errorf("row %d: alias %q: %w", index, alias.Name, err)
 			}
-			setRowPath(row, alias.Name, value)
+			if err := setRowPath(row, alias.Name, value); err != nil {
+				return nil, nil, fmt.Errorf("row %d: alias %q: %w", index, alias.Name, err)
+			}
 			projected = append(projected, struct {
 				name  string
 				value any
@@ -79,7 +84,9 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) ([]Row
 			if _, ignored := ignoredNames[alias.name]; ignored {
 				continue
 			}
-			setRowPath(row, alias.name, alias.value)
+			if err := setRowPath(row, alias.name, alias.value); err != nil {
+				return nil, nil, fmt.Errorf("row %d: alias %q: %w", index, alias.name, err)
+			}
 		}
 		if len(filters) > 0 {
 			keep, err := keepRow(ctx, filters, row)
@@ -97,13 +104,17 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) ([]Row
 				if err != nil {
 					return nil, nil, fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
 				}
-				row[column.Name] = value
+				if err := setRowValue(row, column.Name, value); err != nil {
+					return nil, nil, fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
+				}
 			case column.JSONPath != "":
 				value, err := evalRowJSONPath(jsonPaths[column.Name], column.Source, row)
 				if err != nil {
 					return nil, nil, fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
 				}
-				row[column.Name] = value
+				if err := setRowValue(row, column.Name, value); err != nil {
+					return nil, nil, fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
+				}
 			}
 		}
 		renamed := make(map[string]any, len(profile.Columns))
@@ -145,8 +156,8 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) ([]Row
 				}
 				class, ok := value.(string)
 				if !ok {
-					return nil, nil, fmt.Errorf("row %d: column %q style: expected a string, got %T (%v)",
-						index, column.Name, value, value)
+					return nil, nil, fmt.Errorf("row %d: column %q style: expected a string, got %T",
+						index, column.Name, value)
 				}
 				if class != "" {
 					rowStyles[column.Name] = class
@@ -173,11 +184,18 @@ func evalRowCEL(ctx context.Context, expression string, row Row) (any, error) {
 	return gomplate.RunExpressionContext(ctx.Context, environment, template)
 }
 
-func setRowPath(row Row, path string, value any) {
+func setRowValue(row Row, name string, value any) error {
+	if err := validateContainerValue(map[string]any(row), value); err != nil {
+		return err
+	}
+	row[name] = value
+	return nil
+}
+
+func setRowPath(row Row, path string, value any) error {
 	parts := strings.Split(path, ".")
 	if len(parts) == 1 {
-		row[path] = value
-		return
+		return setRowValue(row, path, value)
 	}
 	current := map[string]any(row)
 	for _, part := range parts[:len(parts)-1] {
@@ -188,7 +206,11 @@ func setRowPath(row Row, path string, value any) {
 		}
 		current = next
 	}
+	if err := validateContainerValue(current, value); err != nil {
+		return err
+	}
 	current[parts[len(parts)-1]] = value
+	return nil
 }
 
 func deleteRowPath(row Row, path string) {

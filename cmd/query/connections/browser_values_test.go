@@ -3,9 +3,12 @@ package connections
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/flanksource/commons-db/models"
 )
@@ -65,6 +68,48 @@ func TestServeValuesScopesToTheSuppliedSearch(t *testing.T) {
 	if !bytes.Contains(encoded, []byte(`"environment":"prod"`)) {
 		t.Fatalf("the supplied search must scope the lookup, got %s", encoded)
 	}
+}
+
+func TestServeValuesEncodesNumericTimestampFields(t *testing.T) {
+	searched := map[string]any{}
+	openSearch := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Path == "/" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+			if got := r.URL.Query().Get("fields"); got != "observed_at" {
+				t.Errorf("field_caps fields = %q, want observed_at", got)
+			}
+			_, _ = fmt.Fprint(w, `{"fields":{"observed_at":{"long":{"searchable":true,"aggregatable":true}}}}`)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&searched); err != nil {
+			t.Errorf("decode search: %v", err)
+		}
+		_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":0,"relation":"eq"},"hits":[]},"aggregations":{"__clicky_values":{"buckets":[]},"__clicky_total":{"value":0}}}`)
+	}))
+	defer openSearch.Close()
+
+	handler, base := browserHandlerFor(t, models.ConnectionTypeOpenSearch, openSearch.URL)
+	recorder := postBrowser(t, handler, base+"/values", `{
+		"index": "logs-*",
+		"field": "service.name",
+		"search": {
+			"timeField": "observed_at",
+			"timeFieldFormat": "epoch_millis",
+			"query": {"op": "match_all"}
+		},
+		"params": {"since": "2026-08-12"},
+		"roles": {"since": "time-from"}
+	}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("values status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	dayStart := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+	assertJSONEqual(t, "query", searched["query"], fmt.Sprintf(
+		`{"bool":{"filter":[{"range":{"observed_at":{"gte":%d}}}]}}`, dayStart.UnixMilli()))
 }
 
 // The builder sends the specification with the condition being edited removed,

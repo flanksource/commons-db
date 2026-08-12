@@ -39,6 +39,30 @@ type Search struct {
 
 	// TimeField is the date field that time-from/time-to parameters fold into.
 	TimeField string `json:"timeField,omitempty"`
+
+	// TimeFieldFormat declares how a numeric TimeField stores instants. Empty
+	// lets a mapped date/date_nanos field use its native date representation.
+	TimeFieldFormat TimeFieldFormat `json:"timeFieldFormat,omitempty"`
+}
+
+// TimeFieldFormat is the explicit epoch unit for a numeric time field.
+type TimeFieldFormat string
+
+const (
+	TimeFieldFormatEpochSecond TimeFieldFormat = "epoch_second"
+	TimeFieldFormatEpochMillis TimeFieldFormat = "epoch_millis"
+	TimeFieldFormatEpochMicros TimeFieldFormat = "epoch_micros"
+	TimeFieldFormatEpochNanos  TimeFieldFormat = "epoch_nanos"
+)
+
+// TimeFieldFormats lists the supported numeric timestamp encodings.
+func TimeFieldFormats() []TimeFieldFormat {
+	return []TimeFieldFormat{
+		TimeFieldFormatEpochSecond,
+		TimeFieldFormatEpochMillis,
+		TimeFieldFormatEpochMicros,
+		TimeFieldFormatEpochNanos,
+	}
 }
 
 // Occur is the bool clause a condition contributes to. Empty means filter.

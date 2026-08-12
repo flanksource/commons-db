@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/flanksource/commons-db/query/datetime"
 )
 
 // ParamType is the declared type of a Profile parameter. It drives validation,
@@ -216,8 +218,8 @@ func (d ParamDef) coerce(raw any) (any, error) {
 		val = fmt.Sprintf("%v", raw)
 	case ParamTypeDate:
 		s := fmt.Sprintf("%v", raw)
-		if _, err := time.Parse(time.RFC3339, s); err != nil {
-			return nil, fmt.Errorf("value %q is not an RFC3339 date: %w", s, err)
+		if _, err := datetime.Parse(s, time.Now()); err != nil {
+			return nil, err
 		}
 		val = s
 	case ParamTypeNumber:

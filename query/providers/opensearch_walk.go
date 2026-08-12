@@ -220,7 +220,8 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 		PIT:   position.pit,
 	})
 	if err != nil {
-		return opensearch.Response{}, nil, false, err
+		return opensearch.Response{}, nil, false,
+			openSearchFailure(err, index, body, built.limitParam(), position.pit)
 	}
 	if position.size > 0 && len(raw.Hits.Hits) > position.size {
 		raw.Hits.Hits = raw.Hits.Hits[:position.size]
@@ -237,6 +238,20 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 			len(raw.Hits.Hits), len(rows))
 	}
 	return raw, rows, built.capped, nil
+}
+
+// openSearchFailure attaches the search that failed to the error. OpenSearch
+// answers a rejected query with a parse exception and a Java stack trace that
+// names neither the index nor any part of the DSL it refused, so the request is
+// the only thing that makes the message actionable.
+func openSearchFailure(err error, index, body, limit, pit string) error {
+	details := map[string]any{"index": index, "limit": limit}
+	if pit != "" {
+		details["pit"] = pit
+	}
+	diagnostics := query.NewProviderDiagnostics("opensearch", body, nil)
+	diagnostics.RecordRequest(body, nil, details)
+	return query.WithDiagnostics(err, diagnostics)
 }
 
 // openSearchTotal reads the hit count, carrying whether the index could state

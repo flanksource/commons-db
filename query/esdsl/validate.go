@@ -61,6 +61,14 @@ func (s Search) Validate() error {
 			return fmt.Errorf("timeField: %w", err)
 		}
 	}
+	if s.TimeFieldFormat != "" {
+		if s.TimeField == "" {
+			return fmt.Errorf("timeFieldFormat requires timeField")
+		}
+		if !slices.Contains(TimeFieldFormats(), s.TimeFieldFormat) {
+			return fmt.Errorf("unknown timeFieldFormat %q", s.TimeFieldFormat)
+		}
+	}
 	return nil
 }
 

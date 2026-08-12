@@ -94,7 +94,9 @@ var _ = Describe("opensearch containers (live)", Ordered, func() {
 		Expect(err).ToNot(HaveOccurred())
 		inspector, err := opensearchinspect.New(searcher.GetRawClient(), opensearchinspect.Options{})
 		Expect(err).ToNot(HaveOccurred())
-		catalog, err := inspector.Fields(ctx, opensearchinspect.Target{Name: index, Kind: "index"})
+		catalog, err := inspector.Fields(ctx, opensearchinspect.FieldRequest{
+			Target: opensearchinspect.Target{Name: index, Kind: "index"},
+		})
 		Expect(err).ToNot(HaveOccurred())
 
 		byName := map[string]opensearchinspect.Field{}

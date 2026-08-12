@@ -66,11 +66,21 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 			yield(query.Page{}, err)
 			return
 		}
+		var timeFieldMapping *esdsl.TimeFieldMapping
+		if opts.Search != nil {
+			timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(
+				ctx, searcher, opts.Index, *opts.Search, openSearchParamBindings(req),
+			)
+			if err != nil {
+				yield(query.Page{}, err)
+				return
+			}
+		}
 		walk := openSearchWalk{
 			searcher: searcher,
 			index:    opts.Index,
 			build: func(position openSearchPage) (openSearchRequest, error) {
-				return buildOpenSearchRequest(req, opts, position)
+				return buildOpenSearchRequest(req, opts, position, timeFieldMapping)
 			},
 			mapRows: func(raw opensearch.Response) []query.Row {
 				return logResultToRows(searcher.ParseResponse(ctx, raw))

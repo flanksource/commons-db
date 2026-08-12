@@ -43,4 +43,44 @@ var _ = Describe("ReadSQLPage", func() {
 		Expect(second.HasMore).To(BeFalse())
 		Expect(second.Total).To(Equal(&query.Total{Value: 3, Exact: true}))
 	})
+
+	It("carries the statement and arguments that failed on the error", func() {
+		database, err := sql.Open("sqlite", ":memory:")
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(database.Close)
+		_, err = database.Exec(`CREATE TABLE events (id INTEGER PRIMARY KEY, message TEXT)`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = ReadSQLPage(context.Background(), database, models.ConnectionTypeClickHouse, SQLPageRequest{
+			Query:   "SELECT id, premum FROM events ORDER BY id",
+			Filters: []query.ColumnFilterValue{{Column: "message", Field: "message", Include: []string{"one"}}},
+			Page:    query.PageRequest{Limit: 2},
+		})
+		Expect(err).To(MatchError(ContainSubstring("premum")))
+
+		diagnostics := query.DiagnosticsFromError(err)
+		Expect(diagnostics).ToNot(BeNil())
+		Expect(diagnostics.Provider).To(Equal("clickhouse"))
+		Expect(diagnostics.Request.Query).To(ContainSubstring("premum"))
+		Expect(diagnostics.Request.Arguments).To(ConsistOf("one"))
+		Expect(diagnostics.Error).To(ContainSubstring("premum"))
+	})
+
+	// A debug run hands its own diagnostics back to the caller, so the error must
+	// not sprout a second, shorter copy that a reader could mistake for it.
+	It("leaves a debug run's own diagnostics as the only ones", func() {
+		database, err := sql.Open("sqlite", ":memory:")
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(database.Close)
+		_, err = database.Exec(`CREATE TABLE events (id INTEGER PRIMARY KEY)`)
+		Expect(err).ToNot(HaveOccurred())
+
+		diagnostics := query.NewProviderDiagnostics("clickhouse", "SELECT premum FROM events", nil)
+		_, err = ReadSQLPage(context.Background(), database, models.ConnectionTypeClickHouse, SQLPageRequest{
+			Query: "SELECT premum FROM events", Page: query.PageRequest{Limit: 2}, Diagnostics: diagnostics,
+		})
+		Expect(err).To(HaveOccurred())
+		Expect(query.DiagnosticsFromError(err)).To(BeNil())
+		Expect(diagnostics.Snapshot().Error).To(ContainSubstring("premum"))
+	})
 })

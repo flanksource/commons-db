@@ -99,6 +99,12 @@ type FieldCatalog struct {
 	TruncateReason string  `json:"truncateReason,omitempty"`
 }
 
+// FieldRequest selects one target and optionally narrows its field catalog.
+type FieldRequest struct {
+	Target Target
+	Names  []string
+}
+
 type resolveResponse struct {
 	Indices []struct {
 		Name       string   `json:"name"`
@@ -172,14 +178,19 @@ func (i *Inspector) Targets(ctx context.Context) (TargetCatalog, error) {
 	return catalog, nil
 }
 
-func (i *Inspector) Fields(ctx context.Context, target Target) (FieldCatalog, error) {
+func (i *Inspector) Fields(ctx context.Context, request FieldRequest) (FieldCatalog, error) {
+	target := request.Target
 	if target.Name == "" || !validTargetKind(target.Kind) {
 		return FieldCatalog{}, fmt.Errorf("invalid opensearch target")
+	}
+	fields := request.Names
+	if len(fields) == 0 {
+		fields = []string{"*"}
 	}
 	response, err := i.client.FieldCaps(
 		i.client.FieldCaps.WithContext(ctx),
 		i.client.FieldCaps.WithIndex(target.Name),
-		i.client.FieldCaps.WithFields("*"),
+		i.client.FieldCaps.WithFields(fields...),
 		i.client.FieldCaps.WithIgnoreUnavailable(true),
 		i.client.FieldCaps.WithAllowNoIndices(false),
 	)

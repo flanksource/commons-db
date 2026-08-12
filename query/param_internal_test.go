@@ -26,3 +26,23 @@ var _ = Describe("paramRoles", func() {
 		Expect(paramRoles(nil)).To(BeEmpty())
 	})
 })
+
+var _ = Describe("date param coercion", func() {
+	DescribeTable("accepts Go date math and lenient date formats",
+		func(input string) {
+			value, err := (ParamDef{Name: "start", Type: ParamTypeDate}).coerce(input)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(value).To(Equal(input))
+		},
+		Entry("date only", "2026-07-01"),
+		Entry("date math", "now-7d"),
+		Entry("timestamp without timezone", "2026-07-01T14:30:00"),
+		Entry("space-separated timestamp", "2026-07-01 14:30:00"),
+		Entry("Unix timestamp", "1782916200"),
+	)
+
+	It("rejects a value that is neither date math nor a recognized date", func() {
+		_, err := (ParamDef{Name: "start", Type: ParamTypeDate}).coerce("not-a-date")
+		Expect(err).To(MatchError(`value "not-a-date" is not a valid date or date math expression`))
+	})
+})

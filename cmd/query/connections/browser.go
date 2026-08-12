@@ -546,7 +546,7 @@ func (h *connectionBrowserHandler) inspectConnection(ctx context.Context, conn *
 		if selected == nil {
 			return browserInspection{}, fmt.Errorf("OpenSearch target %q (%s) was not discovered", targetName, targetKind)
 		}
-		fields, err := inspector.Fields(ctx, *selected)
+		fields, err := inspector.Fields(ctx, opensearchinspect.FieldRequest{Target: *selected})
 		if err != nil {
 			return browserInspection{}, err
 		}

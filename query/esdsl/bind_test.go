@@ -1,6 +1,8 @@
 package esdsl
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -36,6 +38,17 @@ var _ = Describe("Bind operands", func() {
 			ParamBinding{Name: "levels", Value: []string{"error", "warn"}},
 		)
 		Expect(query).To(Equal(map[string]any{"terms": map[string]any{"level": []any{"error", "warn"}}}))
+	})
+
+	It("rejects a list-valued parameter bound to a term clause", func() {
+		_, err := Compile(CompileRequest{
+			Search: Search{Query: &Condition{Op: OpTerm, Field: "level", Value: Param("levels")}},
+			Params: []ParamBinding{{Name: "levels", Value: []string{"error", "warn"}}},
+		})
+		Expect(err).To(MatchError(And(
+			ContainSubstring(`query: operator "term" requires a scalar value`),
+			ContainSubstring(`use "terms" for multiple values`),
+		)))
 	})
 
 	It("reports every condition field that structurally binds a parameter", func() {
@@ -181,6 +194,85 @@ var _ = Describe("Bind pruning", func() {
 })
 
 var _ = Describe("Bind parameter roles", func() {
+	It("expands date-only parameters to the complete UTC day", func() {
+		compiled, err := Compile(CompileRequest{
+			Search: Search{TimeField: "@timestamp"},
+			Params: []ParamBinding{
+				{Name: "from", Role: RoleTimeFrom, Value: "2026-08-12"},
+				{Name: "to", Role: RoleTimeTo, Value: "2026-08-12"},
+			},
+			TimeFieldMapping: &TimeFieldMapping{Type: "date"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compiled.Body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{"@timestamp": map[string]any{
+				"gte": "2026-08-12T00:00:00Z",
+				"lt":  "2026-08-13T00:00:00Z",
+			}}}},
+		}}))
+	})
+
+	It("canonicalizes absolute timestamps for mapped date fields", func() {
+		compiled, err := Compile(CompileRequest{
+			Search:           Search{TimeField: "@timestamp"},
+			Params:           []ParamBinding{{Name: "from", Role: RoleTimeFrom, Value: "2026-08-12 14:30:00"}},
+			TimeFieldMapping: &TimeFieldMapping{Type: "date_nanos"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compiled.Body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{"@timestamp": map[string]any{
+				"gte": "2026-08-12T14:30:00Z",
+			}}}},
+		}}))
+	})
+
+	It("keeps date math native for mapped date fields", func() {
+		compiled, err := Compile(CompileRequest{
+			Search:           Search{TimeField: "@timestamp"},
+			Params:           []ParamBinding{{Name: "from", Role: RoleTimeFrom, Value: "now-2h"}},
+			TimeFieldMapping: &TimeFieldMapping{Type: "date"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compiled.Body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{"@timestamp": map[string]any{
+				"gte": "now-2h",
+			}}}},
+		}}))
+	})
+
+	It("encodes a numeric time field in its declared epoch unit", func() {
+		now := time.Date(2026, time.August, 12, 12, 0, 0, 0, time.UTC)
+		compiled, err := Compile(CompileRequest{
+			Search:           Search{TimeField: "startTimeMillis", TimeFieldFormat: TimeFieldFormatEpochMillis},
+			Params:           []ParamBinding{{Name: "from", Role: RoleTimeFrom, Value: "now-2h"}},
+			TimeFieldMapping: &TimeFieldMapping{Type: "long", Now: now},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(compiled.Body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{"startTimeMillis": map[string]any{
+				"gte": now.Add(-2 * time.Hour).UnixMilli(),
+			}}}},
+		}}))
+	})
+
+	It("requires an explicit epoch unit for a numeric time field", func() {
+		_, err := Compile(CompileRequest{
+			Search:           Search{TimeField: "observed"},
+			Params:           []ParamBinding{{Name: "from", Role: RoleTimeFrom, Value: "2026-08-12"}},
+			TimeFieldMapping: &TimeFieldMapping{Type: "long"},
+		})
+		Expect(err).To(MatchError(ContainSubstring(`timeField "observed" is mapped as "long" and requires timeFieldFormat`)))
+	})
+
+	It("rejects an epoch unit on a mapped date field", func() {
+		_, err := Compile(CompileRequest{
+			Search:           Search{TimeField: "@timestamp", TimeFieldFormat: TimeFieldFormatEpochMillis},
+			Params:           []ParamBinding{{Name: "from", Role: RoleTimeFrom, Value: "2026-08-12"}},
+			TimeFieldMapping: &TimeFieldMapping{Type: "date"},
+		})
+		Expect(err).To(MatchError(ContainSubstring(`timeField "@timestamp" is mapped as "date" and must not set timeFieldFormat`)))
+	})
+
 	It("folds time-from and time-to into a single range on the time field", func() {
 		compiled, err := Compile(CompileRequest{
 			Search: Search{
