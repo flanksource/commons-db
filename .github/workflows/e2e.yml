@@ -22,26 +22,29 @@ on:
       - "go.mod"
       - "go.sum"
 
-env:
-  GO_VERSION: "1.26"
-
 permissions: read-all
 
+env:
+  DEPS_START_VERSION: v1.0.39
+
 jobs:
-  e2e-tests:
-    name: E2E Tests
+  e2e:
+    name: E2E (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        go-version: ["1.26"]
-    # Ginkgo e2e (10m) + embedded pool tests (10m) + helper unit tests (5m) +
-    # a full coverage re-run of the e2e suite, on a slower macOS runner.
     timeout-minutes: 45
 
-    # Exercises the default embedded-postgres path on both platforms. The
-    # external-DB path is covered by e2e-external, which needs a Linux-only
-    # service container.
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    # Ubuntu only: opensearch publishes no darwin bundle, so its deps-start
+    # binary runtime is linux-*.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        go-version: ["1.26"]
 
     steps:
       - name: Checkout code
@@ -54,120 +57,52 @@ jobs:
           cache: true
           cache-dependency-path: go.sum
 
-      - name: Set up Docker (Ubuntu)
-        if: runner.os == 'Linux'
+      - name: Install deps-start
         run: |
-          # Docker is pre-installed on Ubuntu runners
-          docker --version
+          set -euo pipefail
+          mkdir -p .tmp "$HOME/.local/bin"
+          base="https://github.com/flanksource/deps/releases/download/${DEPS_START_VERSION}"
+          curl --fail --location --silent --show-error \
+            -o .tmp/deps-start-linux-amd64 "$base/deps-start-linux-amd64"
+          curl --fail --location --silent --show-error \
+            -o .tmp/deps-start-linux-amd64.sha256 "$base/deps-start-linux-amd64.sha256"
+          (cd .tmp && sha256sum --check deps-start-linux-amd64.sha256)
+          install -m 0755 .tmp/deps-start-linux-amd64 "$HOME/.local/bin/deps-start"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Set up Docker (macOS)
-        if: runner.os == 'macOS'
+      # deps-start writes the JSON envelope to stdout and its status line to
+      # stderr, so piping straight into jq is safe. The postgres and valkey URLs
+      # carry a generated password and have to be masked.
+      - name: Start services
         run: |
-          # Install Docker on macOS via Docker Desktop
-          brew install docker docker-compose 2>/dev/null || true
-          docker --version 2>/dev/null || echo "Docker will be installed via Colima"
+          set -euo pipefail
+          pg=$(deps-start postgres@16 --runtime binary -o json --wait-timeout 5m \
+            | jq -er '.connection.url')
+          opensearch=$(deps-start opensearch --runtime binary -o json --wait-timeout 5m \
+            | jq -er '.connection.url')
+          # valkey has no binary runtime in deps; docker is preinstalled here.
+          valkey=$(deps-start valkey --runtime docker -o json --wait-timeout 5m \
+            | jq -er '.connection.url')
+          echo "::add-mask::$pg"
+          echo "::add-mask::$valkey"
+          {
+            echo "COMMONS_DB_URL=$pg"
+            echo "OPENSEARCH_URL=$opensearch"
+            echo "VALKEY_URL=$valkey"
+          } >> "$GITHUB_ENV"
 
-      - name: Install dependencies
-        run: |
-          go mod download
-          go mod verify
-
-      - name: Build e2e tests
-        run: |
-          go test -c -o /dev/null ./e2e
-        env:
-          CGO_ENABLED: 1
-
-      - name: Run E2E tests with Ginkgo
-        run: |
-          go run github.com/onsi/ginkgo/v2/ginkgo@v2.28.0 run -v --timeout=10m --poll-progress-after=1m ./e2e
-        env:
-          CGO_ENABLED: 1
-        continue-on-error: false
-
-      - name: Run embedded database pool tests
-        run: go test ./dbtest -timeout 10m
-
-      - name: Run unit tests for helpers
-        run: |
-          go test -v ./e2e/helpers/... -timeout 5m
-        continue-on-error: false
-
-      - name: Collect test coverage
-        run: |
-          go test -v ./e2e -coverprofile=coverage-e2e.out
-          go tool cover -html=coverage-e2e.out -o coverage-e2e.html
-        continue-on-error: true
-
-      - name: Upload coverage reports
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - name: Test with gavel
+        uses: flanksource/gavel@43a9189b99e71ed928f418e01cd34aa797c2c0e0 # v0.0.54
         with:
-          name: e2e-coverage-${{ matrix.os }}
-          path: coverage-e2e.*
-
-      - name: Upload test results
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        with:
-          name: e2e-test-results-${{ matrix.os }}
-          path: |
-            e2e-test-results.json
-            e2e-test-results.xml
-
-      - name: Lint e2e tests
-        run: |
-          go vet ./e2e/...
-        continue-on-error: false
-
-      - name: Check code formatting
-        run: |
-          go fmt ./e2e/...
-        continue-on-error: false
-
-  e2e-external:
-    name: E2E and DB Tests (external postgres)
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_PASSWORD: postgres
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-
-    # COMMONS_DB_URL names the maintenance database; COMMONS_DB_CREATE defaults
-    # to true, so each test carves out and drops its own database on this server.
-    env:
-      COMMONS_DB_URL: postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable
-      CGO_ENABLED: 1
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - name: Set up Go
-        uses: actions/setup-go@7b8cf10d4e4a01d4992d18a89f4d7dc5a3e6d6f4 # v4
-        with:
-          go-version: "1.26"
-          cache: true
-          cache-dependency-path: go.sum
-
-      - name: Run E2E tests with verbose output
-        run: |
-          go run github.com/onsi/ginkgo/v2/ginkgo@v2.28.0 run -v -r --timeout=10m --poll-progress-after=1m ./e2e
-
-      - name: Run DB integration tests
-        run: go test ./migrate/... ./query/... ./db/... ./dbtest/... -timeout 15m
+          args: test ./e2e --framework ginkgo --timeout 30m --test-timeout 10m
+          artifact-name: gavel-e2e-${{ matrix.os }}
+          comment-header: gavel-e2e
+          # GITHUB_TOKEN is read-only on fork PRs, so the sticky comment would fail.
+          comment: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+          fail-on-error: "true"
 
       - name: Assert no scratch databases leaked
+        if: always()
         run: |
           leaked=$(psql "$COMMONS_DB_URL" -tAc \
             "SELECT count(*) FROM pg_database
@@ -176,20 +111,6 @@ jobs:
           echo "leftover databases: $leaked"
           test "$leaked" -eq 0
 
-  quality-gate:
-    name: Quality Gate
-    runs-on: ubuntu-latest
-    needs: [e2e-tests, e2e-external]
-    if: always()
-
-    steps:
-      - name: Check test results
-        run: |
-          if [ "${{ needs.e2e-tests.result }}" = "failure" ] || [ "${{ needs.e2e-external.result }}" = "failure" ]; then
-            echo "E2E tests failed"
-            exit 1
-          fi
-          echo "All E2E tests passed"
-
-      - name: Status check
-        run: echo "E2E test suite completed successfully"
+      - name: Stop services
+        if: always()
+        run: deps-start stop --all || true

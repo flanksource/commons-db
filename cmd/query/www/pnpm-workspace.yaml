@@ -1,6 +1,15 @@
 packages:
   - "."
 
+# Supply-chain hardening: only install releases that have been public long enough
+# to be vetted, and never accept weakened trust signals on an update.
+minimumReleaseAge: 10080
+# First-party packages are published from our own CI, so the vetting delay that
+# protects against a compromised upstream registry account does not apply.
+minimumReleaseAgeExclude:
+  - "@flanksource/*"
+trustPolicy: no-downgrade
+
 catalog:
   "@ai-sdk/react": ^3.0.201
   "@chromatic-com/storybook": ^5.2.1
@@ -10,7 +19,7 @@ catalog:
   "@codemirror/lang-sql": ^6.10.0
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
-  '@flanksource/clicky-ui': 0.3.19
+  '@flanksource/clicky-ui': 0.3.20
   "@floating-ui/react": ^0.27.19
   "@mdxeditor/editor": ^4.0.4
   "@monaco-editor/react": ^4.7.0

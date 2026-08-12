@@ -21,7 +21,6 @@
 @import "tailwindcss/utilities.css" layer(utilities);
 
 @source "./**/*.{ts,tsx}";
-@source "../design/**/*.{html,ts,tsx}";
 
 /* Density-aware spacing scale, mirrored from clicky-ui's tokens.css so
  * `px-density-4`, `gap-density-2`, `h-control-h` compile here too. The values

@@ -115,11 +115,11 @@ var _ = Describe("opensearch structured search", func() {
 		}}))
 	})
 
-	// The Kenya Prod regression: an operand that reaches its param textually was
+	// The tenant-x Prod regression: an operand that reaches its param textually was
 	// sent to the backend as the template text, and the specification then
 	// reported the param as unreferenced.
 	DescribeTable("interpolates a param into a specification operand",
-		func(country, expected string) {
+		func(tenant, expected string) {
 			var capture openSearchCapture
 			server := stubOpenSearch(&capture)
 			defer server.Close()
@@ -127,18 +127,18 @@ var _ = Describe("opensearch structured search", func() {
 			profile := openSearchProfile(server.URL, map[string]any{
 				"search": map[string]any{
 					"query": map[string]any{
-						"op": "term", "field": "process.serviceName", "value": "{{.params.country}}-api",
+						"op": "term", "field": "process.serviceName", "value": "{{.params.tenant}}-api",
 					},
 				},
 			})
 			profile.Params = []query.ParamDef{{
-				Name: "country", Type: query.ParamTypeEnum,
-				Options: []string{"kenya", "botswana"}, Default: "kenya",
+				Name: "tenant", Type: query.ParamTypeEnum,
+				Options: []string{"tenant-x", "tenant-y"}, Default: "tenant-x",
 			}}
 
 			supplied := map[string]any{}
-			if country != "" {
-				supplied["country"] = country
+			if tenant != "" {
+				supplied["tenant"] = tenant
 			}
 			_, err := query.Execute(context.New(), profile, supplied)
 			Expect(err).ToNot(HaveOccurred())
@@ -146,8 +146,8 @@ var _ = Describe("opensearch structured search", func() {
 			Expect(capture.body["query"]).To(Equal(
 				map[string]any{"term": map[string]any{"process.serviceName": expected}}))
 		},
-		Entry("the default value", "", "kenya-api"),
-		Entry("a supplied value", "botswana", "botswana-api"),
+		Entry("the default value", "", "tenant-x-api"),
+		Entry("a supplied value", "tenant-y", "tenant-y-api"),
 	)
 
 	It("composes runtime column filters onto a compiled specification", func() {
