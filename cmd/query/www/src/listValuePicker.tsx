@@ -10,7 +10,11 @@
 
 import { Button, Select } from "@flanksource/clicky-ui";
 import { useRef, useState } from "react";
-import { parseListValueFile, type ListValueParse } from "./listValueFile";
+import {
+  parseListValueFile,
+  summarizeListValueLoad,
+  type ListValueParse,
+} from "./listValueFile";
 import {
   mergeIntoMultiFilter,
   type MergeResult,
@@ -19,26 +23,6 @@ import {
 } from "./listValueMerge";
 
 const ACCEPTED = ".csv,.json,.txt";
-
-/**
- * summarizeListValueLoad says what the file actually contributed. Skipped values
- * are named rather than absorbed: a dropped row changes which rows come back, so
- * a silent count would misrepresent the result.
- */
-export function summarizeListValueLoad(parsed: ListValueParse, loaded: number): string {
-  if (parsed.error) return parsed.error;
-
-  const parts = [`${loaded} values`];
-  const skipped: string[] = [];
-  if (parsed.rejected.length > 0) skipped.push(`${parsed.rejected.length} containing a comma`);
-  if (parsed.skippedDuplicate > 0) skipped.push(`${parsed.skippedDuplicate} duplicate`);
-  if (parsed.skippedBlank > 0) skipped.push(`${parsed.skippedBlank} blank`);
-  if (skipped.length > 0) {
-    const total = parsed.rejected.length + parsed.skippedDuplicate + parsed.skippedBlank;
-    parts.push(`${total} skipped (${skipped.join(", ")})`);
-  }
-  return parts.join(" · ");
-}
 
 /**
  * ListValueFileButton reads a file and hands back its values. It keeps the file

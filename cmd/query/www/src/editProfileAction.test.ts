@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResolvedOperation } from "@flanksource/clicky-ui";
-import { findProfileUpdateOperation, isProfileSurface } from "./editProfileAction";
+import { findProfileUpdateOperation, isProfileSurface } from "./profileUpdateOperation";
 
 function operation(
   surface: string,

@@ -2,20 +2,13 @@ import { useMemo } from "react";
 import {
   useOperations,
   type OperationsApiClient,
-  type ResolvedOperation,
 } from "@flanksource/clicky-ui";
 import {
   ChatFab,
   ChatWindowLayer,
 } from "@flanksource/clicky-ui/ai";
 import { clickyOperationsToTools } from "@flanksource/clicky-ui/chat";
-
-const NON_CHAT_OPERATIONS = new Set(["serve", "schema"]);
-
-export function isQueryChatOperation(operation: ResolvedOperation): boolean {
-  const id = operation.operation.operationId?.trim().toLowerCase();
-  return id !== undefined && !NON_CHAT_OPERATIONS.has(id);
-}
+import { isQueryChatOperation } from "./chatOperations";
 
 /** Floating Clicky chat whose tool catalog is derived from the exact OpenAPI
  * operations used by EntityExplorerApp. Tool execution stays in the Go

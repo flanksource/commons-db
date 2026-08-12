@@ -3,7 +3,7 @@ import type { ResolvedOperation } from "@flanksource/clicky-ui";
 import {
   buildProfileInitialValue,
   findProfileCreateOperation,
-} from "./buildProfileAction";
+} from "./profileCreateOperation";
 
 function operation(
   surface: string,

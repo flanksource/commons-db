@@ -219,16 +219,34 @@ function readJSON(text: string, selector?: string): read {
   return { values, columns };
 }
 
+/**
+ * summarizeListValueLoad says what the file actually contributed. Skipped values
+ * are named rather than absorbed: a dropped row changes which rows come back, so
+ * a silent count would misrepresent the result.
+ */
+export function summarizeListValueLoad(parsed: ListValueParse, loaded: number): string {
+  if (parsed.error) return parsed.error;
+
+  const parts = [`${loaded} values`];
+  const skipped: string[] = [];
+  if (parsed.rejected.length > 0) skipped.push(`${parsed.rejected.length} containing a comma`);
+  if (parsed.skippedDuplicate > 0) skipped.push(`${parsed.skippedDuplicate} duplicate`);
+  if (parsed.skippedBlank > 0) skipped.push(`${parsed.skippedBlank} blank`);
+  if (skipped.length > 0) {
+    const total = parsed.rejected.length + parsed.skippedDuplicate + parsed.skippedBlank;
+    parts.push(`${total} skipped (${skipped.join(", ")})`);
+  }
+  return parts.join(" · ");
+}
+
 /** objectKeys returns the union of the keys of every object in the array. */
 function objectKeys(items: unknown[]): string[] {
-  const keys: string[] = [];
+  const keys = new Set<string>();
   for (const item of items) {
     if (item === null || typeof item !== "object" || Array.isArray(item)) continue;
-    for (const key of Object.keys(item as Record<string, unknown>)) {
-      if (!keys.includes(key)) keys.push(key);
-    }
+    for (const key of Object.keys(item as Record<string, unknown>)) keys.add(key);
   }
-  return keys;
+  return [...keys];
 }
 
 function readLines(text: string): read {

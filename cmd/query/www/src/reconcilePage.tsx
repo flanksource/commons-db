@@ -20,13 +20,13 @@ import {
 import { UiArrowLeft } from "@flanksource/clicky-ui/icons";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 
-import { findProfileUpdateOperation } from "./editProfileAction";
+import { findProfileUpdateOperation } from "./profileUpdateOperation";
 import { PROFILES_QUERY_KEY, useProfiles } from "./profilesQuery";
 import { ReconcileBench, type BenchState } from "./reconcileBench";
-import { findReconcileAction } from "./reconcileAction";
 import { ReconcileResults } from "./reconcileResults";
 import {
   celForPairings,
+  findReconcileAction,
   parseReconcileQuery,
   profileForSurface,
   reconcileQueryString,
@@ -89,14 +89,14 @@ export function ReconcilePage({
     () => (profiles.data ?? []).find((document) => document.profile === state?.dest),
     [profiles.data, state?.dest],
   );
-  const destNames = useMemo(
-    () =>
-      (profiles.data ?? [])
-        .map((document) => document.profile ?? "")
-        .filter((name) => name !== "" && name !== sourceName)
-        .sort(),
-    [profiles.data, sourceName],
-  );
+  const destNames = useMemo(() => {
+    const names: string[] = [];
+    for (const document of profiles.data ?? []) {
+      const name = document.profile ?? "";
+      if (name !== "" && name !== sourceName) names.push(name);
+    }
+    return names.sort();
+  }, [profiles.data, sourceName]);
 
   const keyExpression = state == null ? "" : state.mode === "cel" ? state.cel : celForPairings(state.pairings);
 
@@ -126,8 +126,12 @@ export function ReconcilePage({
       }
       return parsed as ReconcileResult;
     },
-    onSuccess: (reconciled) => {
+    onSuccess: async (reconciled) => {
       setResult(reconciled);
+      // The engine resolved both profile documents server-side, so refresh the
+      // cached copies the results view renders against — otherwise a stale
+      // definition would describe a run that used a newer one.
+      await queryClient.invalidateQueries({ queryKey: PROFILES_QUERY_KEY });
       // Keep the run in the URL so it can be shared or reloaded before it is
       // saved onto the profile.
       if (state) {

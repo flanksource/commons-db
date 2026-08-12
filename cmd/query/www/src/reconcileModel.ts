@@ -9,6 +9,8 @@
  * so the browser cannot quietly disagree with the CLI about what a run found.
  */
 
+import type { ResolvedOperation } from "@flanksource/clicky-ui";
+
 export type ReconcileStatus = "matched" | "only_source" | "only_dest";
 
 export type ResultRow = Record<string, unknown>;
@@ -153,9 +155,25 @@ export function celForPairings(pairings: KeyPairing[]): string {
 
 /** Field names a profile document offers as key candidates. */
 export function profileFields(document: ProfileDocument | undefined): string[] {
-  return (document?.columns ?? [])
-    .map((column) => column.name?.trim() ?? "")
-    .filter((name) => name !== "");
+  const fields: string[] = [];
+  for (const column of document?.columns ?? []) {
+    const name = column.name?.trim() ?? "";
+    if (name !== "") fields.push(name);
+  }
+  return fields;
+}
+
+/**
+ * The profiles `reconcile` action, found by its clicky metadata rather than by
+ * path, so the UI keeps working when the executor changes how it names routes.
+ */
+export function findReconcileAction(
+  operations: ResolvedOperation[],
+): ResolvedOperation | undefined {
+  return operations.find((operation) => {
+    const metadata = operation.operation["x-clicky"];
+    return metadata?.surface === "profiles" && metadata.actionName === "reconcile";
+  });
 }
 
 /** The column a side reads its event time from, when it declares one. */

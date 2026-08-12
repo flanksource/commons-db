@@ -13,24 +13,10 @@ import {
   useOperations,
   useRouter,
   type OperationsApiClient,
-  type ResolvedOperation,
 } from "@flanksource/clicky-ui";
 import { UiDiff } from "@flanksource/clicky-ui/icons";
 
-import { reconcileRoute } from "./reconcileModel";
-
-/**
- * The profiles `reconcile` action, found by its clicky metadata rather than by
- * path, so the UI keeps working when the executor changes how it names routes.
- */
-export function findReconcileAction(
-  operations: ResolvedOperation[],
-): ResolvedOperation | undefined {
-  return operations.find((operation) => {
-    const metadata = operation.operation["x-clicky"];
-    return metadata?.surface === "profiles" && metadata.actionName === "reconcile";
-  });
-}
+import { findReconcileAction, reconcileRoute } from "./reconcileModel";
 
 export function ReconcileButton({
   client,

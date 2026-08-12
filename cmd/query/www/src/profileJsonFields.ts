@@ -7,6 +7,16 @@ import type { ProfileColumn } from "@flanksource/clicky-ui/profiles";
 
 const structuredColumnTypes = new Set(["json", "key_value", "key_values"]);
 
+/** The column types a discovered JSON field may be promoted to. */
+export const promotedColumnTypes = [
+  "string",
+  "number",
+  "boolean",
+  "datetime",
+  "duration",
+  "bytes",
+] as const;
+
 export type JsonFieldCandidate = {
   id: string;
   source: string;

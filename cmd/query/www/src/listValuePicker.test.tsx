@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { ListValuePicker, summarizeListValueLoad } from "./listValuePicker";
-import { parseListValueFile } from "./listValueFile";
+import { ListValuePicker } from "./listValuePicker";
+import { parseListValueFile, summarizeListValueLoad } from "./listValueFile";
 
 describe("summarizeListValueLoad", () => {
   const load = (filename: string, text: string, selector?: string) => {

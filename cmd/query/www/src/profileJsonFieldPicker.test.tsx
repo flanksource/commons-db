@@ -1,10 +1,10 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
+import { ProfileJsonFieldPicker } from "./profileJsonFieldPicker";
 import {
-  ProfileJsonFieldPicker,
   promotedColumnTypes,
-} from "./profileJsonFieldPicker";
-import type { JsonFieldCandidate } from "./profileJsonFields";
+  type JsonFieldCandidate,
+} from "./profileJsonFields";
 
 const candidates: JsonFieldCandidate[] = [
   {

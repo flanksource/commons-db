@@ -3,6 +3,7 @@ import { UiColumns } from "@flanksource/clicky-ui/icons";
 import { useState, type Dispatch, type SetStateAction } from "react";
 import {
   configuredColumnName,
+  promotedColumnTypes,
   promotedColumnsError,
   type JsonFieldCandidate,
 } from "./profileJsonFields";
@@ -16,15 +17,6 @@ type ProfileJsonFieldPickerProps = {
   onCancel: () => void;
   onSave: (columns: ProfileColumn[]) => void | Promise<void>;
 };
-
-export const promotedColumnTypes = [
-  "string",
-  "number",
-  "boolean",
-  "datetime",
-  "duration",
-  "bytes",
-] as const;
 
 export function ProfileJsonFieldPicker({
   candidates,
@@ -47,16 +39,17 @@ export function ProfileJsonFieldPicker({
   const validationError = promotedColumnsError(existingColumns, drafts);
 
   const reviewSelection = () => {
-    setDrafts(
-      candidates
-        .filter((candidate) => selected.has(candidate.id))
-        .map((candidate) => ({
-          name: candidate.name,
-          label: fieldLabel(candidate.name),
-          type: candidate.type,
-          cel: candidate.cel,
-        })),
-    );
+    const columns: ProfileColumn[] = [];
+    for (const candidate of candidates) {
+      if (!selected.has(candidate.id)) continue;
+      columns.push({
+        name: candidate.name,
+        label: fieldLabel(candidate.name),
+        type: candidate.type,
+        cel: candidate.cel,
+      });
+    }
+    setDrafts(columns);
     setStage("review");
   };
 

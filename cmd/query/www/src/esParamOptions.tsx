@@ -195,12 +195,16 @@ function EsParamFields({
           <ListValueFileButton
             title="Load this parameter's options from a CSV, JSON or text file"
             onValues={(values) => {
-              const merged = [...(param.options ?? [])];
+              const existing = param.options ?? [];
+              const seen = new Set(existing);
+              const merged = [...existing];
               for (const value of values) {
-                if (!merged.includes(value)) merged.push(value);
+                if (seen.has(value)) continue;
+                seen.add(value);
+                merged.push(value);
               }
               onOptionsChange(merged);
-              return merged.length - (param.options?.length ?? 0);
+              return merged.length - existing.length;
             }}
           />
         </>

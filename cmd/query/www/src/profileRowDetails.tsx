@@ -19,7 +19,7 @@ import {
 import { UiColumns } from "@flanksource/clicky-ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { isValidElement, useMemo, useState, type ReactNode } from "react";
-import { findProfileUpdateOperation } from "./editProfileAction";
+import { findProfileUpdateOperation } from "./profileUpdateOperation";
 import {
   loadProfileDocument,
   profileColumns,

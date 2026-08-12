@@ -4,7 +4,6 @@ import {
   useOperations,
   useRouter,
   type OperationsApiClient,
-  type ResolvedOperation,
 } from "@flanksource/clicky-ui";
 import { UiEdit } from "@flanksource/clicky-ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,23 +15,7 @@ import {
 } from "@flanksource/clicky-ui/profiles";
 import { loadProfileDocument } from "./profileColumnPromotion";
 import { PROFILES_QUERY_KEY } from "./profilesQuery";
-
-export function isProfileSurface(surfaceKey?: string): boolean {
-  return Boolean(surfaceKey?.startsWith("profile-") && surfaceKey !== "profiles");
-}
-
-export function findProfileUpdateOperation(
-  operations: ResolvedOperation[],
-): ResolvedOperation | undefined {
-  return operations.find((operation) => {
-    const metadata = operation.operation["x-clicky"];
-    return (
-      metadata?.surface === "profiles" &&
-      metadata.scope === "entity" &&
-      metadata.verb === "update"
-    );
-  });
-}
+import { findProfileUpdateOperation } from "./profileUpdateOperation";
 
 /** Opens the editor route, so the edit surface is deep-linkable and survives a
  *  refresh — it used to be a dialog with no address of its own. */
