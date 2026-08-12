@@ -19,6 +19,7 @@ type ReconcileFlags struct {
 	KeyFrom    string   `flag:"key-from" help:"Reconcile keys at or after this one; empty starts at the first key"`
 	KeyTo      string   `flag:"key-to" help:"Reconcile keys before this one; empty runs to the last key"`
 	Params     []string `flag:"param" help:"Profile filter param as key=value (repeatable), applied to whichever side declares it"`
+	Outcome    string   `flag:"outcome" help:"Return one result outcome: matched, only_source, only_dest, or ambiguous"`
 }
 
 func (ReconcileFlags) ClickyActionFlags() {}
@@ -26,6 +27,9 @@ func (ReconcileFlags) ClickyActionFlags() {}
 // Reconcile runs two profiles and joins their results on a shared key,
 // reporting which records made it across and how long they took.
 func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileFlags) (*query.ReconcileResult, error) {
+	if err := validateReconcileOutcome(options.Outcome); err != nil {
+		return nil, err
+	}
 	store, err := s.store()
 	if err != nil {
 		return nil, err
@@ -61,13 +65,69 @@ func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileF
 	}
 
 	queryCtx := s.context().Wrap(ctx)
-	return query.ReconcileProfiles(queryCtx, query.ReconcileRun{
+	result, err := query.ReconcileProfiles(queryCtx, query.ReconcileRun{
 		Source:       source.Profile,
 		Dest:         dest.Profile,
 		Config:       config,
 		SourceParams: paramsFor(queryCtx, source.Profile, params, "source"),
 		DestParams:   paramsFor(queryCtx, dest.Profile, params, "dest"),
 	})
+	if err != nil {
+		return nil, err
+	}
+	if err := selectReconcileOutcome(result, options.Outcome); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func selectReconcileOutcome(result *query.ReconcileResult, outcome string) error {
+	if err := validateReconcileOutcome(outcome); err != nil {
+		return err
+	}
+	if outcome == "" {
+		return nil
+	}
+
+	rows := make([]query.ReconcileRow, 0, len(result.Rows))
+	stats := query.ReconcileStats{}
+	seen := make(map[string]struct{})
+	for _, row := range result.Rows {
+		duplicated := row.SourceDupCount > 1 || row.DestDupCount > 1
+		if (outcome == "ambiguous" && !duplicated) || (outcome != "ambiguous" && outcome != string(row.Status)) {
+			continue
+		}
+		rows = append(rows, row)
+		if _, ok := seen[row.Key]; ok {
+			continue
+		}
+		seen[row.Key] = struct{}{}
+		switch row.Status {
+		case query.ReconcileMatched:
+			stats.Matched++
+		case query.ReconcileOnlySource:
+			stats.OnlySource++
+		case query.ReconcileOnlyDest:
+			stats.OnlyDest++
+		}
+		if duplicated {
+			stats.DupKeys++
+		}
+	}
+	result.Rows = rows
+	result.Stats = stats
+	return nil
+}
+
+func validateReconcileOutcome(outcome string) error {
+	if outcome != "" &&
+		outcome != string(query.ReconcileMatched) &&
+		outcome != string(query.ReconcileOnlySource) &&
+		outcome != string(query.ReconcileOnlyDest) &&
+		outcome != "ambiguous" {
+		return fmt.Errorf("invalid reconcile outcome %q: expected matched, only_source, only_dest, or ambiguous", outcome)
+	}
+	return nil
 }
 
 // reconcileConfig merges the reconcile stored on the source profile with the

@@ -23,6 +23,19 @@ type profileOpenAPIHandler struct {
 
 type OpenAPIExtension func(*rpc.OpenAPISpec)
 
+var reconcileExportFormats = []string{"json", "yaml", "csv", "markdown", "html", "pdf", "excel"}
+
+func addReconcileExportMeta(spec *rpc.OpenAPISpec) {
+	for _, methods := range spec.Paths {
+		for _, operation := range methods {
+			if operation.Clicky == nil || operation.Clicky.Surface != "profiles" || operation.Clicky.ActionName != "reconcile" {
+				continue
+			}
+			operation.Clicky.Export = &rpc.ExportMeta{Formats: append([]string(nil), reconcileExportFormats...)}
+		}
+	}
+}
+
 func newProfileOpenAPIHandler(root *cobra.Command, config *rpc.Config, store Store, extensions []OpenAPIExtension) http.Handler {
 	return &profileOpenAPIHandler{
 		root:   root,
@@ -51,6 +64,7 @@ func (h *profileOpenAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	addReconcileExportMeta(spec)
 	for _, extend := range h.extensions {
 		extend(spec)
 	}

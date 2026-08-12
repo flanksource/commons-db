@@ -36,6 +36,10 @@ import {
   type ReconcileResult,
 } from "./reconcileModel";
 
+type ReconcileRunOutput = {
+  result: ReconcileResult;
+  requestUrl: string;
+};
 
 /** Bench state seeded from the profile's stored reconcile, then from the URL. */
 function initialState(document: ProfileDocument | undefined, search: string): BenchState {
@@ -76,7 +80,7 @@ export function ReconcilePage({
   const sourceName = sourceDocument?.profile ?? "";
 
   const [state, setState] = useState<BenchState | null>(null);
-  const [result, setResult] = useState<ReconcileResult | null>(null);
+  const [runOutput, setRunOutput] = useState<ReconcileRunOutput | null>(null);
 
   // The bench opens on what the profile already stores, so a saved reconcile
   // runs without being retyped.
@@ -101,7 +105,7 @@ export function ReconcilePage({
   const keyExpression = state == null ? "" : state.mode === "cel" ? state.cel : celForPairings(state.pairings);
 
   const run = useMutation({
-    mutationFn: async (): Promise<ReconcileResult> => {
+    mutationFn: async (): Promise<ReconcileRunOutput> => {
       if (!reconcileAction) throw new Error("The reconcile action is unavailable");
       if (!state) throw new Error("The bench is still loading");
       const idParam = reconcileAction.operation["x-clicky"]?.idParam ?? "id";
@@ -124,10 +128,11 @@ export function ReconcilePage({
       if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as ReconcileResult).rows)) {
         throw new Error("The reconcile returned no result");
       }
-      return parsed as ReconcileResult;
+      if (!response.requestUrl) throw new Error("The reconcile response did not include its request URL");
+      return { result: parsed as ReconcileResult, requestUrl: response.requestUrl };
     },
     onSuccess: async (reconciled) => {
-      setResult(reconciled);
+      setRunOutput(reconciled);
       // The engine resolved both profile documents server-side, so refresh the
       // cached copies the results view renders against — otherwise a stale
       // definition would describe a run that used a newer one.
@@ -227,12 +232,21 @@ export function ReconcilePage({
         error={failure?.message ?? ""}
       />
 
-      {result && (
+      {runOutput && (
         <section className="flex min-h-0 flex-col gap-2">
           <h2 className="text-sm font-semibold">
-            {result.source} → {result.dest}
+            {runOutput.result.source} → {runOutput.result.dest}
           </h2>
-          <ReconcileResults result={result} source={sourceDocument} dest={destDocument} />
+          <ReconcileResults
+            result={runOutput.result}
+            source={sourceDocument}
+            dest={destDocument}
+            exportRequest={{
+              requestUrl: runOutput.requestUrl,
+              formats: reconcileAction?.operation["x-clicky"]?.export?.formats ?? [],
+              label: `${runOutput.result.source} to ${runOutput.result.dest} reconcile`,
+            }}
+          />
         </section>
       )}
     </div>

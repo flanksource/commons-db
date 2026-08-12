@@ -29,6 +29,7 @@ import {
   type ProfileDocument,
   type ReconcileResult,
 } from "./reconcileModel";
+import { ReconcileExport } from "./reconcileExport";
 
 const TH =
   "whitespace-nowrap px-2 py-1.5 text-left text-[11px] font-medium uppercase tracking-wide text-muted-foreground";
@@ -50,10 +51,12 @@ export function ReconcileResults({
   result,
   source,
   dest,
+  exportRequest,
 }: {
   result: ReconcileResult;
   source: ProfileDocument | undefined;
   dest: ProfileDocument | undefined;
+  exportRequest?: { requestUrl: string; formats: string[]; label: string };
 }) {
   const stats = deriveStats(result.rows);
   const groups = groupByKey(result.rows);
@@ -127,14 +130,17 @@ export function ReconcileResults({
         </p>
       )}
 
-      <SegmentedControl
-        value={lane}
-        options={lanes.map((entry) => ({ id: entry.id, label: `${entry.label} (${entry.count})` }))}
-        onChange={(next) => selectLane(next as LaneId)}
-        size="sm"
-        wrap
-        aria-label="Outcome"
-      />
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <SegmentedControl
+          value={lane}
+          options={lanes.map((entry) => ({ id: entry.id, label: `${entry.label} (${entry.count})` }))}
+          onChange={(next) => selectLane(next as LaneId)}
+          size="sm"
+          wrap
+          aria-label="Outcome"
+        />
+        {exportRequest && <ReconcileExport {...exportRequest} outcome={lane} />}
+      </div>
 
       <div className="min-h-0 flex-1 overflow-auto rounded-lg border border-border">
         <LaneTable lane={lane} groups={shown.groups} source={source} dest={dest} />

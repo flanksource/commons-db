@@ -1,5 +1,5 @@
 import path from "node:path";
-import { defineConfig } from "vite";
+import { defineConfig, type ConfigEnv } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
@@ -8,14 +8,38 @@ import tailwindcss from "@tailwindcss/vite";
 // the Go binary, so requests are same-origin.
 const apiTarget = process.env.QUERY_API_URL || "http://localhost:8080";
 
-// When @flanksource/clicky-ui is linked from the sibling checkout (pnpm
-// workspace), it resolves to a symlink outside this project root — allow Vite to
-// read it, and dedupe React so the linked package shares this app's single copy.
+// `query serve --dev` runs Vite's serve command, which resolves clicky-ui from
+// the sibling source checkout for hot reload. Production builds keep resolving
+// the published package pinned in package.json.
 const clickyUI = path.resolve(__dirname, "../../../../clicky-ui/packages/ui");
+const clickyUISource = path.resolve(clickyUI, "src");
 
-export default defineConfig({
+export function clickyUIDevAliases(command: ConfigEnv["command"]) {
+  if (command !== "serve") return [];
+  return [
+    {
+      find: "@flanksource/clicky-ui/styles.css",
+      replacement: path.resolve(clickyUISource, "styles/full.css"),
+    },
+    {
+      find: "@flanksource/clicky-ui/monaco/schema",
+      replacement: path.resolve(clickyUISource, "monaco-schema.ts"),
+    },
+    ...["ai", "chat", "clicky", "components", "data", "hooks", "icons", "jotai", "mdx-editor", "monaco", "profiles", "rpc", "utils"].map((entrypoint) => ({
+      find: `@flanksource/clicky-ui/${entrypoint}`,
+      replacement: path.resolve(clickyUISource, `${entrypoint}.ts`),
+    })),
+    {
+      find: "@flanksource/clicky-ui",
+      replacement: path.resolve(clickyUISource, "index.ts"),
+    },
+  ];
+}
+
+export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
   resolve: {
+    alias: clickyUIDevAliases(command),
     dedupe: ["react", "react-dom", "react/jsx-runtime", "@tanstack/react-query", "monaco-editor"],
   },
   build: {
@@ -31,4 +55,4 @@ export default defineConfig({
       "/health": { target: apiTarget, changeOrigin: true },
     },
   },
-});
+}));

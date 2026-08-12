@@ -193,7 +193,8 @@ func (s *Service) RegisterClicky() {
 				}
 				return s.Reconcile(ctx, id, options)
 			}).
-			WithShort("Join this profile's rows against another profile on a shared key")).
+			WithShort("Join this profile's rows against another profile on a shared key").
+			WithMethod(http.MethodGet)).
 		WithAction(entity.ActionWithFlagsAndContext("run", RunFlags{},
 			func(ctx context.Context, id string, flagMap map[string]string) (*RunResult, error) {
 				options, err := decodeActionFlags[RunFlags](flagMap)
