@@ -6,9 +6,6 @@ settings:
 
 catalogs:
   default:
-    '@flanksource/clicky-ui':
-      specifier: 0.3.19
-      version: 0.3.19
     '@tailwindcss/vite':
       specifier: ^4.3.3
       version: 4.3.3
@@ -33,8 +30,8 @@ importers:
         specifier: ^3.0.201
         version: 3.0.210(react@18.3.1)(zod@4.4.3)
       '@flanksource/clicky-ui':
-        specifier: 'catalog:'
-        version: 0.3.19(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)
+        specifier: 0.3.20
+        version: 0.3.20(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)
       '@flanksource/icons':
         specifier: 1.0.63
         version: 1.0.63(react@18.3.1)
@@ -559,8 +556,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@flanksource/clicky-ui@0.3.19':
-    resolution: {integrity: sha512-9bO7LfrlGMwcC46rWz1iBwElXfVJgDPfqG4vbDXTqfS7UO9UdFT3nnPzNjrVJLhza/ZxUgPt8E02isr76Z1v1g==}
+  '@flanksource/clicky-ui@0.3.20':
+    resolution: {integrity: sha512-FByvZ67fymsUNVtO3HvbpUmF9XzNj1cC9rQtY2wmMmmOHaG2xLgyzmUE1zaOB2oVYUwhhbpj6XQKCeHZxZ0vsw==}
     peerDependencies:
       '@ai-sdk/react': ^3.0.0
       '@mdxeditor/editor': ^4.0.4
@@ -2330,7 +2327,7 @@ snapshots:
   '@esbuild/win32-x64@0.28.1':
     optional: true
 
-  '@flanksource/clicky-ui@0.3.19(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)':
+  '@flanksource/clicky-ui@0.3.20(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@babel/core@7.29.7)(@babel/template@7.29.7)(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4
