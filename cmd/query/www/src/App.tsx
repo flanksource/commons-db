@@ -16,7 +16,7 @@ import { namespaceFormExtensions } from "./namespacePicker";
 import { connectionFormActions } from "./connectionActions";
 import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
-import { connectionDashboardResultRenderer } from "./connectionDashboard";
+import { connectionDashboardResultRenderer } from "./connectionDashboardRenderer";
 import { getMonacoWorker } from "./monacoWorkers";
 import { ChatWidget } from "./chatWidget";
 import {
@@ -27,11 +27,8 @@ import {
 import { esParamOptionsFormExtensions } from "./esParamOptions";
 import { jsonPathFormExtensions } from "./jsonPathPicker";
 import { BuildProfileButton } from "./buildProfileAction";
-import {
-  EditProfileButton,
-  ProfileEditorPage,
-  isProfileSurface,
-} from "./editProfileAction";
+import { EditProfileButton, ProfileEditorPage } from "./editProfileAction";
+import { isProfileSurface } from "./profileUpdateOperation";
 import { profileRowDetailsResult } from "./profileRowDetails";
 import { ReconcileButton } from "./reconcileAction";
 import { ReconcilePage } from "./reconcilePage";

@@ -1,11 +1,11 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { ConnectionDashboardLanes } from "./connectionDashboard";
 import {
-  ConnectionDashboardLanes,
   connectionDashboardUrl,
   groupConnectionDashboardLanes,
   type ConnectionDashboardItem,
-} from "./connectionDashboard";
+} from "./connectionDashboardModel";
 
 function connection(
   overrides: Partial<ConnectionDashboardItem>,

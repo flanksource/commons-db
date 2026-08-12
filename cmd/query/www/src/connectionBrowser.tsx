@@ -1,54 +1,13 @@
-import {
-  CacheBrowser,
-  type EntityDetailBodyRenderContext,
-  type EntityDetailHeaderRenderContext,
-  type QueryBrowserResult,
-} from "@flanksource/clicky-ui";
+import { CacheBrowser, type EntityDetailBodyRenderContext, type EntityDetailHeaderRenderContext } from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import {
   browserBaseUrl,
-  ConnectionQueryWorkspace,
-  fetchJSON,
-  mergeProviderOptions,
-  queryBrowserOptionsSchema,
-  useInspection,
   type BrowserDescriptor,
   type ConnectionProfileActionRenderer,
-  type EsSearch,
 } from "@flanksource/clicky-ui/profiles";
-import { makeBrowserFilterLookup } from "./browserFilterValues";
-
-type ConnectionPresence = {
-  configured: boolean;
-  resolved: boolean;
-};
-
-type ConnectionInfo = {
-  connection: {
-    name: string;
-    type: string;
-    namespace?: string;
-    configuredEndpoint?: string;
-    resolvedEndpoint?: string;
-    configuredUsername?: string;
-    resolvedUsername?: string;
-    password: ConnectionPresence;
-    certificate: ConnectionPresence;
-  };
-  server: {
-    status: "available" | "unavailable" | "error";
-    product?: string;
-    version?: string;
-    database?: string;
-    user?: string;
-    cluster?: string;
-    node?: string;
-    details?: Record<string, string>;
-    message?: string;
-  };
-  discoveredAt: string;
-};
+import { ConnectionInfoHeader } from "./connectionInfoHeader";
+import { ConnectionQueryBrowser } from "./connectionQueryBrowser";
 
 export function connectionDetailBodyRenderer(
   context: EntityDetailBodyRenderContext,
@@ -151,98 +110,6 @@ function ConnectionBrowser({
   );
 }
 
-function ConnectionQueryBrowser({
-  id,
-  baseUrl,
-  descriptor,
-  onTargetChange,
-}: {
-  id: string;
-  baseUrl: string;
-  descriptor: BrowserDescriptor;
-  onTargetChange: (target: string) => void;
-}) {
-  const [selection, setSelection] = useState<{
-    query?: string;
-    options?: Record<string, unknown>;
-  }>({});
-  const [liveOptions, setLiveOptions] = useState<Record<string, unknown>>({});
-  const [selectedDatabase, setSelectedDatabase] = useState("");
-  // Exploration is not saved anywhere, so the specification lives here for as
-  // long as the browser is open. "Build profile" carries the options forward.
-  const [search, setSearch] = useState<EsSearch | undefined>(undefined);
-  const explicitTargetKind =
-    liveOptions.targetKind ?? selection.options?.targetKind;
-  const inspection = useInspection({
-    cacheKey: "connection-browser-inspection",
-    id,
-    baseUrl,
-    enabled: descriptor.catalog === true,
-    database: selectedDatabase,
-    target: String(liveOptions.index ?? selection.options?.index ?? ""),
-    ...(typeof explicitTargetKind === "string"
-      ? { targetKind: explicitTargetKind }
-      : {}),
-  });
-  const options = useMemo(
-    () =>
-      mergeProviderOptions({
-        layers: [descriptor.initialOptions, selection.options],
-        keepTargetKind: true,
-      }),
-    [descriptor.initialOptions, selection.options],
-  );
-  const lookupFilterValues = useMemo(
-    () => makeBrowserFilterLookup(baseUrl),
-    [baseUrl],
-  );
-
-  return (
-    <ConnectionQueryWorkspace
-      id={`${descriptor.provider ?? "query"}:${id}`}
-      title={`${descriptor.queryLabel ?? "Query"} browser`}
-      descriptor={descriptor}
-      inspection={inspection}
-      onDatabaseChange={setSelectedDatabase}
-      query={selection.query ?? descriptor.defaultQuery ?? ""}
-      onQueryChange={(next) =>
-        setSelection((current) => ({ ...current, query: next }))
-      }
-      options={options}
-      onOptionsChange={(next) => {
-        setLiveOptions(next);
-        onTargetChange(String(next.index ?? ""));
-      }}
-      optionsSchema={queryBrowserOptionsSchema(descriptor)}
-      search={search}
-      onSearchChange={(transition) => {
-        setSearch(transition.search);
-        setSelection((current) => ({ ...current, query: transition.query }));
-      }}
-      compileBaseUrl={baseUrl}
-      onCatalogSelect={(node) => {
-        setSelection({ query: node.query, options: node.options });
-        setLiveOptions(node.options ?? {});
-      }}
-      {...(lookupFilterValues ? { lookupFilterValues } : {})}
-      execute={(request) =>
-        fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            ...request,
-            options: mergeProviderOptions({
-              layers: [request.options],
-              database: inspection.sqlDatabase,
-              keepTargetKind: true,
-            }),
-          }),
-        })
-      }
-    />
-  );
-}
-
 export function connectionDetailHeaderRenderer(
   context: EntityDetailHeaderRenderContext,
 ): ReactNode {
@@ -253,98 +120,5 @@ export function connectionDetailHeaderRenderer(
       icon={context.icon}
       fallbackName={context.title}
     />
-  );
-}
-
-// ConnectionInfoHeader renders the connection's identity and resolved server on
-// a single line for the explorer heading: [icon] name · endpoint · product ·
-// status. It shares the ["connection-info", id] query cache with the browser.
-function ConnectionInfoHeader({
-  id,
-  icon,
-  fallbackName,
-}: {
-  id: string;
-  icon?: ReactNode;
-  fallbackName: string;
-}) {
-  const info = useQuery({
-    queryKey: ["connection-info", id],
-    queryFn: () =>
-      fetchJSON<ConnectionInfo>(
-        `/api/v1/connection/${encodeURIComponent(id)}/info`,
-      ),
-    retry: 0,
-    staleTime: 30_000,
-  });
-  const data = info.data;
-  const name = data?.connection.name ?? fallbackName;
-  const endpoint =
-    data?.connection.resolvedEndpoint ?? data?.connection.configuredEndpoint;
-  const product = data
-    ? [data.server.product, data.server.version].filter(Boolean).join(" ")
-    : "";
-  return (
-    <h1 className="flex min-w-0 items-center gap-2 text-2xl font-semibold tracking-tight">
-      {icon}
-      <span className="shrink-0">{name}</span>
-      {info.isLoading ? (
-        <span className="text-sm font-normal text-muted-foreground">
-          resolving…
-        </span>
-      ) : info.isError ? (
-        <span
-          className="truncate text-sm font-normal text-destructive"
-          title={info.error instanceof Error ? info.error.message : undefined}
-        >
-          {info.error instanceof Error ? info.error.message : "unresolved"}
-        </span>
-      ) : data ? (
-        <span className="flex min-w-0 items-center gap-2 text-sm font-normal text-muted-foreground">
-          {endpoint ? (
-            <>
-              <HeaderDot />
-              <code className="min-w-0 truncate">{endpoint}</code>
-            </>
-          ) : null}
-          {product ? (
-            <>
-              <HeaderDot />
-              <span className="shrink-0">{product}</span>
-            </>
-          ) : null}
-          <HeaderDot />
-          <ServerStatus server={data.server} />
-        </span>
-      ) : null}
-    </h1>
-  );
-}
-
-function HeaderDot() {
-  return <span className="shrink-0 opacity-40">·</span>;
-}
-
-function ServerStatus({ server }: { server: ConnectionInfo["server"] }) {
-  const tone =
-    server.status === "available"
-      ? "text-emerald-600 dark:text-emerald-400"
-      : server.status === "error"
-        ? "text-destructive"
-        : "text-muted-foreground";
-  const label =
-    server.status === "available"
-      ? "available"
-      : server.status === "error"
-        ? "unreachable"
-        : "unavailable";
-  return (
-    <span
-      className={`inline-flex shrink-0 items-center gap-1 ${tone}`}
-      title={server.message ?? undefined}
-    >
-      <span className="inline-block h-1.5 w-1.5 rounded-full bg-current" />
-      {label}
-    </span>
   );
 }

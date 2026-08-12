@@ -3,7 +3,6 @@ import {
   Icon,
   cn,
   useRouter,
-  type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import {
   UiKey,
@@ -12,37 +11,19 @@ import {
   UiWarningTriangle,
 } from "@flanksource/clicky-ui/icons";
 import { useQuery } from "@tanstack/react-query";
-import type { ReactNode } from "react";
 import { ConnectionTypeIcon } from "./iconProvider";
+import {
+  groupConnectionDashboardLanes,
+  type ConnectionDashboardHealthState,
+  type ConnectionDashboardItem,
+  type ConnectionDashboardResponse,
+} from "./connectionDashboardModel";
 
-export type ConnectionDashboardHealthState =
-  | "healthy"
-  | "credentials"
-  | "unreachable"
-  | "unverifiable";
-
-export type ConnectionDashboardItem = {
-  id: string;
-  name: string;
-  namespace: string;
-  type: string;
-  endpoint?: { scheme: string; host: string; path?: string };
-  secretCount: number;
-  inlineCredential: boolean;
-  insecureTLS: boolean;
-  health: { state: ConnectionDashboardHealthState; detail: string };
-  profileCount: number;
-  updatedAt: string;
-};
-
-type ConnectionDashboardResponse = {
-  connections: ConnectionDashboardItem[];
-  generatedAt: string;
-};
-
-export type ConnectionDashboardLane = {
-  namespace: string;
-  connections: ConnectionDashboardItem[];
+const HEALTH_LEGEND_LABELS: Record<ConnectionDashboardHealthState, string> = {
+  healthy: "reachable",
+  credentials: "credentials failed",
+  unreachable: "unreachable",
+  unverifiable: "no discovery for this type",
 };
 
 const HEALTH_LABELS: Record<ConnectionDashboardHealthState, string> = {
@@ -62,54 +43,7 @@ const HEALTH_STYLES: Record<
   unverifiable: { dot: "bg-muted-foreground", edge: "border-l-border" },
 };
 
-export function groupConnectionDashboardLanes(
-  connections: ConnectionDashboardItem[],
-): ConnectionDashboardLane[] {
-  const lanes = new Map<string, ConnectionDashboardItem[]>();
-  for (const connection of connections) {
-    const lane = lanes.get(connection.namespace);
-    if (lane) lane.push(connection);
-    else lanes.set(connection.namespace, [connection]);
-  }
-  return [...lanes]
-    .map(([namespace, items]) => ({
-      namespace,
-      connections: [...items].sort((a, b) => a.name.localeCompare(b.name)),
-    }))
-    .sort((a, b) => {
-      if (a.namespace === "") return 1;
-      if (b.namespace === "") return -1;
-      return a.namespace.localeCompare(b.namespace);
-    });
-}
-
-export function connectionDashboardUrl(requestUrl?: string): string {
-  const target = new URL("/api/v1/connections/dashboard", "http://query.local");
-  if (requestUrl) {
-    const source = new URL(requestUrl, "http://query.local");
-    for (const key of ["type", "types"]) {
-      const value = source.searchParams.get(key);
-      if (value) target.searchParams.set(key, value);
-    }
-  }
-  return target.pathname + target.search;
-}
-
-export function connectionDashboardResultRenderer(
-  context: ResultRenderContext,
-): ReactNode {
-  if (context.surfaceKey !== "connection") return context.defaultView;
-  return (
-    <ConnectionDashboardSurface
-      requestUrl={connectionDashboardUrl(context.response?.requestUrl)}
-      refreshKey={
-        context.response?.output ?? JSON.stringify(context.response?.parsed ?? null)
-      }
-    />
-  );
-}
-
-function ConnectionDashboardSurface({
+export function ConnectionDashboardSurface({
   requestUrl,
   refreshKey,
 }: {
@@ -370,12 +304,6 @@ function RiskChips({ connection }: { connection: ConnectionDashboardItem }) {
 }
 
 function ConnectionHealthLegend() {
-  const labels: Record<ConnectionDashboardHealthState, string> = {
-    healthy: "reachable",
-    credentials: "credentials failed",
-    unreachable: "unreachable",
-    unverifiable: "no discovery for this type",
-  };
   return (
     <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
       {(
@@ -383,7 +311,7 @@ function ConnectionHealthLegend() {
       ).map((state) => (
         <span key={state} className="inline-flex items-center gap-1.5">
           <span className={cn("inline-block h-3 w-0.5", HEALTH_STYLES[state].dot)} />
-          {labels[state]}
+          {HEALTH_LEGEND_LABELS[state]}
         </span>
       ))}
     </p>
