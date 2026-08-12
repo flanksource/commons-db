@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/glebarez/go-sqlite"
 	"github.com/google/uuid"
+	_ "modernc.org/sqlite"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -43,20 +43,21 @@ type Manager struct {
 }
 
 type snapshot struct {
-	id           string
-	connection   models.Connection
-	createdAt    time.Time
-	lastAccessed time.Time
-	age          time.Duration
-	path         string
-	db           *sql.DB
-	stats        query.ReconcileStats
-	source       string
-	dest         string
-	sourceCut    bool
-	destCut      bool
-	profiles     map[string]materialization
-	leases       int
+	materializeMu sync.Mutex
+	id            string
+	connection    models.Connection
+	createdAt     time.Time
+	lastAccessed  time.Time
+	age           time.Duration
+	path          string
+	db            *sql.DB
+	stats         query.ReconcileStats
+	source        string
+	dest          string
+	sourceCut     bool
+	destCut       bool
+	profiles      map[string]materialization
+	leases        int
 }
 
 type materialization struct {

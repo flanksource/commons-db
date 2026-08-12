@@ -449,7 +449,8 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 	if err != nil {
 		return nil, err
 	}
-	sample := newProfileSampleHandler(prefix, s.context(), newSampleJSONPathHandler(prefix, next))
+	expression := newSampleExpressionHandler(prefix, s.context(), newSampleJSONPathHandler(prefix, next))
+	sample := newProfileSampleHandler(prefix, s.context(), expression)
 	return newExecHandler(prefix, s.context(), store, sample), nil
 }
 

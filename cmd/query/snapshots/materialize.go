@@ -23,6 +23,8 @@ func (m *Manager) Materialize(ctx context.Context, options profiles.ReconcileMat
 		return profiles.ReconcileSnapshotDescriptor{}, err
 	}
 	defer release()
+	item.materializeMu.Lock()
+	defer item.materializeMu.Unlock()
 	m.mu.RLock()
 	base, found := item.profiles[options.Profile]
 	m.mu.RUnlock()

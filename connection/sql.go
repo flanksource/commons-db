@@ -10,11 +10,11 @@ import (
 	"strings"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
-	_ "github.com/glebarez/go-sqlite"
 	mysql "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
+	_ "modernc.org/sqlite"
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"

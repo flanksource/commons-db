@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/commons-db/models"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	_ "modernc.org/sqlite"
 )
 
 var _ = Describe("SQLite SQL connections", func() {
@@ -27,7 +28,7 @@ var _ = Describe("SQLite SQL connections", func() {
 		})).To(Succeed())
 		client, err := connection.Client(dbcontext.New())
 		Expect(err).NotTo(HaveOccurred())
-		defer client.Close()
+		DeferCleanup(client.Close)
 
 		var outcome string
 		Expect(client.QueryRow(`SELECT outcome FROM reconcile_rows WHERE row_id = 1`).Scan(&outcome)).To(Succeed())
