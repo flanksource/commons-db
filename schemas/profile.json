@@ -2133,8 +2133,19 @@
                   "type": "array"
                 },
                 "timeField": {
-                  "description": "Date field that time-from and time-to params bind to",
+                  "description": "Date or integral epoch field that time-from and time-to params bind to",
                   "title": "Time field",
+                  "type": "string"
+                },
+                "timeFieldFormat": {
+                  "description": "Required epoch unit for a numeric time field; omit for date and date_nanos mappings",
+                  "enum": [
+                    "epoch_second",
+                    "epoch_millis",
+                    "epoch_micros",
+                    "epoch_nanos"
+                  ],
+                  "title": "Time field format",
                   "type": "string"
                 },
                 "trackTotalHits": {
@@ -3177,8 +3188,19 @@
                   "type": "array"
                 },
                 "timeField": {
-                  "description": "Date field that time-from and time-to params bind to",
+                  "description": "Date or integral epoch field that time-from and time-to params bind to",
                   "title": "Time field",
+                  "type": "string"
+                },
+                "timeFieldFormat": {
+                  "description": "Required epoch unit for a numeric time field; omit for date and date_nanos mappings",
+                  "enum": [
+                    "epoch_second",
+                    "epoch_millis",
+                    "epoch_micros",
+                    "epoch_nanos"
+                  ],
+                  "title": "Time field format",
                   "type": "string"
                 },
                 "trackTotalHits": {
