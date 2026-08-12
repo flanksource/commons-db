@@ -65,6 +65,30 @@ var _ = Describe("ReconcileProfiles", func() {
 		Expect(result.Bounded()).To(BeFalse())
 	})
 
+	It("passes different values for the same filter name to each side", func() {
+		sourceProvider := &mockProvider{typ: "recon-filter-source", rows: []query.Row{{"id": "ord001"}}}
+		destProvider := &mockProvider{typ: "recon-filter-dest", rows: []query.Row{{"id": "ord001"}}}
+		query.RegisterProvider(sourceProvider)
+		query.RegisterProvider(destProvider)
+		source := reconcileProfile("orders-emitted", sourceProvider.typ)
+		dest := reconcileProfile("orders-ingested", destProvider.typ)
+		source.Params = []query.ParamDef{{Name: "region"}}
+		dest.Params = []query.ParamDef{{Name: "region"}}
+
+		result, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
+			Source:        source,
+			Dest:          dest,
+			Config:        query.ReconcileConfig{ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{CEL: "row.id"}}},
+			SourceFilters: map[string]any{"region": "eu"},
+			DestFilters:   map[string]any{"region": "us"},
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 1}))
+		Expect(sourceProvider.last.Params).To(HaveKeyWithValue("region", "eu"))
+		Expect(destProvider.last.Params).To(HaveKeyWithValue("region", "us"))
+	})
+
 	It("says it buffered a CEL-keyed run, and why", func() {
 		result := run(2, 2)
 		Expect(result.Mode).To(Equal(query.ReconcileBuffered))
@@ -175,7 +199,9 @@ var _ = Describe("ReconcileProfiles", func() {
 
 var _ = Describe("ReconcileConfig", func() {
 	config := query.ReconcileConfig{
-		Dest: "orders-ingested",
+		Dest:          "orders-ingested",
+		SourceFilters: map[string]string{"region": "eu"},
+		DestFilters:   map[string]string{"region": "us"},
 		ReconcileSpec: query.ReconcileSpec{
 			Range:      &query.KeyRange{From: "ord100", To: "ord200"},
 			Key:        query.KeySpec{CEL: `row.id`},
@@ -187,7 +213,7 @@ var _ = Describe("ReconcileConfig", func() {
 		encoded, err := json.Marshal(config)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(string(encoded)).To(Equal(
-			`{"dest":"orders-ingested","range":{"from":"ord100","to":"ord200"},"key":{"cel":"row.id"},"timeColumn":"created_at"}`))
+			`{"dest":"orders-ingested","sourceFilters":{"region":"eu"},"destFilters":{"region":"us"},"range":{"from":"ord100","to":"ord200"},"key":{"cel":"row.id"},"timeColumn":"created_at"}`))
 	})
 
 	It("round-trips through a profile document", func() {
@@ -197,5 +223,21 @@ var _ = Describe("ReconcileConfig", func() {
 		var decoded query.Profile
 		Expect(yaml.Unmarshal(document, &decoded)).To(Succeed())
 		Expect(decoded.Reconcile).To(Equal(&config))
+	})
+
+	It("merges each side's filters without crossing them", func() {
+		base := query.ReconcileConfig{
+			SourceFilters: map[string]string{"region": "eu", "tier": "gold"},
+			DestFilters:   map[string]string{"region": "us", "tenant": "acme"},
+		}
+		override := query.ReconcileConfig{
+			SourceFilters: map[string]string{"region": "za"},
+			DestFilters:   map[string]string{"tenant": "tenant-x"},
+		}
+
+		merged := query.MergeReconcileConfig(&base, &override)
+
+		Expect(merged.SourceFilters).To(Equal(map[string]string{"region": "za", "tier": "gold"}))
+		Expect(merged.DestFilters).To(Equal(map[string]string{"region": "us", "tenant": "tenant-x"}))
 	})
 })

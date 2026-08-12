@@ -16,7 +16,8 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("NOT_FOUND")
+	ErrNotFound          = errors.New("NOT_FOUND")
+	ErrConnectionExpired = errors.New("connection expired")
 )
 
 // extractConnectionNameType extracts the name and connection type from a connection
@@ -115,6 +116,15 @@ func IsValidConnectionURL(connectionString string) bool {
 //   - connection://<namespace>/<name> or connection://<name>
 //   - the UUID of the connection.
 func FindConnectionByURL(ctx Context, connectionString string) (*models.Connection, error) {
+	if resolver := ctx.connectionResolver(); resolver != nil {
+		connection, err := resolver(connectionString)
+		if err != nil {
+			return nil, err
+		}
+		if connection != nil {
+			return connection, nil
+		}
+	}
 	db := ctx.DB()
 
 	if db == nil {

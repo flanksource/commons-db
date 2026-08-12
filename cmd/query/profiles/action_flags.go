@@ -38,24 +38,35 @@ func parseKeyValues(flag string, pairs []string) (map[string]string, error) {
 	return out, nil
 }
 
-// parseParamValues reads the repeatable --param flag of an action.
+// parseProfileInputValues reads a repeatable key=value profile input flag.
 //
 // Actions are served over HTTP as well as from the CLI — clicky populates the
 // same flag map from a request body — so an @file reference is refused here
 // rather than expanded: honouring it would let any caller read a file off the
 // server. The command line reaches the loader through `query trace`/`query top`,
 // and a large selection travels over HTTP as a POST body instead.
+func parseProfileInputValues(flag string, pairs []string) (map[string]string, error) {
+	parsed, err := parseKeyValues(flag, pairs)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range parsed {
+		if strings.HasPrefix(value, "@") {
+			return nil, fmt.Errorf(
+				"--%s %q: @file values are read from the command line only; POST the values to /api/v1/profile/<name> instead", flag, key)
+		}
+	}
+	return parsed, nil
+}
+
+// parseParamValues reads the repeatable --param flag of an action.
 func parseParamValues(pairs []string) (map[string]any, error) {
-	parsed, err := parseKeyValues("param", pairs)
+	parsed, err := parseProfileInputValues("param", pairs)
 	if err != nil {
 		return nil, err
 	}
 	params := make(map[string]any, len(parsed))
 	for key, value := range parsed {
-		if strings.HasPrefix(value, "@") {
-			return nil, fmt.Errorf(
-				"param %q: @file values are read from the command line only; POST the values to /api/v1/profile/<name> instead", key)
-		}
 		params[key] = value
 	}
 	return params, nil

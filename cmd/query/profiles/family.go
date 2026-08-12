@@ -75,7 +75,7 @@ func (s *Service) listSurfaces(ctx context.Context) ([]entity.DynamicEntitySpec,
 	}
 	surfaces := make([]entity.DynamicEntitySpec, 0, len(stored))
 	for _, profile := range stored {
-		resolved, err := Resolve(ctx, store, profile.Name)
+		resolved, err := ResolveWithoutTouch(ctx, store, profile.Name)
 		if err != nil {
 			return nil, fmt.Errorf("resolve profile surface %q: %w", profile.Name, err)
 		}

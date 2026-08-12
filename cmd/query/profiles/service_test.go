@@ -80,7 +80,7 @@ func TestProfileItemTableProvider(t *testing.T) {
 	p := profileItem{sampleProfile("Sales Report")}
 
 	cols := p.Columns()
-	wantOrder := []string{"name", "type", "connection", "query"}
+	wantOrder := []string{"name", "type", "connection", "access", "expires", "query"}
 	if len(cols) != len(wantOrder) {
 		t.Fatalf("got %d columns, want %d", len(cols), len(wantOrder))
 	}
@@ -99,6 +99,9 @@ func TestProfileItemTableProvider(t *testing.T) {
 	}
 	if row["connection"] != "connection://db" {
 		t.Errorf("row connection = %v, want connection://db", row["connection"])
+	}
+	if row["access"] != "editable" {
+		t.Errorf("row access = %v, want editable", row["access"])
 	}
 }
 

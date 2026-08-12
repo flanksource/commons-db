@@ -32,12 +32,13 @@ func (p sqlProvider) LookupFilterValues(
 	if err != nil {
 		return nil, nil, err
 	}
-	client, dialect, err := sqlConnect(ctx, sqlConnectRequest{
+	client, dialect, release, err := sqlConnect(ctx, sqlConnectRequest{
 		Connection: req.Connection, ConnType: p.connType, Options: opts,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
+	defer release()
 	defer client.Close()
 
 	statement, args, err := buildLookupSQL(dialect, req.Query, binding, req.Filters, search, limit)

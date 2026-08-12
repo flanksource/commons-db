@@ -11,14 +11,24 @@
  */
 
 import { useState } from "react";
-import { Badge, Button, Icon, InputField, SegmentedControl, cn } from "@flanksource/clicky-ui";
+import {
+  Badge,
+  Button,
+  FilterForm,
+  Icon,
+  InputField,
+  SegmentedControl,
+  cn,
+  type OperationsApiClient,
+  type ResolvedOperation,
+} from "@flanksource/clicky-ui";
 import { UiAdd, UiArrowRight, UiClock, UiCode2, UiPlay, UiTrash } from "@flanksource/clicky-ui/icons";
 
 import { ProfilePicker } from "./profilePicker";
 import {
   celForPairings,
   profileFields,
-  routeParams,
+  reconcileFilterParameters,
   timestampField,
   type KeyPairing,
   type ProfileDocument,
@@ -36,8 +46,9 @@ export type BenchState = {
   pairings: KeyPairing[];
   mode: KeyMode;
   cel: string;
-  limit: number;
-  params: Record<string, string>;
+  snapshotAge: string;
+  sourceFilters: Record<string, string>;
+  destFilters: Record<string, string>;
 };
 
 export function ReconcileBench({
@@ -46,6 +57,9 @@ export function ReconcileBench({
   source,
   dest,
   destNames,
+  client,
+  sourceOperation,
+  destOperation,
   onRun,
   onSave,
   running,
@@ -57,6 +71,9 @@ export function ReconcileBench({
   source: ProfileDocument | undefined;
   dest: ProfileDocument | undefined;
   destNames: string[];
+  client: OperationsApiClient;
+  sourceOperation: ResolvedOperation | undefined;
+  destOperation: ResolvedOperation | undefined;
   onRun: () => void;
   onSave: () => void;
   running: boolean;
@@ -68,8 +85,6 @@ export function ReconcileBench({
 
   const cel = state.mode === "cel" ? state.cel : celForPairings(state.pairings);
   const canPair = Boolean(sourceField && destField);
-  const routed = routeParams(state.params, source, dest);
-
   const addPairing = () => {
     if (!sourceField || !destField) return;
     onChange({ ...state, pairings: [...state.pairings, { source: sourceField, dest: destField }] });
@@ -87,6 +102,13 @@ export function ReconcileBench({
             selected={sourceField}
             onSelect={setSourceField}
             clock={timestampField(source)}
+          />
+          <ProfileFilters
+            side="source"
+            client={client}
+            operation={sourceOperation}
+            values={state.sourceFilters}
+            onChange={(sourceFilters) => onChange({ ...state, sourceFilters })}
           />
         </section>
 
@@ -190,7 +212,10 @@ export function ReconcileBench({
               <ProfilePicker
                 names={destNames}
                 value={state.dest}
-                onChange={(dest) => onChange({ ...state, dest })}
+                onChange={(dest) => {
+                  setDestField(undefined);
+                  onChange({ ...state, dest, destFilters: {} });
+                }}
                 ariaLabel="Destination profile"
               />
             </div>
@@ -201,48 +226,24 @@ export function ReconcileBench({
             onSelect={setDestField}
             clock={timestampField(dest)}
           />
+          <ProfileFilters
+            side="dest"
+            client={client}
+            operation={destOperation}
+            values={state.destFilters}
+            onChange={(destFilters) => onChange({ ...state, destFilters })}
+          />
         </section>
       </div>
 
       <section className="space-y-3 rounded-lg border border-border p-3">
-        {routed.length > 0 && (
-          <div className="space-y-1">
-            <h3 className="text-sm font-semibold">Filters</h3>
-            <div className="flex flex-wrap items-center gap-2">
-              {routed.map((param) => (
-                <span
-                  key={param.name}
-                  className={cn(
-                    "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs",
-                    param.dropped ? "border-amber-500/50 bg-amber-500/10" : "border-border bg-muted/60",
-                  )}
-                >
-                  <span className="font-mono">
-                    {param.name}={param.value}
-                  </span>
-                  {param.sides.map((side) => (
-                    <SideTag key={side} side={side} />
-                  ))}
-                  {param.dropped && (
-                    <span className="text-amber-700 [[data-theme=dark]_&]:text-amber-400">
-                      dropped on {param.sides.includes("source") ? "the destination" : "the source"}
-                    </span>
-                  )}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div className="flex flex-wrap items-end gap-3 border-t border-border/60 pt-3">
+        <div className="flex flex-wrap items-end gap-3">
           <label className="flex w-40 flex-col gap-1 text-xs text-muted-foreground">
-            Rows per side
+            Snapshot expiry
             <InputField
-              type="number"
-              min={0}
-              value={state.limit === 0 ? "" : String(state.limit)}
-              placeholder="all"
-              onChange={(text) => onChange({ ...state, limit: Number(text) || 0 })}
+              value={state.snapshotAge}
+              placeholder="1h"
+              onChange={(text) => onChange({ ...state, snapshotAge: text })}
             />
           </label>
           <Button size="sm" className="gap-1.5" disabled={running || !state.dest || !cel} onClick={onRun}>
@@ -259,13 +260,48 @@ export function ReconcileBench({
             {saving ? "Saving…" : "Save on profile"}
           </Button>
           <p className="text-xs text-muted-foreground">
-            A bound makes checking a key cheap; a bounded run reports a key as one-sided when its counterpart falls
-            outside the window.
+            The snapshot expires after this much idle time and cannot outlive the server maximum.
           </p>
         </div>
 
         {error && <p className="text-xs text-destructive">{error}</p>}
       </section>
+    </div>
+  );
+}
+
+function ProfileFilters({
+  side,
+  client,
+  operation,
+  values,
+  onChange,
+}: {
+  side: "source" | "dest";
+  client: OperationsApiClient;
+  operation: ResolvedOperation | undefined;
+  values: Record<string, string>;
+  onChange: (values: Record<string, string>) => void;
+}) {
+  const parameters = reconcileFilterParameters(operation);
+  return (
+    <div className="mt-3 space-y-2 border-t border-border/60 pt-3">
+      <h3 className="text-xs font-semibold">{side === "source" ? "Source" : "Destination"} filters</h3>
+      {operation && parameters.length > 0 ? (
+        <FilterForm
+          client={client}
+          path={operation.path}
+          method={operation.method}
+          parameters={parameters}
+          initialValues={values}
+          autoSubmit
+          onSubmit={onChange}
+        />
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          {operation ? "This profile exposes no filters." : "Filter controls are unavailable for this profile."}
+        </p>
+      )}
     </div>
   );
 }

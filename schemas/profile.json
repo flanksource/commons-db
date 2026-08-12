@@ -5078,6 +5078,14 @@
           },
           "x-clicky-order": 1
         },
+        "destFilters": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Filter values applied only to the destination profile",
+          "title": "Destination filters",
+          "type": "object"
+        },
         "key": {
           "description": "How the shared identity is read from a row on either side; set columns or cel, never both",
           "properties": {
@@ -5100,14 +5108,6 @@
           "type": "object",
           "x-clicky-order": 2
         },
-        "params": {
-          "additionalProperties": {
-            "type": "string"
-          },
-          "description": "Filter values applied to whichever side declares each one",
-          "title": "Params",
-          "type": "object"
-        },
         "range": {
           "description": "Span of keys to reconcile; empty covers all of them. A range cuts both sides at the same keys, so a key missing from one side inside it is missing rather than merely unread",
           "properties": {
@@ -5123,6 +5123,14 @@
             }
           },
           "title": "Key range",
+          "type": "object"
+        },
+        "sourceFilters": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Filter values applied only to this source profile",
+          "title": "Source filters",
           "type": "object"
         },
         "timeColumn": {

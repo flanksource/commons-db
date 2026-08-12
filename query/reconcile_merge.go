@@ -61,12 +61,12 @@ func mergeJoin(ctx context.Context, run ReconcileRun) (*ReconcileResult, error) 
 		return nil, fmt.Errorf("reconcile: %w", err)
 	}
 
-	source, err := openReconcileSide(ctx, "source", run.Source, run.SourceParams, keyOf, spec)
+	source, err := openReconcileSide(ctx, "source", run.Source, run.SourceFilters, keyOf, spec)
 	if err != nil {
 		return nil, err
 	}
 	defer source.close()
-	dest, err := openReconcileSide(ctx, "dest", run.Dest, run.DestParams, keyOf, spec)
+	dest, err := openReconcileSide(ctx, "dest", run.Dest, run.DestFilters, keyOf, spec)
 	if err != nil {
 		return nil, err
 	}

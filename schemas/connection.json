@@ -286,12 +286,92 @@
           "x-clicky-order": 5
         },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "description": "Applied to every query opened through this connection. Missing values use these safe defaults.",
+          "properties": {
+            "max_bytes_to_read": {
+              "default": "268435456",
+              "description": "Maximum uncompressed source bytes a query may scan",
+              "pattern": "^[1-9][0-9]*$",
+              "title": "Maximum bytes to read",
+              "type": "string",
+              "x-clicky-order": 2,
+              "x-clicky-unit": "bytes"
+            },
+            "max_execution_time": {
+              "default": "10",
+              "description": "Server-side query execution limit in seconds",
+              "pattern": "^[1-9][0-9]*$",
+              "title": "Maximum execution time",
+              "type": "string",
+              "x-clicky-order": 0,
+              "x-input-suffix": "seconds"
+            },
+            "max_memory_usage": {
+              "default": "536870912",
+              "description": "Maximum memory in bytes for one query",
+              "pattern": "^[1-9][0-9]*$",
+              "title": "Maximum memory usage",
+              "type": "string",
+              "x-clicky-order": 3,
+              "x-clicky-unit": "bytes"
+            },
+            "max_rows_to_read": {
+              "default": "1000000",
+              "description": "Maximum source rows a query may scan",
+              "pattern": "^[1-9][0-9]*$",
+              "title": "Maximum rows to read",
+              "type": "string",
+              "x-clicky-order": 1,
+              "x-clicky-unit": "count",
+              "x-input-suffix": "rows"
+            },
+            "max_threads": {
+              "default": "4",
+              "description": "Maximum worker threads available to one query",
+              "pattern": "^[1-9][0-9]*$",
+              "title": "Maximum threads",
+              "type": "string",
+              "x-clicky-order": 4,
+              "x-input-suffix": "threads"
+            },
+            "read_overflow_mode": {
+              "default": "throw",
+              "description": "Action when a row or byte read limit is exceeded",
+              "enum": [
+                "throw",
+                "break"
+              ],
+              "title": "Read overflow",
+              "type": "string",
+              "x-clicky-order": 5,
+              "x-enum-display": "segmented",
+              "x-enum-labels": {
+                "break": "Break",
+                "throw": "Throw"
+              }
+            },
+            "timeout_overflow_mode": {
+              "default": "throw",
+              "description": "Action when the execution time limit is exceeded",
+              "enum": [
+                "throw",
+                "break"
+              ],
+              "title": "Timeout overflow",
+              "type": "string",
+              "x-clicky-order": 6,
+              "x-enum-display": "segmented",
+              "x-enum-labels": {
+                "break": "Break",
+                "throw": "Throw"
+              }
+            }
           },
-          "title": "Properties",
+          "title": "Query limits",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-column-min-width": "16rem",
+          "x-columns": 2
         },
         "type": {
           "const": "clickhouse",

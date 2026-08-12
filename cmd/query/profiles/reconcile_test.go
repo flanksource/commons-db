@@ -84,16 +84,14 @@ func TestReconcileJoinsOnColumnNames(t *testing.T) {
 	}
 }
 
-// A filter one side does not declare must not fail the whole run — the two
-// backends rarely accept the same parameters.
-func TestReconcileRoutesParamsToTheSideThatDeclaresThem(t *testing.T) {
+func TestReconcileAppliesAFilterToItsDeclaredSide(t *testing.T) {
 	source := sideProfile(t, "params-source", "recon-source-params", "",
 		[]query.ParamDef{{Name: "policy", Type: query.ParamTypeString}}, []query.Row{{"id": "A"}})
 	dest := sideProfile(t, "params-dest", "recon-dest-params", "", nil, []query.Row{{"id": "A"}})
 	service := serviceOver(t, source, dest)
 
 	result, err := service.Reconcile(context.Background(), source.Name, ReconcileFlags{
-		Dest: dest.Name, KeyColumns: []string{"id"}, Params: []string{"policy=POL1"},
+		Dest: dest.Name, KeyColumns: []string{"id"}, SourceFilters: []string{"policy=POL1"},
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -112,11 +110,11 @@ func TestReconcileRequiresBothSidesAndAKey(t *testing.T) {
 		flags ReconcileFlags
 		want  string
 	}{
-		"no dest":       {ReconcileFlags{KeyColumns: []string{"id"}}, "--dest is required"},
-		"unknown dest":  {ReconcileFlags{Dest: "nope", KeyColumns: []string{"id"}}, `profile "nope" not found`},
-		"no key":        {ReconcileFlags{Dest: dest.Name}, "columns or a cel expression"},
-		"both key sets": {ReconcileFlags{Dest: dest.Name, KeyColumns: []string{"id"}, KeyCEL: `row.id`}, "pick one"},
-		"bad param":     {ReconcileFlags{Dest: dest.Name, KeyColumns: []string{"id"}, Params: []string{"noequals"}}, "expected key=value"},
+		"no dest":           {ReconcileFlags{KeyColumns: []string{"id"}}, "--dest is required"},
+		"unknown dest":      {ReconcileFlags{Dest: "nope", KeyColumns: []string{"id"}}, `profile "nope" not found`},
+		"no key":            {ReconcileFlags{Dest: dest.Name}, "columns or a cel expression"},
+		"both key sets":     {ReconcileFlags{Dest: dest.Name, KeyColumns: []string{"id"}, KeyCEL: `row.id`}, "pick one"},
+		"bad source filter": {ReconcileFlags{Dest: dest.Name, KeyColumns: []string{"id"}, SourceFilters: []string{"noequals"}}, "expected key=value"},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -206,10 +204,10 @@ func TestReconcileFlagsOverrideTheStoredBlockFieldByField(t *testing.T) {
 	stored := sideProfile(t, "override-stored-dest", "recon-dest-stored-override", "", nil, idRows(4))
 	other := sideProfile(t, "override-other-dest", "recon-dest-other", "", nil, idRows(4))
 	source := sideProfile(t, "override-source", "recon-source-override", "",
-		[]query.ParamDef{{Name: "region", Type: query.ParamTypeString}}, idRows(4))
+		[]query.ParamDef{{Name: "region", Type: query.ParamTypeString}, {Name: "tier", Type: query.ParamTypeString}}, idRows(4))
 	source.Reconcile = &query.ReconcileConfig{
-		Dest:   stored.Name,
-		Params: map[string]string{"region": "eu", "tier": "gold"},
+		Dest:          stored.Name,
+		SourceFilters: map[string]string{"region": "eu", "tier": "gold"},
 		ReconcileSpec: query.ReconcileSpec{
 			Range: &query.KeyRange{To: "id002"},
 			Key:   query.KeySpec{Columns: []string{"id"}},
@@ -218,7 +216,7 @@ func TestReconcileFlagsOverrideTheStoredBlockFieldByField(t *testing.T) {
 	service := serviceOver(t, source, stored, other)
 
 	result, err := service.Reconcile(context.Background(), source.Name, ReconcileFlags{
-		Dest: other.Name, KeyTo: "id004", Params: []string{"region=us"},
+		Dest: other.Name, KeyTo: "id004", SourceFilters: []string{"region=us"},
 	})
 	if err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -235,27 +233,27 @@ func TestReconcileFlagsOverrideTheStoredBlockFieldByField(t *testing.T) {
 	}
 }
 
-func TestReconcileMergesStoredParamsWithFlagParams(t *testing.T) {
+func TestReconcileMergesStoredSourceFiltersWithFlagFilters(t *testing.T) {
 	dest := sideProfile(t, "merge-dest", "recon-dest-merge", "", nil, idRows(1))
 	source := sideProfile(t, "merge-source", "recon-source-merge", "",
 		[]query.ParamDef{{Name: "region", Type: query.ParamTypeString}, {Name: "tier", Type: query.ParamTypeString}},
 		idRows(1))
 	source.Reconcile = &query.ReconcileConfig{
 		Dest:          dest.Name,
-		Params:        map[string]string{"region": "eu", "tier": "gold"},
+		SourceFilters: map[string]string{"region": "eu", "tier": "gold"},
 		ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{Columns: []string{"id"}}},
 	}
 	service := serviceOver(t, source, dest)
 
 	// Overriding one stored filter must not drop the others.
-	config, err := reconcileConfig(source, ReconcileFlags{Params: []string{"region=us"}}, map[string]string{"region": "us"})
+	config, err := reconcileConfig(source, ReconcileFlags{SourceFilters: []string{"region=us"}}, map[string]string{"region": "us"}, nil)
 	if err != nil {
 		t.Fatalf("reconcileConfig: %v", err)
 	}
-	if config.Params["region"] != "us" || config.Params["tier"] != "gold" {
-		t.Errorf("params = %v, want region overridden and tier kept", config.Params)
+	if config.SourceFilters["region"] != "us" || config.SourceFilters["tier"] != "gold" {
+		t.Errorf("source filters = %v, want region overridden and tier kept", config.SourceFilters)
 	}
-	if _, err := service.Reconcile(context.Background(), source.Name, ReconcileFlags{Params: []string{"region=us"}}); err != nil {
+	if _, err := service.Reconcile(context.Background(), source.Name, ReconcileFlags{SourceFilters: []string{"region=us"}}); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
 }

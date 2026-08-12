@@ -67,6 +67,7 @@ const (
 	ConnectionTypePushbullet     = "pushbullet"
 	ConnectionTypePushover       = "pushover"
 	ConnectionTypeRedis          = "redis"
+	ConnectionTypeSQLite         = "sqlite"
 	ConnectionTypeRestic         = "restic"
 	ConnectionTypeRocketchat     = "rocketchat"
 	ConnectionTypeS3             = "s3"
@@ -104,6 +105,9 @@ type Connection struct {
 	CreatedAt   time.Time           `gorm:"column:created_at;default:now();<-:create" json:"created_at,omitempty" faker:"-"  `
 	UpdatedAt   time.Time           `gorm:"column:updated_at;default:now()" json:"updated_at,omitempty" faker:"-"  `
 	CreatedBy   *uuid.UUID          `gorm:"column:created_by" json:"created_by,omitempty" faker:"-"  `
+	Virtual     bool                `gorm:"-" json:"virtual,omitempty" faker:"-"`
+	ReadOnly    bool                `gorm:"-" json:"read_only,omitempty" faker:"-"`
+	ExpiresAt   *time.Time          `gorm:"-" json:"expires_at,omitempty" faker:"-"`
 }
 
 func (c *Connection) GetID() string {

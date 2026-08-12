@@ -310,6 +310,14 @@ var _ = Describe("Profile schema", func() {
 
 		Expect(reconcile["dest"].(schema.Schema)["type"]).To(Equal("string"))
 		Expect(reconcile["timeColumn"]).To(HaveKey("description"))
+		for _, filters := range []string{"sourceFilters", "destFilters"} {
+			filterSchema := reconcile[filters].(schema.Schema)
+			Expect(filterSchema["type"]).To(Equal("object"))
+			Expect(filterSchema["title"]).ToNot(BeEmpty())
+			Expect(filterSchema["description"]).ToNot(BeEmpty())
+			Expect(filterSchema["additionalProperties"]).To(Equal(schema.Schema{"type": "string"}))
+		}
+		Expect(reconcile).ToNot(HaveKey("params"))
 
 		// A range narrows both sides to the same keys, which the per-side row
 		// cap it replaced could not: two sides cut at N rows each are two

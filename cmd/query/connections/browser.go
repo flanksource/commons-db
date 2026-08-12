@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,6 +14,7 @@ import (
 
 	clickycache "github.com/flanksource/clicky/cache"
 	clickyvalkey "github.com/flanksource/clicky/valkey"
+	"github.com/google/uuid"
 	"github.com/valkey-io/valkey-go"
 
 	dbconnection "github.com/flanksource/commons-db/connection"
@@ -175,7 +177,11 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	tail := strings.TrimPrefix(resource, "browser")
 	conn, err := findConnectionMust(h.ctx, id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		status := http.StatusNotFound
+		if errors.Is(err, dbcontext.ErrConnectionExpired) {
+			status = http.StatusGone
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
 	if conn.Type == models.ConnectionTypeOpenTelemetry {
@@ -220,15 +226,15 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 }
 
 func findConnectionMust(ctx dbcontext.Context, id string) (*models.Connection, error) {
-	conn, err := findConnection(ctx.DB(), id)
+	reference := id
+	if _, err := uuid.Parse(id); err != nil {
+		reference = "connection://" + id
+	}
+	conn, err := dbcontext.HydrateConnectionByURL(ctx, reference)
 	if err != nil {
 		return nil, fmt.Errorf("connection %q not found: %w", id, err)
 	}
-	hydrated, err := dbcontext.HydrateConnection(ctx, conn)
-	if err != nil {
-		return nil, fmt.Errorf("hydrate connection %q: %w", id, err)
-	}
-	return hydrated, nil
+	return conn, nil
 }
 
 func descriptorForConnection(connType string) (browserDescriptor, bool) {
@@ -242,6 +248,8 @@ func descriptorForConnection(connType string) (browserDescriptor, bool) {
 		d.Provider, d.Language, d.QueryLabel, d.DefaultQuery, d.Catalog = "sqlserver", "sql", "SQL", "SELECT TOP 100 * FROM INFORMATION_SCHEMA.TABLES", true
 	case models.ConnectionTypeClickHouse:
 		d.Provider, d.Language, d.QueryLabel, d.DefaultQuery, d.Catalog = "clickhouse", "sql", "SQL", "SELECT 1", true
+	case models.ConnectionTypeSQLite:
+		d.Provider, d.Language, d.QueryLabel, d.DefaultQuery, d.Catalog = "sqlite", "sql", "SQL", "SELECT * FROM reconcile_rows LIMIT 100", true
 	case models.ConnectionTypeHTTP:
 		d.Provider, d.Language, d.QueryLabel, d.DefaultQuery = "http", "text", "Relative request path", "/"
 		d.InitialOptions = map[string]any{"method": http.MethodGet}
@@ -338,7 +346,7 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 	var result browserQueryResult
 	var err error
 	switch descriptor.Provider {
-	case "postgres", "mysql", "sqlserver", "clickhouse":
+	case "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
 		database, _ := request.Options["database"].(string)
 		result, err = h.executeSQL(r, conn, descriptor, request, database)
 	case "opensearch":
@@ -409,6 +417,9 @@ func (h *connectionBrowserHandler) executeSQL(
 		return browserQueryResult{}, err
 	}
 	if !sqlReturnsRows(statement) {
+		if conn.ReadOnly {
+			return browserQueryResult{}, fmt.Errorf("virtual connection %q is read-only", conn.Name)
+		}
 		if len(filters) > 0 {
 			return browserQueryResult{}, fmt.Errorf("column filters can only be applied to a row-producing SQL query")
 		}
@@ -502,7 +513,7 @@ func (contextWithoutDeadline) Deadline() (time.Time, bool) {
 
 func (h *connectionBrowserHandler) inspectConnection(ctx context.Context, conn *models.Connection, database, targetName, targetKind string) (browserInspection, error) {
 	switch conn.Type {
-	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse:
+	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse, models.ConnectionTypeSQLite:
 		catalog, err := h.inspectSQL(ctx, conn, database)
 		if err != nil {
 			return browserInspection{}, err

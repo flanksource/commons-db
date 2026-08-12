@@ -29,6 +29,7 @@ func resolve(ctx context.Context, store Store, name string, path []string) (Reso
 	if current.Name == "" {
 		return ResolvedProfile{}, fmt.Errorf("resolve profile %q: profile not found", name)
 	}
+	virtual, readOnly, expiresAt := current.Virtual, current.ReadOnly, current.ExpiresAt
 
 	var result ResolvedProfile
 	for _, importedName := range current.Imports {
@@ -48,6 +49,7 @@ func resolve(ctx context.Context, store Store, name string, path []string) (Reso
 	previousType := result.Profile.Provider.Type
 	result.Profile = mergeProfile(result.Profile, current)
 	result.Profile.Name = current.Name
+	result.Profile.Virtual, result.Profile.ReadOnly, result.Profile.ExpiresAt = virtual, readOnly, expiresAt
 	result.Profile.Imports = nil
 	if current.Provider.Connection != "" || current.Provider.Type != "" && current.Provider.Type != previousType {
 		result.ConnectionProfile = current.Name

@@ -5,9 +5,13 @@ import {
   celForPairings,
   deriveStats,
   displayKey,
+  filterFlagValue,
   formatTime,
+  findReconcileMaterializeAction,
+  findProfileRunOperation,
   groupByKey,
   humanizeDuration,
+  initialReconcileFilters,
   isDuplicated,
   laneGroups,
   lanePage,
@@ -19,7 +23,7 @@ import {
   reconcileQueryString,
   reconcileRoute,
   reconcileSurfaceKey,
-  routeParams,
+  reconcileFilterParameters,
   storedConfig,
   timestampField,
   type ProfileDocument,
@@ -94,13 +98,70 @@ describe("the reconcile route", () => {
   });
 
   it("round-trips the bench state through the query string", () => {
-    const query = { dest: "orders-ingested", cel: "row.id", limit: 100 };
+    const query = {
+      dest: "orders-ingested",
+      cel: "row.id",
+      snapshotAge: "30m",
+      sourceFilters: { region: "eu", "filter.tenant": "acme,blue" },
+      destFilters: { region: "us" },
+    };
     expect(parseReconcileQuery(reconcileQueryString(query))).toEqual(query);
   });
 
-  it("drops a limit that is not a usable bound", () => {
-    expect(parseReconcileQuery("?dest=x&limit=0")).toEqual({ dest: "x" });
-    expect(parseReconcileQuery("?dest=x&limit=nonsense")).toEqual({ dest: "x" });
+  it("drops stored destination filters when the URL chooses another destination", () => {
+    expect(
+      initialReconcileFilters(
+        { dest: "old-dest", sourceFilters: { region: "eu" }, destFilters: { tenant: "old" } },
+        { dest: "new-dest", destFilters: { tenant: "new" } },
+      ),
+    ).toEqual({ sourceFilters: { region: "eu" }, destFilters: { tenant: "new" } });
+  });
+
+});
+
+describe("reconcile actions", () => {
+  const operation = (actionName: string) => ({
+    path: `/api/v1/profiles/{id}/${actionName}`,
+    method: "post",
+    operation: {
+      responses: {},
+      "x-clicky": { surface: "profiles", actionName, verb: "action" as const, scope: "entity" as const },
+    },
+  });
+
+  it("finds the snapshot materialization sub-action", () => {
+    expect(
+      findReconcileMaterializeAction([
+        operation("reconcile"),
+        operation("reconcile-materialize"),
+      ]),
+    ).toMatchObject({ path: "/api/v1/profiles/{id}/reconcile-materialize" });
+  });
+
+  it("finds the destination's normal run operation and excludes transport controls", () => {
+    const run = {
+      path: "/api/v1/profile/profile-orders-ingested",
+      method: "get",
+      operation: {
+        responses: {},
+        parameters: [
+          { name: "region", in: "query" as const, "x-clicky": { role: "filter" as const } },
+          { name: "from", in: "query" as const, "x-clicky": { role: "time-from" as const } },
+          { name: "limit", in: "query" as const, "x-clicky": { role: "limit" as const } },
+          { name: "cursor", in: "query" as const, "x-clicky": { role: "cursor" as const } },
+        ],
+        "x-clicky": { surface: "profile-orders-ingested", verb: "list" as const, scope: "collection" as const },
+      },
+    };
+
+    expect(findProfileRunOperation([run], "Orders Ingested")).toBe(run);
+    expect(reconcileFilterParameters(run).map((parameter) => parameter.name)).toEqual(["region", "from"]);
+  });
+
+  it("CSV-encodes sorted repeatable filters without splitting list values", () => {
+    expect(filterFlagValue({ region: "eu", "filter.tenant": 'acme,"blue"' })).toBe(
+      '"filter.tenant=acme,""blue""",region=eu',
+    );
   });
 });
 
@@ -152,24 +213,6 @@ describe("reading a profile document", () => {
     expect(timestampField(sourceProfile)).toBe("created_at");
     expect(timestampField(destProfile)).toBe("@timestamp");
     expect(timestampField({ columns: [{ name: "id" }] })).toBe("");
-  });
-});
-
-describe("routeParams", () => {
-  it("flags a filter only one side declares, which the engine would silently drop", () => {
-    expect(routeParams({ since: "-15m", customer: "acme" }, sourceProfile, destProfile)).toEqual([
-      { name: "since", value: "-15m", sides: ["source", "dest"], dropped: false },
-      { name: "customer", value: "acme", sides: ["source"], dropped: true },
-    ]);
-  });
-
-  it("flags a filter neither side declares rather than passing it silently", () => {
-    expect(routeParams({ nope: "1" }, sourceProfile, destProfile)[0]).toEqual({
-      name: "nope",
-      value: "1",
-      sides: [],
-      dropped: true,
-    });
   });
 });
 
@@ -297,21 +340,26 @@ describe("boundWarning", () => {
 });
 
 describe("storedConfig", () => {
-  it("stores the key as CEL and omits a bound of zero", () => {
-    expect(storedConfig({ dest: "orders-ingested", cel: "row.id", limit: 0, params: {} })).toEqual({
+  it("stores the key as CEL", () => {
+    expect(storedConfig({ dest: "orders-ingested", cel: "row.id", sourceFilters: {}, destFilters: {} })).toEqual({
       dest: "orders-ingested",
       key: { cel: "row.id" },
     });
   });
 
-  it("keeps the bound and the filters when they are set", () => {
+  it("keeps filters when they are set", () => {
     expect(
-      storedConfig({ dest: "orders-ingested", cel: "row.id", limit: 100, params: { since: "-15m" } }),
+      storedConfig({
+        dest: "orders-ingested",
+        cel: "row.id",
+        sourceFilters: { since: "-15m" },
+        destFilters: { tenant: "tenant-x" },
+      }),
     ).toEqual({
       dest: "orders-ingested",
       key: { cel: "row.id" },
-      limit: 100,
-      params: { since: "-15m" },
+      sourceFilters: { since: "-15m" },
+      destFilters: { tenant: "tenant-x" },
     });
   });
 });

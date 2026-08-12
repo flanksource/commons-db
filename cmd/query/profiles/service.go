@@ -45,6 +45,7 @@ type Options struct {
 	Store             StoreProvider
 	Context           ContextProvider
 	DecodeBody        BodyDecoder
+	Snapshots         SnapshotService
 	OpenAPIExtensions []OpenAPIExtension
 }
 
@@ -52,6 +53,7 @@ type Service struct {
 	store             StoreProvider
 	context           ContextProvider
 	decodeBody        BodyDecoder
+	snapshots         SnapshotService
 	openAPIExtensions []OpenAPIExtension
 	mu                sync.Mutex
 	registered        map[string]struct{}
@@ -69,9 +71,14 @@ func New(options Options) (*Service, error) {
 	}
 	return &Service{
 		store: options.Store, context: options.Context, decodeBody: options.DecodeBody,
+		snapshots:         options.Snapshots,
 		openAPIExtensions: append([]OpenAPIExtension(nil), options.OpenAPIExtensions...),
 		registered:        map[string]struct{}{},
 	}, nil
+}
+
+func (s *Service) SetSnapshots(service SnapshotService) {
+	s.snapshots = service
 }
 
 // profileSurfaceParent groups every per-profile dynamic entity under one sidebar
@@ -110,6 +117,8 @@ func (p profileItem) Columns() []api.ColumnDef {
 		api.Column("name").Label("Name").Style("font-bold").Build(),
 		api.Column("type").Label("Type").Build(),
 		api.Column("connection").Label("Connection").Style("text-muted").Build(),
+		api.Column("access").Label("Access").Build(),
+		api.Column("expires").Label("Expires").Style("text-muted").Build(),
 		api.Column("query").Label("Query").MaxWidth(60).Style("text-muted").Build(),
 	}
 }
@@ -120,8 +129,17 @@ func (p profileItem) Row() map[string]any {
 		"name":       p.Name,
 		"type":       p.Provider.Type,
 		"connection": p.Provider.Connection,
+		"access":     profileAccess(p.Profile),
+		"expires":    p.ExpiresAt,
 		"query":      p.Query,
 	}
+}
+
+func profileAccess(profile query.Profile) string {
+	if profile.ReadOnly {
+		return "read-only"
+	}
+	return "editable"
 }
 
 // profileListOpts are the (currently empty) list options for the profile entity.
@@ -186,15 +204,22 @@ func (s *Service) RegisterClicky() {
 			// action asks even where the app's default policy would not.
 			WithToolPermission(entity.ToolPermissionAsk)).
 		WithAction(entity.ActionWithFlagsAndContext("reconcile", ReconcileFlags{},
-			func(ctx context.Context, id string, flagMap map[string]string) (*query.ReconcileResult, error) {
+			func(ctx context.Context, id string, flagMap map[string]string) (ReconcileSnapshotDescriptor, error) {
 				options, err := decodeActionFlags[ReconcileFlags](flagMap)
 				if err != nil {
-					return nil, err
+					return ReconcileSnapshotDescriptor{}, err
 				}
-				return s.Reconcile(ctx, id, options)
+				return s.ReconcileSnapshot(ctx, id, options)
 			}).
-			WithShort("Join this profile's rows against another profile on a shared key").
-			WithMethod(http.MethodGet)).
+			WithShort("Join two profiles and materialize an expiring result snapshot")).
+		WithAction(entity.ActionWithFlagsAndContext("reconcile-materialize", ReconcileMaterializeOptions{},
+			func(ctx context.Context, _ string, flagMap map[string]string) (ReconcileSnapshotDescriptor, error) {
+				options, err := decodeActionFlags[ReconcileMaterializeOptions](flagMap)
+				if err != nil {
+					return ReconcileSnapshotDescriptor{}, err
+				}
+				return s.MaterializeReconcile(ctx, options)
+			}).WithShort("Materialize transformed or projected reconciliation rows")).
 		WithAction(entity.ActionWithFlagsAndContext("run", RunFlags{},
 			func(ctx context.Context, id string, flagMap map[string]string) (*RunResult, error) {
 				options, err := decodeActionFlags[RunFlags](flagMap)

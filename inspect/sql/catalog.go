@@ -159,6 +159,8 @@ func normalizeDriver(driver string) string {
 		return "sqlserver"
 	case "clickhouse":
 		return "clickhouse"
+	case "sqlite", "sqlite3":
+		return "sqlite"
 	default:
 		return strings.ToLower(driver)
 	}
@@ -200,6 +202,15 @@ SELECT database, table, 'BASE TABLE', name, type, position
 FROM system.columns
 WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA')
 ORDER BY database, table, position`, nil
+	case "sqlite":
+		return `SELECT 'snapshot', 'main'`, `
+SELECT 'main', m.name,
+       CASE WHEN m.type = 'view' THEN 'VIEW' ELSE 'BASE TABLE' END,
+       p.name, p.type, p.cid + 1
+FROM sqlite_master m
+JOIN pragma_table_info(m.name) p
+WHERE m.type IN ('table', 'view') AND m.name NOT LIKE 'sqlite_%'
+ORDER BY m.name, p.cid`, nil
 	default:
 		return "", "", fmt.Errorf("unsupported sql inspection driver %q", driver)
 	}
@@ -227,6 +238,8 @@ WHERE schema_name NOT IN ('sys','INFORMATION_SCHEMA','guest')
 ORDER BY schema_name`
 	case "clickhouse":
 		return `SELECT name FROM system.databases WHERE name = currentDatabase() ORDER BY name`
+	case "sqlite":
+		return `SELECT 'main'`
 	default:
 		return ""
 	}
@@ -251,6 +264,8 @@ ORDER BY schema_name`
 FROM system.databases
 WHERE name NOT IN ('system','information_schema','INFORMATION_SCHEMA')
 ORDER BY name`
+	case "sqlite":
+		return `SELECT 'snapshot'`
 	default:
 		return ""
 	}

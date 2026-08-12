@@ -20,20 +20,22 @@ import (
 )
 
 type ServeOptions struct {
-	Host               string
-	Port               int
-	DatabaseURL        string
-	DataDir            string
-	Dev                bool
-	MaxSessions        int
-	MaxSessionDuration time.Duration
-	SessionRetention   time.Duration
+	Host                    string
+	Port                    int
+	DatabaseURL             string
+	DataDir                 string
+	Dev                     bool
+	MaxSessions             int
+	MaxSessionDuration      time.Duration
+	SessionRetention        time.Duration
+	ReconcileSnapshotMaxAge time.Duration
 }
 
 func DefaultServeOptions() ServeOptions {
 	return ServeOptions{
 		Host: "localhost", Port: 8080, DatabaseURL: EmbeddedDatabase, MaxSessions: 5,
 		MaxSessionDuration: 15 * time.Minute, SessionRetention: 7 * 24 * time.Hour,
+		ReconcileSnapshotMaxAge: time.Hour,
 	}
 }
 
@@ -56,7 +58,19 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	if !database.Enabled() {
 		return fmt.Errorf("serve requires a database; --db is empty")
 	}
-	if err := a.Runtime.SetContext(dbcontext.NewContext(ctx)); err != nil {
+	if options.ReconcileSnapshotMaxAge <= 0 {
+		return fmt.Errorf("reconcile snapshot maximum age must be positive")
+	}
+	if err := a.snapshots.SetMaxAge(options.ReconcileSnapshotMaxAge); err != nil {
+		return err
+	}
+	if err := a.snapshots.Prepare(); err != nil {
+		return err
+	}
+	defer func() { _ = a.snapshots.Close() }()
+	if err := a.Runtime.SetContext(dbcontext.NewContext(ctx).
+		WithConnectionResolver(a.snapshots.ResolveConnection).
+		WithConnectionLeaseResolver(a.snapshots.AcquireConnection)); err != nil {
 		return err
 	}
 	a.Runtime.SetDatabaseOptions(database)
@@ -155,7 +169,8 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		return err
 	}
 	sessionService, err := sessions.New(sessions.Options{
-		Profiles: a.Runtime.ProfileStore, Context: a.Runtime.Context, Registry: sessionRegistry, Store: sessionStore,
+		Profiles: func() (profiles.Store, error) { return a.profileStore() },
+		Context:  a.Runtime.Context, Registry: sessionRegistry, Store: sessionStore,
 	})
 	if err != nil {
 		return err

@@ -26,7 +26,7 @@ type browserCatalogNode struct {
 
 func (h *connectionBrowserHandler) serveCatalog(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
 	switch conn.Type {
-	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse:
+	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse, models.ConnectionTypeSQLite:
 		catalog, err := h.sqlCatalog(r, conn)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)

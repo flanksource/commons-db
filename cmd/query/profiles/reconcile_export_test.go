@@ -12,27 +12,60 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var _ = Describe("reconcile export metadata", func() {
-	It("advertises the native Clicky formats on the reconcile action only", func() {
-		spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{
-			"/api/v1/profiles/{id}/reconcile": {"get": {
-				Clicky: &rpc.ClickyOperationMeta{Surface: "profiles", ActionName: "reconcile"},
-			}},
-			"/api/v1/profiles/{id}/replay": {"get": {
-				Clicky: &rpc.ClickyOperationMeta{Surface: "profiles", ActionName: "replay"},
-			}},
-		}}
+var _ = Describe("reconcile snapshot actions", func() {
+	It("keeps source and destination filter overrides independent", func() {
+		source := query.Profile{
+			Name: "orders-emitted",
+			Reconcile: &query.ReconcileConfig{
+				Dest:          "orders-ingested",
+				SourceFilters: map[string]string{"region": "eu", "tier": "gold"},
+				DestFilters:   map[string]string{"region": "us", "tenant": "acme"},
+			},
+		}
 
-		addReconcileExportMeta(spec)
+		config, err := reconcileConfig(
+			source,
+			ReconcileFlags{},
+			map[string]string{"region": "za"},
+			map[string]string{"tenant": "tenant-x"},
+		)
 
-		reconcile := spec.Paths["/api/v1/profiles/{id}/reconcile"]["get"]
-		Expect(reconcile.Clicky.Export).To(Equal(&rpc.ExportMeta{
-			Formats: []string{"json", "yaml", "csv", "markdown", "html", "pdf", "excel"},
-		}))
-		Expect(spec.Paths["/api/v1/profiles/{id}/replay"]["get"].Clicky.Export).To(BeNil())
+		Expect(err).ToNot(HaveOccurred())
+		Expect(config.SourceFilters).To(Equal(map[string]string{"region": "za", "tier": "gold"}))
+		Expect(config.DestFilters).To(Equal(map[string]string{"region": "us", "tenant": "tenant-x"}))
 	})
 
-	It("serves the read-only reconcile action over GET for native Clicky downloads", func() {
+	It("decodes CSV action values without splitting a filter's comma-separated selection", func() {
+		flags, err := decodeActionFlags[ReconcileFlags](map[string]string{
+			"source-filter": `"filter.tenant=acme,blue",region=eu`,
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(flags.SourceFilters).To(Equal([]string{"filter.tenant=acme,blue", "region=eu"}))
+	})
+
+	It("accepts normal profile filters but rejects transport and wrong-side filters", func() {
+		profile := query.Profile{
+			Name:     "orders-emitted",
+			Provider: query.ProviderConfig{Type: "postgres"},
+			Params: []query.ParamDef{
+				{Name: "region"},
+				{Name: "from", Role: query.ParamRoleTimeFrom},
+				{Name: "limit", Role: query.ParamRoleLimit},
+			},
+			Columns: []query.ColumnDef{{Name: "tenant"}},
+		}
+
+		Expect(validateReconcileFilters(profile, map[string]string{
+			"region": "eu", "from": "now-1h", "filter.tenant": "acme",
+		}, "source")).To(Succeed())
+		Expect(validateReconcileFilters(profile, map[string]string{"limit": "100"}, "source")).To(
+			MatchError(`source filter "limit" is not supported by profile "orders-emitted"`))
+		Expect(validateReconcileFilters(profile, map[string]string{"service": "api"}, "destination")).To(
+			MatchError(`destination filter "service" is not supported by profile "orders-emitted"`))
+	})
+
+	It("creates and materializes snapshots over POST instead of exporting the action response", func() {
 		store, err := NewFileStore(GinkgoT().TempDir())
 		Expect(err).ToNot(HaveOccurred())
 		service, err := New(Options{
@@ -48,9 +81,11 @@ var _ = Describe("reconcile export metadata", func() {
 		spec, err := rpc.NewOpenAPIGenerator(nil).GenerateFromCobra(root)
 		Expect(err).ToNot(HaveOccurred())
 
-		methods := spec.Paths["/api/v1/profiles/{id}/reconcile"]
-		Expect(methods).To(HaveKey("get"))
-		Expect(methods).ToNot(HaveKey("post"))
+		reconcile := spec.Paths["/api/v1/profiles/{id}/reconcile"]
+		Expect(reconcile).To(HaveKey("post"))
+		Expect(reconcile["post"].Clicky.Export).To(BeNil())
+		materialize := spec.Paths["/api/v1/profiles/{id}/reconcile-materialize"]
+		Expect(materialize).To(HaveKey("post"))
 	})
 
 	DescribeTable("selects only the requested reconcile outcome before formatting",

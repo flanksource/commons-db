@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	_ "github.com/glebarez/go-sqlite"
 	mysql "github.com/go-sql-driver/mysql"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/microsoft/go-mssqldb"
@@ -25,6 +26,7 @@ var supportedSQLTypes = []string{
 	models.ConnectionTypeMySQL,
 	models.ConnectionTypeSQLServer,
 	models.ConnectionTypeClickHouse,
+	models.ConnectionTypeSQLite,
 }
 
 // SQLConnection is a multi-driver SQL connection (postgres, mysql, sqlserver).
@@ -217,6 +219,8 @@ func (s SQLConnection) UseDatabase(database string) (SQLConnection, error) {
 			return SQLConnection{}, err
 		}
 		s.URL.ValueStatic = updated
+	case models.ConnectionTypeSQLite:
+		return SQLConnection{}, fmt.Errorf("sqlite snapshots do not support database switching")
 	default:
 		return SQLConnection{}, fmt.Errorf("unsupported sql connection type: %s", s.Type)
 	}
@@ -404,6 +408,8 @@ func sqlDriverName(connectionType string) (string, error) {
 		return "sqlserver", nil
 	case models.ConnectionTypeClickHouse:
 		return "clickhouse", nil
+	case models.ConnectionTypeSQLite:
+		return "sqlite", nil
 	default:
 		return "", fmt.Errorf("unsupported sql connection type: %s", connectionType)
 	}

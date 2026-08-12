@@ -55,17 +55,18 @@ type ReconcileSpec struct {
 }
 
 // ReconcileConfig is a whole reconcile: which profile to join against, how to
-// derive the identity, and how many rows to read per side. It is what a Profile
-// stores under `reconcile:` and what the action's flags override, whereas
-// ReconcileSpec is only what the join itself needs.
+// filter each side, and how to derive the identity. It is what a Profile stores
+// under `reconcile:` and what the action's flags override, whereas ReconcileSpec
+// is only what the join itself needs.
 type ReconcileConfig struct {
 	// Dest names the profile the source is reconciled against.
 	Dest string `json:"dest" yaml:"dest"`
 
-
-	// Params are the stored filter values, applied to whichever side declares
-	// each one.
-	Params map[string]string `json:"params,omitempty" yaml:"params,omitempty"`
+	// SourceFilters and DestFilters are independent because both profiles can
+	// expose the same filter name with different values, or entirely different
+	// filter surfaces.
+	SourceFilters map[string]string `json:"sourceFilters,omitempty" yaml:"sourceFilters,omitempty"`
+	DestFilters   map[string]string `json:"destFilters,omitempty" yaml:"destFilters,omitempty"`
 
 	// Key and TimeColumn are promoted, so a stored reconcile reads as one flat
 	// block rather than nesting the join spec inside itself.
@@ -73,20 +74,27 @@ type ReconcileConfig struct {
 }
 
 // Clone returns a deep copy, so merging two profiles never aliases a stored
-// config's params or key columns.
+// config's filters or key columns.
 func (c *ReconcileConfig) Clone() *ReconcileConfig {
 	if c == nil {
 		return nil
 	}
 	cloned := *c
 	cloned.Key.Columns = append([]string(nil), c.Key.Columns...)
-	if c.Params != nil {
-		cloned.Params = make(map[string]string, len(c.Params))
-		for key, value := range c.Params {
-			cloned.Params[key] = value
-		}
-	}
+	cloned.SourceFilters = cloneReconcileFilters(c.SourceFilters)
+	cloned.DestFilters = cloneReconcileFilters(c.DestFilters)
 	return &cloned
+}
+
+func cloneReconcileFilters(filters map[string]string) map[string]string {
+	if filters == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(filters))
+	for key, value := range filters {
+		cloned[key] = value
+	}
+	return cloned
 }
 
 // MergeReconcileConfig layers an imported profile's reconcile with the
@@ -116,23 +124,28 @@ func MergeReconcileConfig(base, override *ReconcileConfig) *ReconcileConfig {
 		merged.Key = override.Key
 		merged.Key.Columns = append([]string(nil), override.Key.Columns...)
 	}
-	for name, value := range override.Params {
-		if merged.Params == nil {
-			merged.Params = map[string]string{}
-		}
-		merged.Params[name] = value
-	}
+	mergeReconcileFilters(&merged.SourceFilters, override.SourceFilters)
+	mergeReconcileFilters(&merged.DestFilters, override.DestFilters)
 	return merged
 }
 
+func mergeReconcileFilters(target *map[string]string, override map[string]string) {
+	for name, value := range override {
+		if *target == nil {
+			*target = map[string]string{}
+		}
+		(*target)[name] = value
+	}
+}
+
 // ReconcileRun is one execution of a ReconcileConfig: the two resolved profiles
-// and each side's filter values, already narrowed to what that side declares.
+// and each side's independently validated filter values.
 type ReconcileRun struct {
-	Source       Profile
-	Dest         Profile
-	Config       ReconcileConfig
-	SourceParams map[string]any
-	DestParams   map[string]any
+	Source        Profile
+	Dest          Profile
+	Config        ReconcileConfig
+	SourceFilters map[string]any
+	DestFilters   map[string]any
 }
 
 // ReconcileProfiles runs both sides and joins them.
@@ -147,11 +160,11 @@ func ReconcileProfiles(ctx context.Context, run ReconcileRun) (*ReconcileResult,
 		return mergeJoin(ctx, run)
 	}
 
-	source, err := Execute(ctx, run.Source, run.SourceParams)
+	source, err := Execute(ctx, run.Source, run.SourceFilters)
 	if err != nil {
 		return nil, fmt.Errorf("source profile %q: %w", run.Source.Name, err)
 	}
-	dest, err := Execute(ctx, run.Dest, run.DestParams)
+	dest, err := Execute(ctx, run.Dest, run.DestFilters)
 	if err != nil {
 		return nil, fmt.Errorf("dest profile %q: %w", run.Dest.Name, err)
 	}

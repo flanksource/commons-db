@@ -38,6 +38,46 @@ type Context struct {
 	commons.Context
 }
 
+type ConnectionResolver func(string) (*models.Connection, error)
+type ConnectionLeaseResolver func(string) (func(), error)
+
+type connectionResolverKey struct{}
+type connectionLeaseResolverKey struct{}
+
+func (k Context) WithConnectionResolver(resolver ConnectionResolver) Context {
+	if resolver == nil {
+		panic("connection resolver is required")
+	}
+	return k.WithValue(connectionResolverKey{}, resolver)
+}
+
+func (k Context) connectionResolver() ConnectionResolver {
+	resolver, _ := k.Value(connectionResolverKey{}).(ConnectionResolver)
+	return resolver
+}
+
+func (k Context) WithConnectionLeaseResolver(resolver ConnectionLeaseResolver) Context {
+	if resolver == nil {
+		panic("connection lease resolver is required")
+	}
+	return k.WithValue(connectionLeaseResolverKey{}, resolver)
+}
+
+func (k Context) AcquireConnectionLease(reference string) (func(), error) {
+	resolver, _ := k.Value(connectionLeaseResolverKey{}).(ConnectionLeaseResolver)
+	if resolver == nil {
+		return func() {}, nil
+	}
+	release, err := resolver(reference)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return func() {}, nil
+	}
+	return release, nil
+}
+
 func (k Context) Oops(tags ...string) oops.OopsErrorBuilder {
 	var args []any
 

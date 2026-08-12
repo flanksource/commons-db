@@ -29,7 +29,7 @@ type SQLPageResult struct {
 func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQLPageRequest) (result SQLPageResult, err error) {
 	dialect := sqlDialect(driver)
 	switch dialect {
-	case dialectPostgres, dialectMySQL, dialectSQLServer, dialectClickHouse:
+	case dialectPostgres, dialectMySQL, dialectSQLServer, dialectClickHouse, dialectSQLite:
 	default:
 		return SQLPageResult{}, fmt.Errorf("unsupported sql connection type %q", driver)
 	}

@@ -73,11 +73,12 @@ func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]
 // taking a single page does not hold either.
 func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
 	return func(yield func(query.Page, error) bool) {
-		client, dialect, err := p.connect(ctx, req)
+		client, dialect, release, err := p.connect(ctx, req)
 		if err != nil {
 			yield(query.Page{}, err)
 			return
 		}
+		defer release()
 		defer func() { _ = client.Close() }()
 
 		request := req
@@ -201,13 +202,13 @@ func takeRowTotal(row query.Row) (int64, bool, error) {
 	}
 }
 
-func (p sqlProvider) connect(ctx context.Context, req query.ProviderRequest) (*sql.DB, sqlDialect, error) {
+func (p sqlProvider) connect(ctx context.Context, req query.ProviderRequest) (*sql.DB, sqlDialect, func(), error) {
 	if req.Query == "" {
-		return nil, "", fmt.Errorf("sql query is required")
+		return nil, "", nil, fmt.Errorf("sql query is required")
 	}
 	opts, err := query.DecodeOptions[sqlOptions](req.Options)
 	if err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 	return sqlConnect(ctx, sqlConnectRequest{
 		Connection: req.Connection, ConnType: p.connType, Options: opts,

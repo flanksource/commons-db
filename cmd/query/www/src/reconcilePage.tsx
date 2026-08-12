@@ -26,20 +26,19 @@ import { ReconcileBench, type BenchState } from "./reconcileBench";
 import { ReconcileResults } from "./reconcileResults";
 import {
   celForPairings,
+  filterFlagValue,
+  findProfileRunOperation,
   findReconcileAction,
+  findReconcileMaterializeAction,
+  initialReconcileFilters,
   parseReconcileQuery,
   profileForSurface,
   reconcileQueryString,
   reconcileRoute,
   storedConfig,
   type ProfileDocument,
-  type ReconcileResult,
+  type ReconcileSnapshot,
 } from "./reconcileModel";
-
-type ReconcileRunOutput = {
-  result: ReconcileResult;
-  requestUrl: string;
-};
 
 /** Bench state seeded from the profile's stored reconcile, then from the URL. */
 function initialState(document: ProfileDocument | undefined, search: string): BenchState {
@@ -51,8 +50,8 @@ function initialState(document: ProfileDocument | undefined, search: string): Be
     pairings: [],
     mode: cel ? "cel" : "mapped",
     cel,
-    limit: query.limit ?? stored?.limit ?? 0,
-    params: stored?.params ?? {},
+    snapshotAge: query.snapshotAge ?? "1h",
+    ...initialReconcileFilters(stored, query),
   };
 }
 
@@ -68,6 +67,7 @@ export function ReconcilePage({
   const { operations, isLoading: operationsLoading } = useOperations(client);
   const updateAction = findProfileUpdateOperation(operations);
   const reconcileAction = findReconcileAction(operations);
+  const materializeAction = findReconcileMaterializeAction(operations);
 
   // One list serves the source document, the destination picker and the
   // destination's fields — and it is the endpoint that returns documents rather
@@ -80,7 +80,7 @@ export function ReconcilePage({
   const sourceName = sourceDocument?.profile ?? "";
 
   const [state, setState] = useState<BenchState | null>(null);
-  const [runOutput, setRunOutput] = useState<ReconcileRunOutput | null>(null);
+  const [runOutput, setRunOutput] = useState<ReconcileSnapshot | null>(null);
 
   // The bench opens on what the profile already stores, so a saved reconcile
   // runs without being retyped.
@@ -103,9 +103,11 @@ export function ReconcilePage({
   }, [profiles.data, sourceName]);
 
   const keyExpression = state == null ? "" : state.mode === "cel" ? state.cel : celForPairings(state.pairings);
+  const sourceRunOperation = findProfileRunOperation(operations, sourceName);
+  const destRunOperation = findProfileRunOperation(operations, state?.dest ?? "");
 
   const run = useMutation({
-    mutationFn: async (): Promise<ReconcileRunOutput> => {
+    mutationFn: async (): Promise<ReconcileSnapshot> => {
       if (!reconcileAction) throw new Error("The reconcile action is unavailable");
       if (!state) throw new Error("The bench is still loading");
       const idParam = reconcileAction.operation["x-clicky"]?.idParam ?? "id";
@@ -114,9 +116,11 @@ export function ReconcilePage({
         dest: state.dest,
         "key-cel": keyExpression,
       };
-      if (state.limit > 0) params.limit = String(state.limit);
-      const filters = Object.entries(state.params).map(([name, value]) => `${name}=${value}`);
-      if (filters.length > 0) params.param = filters.join(",");
+      if (state.snapshotAge.trim()) params["snapshot-age"] = state.snapshotAge.trim();
+      const sourceFilters = filterFlagValue(state.sourceFilters);
+      const destFilters = filterFlagValue(state.destFilters);
+      if (sourceFilters) params["source-filter"] = sourceFilters;
+      if (destFilters) params["dest-filter"] = destFilters;
 
       const response = await client.executeCommand(reconcileAction.path, reconcileAction.method, params, {
         Accept: "application/json",
@@ -124,12 +128,11 @@ export function ReconcilePage({
       if (!response.success) {
         throw new Error(response.error ?? response.message ?? "The reconcile failed");
       }
-      const parsed = response.parsed;
-      if (!parsed || typeof parsed !== "object" || !Array.isArray((parsed as ReconcileResult).rows)) {
-        throw new Error("The reconcile returned no result");
+      const parsed = response.parsed as Partial<ReconcileSnapshot> | undefined;
+      if (!parsed || typeof parsed.id !== "string" || typeof parsed.profile !== "string" || !Array.isArray(parsed.columns)) {
+        throw new Error("The reconcile returned no snapshot profile");
       }
-      if (!response.requestUrl) throw new Error("The reconcile response did not include its request URL");
-      return { result: parsed as ReconcileResult, requestUrl: response.requestUrl };
+      return parsed as ReconcileSnapshot;
     },
     onSuccess: async (reconciled) => {
       setRunOutput(reconciled);
@@ -142,7 +145,13 @@ export function ReconcilePage({
       if (state) {
         router.navigate(
           reconcileRoute(surfaceKey) +
-            reconcileQueryString({ dest: state.dest, cel: keyExpression, limit: state.limit }),
+            reconcileQueryString({
+              dest: state.dest,
+              cel: keyExpression,
+              snapshotAge: state.snapshotAge,
+              sourceFilters: state.sourceFilters,
+              destFilters: state.destFilters,
+            }),
           { replace: true },
         );
       }
@@ -164,8 +173,8 @@ export function ReconcilePage({
           reconcile: storedConfig({
             dest: state.dest,
             cel: keyExpression,
-            limit: state.limit,
-            params: state.params,
+            sourceFilters: state.sourceFilters,
+            destFilters: state.destFilters,
           }),
           [idParam]: sourceName,
         },
@@ -197,6 +206,9 @@ export function ReconcilePage({
   if (!operationsLoading && !reconcileAction) {
     return <Message error>Reconciling is unavailable — the profiles reconcile action was not found</Message>;
   }
+  if (!operationsLoading && !materializeAction) {
+    return <Message error>Exporting is unavailable — the reconcile materialize action was not found</Message>;
+  }
   if (operationsLoading || profiles.isLoading || state == null) {
     return <Message>Loading profile…</Message>;
   }
@@ -221,10 +233,16 @@ export function ReconcilePage({
 
       <ReconcileBench
         state={state}
-        onChange={setState}
+        onChange={(next) => {
+          setState(next);
+          setRunOutput(null);
+        }}
         source={sourceDocument}
         dest={destDocument}
         destNames={destNames}
+        client={client}
+        sourceOperation={sourceRunOperation}
+        destOperation={destRunOperation}
         onRun={() => run.mutate()}
         onSave={() => save.mutate()}
         running={run.isPending}
@@ -235,17 +253,12 @@ export function ReconcilePage({
       {runOutput && (
         <section className="flex min-h-0 flex-col gap-2">
           <h2 className="text-sm font-semibold">
-            {runOutput.result.source} → {runOutput.result.dest}
+            {runOutput.source} → {runOutput.dest}
           </h2>
           <ReconcileResults
-            result={runOutput.result}
-            source={sourceDocument}
-            dest={destDocument}
-            exportRequest={{
-              requestUrl: runOutput.requestUrl,
-              formats: reconcileAction?.operation["x-clicky"]?.export?.formats ?? [],
-              label: `${runOutput.result.source} to ${runOutput.result.dest} reconcile`,
-            }}
+            client={client}
+            snapshot={runOutput}
+            materializeAction={materializeAction!}
           />
         </section>
       )}

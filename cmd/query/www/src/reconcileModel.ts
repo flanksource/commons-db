@@ -9,7 +9,7 @@
  * so the browser cannot quietly disagree with the CLI about what a run found.
  */
 
-import type { ResolvedOperation } from "@flanksource/clicky-ui";
+import type { OpenAPIParameter, ResolvedOperation } from "@flanksource/clicky-ui";
 
 export type ReconcileStatus = "matched" | "only_source" | "only_dest";
 
@@ -49,11 +49,36 @@ export type ReconcileResult = {
   dest_truncated?: boolean;
 };
 
+export type SnapshotColumn = {
+  name: string;
+  label?: string;
+  type?: string;
+  hidden?: boolean;
+};
+
+export type ReconcileSnapshot = {
+  id: string;
+  connection: string;
+  connection_id: string;
+  profile: string;
+  surface: string;
+  url: string;
+  columns: SnapshotColumn[];
+  row_count: number;
+  stats: ReconcileStats;
+  source: string;
+  dest: string;
+  source_truncated?: boolean;
+  dest_truncated?: boolean;
+  idle_age: number;
+  expires_at: string;
+};
+
 /** The `reconcile:` block a profile stores, as `query.ReconcileConfig`. */
 export type ReconcileConfig = {
   dest?: string;
-  limit?: number;
-  params?: Record<string, string>;
+  sourceFilters?: Record<string, string>;
+  destFilters?: Record<string, string>;
   key?: { columns?: string[]; cel?: string };
   timeColumn?: string;
 };
@@ -111,17 +136,27 @@ export function reconcileSurfaceKey(pathname: string): string | null {
  * The bench state carried in the query string, so a reconcile someone is still
  * shaping can be shared or survive a reload before it is saved on the profile.
  */
-export type ReconcileQuery = { dest?: string; cel?: string; limit?: number };
+export type ReconcileQuery = {
+  dest?: string;
+  cel?: string;
+  snapshotAge?: string;
+  sourceFilters?: Record<string, string>;
+  destFilters?: Record<string, string>;
+};
 
 export function parseReconcileQuery(search: string): ReconcileQuery {
   const params = new URLSearchParams(search);
   const query: ReconcileQuery = {};
   const dest = params.get("dest");
   const cel = params.get("cel");
-  const limit = Number(params.get("limit"));
+  const snapshotAge = params.get("snapshot-age");
   if (dest) query.dest = dest;
   if (cel) query.cel = cel;
-  if (Number.isFinite(limit) && limit > 0) query.limit = limit;
+  if (snapshotAge) query.snapshotAge = snapshotAge;
+  const sourceFilters = filterQueryValues(params, "source-filter");
+  const destFilters = filterQueryValues(params, "dest-filter");
+  if (Object.keys(sourceFilters).length > 0) query.sourceFilters = sourceFilters;
+  if (Object.keys(destFilters).length > 0) query.destFilters = destFilters;
   return query;
 }
 
@@ -129,9 +164,39 @@ export function reconcileQueryString(query: ReconcileQuery): string {
   const params = new URLSearchParams();
   if (query.dest) params.set("dest", query.dest);
   if (query.cel) params.set("cel", query.cel);
-  if (query.limit) params.set("limit", String(query.limit));
+  if (query.snapshotAge) params.set("snapshot-age", query.snapshotAge);
+  appendFilterQueryValues(params, "source-filter", query.sourceFilters);
+  appendFilterQueryValues(params, "dest-filter", query.destFilters);
   const encoded = params.toString();
   return encoded ? `?${encoded}` : "";
+}
+
+export function initialReconcileFilters(
+  stored: ReconcileConfig | undefined,
+  query: ReconcileQuery,
+): Pick<Required<ReconcileConfig>, "sourceFilters" | "destFilters"> {
+  const changedDestination = query.dest != null && query.dest !== stored?.dest;
+  return {
+    sourceFilters: { ...stored?.sourceFilters, ...query.sourceFilters },
+    destFilters: { ...(changedDestination ? {} : stored?.destFilters), ...query.destFilters },
+  };
+}
+
+function filterQueryValues(params: URLSearchParams, name: string): Record<string, string> {
+  const values: Record<string, string> = {};
+  for (const pair of params.getAll(name)) {
+    const separator = pair.indexOf("=");
+    if (separator > 0) values[pair.slice(0, separator)] = pair.slice(separator + 1);
+  }
+  return values;
+}
+
+function appendFilterQueryValues(
+  params: URLSearchParams,
+  name: string,
+  filters: Record<string, string> | undefined,
+) {
+  for (const [key, value] of sortedFilterEntries(filters)) params.append(name, `${key}=${value}`);
 }
 
 /* ------------------------------------------------------------------ the key */
@@ -176,37 +241,51 @@ export function findReconcileAction(
   });
 }
 
+export function findReconcileMaterializeAction(
+  operations: ResolvedOperation[],
+): ResolvedOperation | undefined {
+  return operations.find((operation) => {
+    const metadata = operation.operation["x-clicky"];
+    return metadata?.surface === "profiles" && metadata.actionName === "reconcile-materialize";
+  });
+}
+
+export function findProfileRunOperation(
+  operations: ResolvedOperation[],
+  profileName: string,
+): ResolvedOperation | undefined {
+  const surface = `profile-${profileSlug(profileName)}`;
+  return operations.find((operation) => {
+    const metadata = operation.operation["x-clicky"];
+    return metadata?.surface === surface && metadata.scope === "collection" && metadata.verb === "list";
+  });
+}
+
+export function reconcileFilterParameters(operation: ResolvedOperation | undefined): OpenAPIParameter[] {
+  const transportRoles = new Set(["limit", "offset", "cursor"]);
+  return (operation?.operation.parameters ?? []).filter(
+    (parameter) => parameter.in === "query" && !transportRoles.has(parameter["x-clicky"]?.role ?? ""),
+  );
+}
+
+export function filterFlagValue(filters: Record<string, string>): string {
+  return sortedFilterEntries(filters)
+    .map(([key, value]) => csvField(`${key}=${value}`))
+    .join(",");
+}
+
+function sortedFilterEntries(filters: Record<string, string> | undefined): [string, string][] {
+  return Object.entries(filters ?? {}).sort(([left], [right]) => left.localeCompare(right));
+}
+
+function csvField(value: string): string {
+  if (!/[",\r\n]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+}
+
 /** The column a side reads its event time from, when it declares one. */
 export function timestampField(document: ProfileDocument | undefined): string {
   return (document?.columns ?? []).find((column) => column.kind === "timestamp")?.name ?? "";
-}
-
-export type ParamRouting = {
-  name: string;
-  value: string;
-  sides: ("source" | "dest")[];
-  /** True when one side does not declare it, so the engine drops it there. */
-  dropped: boolean;
-};
-
-/**
- * Which side accepts each filter. The engine narrows a reconcile's params to
- * what each profile declares and drops the rest with nothing louder than a
- * debug log, so the bench says it before the run instead.
- */
-export function routeParams(
-  values: Record<string, string>,
-  source: ProfileDocument | undefined,
-  dest: ProfileDocument | undefined,
-): ParamRouting[] {
-  const declares = (document: ProfileDocument | undefined, name: string) =>
-    (document?.params ?? []).some((param) => param.name === name);
-  return Object.entries(values).map(([name, value]) => {
-    const sides: ("source" | "dest")[] = [];
-    if (declares(source, name)) sides.push("source");
-    if (declares(dest, name)) sides.push("dest");
-    return { name, value, sides, dropped: sides.length < 2 };
-  });
 }
 
 /* -------------------------------------------------------------- the result */
@@ -355,11 +434,11 @@ export function boundWarning(result: ReconcileResult): string {
 export function storedConfig(state: {
   dest: string;
   cel: string;
-  limit: number;
-  params: Record<string, string>;
+  sourceFilters: Record<string, string>;
+  destFilters: Record<string, string>;
 }): ReconcileConfig {
   const config: ReconcileConfig = { dest: state.dest, key: { cel: state.cel } };
-  if (state.limit > 0) config.limit = state.limit;
-  if (Object.keys(state.params).length > 0) config.params = state.params;
+  if (Object.keys(state.sourceFilters).length > 0) config.sourceFilters = state.sourceFilters;
+  if (Object.keys(state.destFilters).length > 0) config.destFilters = state.destFilters;
   return config;
 }

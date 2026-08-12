@@ -479,10 +479,10 @@ func replaySpec() Schema {
 }
 
 // reconcileSpec describes the profile's reconcile block: the profile this one is
-// habitually joined against, how the shared identity is derived, and the row
-// bound a check runs under. Columns and CEL are alternatives, not a pair — the
-// engine rejects a key that sets both — so the description says so where the
-// form cannot enforce it.
+// habitually joined against, each side's filters, and how the shared identity is
+// derived. Columns and CEL are alternatives, not a pair — the engine rejects a
+// key that sets both — so the description says so where the form cannot enforce
+// it.
 func reconcileSpec() Schema {
 	return Schema{
 		"type":        "object",
@@ -521,10 +521,16 @@ func reconcileSpec() Schema {
 					"to":   strProp("To", "Reconcile keys before this one; empty runs to the last key"),
 				},
 			},
-			"params": Schema{
+			"sourceFilters": Schema{
 				"type":                 "object",
-				"title":                "Params",
-				"description":          "Filter values applied to whichever side declares each one",
+				"title":                "Source filters",
+				"description":          "Filter values applied only to this source profile",
+				"additionalProperties": Schema{"type": "string"},
+			},
+			"destFilters": Schema{
+				"type":                 "object",
+				"title":                "Destination filters",
+				"description":          "Filter values applied only to the destination profile",
 				"additionalProperties": Schema{"type": "string"},
 			},
 		},

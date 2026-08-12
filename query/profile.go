@@ -1,6 +1,9 @@
 package query
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
 
 // Profile is a declarative, CEL-driven view over a data provider. It names the
 // backend to read from, the provider-native query, the output columns (with
@@ -11,6 +14,12 @@ import "fmt"
 type Profile struct {
 	// Name identifies the Profile (e.g. "SQL Server trace").
 	Name string `json:"profile" yaml:"profile"`
+
+	// Virtual profiles are generated runtime views over temporary data. They use
+	// the normal profile execution surfaces but cannot be persisted.
+	Virtual   bool       `json:"virtual,omitempty" yaml:"-"`
+	ReadOnly  bool       `json:"read_only,omitempty" yaml:"-"`
+	ExpiresAt *time.Time `json:"expires_at,omitempty" yaml:"-"`
 
 	// Imports names profiles to merge from left to right before this profile is
 	// executed. The authored profile remains unchanged in the profile store.

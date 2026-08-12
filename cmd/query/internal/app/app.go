@@ -4,10 +4,13 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"path/filepath"
+	"time"
 
 	"github.com/flanksource/commons-db/cmd/query/connections"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
+	"github.com/flanksource/commons-db/cmd/query/snapshots"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 )
@@ -23,13 +26,15 @@ type Options struct {
 }
 
 type App struct {
-	Runtime     *Runtime
-	Connections *connections.Service
-	Profiles    *profiles.Service
-	Sessions    *sessions.Runner
-	fileStore   *profiles.FileStore
-	stdout      io.Writer
-	stderr      io.Writer
+	Runtime      *Runtime
+	Connections  *connections.Service
+	Profiles     *profiles.Service
+	Sessions     *sessions.Runner
+	fileStore    *profiles.FileStore
+	snapshots    *snapshots.Manager
+	profileStore profiles.StoreProvider
+	stdout       io.Writer
+	stderr       io.Writer
 }
 
 func New(options Options) (*App, error) {
@@ -44,10 +49,29 @@ func New(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	snapshotManager, err := snapshots.New(snapshots.Options{
+		Dir: filepath.Join(ResolveConfigDir(options.Args), ".tmp", "reconciliations"), MaxAge: time.Hour,
+	})
+	if err != nil {
+		return nil, err
+	}
+	profileStore := func() (profiles.Store, error) {
+		base, err := runtime.ProfileStore()
+		if err != nil {
+			return nil, err
+		}
+		return profiles.NewOverlayStore(base, snapshotManager)
+	}
+	if err := runtime.SetContext(runtime.Context().
+		WithConnectionResolver(snapshotManager.ResolveConnection).
+		WithConnectionLeaseResolver(snapshotManager.AcquireConnection)); err != nil {
+		return nil, err
+	}
 	connectionService, err := connections.New(connections.Options{
 		Database: runtime.Database, Context: runtime.Context, DecodeBody: DecodeBody,
+		Virtual: snapshotManager,
 		Profiles: func(ctx context.Context) ([]query.Profile, error) {
-			store, err := runtime.ProfileStore()
+			store, err := profileStore()
 			if err != nil {
 				return nil, err
 			}
@@ -58,21 +82,22 @@ func New(options Options) (*App, error) {
 		return nil, err
 	}
 	profileService, err := profiles.New(profiles.Options{
-		Store: runtime.ProfileStore, Context: runtime.Context, DecodeBody: DecodeBody,
+		Store: profileStore, Context: runtime.Context, DecodeBody: DecodeBody, Snapshots: snapshotManager,
 		OpenAPIExtensions: []profiles.OpenAPIExtension{connections.AddDashboardOpenAPI},
 	})
 	if err != nil {
 		return nil, err
 	}
 	runner, err := sessions.NewRunner(sessions.RunnerOptions{
-		Profiles: runtime.ProfileStore, Context: runtime.Context, Stdout: options.Stdout, Stderr: options.Stderr,
+		Profiles: profileStore, Context: runtime.Context, Stdout: options.Stdout, Stderr: options.Stderr,
 	})
 	if err != nil {
 		return nil, err
 	}
 	return &App{
 		Runtime: runtime, Connections: connectionService, Profiles: profileService, Sessions: runner,
-		fileStore: fileStore, stdout: options.Stdout, stderr: options.Stderr,
+		fileStore: fileStore, snapshots: snapshotManager, profileStore: profileStore,
+		stdout: options.Stdout, stderr: options.Stderr,
 	}, nil
 }
 

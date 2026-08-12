@@ -12,14 +12,16 @@ import (
 // reconcile the source profile stores, so a saved join runs with no flags at all
 // and an ad-hoc one supplies its own.
 type ReconcileFlags struct {
-	Dest       string   `flag:"dest" help:"Profile to reconcile against; required unless the source profile stores a reconcile block"`
-	KeyCEL     string   `flag:"key-cel" help:"CEL expression evaluated against a row on either side to derive the join key"`
-	KeyColumns []string `flag:"key-columns" help:"Column names whose values form the join key (use --key-cel when the two sides name them differently)"`
-	TimeColumn string   `flag:"time-column" help:"Row key holding each side's event time; defaults to the profile's timestamp column"`
-	KeyFrom    string   `flag:"key-from" help:"Reconcile keys at or after this one; empty starts at the first key"`
-	KeyTo      string   `flag:"key-to" help:"Reconcile keys before this one; empty runs to the last key"`
-	Params     []string `flag:"param" help:"Profile filter param as key=value (repeatable), applied to whichever side declares it"`
-	Outcome    string   `flag:"outcome" help:"Return one result outcome: matched, only_source, only_dest, or ambiguous"`
+	Dest          string   `flag:"dest" help:"Profile to reconcile against; required unless the source profile stores a reconcile block"`
+	KeyCEL        string   `flag:"key-cel" help:"CEL expression evaluated against a row on either side to derive the join key"`
+	KeyColumns    []string `flag:"key-columns" help:"Column names whose values form the join key (use --key-cel when the two sides name them differently)"`
+	TimeColumn    string   `flag:"time-column" help:"Row key holding each side's event time; defaults to the profile's timestamp column"`
+	KeyFrom       string   `flag:"key-from" help:"Reconcile keys at or after this one; empty starts at the first key"`
+	KeyTo         string   `flag:"key-to" help:"Reconcile keys before this one; empty runs to the last key"`
+	SourceFilters []string `flag:"source-filter" help:"Source profile filter as key=value (repeatable)"`
+	DestFilters   []string `flag:"dest-filter" help:"Destination profile filter as key=value (repeatable)"`
+	Outcome       string   `flag:"outcome" help:"Return one result outcome: matched, only_source, only_dest, or ambiguous"`
+	SnapshotAge   string   `flag:"snapshot-age" help:"Idle expiry for the reconciliation snapshot; cannot exceed the server maximum"`
 }
 
 func (ReconcileFlags) ClickyActionFlags() {}
@@ -39,17 +41,15 @@ func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileF
 		return nil, err
 	}
 
-	// parseParamValues rather than parseKeyValues: it is the one that refuses an
-	// @file reference, which an action served over HTTP must.
-	parsed, err := parseParamValues(options.Params)
+	sourceFilters, err := parseProfileInputValues("source-filter", options.SourceFilters)
 	if err != nil {
 		return nil, err
 	}
-	flagParams := make(map[string]string, len(parsed))
-	for key, value := range parsed {
-		flagParams[key] = fmt.Sprint(value)
+	destFilters, err := parseProfileInputValues("dest-filter", options.DestFilters)
+	if err != nil {
+		return nil, err
 	}
-	config, err := reconcileConfig(source.Profile, options, flagParams)
+	config, err := reconcileConfig(source.Profile, options, sourceFilters, destFilters)
 	if err != nil {
 		return nil, err
 	}
@@ -59,18 +59,20 @@ func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileF
 		return nil, err
 	}
 
-	params := make(map[string]any, len(config.Params))
-	for key, value := range config.Params {
-		params[key] = value
+	if err := validateReconcileFilters(source.Profile, config.SourceFilters, "source"); err != nil {
+		return nil, err
+	}
+	if err := validateReconcileFilters(dest.Profile, config.DestFilters, "destination"); err != nil {
+		return nil, err
 	}
 
 	queryCtx := s.context().Wrap(ctx)
 	result, err := query.ReconcileProfiles(queryCtx, query.ReconcileRun{
-		Source:       source.Profile,
-		Dest:         dest.Profile,
-		Config:       config,
-		SourceParams: paramsFor(queryCtx, source.Profile, params, "source"),
-		DestParams:   paramsFor(queryCtx, dest.Profile, params, "dest"),
+		Source:        source.Profile,
+		Dest:          dest.Profile,
+		Config:        config,
+		SourceFilters: reconcileFilterValues(config.SourceFilters),
+		DestFilters:   reconcileFilterValues(config.DestFilters),
 	})
 	if err != nil {
 		return nil, err
@@ -132,10 +134,10 @@ func validateReconcileOutcome(outcome string) error {
 
 // reconcileConfig merges the reconcile stored on the source profile with the
 // flags of this invocation, field by field: a flag that was given wins, one that
-// was not leaves the stored value alone. Params merge per key rather than
-// replacing the stored set, so overriding one filter does not silently drop the
-// rest.
-func reconcileConfig(source query.Profile, options ReconcileFlags, flagParams map[string]string) (query.ReconcileConfig, error) {
+// was not leaves the stored value alone. Each side's filters merge per key, so
+// overriding one filter does not silently drop the rest or affect the other
+// side.
+func reconcileConfig(source query.Profile, options ReconcileFlags, sourceFilters, destFilters map[string]string) (query.ReconcileConfig, error) {
 	config := query.ReconcileConfig{}
 	if source.Reconcile != nil {
 		config = *source.Reconcile
@@ -161,16 +163,8 @@ func reconcileConfig(source query.Profile, options ReconcileFlags, flagParams ma
 	if options.KeyFrom != "" || options.KeyTo != "" {
 		config.Range = &query.KeyRange{From: options.KeyFrom, To: options.KeyTo}
 	}
-	if len(flagParams) > 0 {
-		merged := make(map[string]string, len(config.Params)+len(flagParams))
-		for key, value := range config.Params {
-			merged[key] = value
-		}
-		for key, value := range flagParams {
-			merged[key] = value
-		}
-		config.Params = merged
-	}
+	config.SourceFilters = mergeFilterValues(config.SourceFilters, sourceFilters)
+	config.DestFilters = mergeFilterValues(config.DestFilters, destFilters)
 	if config.Dest == "" {
 		return config, fmt.Errorf("--dest is required: reconcile joins two profiles, and %q stores no reconcile block", source.Name)
 	}
@@ -180,23 +174,46 @@ func reconcileConfig(source query.Profile, options ReconcileFlags, flagParams ma
 	return config, nil
 }
 
-// paramsFor narrows the caller's filters to those the given profile declares.
-// The two sides rarely accept the same filter set, and refusing the whole run
-// because one side lacks a filter would make reconcile unusable across
-// heterogeneous backends — so an unsupported filter is dropped with a debug log
-// rather than raised.
-func paramsFor(ctx interface{ Debugf(string, ...any) }, profile query.Profile, params map[string]any, side string) map[string]any {
-	declared := make(map[string]struct{}, len(profile.Params))
+func mergeFilterValues(stored, override map[string]string) map[string]string {
+	if len(override) == 0 {
+		return stored
+	}
+	merged := make(map[string]string, len(stored)+len(override))
+	for key, value := range stored {
+		merged[key] = value
+	}
+	for key, value := range override {
+		merged[key] = value
+	}
+	return merged
+}
+
+func validateReconcileFilters(profile query.Profile, filters map[string]string, side string) error {
+	allowed := make(map[string]struct{}, len(profile.Params)+len(profile.Columns))
 	for _, param := range profile.Params {
-		declared[param.Name] = struct{}{}
-	}
-	out := make(map[string]any, len(params))
-	for key, value := range params {
-		if _, ok := declared[key]; !ok {
-			ctx.Debugf("reconcile: %s profile %q does not declare param %q; dropping", side, profile.Name, key)
-			continue
+		if param.Role != query.ParamRoleLimit && param.Role != query.ParamRoleOffset {
+			allowed[param.Name] = struct{}{}
 		}
-		out[key] = value
 	}
-	return out
+	bindings, err := profile.ColumnFilterBindings()
+	if err != nil {
+		return fmt.Errorf("%s profile %q filters: %w", side, profile.Name, err)
+	}
+	for _, binding := range bindings {
+		allowed[binding.Key] = struct{}{}
+	}
+	for key := range filters {
+		if _, ok := allowed[key]; !ok {
+			return fmt.Errorf("%s filter %q is not supported by profile %q", side, key, profile.Name)
+		}
+	}
+	return nil
+}
+
+func reconcileFilterValues(filters map[string]string) map[string]any {
+	values := make(map[string]any, len(filters))
+	for key, value := range filters {
+		values[key] = value
+	}
+	return values
 }

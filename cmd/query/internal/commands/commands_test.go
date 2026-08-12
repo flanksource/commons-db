@@ -45,6 +45,7 @@ var _ = Describe("New", Ordered, func() {
 		serve, _, err := root.Find([]string{"serve"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(serve.Flags().Lookup("data-dir")).To(BeNil())
+		Expect(serve.Flags().Lookup("reconcile-snapshot-max-age").DefValue).To(Equal("1h0m0s"))
 	})
 
 	DescribeTable("builds the command tree without starting postgres",
@@ -145,7 +146,7 @@ var _ = Describe("New", Ordered, func() {
 		reconcile, _, err := root.Find([]string{"profiles", "reconcile"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(reconcile.Name()).To(Equal("reconcile"))
-		for _, flag := range []string{"dest", "key-cel", "key-columns", "time-column", "param"} {
+		for _, flag := range []string{"dest", "key-cel", "key-columns", "time-column", "source-filter", "dest-filter", "snapshot-age"} {
 			Expect(reconcile.Flags().Lookup(flag)).NotTo(BeNil(), flag)
 		}
 	})

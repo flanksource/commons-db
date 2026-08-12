@@ -22,6 +22,7 @@ const (
 	dialectMySQL      sqlDialect = models.ConnectionTypeMySQL
 	dialectSQLServer  sqlDialect = models.ConnectionTypeSQLServer
 	dialectClickHouse sqlDialect = models.ConnectionTypeClickHouse
+	dialectSQLite     sqlDialect = models.ConnectionTypeSQLite
 )
 
 // validSQLIdentifier is the only shape a profile-supplied backend field may
@@ -45,7 +46,7 @@ const sqlIdentifierAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvw
 // because it is only knowable here: a `provider.type: sql` profile naming a
 // stored connection does not know its own engine until that connection has been
 // hydrated.
-func sqlConnect(ctx context.Context, req sqlConnectRequest) (*sql.DB, sqlDialect, error) {
+func sqlConnect(ctx context.Context, req sqlConnectRequest) (*sql.DB, sqlDialect, func(), error) {
 	connType := req.ConnType
 	if connType == "" {
 		connType = req.Options.Type
@@ -62,31 +63,37 @@ func sqlConnect(ctx context.Context, req sqlConnectRequest) (*sql.DB, sqlDialect
 		}
 		resolved, err := resolveInlineURL(ctx, req.Options.URL, resolveType)
 		if err != nil {
-			return nil, "", err
+			return nil, "", nil, err
 		}
 		conn.URL.ValueStatic = resolved
 	}
 
 	if err := conn.HydrateConnection(ctx); err != nil {
-		return nil, "", fmt.Errorf("failed to hydrate sql connection: %w", err)
+		return nil, "", nil, fmt.Errorf("failed to hydrate sql connection: %w", err)
+	}
+	release, err := ctx.AcquireConnectionLease(req.Connection)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("acquire sql connection lease: %w", err)
 	}
 	if req.Options.Database != "" {
 		hydrated, err := conn.UseDatabase(req.Options.Database)
 		if err != nil {
-			return nil, "", fmt.Errorf("failed to select sql database: %w", err)
+			release()
+			return nil, "", nil, fmt.Errorf("failed to select sql database: %w", err)
 		}
 		conn = hydrated
 	}
 
 	client, err := conn.Client(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to create sql client: %w", err)
+		release()
+		return nil, "", nil, fmt.Errorf("failed to create sql client: %w", err)
 	}
 	dialect := sqlDialect(conn.Type)
 	if dialect == "" {
 		dialect = dialectPostgres
 	}
-	return client, dialect, nil
+	return client, dialect, release, nil
 }
 
 // sqlConnectRequest is what sqlConnect needs from a provider request, named so

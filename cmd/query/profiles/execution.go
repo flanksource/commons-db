@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"unicode"
@@ -39,7 +40,7 @@ func newExecHandler(prefix string, ctx dbcontext.Context, store Store, next http
 
 func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodPut {
-		if name, ok := h.connectionProfileName(r.URL.Path); ok {
+		if name, ok := h.connectionProfileName(r.URL.EscapedPath()); ok {
 			h.mapConnection(w, r, name)
 			return
 		}
@@ -49,7 +50,7 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// discarded rather than never produced: the totals it reports are only known
 	// by running the page.
 	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && !wantsSchema(r) && !wantsLookup(r) {
-		if name, ok := h.profileName(r.URL.Path); ok {
+		if name, ok := h.profileName(r.URL.EscapedPath()); ok {
 			if r.Method == http.MethodHead {
 				w = headResponseWriter{w}
 			}
@@ -61,13 +62,13 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// sampling is a different POST on a sibling path, so it is excluded by name
 	// rather than swallowed here.
 	if r.Method == http.MethodPost {
-		if name, ok := h.profileName(r.URL.Path); ok && name != sampleProfileName {
+		if name, ok := h.profileName(r.URL.EscapedPath()); ok && name != sampleProfileName {
 			h.execute(w, r, name)
 			return
 		}
 	}
 	if r.Method == http.MethodOptions {
-		if name, ok := h.profileName(r.URL.Path); ok && name != sampleProfileName {
+		if name, ok := h.profileName(r.URL.EscapedPath()); ok && name != sampleProfileName {
 			// Without the origin, the preflight fails and the request it was
 			// clearing is never sent — so the methods allowed here would never
 			// be reached.
@@ -103,7 +104,8 @@ func (h *execHandler) connectionProfileName(path string) (string, bool) {
 	if len(parts) != 3 || parts[0] != "profile" || parts[1] == "" || parts[2] != "connection" {
 		return "", false
 	}
-	return parts[1], true
+	name, err := url.PathUnescape(parts[1])
+	return name, err == nil
 }
 
 // profileName returns the {name} segment of {prefix}/profile/{name}, or false.
@@ -116,7 +118,8 @@ func (h *execHandler) profileName(path string) (string, bool) {
 	if name == "" || strings.Contains(name, "/") {
 		return "", false
 	}
-	return name, true
+	name, err := url.PathUnescape(name)
+	return name, err == nil
 }
 
 func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name string) {
@@ -135,8 +138,17 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 	}()
 	execCtx := h.ctx.Wrap(base)
 
+	name, err := h.storedProfileName(r.Context(), name)
+	if err != nil {
+		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
+		return
+	}
 	resolved, err := Resolve(r.Context(), h.store, name)
 	if err != nil {
+		if errors.Is(err, dbcontext.ErrConnectionExpired) {
+			writeExecError(w, http.StatusGone, "snapshot_expired", err)
+			return
+		}
 		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
 		return
 	}
@@ -250,6 +262,22 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		execCtx.Warnf("profile %q: export reached its %d row ceiling with more rows to come", p.Name, export.maxRows)
 		w.Header().Set("X-Truncated", "true")
 	}
+}
+
+func (h *execHandler) storedProfileName(ctx stdcontext.Context, name string) (string, error) {
+	if !strings.HasPrefix(name, "profile-") {
+		return name, nil
+	}
+	stored, err := h.store.List(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, profile := range stored {
+		if profileSurfaceKey(profile.Name) == name {
+			return profile.Name, nil
+		}
+	}
+	return "", fmt.Errorf("profile surface %q not found", name)
 }
 
 // execError is the body every failed execution returns.

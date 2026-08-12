@@ -3,13 +3,26 @@ package context
 import (
 	"context"
 
-	commons "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons-db/models"
+	commons "github.com/flanksource/commons/context"
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = ginkgo.Describe("Connection Tests", func() {
+	ginkgo.It("resolves a virtual connection before consulting the database", func() {
+		virtual := &models.Connection{Name: "snapshot", Namespace: "reconciliations", Type: models.ConnectionTypeSQLite}
+		ctx := NewContext(context.Background()).WithConnectionResolver(func(reference string) (*models.Connection, error) {
+			if reference == "connection://reconciliations/snapshot" {
+				return virtual, nil
+			}
+			return nil, nil
+		})
+		resolved, err := FindConnectionByURL(ctx, "connection://reconciliations/snapshot")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved).To(Equal(virtual))
+	})
+
 	ginkgo.Describe("GetConnectionNameType", func() {
 		testCases := []struct {
 			name       string
