@@ -1,57 +1,29 @@
-import {
-  Button,
-  Icon,
-  cn,
-  useRouter,
-} from "@flanksource/clicky-ui";
-import {
-  UiKey,
-  UiLink,
-  UiLock,
-  UiWarningTriangle,
-} from "@flanksource/clicky-ui/icons";
+import { Button, cn } from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
-import { ConnectionTypeIcon } from "./iconProvider";
+import { useEffect } from "react";
 import {
   groupConnectionDashboardLanes,
-  type ConnectionDashboardHealthState,
   type ConnectionDashboardItem,
   type ConnectionDashboardResponse,
 } from "./connectionDashboardModel";
+import {
+  ConnectionDashboardRow,
+  ConnectionHealthLegend,
+} from "./connectionDashboardRow";
+import {
+  summarizeLaneHealth,
+  useConnectionHealth,
+  type ConnectionHealthMap,
+} from "./connectionHealth";
 
-const HEALTH_LEGEND_LABELS: Record<ConnectionDashboardHealthState, string> = {
-  healthy: "reachable",
-  credentials: "credentials failed",
-  unreachable: "unreachable",
-  unverifiable: "no discovery for this type",
-};
-
-const HEALTH_LABELS: Record<ConnectionDashboardHealthState, string> = {
-  healthy: "Reachable",
-  credentials: "Credentials failed",
-  unreachable: "Unreachable",
-  unverifiable: "Not verifiable",
-};
-
-const HEALTH_STYLES: Record<
-  ConnectionDashboardHealthState,
-  { dot: string; edge: string }
-> = {
-  healthy: { dot: "bg-emerald-400", edge: "border-l-emerald-400" },
-  credentials: { dot: "bg-amber-400", edge: "border-l-amber-400" },
-  unreachable: { dot: "bg-rose-400", edge: "border-l-rose-400" },
-  unverifiable: { dot: "bg-muted-foreground", edge: "border-l-border" },
-};
-
-export function ConnectionDashboardSurface({
-  requestUrl,
-  refreshKey,
-}: {
-  requestUrl: string;
-  refreshKey: string;
-}) {
+/**
+ * ConnectionDashboardSurface lists the connection fleet from the database only.
+ * Health checks dial real backends, so they are opt-in: nothing is probed until
+ * the operator clicks a row's dot, a lane's Check button, or Check all.
+ */
+export function ConnectionDashboardSurface({ requestUrl }: { requestUrl: string }) {
   const dashboard = useQuery({
-    queryKey: ["connection-dashboard", requestUrl, refreshKey],
+    queryKey: ["connection-dashboard", requestUrl],
     queryFn: async () => {
       const response = await fetch(requestUrl, {
         headers: { Accept: "application/json" },
@@ -66,14 +38,20 @@ export function ConnectionDashboardSurface({
       }
       return payload.connections;
     },
-    staleTime: 30_000,
+    staleTime: 10_000,
     retry: 0,
   });
+
+  const { health, pending, error, seed, check } = useConnectionHealth();
+  const connections = dashboard.data;
+  useEffect(() => {
+    if (connections) seed(connections);
+  }, [connections, seed]);
 
   if (dashboard.isLoading) {
     return (
       <div className="rounded-lg border bg-card p-6 text-sm text-muted-foreground">
-        Loading connection health…
+        Loading connections…
       </div>
     );
   }
@@ -83,7 +61,7 @@ export function ConnectionDashboardSurface({
         <span>
           {dashboard.error instanceof Error
             ? dashboard.error.message
-            : "Unable to load connection health"}
+            : "Unable to load connections"}
         </span>
         <Button type="button" variant="outline" size="sm" onClick={() => void dashboard.refetch()}>
           Retry
@@ -91,39 +69,78 @@ export function ConnectionDashboardSurface({
       </div>
     );
   }
-  if (!dashboard.data) {
+  if (!connections) {
     return (
       <div className="rounded-lg border border-destructive/40 bg-destructive/5 p-4 text-sm text-destructive">
         Connection dashboard returned no data.
       </div>
     );
   }
-  if (dashboard.data.length === 0) {
+  if (connections.length === 0) {
     return (
       <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
         No connections match the current filters.
       </div>
     );
   }
-  return <ConnectionDashboardLanes connections={dashboard.data} />;
+
+  const checked = connections.filter(
+    (connection) => health[connection.id] && health[connection.id]?.state !== "unknown",
+  ).length;
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={() => void dashboard.refetch()}>
+          Refresh
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          disabled={pending.size > 0}
+          onClick={() =>
+            check(
+              connections.map((connection) => connection.id),
+              { force: checked === connections.length },
+            )
+          }
+        >
+          {pending.size > 0 ? "Checking…" : "Check all health"}
+        </Button>
+        <span className="text-xs text-muted-foreground">
+          {checked}/{connections.length} checked
+        </span>
+        {error ? (
+          <span className="text-xs text-destructive" title={error.message}>
+            {error.message}
+          </span>
+        ) : null}
+      </div>
+      <ConnectionDashboardLanes
+        connections={connections}
+        health={health}
+        pending={pending}
+        onCheck={check}
+      />
+    </div>
+  );
 }
 
 export function ConnectionDashboardLanes({
   connections,
+  health = {},
+  pending = new Set<string>(),
+  onCheck = () => {},
 }: {
   connections: ConnectionDashboardItem[];
+  health?: ConnectionHealthMap;
+  pending?: Set<string>;
+  onCheck?: (ids: string[], options?: { force?: boolean }) => void;
 }) {
   return (
     <div className="space-y-4">
       {groupConnectionDashboardLanes(connections).map((lane) => {
-        const failing = lane.connections.filter(
-          (connection) =>
-            connection.health.state === "credentials" ||
-            connection.health.state === "unreachable",
-        ).length;
-        const unused = lane.connections.filter(
-          (connection) => connection.profileCount === 0,
-        ).length;
+        const summary = summarizeLaneHealth(lane.connections, health);
         const unnamespaced = lane.namespace === "";
         return (
           <section
@@ -145,13 +162,30 @@ export function ConnectionDashboardLanes({
               <span className="rounded bg-background px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">
                 {lane.connections.length}
               </span>
-              {failing > 0 ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-[11px]"
+                onClick={() =>
+                  onCheck(
+                    lane.connections.map((connection) => connection.id),
+                    { force: summary.checked === lane.connections.length },
+                  )
+                }
+              >
+                Check
+              </Button>
+              {summary.failing > 0 ? (
                 <span className="inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 text-[11px] text-rose-700 ring-1 ring-inset ring-rose-300/60 dark:bg-rose-400/10 dark:text-rose-300 dark:ring-rose-400/25">
-                  {failing} failing
+                  {summary.failing} failing
                 </span>
               ) : null}
-              {unused > 0 ? (
-                <span className="text-[11px] text-muted-foreground">{unused} unused</span>
+              <span className="text-[11px] text-muted-foreground">
+                {summary.checked}/{lane.connections.length} checked
+              </span>
+              {summary.unused > 0 ? (
+                <span className="text-[11px] text-muted-foreground">{summary.unused} unused</span>
               ) : null}
               {unnamespaced ? (
                 <span className="text-xs text-muted-foreground">
@@ -161,7 +195,13 @@ export function ConnectionDashboardLanes({
             </header>
             <div className="divide-y divide-border">
               {lane.connections.map((connection) => (
-                <ConnectionDashboardRow key={connection.id} connection={connection} />
+                <ConnectionDashboardRow
+                  key={connection.id}
+                  connection={connection}
+                  health={health[connection.id]}
+                  pending={pending.has(connection.id)}
+                  onCheck={onCheck}
+                />
               ))}
             </div>
           </section>
@@ -170,156 +210,4 @@ export function ConnectionDashboardLanes({
       <ConnectionHealthLegend />
     </div>
   );
-}
-
-function ConnectionDashboardRow({
-  connection,
-}: {
-  connection: ConnectionDashboardItem;
-}) {
-  const { renderLink } = useRouter();
-  return renderLink({
-    to: `/connection/${encodeURIComponent(connection.id)}`,
-    title: connection.health.detail,
-    className: cn(
-      "flex min-w-0 items-center gap-3 border-l-2 py-2 pl-3 pr-2 hover:bg-muted/30 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset",
-      HEALTH_STYLES[connection.health.state].edge,
-    ),
-    children: (
-      <>
-        <span className="shrink-0" aria-hidden>
-          <ConnectionTypeIcon type={connection.type} className="size-4" />
-        </span>
-        <div className="flex w-36 shrink-0 items-center gap-1.5 md:w-44">
-          <HealthDot state={connection.health.state} detail={connection.health.detail} />
-          <span className="truncate text-sm font-medium" title={connection.name}>
-            {connection.name}
-          </span>
-        </div>
-        <div className="min-w-0 flex-1">
-          <EndpointLine endpoint={connection.endpoint} />
-        </div>
-        <div className="hidden shrink-0 items-center gap-1.5 lg:flex">
-          <SecretChip count={connection.secretCount} />
-          <RiskChips connection={connection} />
-        </div>
-        <span className="w-24 shrink-0 text-right text-xs text-muted-foreground">
-          {connection.profileCount === 0 ? (
-            <span className="text-muted-foreground/60">unused</span>
-          ) : (
-            `${connection.profileCount} profile${connection.profileCount === 1 ? "" : "s"}`
-          )}
-        </span>
-        <span className="hidden w-16 shrink-0 text-right text-xs text-muted-foreground/70 xl:inline">
-          {ageLabel(connection.updatedAt)}
-        </span>
-      </>
-    ),
-  });
-}
-
-function HealthDot({
-  state,
-  detail,
-}: {
-  state: ConnectionDashboardHealthState;
-  detail: string;
-}) {
-  return (
-    <span
-      role="img"
-      className={cn("inline-block size-2 shrink-0 rounded-full", HEALTH_STYLES[state].dot)}
-      title={detail}
-      aria-label={HEALTH_LABELS[state]}
-    />
-  );
-}
-
-function EndpointLine({
-  endpoint,
-}: {
-  endpoint: ConnectionDashboardItem["endpoint"];
-}) {
-  if (!endpoint) {
-    return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
-        <Icon icon={UiLink} className="text-xs" />
-        <span className="italic">Resolved from ambient config</span>
-      </span>
-    );
-  }
-  const indirect = ["connection", "host", "portforward"].includes(endpoint.scheme);
-  return (
-    <span className="flex min-w-0 items-center gap-1.5 font-mono text-xs">
-      <span
-        className={cn(
-          "shrink-0 rounded px-1 py-0.5 text-[10px] ring-1 ring-inset",
-          indirect
-            ? "bg-violet-100 text-violet-700 ring-violet-300/60 dark:bg-violet-400/10 dark:text-violet-300 dark:ring-violet-400/25"
-            : "bg-muted text-muted-foreground ring-border",
-        )}
-      >
-        {endpoint.scheme}
-      </span>
-      <span
-        className="truncate text-foreground"
-        title={`${endpoint.host}${endpoint.path ?? ""}`}
-      >
-        {endpoint.host}
-        {endpoint.path ? (
-          <span className="text-muted-foreground">{endpoint.path}</span>
-        ) : null}
-      </span>
-    </span>
-  );
-}
-
-function SecretChip({ count }: { count: number }) {
-  if (count === 0) return null;
-  return (
-    <span className="inline-flex items-center gap-1 rounded bg-teal-100 px-1.5 py-0.5 text-[11px] text-teal-700 ring-1 ring-inset ring-teal-300/60 dark:bg-teal-400/10 dark:text-teal-300 dark:ring-teal-400/25">
-      <Icon icon={UiLock} className="text-[11px]" />
-      {count} secret{count === 1 ? "" : "s"}
-    </span>
-  );
-}
-
-function RiskChips({ connection }: { connection: ConnectionDashboardItem }) {
-  return (
-    <>
-      {connection.inlineCredential ? (
-        <span className="inline-flex items-center gap-1 rounded bg-rose-100 px-1.5 py-0.5 text-[11px] text-rose-700 ring-1 ring-inset ring-rose-300/60 dark:bg-rose-400/10 dark:text-rose-300 dark:ring-rose-400/25">
-          <Icon icon={UiKey} className="text-[11px]" />
-          Password in URL
-        </span>
-      ) : null}
-      {connection.insecureTLS ? (
-        <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-1.5 py-0.5 text-[11px] text-amber-800 ring-1 ring-inset ring-amber-300/60 dark:bg-amber-400/10 dark:text-amber-300 dark:ring-amber-400/25">
-          <Icon icon={UiWarningTriangle} className="text-[11px]" />
-          TLS verification off
-        </span>
-      ) : null}
-    </>
-  );
-}
-
-function ConnectionHealthLegend() {
-  return (
-    <p className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-      {(
-        ["healthy", "credentials", "unreachable", "unverifiable"] as const
-      ).map((state) => (
-        <span key={state} className="inline-flex items-center gap-1.5">
-          <span className={cn("inline-block h-3 w-0.5", HEALTH_STYLES[state].dot)} />
-          {HEALTH_LEGEND_LABELS[state]}
-        </span>
-      ))}
-    </p>
-  );
-}
-
-function ageLabel(updatedAt: string): string {
-  const timestamp = Date.parse(updatedAt);
-  if (!Number.isFinite(timestamp)) return "—";
-  return `${Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000))}d`;
 }

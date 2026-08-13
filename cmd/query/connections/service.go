@@ -120,8 +120,9 @@ func (s *Service) RegisterClicky() {
 func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	ctx := s.context()
 	browser := newConnectionBrowserHandler(prefix, ctx, newConnectionActionsHandler(prefix, ctx, next))
+	health := newConnectionHealthHandler(prefix, ctx, browser)
 	return newConnectionDashboardHandler(connectionDashboardHandlerOptions{
-		Prefix: prefix, Context: ctx, Profiles: s.profiles, Next: browser,
+		Prefix: prefix, Context: ctx, Profiles: s.profiles, Next: health,
 	})
 }
 
@@ -177,7 +178,12 @@ func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*
 	if err != nil {
 		return nil, err
 	}
-	return updateConnection(db, id, body)
+	updated, err := updateConnection(db, id, body)
+	if err != nil {
+		return nil, err
+	}
+	forgetConnectionHealth(updated.ID.String())
+	return updated, nil
 }
 
 func (s *Service) Delete(id string) error {
@@ -188,7 +194,17 @@ func (s *Service) Delete(id string) error {
 	if err != nil {
 		return err
 	}
-	return deleteConnection(db, id)
+	// Resolve first so both the delete and the health invalidation address the
+	// same row even when the caller named the connection rather than its id.
+	existing, err := findConnection(db, id)
+	if err != nil {
+		return err
+	}
+	if err := deleteConnection(db, existing.ID.String()); err != nil {
+		return err
+	}
+	forgetConnectionHealth(existing.ID.String())
+	return nil
 }
 
 func (s *Service) withVirtual(stored []*models.Connection, options ListOptions) []*models.Connection {

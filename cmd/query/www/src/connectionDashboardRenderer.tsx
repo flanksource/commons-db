@@ -3,6 +3,9 @@ import type { ReactNode } from "react";
 import { ConnectionDashboardSurface } from "./connectionDashboard";
 import { connectionDashboardUrl } from "./connectionDashboardModel";
 
+// The dashboard's identity is its request URL alone. Keying it off the response
+// body instead would mint a fresh query cache entry on nearly every render,
+// which is what made the surface refetch constantly.
 export function connectionDashboardResultRenderer(
   context: ResultRenderContext,
 ): ReactNode {
@@ -10,9 +13,6 @@ export function connectionDashboardResultRenderer(
   return (
     <ConnectionDashboardSurface
       requestUrl={connectionDashboardUrl(context.response?.requestUrl)}
-      refreshKey={
-        context.response?.output ?? JSON.stringify(context.response?.parsed ?? null)
-      }
     />
   );
 }

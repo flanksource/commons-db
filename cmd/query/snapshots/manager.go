@@ -13,8 +13,8 @@ import (
 	"sync"
 	"time"
 
+	_ "github.com/glebarez/go-sqlite"
 	"github.com/google/uuid"
-	_ "modernc.org/sqlite"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"

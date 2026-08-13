@@ -22,6 +22,7 @@ type connectionInfo struct {
 	Connection   connectionInfoDetails `json:"connection"`
 	Server       serverInfo            `json:"server"`
 	DiscoveredAt time.Time             `json:"discoveredAt"`
+	Cached       bool                  `json:"cached"`
 }
 
 type connectionInfoDetails struct {
@@ -53,46 +54,27 @@ type serverInfo struct {
 	Message  string            `json:"message,omitempty"`
 }
 
+// serveConnectionInfo probes one connection through the shared health seam, so
+// the connection header and the dashboard share a single cache entry. `id` may
+// be a uuid or a name, so the cache is keyed off the resolved row's ID.
 func (h *connectionBrowserHandler) serveConnectionInfo(w http.ResponseWriter, r *http.Request, id string) {
 	raw, err := findConnection(h.ctx.DB(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	resolved := cloneConnection(raw)
-	if _, err := dbcontext.HydrateConnection(h.ctx, resolved); err != nil {
-		http.Error(w, sanitizeConnectionError(err, raw, resolved), http.StatusUnprocessableEntity)
+
+	result := probeConnectionHealth(probeOptions{
+		Context:           r.Context(),
+		ConnectionContext: h.ctx,
+		Connection:        raw,
+		Force:             r.URL.Query().Get("force") == "true",
+	})
+	if result.State == connectionHealthCredentials {
+		http.Error(w, result.Detail, http.StatusUnprocessableEntity)
 		return
 	}
-
-	discoveryContext, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	server := discoverServer(discoveryContext, h.ctx, resolved)
-	if server.Status == "error" {
-		server.Message = sanitizeConnectionError(fmt.Errorf("%s", server.Message), raw, resolved)
-	}
-
-	writeJSON(w, connectionInfo{
-		Connection: connectionInfoDetails{
-			Name:               raw.Name,
-			Type:               raw.Type,
-			Namespace:          raw.Namespace,
-			ConfiguredEndpoint: redactConnectionURL(raw.URL),
-			ResolvedEndpoint:   redactConnectionURL(resolved.URL),
-			ConfiguredUsername: raw.Username,
-			ResolvedUsername:   resolved.Username,
-			Password: connectionPresence{
-				Configured: strings.TrimSpace(raw.Password) != "",
-				Resolved:   strings.TrimSpace(resolved.Password) != "",
-			},
-			Certificate: connectionPresence{
-				Configured: strings.TrimSpace(raw.Certificate) != "",
-				Resolved:   strings.TrimSpace(resolved.Certificate) != "",
-			},
-		},
-		Server:       server,
-		DiscoveredAt: time.Now().UTC(),
-	})
+	writeJSON(w, connectionInfoFromHealth(result))
 }
 
 func cloneConnection(source *models.Connection) *models.Connection {

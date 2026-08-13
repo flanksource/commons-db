@@ -6,6 +6,7 @@ import {
   groupConnectionDashboardLanes,
   type ConnectionDashboardItem,
 } from "./connectionDashboardModel";
+import type { ConnectionHealthMap } from "./connectionHealth";
 
 function connection(
   overrides: Partial<ConnectionDashboardItem>,
@@ -19,7 +20,6 @@ function connection(
     secretCount: 0,
     inlineCredential: false,
     insecureTLS: false,
-    health: { state: "healthy", detail: "PostgreSQL 17" },
     profileCount: 0,
     updatedAt: "2026-08-09T12:00:00Z",
     ...overrides,
@@ -27,7 +27,7 @@ function connection(
 }
 
 describe("connection dashboard lanes", () => {
-  it("carries connection type filters into the batched health request", () => {
+  it("carries connection type filters into the inventory request", () => {
     expect(
       connectionDashboardUrl("/api/v1/connection?type=postgres&limit=50&offset=100"),
     ).toBe("/api/v1/connections/dashboard?type=postgres");
@@ -45,14 +45,36 @@ describe("connection dashboard lanes", () => {
     expect(lanes[0]?.connections.map((item) => item.name)).toEqual(["alpha", "zeta"]);
   });
 
-  it("renders lane health, risks, usage, and a detail link", () => {
+  it("offers a check control per row and claims no verdict before one is run", () => {
     const html = renderToStaticMarkup(
       <ConnectionDashboardLanes
+        connections={[connection({ id: "unchecked-id", name: "warehouse" })]}
+      />,
+    );
+
+    expect(html).toContain('aria-label="Check health"');
+    expect(html).toContain("0/1 checked");
+    expect(html).not.toContain("failing");
+    expect(html).toContain("not checked");
+  });
+
+  it("renders lane health, risks, usage, and a detail link once checked", () => {
+    const health: ConnectionHealthMap = {
+      "failing-id": {
+        state: "credentials",
+        detail: "Could not resolve credentials",
+        checkedAt: "2026-08-13T10:00:00Z",
+        cached: false,
+      },
+    };
+
+    const html = renderToStaticMarkup(
+      <ConnectionDashboardLanes
+        health={health}
         connections={[
           connection({
             id: "failing-id",
             name: "warehouse",
-            health: { state: "credentials", detail: "Could not resolve credentials" },
             secretCount: 2,
             inlineCredential: true,
             insecureTLS: true,
@@ -63,11 +85,17 @@ describe("connection dashboard lanes", () => {
     );
 
     expect(html).toContain("1 failing");
+    expect(html).toContain("1/2 checked");
     expect(html).toContain("2 unused");
     expect(html).toContain("2 secrets");
     expect(html).toContain("Password in URL");
     expect(html).toContain("TLS verification off");
+    expect(html).toContain('aria-label="Credentials failed — check again"');
+    // The dot is a button, so it must be a sibling of the link rather than
+    // nested inside it — an anchor would otherwise swallow the click.
     expect(html).toContain('href="/connection/failing-id"');
-    expect(html).toContain('aria-label="Credentials failed"');
+    expect(html.indexOf('aria-label="Credentials failed')).toBeLessThan(
+      html.indexOf('href="/connection/failing-id"'),
+    );
   });
 });

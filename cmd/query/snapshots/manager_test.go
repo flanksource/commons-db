@@ -13,7 +13,6 @@ import (
 	_ "github.com/flanksource/commons-db/query/providers"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	_ "modernc.org/sqlite"
 )
 
 var _ = Describe("Manager", func() {

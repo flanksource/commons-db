@@ -49,12 +49,13 @@ var _ = Describe("connection dashboard model", func() {
 		Expect(dashboardProfileCount(&models.Connection{Name: "warehouse", Namespace: "other"}, counts)).To(Equal(1))
 	})
 
-	It("documents the batched dashboard read in OpenAPI", func() {
+	It("documents the inventory read and its opt-in health trigger in OpenAPI", func() {
 		spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}}
-		AddDashboardOpenAPI(spec)
+		AddConnectionsOpenAPI(spec)
 
-		operation := spec.Paths[connectionDashboardPath]["get"]
-		Expect(operation).NotTo(BeNil())
-		Expect(operation.Summary).To(Equal("List connection dashboard health"))
+		Expect(spec.Paths[connectionDashboardPath]["get"].Summary).To(Equal("List connection inventory"))
+		Expect(spec.Paths[connectionHealthPath]["post"].Summary).To(Equal("Check connection health"))
+		Expect(spec.Paths[connectionHealthPath]["get"]).To(BeZero(),
+			"health checks must be opt-in, so the inventory verb must not probe")
 	})
 })

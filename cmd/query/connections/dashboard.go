@@ -12,23 +12,14 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
-	"golang.org/x/sync/errgroup"
 )
-
-const connectionDashboardPath = "/api/v1/connections/dashboard"
-
-const dashboardProbeConcurrency = 6
-
-type ProfileProvider func(context.Context) ([]query.Profile, error)
-
-type connectionHealthState string
 
 const (
-	connectionHealthHealthy      connectionHealthState = "healthy"
-	connectionHealthCredentials  connectionHealthState = "credentials"
-	connectionHealthUnreachable  connectionHealthState = "unreachable"
-	connectionHealthUnverifiable connectionHealthState = "unverifiable"
+	connectionDashboardPath = "/api/v1/connections/dashboard"
+	connectionHealthPath    = "/api/v1/connections/health"
 )
+
+type ProfileProvider func(context.Context) ([]query.Profile, error)
 
 type connectionDashboardHandlerOptions struct {
 	Prefix   string
@@ -58,9 +49,11 @@ type connectionDashboardItem struct {
 	SecretCount      int                       `json:"secretCount"`
 	InlineCredential bool                      `json:"inlineCredential"`
 	InsecureTLS      bool                      `json:"insecureTLS"`
-	Health           connectionDashboardHealth `json:"health"`
-	ProfileCount     int                       `json:"profileCount"`
-	UpdatedAt        time.Time                 `json:"updatedAt"`
+	// Health is present only when a probe result is already cached for this
+	// exact row. Listing never probes — see POST /connections/health.
+	Health       *connectionDashboardHealth `json:"health,omitempty"`
+	ProfileCount int                        `json:"profileCount"`
+	UpdatedAt    time.Time                  `json:"updatedAt"`
 }
 
 type dashboardEndpoint struct {
@@ -70,8 +63,10 @@ type dashboardEndpoint struct {
 }
 
 type connectionDashboardHealth struct {
-	State  connectionHealthState `json:"state"`
-	Detail string                `json:"detail"`
+	State     connectionHealthState `json:"state"`
+	Detail    string                `json:"detail"`
+	CheckedAt time.Time             `json:"checkedAt"`
+	Cached    bool                  `json:"cached"`
 }
 
 func newConnectionDashboardHandler(options connectionDashboardHandlerOptions) http.Handler {
@@ -105,13 +100,10 @@ func (h *connectionDashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	items, err := h.dashboardItems(r.Context(), connections, profileUsageCounts(profiles))
-	if err != nil {
-		http.Error(w, fmt.Sprintf("build connection dashboard: %v", err), http.StatusRequestTimeout)
-		return
-	}
-
-	writeJSON(w, connectionDashboardResponse{Connections: items, GeneratedAt: time.Now().UTC()})
+	writeJSON(w, connectionDashboardResponse{
+		Connections: dashboardItems(connections, profileUsageCounts(profiles)),
+		GeneratedAt: time.Now().UTC(),
+	})
 }
 
 func (h *connectionDashboardHandler) listConnections(ctx context.Context, options ListOptions) ([]*models.Connection, error) {
@@ -126,72 +118,26 @@ func (h *connectionDashboardHandler) listConnections(ctx context.Context, option
 	return connections, nil
 }
 
-func (h *connectionDashboardHandler) dashboardItems(
-	ctx context.Context,
-	connections []*models.Connection,
-	usage map[string]int,
-) ([]connectionDashboardItem, error) {
+// dashboardItems builds the inventory from the DB rows alone. It performs no
+// network I/O and no secret hydration: health is attached only where a probe
+// already ran, so listing a fleet of unreachable connections is as fast as
+// listing a healthy one.
+func dashboardItems(connections []*models.Connection, usage map[string]int) []connectionDashboardItem {
 	items := make([]connectionDashboardItem, len(connections))
-	group, groupContext := errgroup.WithContext(ctx)
-	group.SetLimit(dashboardProbeConcurrency)
 	for index, connection := range connections {
-		index, connection := index, connection
-		group.Go(func() error {
-			health, err := dashboardHealth(groupContext, h.ctx, connection)
-			if err != nil {
-				return err
-			}
-			items[index] = connectionDashboardItem{
-				ID: connection.ID.String(), Name: connection.Name, Namespace: connection.Namespace,
-				Type: connection.Type, Endpoint: dashboardEndpointFor(connection),
-				SecretCount:      dashboardSecretCount(connection),
-				InlineCredential: hasInlineConnectionCredential(connection.URL),
-				InsecureTLS:      connection.InsecureTLS, Health: health,
-				ProfileCount: dashboardProfileCount(connection, usage), UpdatedAt: connection.UpdatedAt,
-			}
-			return nil
-		})
+		items[index] = connectionDashboardItem{
+			ID: connection.ID.String(), Name: connection.Name, Namespace: connection.Namespace,
+			Type: connection.Type, Endpoint: dashboardEndpointFor(connection),
+			SecretCount:      dashboardSecretCount(connection),
+			InlineCredential: hasInlineConnectionCredential(connection.URL),
+			InsecureTLS:      connection.InsecureTLS,
+			ProfileCount:     dashboardProfileCount(connection, usage), UpdatedAt: connection.UpdatedAt,
+		}
+		if cached, ok := cachedConnectionHealth(connection.ID.String(), connection.UpdatedAt); ok {
+			items[index].Health = healthSummary(cached)
+		}
 	}
-	if err := group.Wait(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
-func dashboardHealth(
-	ctx context.Context,
-	connectionContext dbcontext.Context,
-	connection *models.Connection,
-) (connectionDashboardHealth, error) {
-	resolved := cloneConnection(connection)
-	if _, err := dbcontext.HydrateConnection(connectionContext, resolved); err != nil {
-		return connectionDashboardHealth{
-			State: connectionHealthCredentials, Detail: sanitizeConnectionError(err, connection, resolved),
-		}, nil
-	}
-
-	probeContext, cancel := context.WithTimeout(ctx, 5*time.Second)
-	defer cancel()
-	server := discoverServer(probeContext, connectionContext, resolved)
-	if ctx.Err() != nil {
-		return connectionDashboardHealth{}, ctx.Err()
-	}
-	if server.Status == "error" {
-		return connectionDashboardHealth{
-			State:  connectionHealthUnreachable,
-			Detail: sanitizeConnectionError(fmt.Errorf("%s", server.Message), connection, resolved),
-		}, nil
-	}
-	if server.Status == "unavailable" {
-		return connectionDashboardHealth{
-			State: connectionHealthUnverifiable, Detail: "No version discovery for this connection type",
-		}, nil
-	}
-	detail := strings.TrimSpace(strings.Join([]string{server.Product, server.Version}, " "))
-	if detail == "" {
-		detail = "Available"
-	}
-	return connectionDashboardHealth{State: connectionHealthHealthy, Detail: detail}, nil
+	return items
 }
 
 func dashboardEndpointFor(connection *models.Connection) *dashboardEndpoint {
@@ -321,8 +267,9 @@ func dashboardProfileCount(connection *models.Connection, counts map[string]int)
 	return count
 }
 
-// AddDashboardOpenAPI documents the aggregate read without publishing it as an explorer surface.
-func AddDashboardOpenAPI(spec *rpc.OpenAPISpec) {
+// AddConnectionsOpenAPI documents the inventory read and its opt-in health
+// trigger without publishing either as an explorer surface.
+func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 	if spec.Paths == nil {
 		spec.Paths = map[string]rpc.OpenAPIPath{}
 	}
@@ -334,18 +281,49 @@ func AddDashboardOpenAPI(spec *rpc.OpenAPISpec) {
 		"updatedAt": {Type: "string", Format: "date-time"},
 	}}
 	spec.Paths[connectionDashboardPath] = rpc.OpenAPIPath{"get": {
-		Tags: []string{"Connections"}, Summary: "List connection dashboard health",
-		Description: "Returns one profile-aware, concurrently probed connection fleet for the namespace-lane dashboard.",
-		OperationID: "listConnectionDashboardHealth",
+		Tags: []string{"Connections"}, Summary: "List connection inventory",
+		Description: "Returns the profile-aware connection fleet for the namespace-lane dashboard. " +
+			"Reads the database only — health is attached only where a prior check is still cached.",
+		OperationID: "listConnectionInventory",
 		Parameters: []rpc.OpenAPIParameter{
 			{Name: "type", In: "query", Schema: &rpc.OpenAPISchema{Type: "string"}},
 			{Name: "types", In: "query", Schema: &rpc.OpenAPISchema{Type: "string"}},
 		},
 		Responses: map[string]rpc.OpenAPIResponse{"200": {
-			Description: "Connection dashboard",
+			Description: "Connection inventory",
 			Content: map[string]rpc.OpenAPIMediaType{"application/json": {Schema: &rpc.OpenAPISchema{
 				Type: "object", Properties: map[string]*rpc.OpenAPISchema{
 					"connections": {Type: "array", Items: item},
+					"generatedAt": {Type: "string", Format: "date-time"},
+				},
+			}}},
+		}},
+	}}
+	spec.Paths[connectionHealthPath] = rpc.OpenAPIPath{"post": {
+		Tags: []string{"Connections"}, Summary: "Check connection health",
+		Description: "Probes the named connections on demand and caches the outcome. " +
+			"A slow or failing connection yields an individual result, never a failed request.",
+		OperationID: "checkConnectionHealth",
+		RequestBody: &rpc.OpenAPIRequestBody{
+			Required: true,
+			Content: map[string]rpc.OpenAPIMediaType{"application/json": {Schema: &rpc.OpenAPISchema{
+				Type: "object", Properties: map[string]*rpc.OpenAPISchema{
+					"ids":   {Type: "array", Items: &rpc.OpenAPISchema{Type: "string"}},
+					"force": {Type: "boolean"},
+				},
+			}}},
+		},
+		Responses: map[string]rpc.OpenAPIResponse{"200": {
+			Description: "Connection health results",
+			Content: map[string]rpc.OpenAPIMediaType{"application/json": {Schema: &rpc.OpenAPISchema{
+				Type: "object", Properties: map[string]*rpc.OpenAPISchema{
+					"results": {Type: "array", Items: &rpc.OpenAPISchema{
+						Type: "object", Properties: map[string]*rpc.OpenAPISchema{
+							"id": {Type: "string"}, "state": {Type: "string"}, "detail": {Type: "string"},
+							"checkedAt": {Type: "string", Format: "date-time"},
+							"durationMs": {Type: "integer"}, "cached": {Type: "boolean"},
+						},
+					}},
 					"generatedAt": {Type: "string", Format: "date-time"},
 				},
 			}}},

@@ -63,6 +63,13 @@ func createOrGetKeeper(ctx context.Context) (*secrets.Keeper, error) {
 	keeperLock.Lock()
 	defer keeperLock.Unlock()
 
+	// Re-check under the write lock: without it two concurrent misses each build
+	// a keeper and the second Set silently overwrites the first. go-cache does
+	// not fire OnEvicted on overwrite, so the orphan would never be closed.
+	if cached, ok := keeperCache.Get("keeper"); ok {
+		return cached.(*secrets.Keeper), nil
+	}
+
 	keeper, err := KeeperFromConnection(ctx, KMSConnection)
 	if err != nil {
 		return nil, err
@@ -71,6 +78,14 @@ func createOrGetKeeper(ctx context.Context) (*secrets.Keeper, error) {
 	ttl := ctx.Properties().Duration("secretkeeper.cache.ttl", defaultKeeperTTL)
 	keeperCache.Set("keeper", keeper, ttl)
 	return keeper, nil
+}
+
+// InvalidateKeeper drops the cached keeper so a KMSConnection change takes
+// effect immediately instead of after the cache TTL.
+func InvalidateKeeper() {
+	keeperLock.Lock()
+	defer keeperLock.Unlock()
+	keeperCache.Delete("keeper")
 }
 
 func KeeperFromConnection(ctx context.Context, connectionString string) (*secrets.Keeper, error) {

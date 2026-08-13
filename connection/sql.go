@@ -11,10 +11,14 @@ import (
 
 	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
 	mysql "github.com/go-sql-driver/mysql"
+	// glebarez/go-sqlite is modernc's engine repackaged, and registers the same
+	// "sqlite" driver name. It is the one the gorm dialector links, so importing
+	// modernc directly here would panic with a duplicate driver registration in
+	// any binary that uses both.
+	_ "github.com/glebarez/go-sqlite"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
-	_ "modernc.org/sqlite"
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"

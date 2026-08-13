@@ -8,7 +8,6 @@ import (
 	"github.com/flanksource/commons-db/models"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	_ "modernc.org/sqlite"
 )
 
 var _ = Describe("SQLite SQL connections", func() {

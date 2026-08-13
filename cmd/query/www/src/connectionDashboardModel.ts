@@ -9,7 +9,15 @@ export type ConnectionDashboardHealthState =
   | "healthy"
   | "credentials"
   | "unreachable"
-  | "unverifiable";
+  | "unverifiable"
+  | "unknown";
+
+export type ConnectionHealth = {
+  state: ConnectionDashboardHealthState;
+  detail: string;
+  checkedAt: string;
+  cached: boolean;
+};
 
 export type ConnectionDashboardItem = {
   id: string;
@@ -20,13 +28,25 @@ export type ConnectionDashboardItem = {
   secretCount: number;
   inlineCredential: boolean;
   insecureTLS: boolean;
-  health: { state: ConnectionDashboardHealthState; detail: string };
+  // Absent until someone checks: listing reads the database only, so a
+  // connection has no health until a check is explicitly requested.
+  health?: ConnectionHealth | null;
   profileCount: number;
   updatedAt: string;
 };
 
 export type ConnectionDashboardResponse = {
   connections: ConnectionDashboardItem[];
+  generatedAt: string;
+};
+
+export type ConnectionHealthResult = ConnectionHealth & {
+  id: string;
+  durationMs: number;
+};
+
+export type ConnectionHealthResponse = {
+  results: ConnectionHealthResult[];
   generatedAt: string;
 };
 
@@ -55,6 +75,8 @@ export function groupConnectionDashboardLanes(
       return a.namespace.localeCompare(b.namespace);
     });
 }
+
+export const connectionHealthUrl = "/api/v1/connections/health";
 
 export function connectionDashboardUrl(requestUrl?: string): string {
   const target = new URL("/api/v1/connections/dashboard", "http://query.local");
