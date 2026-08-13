@@ -46,6 +46,7 @@ var _ = Describe("New", Ordered, func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(serve.Flags().Lookup("data-dir")).To(BeNil())
 		Expect(serve.Flags().Lookup("reconcile-snapshot-max-age").DefValue).To(Equal("1h0m0s"))
+		Expect(serve.Flags().Lookup("hide-error-details").DefValue).To(Equal("false"))
 	})
 
 	DescribeTable("builds the command tree without starting postgres",

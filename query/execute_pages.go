@@ -53,7 +53,11 @@ func PagesNatively(providerType string) bool {
 // walked by offset, which is correct and merely slower.
 func walkRequest(p Profile, batch int) PageRequest {
 	page := PageRequest{Limit: batch}
-	if len(p.Order) > 0 && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
+	// A derivation failure is not decided here: ExecutePages resolves the same
+	// order and reports it. This only chooses a strategy, and offset is the
+	// correct one for a profile that turns out to have no order at all.
+	order, err := p.EffectiveOrder()
+	if err == nil && len(order) > 0 && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
 		page.Strategy = PagingCursor
 	}
 	return page
@@ -77,10 +81,19 @@ func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...ma
 		return ErrorPage(fmt.Errorf("profile %q is a trace; use ExecuteStream", p.Name))
 	}
 
+	// Resolved once and used for both the provider request and the cursor scope
+	// below: the scope is what a cursor is validated against, so serving a page
+	// under one order and scoping it under another would stale every cursor the
+	// walk mints.
+	order, err := p.EffectiveOrder()
+	if err != nil {
+		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+	}
+
 	// A position past the first row only means something under a total order,
 	// so the profile is held to declaring one before it can be asked for one.
 	if page.Offset > 0 || !page.Cursor.IsZero() {
-		if err := p.Order.Pageable(); err != nil {
+		if err := order.Pageable(); err != nil {
 			return ErrorPage(fmt.Errorf("profile %q cannot be paged: %w", p.Name, err))
 		}
 	}
@@ -106,15 +119,19 @@ func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...ma
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}
 	req.Filters = filters
-	req.Order = p.Order
+	req.Order = order
 	req.Diagnostics = page.Diagnostics
+	if req.Diagnostics == nil {
+		req.Diagnostics = DiagnosticSink(ctx)
+	}
+	req.Diagnostics.RecordRendered(req.Query, req.Options)
 	scope := CursorScope{
 		Profile:    p.Name,
 		Provider:   p.Provider.Type,
 		Connection: req.Connection,
 		Query:      req.Query,
 		Options:    req.Options,
-		Order:      p.Order,
+		Order:      order,
 		Params:     resolved,
 		Roles:      paramRoles(p.Params),
 		Filters:    filters,

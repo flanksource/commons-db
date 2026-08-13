@@ -223,6 +223,17 @@ var _ = Describe("Profile schema", func() {
 		column := props["columns"].(schema.Schema)["items"].(schema.Schema)
 		columnProps := column["properties"].(schema.Schema)
 		Expect(columnProps["kind"].(schema.Schema)["enum"]).To(ContainElement("timestamp"))
+
+		// Every CEL field asks for the expression editor and says which scope it
+		// compiles in — the distinction the document itself never records.
+		for _, cel := range []schema.Schema{
+			columnProps["cel"].(schema.Schema),
+			columnProps["style"].(schema.Schema),
+			props["aliases"].(schema.Schema)["items"].(schema.Schema)["properties"].(schema.Schema)["cel"].(schema.Schema),
+		} {
+			Expect(cel["x-clicky-component"]).To(Equal("cel-editor"))
+			Expect(cel["x-clicky-cel-scope"]).To(Equal("row"))
+		}
 		typeSchema := columnProps["type"].(schema.Schema)
 		Expect(typeSchema["enum"]).To(ContainElements("key_value", "key_values", "json"))
 		Expect(typeSchema["x-enum-labels"].(map[string]string)).To(HaveKeyWithValue("key_values", "[]KeyValue"))
@@ -560,6 +571,13 @@ var _ = Describe("Profile column editor schema", func() {
 		Expect(filter).ToNot(HaveKey("required"))
 		Expect(filterProps["field"].(schema.Schema)["description"]).To(ContainSubstring("required only when the column implies none"))
 		Expect(filterProps["kind"].(schema.Schema)["enum"]).To(Equal(query.ColumnFilterKindValues()))
+		// The labels are a hand-written map beside a generated enum, so the only
+		// thing stopping a tenth kind reaching the editor unnamed is this.
+		kindLabels := filterProps["kind"].(schema.Schema)["x-enum-labels"].(map[string]string)
+		Expect(kindLabels).To(HaveLen(len(query.ColumnFilterKindValues())))
+		for _, kind := range query.ColumnFilterKindValues() {
+			Expect(kindLabels).To(HaveKey(kind))
+		}
 		Expect(props["kind"].(schema.Schema)["title"]).To(Equal("Role"))
 		Expect(props["kind"].(schema.Schema)["description"]).To(ContainSubstring("independent of Type"))
 		Expect(props["format"].(schema.Schema)["enum"]).To(Equal([]string{"date", "float", "duration", "bytes", "currency"}))

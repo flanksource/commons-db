@@ -270,7 +270,7 @@ export function ReconcileBench({
   );
 }
 
-function ProfileFilters({
+export function ProfileFilters({
   side,
   client,
   operation,

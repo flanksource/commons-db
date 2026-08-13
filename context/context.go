@@ -84,7 +84,7 @@ func (k Context) Oops(tags ...string) oops.OopsErrorBuilder {
 	for k, v := range k.GetLoggingContext() {
 		args = append(args, k, v)
 	}
-	return oops.With(args...).Tags(tags...)
+	return oops.With(args...).Tags(tags...).WithContext(k.Context)
 }
 
 func New(opts ...commons.ContextOptions) Context {

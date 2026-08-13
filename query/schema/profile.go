@@ -191,7 +191,13 @@ func ProfileSource() Schema {
 				},
 			},
 			"width": Schema{"type": "integer", "title": "Width", "description": "Maximum rendered width in characters", "x-clicky-order": 7},
-			"cel":   Schema{"type": "string", "title": "CEL", "description": "Expression computing the cell value from `row`", "x-clicky-order": 8},
+			"cel": Schema{
+				"type": "string", "title": "CEL",
+				"description":        "Expression computing the cell value from `row`",
+				"x-clicky-component": celEditorComponent,
+				"x-clicky-cel-scope": string(query.ScopeRow),
+				"x-clicky-order":     8,
+			},
 			"jsonpath": Schema{
 				"type": "string", "title": "JSONPath",
 				"description":        "Path computing the cell value, rooted at the row or at Source when it is set; an alternative to CEL",
@@ -220,28 +226,31 @@ func ProfileSource() Schema {
 					"kind": Schema{
 						"type": "string", "title": "Kind", "enum": query.ColumnFilterKindValues(),
 						"x-enum-labels": map[string]string{
-							"terms":   "Value selection",
-							"range":   "Numeric range",
-							"time":    "Time range",
-							"boolean": "Yes/no",
-							"text":    "Substring",
-							"none":    "Not filterable",
+							"terms":    "Value selection",
+							"exact":    "Exact match",
+							"text":     "Substring",
+							"range":    "Numeric range",
+							"duration": "Duration range",
+							"date":     "Date range",
+							"time":     "Date & time range",
+							"boolean":  "Yes/no",
+							"none":     "Not filterable",
 						},
 						"x-enum-display": "combobox",
 						"description":    "Overrides the control derived from Type; set it where the rendered type and the backend storage disagree",
 					},
 					"options": Schema{
 						"type": "array", "items": Schema{"type": "string"}, "title": "Options", "x-col-span": "full",
-						"description": "Selectable values; leave empty to ask the backend for its own distinct values",
+						"description": "Selectable values; leave empty to ask the backend for its own distinct values. Value selections only",
 					},
 					"lookup": Schema{
 						"type": "boolean", "title": "Lookup", "default": true,
-						"description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked",
+						"description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked. Value selections only",
 					},
 					"limit": Schema{
 						"type": "integer", "title": "Limit", "default": query.DefaultFilterLookupLimit,
 						"minimum": 1, "maximum": query.MaxFilterLookupLimit,
-						"description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup",
+						"description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup. Value selections only",
 					},
 					"multi": Schema{
 						"type": "boolean", "title": "Multi", "default": true,
@@ -254,12 +263,25 @@ func ProfileSource() Schema {
 				},
 			},
 			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for CEL and processors", "x-clicky-order": 11},
-			"style":  Schema{"type": "string", "title": "Style", "description": `CEL returning this cell's presentation classes, e.g. level == "ERROR" ? "text-red-500" : ""`, "x-clicky-order": 12},
+			"style": Schema{
+				"type": "string", "title": "Style",
+				"description":        `CEL returning this cell's presentation classes, e.g. level == "ERROR" ? "text-red-500" : ""`,
+				"x-clicky-component": celEditorComponent,
+				"x-clicky-cel-scope": string(query.ScopeRow),
+				"x-clicky-order":     12,
+			},
 		},
 	}
 	aliasDef := Schema{
 		"type": "object", "required": []string{"name", "cel"},
-		"properties": Schema{"name": strProp("Name", "Dotted output path"), "cel": strProp("CEL", "Ordered row projection")},
+		"properties": Schema{
+			"name": strProp("Name", "Dotted output path"),
+			"cel": Schema{
+				"type": "string", "title": "CEL", "description": "Ordered row projection",
+				"x-clicky-component": celEditorComponent,
+				"x-clicky-cel-scope": string(query.ScopeRow),
+			},
+		},
 	}
 	filterDef := Schema{
 		"type": "object", "required": []string{"fields"},
@@ -372,6 +394,12 @@ func ProfileSource() Schema {
 			"processors": Schema{
 				"type": "array", "title": "Processors", "x-layout": "table", "items": processorSpec(),
 				"description": "Post-query steps applied in order, after columns and aliases",
+				// The order of this array is semantic — a stack-trace merge has to
+				// run before a dedupe, or every frame dedupes as its own line — and
+				// `config` is an untyped object no schema-driven control can check.
+				// The pipeline widget owns both, so it replaces the table layout.
+				"x-clicky-component": "processor-pipeline",
+				"x-clicky-presets":   namedProcessorPresets(),
 			},
 			"replay":    replaySpec(),
 			"reconcile": reconcileSpec(),
@@ -415,6 +443,25 @@ func processorSpec() Schema {
 			"config": Schema{"type": "object", "title": "Config", "x-clicky-order": 2, "description": "Processor-specific configuration"},
 		},
 	}
+}
+
+// namedProcessorPresets is what each library key actually resolves to.
+//
+// `use: java.stacktrace` runs eleven configuration keys the author never typed,
+// and `Resolve()` merges their own `config` over them — so an editor showing
+// only the override is showing a fraction of what runs. The enum alone cannot
+// say that, which is why the resolved spec travels with the schema.
+func namedProcessorPresets() Schema {
+	presets := Schema{}
+	for _, named := range query.NamedProcessors() {
+		presets[named.Name] = Schema{
+			"type":        named.Spec.Type,
+			"title":       named.Title,
+			"description": named.Description,
+			"config":      named.Spec.Config,
+		}
+	}
+	return presets
 }
 
 // namedProcessorLabels maps each library key to its short title, which is what
@@ -563,6 +610,13 @@ func Profile() Schema {
 // hierarchy — `jms.incoming` nests, `remote-debugger` does not. Kept in sync with
 // cmd/query/profiles.profilePathDelimiters, which emits the same split as the
 // sidebar's x-clicky-path.
+// celEditorComponent marks a field whose value is a CEL expression, so the form
+// offers an editor that knows the bindings and can evaluate against sample rows
+// rather than a bare text input. The scope travels beside it in
+// `x-clicky-cel-scope`, because the same expression text means different things
+// under a column and under a processor's `set`.
+const celEditorComponent = "cel-editor"
+
 const profilePathDelimiters = "./"
 
 // profileRefLookup is the x-clicky-lookup for a field naming another profile. It

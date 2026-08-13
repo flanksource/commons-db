@@ -47,8 +47,17 @@ representation:
 | `GET /api/v1/profile/{name}?format=csv&scope=page` | export the current page |
 | `GET /api/v1/profile/{name}?format=ndjson&scope=all` | stream every SQL/OpenSearch row |
 | `GET /api/v1/profile/{name}` + `Accept: application/schema+json` | per-profile schema: `properties` = FilterBar inputs, `x-clicky-columns` = DataTable columns |
+| `GET /api/v1/profile/{name}?<params>` + `Accept: application/info+json` | **explain** the same execution → the provider query, its bound arguments, timings and paging headers, instead of rows |
 
-(`?__schema` is accepted as an alias for the schema Accept header.)
+(`?__schema` and `?__info` are accepted as aliases for their Accept headers.)
+
+An info request runs the page it is asked about — that is the only way to know
+what the provider was actually sent, since the query is rendered from the params
+and filters in the URL. It never runs an all-row export: the scope is forced back
+to one page, so explaining a download costs a page and not the download. A failed
+execution answers with the same diagnostics plus the error, which is the case the
+endpoint mostly exists for. It is what the result table's **Show query** menu item
+reads.
 
 Profile results export as JSON, NDJSON, CSV, YAML, Markdown, HTML, XLSX, or
 PDF. SQL and OpenSearch all-row exports keep bounded memory by consuming a

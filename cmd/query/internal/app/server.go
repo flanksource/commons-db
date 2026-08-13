@@ -25,6 +25,7 @@ type ServeOptions struct {
 	DatabaseURL             string
 	DataDir                 string
 	Dev                     bool
+	HideErrorDetails        bool
 	MaxSessions             int
 	MaxSessionDuration      time.Duration
 	SessionRetention        time.Duration
@@ -120,7 +121,8 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	server := rpc.NewSwaggerServer(
 		&rpc.ServeConfig{
 			Host: options.Host, Port: options.Port, Title: "Query", Version: "0.1.0", SkipHealth: false,
-			Executor: &rpc.ExecutorConfig{Enabled: true, SkipPreRun: true, PathPrefix: "/api/v1"},
+			HideErrorDetails: options.HideErrorDetails,
+			Executor:         &rpc.ExecutorConfig{Enabled: true, SkipPreRun: true, PathPrefix: "/api/v1"},
 		},
 		root,
 		&rpc.OpenAPIConfig{Title: "Query", Description: "Connections, profiles and execution", Version: "0.1.0"},

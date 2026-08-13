@@ -45,6 +45,17 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// An info request asks the same URL what it would run rather than for its
+	// rows, so it is answered before the execution branch reads it as one.
+	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && wantsInfo(r) {
+		if name, ok := h.profileName(r.URL.EscapedPath()); ok {
+			if r.Method == http.MethodHead {
+				w = headResponseWriter{w}
+			}
+			h.serveInfo(w, r, name)
+			return
+		}
+	}
 	// HEAD answers the same question as GET and is how a caller reads the paging
 	// headers — the total above all — without paying for the rows. The body is
 	// discarded rather than never produced: the totals it reports are only known
@@ -122,13 +133,58 @@ func (h *execHandler) profileName(path string) (string, bool) {
 	return name, err == nil
 }
 
-func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name string) {
-	// Before anything that can fail: every error below is one a browser has to
-	// be able to read to act on.
-	setCORSHeaders(w)
+// executionRequest is one profile execution as the transport resolved it: the
+// stored profile, the parameters the caller supplied, and the export asked for.
+// Shared by the execution itself and by the info request that reports on it, so
+// the two can never disagree about which query a URL names.
+type executionRequest struct {
+	profile query.Profile
+	params  map[string]any
+	export  exportRequest
+}
 
+// resolveExecution answers every question a profile URL raises before its rows
+// are read. It writes its own failure response and reports false when it did.
+func (h *execHandler) resolveExecution(w http.ResponseWriter, r *http.Request, name string) (executionRequest, bool) {
+	name, err := h.storedProfileName(r.Context(), name)
+	if err != nil {
+		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
+		return executionRequest{}, false
+	}
+	resolved, err := Resolve(r.Context(), h.store, name)
+	if err != nil {
+		if errors.Is(err, dbcontext.ErrConnectionExpired) {
+			writeExecError(w, http.StatusGone, "snapshot_expired", err)
+			return executionRequest{}, false
+		}
+		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
+		return executionRequest{}, false
+	}
+	p := resolved.Profile
+	if p.Provider.Type == "opentelemetry" && p.Provider.Connection == "" {
+		h.writeConnectionRequired(w, name, resolved.ConnectionProfile)
+		return executionRequest{}, false
+	}
+
+	params, err := executeParams(r, p)
+	if err != nil {
+		writeExecError(w, http.StatusBadRequest, "invalid_params", err)
+		return executionRequest{}, false
+	}
+
+	export, err := parseExportRequest(r, p)
+	if err != nil {
+		writeExecError(w, http.StatusBadRequest, "invalid_export_request", err)
+		return executionRequest{}, false
+	}
+	export.maxRows = p.RowLimits().MaxExportRows
+	return executionRequest{profile: p, params: params, export: export}, true
+}
+
+// executionContext is the cancellable context an execution runs under: the
+// server's, cancelled when the caller hangs up.
+func (h *execHandler) executionContext(r *http.Request) (dbcontext.Context, stdcontext.CancelFunc) {
 	base, cancel := stdcontext.WithCancel(h.ctx.Context)
-	defer cancel()
 	go func() {
 		select {
 		case <-r.Context().Done():
@@ -136,39 +192,22 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		case <-base.Done():
 		}
 	}()
-	execCtx := h.ctx.Wrap(base)
+	return h.ctx.Wrap(base), cancel
+}
 
-	name, err := h.storedProfileName(r.Context(), name)
-	if err != nil {
-		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
-		return
-	}
-	resolved, err := Resolve(r.Context(), h.store, name)
-	if err != nil {
-		if errors.Is(err, dbcontext.ErrConnectionExpired) {
-			writeExecError(w, http.StatusGone, "snapshot_expired", err)
-			return
-		}
-		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
-		return
-	}
-	p := resolved.Profile
-	if p.Provider.Type == "opentelemetry" && p.Provider.Connection == "" {
-		h.writeConnectionRequired(w, name, resolved.ConnectionProfile)
-		return
-	}
+func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name string) {
+	// Before anything that can fail: every error below is one a browser has to
+	// be able to read to act on.
+	setCORSHeaders(w)
 
-	params, err := executeParams(r, p)
-	if err != nil {
-		writeExecError(w, http.StatusBadRequest, "invalid_params", err)
-		return
-	}
+	execCtx, cancel := h.executionContext(r)
+	defer cancel()
 
-	export, err := parseExportRequest(r, p)
-	if err != nil {
-		writeExecError(w, http.StatusBadRequest, "invalid_export_request", err)
+	request, ok := h.resolveExecution(w, r, name)
+	if !ok {
 		return
 	}
+	p, params, export := request.profile, request.params, request.export
 
 	if export.scope == "all" && export.format == "clicky-json" {
 		writeExecError(w, http.StatusUnprocessableEntity, "format_not_exportable",
@@ -186,7 +225,6 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 
-	export.maxRows = p.RowLimits().MaxExportRows
 	response, err := exportRows(execCtx, p, params, export)
 	if err != nil {
 		// A stale cursor is the caller's to fix by starting the walk again, so
@@ -569,7 +607,7 @@ func sanitizeExportFilename(filename string) string {
 // format, content-negotiation) rather than a profile filter param.
 func IsReservedParam(key string) bool {
 	switch key {
-	case "format", "scope", "page", "limit", "offset", "filename", "_download", "args", "__schema", "__lookup", "__lookup_filter", "__lookup_q":
+	case "format", "scope", "page", "limit", "offset", "filename", "_download", "args", "__schema", "__info", "__lookup", "__lookup_filter", "__lookup_q":
 		return true
 	default:
 		return false

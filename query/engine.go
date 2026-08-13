@@ -52,7 +52,12 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	req.Filters = filters
-	req.Order = p.Order
+	req.Order, err = p.EffectiveOrder()
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	req.Diagnostics = DiagnosticSink(ctx)
+	req.Diagnostics.RecordRendered(req.Query, req.Options)
 
 	rows, styles, truncated, err := drainPages(ctx, p, req)
 	if err != nil {

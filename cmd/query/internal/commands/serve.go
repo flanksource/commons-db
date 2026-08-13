@@ -31,6 +31,7 @@ func newServe(application *app.App) *cobra.Command {
 	flags.StringVar(&options.Host, "host", options.Host, "Host to bind")
 	flags.IntVarP(&options.Port, "port", "p", options.Port, "Port to bind")
 	flags.BoolVar(&options.Dev, "dev", options.Dev, "Spawn a Vite dev server and proxy the UI to it")
+	flags.BoolVar(&options.HideErrorDetails, "hide-error-details", options.HideErrorDetails, "Hide unclassified error details from API responses")
 	flags.IntVar(&options.MaxSessions, "max-sessions", options.MaxSessions, "Maximum concurrently running trace/top sessions")
 	flags.DurationVar(&options.MaxSessionDuration, "max-session-duration", options.MaxSessionDuration, "Upper bound on any trace/top session; profiles can only lower it")
 	flags.DurationVar(&options.SessionRetention, "session-retention", options.SessionRetention, "How long finished sessions and their events are kept in PostgreSQL")

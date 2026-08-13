@@ -27,11 +27,15 @@ type exportRequest struct {
 	// pageable reports whether the profile can serve a position past its first
 	// page. A response that cannot must not report one as available.
 	pageable bool
+
+	// diagnostics is set only for an info request, which runs the export it is
+	// asked about purely to report what the provider was sent.
+	diagnostics *query.ProviderDiagnostics
 }
 
 // pageRequest renders the transport request as the engine's page.
 func (r exportRequest) pageRequest() query.PageRequest {
-	page := query.PageRequest{Limit: r.limit, Offset: r.offset, Cursor: r.cursor}
+	page := query.PageRequest{Limit: r.limit, Offset: r.offset, Cursor: r.cursor, Diagnostics: r.diagnostics}
 	if r.scope == "all" {
 		// An export reads forward to the ceiling and never jumps, so it takes
 		// the strategy that does not get more expensive the further it goes.
@@ -44,10 +48,11 @@ func (r exportRequest) pageRequest() query.PageRequest {
 		// whether the ceiling bit, and X-Total-Relation says "unknown" rather
 		// than implying a count nobody stated.
 		page = query.PageRequest{
-			Limit:     query.DefaultMaxPageSize,
-			Strategy:  query.PagingCursor,
-			Ceiling:   r.maxRows,
-			SkipTotal: true,
+			Limit:       query.DefaultMaxPageSize,
+			Strategy:    query.PagingCursor,
+			Ceiling:     r.maxRows,
+			SkipTotal:   true,
+			Diagnostics: r.diagnostics,
 		}
 	}
 	return page
