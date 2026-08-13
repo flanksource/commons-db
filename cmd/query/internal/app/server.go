@@ -62,6 +62,9 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	if options.ReconcileSnapshotMaxAge <= 0 {
 		return fmt.Errorf("reconcile snapshot maximum age must be positive")
 	}
+	// SetMaxAge before Prepare, and the order is load-bearing: SetMaxAge refuses
+	// while snapshots exist, and Prepare is what reloads them from disk. Swapped,
+	// a server that had ever written a snapshot would fail to start.
 	if err := a.snapshots.SetMaxAge(options.ReconcileSnapshotMaxAge); err != nil {
 		return err
 	}

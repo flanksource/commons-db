@@ -13,8 +13,11 @@ import (
 	"sync"
 	"time"
 
-	_ "github.com/glebarez/go-sqlite"
 	"github.com/google/uuid"
+	// Pure-Go sqlite driver for the snapshot files. Must be modernc, never
+	// github.com/glebarez/go-sqlite — both register the "sqlite" driver name and
+	// linking both panics at init. See connection/sql.go for the full rationale.
+	_ "modernc.org/sqlite"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -56,8 +59,12 @@ type snapshot struct {
 	dest          string
 	sourceCut     bool
 	destCut       bool
-	profiles      map[string]materialization
-	leases        int
+	// baseProfile names the reconciliation itself among profiles, which also
+	// holds every projection materialized from it.
+	baseProfile string
+	reconcile   *profiles.ReconcileSnapshotProvenance
+	profiles    map[string]materialization
+	leases      int
 }
 
 type materialization struct {
@@ -88,18 +95,25 @@ func New(options Options) (*Manager, error) {
 	}, nil
 }
 
-// Prepare clears files left by a previous process and creates the private root.
-// Serve calls it at startup; tests and direct callers can create lazily.
+// Prepare creates the private root, reloads the snapshots a previous process
+// left behind, and starts the prune loop. Serve calls it at startup; tests and
+// direct callers can create lazily.
+//
+// It no longer wipes the directory. Persisting each snapshot's metadata beside
+// its rows is what makes a /reconcile/{id} link outlive the process that
+// created it, and a startup wipe would undo exactly that. Anything whose
+// deadline passed while the process was down is dropped during the reload, so
+// the guarantee a client was given still holds.
 func (m *Manager) Prepare() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.items) > 0 {
 		return fmt.Errorf("cannot prepare snapshots while snapshots exist")
 	}
-	if err := os.RemoveAll(m.dir); err != nil {
-		return fmt.Errorf("clear orphaned snapshots: %w", err)
-	}
 	if err := m.ensureRootLocked(); err != nil {
+		return err
+	}
+	if err := m.reloadLocked(); err != nil {
 		return err
 	}
 	if m.stop == nil {
@@ -157,28 +171,47 @@ func (m *Manager) Create(ctx context.Context, result *query.ReconcileResult, age
 
 	profileName := "reconciliations/" + short + "/results"
 	connectionName := "reconciliation-" + short
-	connectionID := uuid.New()
 	profile := snapshotProfile(profileName, "reconcile_rows", columns, connectionName, len(rows))
 	now := m.now()
 	item := &snapshot{
 		id: id, path: path, db: writer, createdAt: now, lastAccessed: now, age: age,
-		connection: models.Connection{
-			ID: connectionID, Name: connectionName, Namespace: "reconciliations", Source: "reconcile",
-			Type: models.ConnectionTypeSQLite, URL: readOnlyDSN(path), Virtual: true, ReadOnly: true,
-			CreatedAt: now, UpdatedAt: now,
-		},
-		stats: result.Stats, source: result.Source, dest: result.Dest,
+		connection: snapshotConnection(uuid.New(), connectionName, path, now),
+		stats:      result.Stats, source: result.Source, dest: result.Dest,
 		sourceCut: result.SourceTruncated, destCut: result.DestTruncated,
+		baseProfile: profileName,
+		reconcile: &profiles.ReconcileSnapshotProvenance{
+			Config:    result.Config,
+			Execution: result.Provenance,
+		},
 		profiles: map[string]materialization{
 			profileName: {profile: profile, table: "reconcile_rows", columns: columns, rows: len(rows)},
 		},
 	}
 	item.connection.ExpiresAt = ptrTime(now.Add(age))
+	// Written inside the cleanup-guarded region: a snapshot whose provenance
+	// could not be stored is a snapshot that will not survive a restart, so it
+	// fails now rather than silently becoming unreadable later.
+	if err := writeSnapshotMetadata(ctx, writer, metadataOf(item)); err != nil {
+		cleanup()
+		return profiles.ReconcileSnapshotDescriptor{}, err
+	}
 	m.mu.Lock()
 	m.items[id] = item
 	m.profiles[profileName] = id
+	descriptor := m.descriptorLocked(item, item.profiles[profileName])
 	m.mu.Unlock()
-	return m.descriptor(item, item.profiles[profileName]), nil
+	return descriptor, nil
+}
+
+// snapshotConnection builds the virtual connection a snapshot is reached
+// through. Create and the restart reload share it so a reloaded snapshot is
+// addressable exactly as the one that wrote it.
+func snapshotConnection(id uuid.UUID, name, path string, at time.Time) models.Connection {
+	return models.Connection{
+		ID: id, Name: name, Namespace: "reconciliations", Source: "reconcile",
+		Type: models.ConnectionTypeSQLite, URL: readOnlyDSN(path), Virtual: true, ReadOnly: true,
+		CreatedAt: at, UpdatedAt: at,
+	}
 }
 
 func (m *Manager) ensureRootLocked() error {
@@ -202,7 +235,7 @@ func (m *Manager) acquireSnapshot(id string) (*snapshot, func(), error) {
 		if _, found := m.expired[id]; found {
 			return nil, nil, ErrExpired
 		}
-		return nil, nil, fmt.Errorf("snapshot %q not found", id)
+		return nil, nil, fmt.Errorf("snapshot %q: %w", id, profiles.ErrSnapshotNotFound)
 	}
 	release, err := m.acquireLocked(item)
 	return item, release, err
@@ -273,12 +306,13 @@ func (m *Manager) Close() error {
 			errs = append(errs, err)
 		}
 	}
+	// The maps are reset so a Close'd-then-Prepare'd manager reloads from disk
+	// rather than from stale memory. The directory itself stays: it is the
+	// snapshots, and the next Prepare is what decides which of them are still
+	// alive. In-process reclamation remains the prune loop's job.
 	m.items = map[string]*snapshot{}
 	m.profiles = map[string]string{}
 	m.expired = map[string]struct{}{}
-	if err := os.RemoveAll(m.dir); err != nil {
-		errs = append(errs, err)
-	}
 	return errors.Join(errs...)
 }
 
@@ -311,7 +345,7 @@ func (m *Manager) snapshot(id string, touch bool) (*snapshot, error) {
 		if _, found := m.expired[id]; found {
 			return nil, ErrExpired
 		}
-		return nil, fmt.Errorf("snapshot %q not found", id)
+		return nil, fmt.Errorf("snapshot %q: %w", id, profiles.ErrSnapshotNotFound)
 	}
 	now := m.now()
 	if item.leases == 0 && !now.Before(item.lastAccessed.Add(item.age)) {
@@ -337,6 +371,21 @@ func (m *Manager) prune() {
 }
 
 func (m *Manager) removeLocked(item *snapshot) {
+	m.tombstoneLocked(item)
+	_ = item.db.Close()
+	_ = os.RemoveAll(filepath.Dir(item.path))
+	delete(m.items, item.id)
+	for name := range item.profiles {
+		delete(m.profiles, name)
+	}
+}
+
+// tombstoneLocked records every name this snapshot answered to, so a client
+// holding a stale reference is told the snapshot expired rather than that it
+// never existed. Extracted so the prune path and the restart reload — which
+// drops snapshots whose deadline passed while the process was down — leave
+// identical tombstones.
+func (m *Manager) tombstoneLocked(item *snapshot) {
 	m.expired[item.id] = struct{}{}
 	for _, reference := range []string{
 		item.connection.ID.String(), item.connection.Name,
@@ -345,16 +394,35 @@ func (m *Manager) removeLocked(item *snapshot) {
 	} {
 		m.expired[reference] = struct{}{}
 	}
-	_ = item.db.Close()
-	_ = os.RemoveAll(filepath.Dir(item.path))
-	delete(m.items, item.id)
 	for name := range item.profiles {
 		m.expired[name] = struct{}{}
-		delete(m.profiles, name)
 	}
 }
 
-func (m *Manager) descriptor(item *snapshot, materialized materialization) profiles.ReconcileSnapshotDescriptor {
+// Describe returns a stored snapshot's base descriptor.
+//
+// It touches: a by-id read is someone opening the results page, which is
+// exactly the activity sliding expiry tracks, and it is the first request of
+// that page load — a non-touching read would hand back an expires_at already
+// stale relative to the row reads that follow it milliseconds later.
+func (m *Manager) Describe(_ context.Context, id string) (profiles.ReconcileSnapshotDescriptor, error) {
+	item, err := m.snapshot(id, true)
+	if err != nil {
+		return profiles.ReconcileSnapshotDescriptor{}, err
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	base, found := item.profiles[item.baseProfile]
+	if !found {
+		return profiles.ReconcileSnapshotDescriptor{},
+			fmt.Errorf("snapshot %q has no base profile: %w", id, profiles.ErrSnapshotNotFound)
+	}
+	return m.descriptorLocked(item, base), nil
+}
+
+// descriptorLocked reads fields that acquireLocked, snapshot and Materialize
+// all mutate under m.mu, so every caller holds the lock.
+func (m *Manager) descriptorLocked(item *snapshot, materialized materialization) profiles.ReconcileSnapshotDescriptor {
 	expires := item.lastAccessed.Add(item.age)
 	return profiles.ReconcileSnapshotDescriptor{
 		ID: item.id, Connection: "connection://" + item.connection.Namespace + "/" + item.connection.Name,
@@ -363,6 +431,7 @@ func (m *Manager) descriptor(item *snapshot, materialized materialization) profi
 		URL:     "/api/v1/profile/" + url.PathEscape(materialized.profile.Name),
 		Columns: slices.Clone(materialized.columns), RowCount: materialized.rows, Stats: item.stats,
 		Source: item.source, Dest: item.dest, SourceLimited: item.sourceCut, DestLimited: item.destCut,
+		Reconcile: item.reconcile, CreatedAt: item.createdAt,
 		IdleAge: item.age, ExpiresAt: expires,
 	}
 }

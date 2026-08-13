@@ -16,10 +16,14 @@ import {
 import { UiCheck, UiCircleX, UiKey, UiWarningTriangle } from "@flanksource/clicky-ui/icons";
 import { useMutation, useQuery } from "@tanstack/react-query";
 
-import { materializeParams, ReconcileResultSettings, snapshotColumnNames } from "./reconcileExport";
-import type { LaneId, ReconcileSnapshot } from "./reconcileModel";
+import {
+  materializeParams,
+  ReconcileProvenancePanel,
+  ReconcileResultSettings,
+  snapshotColumnNames,
+} from "./reconcileExport";
+import { virtualProfileHref, type LaneId, type ReconcileSnapshot, type ResultsView } from "./reconcileModel";
 
-const PAGE_SIZE = 100;
 const DOWNLOAD_FORMATS: ClickyRemoteFormat[] = [
   "json",
   "ndjson",
@@ -67,22 +71,23 @@ export function ReconcileResults({
   client,
   snapshot,
   materializeAction,
+  view,
+  onView,
 }: {
   client: OperationsApiClient;
   snapshot: ReconcileSnapshot;
   materializeAction: ResolvedOperation;
+  /** Lane and position, owned by the route so both live in the URL. */
+  view: ResultsView;
+  onView: (view: ResultsView) => void;
 }) {
   const [active, setActive] = useState(snapshot);
-  const [lane, setLane] = useState<LaneId>(initialLane(snapshot));
-  const [page, setPage] = useState(0);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE);
   const [selected, setSelected] = useState(() => snapshotColumnNames(snapshot));
   const [cel, setCEL] = useState("");
+  const { lane, page, pageSize } = view;
 
   useEffect(() => {
     setActive(snapshot);
-    setLane(initialLane(snapshot));
-    setPage(0);
     setSelected(snapshotColumnNames(snapshot));
     setCEL("");
   }, [snapshot]);
@@ -103,7 +108,9 @@ export function ReconcileResults({
   }, [client, materializeAction]);
 
   const result = useQuery({
-    queryKey: ["reconcile-snapshot", active.profile, lane, page, pageSize],
+    // Distinct from ["reconcile-snapshot", <id>], which holds the descriptor:
+    // one invalidateQueries prefix would otherwise hit both.
+    queryKey: ["reconcile-snapshot-page", active.profile, lane, page, pageSize],
     queryFn: async () => {
       const response = await client.executeCommand(
         active.url,
@@ -127,7 +134,7 @@ export function ReconcileResults({
     onSuccess: (transformed) => {
       setActive(transformed);
       setSelected(snapshotColumnNames(transformed));
-      setPage(0);
+      onView({ ...view, page: 0 });
       setCEL("");
     },
   });
@@ -140,10 +147,7 @@ export function ReconcileResults({
     prepare: () => prepareSnapshotDownload(materialize, snapshot, active, selected),
   }), [active, materialize, selected, snapshot]);
 
-  const selectLane = (next: LaneId) => {
-    setLane(next);
-    setPage(0);
-  };
+  const selectLane = (next: LaneId) => onView({ ...view, lane: next, page: 0 });
   const warning = snapshotWarning(snapshot);
   const stats = snapshot.stats;
 
@@ -185,6 +189,7 @@ export function ReconcileResults({
 
       <ReconcileResultSettings
         active={active}
+        virtualProfileHref={virtualProfileHref(active, view)}
         selected={selected}
         onSelected={setSelected}
         cel={cel}
@@ -193,6 +198,10 @@ export function ReconcileResults({
         applying={transform.isPending}
         error={transform.error instanceof Error ? transform.error.message : ""}
       />
+
+      {/* Reads the run, not `active`: a CEL transform swaps `active` for a
+          projection whose provenance is still the root run's. */}
+      {snapshot.reconcile && <ReconcileProvenancePanel provenance={snapshot.reconcile} />}
 
       <div className="min-h-64 flex-1 overflow-auto rounded-lg border border-border">
         {result.isLoading && <ResultMessage>Loading snapshot page…</ResultMessage>}
@@ -209,21 +218,14 @@ export function ReconcileResults({
               ...(result.data.pagination?.total !== undefined ? { total: result.data.pagination.total } : {}),
               ...(result.data.pagination?.totalRelation !== undefined ? { totalRelation: result.data.pagination.totalRelation } : {}),
               ...(result.data.pagination?.hasMore !== undefined ? { hasMore: result.data.pagination.hasMore } : {}),
-              onPageChange: setPage,
-              onPageSizeChange: (next) => { setPageSize(next); setPage(0); },
+              onPageChange: (next) => onView({ ...view, page: next }),
+              onPageSizeChange: (next) => onView({ ...view, pageSize: next, page: 0 }),
             }}
           />
         )}
       </div>
     </div>
   );
-}
-
-function initialLane(snapshot: ReconcileSnapshot): LaneId {
-  if (snapshot.stats.only_source > 0) return "only_source";
-  if (snapshot.stats.only_dest > 0) return "only_dest";
-  if (snapshot.stats.dup_keys > 0) return "ambiguous";
-  return "matched";
 }
 
 function snapshotWarning(snapshot: ReconcileSnapshot): string {

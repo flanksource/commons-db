@@ -38,8 +38,9 @@ func (m *Manager) Materialize(ctx context.Context, options profiles.ReconcileMat
 	profileName := strings.TrimSuffix(options.Profile, "/") + "/materialized-" + fingerprint[:12]
 	m.mu.RLock()
 	if existing, ok := item.profiles[profileName]; ok {
+		descriptor := m.descriptorLocked(item, existing)
 		m.mu.RUnlock()
-		return m.descriptor(item, existing), nil
+		return descriptor, nil
 	}
 	m.mu.RUnlock()
 
@@ -80,11 +81,32 @@ func (m *Manager) Materialize(ctx context.Context, options profiles.ReconcileMat
 	}
 	profile := snapshotProfile(profileName, table, columns, item.connection.Name, len(rows))
 	created := materialization{profile: profile, table: table, columns: columns, rows: len(rows)}
+
+	// Persist before registering. A crash between the two leaves a durable
+	// record for a table that exists, and the reload picks it up; the reverse
+	// would lose a materialization the caller already holds a URL for.
+	//
+	// The record is snapshotted under the read lock and written without it:
+	// m.mu is process-wide and this is blocking file I/O. That is only safe
+	// because item.materializeMu — held for this whole function — serializes
+	// every whole-record rewrite for this snapshot.
+	m.mu.RLock()
+	meta := metadataOf(item)
+	m.mu.RUnlock()
+	meta.Profiles = append(meta.Profiles, snapshotProfileMetadata{
+		Name: profileName, Table: table, Columns: columns, Rows: len(rows),
+	})
+	if err := writeSnapshotMetadata(ctx, item.db, meta); err != nil {
+		_, _ = item.db.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, quoteIdentifier(table)))
+		return profiles.ReconcileSnapshotDescriptor{}, err
+	}
+
 	m.mu.Lock()
 	item.profiles[profileName] = created
 	m.profiles[profileName] = item.id
+	descriptor := m.descriptorLocked(item, created)
 	m.mu.Unlock()
-	return m.descriptor(item, created), nil
+	return descriptor, nil
 }
 
 func snapshotProfile(name, table string, columns []query.ColumnDef, connectionName string, rows int) query.Profile {

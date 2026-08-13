@@ -58,6 +58,9 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	}
 	req.Diagnostics = DiagnosticSink(ctx)
 	req.Diagnostics.RecordRendered(req.Query, req.Options)
+	// The rendered connection is otherwise discarded with the request, and it is
+	// half of what "where did these rows come from" means.
+	req.Diagnostics.RecordConnection(req.Connection)
 
 	rows, styles, truncated, err := drainPages(ctx, p, req)
 	if err != nil {

@@ -58,6 +58,21 @@ func DiagnosticSink(ctx context.Context) *ProviderDiagnostics {
 	return sink
 }
 
+// DiagnosticDetail says how much a run is willing to pay to be explained.
+type DiagnosticDetail int
+
+const (
+	// DiagnosticRendered records what was sent and what came back, and nothing a
+	// backend has to be asked for. It is what a run that is not a debug run can
+	// afford — a reconciliation records itself on every execution, not only when
+	// someone is watching.
+	DiagnosticRendered DiagnosticDetail = iota
+
+	// DiagnosticFull additionally records response previews and whatever
+	// backend-side instrumentation the provider can switch on.
+	DiagnosticFull
+)
+
 type ProviderDiagnostics struct {
 	Provider string                     `json:"provider"`
 	Request  ProviderDiagnosticRequest  `json:"request"`
@@ -65,18 +80,32 @@ type ProviderDiagnostics struct {
 	Error    string                     `json:"error,omitempty"`
 
 	mu sync.Mutex
+	// walk records a many-page read rather than one request: the first statement
+	// wins and the response fields accumulate. requested tracks whether that
+	// first statement has been seen.
+	walk      bool
+	requested bool
+	detail    DiagnosticDetail
 }
 
 type ProviderDiagnosticRequest struct {
-	Query     string         `json:"query,omitempty"`
-	Arguments []any          `json:"arguments,omitempty"`
-	Options   map[string]any `json:"options,omitempty"`
-	Details   map[string]any `json:"details,omitempty"`
+	// Query is the statement the provider actually issued — the first page's,
+	// for a walk. Rendered is the profile's query once the engine templated it.
+	// A provider that records nothing of its own leaves them equal.
+	Query    string `json:"query,omitempty"`
+	Rendered string `json:"rendered,omitempty"`
+	// Connection is the reference or DSN the request was rendered against,
+	// stripped of credentials.
+	Connection string         `json:"connection,omitempty"`
+	Arguments  []any          `json:"arguments,omitempty"`
+	Options    map[string]any `json:"options,omitempty"`
+	Details    map[string]any `json:"details,omitempty"`
 }
 
 type ProviderDiagnosticResponse struct {
 	DurationMS   float64        `json:"durationMs,omitempty"`
 	ReturnedRows int            `json:"returnedRows,omitempty"`
+	Pages        int            `json:"pages,omitempty"`
 	Details      map[string]any `json:"details,omitempty"`
 	Preview      string         `json:"preview,omitempty"`
 	ContentType  string         `json:"contentType,omitempty"`
@@ -86,11 +115,57 @@ type ProviderDiagnosticResponse struct {
 func NewProviderDiagnostics(provider, query string, options map[string]any) *ProviderDiagnostics {
 	return &ProviderDiagnostics{
 		Provider: provider,
+		detail:   DiagnosticFull,
 		Request: ProviderDiagnosticRequest{
 			Query:   query,
 			Options: sanitizeDiagnosticMap(options),
 		},
 	}
+}
+
+// NewWalkDiagnostics records a walk rather than a single request: the first
+// statement issued is the one reported, and every page's rows and duration are
+// summed into one response.
+//
+// A walk's last page is not what it ran. Recording page forty of a paged read
+// the way a single request is recorded reports `OFFSET 19500` as the query,
+// which is true of that page and false of the read. Keeping the first statement
+// and the first page's paging details says which page is being shown, and
+// summing the rest says what the whole walk cost.
+//
+// It records at DiagnosticRendered: a walk is how ordinary execution reads a
+// large profile, so it must not switch on per-page previews or backend
+// instrumentation that only a debug run should pay for.
+func NewWalkDiagnostics(provider string) *ProviderDiagnostics {
+	return &ProviderDiagnostics{Provider: provider, walk: true, detail: DiagnosticRendered}
+}
+
+// WantsPreview reports whether this run pays for a response body preview and
+// for backend-side instrumentation.
+func (d *ProviderDiagnostics) WantsPreview() bool {
+	if d == nil {
+		return false
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.detail >= DiagnosticFull
+}
+
+// RecordConnection records the connection the request was rendered against. A
+// connection:// reference is kept verbatim; an inline DSN is stripped of its
+// credentials, because provenance that cannot be shared is provenance nobody
+// reads.
+func (d *ProviderDiagnostics) RecordConnection(connection string) {
+	if d == nil || connection == "" {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if strings.HasPrefix(connection, "connection://") {
+		d.Request.Connection = connection
+		return
+	}
+	d.Request.Connection = redactDiagnosticURL(connection)
 }
 
 // RecordRendered seeds the diagnostics with the request the engine built — the
@@ -104,6 +179,7 @@ func (d *ProviderDiagnostics) RecordRendered(query string, options map[string]an
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.Request.Query = query
+	d.Request.Rendered = query
 	d.Request.Options = sanitizeDiagnosticMap(options)
 }
 
@@ -113,6 +189,10 @@ func (d *ProviderDiagnostics) RecordRequest(query string, arguments []any, detai
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.walk && d.requested {
+		return
+	}
+	d.requested = true
 	d.Request.Query = query
 	d.Request.Arguments = cloneDiagnosticValues(arguments)
 	d.Request.Details = sanitizeDiagnosticMap(details)
@@ -124,7 +204,22 @@ func (d *ProviderDiagnostics) RecordResponse(started time.Time, rows int, detail
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.Response.DurationMS = float64(time.Since(started)) / float64(time.Millisecond)
+	elapsed := float64(time.Since(started)) / float64(time.Millisecond)
+	if d.walk {
+		d.Response.DurationMS += elapsed
+		d.Response.ReturnedRows += rows
+		d.Response.Pages++
+		// The first page's details describe the walk — dialect, and the paging
+		// mode the rest of the pages follow. Later pages differ only in offset,
+		// so keeping the last would report the tail as the shape.
+		if d.Response.Details == nil {
+			d.Response.Details = sanitizeDiagnosticMap(details)
+		}
+		return
+	}
+	// Pages stays unset for a single request: a page count means something only
+	// for a walk, and an omitted field says that better than a hardcoded 1.
+	d.Response.DurationMS = elapsed
 	d.Response.ReturnedRows = rows
 	d.Response.Details = sanitizeDiagnosticMap(details)
 }
@@ -144,6 +239,9 @@ func (d *ProviderDiagnostics) RecordPreview(contentType string, body []byte) {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	if d.detail < DiagnosticFull {
+		return
+	}
 	d.Response.ContentType = contentType
 	d.Response.Truncated = len(body) > DiagnosticPreviewLimit
 	if d.Response.Truncated {
@@ -158,17 +256,25 @@ func (d *ProviderDiagnostics) Snapshot() *ProviderDiagnostics {
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	// Every field is copied by hand so the copy can be re-sanitized on the way
+	// out. That makes an added field a silent omission rather than a compile
+	// error — diagnostics_test.go asserts the whole round trip for that reason.
 	return &ProviderDiagnostics{
 		Provider: d.Provider,
+		walk:     d.walk,
+		detail:   d.detail,
 		Request: ProviderDiagnosticRequest{
-			Query:     d.Request.Query,
-			Arguments: cloneDiagnosticValues(d.Request.Arguments),
-			Options:   sanitizeDiagnosticMap(d.Request.Options),
-			Details:   sanitizeDiagnosticMap(d.Request.Details),
+			Query:      d.Request.Query,
+			Rendered:   d.Request.Rendered,
+			Connection: d.Request.Connection,
+			Arguments:  cloneDiagnosticValues(d.Request.Arguments),
+			Options:    sanitizeDiagnosticMap(d.Request.Options),
+			Details:    sanitizeDiagnosticMap(d.Request.Details),
 		},
 		Response: ProviderDiagnosticResponse{
 			DurationMS:   d.Response.DurationMS,
 			ReturnedRows: d.Response.ReturnedRows,
+			Pages:        d.Response.Pages,
 			Details:      sanitizeDiagnosticMap(d.Response.Details),
 			Preview:      d.Response.Preview,
 			ContentType:  d.Response.ContentType,

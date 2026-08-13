@@ -186,8 +186,8 @@ func TestReconcileUsesTheBlockStoredOnTheProfile(t *testing.T) {
 	if result.Dest != dest.Name {
 		t.Errorf("dest = %q, want %q", result.Dest, dest.Name)
 	}
-	if result.Range == nil || result.Range.To != "id003" {
-		t.Errorf("range = %+v, want the stored range", result.Range)
+	if result.Config.Range == nil || result.Config.Range.To != "id003" {
+		t.Errorf("range = %+v, want the stored range", result.Config.Range)
 	}
 	// The range covers id001 and id002, which both sides have. The source's
 	// third row is outside the range rather than cut off inside it, so it is
@@ -224,8 +224,8 @@ func TestReconcileFlagsOverrideTheStoredBlockFieldByField(t *testing.T) {
 	if result.Dest != other.Name {
 		t.Errorf("dest = %q, want the flag's %q", result.Dest, other.Name)
 	}
-	if result.Range == nil || result.Range.To != "id004" {
-		t.Errorf("range = %+v, want the flag's id004", result.Range)
+	if result.Config.Range == nil || result.Config.Range.To != "id004" {
+		t.Errorf("range = %+v, want the flag's id004", result.Config.Range)
 	}
 	// The key came from the stored block, which no flag overrode.
 	if want := (query.ReconcileStats{Matched: 3}); result.Stats != want {

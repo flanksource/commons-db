@@ -160,11 +160,20 @@ func ReconcileProfiles(ctx context.Context, run ReconcileRun) (*ReconcileResult,
 		return mergeJoin(ctx, run)
 	}
 
-	source, err := Execute(ctx, run.Source, run.SourceFilters)
+	// A sink per side, on two children of the same context. The sink is keyed on
+	// the context and every recorder is last-write-wins, so one sink shared
+	// across both reads would report the destination's query as the source's.
+	// ctx itself is never reassigned, which is what keeps the join below
+	// unrecorded — it issues no provider request of its own.
+	sourceRecord := newReconcileSideRecorder("source", run.Source, run.SourceFilters)
+	sourceRecord.start()
+	source, err := Execute(WithDiagnosticSink(ctx, sourceRecord.sink), run.Source, run.SourceFilters)
 	if err != nil {
 		return nil, fmt.Errorf("source profile %q: %w", run.Source.Name, err)
 	}
-	dest, err := Execute(ctx, run.Dest, run.DestFilters)
+	destRecord := newReconcileSideRecorder("dest", run.Dest, run.DestFilters)
+	destRecord.start()
+	dest, err := Execute(WithDiagnosticSink(ctx, destRecord.sink), run.Dest, run.DestFilters)
 	if err != nil {
 		return nil, fmt.Errorf("dest profile %q: %w", run.Dest.Name, err)
 	}
@@ -173,8 +182,15 @@ func ReconcileProfiles(ctx context.Context, run ReconcileRun) (*ReconcileResult,
 		return nil, err
 	}
 	result.Mode = ReconcileBuffered
-	result.Range = run.Config.Range
+	result.Config = *run.Config.Clone()
 	_, result.BufferedReason = run.Mergeable()
+	result.Provenance = &ReconcileProvenance{
+		Mode:           ReconcileBuffered,
+		BufferedReason: result.BufferedReason,
+		Source:         sourceRecord.finish(run.Source, len(source.Rows), source.Truncated),
+		Dest:           destRecord.finish(run.Dest, len(dest.Rows), dest.Truncated),
+		RanAt:          sourceRecord.started,
+	}
 	// A backend that capped either read leaves keys unaccounted for, and a
 	// one-sided key inside an incomplete read is not a finding.
 	result.SourceTruncated = source.Truncated
@@ -216,23 +232,27 @@ type ReconcileRow struct {
 // ReconcileResult is a completed join, carrying both profiles so the table
 // renderer can label and order each side's columns.
 type ReconcileResult struct {
-	Spec          ReconcileSpec  `json:"spec"`
-	SourceProfile Profile        `json:"-"`
-	DestProfile   Profile        `json:"-"`
-	Source        string         `json:"source"`
-	Dest          string         `json:"dest"`
-	Rows          []ReconcileRow `json:"rows"`
-	Stats         ReconcileStats `json:"stats"`
+	// Config is what the run was asked to do — destination, key, per-side
+	// filters, and the span of keys it covered (nil range means all of them).
+	// Both sides are cut at the same keys, so a one-sided key inside the range
+	// is a finding rather than an artefact of where the read stopped.
+	Config        ReconcileConfig `json:"config"`
+	SourceProfile Profile         `json:"-"`
+	DestProfile   Profile         `json:"-"`
+	Source        string          `json:"source"`
+	Dest          string          `json:"dest"`
+	Rows          []ReconcileRow  `json:"rows"`
+	Stats         ReconcileStats  `json:"stats"`
 
 	// Mode says how the two sides were joined, and BufferedReason says why a run
 	// could not be merged — which is always something the author can change.
 	Mode           ReconcileMode `json:"mode,omitempty"`
 	BufferedReason string        `json:"buffered_reason,omitempty"`
 
-	// Range is the span of keys this run covered; nil means all of them. Both
-	// sides are cut at the same keys, so a one-sided key inside the range is a
-	// finding rather than an artefact of where the read stopped.
-	Range *KeyRange `json:"range,omitempty"`
+	// Provenance is what each side actually ran. It is a record, not an input:
+	// nothing in the join reads it, and it is the only trace of a query that
+	// existed only at execution time.
+	Provenance *ReconcileProvenance `json:"provenance,omitempty"`
 
 	// The Truncated flags report a side whose backend cut the read short. A
 	// one-sided key from an incomplete read is not a finding, which is why they
@@ -279,8 +299,11 @@ func Reconcile(ctx context.Context, source, dest *Result, sourceProfile, destPro
 		return nil, fmt.Errorf("reconcile: dest keys: %w", err)
 	}
 
+	// The low-level join is handed a spec rather than a whole config — it has no
+	// destination to name and no filters to apply. ReconcileProfiles overwrites
+	// Config with the full one it resolved.
 	result := &ReconcileResult{
-		Spec:          spec,
+		Config:        ReconcileConfig{ReconcileSpec: spec, Dest: destProfile.Name},
 		SourceProfile: sourceProfile,
 		DestProfile:   destProfile,
 		Source:        sourceProfile.Name,

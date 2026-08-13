@@ -86,6 +86,23 @@ var _ = Describe("reconcile snapshot actions", func() {
 		Expect(reconcile["post"].Clicky.Export).To(BeNil())
 		materialize := spec.Paths["/api/v1/profiles/{id}/reconcile-materialize"]
 		Expect(materialize).To(HaveKey("post"))
+
+		// Reading a snapshot is the one action registered as a GET, so that the
+		// results URL is a link rather than a form submission. Actions default to
+		// POST, and nothing else in this repo overrides that — this is the whole
+		// regression net for it.
+		read := spec.Paths["/api/v1/profiles/{id}/reconcile-snapshot"]
+		Expect(read).To(HaveKey("get"))
+		Expect(read).ToNot(HaveKey("post"))
+		var snapshotParam *rpc.OpenAPIParameter
+		for _, parameter := range read["get"].Parameters {
+			if parameter.Name == "snapshot" {
+				snapshotParam = &parameter
+			}
+		}
+		Expect(snapshotParam).ToNot(BeNil(), "the snapshot id must be a parameter")
+		// A GET carries its flags in the query string; a body would never be read.
+		Expect(snapshotParam.In).To(Equal("query"))
 	})
 
 	DescribeTable("selects only the requested reconcile outcome before formatting",

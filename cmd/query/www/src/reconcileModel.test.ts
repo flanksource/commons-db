@@ -10,25 +10,37 @@ import {
   findReconcileMaterializeAction,
   findProfileRunOperation,
   groupByKey,
+  benchQueryForConfig,
+  classifySnapshotError,
+  formatIdleAge,
   humanizeDuration,
+  initialLane,
   initialReconcileFilters,
   isDuplicated,
   laneGroups,
   lanePage,
   LANE_PAGE_SIZE,
   parseReconcileQuery,
+  parseResultsView,
   profileFields,
   profileForSurface,
   profileSlug,
   reconcileQueryString,
   reconcileRoute,
+  reconcileRouteView,
+  reconcileSnapshotRoute,
   reconcileSurfaceKey,
   reconcileFilterParameters,
+  RESULTS_PAGE_SIZE,
+  resultsViewQueryString,
   storedConfig,
   timestampField,
+  virtualProfileHref,
   type ProfileDocument,
   type ReconcileResult,
   type ReconcileRow,
+  type ReconcileSnapshot,
+  type ResultsView,
 } from "./reconcileModel";
 
 const sourceProfile: ProfileDocument = {
@@ -117,6 +129,150 @@ describe("the reconcile route", () => {
     ).toEqual({ sourceFilters: { region: "eu" }, destFilters: { tenant: "new" } });
   });
 
+});
+
+describe("the results route", () => {
+  const id = "3f1c8a24-9f2b-4c31-8f0e-2a7b6d5c4e13";
+  const view: ResultsView = { lane: "only_dest", page: 3, pageSize: 25 };
+
+  it("is the snapshot's own address", () => {
+    expect(reconcileSnapshotRoute("profile-orders-emitted", id)).toBe(
+      `/profile-orders-emitted/reconcile/${id}`,
+    );
+  });
+
+  it("tells the two reconcile pages apart", () => {
+    expect(reconcileRouteView("/profile-orders-emitted/reconcile")).toEqual({
+      surfaceKey: "profile-orders-emitted",
+      view: "bench",
+    });
+    expect(reconcileRouteView(`/profile-orders-emitted/reconcile/${id}`)).toEqual({
+      surfaceKey: "profile-orders-emitted",
+      view: "results",
+      snapshotId: id,
+    });
+    expect(reconcileRouteView(`/profile-orders-emitted/reconcile/${id}/`)).toEqual({
+      surfaceKey: "profile-orders-emitted",
+      view: "results",
+      snapshotId: id,
+    });
+    expect(reconcileSurfaceKey(`/profile-orders-emitted/reconcile/${id}`)).toBe("profile-orders-emitted");
+  });
+
+  // A trailing segment must look like a snapshot id, so the retired /results
+  // path and anything mistyped are non-routes rather than a fetch of garbage.
+  it("refuses a trailing segment that is not a snapshot id", () => {
+    expect(reconcileRouteView("/profile-orders-emitted/reconcile/results")).toBeNull();
+    expect(reconcileRouteView("/profile-orders-emitted/reconcile/not-a-uuid")).toBeNull();
+    expect(reconcileRouteView(`/profile-orders-emitted/reconcile/${id}/extra`)).toBeNull();
+  });
+
+  // The whole point of naming the snapshot: the join is no longer restated in
+  // the URL, because the server stored it.
+  it("carries only where the reader is, never the join", () => {
+    const search = resultsViewQueryString(view);
+
+    expect(parseResultsView(search)).toEqual(view);
+    expect(parseReconcileQuery(search)).toEqual({});
+  });
+
+  it("omits the first page and the default page size", () => {
+    const search = resultsViewQueryString({ lane: "matched", page: 0, pageSize: RESULTS_PAGE_SIZE });
+
+    expect(new URLSearchParams(search).has("page")).toBe(false);
+    expect(new URLSearchParams(search).has("size")).toBe(false);
+  });
+
+  it("falls back to the lane a run would open on when the URL names none", () => {
+    expect(parseResultsView("", "only_source")).toEqual({
+      lane: "only_source",
+      page: 0,
+      pageSize: RESULTS_PAGE_SIZE,
+    });
+    expect(parseResultsView("?outcome=everything", "ambiguous").lane).toBe("ambiguous");
+  });
+
+  it("opens a finished run on the first lane that found something", () => {
+    expect(initialLane({ matched: 4, only_source: 2, only_dest: 1, dup_keys: 1 })).toBe("only_source");
+    expect(initialLane({ matched: 4, only_source: 0, only_dest: 1, dup_keys: 1 })).toBe("only_dest");
+    expect(initialLane({ matched: 4, only_source: 0, only_dest: 0, dup_keys: 1 })).toBe("ambiguous");
+    expect(initialLane({ matched: 4, only_source: 0, only_dest: 0, dup_keys: 0 })).toBe("matched");
+  });
+});
+
+describe("the bench a snapshot reopens", () => {
+  it("rebuilds the join the run used, so Back lands on it", () => {
+    const query = benchQueryForConfig(
+      {
+        dest: "orders-ingested",
+        key: { cel: "row.order_id" },
+        sourceFilters: { region: "eu" },
+        destFilters: { tenant: "acme" },
+      },
+      1_800_000_000_000,
+    );
+
+    expect(query).toEqual({
+      dest: "orders-ingested",
+      cel: "row.order_id",
+      snapshotAge: "30m",
+      sourceFilters: { region: "eu" },
+      destFilters: { tenant: "acme" },
+    });
+    expect(parseReconcileQuery(reconcileQueryString(query))).toEqual(query);
+  });
+
+  // A columns key reads the same named fields on both sides, which is exactly
+  // what celForPairings emits when source and dest are equal.
+  it("renders a columns key as the CEL it is equivalent to", () => {
+    expect(benchQueryForConfig({ key: { columns: ["order_id"] } }).cel).toBe(
+      celForPairings([{ source: "order_id", dest: "order_id" }]),
+    );
+  });
+
+  // The expired case: nothing to rehydrate from, so the bench falls back to
+  // whatever the profile itself stores.
+  it("asks for nothing when there is no stored config", () => {
+    expect(benchQueryForConfig(undefined)).toEqual({});
+  });
+
+  it("leaves the bench default in place rather than emitting a zero age", () => {
+    expect(formatIdleAge(0)).toBe("");
+    expect(formatIdleAge(3_600_000_000_000)).toBe("1h");
+    expect(formatIdleAge(90_000_000_000)).toBe("90s");
+  });
+});
+
+describe("reading a snapshot by id", () => {
+  it("tells an expired run from a broken link", () => {
+    expect(classifySnapshotError({ status: 410 })).toBe("expired");
+    expect(classifySnapshotError({ status: 404 })).toBe("missing");
+    // The status is not always preserved, but the server's code is in the text.
+    expect(classifySnapshotError(new Error('snapshot_expired: snapshot "x" has expired'))).toBe("expired");
+    expect(classifySnapshotError(new Error('snapshot_not_found: snapshot "x" not found'))).toBe("missing");
+    expect(classifySnapshotError(new Error("Failed to fetch"))).toBe("failed");
+  });
+});
+
+describe("the virtual profile link", () => {
+  const snapshot = {
+    surface: "profile-reconciliations-one-results",
+    columns: [{ name: "key" }, { name: "outcome" }, { name: "row_id", hidden: true }],
+  } as ReconcileSnapshot;
+
+  it("carries the lane and the page size onto the snapshot's own surface", () => {
+    expect(virtualProfileHref(snapshot, { lane: "only_source", page: 2, pageSize: 25 })).toBe(
+      "/profile-reconciliations-one-results?filter.outcome=only_source&limit=25",
+    );
+  });
+
+  it("drops the lane when a projection no longer carries the outcome column", () => {
+    const projected = { ...snapshot, columns: [{ name: "key" }] } as ReconcileSnapshot;
+
+    expect(virtualProfileHref(projected, { lane: "only_source", page: 0, pageSize: 100 })).toBe(
+      "/profile-reconciliations-one-results?limit=100",
+    );
+  });
 });
 
 describe("reconcile actions", () => {

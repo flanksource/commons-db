@@ -125,6 +125,7 @@ func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...ma
 		req.Diagnostics = DiagnosticSink(ctx)
 	}
 	req.Diagnostics.RecordRendered(req.Query, req.Options)
+	req.Diagnostics.RecordConnection(req.Connection)
 	scope := CursorScope{
 		Profile:    p.Name,
 		Provider:   p.Provider.Type,

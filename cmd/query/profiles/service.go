@@ -220,6 +220,19 @@ func (s *Service) RegisterClicky() {
 				}
 				return s.MaterializeReconcile(ctx, options)
 			}).WithShort("Materialize transformed or projected reconciliation rows")).
+		WithAction(entity.ActionWithFlagsAndContext("reconcile-snapshot", ReconcileSnapshotFlags{},
+			func(ctx context.Context, id string, flagMap map[string]string) (ReconcileSnapshotDescriptor, error) {
+				options, err := decodeActionFlags[ReconcileSnapshotFlags](flagMap)
+				if err != nil {
+					return ReconcileSnapshotDescriptor{}, err
+				}
+				return s.GetReconcileSnapshot(ctx, id, options)
+			}).
+			WithShort("Read a stored reconciliation snapshot by id").
+			// Reading a stored snapshot is safe and repeatable, and its URL is a
+			// link someone bookmarks — so it is a GET, not the POST every other
+			// action defaults to.
+			WithMethod(http.MethodGet)).
 		WithAction(entity.ActionWithFlagsAndContext("run", RunFlags{},
 			func(ctx context.Context, id string, flagMap map[string]string) (*RunResult, error) {
 				options, err := decodeActionFlags[RunFlags](flagMap)

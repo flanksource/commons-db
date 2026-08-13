@@ -38,9 +38,12 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 	}
 
 	started := time.Now()
+	// Gated on WantsPreview rather than on the sink existing: a reconciliation
+	// records itself on every run, and turning on server debug logging for every
+	// page of an ordinary read is a debug-run price an ordinary read must not pay.
 	queryContext, queryID, providerDetails := clickHouseDiagnosticContext(
 		ctx,
-		dialect == dialectClickHouse && request.Diagnostics != nil,
+		dialect == dialectClickHouse && request.Diagnostics.WantsPreview(),
 	)
 	defer func() {
 		if request.Diagnostics == nil {
@@ -62,7 +65,9 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		if err != nil {
 			request.Diagnostics.RecordError(err)
 		}
-		if len(result.Rows) > 0 {
+		// Marshalling every page's rows costs more than the preview is worth
+		// outside a debug run, and RecordPreview would discard it anyway.
+		if len(result.Rows) > 0 && request.Diagnostics.WantsPreview() {
 			request.Diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(result.Rows))
 		}
 		request.Diagnostics.RecordResponse(started, len(result.Rows), details)

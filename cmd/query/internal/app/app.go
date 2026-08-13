@@ -49,8 +49,10 @@ func New(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Not under .tmp: snapshots now outlive the process that wrote them, and a
+	// directory a restart deliberately preserves should not be named as scratch.
 	snapshotManager, err := snapshots.New(snapshots.Options{
-		Dir: filepath.Join(ResolveConfigDir(options.Args), ".tmp", "reconciliations"), MaxAge: time.Hour,
+		Dir: filepath.Join(ResolveConfigDir(options.Args), "reconciliations"), MaxAge: time.Hour,
 	})
 	if err != nil {
 		return nil, err

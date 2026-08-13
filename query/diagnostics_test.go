@@ -87,4 +87,60 @@ var _ = Describe("ProviderDiagnostics", func() {
 		Expect(snapshot.Response.Truncated).To(BeTrue())
 		Expect(snapshot.Response.ContentType).To(Equal("application/json"))
 	})
+
+	It("keeps the rendered query beside the statement a provider issued", func() {
+		diagnostics := query.NewProviderDiagnostics("sql", "", nil)
+		diagnostics.RecordRendered("select * from events where tenant = 'acme'", nil)
+		diagnostics.RecordRequest("SELECT * FROM events WHERE tenant = 'acme' LIMIT 100", nil, nil)
+
+		snapshot := diagnostics.Snapshot()
+		Expect(snapshot.Request.Rendered).To(Equal("select * from events where tenant = 'acme'"))
+		Expect(snapshot.Request.Query).To(Equal("SELECT * FROM events WHERE tenant = 'acme' LIMIT 100"))
+	})
+
+	It("records a connection reference verbatim and strips an inline DSN", func() {
+		reference := query.NewProviderDiagnostics("sql", "", nil)
+		reference.RecordConnection("connection://ops/warehouse")
+		Expect(reference.Snapshot().Request.Connection).To(Equal("connection://ops/warehouse"))
+
+		inline := query.NewProviderDiagnostics("sql", "", nil)
+		inline.RecordConnection("postgres://reader:hunter2@db.example.com:5432/analytics")
+		Expect(inline.Snapshot().Request.Connection).To(Equal("postgres://reader@db.example.com:5432/analytics"))
+		Expect(inline.Snapshot().Request.Connection).ToNot(ContainSubstring("hunter2"))
+	})
+
+	Describe("walk diagnostics", func() {
+		It("reports the first statement and sums what every page cost", func() {
+			diagnostics := query.NewWalkDiagnostics("sql")
+			diagnostics.RecordRendered("select * from events", nil)
+
+			diagnostics.RecordRequest("SELECT * FROM events LIMIT 100 OFFSET 0", []any{0}, map[string]any{"page": 1})
+			diagnostics.RecordResponse(time.Now().Add(-10*time.Millisecond), 100, map[string]any{"page": 1})
+			diagnostics.RecordRequest("SELECT * FROM events LIMIT 100 OFFSET 100", []any{100}, map[string]any{"page": 2})
+			diagnostics.RecordResponse(time.Now().Add(-10*time.Millisecond), 40, map[string]any{"page": 2})
+
+			snapshot := diagnostics.Snapshot()
+			// The walk's identity is its first page: reporting the last would
+			// name OFFSET 100 as the query the reconciliation ran.
+			Expect(snapshot.Request.Query).To(Equal("SELECT * FROM events LIMIT 100 OFFSET 0"))
+			Expect(snapshot.Request.Arguments).To(Equal([]any{0}))
+			Expect(snapshot.Request.Details).To(Equal(map[string]any{"page": 1}))
+			Expect(snapshot.Request.Rendered).To(Equal("select * from events"))
+			Expect(snapshot.Response.ReturnedRows).To(Equal(140))
+			Expect(snapshot.Response.Pages).To(Equal(2))
+			Expect(snapshot.Response.DurationMS).To(BeNumerically(">=", 20))
+		})
+
+		It("declines the previews and instrumentation only a debug run pays for", func() {
+			walk := query.NewWalkDiagnostics("sql")
+			Expect(walk.WantsPreview()).To(BeFalse())
+			Expect(query.NewProviderDiagnostics("sql", "", nil).WantsPreview()).To(BeTrue())
+
+			var absent *query.ProviderDiagnostics
+			Expect(absent.WantsPreview()).To(BeFalse())
+
+			walk.RecordPreview("application/json", []byte(`[{"id":1}]`))
+			Expect(walk.Snapshot().Response.Preview).To(BeEmpty())
+		})
+	})
 })

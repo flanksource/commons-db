@@ -35,6 +35,27 @@ func orderedProfile(name, providerType, keyColumn string) query.Profile {
 	}
 }
 
+// mergeRunFor runs a merge join over two ordered sides keyed on their shared
+// order column — the shape that lets both be walked rather than buffered.
+func mergeRunFor(keys *query.KeyRange, sourceRows, destRows int) *query.ReconcileResult {
+	query.RegisterProvider(&mockProvider{typ: "merge-source", rows: reconcileRows("ord", "order_id", sourceRows)})
+	query.RegisterProvider(&mockProvider{typ: "merge-dest", rows: reconcileRows("ord", "order_id", destRows)})
+
+	result, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
+		Source: orderedProfile("orders-emitted", "merge-source", "order_id"),
+		Dest:   orderedProfile("orders-ingested", "merge-dest", "order_id"),
+		Config: query.ReconcileConfig{
+			Dest: "orders-ingested",
+			ReconcileSpec: query.ReconcileSpec{
+				Range: keys,
+				Key:   query.KeySpec{Columns: []string{"order_id"}},
+			},
+		},
+	})
+	Expect(err).ToNot(HaveOccurred())
+	return result
+}
+
 var _ = Describe("ReconcileProfiles", func() {
 	const keyCEL = `has(row.order_id) ? string(row.order_id) : string(row.order_ref)`
 
@@ -111,24 +132,7 @@ var _ = Describe("ReconcileProfiles", func() {
 	})
 
 	Describe("merge join", func() {
-		mergeRun := func(keys *query.KeyRange, sourceRows, destRows int) *query.ReconcileResult {
-			query.RegisterProvider(&mockProvider{typ: "merge-source", rows: reconcileRows("ord", "order_id", sourceRows)})
-			query.RegisterProvider(&mockProvider{typ: "merge-dest", rows: reconcileRows("ord", "order_id", destRows)})
-
-			result, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
-				Source: orderedProfile("orders-emitted", "merge-source", "order_id"),
-				Dest:   orderedProfile("orders-ingested", "merge-dest", "order_id"),
-				Config: query.ReconcileConfig{
-					Dest: "orders-ingested",
-					ReconcileSpec: query.ReconcileSpec{
-						Range: keys,
-						Key:   query.KeySpec{Columns: []string{"order_id"}},
-					},
-				},
-			})
-			Expect(err).ToNot(HaveOccurred())
-			return result
-		}
+		mergeRun := mergeRunFor
 
 		It("merges when the key is the order", func() {
 			result := mergeRun(nil, 4, 4)
@@ -153,7 +157,7 @@ var _ = Describe("ReconcileProfiles", func() {
 
 		It("reports the range it covered", func() {
 			keys := &query.KeyRange{From: "ord002", To: "ord004"}
-			Expect(mergeRun(keys, 5, 5).Range).To(Equal(keys))
+			Expect(mergeRun(keys, 5, 5).Config.Range).To(Equal(keys))
 			Expect(keys.String()).To(Equal("keys from ord002 up to ord004"))
 		})
 
@@ -169,6 +173,85 @@ var _ = Describe("ReconcileProfiles", func() {
 		It("refuses a range that covers no keys", func() {
 			Expect((&query.KeyRange{From: "b", To: "a"}).Validate()).To(
 				MatchError(ContainSubstring("covers no keys")))
+		})
+	})
+
+	// A reconciliation's findings are only as trustworthy as the two reads
+	// behind them, and neither read is visible in the joined rows.
+	Describe("provenance", func() {
+		// One sink is keyed on the context and every recorder is last-write-wins,
+		// so a shared sink would report the destination's query for both sides.
+		// This is the assertion that the two sides are recorded separately.
+		It("records each side's own rendered query", func() {
+			query.RegisterProvider(&mockProvider{typ: "prov-source", rows: reconcileRows("ord", "order_id", 2)})
+			query.RegisterProvider(&mockProvider{typ: "prov-dest", rows: reconcileRows("ord", "order_ref", 2)})
+			source := reconcileProfile("orders-emitted", "prov-source")
+			source.Query = "select * from emitted where region = '{{.params.region}}'"
+			source.Params = []query.ParamDef{{Name: "region"}}
+			dest := reconcileProfile("orders-ingested", "prov-dest")
+			dest.Query = "select * from ingested where region = '{{.params.region}}'"
+			dest.Params = []query.ParamDef{{Name: "region"}}
+
+			result, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
+				Source: source, Dest: dest,
+				Config:        query.ReconcileConfig{ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{CEL: keyCEL}}},
+				SourceFilters: map[string]any{"region": "eu"},
+				DestFilters:   map[string]any{"region": "us"},
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			provenance := result.Provenance
+			Expect(provenance).ToNot(BeNil())
+			Expect(provenance.Mode).To(Equal(query.ReconcileBuffered))
+			Expect(provenance.Source.Profile).To(Equal("orders-emitted"))
+			Expect(provenance.Dest.Profile).To(Equal("orders-ingested"))
+			Expect(provenance.Source.Diagnostics.Request.Rendered).To(
+				Equal("select * from emitted where region = 'eu'"))
+			Expect(provenance.Dest.Diagnostics.Request.Rendered).To(
+				Equal("select * from ingested where region = 'us'"))
+			Expect(provenance.Source.Diagnostics.Request.Rendered).ToNot(
+				Equal(provenance.Dest.Diagnostics.Request.Rendered))
+
+			// The query as authored survives beside what it rendered to, so a
+			// reader can tell a bad template from a bad parameter.
+			Expect(provenance.Source.Query).To(ContainSubstring("{{.params.region}}"))
+			Expect(provenance.Source.Filters).To(Equal(map[string]any{"region": "eu"}))
+			Expect(provenance.Source.Rows).To(Equal(2))
+		})
+
+		It("records both sides of a merged run", func() {
+			result := mergeRunFor(nil, 5, 3)
+
+			Expect(result.Provenance.Mode).To(Equal(query.ReconcileMerged))
+			Expect(result.Provenance.Source.Rows).To(Equal(5))
+			Expect(result.Provenance.Dest.Rows).To(Equal(3))
+		})
+
+		// A range stops the walk early, so what the join consumed is less than
+		// what the provider returned — the two counts are not the same fact.
+		It("counts what the join consumed, not what the provider returned", func() {
+			result := mergeRunFor(&query.KeyRange{From: "ord001", To: "ord003"}, 20, 20)
+
+			Expect(result.Provenance.Source.Rows).To(BeNumerically("<", 20))
+		})
+
+		It("keeps credentials out of what it stores", func() {
+			query.RegisterProvider(&mockProvider{typ: "prov-secret", rows: reconcileRows("ord", "order_id", 1)})
+			secret := reconcileProfile("orders-emitted", "prov-secret")
+			secret.Provider.Options = map[string]any{
+				"password": "hunter2",
+				"url":      "postgres://reader:hunter2@db.example.com:5432/analytics",
+			}
+
+			result, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
+				Source: secret, Dest: secret,
+				Config: query.ReconcileConfig{ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{CEL: "row.order_id"}}},
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			encoded, err := json.Marshal(result.Provenance)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(string(encoded)).ToNot(ContainSubstring("hunter2"))
 		})
 	})
 

@@ -73,13 +73,12 @@ func mergeJoin(ctx context.Context, run ReconcileRun) (*ReconcileResult, error) 
 	defer dest.close()
 
 	result := &ReconcileResult{
-		Spec:          spec,
+		Config:        *run.Config.Clone(),
 		SourceProfile: run.Source,
 		DestProfile:   run.Dest,
 		Source:        run.Source.Name,
 		Dest:          run.Dest.Name,
 		Mode:          ReconcileMerged,
-		Range:         run.Config.Range,
 	}
 
 	keys := run.Config.Range
@@ -96,6 +95,12 @@ func mergeJoin(ctx context.Context, run ReconcileRun) (*ReconcileResult, error) 
 		case left == nil && right == nil:
 			result.SourceTruncated = source.truncated
 			result.DestTruncated = dest.truncated
+			result.Provenance = &ReconcileProvenance{
+				Mode:   ReconcileMerged,
+				Source: source.recorder.finish(run.Source, source.rows, source.truncated),
+				Dest:   dest.recorder.finish(run.Dest, dest.rows, dest.truncated),
+				RanAt:  source.recorder.started,
+			}
 			return result, nil
 		case right == nil || (left != nil && left.key < right.key):
 			result.appendGroup(left.key, left.rows, nil)
@@ -134,6 +139,11 @@ type reconcileSide struct {
 	hasLast   bool
 	exhausted bool
 	truncated bool
+
+	recorder *reconcileSideRecorder
+	// rows counts what the join actually pulled, which a key range can cut far
+	// short of what the provider returned.
+	rows int
 }
 
 func openReconcileSide(
@@ -153,17 +163,26 @@ func openReconcileSide(
 		profile:    profile.Name,
 		keyOf:      keyOf,
 		timeColumn: timeColumn,
+		recorder:   newReconcileSideRecorder(name, profile, params),
 	}
-	pages := ExecutePages(ctx, profile, walkRequest(profile, DefaultMaxPageSize), params)
-	side.next, side.stop = iter.Pull2(rowsRecordingTruncation(pages, &side.truncated))
+	// ExecutePages prefers the recorder on the request over the one on the
+	// context, so a merged run needs no context sink at all and the two sides
+	// cannot overwrite each other's record.
+	request := walkRequest(profile, DefaultMaxPageSize)
+	request.Diagnostics = side.recorder.sink
+	side.recorder.start()
+	pages := ExecutePages(ctx, profile, request, params)
+	side.next, side.stop = iter.Pull2(rowsRecordingProgress(pages, side))
 	return side, nil
 }
 
-// rowsRecordingTruncation flattens pages while keeping the one fact that does
-// not survive flattening: that a backend applied a cap of its own. A reconcile
-// that lost it would present a partial read as a complete diagnosis, which is
-// the failure this whole path exists to prevent.
-func rowsRecordingTruncation(pages iter.Seq2[Page, error], truncated *bool) iter.Seq2[Row, error] {
+// rowsRecordingProgress flattens pages while keeping the two facts that do not
+// survive flattening: that a backend applied a cap of its own, and how many
+// rows this side actually gave the join. A reconcile that lost the first would
+// present a partial read as a complete diagnosis, which is the failure this
+// whole path exists to prevent; the second is what makes a side's provenance
+// comparable to the provider's own count.
+func rowsRecordingProgress(pages iter.Seq2[Page, error], side *reconcileSide) iter.Seq2[Row, error] {
 	return func(yield func(Row, error) bool) {
 		for page, err := range pages {
 			if err != nil {
@@ -171,9 +190,10 @@ func rowsRecordingTruncation(pages iter.Seq2[Page, error], truncated *bool) iter
 				return
 			}
 			if page.Truncated {
-				*truncated = true
+				side.truncated = true
 			}
 			for _, row := range page.Rows {
+				side.rows++
 				if !yield(row, nil) {
 					return
 				}

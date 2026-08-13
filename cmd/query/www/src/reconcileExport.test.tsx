@@ -2,11 +2,12 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  ReconcileProvenancePanel,
   ReconcileResultSettings,
   materializeParams,
   snapshotColumnNames,
 } from "./reconcileExport";
-import type { ReconcileSnapshot } from "./reconcileModel";
+import { virtualProfileHref, type ReconcileSnapshot } from "./reconcileModel";
 
 const snapshot: ReconcileSnapshot = {
   id: "snapshot-1",
@@ -52,6 +53,7 @@ describe("reconciliation snapshot export", () => {
     const markup = renderToStaticMarkup(
       <ReconcileResultSettings
         active={snapshot}
+        virtualProfileHref={virtualProfileHref(snapshot, { lane: "only_source", page: 0, pageSize: 100 })}
         selected={["key"]}
         onSelected={vi.fn()}
         cel=""
@@ -65,5 +67,53 @@ describe("reconciliation snapshot export", () => {
     expect(markup).toContain("Results");
     expect(markup).toContain("Source value");
     expect(markup).toContain("Open virtual profile");
+  });
+
+  it("shows the join and what each side actually ran", () => {
+    const markup = renderToStaticMarkup(
+      <ReconcileProvenancePanel
+        provenance={{
+          config: {
+            dest: "warehouse",
+            key: { cel: "row.order_id" },
+            sourceFilters: { region: "eu" },
+          },
+          execution: {
+            mode: "buffered",
+            source: {
+              side: "source",
+              profile: "orders",
+              provider: "postgres",
+              query: "select * from orders where region = '{{.params.region}}'",
+              diagnostics: {
+                provider: "postgres",
+                request: {
+                  query: "SELECT * FROM orders WHERE region = $1 LIMIT 100",
+                  rendered: "select * from orders where region = 'eu'",
+                  connection: "connection://ops/warehouse",
+                  arguments: ["eu"],
+                },
+                response: { returnedRows: 8134, durationMs: 412, pages: 3 },
+              },
+              rows: 8134,
+              pages: 3,
+              durationMs: 430,
+              backendMs: 412,
+            },
+            dest: { side: "dest", profile: "warehouse", provider: "opensearch", rows: 8130, durationMs: 890 },
+          },
+        }}
+      />,
+    );
+
+    expect(markup).toContain("Queries");
+    expect(markup).toContain("row.order_id");
+    expect(markup).toContain("region=eu");
+    // The statement the backend was sent, and the template it came from.
+    expect(markup).toContain("SELECT * FROM orders WHERE region = $1 LIMIT 100");
+    expect(markup).toContain("select * from orders where region = &#x27;eu&#x27;");
+    expect(markup).toContain("connection://ops/warehouse");
+    expect(markup).toContain("8134");
+    expect(markup).toContain("412ms");
   });
 });
