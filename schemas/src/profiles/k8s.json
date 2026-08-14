@@ -75,10 +75,6 @@
     },
     "options": {
       "properties": {
-        "apiVersion": {
-          "title": "API version",
-          "type": "string"
-        },
         "containers": {
           "description": "Match expressions picking which containers of each pod are read",
           "items": {
@@ -92,30 +88,9 @@
           "title": "End",
           "type": "string"
         },
-        "kind": {
-          "description": "Workload to read logs from; a workload resolves to its current pods",
-          "enum": [
-            "Pod",
-            "Deployment",
-            "StatefulSet",
-            "DaemonSet"
-          ],
-          "title": "Kind",
-          "type": "string"
-        },
         "limit": {
           "description": "Maximum number of log lines",
           "title": "Limit",
-          "type": "string"
-        },
-        "name": {
-          "description": "Name of the workload",
-          "title": "Name",
-          "type": "string"
-        },
-        "namespace": {
-          "description": "Namespace of the workload",
-          "title": "Namespace",
           "type": "string"
         },
         "pods": {

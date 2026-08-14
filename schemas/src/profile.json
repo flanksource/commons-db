@@ -403,7 +403,7 @@
             "x-col-span": "full"
           },
           "field": {
-            "description": "Backend field this parameter filters on; enables excluding a value and requires a provider that applies native filters (OpenSearch, OpenTelemetry, or SQL)",
+            "description": "Backend field this parameter filters on; Kubernetes label parameters use labels.\u003ckey\u003e",
             "title": "Field",
             "type": "string",
             "x-clicky-component": "es-param-field",
@@ -471,14 +471,15 @@
             "x-clicky-order": 6
           },
           "type": {
-            "description": "A list accepts several values at once; bind it to a field to allow excluding them",
+            "description": "A list accepts several values; labels binds a Kubernetes labels.\u003ckey\u003e field",
             "enum": [
               "string",
               "number",
               "boolean",
               "date",
               "enum",
-              "list"
+              "list",
+              "labels"
             ],
             "title": "Type",
             "type": "string",
@@ -488,17 +489,20 @@
               "boolean": "toggle-on",
               "date": "calendar",
               "enum": "tag",
+              "labels": "tags",
               "list": "list-dashes",
               "number": "sigma",
               "string": "cursor-text"
             },
             "x-enum-labels": {
+              "labels": "Kubernetes labels",
               "list": "List (multi-select)"
             },
             "x-enum-tones": {
               "boolean": "amber",
               "date": "sky",
               "enum": "teal",
+              "labels": "emerald",
               "list": "indigo",
               "number": "violet",
               "string": "slate"

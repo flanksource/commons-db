@@ -1445,12 +1445,17 @@
           "x-clicky-order": 1
         },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "max_resources": {
+              "description": "Maximum matching workloads read by one query (default 20)",
+              "format": "int32",
+              "title": "Maximum resources",
+              "type": "integer",
+              "x-clicky-order": 7
+            }
           },
           "title": "Properties",
-          "type": "object",
-          "x-clicky-order": 7
+          "type": "object"
         },
         "type": {
           "const": "kubernetes",
