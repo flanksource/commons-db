@@ -7,7 +7,9 @@
           "cel": {
             "description": "Ordered row projection",
             "title": "CEL",
-            "type": "string"
+            "type": "string",
+            "x-clicky-cel-scope": "row",
+            "x-clicky-component": "cel-editor"
           },
           "name": {
             "description": "Dotted output path",
@@ -32,6 +34,8 @@
             "description": "Expression computing the cell value from `row`",
             "title": "CEL",
             "type": "string",
+            "x-clicky-cel-scope": "row",
+            "x-clicky-component": "cel-editor",
             "x-clicky-order": 8
           },
           "filter": {
@@ -52,10 +56,13 @@
                 "description": "Overrides the control derived from Type; set it where the rendered type and the backend storage disagree",
                 "enum": [
                   "terms",
+                  "exact",
+                  "text",
                   "range",
+                  "duration",
+                  "date",
                   "time",
                   "boolean",
-                  "text",
                   "none"
                 ],
                 "title": "Kind",
@@ -63,16 +70,19 @@
                 "x-enum-display": "combobox",
                 "x-enum-labels": {
                   "boolean": "Yes/no",
+                  "date": "Date range",
+                  "duration": "Duration range",
+                  "exact": "Exact match",
                   "none": "Not filterable",
                   "range": "Numeric range",
                   "terms": "Value selection",
                   "text": "Substring",
-                  "time": "Time range"
+                  "time": "Date \u0026 time range"
                 }
               },
               "limit": {
                 "default": 50,
-                "description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup",
+                "description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup. Value selections only",
                 "maximum": 200,
                 "minimum": 1,
                 "title": "Limit",
@@ -80,7 +90,7 @@
               },
               "lookup": {
                 "default": true,
-                "description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked",
+                "description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked. Value selections only",
                 "title": "Lookup",
                 "type": "boolean"
               },
@@ -97,7 +107,7 @@
                 "x-clicky-component": "es-param-field"
               },
               "options": {
-                "description": "Selectable values; leave empty to ask the backend for its own distinct values",
+                "description": "Selectable values; leave empty to ask the backend for its own distinct values. Value selections only",
                 "items": {
                   "type": "string"
                 },
@@ -185,6 +195,8 @@
             "description": "CEL returning this cell's presentation classes, e.g. level == \"ERROR\" ? \"text-red-500\" : \"\"",
             "title": "Style",
             "type": "string",
+            "x-clicky-cel-scope": "row",
+            "x-clicky-component": "cel-editor",
             "x-clicky-order": 12
           },
           "type": {
@@ -543,6 +555,7 @@
             "enum": [
               "cel.batch",
               "cel.dedupe",
+              "logs.parse",
               "sqlite.merge",
               "sqlite.recon"
             ],
@@ -551,10 +564,12 @@
             "x-clicky-order": 1
           },
           "use": {
-            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.\n- `logs.dedupe`: Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.",
+            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.\n- `logs.dedupe`: Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.\n- `logs.json`: Extracts message, severity, source and host from a JSON log body, promotes the remaining fields as columns, and hashes the parsed message for later deduplication. Non-JSON lines pass through unchanged, so this can precede a multiline processor.\n- `logs.logfmt`: Extracts message and severity from a logfmt body, promotes the remaining key/value pairs as columns, and hashes the parsed message for later deduplication. Non-logfmt lines pass through unchanged.",
             "enum": [
               "java.stacktrace",
-              "logs.dedupe"
+              "logs.dedupe",
+              "logs.json",
+              "logs.logfmt"
             ],
             "title": "Library processor",
             "type": "string",
@@ -562,7 +577,9 @@
             "x-enum-display": "combobox",
             "x-enum-labels": {
               "java.stacktrace": "Java stack trace merge",
-              "logs.dedupe": "Collapse repeated log lines"
+              "logs.dedupe": "Collapse repeated log lines",
+              "logs.json": "Parse JSON logs",
+              "logs.logfmt": "Parse logfmt logs"
             }
           }
         },
@@ -571,6 +588,61 @@
       },
       "title": "Processors",
       "type": "array",
+      "x-clicky-component": "processor-pipeline",
+      "x-clicky-presets": {
+        "java.stacktrace": {
+          "config": {
+            "continuation": "(row.message + \"\").matches(\"^\\\\s*(at\\\\s|Caused by:|Suppressed:|\\\\.\\\\.\\\\.\\\\s*[0-9]+\\\\s+more\\\\s*$)\")",
+            "keep": "first",
+            "order": "desc",
+            "partition": [
+              "pod",
+              "container"
+            ],
+            "set": {
+              "exception": "\n\t(first.message + \"\").matches(\"^[a-zA-Z_$][a-zA-Z0-9_$.]*(Exception|Error|Throwable):\")\n\t\t? (first.message + \"\").split(\":\")[0]\n\t\t: \"\"",
+              "message": "dyn(batch).map(line, line.message + \"\").join(\"\\n\")",
+              "stack_depth": "count - 1"
+            },
+            "when": "count \u003e 1"
+          },
+          "description": "Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.",
+          "title": "Java stack trace merge",
+          "type": "cel.batch"
+        },
+        "logs.dedupe": {
+          "config": {
+            "keep": "first",
+            "partition": [
+              "hash"
+            ],
+            "set": {
+              "count": "count",
+              "firstSeen": "dyn(batch)[count - 1].timestamp",
+              "lastSeen": "dyn(batch)[0].timestamp"
+            }
+          },
+          "description": "Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.",
+          "title": "Collapse repeated log lines",
+          "type": "cel.dedupe"
+        },
+        "logs.json": {
+          "config": {
+            "format": "json"
+          },
+          "description": "Extracts message, severity, source and host from a JSON log body, promotes the remaining fields as columns, and hashes the parsed message for later deduplication. Non-JSON lines pass through unchanged, so this can precede a multiline processor.",
+          "title": "Parse JSON logs",
+          "type": "logs.parse"
+        },
+        "logs.logfmt": {
+          "config": {
+            "format": "logfmt"
+          },
+          "description": "Extracts message and severity from a logfmt body, promotes the remaining key/value pairs as columns, and hashes the parsed message for later deduplication. Non-logfmt lines pass through unchanged.",
+          "title": "Parse logfmt logs",
+          "type": "logs.parse"
+        }
+      },
       "x-layout": "table"
     },
     "profile": {
