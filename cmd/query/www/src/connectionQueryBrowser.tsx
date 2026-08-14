@@ -17,12 +17,12 @@ export function ConnectionQueryBrowser({
   id,
   baseUrl,
   descriptor,
-  onTargetChange,
+  onOptionsChange,
 }: {
   id: string;
   baseUrl: string;
   descriptor: BrowserDescriptor;
-  onTargetChange: (target: string) => void;
+  onOptionsChange: (options: Record<string, unknown>) => void;
 }) {
   const [selection, setSelection] = useState<{
     query?: string;
@@ -73,7 +73,7 @@ export function ConnectionQueryBrowser({
       options={options}
       onOptionsChange={(next: Record<string, unknown>) => {
         setLiveOptions(next);
-        onTargetChange(String(next.index ?? ""));
+        onOptionsChange(next);
       }}
       optionsSchema={queryBrowserOptionsSchema(descriptor)}
       search={search}

@@ -16,6 +16,8 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/types"
+	"k8s.io/client-go/kubernetes"
 )
 
 type connectionInfo struct {
@@ -131,6 +133,8 @@ func discoverServer(ctx context.Context, connectionContext dbcontext.Context, co
 		info, err = discoverPrometheus(ctx, connectionContext, connection)
 	case models.ConnectionTypeRedis:
 		info, err = discoverRedis(ctx, connection)
+	case models.ConnectionTypeKubernetes:
+		info, err = discoverKubernetes(ctx, connectionContext, connection)
 	default:
 		return serverInfo{Status: "unavailable", Message: "Server version discovery is not available for this connection type"}
 	}
@@ -139,6 +143,48 @@ func discoverServer(ctx context.Context, connectionContext dbcontext.Context, co
 	}
 	info.Status = "available"
 	return info
+}
+
+func discoverKubernetes(
+	ctx context.Context,
+	connectionContext dbcontext.Context,
+	connection *models.Connection,
+) (serverInfo, error) {
+	_, config, err := (dbconnection.KubeconfigConnection{
+		Kubeconfig: &types.EnvVar{ValueStatic: connection.Certificate},
+	}).Populate(connectionContext)
+	if err != nil {
+		return serverInfo{}, fmt.Errorf("configure Kubernetes client: %w", err)
+	}
+	if config == nil {
+		return serverInfo{}, fmt.Errorf("configure Kubernetes client: REST config is missing")
+	}
+	config.Timeout = connectionProbeTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return serverInfo{}, fmt.Errorf("get Kubernetes server version: %w", context.DeadlineExceeded)
+		}
+		if remaining < config.Timeout {
+			config.Timeout = remaining
+		}
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return serverInfo{}, fmt.Errorf("create Kubernetes client: %w", err)
+	}
+	version, err := client.Discovery().ServerVersion()
+	if err != nil {
+		return serverInfo{}, fmt.Errorf("get Kubernetes server version: %w", err)
+	}
+	return serverInfo{
+		Product: "Kubernetes",
+		Version: version.GitVersion,
+		Details: nonEmptyDetails(map[string]string{
+			"major": version.Major, "minor": version.Minor,
+			"goVersion": version.GoVersion, "platform": version.Platform,
+		}),
+	}, nil
 }
 
 func discoverSQLServer(ctx context.Context, connectionContext dbcontext.Context, connection *models.Connection) (serverInfo, error) {

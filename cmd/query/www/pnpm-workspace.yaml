@@ -11,7 +11,7 @@ minimumReleaseAgeExclude:
 trustPolicy: no-downgrade
 
 catalog:
-  "@ai-sdk/react": ^3.0.201
+  "@ai-sdk/react": 3.0.210
   "@chromatic-com/storybook": ^5.2.1
   "@codemirror/autocomplete": ^6.20.3
   "@codemirror/commands": ^6.10.4
@@ -54,7 +54,7 @@ catalog:
   "@types/node": ^24
   "@types/react": ^18.3.12
   "@types/react-dom": ^18.3.1
-  ai: ^6.0.199
+  ai: 6.0.208
   autoprefixer: ^10.4.20
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
@@ -76,7 +76,7 @@ catalog:
   shiki: ^1.24.0
   sonner: ^1.7.1
   storybook: ^8.6.18
-  tailwind-merge: ^2.6.0
+  tailwind-merge: ^3.6.0
   tailwindcss: ^4.3.3
   typescript: ^5.7.2
   vite: ^6.0.3
@@ -85,7 +85,12 @@ catalog:
   yaml: ^2.8.3
 catalogMode: prefer
 
+overrides:
+  tailwind-merge: "catalog:"
+
 confirmModulesPurge: false
 
 linkWorkspacePackages: true
 preferWorkspacePackages: true
+allowBuilds:
+  esbuild: true

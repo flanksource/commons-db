@@ -21,7 +21,7 @@ import {
 import profileSchemaDocument from "../../../../schemas/profile.json";
 import "./styles.css";
 import "@flanksource/clicky-ui/styles.css";
-import { App } from "./App";
+import { App, formExtensions } from "./App";
 import { FlanksourceIcon } from "./iconProvider";
 
 // The profile editor ships in clicky-ui, but the schema it renders is generated
@@ -30,6 +30,7 @@ import { FlanksourceIcon } from "./iconProvider";
 // mount point is the default /api/v1, so basePath is left alone.
 configureProfiles({
   schema: profileSchemaDocument as unknown as ProfileSchema,
+  formExtensions,
 });
 
 // Resolve clicky-ui's name-based icons (e.g. the connection-type picker grid).

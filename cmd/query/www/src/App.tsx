@@ -1,5 +1,6 @@
 import {
   EntityExplorerApp,
+  ChatLayer,
   RouterProvider,
   ThemeProvider,
   createUnitFormExtensions,
@@ -9,7 +10,7 @@ import {
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { MonacoProvider } from "@flanksource/clicky-ui/monaco";
-import { ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
+import { ChatButton, ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { secretFormExtensions } from "./secretKeySelector";
 import { namespaceFormExtensions } from "./namespacePicker";
@@ -18,11 +19,14 @@ import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
 import { connectionDashboardResultRenderer } from "./connectionDashboardRenderer";
 import { getMonacoWorker } from "./monacoWorkers";
-import { ChatWidget } from "./chatWidget";
+import { queryChatConfig } from "./chatWidget";
+import { isQueryChatOperation } from "./chatOperations";
 import {
+  celEditorFormExtensions,
   esQueryBuilderFormExtensions,
   profileBuilderFormExtensions,
   profileEditSurfaceKey,
+  processorPipelineFormExtensions,
 } from "@flanksource/clicky-ui/profiles";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
 import { jsonPathFormExtensions } from "./jsonPathPicker";
@@ -44,7 +48,12 @@ const unitFormExtensions = createUnitFormExtensions();
 // selector (which reads the selected namespace from the form's root value), the
 // profile query builder, and the structured OpenSearch filter builder that
 // mounts on provider.options.search in both the create and the edit form.
-const formExtensions = {
+// Exported so main.tsx can hand the same list to configureProfiles: the profile
+// editor renders its own JsonSchemaForms inside clicky-ui, far from this app's
+// EntityExplorerApp, and without them every x-clicky-component in the profile
+// schema — the CEL editor, the processor pipeline, the namespace and secret
+// pickers — falls back to a plain control.
+export const formExtensions = {
   pre: [...unitFormExtensions.pre, ...esParamOptionsFormExtensions.pre],
   post: [
     ...namespaceFormExtensions.post,
@@ -53,6 +62,8 @@ const formExtensions = {
     ...esQueryBuilderFormExtensions.post,
     ...esParamOptionsFormExtensions.post,
     ...jsonPathFormExtensions.post,
+    ...celEditorFormExtensions.post,
+    ...processorPipelineFormExtensions.post,
   ],
 };
 
@@ -119,55 +130,44 @@ function Explorer() {
       </div>
     );
   };
-  // The editor is a route of its own rather than a dialog over the explorer:
-  // six sections and a column grid need the whole viewport, a URL, and the back
-  // button. It replaces the shell instead of nesting inside it.
-  if (editingProfile) {
-    return (
-      <>
-        <ProfileEditorPage client={client} surfaceKey={editingProfile} />
-        {dialog}
-      </>
-    );
-  }
-  // Reconciling is a route for the same reason: two schemas, a key being worked
-  // out against them, and a result read as triage all want the whole viewport.
-  if (reconcilingProfile) {
-    return (
-      <>
-        <ReconcilePage client={client} surfaceKey={reconcilingProfile} />
-        {dialog}
-      </>
-    );
-  }
-
   return (
     <>
-      <EntityExplorerApp
+      {editingProfile ? (
+        <ProfileEditorPage client={client} surfaceKey={editingProfile} />
+      ) : reconcilingProfile ? (
+        <ReconcilePage client={client} surfaceKey={reconcilingProfile} />
+      ) : (
+        <EntityExplorerApp
+          client={client}
+          actions={<ChatButton label="Open query assistant" />}
+          formExtensions={formExtensions}
+          formActions={connectionFormActions}
+          surfaceActionLabels={{
+            connection: { create: "Add Connection", update: "Edit" },
+            profiles: { create: "Add Profile" },
+          }}
+          resultRenderer={renderResult}
+          entityDetailBodyRenderer={(context) =>
+            connectionDetailBodyRenderer(
+              context,
+              ({ connectionName, providerType, providerOptions }) => (
+                <BuildProfileButton
+                  client={client}
+                  connectionName={connectionName}
+                  providerType={providerType}
+                  providerOptions={providerOptions}
+                />
+              ),
+            )
+          }
+          entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
+        />
+      )}
+      <ChatLayer
         client={client}
-      formExtensions={formExtensions}
-      formActions={connectionFormActions}
-      surfaceActionLabels={{
-        connection: { create: "Add Connection", update: "Edit" },
-        profiles: { create: "Add Profile" },
-      }}
-      resultRenderer={renderResult}
-      entityDetailBodyRenderer={(context) =>
-        connectionDetailBodyRenderer(
-          context,
-          ({ connectionName, providerType, providerOptions }) => (
-            <BuildProfileButton
-              client={client}
-              connectionName={connectionName}
-              providerType={providerType}
-              providerOptions={providerOptions}
-            />
-          ),
-        )
-      }
-        entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
+        operationFilter={isQueryChatOperation}
+        {...queryChatConfig}
       />
-      <ChatWidget client={client} />
       {dialog}
     </>
   );

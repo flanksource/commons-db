@@ -123,7 +123,7 @@ describe("OpenSearch index picker", () => {
     const picked = queryBrowserOptionsSchema({
       kind: "query",
       provider: "opensearch",
-      targetLabel: "Index",
+      target: { kind: "index", label: "Index" },
       optionsSchema,
     });
     const unpicked = queryBrowserOptionsSchema({

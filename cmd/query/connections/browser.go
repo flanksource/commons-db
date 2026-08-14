@@ -16,6 +16,7 @@ import (
 	clickyvalkey "github.com/flanksource/clicky/valkey"
 	"github.com/google/uuid"
 	"github.com/valkey-io/valkey-go"
+	"k8s.io/client-go/kubernetes"
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -28,29 +29,45 @@ import (
 )
 
 type connectionBrowserHandler struct {
-	prefix string
-	ctx    dbcontext.Context
-	next   http.Handler
+	prefix           string
+	ctx              dbcontext.Context
+	next             http.Handler
+	kubernetesClient func(context.Context, *models.Connection) (kubernetes.Interface, error)
 }
 
 func newConnectionBrowserHandler(prefix string, ctx dbcontext.Context, next http.Handler) *connectionBrowserHandler {
-	return &connectionBrowserHandler{prefix: strings.TrimRight(prefix, "/"), ctx: ctx, next: next}
+	return &connectionBrowserHandler{
+		prefix: strings.TrimRight(prefix, "/"), ctx: ctx, next: next,
+		kubernetesClient: func(requestContext context.Context, connection *models.Connection) (kubernetes.Interface, error) {
+			client, _, err := (dbconnection.KubeconfigConnection{
+				ConnectionName: connection.ID.String(),
+			}).Populate(ctx.Wrap(requestContext))
+			if err != nil {
+				return nil, fmt.Errorf("connect to Kubernetes connection %q: %w", connection.Name, err)
+			}
+			return client, nil
+		},
+	}
+}
+
+type browserTarget struct {
+	Kind  string   `json:"kind"`
+	Label string   `json:"label"`
+	Kinds []string `json:"kinds,omitempty"`
 }
 
 type browserDescriptor struct {
-	Kind           string             `json:"kind"`
-	Provider       string             `json:"provider,omitempty"`
-	Language       string             `json:"language,omitempty"`
-	QueryLabel     string             `json:"queryLabel,omitempty"`
-	DefaultQuery   string             `json:"defaultQuery,omitempty"`
-	ResultView     string             `json:"resultView,omitempty"`
-	OptionsSchema  queryschema.Schema `json:"optionsSchema,omitempty"`
-	InitialOptions map[string]any     `json:"initialOptions,omitempty"`
-	Catalog        bool               `json:"catalog,omitempty"`
-	// TargetLabel names what a query runs against when the source picks one flat
-	// target — the `index` option — instead of navigating a hierarchy. Setting it
-	// gives the browser a target combobox in place of the catalog tree.
-	TargetLabel string `json:"targetLabel,omitempty"`
+	Kind            string             `json:"kind"`
+	Provider        string             `json:"provider,omitempty"`
+	Language        string             `json:"language,omitempty"`
+	QueryLabel      string             `json:"queryLabel,omitempty"`
+	DefaultQuery    string             `json:"defaultQuery,omitempty"`
+	ResultView      string             `json:"resultView,omitempty"`
+	OptionsSchema   queryschema.Schema `json:"optionsSchema,omitempty"`
+	InitialOptions  map[string]any     `json:"initialOptions,omitempty"`
+	Catalog         bool               `json:"catalog,omitempty"`
+	AllowEmptyQuery bool               `json:"allowEmptyQuery,omitempty"`
+	Target          *browserTarget     `json:"target,omitempty"`
 	// RowLimits are the row caps that apply when a profile sets none of its own:
 	// the page it returns by default, the largest page a caller may ask for, and
 	// where an export stops. The browser shows them beside the query's own limit
@@ -218,6 +235,10 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		h.serveCatalog(w, r, conn)
 	case tail == "/inspect" && r.Method == http.MethodGet:
 		h.serveInspection(w, r, conn)
+	case tail == "/namespaces" && r.Method == http.MethodGet:
+		h.serveKubernetesNamespaces(w, r, conn)
+	case tail == "/workloads" && r.Method == http.MethodGet:
+		h.serveKubernetesWorkloads(w, r, conn)
 	case strings.HasPrefix(tail, "/cache/"):
 		h.serveCache(w, r, conn, h.prefix+"/connection/"+idPart+"/browser")
 	default:
@@ -261,7 +282,7 @@ func descriptorForConnection(connType string) (browserDescriptor, bool) {
 		d.InitialOptions = map[string]any{"since": "1h", "limit": "200", "direction": "backward"}
 	case models.ConnectionTypeOpenSearch:
 		d.Provider, d.Language, d.QueryLabel, d.DefaultQuery, d.Catalog = "opensearch", "json", "OpenSearch query DSL", `{"query":{"match_all":{}}}`, true
-		d.TargetLabel = "Index"
+		d.Target = &browserTarget{Kind: "index", Label: "Index"}
 		d.InitialOptions = map[string]any{"limit": "200"}
 	case models.ConnectionTypeJaeger:
 		d.Provider, d.Language, d.QueryLabel, d.ResultView = "jaeger", "text", "Trace ID (optional)", "table"
@@ -269,7 +290,7 @@ func descriptorForConnection(connType string) (browserDescriptor, bool) {
 	case models.ConnectionTypeAWS:
 		d.Provider, d.Language, d.QueryLabel, d.ResultView = "cloudwatch", "text", "Logs Insights query", "logs"
 		d.DefaultQuery = "fields @timestamp, @message | sort @timestamp desc | limit 100"
-		d.TargetLabel = "Log group"
+		d.Target = &browserTarget{Kind: "index", Label: "Log group"}
 		d.InitialOptions = map[string]any{"start": "now-1h", "limit": "200"}
 	case models.ConnectionTypeGCP:
 		// One connection type, two providers: Cloud Logging is the log browser,
@@ -280,14 +301,18 @@ func descriptorForConnection(connType string) (browserDescriptor, bool) {
 	case models.ConnectionTypeAzure:
 		d.Provider, d.Language, d.QueryLabel, d.ResultView = "azureloganalytics", "text", "KQL", "logs"
 		d.DefaultQuery = "AzureActivity | top 100 by TimeGenerated"
-		d.TargetLabel = "Workspace"
+		d.Target = &browserTarget{Kind: "index", Label: "Workspace"}
 		d.InitialOptions = map[string]any{"start": "now-1h", "limit": "200"}
 	case models.ConnectionTypeKubernetes:
 		// No query language — a pod-log request is entirely structural, so the
 		// browser drives it from options alone.
 		d.Provider, d.ResultView = "k8s", "logs"
-		d.TargetLabel = "Workload"
-		d.InitialOptions = map[string]any{"kind": "Deployment", "limit": "200"}
+		d.AllowEmptyQuery = true
+		d.Target = &browserTarget{
+			Kind: "kubernetes-workload", Label: "Workload",
+			Kinds: []string{"pod", "deployment", "statefulset", "daemonset"},
+		}
+		d.InitialOptions = map[string]any{"limit": "200"}
 	case models.ConnectionTypeRedis:
 		return browserDescriptor{Kind: "cache"}, true
 	default:

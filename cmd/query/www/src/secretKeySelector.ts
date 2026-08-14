@@ -68,8 +68,10 @@ const loaders: SecretFormLoaders = {
       return Promise.resolve({
         service: [],
         ingress: [],
+        pod: [],
         deployment: [],
         statefulset: [],
+        daemonset: [],
       } satisfies Record<WorkloadKind, WorkloadResource[]>);
     }
     return fetchJSON<Record<WorkloadKind, WorkloadResource[]>>(

@@ -8,6 +8,7 @@ import {
 } from "@flanksource/clicky-ui/profiles";
 import { ConnectionInfoHeader } from "./connectionInfoHeader";
 import { ConnectionQueryBrowser } from "./connectionQueryBrowser";
+import { connectionProfileTargetOptions } from "./connectionProfileTarget";
 
 export function connectionDetailBodyRenderer(
   context: EntityDetailBodyRenderContext,
@@ -55,10 +56,10 @@ function ConnectionBrowser({
   // The target the browser is pointed at, so "Build profile" starts where the
   // author left off. It is reported by the browser rather than picked here —
   // the picker lives in the browser's navigator.
-  const [selectedTarget, setSelectedTarget] = useState("");
+  const [selectedOptions, setSelectedOptions] = useState<Record<string, unknown>>({});
   const profileOptions = useMemo(
-    () => (selectedTarget ? { index: selectedTarget } : undefined),
-    [selectedTarget],
+    () => connectionProfileTargetOptions(descriptor.data, selectedOptions),
+    [descriptor.data, selectedOptions],
   );
 
   if (descriptor.isLoading) {
@@ -104,7 +105,7 @@ function ConnectionBrowser({
         id={id}
         baseUrl={baseUrl}
         descriptor={descriptor.data}
-        onTargetChange={setSelectedTarget}
+        onOptionsChange={setSelectedOptions}
       />
     </div>
   );

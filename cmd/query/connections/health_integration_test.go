@@ -3,6 +3,7 @@ package connections
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,7 +29,7 @@ var _ = Describe("connection health endpoint", func() {
 			URL: "postgres://operator:hunter2@" + blackholeAddress() + "/app",
 		}
 		unprobable = models.Connection{
-			ID: uuid.New(), Name: "cluster", Namespace: "acme", Type: models.ConnectionTypeKubernetes,
+			ID: uuid.New(), Name: "archive", Namespace: "acme", Type: models.ConnectionTypeFolder,
 		}
 		database := newConnectionTestDB([]models.Connection{stalling, unprobable})
 		ctx := dbcontext.NewContext(context.Background()).WithDB(database, nil)
@@ -108,5 +109,61 @@ var _ = Describe("connection health endpoint", func() {
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, connectionHealthPath, nil))
 
 		Expect(recorder.Code).To(Equal(http.StatusNotFound))
+	})
+})
+
+var _ = Describe("Kubernetes connection health", func() {
+	It("reports the API server version from the saved kubeconfig", func() {
+		requests := make(chan string, 1)
+		apiServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests <- r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, err := w.Write([]byte(`{"major":"1","minor":"31","gitVersion":"v1.31.4"}`))
+			if err != nil {
+				panic(err)
+			}
+		}))
+		DeferCleanup(apiServer.Close)
+
+		connection := models.Connection{
+			ID: uuid.New(), Name: "cluster", Namespace: "acme", Type: models.ConnectionTypeKubernetes,
+			Certificate: fmt.Sprintf(`apiVersion: v1
+kind: Config
+clusters:
+- name: test
+  cluster:
+    server: %s
+contexts:
+- name: test
+  context:
+    cluster: test
+current-context: test
+`, apiServer.URL),
+		}
+		database := newConnectionTestDB([]models.Connection{connection})
+		handler := newConnectionHealthHandler(
+			"/api/v1",
+			dbcontext.NewContext(context.Background()).WithDB(database, nil),
+			http.NotFoundHandler(),
+		)
+		DeferCleanup(func() { forgetConnectionHealth(connection.ID.String()) })
+
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, httptest.NewRequest(
+			http.MethodPost,
+			connectionHealthPath,
+			strings.NewReader(`{"ids":["`+connection.ID.String()+`"]}`),
+		))
+
+		Expect(recorder.Code).To(Equal(http.StatusOK), recorder.Body.String())
+		var response connectionHealthResponse
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &response)).To(Succeed())
+		Expect(response.Results).To(HaveLen(1))
+		Expect(response.Results).To(ConsistOf(connectionHealthItem{
+			ID: connection.ID.String(), State: connectionHealthHealthy,
+			Detail:    "Kubernetes v1.31.4",
+			CheckedAt: response.Results[0].CheckedAt, DurationMS: response.Results[0].DurationMS,
+		}))
+		Expect(requests).To(Receive(Equal("/version")))
 	})
 })

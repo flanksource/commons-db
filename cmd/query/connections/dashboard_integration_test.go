@@ -133,7 +133,7 @@ var _ = Describe("connection dashboard endpoint", func() {
 
 	It("surfaces a health result on the next listing once one has been checked", func() {
 		connection := models.Connection{
-			ID: uuid.New(), Name: "cluster", Namespace: "acme", Type: models.ConnectionTypeKubernetes,
+			ID: uuid.New(), Name: "archive", Namespace: "acme", Type: models.ConnectionTypeFolder,
 		}
 		database := newConnectionTestDB([]models.Connection{connection})
 		ctx := dbcontext.NewContext(context.Background()).WithDB(database, nil)

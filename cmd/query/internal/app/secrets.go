@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/flanksource/commons-db/cmd/query/kubecatalog"
 	dbcontext "github.com/flanksource/commons-db/context"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -128,9 +129,9 @@ func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var payload any
 	switch rel {
 	case "namespaces":
-		payload, err = listNamespaces(r.Context(), client)
+		payload, err = kubecatalog.ListNamespaces(r.Context(), client)
 	case "workloads":
-		payload, err = listWorkloads(r.Context(), client, ns, q.Get("kinds"))
+		payload, err = kubecatalog.ListWorkloads(r.Context(), client, ns, q.Get("kinds"))
 	case "secrets":
 		payload, err = listSecretResources(r.Context(), client, q.Get("kind"), ns)
 	case "secrets/preview":
