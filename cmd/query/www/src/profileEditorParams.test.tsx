@@ -78,14 +78,19 @@ describe("profile editor — Parameters section", () => {
   });
 
   it("makes the add row the empty state when a profile has no parameters", () => {
-    const html = markup({ ...DRAFT, params: [] } as unknown as ProfileWizardDraft);
+    const html = markup({
+      ...DRAFT,
+      params: [],
+    } as unknown as ProfileWizardDraft);
     expect(html).not.toContain('aria-expanded="false"');
     expect(html).toContain("No parameters yet");
     expect(html).toContain("Add parameter");
-    expect(html).toContain("A parameter turns a fixed query into a reusable one");
+    expect(html).toContain(
+      "A parameter turns a fixed query into a reusable one",
+    );
   });
 
-  it("leaves the shared Advanced composition section on the plain defaults", () => {
+  it("leaves shared non-parameter sections on their schema controls", () => {
     // ProfileSchemaSection is shared; presentation must come from the call site,
     // never a branch on `keys` inside the component.
     const html = renderToStaticMarkup(
@@ -99,6 +104,8 @@ describe("profile editor — Parameters section", () => {
       />,
     );
     expect(html).toContain("Advanced composition");
-    expect(html).not.toContain("aria-expanded");
+    expect(html).toContain("Ignore");
+    expect(html).not.toContain("No parameters yet");
+    expect(html).not.toContain("Add parameter");
   });
 });

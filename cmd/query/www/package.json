@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@ai-sdk/react": "3.0.210",
-    "@flanksource/clicky-ui": "0.3.20",
+    "@flanksource/clicky-ui": "workspace:*",
     "@flanksource/icons": "1.0.63",
     "@tanstack/react-query": "catalog:",
     "ai": "6.0.208",
