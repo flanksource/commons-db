@@ -26,10 +26,10 @@ const (
 	OrderDescending = "desc"
 
 	// KeepFirst builds the merged row from the earliest row in the batch.
-	KeepFirst = "first"
+	KeepFirst = query.KeepFirst
 
 	// KeepLast builds it from the latest.
-	KeepLast = "last"
+	KeepLast = query.KeepLast
 )
 
 // timestampColumns are probed, in order, when BatchConfig.Column is unset.

@@ -28,10 +28,11 @@ type profileSampleHandler struct {
 }
 
 type profileSampleRequest struct {
-	Profile    query.Profile           `json:"profile"`
-	Params     map[string]any          `json:"params,omitempty"`
-	Pagination samplePaginationRequest `json:"pagination,omitempty"`
-	Debug      bool                    `json:"debug,omitempty"`
+	Profile           query.Profile           `json:"profile"`
+	Params            map[string]any          `json:"params,omitempty"`
+	Pagination        samplePaginationRequest `json:"pagination,omitempty"`
+	Debug             bool                    `json:"debug,omitempty"`
+	PreviewProcessors bool                    `json:"previewProcessors,omitempty"`
 }
 
 type samplePaginationRequest struct {
@@ -74,7 +75,8 @@ func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		Page: query.PageRequest{
 			Limit: request.Pagination.Limit, Cursor: request.Pagination.Cursor,
 		},
-		Debug: request.Debug,
+		Debug:             request.Debug,
+		PreviewProcessors: request.PreviewProcessors,
 	})
 	if err != nil {
 		status := http.StatusBadRequest

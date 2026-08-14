@@ -169,6 +169,61 @@ var _ = Describe("buildFilteredSQL", func() {
 			})
 			Expect(err).To(MatchError(ContainSubstring("filtered as both")))
 		})
+
+		// Compatibility is by compiled clause, not by declared kind. A list param
+		// is always a value selection and an identifier column is an exact match,
+		// so comparing the declared kinds would refuse a pairing that is one IN.
+		It("merges a value selection and an exact match on one field", func() {
+			statement, args, err := buildFilteredSQL(dialectPostgres, ordersQuery, []query.ColumnFilterValue{
+				terms("region", []string{"eu"}, nil),
+				{Field: "region", Kind: query.ColumnFilterKindExact, Include: []string{"us"}},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(statement).To(ContainSubstring(`"region" IN ($1,$2)`))
+			Expect(args).To(Equal([]any{"eu", "us"}))
+		})
+
+		// A duration bound and a date bound differ from their numeric and time
+		// siblings in the control they render, never in the clause they compile
+		// to. Comparing against the sibling is the whole claim, stated as an
+		// reference rather than as a hand-written SQL literal.
+		DescribeTable("compiles a bound exactly as the clause it belongs to",
+			func(kind, sibling query.ColumnFilterKind, low, high any) {
+				bounded := func(k query.ColumnFilterKind) query.ColumnFilterValue {
+					return query.ColumnFilterValue{Field: "status", Kind: k, Range: &query.FilterRange{
+						Min: &query.FilterBound{Value: low, Inclusive: true},
+						Max: &query.FilterBound{Value: high, Inclusive: false},
+					}}
+				}
+				statement, args, err := buildFilteredSQL(dialectPostgres, ordersQuery,
+					[]query.ColumnFilterValue{bounded(kind)})
+				Expect(err).ToNot(HaveOccurred())
+				siblingStatement, siblingArgs, err := buildFilteredSQL(dialectPostgres, ordersQuery,
+					[]query.ColumnFilterValue{bounded(sibling)})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(statement).To(Equal(siblingStatement))
+				Expect(args).To(Equal(siblingArgs))
+			},
+			Entry("a duration compiles as a range",
+				query.ColumnFilterKindDuration, query.ColumnFilterKindRange, float64(500), float64(5000)),
+			Entry("a date compiles as a time",
+				query.ColumnFilterKindDate, query.ColumnFilterKindTime,
+				"2024-01-02T03:04:05Z", "2024-01-09T03:04:05Z"),
+		)
+
+		// Date math cannot be compared against its sibling by equality — each
+		// resolution reads the clock afresh — so it is asserted directly: SQL has
+		// no server-side date math, so a date bound must arrive as an instant
+		// rather than as the string the operator wrote.
+		It("resolves date math on a date bound, as it does on a time bound", func() {
+			_, args, err := buildFilteredSQL(dialectPostgres, ordersQuery, []query.ColumnFilterValue{{
+				Field: "status", Kind: query.ColumnFilterKindDate,
+				Range: &query.FilterRange{Min: &query.FilterBound{Value: "now-7d", Inclusive: true}},
+			}})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(args).To(HaveLen(1))
+			Expect(args[0]).To(BeTemporally("~", time.Now().UTC().AddDate(0, 0, -7), time.Minute))
+		})
 	})
 
 	Describe("wrapping a query that already has a WITH clause", func() {

@@ -96,26 +96,15 @@ func (m *merger) collapse(group []query.Row) ([]query.Row, error) {
 	return []query.Row{merged}, nil
 }
 
-// mergeScope is the CEL environment a group expression is evaluated in.
+// mergeScope is the CEL environment a group expression is evaluated in. It is
+// query.MergeScope so that evaluating one of these expressions in the builder
+// and running it here cannot drift apart.
 func mergeScope(group []query.Row, keep string) map[string]any {
-	rows := make([]any, len(group))
-	for index, row := range group {
-		rows[index] = map[string]any(row)
-	}
-	return map[string]any{
-		"batch": rows,
-		"first": map[string]any(group[0]),
-		"last":  map[string]any(group[len(group)-1]),
-		"count": len(group),
-		"row":   map[string]any(keptRow(group, keep)),
-	}
+	return query.MergeScope(group, keep)
 }
 
 func keptRow(group []query.Row, keep string) query.Row {
-	if keep == KeepLast {
-		return group[len(group)-1]
-	}
-	return group[0]
+	return query.KeptRow(group, keep)
 }
 
 func partitionKey(row query.Row, columns []string) string {

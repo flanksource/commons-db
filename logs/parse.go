@@ -2,11 +2,38 @@ package logs
 
 import (
 	"encoding/json"
+	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/commons/utils"
 )
+
+const (
+	FormatAutodetect = "autodetect"
+	FormatJSON       = "json"
+	FormatKlogfmt    = "klogfmt"
+	FormatLogfmt     = "logfmt"
+	FormatSyslog     = "syslog"
+)
+
+var supportedFormats = []string{FormatAutodetect, FormatJSON, FormatKlogfmt, FormatLogfmt, FormatSyslog}
+
+// SupportedFormats returns the explicit formats ParseMessage accepts. An empty
+// format is accepted too and means autodetect.
+func SupportedFormats() []string {
+	return slices.Clone(supportedFormats)
+}
+
+// ValidateFormat rejects a format ParseMessage would otherwise leave
+// untouched. Empty is valid because it selects autodetection.
+func ValidateFormat(format string) error {
+	if format == "" || slices.Contains(supportedFormats, format) {
+		return nil
+	}
+	return fmt.Errorf("log format %q is not one of %s", format, strings.Join(supportedFormats, ", "))
+}
 
 var klogPattern = regexp.MustCompile(`^([IWEF])(\d{4})\s+(\d{2}:\d{2}:\d{2}\.\d+)\s+(\d+)\s+(\S+:\d+)]\s*(.*)$`)
 
@@ -33,15 +60,15 @@ var syslogSeverities = []string{
 
 func ParseMessage(line *LogLine, format string) {
 	switch format {
-	case "klogfmt":
+	case FormatKlogfmt:
 		ParseKlogfmt(line)
-	case "logfmt":
+	case FormatLogfmt:
 		ParseLogfmt(line)
-	case "json":
+	case FormatJSON:
 		ParseJSON(line)
-	case "syslog":
+	case FormatSyslog:
 		ParseSyslog(line)
-	case "autodetect", "":
+	case FormatAutodetect, "":
 		ParseAutodetect(line)
 	}
 }
@@ -51,16 +78,16 @@ func DetectFormat(msg string) string {
 		return ""
 	}
 	if msg[0] == '{' {
-		return "json"
+		return FormatJSON
 	}
 	if klogPattern.MatchString(msg) {
-		return "klogfmt"
+		return FormatKlogfmt
 	}
 	if msg[0] == '<' && syslogPattern.MatchString(msg) {
-		return "syslog"
+		return FormatSyslog
 	}
 	if pairs := parseKeyValuePairs(msg); len(pairs) >= 2 {
-		return "logfmt"
+		return FormatLogfmt
 	}
 	return ""
 }

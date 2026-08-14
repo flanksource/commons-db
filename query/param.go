@@ -173,7 +173,7 @@ func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, []
 // template, and a bound list's whole contract is that params.<name> is a list
 // of values the query interpolates.
 func (d ParamDef) coerceList(raw any) ([]string, []string, error) {
-	selection, err := parseColumnFilterSelection(ColumnFilterKindTerms, raw)
+	selection, err := ColumnFilterBinding{Kind: ColumnFilterKindTerms}.parseSelection(raw)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -17,6 +17,11 @@ type openSearchWalk struct {
 	searcher *opensearch.Searcher
 	index    string
 
+	// diagnostics is non-nil only for a debug run, and records the search this
+	// walk actually issues — the body with every runtime filter and time range
+	// already folded in, which is the query no view of the profile can show.
+	diagnostics *query.ProviderDiagnostics
+
 	// build renders the search body for one position.
 	build func(openSearchPage) (openSearchRequest, error)
 
@@ -81,6 +86,11 @@ func (w openSearchWalk) run(
 // the consistency of a walk at a boundary no caller could see. An ordered
 // profile still gets a cursor off every page, so a caller can carry on past the
 // window by following it rather than by asking for a deeper offset.
+//
+// It pins nothing. Every order it serves sorts on document values — a declared
+// one by construction, a derived one because its tiebreaker is _id — so the
+// position a page hands over as a cursor means the same thing in the request
+// that resumes it, and no point-in-time has to be held open between the two.
 func (w openSearchWalk) byOffset(
 	ctx context.Context,
 	req query.ProviderRequest,
@@ -213,6 +223,9 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 		// A point-in-time already names the indices it was opened over.
 		index = ""
 	}
+	details := openSearchDiagnosticDetails(w.index, built.limitParam(), position)
+	w.diagnostics.RecordRequest(body, nil, details)
+	started := time.Now()
 	raw, err := w.searcher.SearchRaw(ctx, opensearch.Request{
 		Index: index,
 		Query: body,
@@ -220,6 +233,8 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 		PIT:   position.pit,
 	})
 	if err != nil {
+		w.diagnostics.RecordError(err)
+		w.diagnostics.RecordResponse(started, 0, details)
 		return opensearch.Response{}, nil, false,
 			openSearchFailure(err, index, body, built.limitParam(), position.pit)
 	}
@@ -228,6 +243,13 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 		built.capped = true
 	}
 	rows := w.mapRows(raw)
+	if w.diagnostics.WantsPreview() {
+		w.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
+	}
+	w.diagnostics.RecordResponse(started, len(rows), map[string]any{
+		"index": w.index, "took": raw.Took, "timedOut": raw.TimedOut,
+		"total": raw.Hits.Total.Value, "relation": raw.Hits.Total.Relation,
+	})
 
 	// A cursor is cut from the raw hits by position, so a mapping that dropped
 	// or reordered one would resume the walk somewhere other than where it
@@ -238,6 +260,23 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 			len(raw.Hits.Hits), len(rows))
 	}
 	return raw, rows, built.capped, nil
+}
+
+// openSearchDiagnosticDetails says which slice of the index a recorded search
+// asked for. The body alone does not: from and search_after are written into it
+// by the walk, and size never reaches it at all.
+func openSearchDiagnosticDetails(index, limit string, position openSearchPage) map[string]any {
+	details := map[string]any{"index": index, "limit": limit}
+	if position.from > 0 {
+		details["from"] = position.from
+	}
+	if len(position.after) > 0 {
+		details["searchAfter"] = position.after
+	}
+	if position.pit != "" {
+		details["pit"] = position.pit
+	}
+	return details
 }
 
 // openSearchFailure attaches the search that failed to the error. OpenSearch

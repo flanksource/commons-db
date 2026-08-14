@@ -26,6 +26,8 @@ type openSearchCapture struct {
 	fieldName     string
 	fieldType     string
 	fieldCapsBody string
+	openedPITs    int
+	closedPITs    int
 }
 
 // stubOpenSearch answers one search with no hits and captures the request.
@@ -49,6 +51,20 @@ func stubOpenSearch(capture *openSearchCapture) *httptest.Server {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"fields":{"%s":{"%s":{"searchable":true,"aggregatable":true}}}}`, capture.fieldName, fieldType)
+			return
+		}
+		// A structured profile derives an order, and an order is walked by
+		// search_after over a point-in-time, so the stub has to hand one out
+		// before it will be asked for hits.
+		if strings.Contains(r.URL.Path, "/_search/point_in_time") {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodDelete {
+				capture.closedPITs++
+				_, _ = fmt.Fprint(w, `{"pits":[{"successful":true,"pit_id":"pit-1"}]}`)
+				return
+			}
+			capture.openedPITs++
+			_, _ = fmt.Fprint(w, `{"pit_id":"pit-1","creation_time":1}`)
 			return
 		}
 		raw, err := io.ReadAll(r.Body)
@@ -99,8 +115,12 @@ var _ = Describe("opensearch structured search", func() {
 			"filter": []any{map[string]any{"term": map[string]any{"level": "error"}}},
 			"must":   []any{map[string]any{"match": map[string]any{"message": "timeout"}}},
 		}}))
+		// The specification's own sort survives, with the tiebreaker that makes
+		// it total appended. Without one, rows sharing a @timestamp could fall
+		// on either side of a page boundary and be repeated or skipped.
 		Expect(capture.body["sort"]).To(Equal([]any{
 			map[string]any{"@timestamp": map[string]any{"order": "desc"}},
+			map[string]any{"_id": map[string]any{"order": "asc"}},
 		}))
 		Expect(capture.fieldCaps).To(BeZero(), "a search without time-role params must not inspect mappings")
 	})

@@ -86,6 +86,9 @@ type ProviderDiagnostics struct {
 	walk      bool
 	requested bool
 	detail    DiagnosticDetail
+	// armed says the provider has just described a request it is about to issue,
+	// so the next HTTP exchange is the one carrying it. See HTTPTransport.
+	armed bool
 }
 
 type ProviderDiagnosticRequest struct {
@@ -100,6 +103,14 @@ type ProviderDiagnosticRequest struct {
 	Arguments  []any          `json:"arguments,omitempty"`
 	Options    map[string]any `json:"options,omitempty"`
 	Details    map[string]any `json:"details,omitempty"`
+
+	// Method, URL and Headers are the HTTP exchange the request rode on, for a
+	// provider that speaks HTTP. The endpoint is stated nowhere the author can
+	// read it — a connection names a host and the provider builds the path — so
+	// it is the first thing anyone reproducing the call by hand has to guess.
+	Method  string            `json:"method,omitempty"`
+	URL     string            `json:"url,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 type ProviderDiagnosticResponse struct {
@@ -110,6 +121,11 @@ type ProviderDiagnosticResponse struct {
 	Preview      string         `json:"preview,omitempty"`
 	ContentType  string         `json:"contentType,omitempty"`
 	Truncated    bool           `json:"truncated,omitempty"`
+
+	// Status and Headers are what the HTTP exchange answered, for a provider
+	// that speaks HTTP.
+	Status  int               `json:"status,omitempty"`
+	Headers map[string]string `json:"headers,omitempty"`
 }
 
 func NewProviderDiagnostics(provider, query string, options map[string]any) *ProviderDiagnostics {
@@ -193,6 +209,9 @@ func (d *ProviderDiagnostics) RecordRequest(query string, arguments []any, detai
 		return
 	}
 	d.requested = true
+	// Whatever the provider sends next is what this statement travels in, which
+	// is how HTTPTransport tells the search apart from the ping before it.
+	d.armed = true
 	d.Request.Query = query
 	d.Request.Arguments = cloneDiagnosticValues(arguments)
 	d.Request.Details = sanitizeDiagnosticMap(details)
@@ -270,6 +289,9 @@ func (d *ProviderDiagnostics) Snapshot() *ProviderDiagnostics {
 			Arguments:  cloneDiagnosticValues(d.Request.Arguments),
 			Options:    sanitizeDiagnosticMap(d.Request.Options),
 			Details:    sanitizeDiagnosticMap(d.Request.Details),
+			Method:     d.Request.Method,
+			URL:        d.Request.URL,
+			Headers:    cloneDiagnosticHeaders(d.Request.Headers),
 		},
 		Response: ProviderDiagnosticResponse{
 			DurationMS:   d.Response.DurationMS,
@@ -279,6 +301,8 @@ func (d *ProviderDiagnostics) Snapshot() *ProviderDiagnostics {
 			Preview:      d.Response.Preview,
 			ContentType:  d.Response.ContentType,
 			Truncated:    d.Response.Truncated,
+			Status:       d.Response.Status,
+			Headers:      cloneDiagnosticHeaders(d.Response.Headers),
 		},
 		Error: d.Error,
 	}

@@ -117,7 +117,6 @@ func exportPage(
 	request exportRequest,
 	streamable bool,
 ) (exportResponse, error) {
-	pages := query.ExecutePages(ctx, p, request.pageRequest(), params)
 	if !streamable {
 		// A pipeline that needs every row before any row is correct cannot be
 		// served a page at a time; the whole query runs and the page is cut
@@ -138,6 +137,7 @@ func exportPage(
 		}, nil
 	}
 
+	pages := query.ProcessPages(ctx, p.Processors, query.ExecutePages(ctx, p, request.pageRequest(), params))
 	for page, err := range pages {
 		if err != nil {
 			return exportResponse{}, err
@@ -182,7 +182,8 @@ func exportAll(
 		}, nil
 	}
 
-	pages, first, err := peekPages(query.ExecutePages(ctx, p, request.pageRequest(), params))
+	processed := query.ProcessPages(ctx, p.Processors, query.ExecutePages(ctx, p, request.pageRequest(), params))
+	pages, first, err := peekPages(processed)
 	if err != nil {
 		return exportResponse{}, err
 	}
@@ -422,4 +423,3 @@ func setExportHeaders(w http.ResponseWriter, r *http.Request, profileName string
 		header.Set("Content-Disposition", "attachment; filename="+strconv.Quote(sanitizeExportFilename(filename)))
 	}
 }
-

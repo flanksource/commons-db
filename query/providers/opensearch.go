@@ -77,8 +77,9 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 			}
 		}
 		walk := openSearchWalk{
-			searcher: searcher,
-			index:    opts.Index,
+			searcher:    searcher,
+			index:       opts.Index,
+			diagnostics: req.Diagnostics,
 			build: func(position openSearchPage) (openSearchRequest, error) {
 				return buildOpenSearchRequest(req, opts, position, timeFieldMapping)
 			},
@@ -123,7 +124,10 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (*opensear
 		return nil, opts, fmt.Errorf("opensearch address is required")
 	}
 
-	searcher, err := opensearch.NewWithTransport(ctx, backend, nil, transport)
+	// A debug run watches the wire as well as the body: which URL the search
+	// went to and which headers the connection put on it are half of "where did
+	// these rows come from", and neither is anywhere in the profile.
+	searcher, err := opensearch.NewWithTransport(ctx, backend, nil, req.Diagnostics.HTTPTransport(transport))
 	if err != nil {
 		return nil, opts, err
 	}

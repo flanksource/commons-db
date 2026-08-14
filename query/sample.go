@@ -3,6 +3,7 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -14,27 +15,49 @@ import (
 	"github.com/flanksource/commons-db/context"
 )
 
-// SampleResult is the raw, pre-column/pre-processor output used by profile
-// authoring tools. Columns are inferred only from top-level row keys.
+// SampleResult is the bounded output used by profile authoring tools. It is raw
+// with respect to processors unless PreviewProcessors was explicitly requested.
+// Columns are inferred only from top-level row keys.
 type SampleResult struct {
-	Rows          []Row                `json:"rows"`
-	Columns       []ColumnDef          `json:"columns"`
-	RenderedQuery string               `json:"renderedQuery"`
-	Truncated     bool                 `json:"truncated,omitempty"`
-	DurationMS    float64              `json:"durationMs"`
-	Pagination    PageInfo             `json:"pagination"`
-	Diagnostics   *ProviderDiagnostics `json:"diagnostics,omitempty"`
+	Rows             []Row                `json:"rows"`
+	Columns          []ColumnDef          `json:"columns"`
+	RenderedQuery    string               `json:"renderedQuery"`
+	Truncated        bool                 `json:"truncated,omitempty"`
+	DurationMS       float64              `json:"durationMs"`
+	Pagination       PageInfo             `json:"pagination"`
+	Diagnostics      *ProviderDiagnostics `json:"diagnostics,omitempty"`
+	ProcessorPreview *ProcessorPreview    `json:"processorPreview,omitempty"`
 }
 
 type SampleOptions struct {
-	Params map[string]any
-	Page   PageRequest
-	Debug  bool
+	Params            map[string]any
+	Page              PageRequest
+	Debug             bool
+	PreviewProcessors bool
+}
+
+// ProcessorPreview carries the source sample and the output after each ordered
+// processor. A whole-result processor sees only Input: this is a bounded preview,
+// not a claim about the complete query result.
+type ProcessorPreview struct {
+	Input  []Row                   `json:"input"`
+	Stages []ProcessorPreviewStage `json:"stages"`
+}
+
+type ProcessorPreviewStage struct {
+	Index   int    `json:"index"`
+	Label   string `json:"label"`
+	Type    string `json:"type"`
+	RowsIn  int    `json:"rowsIn"`
+	RowsOut int    `json:"rowsOut"`
+	Rows    []Row  `json:"rows"`
 }
 
 // Sample renders and executes a profile through its provider while bypassing
-// context queries and processors. Configured row transforms still shape the
-// preview, and only providers whose request can be proven read-only are allowed.
+// context queries. Processors are also bypassed by default; PreviewProcessors
+// runs them over the bounded sample and records every stage. Configured row
+// transforms still shape the preview, and only providers whose request can be
+// proven read-only are allowed.
 func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResult, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -85,15 +108,59 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	if rows == nil {
 		rows = []Row{}
 	}
+	var processorPreview *ProcessorPreview
+	if options.PreviewProcessors {
+		processorPreview, rows, err = previewSampleProcessors(ctx, p, rows)
+		if err != nil {
+			return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		}
+	}
 	return &SampleResult{
-		Rows:          rows,
-		Columns:       InferSampleColumns(rows),
-		RenderedQuery: req.Query,
-		Truncated:     page.Truncated,
-		DurationMS:    float64(duration) / float64(time.Millisecond),
-		Pagination:    NewPageInfo(pageRequest, page),
-		Diagnostics:   diagnostics.Snapshot(),
+		Rows:             rows,
+		Columns:          InferSampleColumns(rows),
+		RenderedQuery:    req.Query,
+		Truncated:        page.Truncated,
+		DurationMS:       float64(duration) / float64(time.Millisecond),
+		Pagination:       NewPageInfo(pageRequest, page),
+		Diagnostics:      diagnostics.Snapshot(),
+		ProcessorPreview: processorPreview,
 	}, nil
+}
+
+func previewSampleProcessors(ctx context.Context, profile Profile, input []Row) (*ProcessorPreview, []Row, error) {
+	preview := &ProcessorPreview{Input: cloneSampleRows(input), Stages: []ProcessorPreviewStage{}}
+	result := &Result{Profile: profile.Name, Rows: cloneSampleRows(input)}
+	for index, spec := range profile.Processors {
+		resolved, err := spec.Resolve()
+		if err != nil {
+			return nil, nil, fmt.Errorf("processor %d: %w", index, err)
+		}
+		registered, err := GetProcessor(resolved.Type)
+		if err != nil {
+			return nil, nil, err
+		}
+		rowsIn := len(result.Rows)
+		result, err = registered.Process(ctx, resolved, result)
+		if err != nil {
+			return nil, nil, fmt.Errorf("processor %q: %w", resolved.Label(), err)
+		}
+		if result == nil {
+			return nil, nil, fmt.Errorf("processor %q returned a nil result", resolved.Label())
+		}
+		preview.Stages = append(preview.Stages, ProcessorPreviewStage{
+			Index: index, Label: resolved.Label(), Type: resolved.Type,
+			RowsIn: rowsIn, RowsOut: len(result.Rows), Rows: cloneSampleRows(result.Rows),
+		})
+	}
+	return preview, cloneSampleRows(result.Rows), nil
+}
+
+func cloneSampleRows(rows []Row) []Row {
+	cloned := make([]Row, len(rows))
+	for index, row := range rows {
+		cloned[index] = maps.Clone(row)
+	}
+	return cloned
 }
 
 func samplePage(ctx context.Context, profile Profile, params map[string]any, request PageRequest) (Page, error) {
@@ -116,7 +183,7 @@ func validateSampleReadOnly(providerType, query string, options map[string]any) 
 			return fmt.Errorf("sampling requires a read-only HTTP GET request; method %s is not allowed", method)
 		}
 		return nil
-	case "prometheus", "postgrest", "loki", "opensearch", "jaeger":
+	case "prometheus", "postgrest", "loki", "opensearch", "jaeger", "k8s":
 		return nil
 	default:
 		return fmt.Errorf("sampling provider %q is disabled because read-only execution cannot be established", providerType)

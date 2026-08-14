@@ -265,6 +265,44 @@ var _ = Describe("applyOpenSearchFilters", func() {
 			Expect(err).To(MatchError(ContainSubstring("filtered as both")))
 		})
 
+		// Compatibility is by compiled clause, not by declared kind: a list param
+		// is always a value selection and an identifier column is an exact match,
+		// and the two on one field are a single terms query.
+		It("merges a value selection and an exact match on one field", func() {
+			body := baseBody()
+			Expect(applyOpenSearchFilters(body, []query.ColumnFilterValue{
+				{Field: "region", Kind: query.ColumnFilterKindTerms, Include: []string{"eu"}},
+				{Field: "region", Kind: query.ColumnFilterKindExact, Include: []string{"us"}},
+			}, nil)).To(Succeed())
+
+			filter := body["query"].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
+			Expect(filter).To(ContainElement(map[string]any{
+				"terms": map[string]any{"region": []any{"eu", "us"}},
+			}))
+		})
+
+		// A duration and a date differ from their numeric and time siblings in
+		// the control they render, never in the DSL they compile to.
+		DescribeTable("compiles a bound exactly as the clause it belongs to",
+			func(kind, sibling query.ColumnFilterKind, low any) {
+				compiled := func(k query.ColumnFilterKind) map[string]any {
+					body := baseBody()
+					Expect(applyOpenSearchFilters(body, []query.ColumnFilterValue{{
+						Field: "latency_ms", Kind: k,
+						Range: bounded(&query.FilterBound{Value: low, Inclusive: true}, nil),
+					}}, nil)).To(Succeed())
+					return body
+				}
+				Expect(compiled(kind)).To(Equal(compiled(sibling)))
+			},
+			Entry("a duration compiles as a range",
+				query.ColumnFilterKindDuration, query.ColumnFilterKindRange, float64(500)),
+			// OpenSearch resolves date math itself, so both bounds travel as the
+			// string the operator wrote and the two bodies stay comparable.
+			Entry("a date compiles as a time",
+				query.ColumnFilterKindDate, query.ColumnFilterKindTime, "now-7d"),
+		)
+
 		It("keeps the author's query as the first filter clause under any kind", func() {
 			body := map[string]any{"query": map[string]any{"match": map[string]any{"body": "error"}}}
 			Expect(applyOpenSearchFilters(body, []query.ColumnFilterValue{{

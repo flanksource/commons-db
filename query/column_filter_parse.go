@@ -1,10 +1,13 @@
 package query
 
 import (
+	"cmp"
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/flanksource/clicky/api"
 	"github.com/timberio/go-datemath"
 )
 
@@ -20,32 +23,43 @@ var rangeOperators = []struct {
 	{prefix: "<", lower: false, inclusive: false},
 }
 
-// parseColumnFilterSelection decodes one request value under the grammar its
-// binding's kind declares.
+// parseSelection decodes one request value under the grammar this binding's
+// kind declares.
 //
 // The kind is the column's, never the value's: a string column's ">=10" is the
-// literal ">=10", and only a range column reads it as a bound. That is what
+// literal ">=10", and only a bounded column reads it as an edge. That is what
 // lets one wire form — a comma-separated list of prefixed tokens — stay
 // unambiguous across every kind.
-func parseColumnFilterSelection(kind ColumnFilterKind, value any) (ColumnFilterValue, error) {
+//
+// It hangs off the binding rather than taking a kind because a duration bound
+// is only meaningful in the column's own unit: passing the two separately would
+// let one column's kind meet another column's unit, and the mistake would land
+// as a wrong number rather than as an error.
+//
+// The switch is on the declared kind, not on CompilesAs: a duration and a range
+// compile to one clause but are written differently, and how they are written
+// is precisely what this layer owns.
+func (b ColumnFilterBinding) parseSelection(value any) (ColumnFilterValue, error) {
 	tokens, err := columnFilterTokens(value)
 	if err != nil {
 		return ColumnFilterValue{}, err
 	}
-	resolved := ColumnFilterValue{Kind: kind.Normalized()}
+	resolved := ColumnFilterValue{Kind: b.Kind.Normalized()}
 	switch resolved.Kind {
-	case ColumnFilterKindTerms, ColumnFilterKindText:
+	case ColumnFilterKindTerms, ColumnFilterKindExact, ColumnFilterKindText:
 		resolved.Include, resolved.Exclude, err = parseTermTokens(tokens)
 	case ColumnFilterKindRange:
 		resolved.Range, err = parseRangeTokens(tokens, parseNumericBound)
-	case ColumnFilterKindTime:
+	case ColumnFilterKindDuration:
+		resolved.Range, err = parseRangeTokens(tokens, durationBound(b.Unit))
+	case ColumnFilterKindTime, ColumnFilterKindDate:
 		resolved.Range, err = parseRangeTokens(tokens, parseTimeBound)
 	case ColumnFilterKindBoolean:
 		resolved.Bool, err = parseBooleanTokens(tokens)
 	case ColumnFilterKindNone:
 		return ColumnFilterValue{}, fmt.Errorf("column offers no filter")
 	default:
-		return ColumnFilterValue{}, fmt.Errorf("filter kind %q is not supported", kind)
+		return ColumnFilterValue{}, fmt.Errorf("filter kind %q is not supported", b.Kind)
 	}
 	if err != nil {
 		return ColumnFilterValue{}, err
@@ -182,6 +196,49 @@ func parseNumericBound(operand string) (any, error) {
 		return nil, fmt.Errorf("%q is not a number", operand)
 	}
 	return number, nil
+}
+
+// durationUnitScale is how many nanoseconds one of the column's own units is
+// worth, so a duration operand can be expressed in the numbers the column
+// actually stores.
+//
+// An unset unit is milliseconds. That is a documented default rather than a
+// guess: it is the unit clicky passes through untouched when formatting a
+// duration column, so the bound and the rendered cell agree.
+func durationUnitScale(unit string) (float64, error) {
+	switch unit {
+	case "", api.ColumnUnitMilliseconds:
+		return float64(time.Millisecond), nil
+	case api.ColumnUnitSeconds:
+		return float64(time.Second), nil
+	default:
+		return 0, fmt.Errorf("a duration filter needs a time unit (%q or %q), got %q",
+			api.ColumnUnitMilliseconds, api.ColumnUnitSeconds, unit)
+	}
+}
+
+// durationBound reads a duration operand into the number the column stores.
+//
+// A bare number is taken as already being in that unit and passes through
+// untouched, so every range filter a duration column already carried still
+// compiles to the bound it always did. Dividing nanoseconds by the scale keeps
+// sub-unit precision: "500us" on a millisecond column is 0.5, not 0.
+func durationBound(unit string) func(string) (any, error) {
+	return func(operand string) (any, error) {
+		if number, err := strconv.ParseFloat(operand, 64); err == nil {
+			return number, nil
+		}
+		scale, err := durationUnitScale(unit)
+		if err != nil {
+			return nil, err
+		}
+		parsed, err := time.ParseDuration(operand)
+		if err != nil {
+			return nil, fmt.Errorf("%q is not a duration (e.g. 500ms, 2m30s) or a number of %s",
+				operand, cmp.Or(unit, api.ColumnUnitMilliseconds))
+		}
+		return float64(parsed) / scale, nil
+	}
 }
 
 // parseTimeBound keeps a time operand as written. Date math is a string the

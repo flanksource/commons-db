@@ -1,12 +1,14 @@
 package profiles
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/query"
@@ -241,12 +243,21 @@ func profileFilterDescription(binding query.ColumnFilterBinding) string {
 	switch binding.Kind.Normalized() {
 	case query.ColumnFilterKindRange:
 		return "Bound " + binding.Label + " with >=, >, <= or < (e.g. \">=100,<500\")"
+	case query.ColumnFilterKindDuration:
+		// Naming the unit is what tells an operator which number a bare bound is,
+		// since one written without a suffix is taken as already being in it.
+		return "Bound " + binding.Label + " with >=, >, <= or < using a duration or a number of " +
+			cmp.Or(binding.Unit, api.ColumnUnitMilliseconds) + " (e.g. \">=500ms,<5s\")"
 	case query.ColumnFilterKindTime:
 		return "Bound " + binding.Label + " with >=, >, <= or < using a time or date math (e.g. \">=now-1h\")"
+	case query.ColumnFilterKindDate:
+		return "Bound " + binding.Label + " with >=, >, <= or < using a date or date math (e.g. \">=now-7d\")"
 	case query.ColumnFilterKindBoolean:
 		return "Restrict " + binding.Label + " to true or false"
 	case query.ColumnFilterKindText:
 		return "Match " + binding.Label + " by substring; prefix a value with ! to exclude it"
+	case query.ColumnFilterKindExact:
+		return "Match " + binding.Label + " exactly against values you type; prefix a value with ! to exclude it"
 	default:
 		return "Include or exclude " + binding.Label + " values; prefix a value with ! to exclude it"
 	}

@@ -120,6 +120,25 @@ type Profile struct {
 // never reach for a default constant themselves.
 func (p Profile) RowLimits() RowLimits { return p.Limits.Resolve() }
 
+// EffectiveOrder is the order this Profile's rows are actually returned in: the
+// one it declares, or the one its provider supplies when it declares none.
+//
+// It resolves on read and never writes back, like RowLimits above. That is what
+// keeps a derived order out of the stored profile: the editor pre-fills from
+// the record as saved, and a rename re-marshals sibling profiles, so an order
+// written into the struct would be persisted into profiles nobody edited.
+//
+// Everything that cuts, resumes, or describes a page reads this rather than the
+// declared field, and they must all read the same value — a cursor is scoped by
+// the order it was cut from, so a caller minting cursors under one order and
+// validating them under another would reject every cursor it issued.
+func (p Profile) EffectiveOrder() (Order, error) {
+	if len(p.Order) > 0 {
+		return p.Order, nil
+	}
+	return NaturalOrder(p.Provider)
+}
+
 // Pageable reports whether a caller can ask this Profile for a position past
 // its first page, and says why not when it cannot.
 //
@@ -129,7 +148,11 @@ func (p Profile) RowLimits() RowLimits { return p.Limits.Resolve() }
 // can only fail. Whoever describes the profile — OpenAPI parameters, export
 // headers — asks here rather than re-deriving the rule.
 func (p Profile) Pageable() error {
-	if err := p.Order.Pageable(); err != nil {
+	order, err := p.EffectiveOrder()
+	if err != nil {
+		return err
+	}
+	if err := order.Pageable(); err != nil {
 		return err
 	}
 	if SupportsPaging(p.Provider.Type) == 0 {

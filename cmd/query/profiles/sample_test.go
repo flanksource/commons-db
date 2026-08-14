@@ -24,4 +24,16 @@ var _ = Describe("profile sampling errors", func() {
 		Expect(payload).To(HaveKeyWithValue("stacktrace", Not(BeEmpty())))
 		Expect(payload).To(HaveKeyWithValue("context", HaveKeyWithValue("operation", "profile.sample")))
 	})
+
+	It("accepts the explicit processor preview mode", func() {
+		handler := newProfileSampleHandler("/api/v1", dbcontext.New(), http.NotFoundHandler())
+		response := post(handler, "/api/v1/profile/sample", `{
+			"profile":{"profile":"sample","provider":{"type":"custom"}},
+			"previewProcessors":true
+		}`)
+
+		Expect(response.Code).To(Equal(http.StatusBadRequest))
+		Expect(response.Body.String()).To(ContainSubstring(`sampling provider \"custom\" is disabled`))
+		Expect(response.Body.String()).NotTo(ContainSubstring(`unknown field \"previewProcessors\"`))
+	})
 })

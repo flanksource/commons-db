@@ -53,3 +53,24 @@ var _ = Describe("the Java application logs example", func() {
 		Expect(resolved.Config).To(HaveKey("continuation"))
 	})
 })
+
+var _ = Describe("the structured application log examples", func() {
+	DescribeTable("uses the matching parser helper without restating its configuration",
+		func(filename, preset, format string) {
+			body, err := os.ReadFile("../profiles/" + filename)
+			Expect(err).ToNot(HaveOccurred())
+
+			var profile query.Profile
+			Expect(yaml.Unmarshal(body, &profile)).To(Succeed())
+			Expect(profile.Processors).To(HaveLen(1))
+			Expect(profile.Processors[0]).To(Equal(query.ProcessorSpec{Use: preset}))
+
+			resolved, err := profile.Processors[0].Resolve()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resolved.Type).To(Equal("logs.parse"))
+			Expect(resolved.Config).To(HaveKeyWithValue("format", format))
+		},
+		Entry("JSON", "json-app-logs.yaml", "logs.json", "json"),
+		Entry("logfmt", "logfmt-app-logs.yaml", "logs.logfmt", "logfmt"),
+	)
+})

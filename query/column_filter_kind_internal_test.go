@@ -15,26 +15,39 @@ var _ = Describe("column filter kind", func() {
 		Entry("status", ColumnTypeStatus, ColumnFilterKindTerms),
 		Entry("health", ColumnTypeHealth, ColumnFilterKindTerms),
 		Entry("number", ColumnTypeNumber, ColumnFilterKindRange),
-		Entry("duration", ColumnTypeDuration, ColumnFilterKindRange),
+		Entry("duration", ColumnTypeDuration, ColumnFilterKindDuration),
+		// A size literal has two bases, so "5MB" would mean two numbers; only
+		// duration has one unambiguous grammar to offer.
 		Entry("bytes", ColumnTypeBytes, ColumnFilterKindRange),
 		Entry("datetime", ColumnTypeDateTime, ColumnFilterKindTime),
 		Entry("boolean", ColumnTypeBoolean, ColumnFilterKindBoolean),
-		// An identifier compares exactly like a string; only its option list
-		// differs, and that is Enumerable's business rather than the kind's.
-		Entry("uuid", ColumnTypeUUID, ColumnFilterKindTerms),
+		// An identifier compares exactly like a string, but there is no list of
+		// them worth offering: enumerating one answers with a page of the rows.
+		Entry("uuid", ColumnTypeUUID, ColumnFilterKindExact),
 		Entry("key_value", ColumnTypeKeyValue, ColumnFilterKindNone),
 		Entry("key_values", ColumnTypeKeyValues, ColumnFilterKindNone),
 		Entry("json", ColumnTypeJSON, ColumnFilterKindNone),
 	)
 
-	// A substring match is a choice an author makes: no column type implies one,
-	// because every type it could apply to has an exact comparison available.
-	It("never infers a substring match", func() {
+	// A substring match and a day-granularity bound are choices an author makes:
+	// no column type implies either, because every type they could apply to has
+	// an exact comparison or a full instant available already.
+	It("never infers a substring match or a date bound", func() {
 		for _, columnType := range []ColumnType{
 			ColumnTypeString, ColumnTypeStatus, ColumnTypeHealth, ColumnTypeNumber,
 			ColumnTypeDuration, ColumnTypeBytes, ColumnTypeDateTime, ColumnTypeBoolean,
+			ColumnTypeUUID,
 		} {
 			Expect(columnFilterKindFor(columnType)).ToNot(Equal(ColumnFilterKindText))
+			Expect(columnFilterKindFor(columnType)).ToNot(Equal(ColumnFilterKindDate))
+		}
+	})
+
+	// A kind that is declarable but not compilable would surface as a schema
+	// option that fails on the first request naming it.
+	It("compiles every kind it offers an author", func() {
+		for _, kind := range ColumnFilterKindValues() {
+			Expect(ColumnFilterKind(kind).Valid()).To(BeTrue(), kind)
 		}
 	})
 
@@ -47,17 +60,39 @@ var _ = Describe("column filter kind", func() {
 		Expect(ColumnFilterKind("regex").Valid()).To(BeFalse())
 	})
 
-	// Only a value selection has a list to offer; a range, a toggle and a
-	// substring are typed rather than picked.
+	// Only a value selection has a list to offer; a range, a toggle, a substring
+	// and an exact match are typed rather than picked.
 	DescribeTable("reports which kinds the backend can enumerate",
 		func(kind ColumnFilterKind, lookupable bool) {
 			Expect(kind.Lookupable()).To(Equal(lookupable))
 		},
 		Entry("terms", ColumnFilterKindTerms, true),
+		Entry("exact", ColumnFilterKindExact, false),
 		Entry("range", ColumnFilterKindRange, false),
+		Entry("duration", ColumnFilterKindDuration, false),
 		Entry("time", ColumnFilterKindTime, false),
+		Entry("date", ColumnFilterKindDate, false),
 		Entry("boolean", ColumnFilterKindBoolean, false),
 		Entry("text", ColumnFilterKindText, false),
+	)
+
+	// Nine kinds, five clauses: an exact match is a terms query, a duration is a
+	// range, a date is a time. This is what lets a list param and an identifier
+	// column bound to one field still merge into a single predicate.
+	DescribeTable("maps each kind to the clause it compiles to",
+		func(kind, compiled ColumnFilterKind) {
+			Expect(kind.CompilesAs()).To(Equal(compiled))
+		},
+		Entry("an unset kind", ColumnFilterKind(""), ColumnFilterKindTerms),
+		Entry("terms", ColumnFilterKindTerms, ColumnFilterKindTerms),
+		Entry("exact", ColumnFilterKindExact, ColumnFilterKindTerms),
+		Entry("range", ColumnFilterKindRange, ColumnFilterKindRange),
+		Entry("duration", ColumnFilterKindDuration, ColumnFilterKindRange),
+		Entry("time", ColumnFilterKindTime, ColumnFilterKindTime),
+		Entry("date", ColumnFilterKindDate, ColumnFilterKindTime),
+		Entry("text", ColumnFilterKindText, ColumnFilterKindText),
+		Entry("boolean", ColumnFilterKindBoolean, ColumnFilterKindBoolean),
+		Entry("none", ColumnFilterKindNone, ColumnFilterKindNone),
 	)
 
 	DescribeTable("maps each kind to the control it registers as",
@@ -65,10 +100,14 @@ var _ = Describe("column filter kind", func() {
 			Expect(kind.ControlType()).To(Equal(control))
 		},
 		Entry("terms", ColumnFilterKindTerms, "multi-filter"),
+		Entry("exact", ColumnFilterKindExact, "value"),
 		Entry("range", ColumnFilterKindRange, "number"),
+		Entry("duration", ColumnFilterKindDuration, "duration"),
 		// Not "date": a time bound carries both edges under one key, and "date"
 		// is clicky's single-instant input.
 		Entry("time", ColumnFilterKindTime, "date-range"),
+		// The same two-edged control with the clock taken off it.
+		Entry("date", ColumnFilterKindDate, "day-range"),
 		Entry("boolean", ColumnFilterKindBoolean, "bool"),
 		Entry("text", ColumnFilterKindText, ""),
 	)
@@ -94,10 +133,16 @@ var _ = Describe("column filter kind", func() {
 			ColumnFilterBinding{Kind: ColumnFilterKindTerms, Lookup: true}, "multi-filter"),
 		Entry("a selection the profile enumerates itself",
 			ColumnFilterBinding{Kind: ColumnFilterKindTerms, Options: []string{"eu"}}, "multi-filter"),
+		// An author who wrote kind: terms on a column that turned out to have
+		// nothing to offer still gets an input rather than an empty dropdown.
 		Entry("a selection with nothing to enumerate",
 			ColumnFilterBinding{Kind: ColumnFilterKindTerms}, "value"),
+		// An exact match arrives at the same control by declaring it outright.
+		Entry("an exact match", ColumnFilterBinding{Kind: ColumnFilterKindExact}, "value"),
 		Entry("a time bound", ColumnFilterBinding{Kind: ColumnFilterKindTime}, "date-range"),
+		Entry("a date bound", ColumnFilterBinding{Kind: ColumnFilterKindDate}, "day-range"),
 		Entry("a range", ColumnFilterBinding{Kind: ColumnFilterKindRange}, "number"),
+		Entry("a duration", ColumnFilterBinding{Kind: ColumnFilterKindDuration}, "duration"),
 	)
 
 	DescribeTable("rejects an enumerated value the wire form cannot carry",

@@ -298,7 +298,11 @@ func sqlPredicates(dialect sqlDialect, filters []query.ColumnFilterValue) (squir
 			order = append(order, filter.Field)
 			continue
 		}
-		if merged.Kind.Normalized() != filter.Kind.Normalized() {
+		// Compatibility is by compiled clause, not by declared kind: a list param
+		// bound to the field an identifier column filters is still one IN. The
+		// message keeps the declared kinds, so an operator reads back the words
+		// from their own profile.
+		if merged.Kind.CompilesAs() != filter.Kind.CompilesAs() {
 			return nil, fmt.Errorf("field %q is filtered as both %s and %s",
 				filter.Field, merged.Kind.Normalized(), filter.Kind.Normalized())
 		}
@@ -370,7 +374,10 @@ func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squi
 		return nil, err
 	}
 	conditions := squirrel.And{}
-	switch kind := filter.Kind.Normalized(); kind {
+	// Every kind compiles through the clause its family compiles through: an
+	// exact match as terms, a duration as a range, a date as a time. See
+	// ColumnFilterKind.CompilesAs.
+	switch kind := filter.Kind.CompilesAs(); kind {
 	case query.ColumnFilterKindTerms, query.ColumnFilterKindBoolean:
 		args, err := sqlFilterArgs(kind, filter)
 		if err != nil {
@@ -438,7 +445,7 @@ func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squi
 			conditions = append(conditions, compare(value))
 		}
 	default:
-		return nil, fmt.Errorf("field %q has no SQL compiler for a %s filter", filter.Field, kind)
+		return nil, fmt.Errorf("field %q has no SQL compiler for a %s filter", filter.Field, filter.Kind.Normalized())
 	}
 	if len(conditions) == 0 {
 		return nil, nil
@@ -483,6 +490,10 @@ func sqlFilterArgs(kind query.ColumnFilterKind, filter query.ColumnFilterValue) 
 // sqlBoundValue resolves one range edge to the value it binds as. SQL has no
 // server-side date math, so "now-1h" is resolved here — unlike OpenSearch,
 // which resolves it itself and must receive it unchanged.
+//
+// The kind arrives already mapped through CompilesAs, so a date bound is a time
+// bound here and gets the same resolution, and a duration bound is a numeric
+// one that the parser already reduced to the column's unit.
 func sqlBoundValue(kind query.ColumnFilterKind, value any) (any, error) {
 	if kind != query.ColumnFilterKindTime {
 		return value, nil

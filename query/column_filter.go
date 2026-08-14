@@ -171,6 +171,10 @@ type ColumnFilterBinding struct {
 	Options []string
 	Lookup  bool
 	Multi   bool
+	// Unit is the unit the column stores its values in (ColumnDef.Unit), which
+	// a duration bound is resolved into. Empty means milliseconds, the unit an
+	// unannotated duration column is read under. No other kind consults it.
+	Unit string
 	// Nested and Where carry the container the selection is compiled inside and
 	// the constants that address one entry of it. See ColumnFilterDef.
 	Nested string
@@ -196,8 +200,9 @@ func (b ColumnFilterBinding) ControlType() string {
 }
 
 // FilterBound is one edge of a range. Value is carried as the kind stores it: a
-// float64 for a numeric field, and for a date field the operand as written —
-// either an RFC3339 instant or date math, which the backend resolves.
+// float64 for a numeric field and for a duration field (already resolved into
+// the column's own unit), and for a date field the operand as written — either
+// an RFC3339 instant or date math, which the backend resolves.
 type FilterBound struct {
 	Value     any
 	Inclusive bool

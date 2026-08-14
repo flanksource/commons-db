@@ -45,7 +45,7 @@ func partitionProfileInput(profile Profile, input map[string]any) (map[string]an
 		if !ok {
 			return nil, nil, fmt.Errorf("column filter %q is not supported by profile %q", key, profile.Name)
 		}
-		selection, err := parseColumnFilterSelection(binding.Kind, value)
+		selection, err := binding.parseSelection(value)
 		if err != nil {
 			return nil, nil, fmt.Errorf("column filter %q: %w", key, err)
 		}

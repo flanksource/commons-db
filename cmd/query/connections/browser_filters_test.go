@@ -150,7 +150,7 @@ func TestBrowserColumnsOfferNoValueListForIdentifiers(t *testing.T) {
 		byName[column.Name] = column
 	}
 	id := byName["id"]
-	if id.Filter == nil || id.Filter.Kind != "terms" || id.Filter.Lookup {
+	if id.Filter == nil || id.Filter.Kind != "exact" || id.Filter.Lookup {
 		t.Fatalf("id column = %+v", id.Filter)
 	}
 	if id.FilterKey != "filter.id" {
@@ -179,7 +179,7 @@ func TestBrowserColumnDefsRoundTripAnIdentifierFilter(t *testing.T) {
 	if len(bindings) != 1 {
 		t.Fatalf("bindings = %+v", bindings)
 	}
-	if bindings[0].Kind != query.ColumnFilterKindTerms || bindings[0].Lookup {
+	if bindings[0].Kind != query.ColumnFilterKindExact || bindings[0].Lookup {
 		t.Fatalf("round-tripped binding = %+v", bindings[0])
 	}
 }

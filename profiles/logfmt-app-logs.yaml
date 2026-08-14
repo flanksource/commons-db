@@ -1,0 +1,43 @@
+# Logfmt application logs expanded into canonical log columns.
+#
+# The `logs.logfmt` helper reads each raw `message`, maps msg/message to message
+# and level to severity, then promotes the remaining key/value pairs as columns.
+# Provider metadata wins on a name collision, so a body cannot replace its pod,
+# namespace or other source identity.
+#
+# A plain-text or stack-frame line is left intact. That makes it safe to follow
+# this parser with `java.stacktrace` when an application emits a logfmt header
+# followed by ordinary JVM continuation lines.
+profile: Logfmt Application Logs
+render: logs
+imports:
+  - Kubernetes Logs
+provider:
+  type: loki
+  connection: connection://loki
+  options:
+    limit: "1000"
+    since: 1h
+query: '{namespace="{{.params.namespace}}", pod=~"{{.params.pod}}.*"}'
+params:
+  - name: namespace
+    label: Namespace
+    type: string
+    required: true
+  - name: pod
+    label: Pod prefix
+    type: string
+    default: ""
+processors:
+  - use: logs.logfmt
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+  - name: severity
+    label: Level
+    type: status
+  - name: source
+    label: Source
+  - name: message
+    label: Message

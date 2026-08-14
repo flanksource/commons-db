@@ -1,6 +1,9 @@
 package processor
 
-import "github.com/flanksource/commons-db/query"
+import (
+	"github.com/flanksource/commons-db/logs"
+	"github.com/flanksource/commons-db/query"
+)
 
 // A JVM logs one exception as many lines: the message, one `\tat …` frame per
 // stack entry, a `Caused by:` chain, `Suppressed:` blocks and the `… 23 more`
@@ -36,6 +39,26 @@ const dedupeLastSeenCEL = `dyn(batch)[0].timestamp`
 const dedupeFirstSeenCEL = `dyn(batch)[count - 1].timestamp`
 
 func init() {
+	query.RegisterNamedProcessor(query.NamedProcessor{
+		Name:        "logs.json",
+		Title:       "Parse JSON logs",
+		Description: "Extracts message, severity, source and host from a JSON log body, promotes the remaining fields as columns, and hashes the parsed message for later deduplication. Non-JSON lines pass through unchanged, so this can precede a multiline processor.",
+		Spec: query.ProcessorSpec{
+			Type:   "logs.parse",
+			Config: map[string]any{"format": logs.FormatJSON},
+		},
+	})
+
+	query.RegisterNamedProcessor(query.NamedProcessor{
+		Name:        "logs.logfmt",
+		Title:       "Parse logfmt logs",
+		Description: "Extracts message and severity from a logfmt body, promotes the remaining key/value pairs as columns, and hashes the parsed message for later deduplication. Non-logfmt lines pass through unchanged.",
+		Spec: query.ProcessorSpec{
+			Type:   "logs.parse",
+			Config: map[string]any{"format": logs.FormatLogfmt},
+		},
+	})
+
 	query.RegisterNamedProcessor(query.NamedProcessor{
 		Name:  "logs.dedupe",
 		Title: "Collapse repeated log lines",

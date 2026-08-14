@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"iter"
 	"sort"
 	"strings"
 
@@ -50,6 +51,53 @@ func StreamableProcessors(specs []ProcessorSpec) (bool, error) {
 		}
 	}
 	return true, nil
+}
+
+// ProcessPages applies a streamable processor chain to each page while
+// preserving its cursor, totals and provider metadata. Ordinary sampling does
+// not call this helper; processor previews run the bounded rows through the full
+// Processor interface so whole-result stages can be inspected too.
+func ProcessPages(ctx context.Context, specs []ProcessorSpec, pages iter.Seq2[Page, error]) iter.Seq2[Page, error] {
+	type stage struct {
+		label     string
+		spec      ProcessorSpec
+		processor PageProcessor
+	}
+	stages := make([]stage, 0, len(specs))
+	for index, spec := range specs {
+		resolved, err := spec.Resolve()
+		if err != nil {
+			return ErrorPage(fmt.Errorf("processor %d: %w", index, err))
+		}
+		registered, err := GetProcessor(resolved.Type)
+		if err != nil {
+			return ErrorPage(err)
+		}
+		processor, ok := registered.(PageProcessor)
+		if !ok {
+			return ErrorPage(fmt.Errorf("processor %q cannot run page by page", resolved.Label()))
+		}
+		stages = append(stages, stage{label: resolved.Label(), spec: resolved, processor: processor})
+	}
+
+	return func(yield func(Page, error) bool) {
+		for page, err := range pages {
+			if err != nil {
+				yield(Page{}, err)
+				return
+			}
+			for _, stage := range stages {
+				page, err = stage.processor.ProcessPage(ctx, stage.spec, page)
+				if err != nil {
+					yield(Page{}, fmt.Errorf("processor %q: %w", stage.label, err))
+					return
+				}
+			}
+			if !yield(page, nil) {
+				return
+			}
+		}
+	}
 }
 
 var processorRegistry = map[string]Processor{}

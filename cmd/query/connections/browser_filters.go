@@ -19,12 +19,16 @@ import (
 // back a selection and this package compiles it, exactly as a stored profile's
 // filters are compiled.
 type browserColumnFilter struct {
-	// Kind is one of terms, range, time, boolean or text.
+	// Kind is one of terms, exact, text, range, duration, date, time or boolean.
 	Kind string `json:"kind"`
 	// Lookup says the source answers POST /browser/filters/values for this key.
 	Lookup bool `json:"lookup,omitempty"`
 	// Multi allows several values at once.
 	Multi bool `json:"multi,omitempty"`
+	// Unit is the unit a duration bound is written in, so the browser labels its
+	// control in the same numbers the column is stored in. Empty means
+	// milliseconds. Unread by every other kind.
+	Unit string `json:"unit,omitempty"`
 }
 
 type browserFilterOption struct {
@@ -392,6 +396,7 @@ func describeBrowserColumns(profile query.Profile, databaseTypes map[string]stri
 				Kind:   string(binding.Kind.Normalized()),
 				Lookup: binding.Lookup,
 				Multi:  binding.Multi,
+				Unit:   binding.Unit,
 			}
 		}
 		columns = append(columns, described)

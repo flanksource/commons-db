@@ -262,12 +262,12 @@ func (s *openSearchScope) pinnedClauses() []any {
 }
 
 func (f *openSearchFieldFilter) add(filter query.ColumnFilterValue) error {
-	kind := filter.Kind
-	if kind == "" {
-		kind = query.ColumnFilterKindTerms
-	}
+	// Compatibility and compilation are both by clause rather than by declared
+	// kind — an exact match is a terms query, a duration is a range, a date is a
+	// time — so one field may collect a list param and an identifier column.
+	kind := filter.Kind.CompilesAs()
 	if existing := f.normalizedKind(); existing != kind {
-		return fmt.Errorf("field %q is filtered as both %s and %s", f.field, existing, kind)
+		return fmt.Errorf("field %q is filtered as both %s and %s", f.field, existing, filter.Kind.Normalized())
 	}
 	switch kind {
 	case query.ColumnFilterKindTerms:
@@ -286,16 +286,13 @@ func (f *openSearchFieldFilter) add(filter query.ColumnFilterValue) error {
 		}
 		f.boolean = filter.Bool
 	default:
-		return fmt.Errorf("field %q has no OpenSearch compiler for a %s filter", f.field, kind)
+		return fmt.Errorf("field %q has no OpenSearch compiler for a %s filter", f.field, filter.Kind.Normalized())
 	}
 	return nil
 }
 
 func (f *openSearchFieldFilter) normalizedKind() query.ColumnFilterKind {
-	if f.kind == "" {
-		return query.ColumnFilterKindTerms
-	}
-	return f.kind
+	return f.kind.CompilesAs()
 }
 
 // narrow intersects a second range on the same field. Two bounds on one side

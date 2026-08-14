@@ -173,7 +173,7 @@ var _ = Describe("OpenSearch column filters", func() {
 		}
 		Expect(kinds).To(Equal(map[string]query.ColumnFilterKind{
 			"region":  query.ColumnFilterKindTerms,
-			"latency": query.ColumnFilterKindRange,
+			"latency": query.ColumnFilterKindDuration,
 			"size":    query.ColumnFilterKindRange,
 			"created": query.ColumnFilterKindTime,
 			"deleted": query.ColumnFilterKindBoolean,
@@ -207,12 +207,17 @@ var _ = Describe("OpenSearch column filters", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(bindings).To(Equal([]query.ColumnFilterBinding{{
 			Column: "id", Key: "filter.id", Field: "id", Label: "id",
-			Kind: query.ColumnFilterKindTerms, Lookup: false, Multi: true,
+			Kind: query.ColumnFilterKindExact, Lookup: false, Multi: true,
 		}}))
+		// The values still compare exactly and several still travel at once; only
+		// the list is gone, which is what the control has always rendered.
 		Expect(bindings[0].ControlType()).To(Equal("value"))
 	})
 
-	It("lets an author put the value list back on an identifier column", func() {
+	// An exact match's defining property is that it has no list, so a lookup on
+	// one is a request nothing can honour. Ignoring it is what turned "I asked
+	// for a dropdown" into "there is no dropdown, and nothing said why".
+	It("refuses a value list on a filter that has none to offer", func() {
 		profile := query.Profile{
 			Provider: query.ProviderConfig{Type: "sql"},
 			Columns: []query.ColumnDef{{
@@ -221,10 +226,55 @@ var _ = Describe("OpenSearch column filters", func() {
 			}},
 		}
 
+		_, err := profile.ColumnFilterBindings()
+		Expect(err).To(MatchError(ContainSubstring("declare kind: terms to enumerate them")))
+	})
+
+	It("lets an author put the value list back on an identifier column", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "sql"},
+			Columns: []query.ColumnDef{{
+				Name: "tenant_id", Type: query.ColumnTypeUUID,
+				Filter: &query.ColumnFilterDef{
+					Kind: query.ColumnFilterKindTerms, Lookup: lo.ToPtr(true),
+				},
+			}},
+		}
+
 		bindings, err := profile.ColumnFilterBindings()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(bindings[0].Lookup).To(BeTrue())
 		Expect(bindings[0].ControlType()).To(Equal("multi-filter"))
+	})
+
+	// A duration bound is resolved into the unit the column stores, so a unit
+	// nothing can convert into is refused where it was written rather than on
+	// the first request that types "5s".
+	It("refuses a duration filter whose unit is not a time unit", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "sql"},
+			Columns: []query.ColumnDef{
+				{Name: "latency", Type: query.ColumnTypeDuration, Unit: "percent"},
+			},
+		}
+
+		_, err := profile.ColumnFilterBindings()
+		Expect(err).To(MatchError(ContainSubstring("needs a time unit")))
+	})
+
+	It("carries the column's unit onto a duration binding", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "sql"},
+			Columns: []query.ColumnDef{
+				{Name: "latency", Type: query.ColumnTypeDuration, Unit: "s"},
+			},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings[0].Unit).To(Equal("s"))
+		Expect(bindings[0].Multi).To(BeFalse())
+		Expect(bindings[0].ControlType()).To(Equal("duration"))
 	})
 
 	// Only a value selection holds several values. Announcing a range or a time
