@@ -2,8 +2,8 @@
 # which reads the same lines after a shipper has put them in Loki. Reading
 # directly needs no log stack, but only reaches pods that still exist.
 #
-# This provider has no query language: a pod-log request is entirely structural,
-# so everything is an option and there is no `query`.
+# The workload target is expressed with the Kubernetes query grammar. Provider
+# options are reserved for how logs are read from the matching pods.
 #
 # The pod/namespace/container columns come from the provider, which tags each
 # line with the container it was read from — Host carries only the pod name, so
@@ -19,10 +19,8 @@ provider:
   type: k8s
   connection: connection://kubernetes
   options:
-    kind: "{{.params.kind}}"
-    namespace: "{{.params.namespace}}"
-    name: "{{.params.name}}"
     limit: "500"
+query: "kind={{.params.kind}} namespace={{.params.namespace}} name={{.params.name}}"
 processors:
   - use: logs.dedupe
 params:

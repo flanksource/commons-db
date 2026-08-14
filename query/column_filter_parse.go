@@ -48,6 +48,16 @@ func (b ColumnFilterBinding) parseSelection(value any) (ColumnFilterValue, error
 	switch resolved.Kind {
 	case ColumnFilterKindTerms, ColumnFilterKindExact, ColumnFilterKindText:
 		resolved.Include, resolved.Exclude, err = parseTermTokens(tokens)
+	case ColumnFilterKindWorkload:
+		if len(tokens) > 1 {
+			return ColumnFilterValue{}, fmt.Errorf("a workload filter takes one value, got %d", len(tokens))
+		}
+		resolved.Include = tokens
+	case ColumnFilterKindLabels:
+		resolved.Include, resolved.Exclude, err = parseTermTokens(tokens)
+		if err == nil {
+			err = validateLabelTokens(append(resolved.Include, resolved.Exclude...))
+		}
 	case ColumnFilterKindRange:
 		resolved.Range, err = parseRangeTokens(tokens, parseNumericBound)
 	case ColumnFilterKindDuration:
@@ -65,6 +75,16 @@ func (b ColumnFilterBinding) parseSelection(value any) (ColumnFilterValue, error
 		return ColumnFilterValue{}, err
 	}
 	return resolved, nil
+}
+
+func validateLabelTokens(tokens []string) error {
+	for _, token := range tokens {
+		key, value, ok := strings.Cut(token, "=")
+		if !ok || strings.TrimSpace(key) == "" || strings.TrimSpace(value) == "" {
+			return fmt.Errorf("label %q must be key=value", token)
+		}
+	}
+	return nil
 }
 
 // columnFilterTokens flattens a request value into its comma-separated items.

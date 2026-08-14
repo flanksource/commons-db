@@ -150,12 +150,13 @@ function Explorer() {
           entityDetailBodyRenderer={(context) =>
             connectionDetailBodyRenderer(
               context,
-              ({ connectionName, providerType, providerOptions }) => (
+              ({ connectionName, providerType, providerOptions, profileQuery }) => (
                 <BuildProfileButton
                   client={client}
                   connectionName={connectionName}
                   providerType={providerType}
-                  providerOptions={providerOptions}
+                  {...(providerOptions ? { providerOptions } : {})}
+                  {...(profileQuery ? { profileQuery } : {})}
                 />
               ),
             )

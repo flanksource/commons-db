@@ -13,7 +13,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons-db/types"
@@ -25,11 +24,6 @@ import (
 type Request struct {
 	logs.LogsRequestBase `json:",inline" yaml:",inline" template:"true"`
 
-	Kind       string `json:"kind" template:"true"`
-	ApiVersion string `json:"apiVersion" template:"true"`
-	Namespace  string `json:"namespace" template:"true"`
-	Name       string `json:"name" template:"true"`
-
 	// Logs will include pods that match any of these selectors.
 	//
 	// This applies when retrieving logs at a higher resource level,
@@ -40,82 +34,11 @@ type Request struct {
 	Containers types.MatchExpressions `json:"containers,omitempty"`
 }
 
-type K8sLogFetcher struct {
-	conn connection.KubernetesConnection
-}
-
-func New(conn connection.KubernetesConnection) *K8sLogFetcher {
-	return &K8sLogFetcher{
-		conn: conn,
-	}
-}
-
-func (t *K8sLogFetcher) Search(ctx context.Context, request Request) ([]logs.LogResult, error) {
-	client, _, err := t.conn.Populate(ctx, false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to populate kubernetes connection: %w", err)
-	}
-
-	switch request.Kind {
-	case "Pod":
-		pod, err := client.CoreV1().Pods(request.Namespace).Get(ctx, request.Name, metav1.GetOptions{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to get pod %s/%s: %w", request.Namespace, request.Name, err)
-		}
-
-		return fetchPodLogs(ctx, client, *pod, request)
-
-	case "Deployment":
-		return fetchDeploymentLogs(ctx, client, request.Namespace, request.Name, request)
-
-	case "StatefulSet":
-		return fetchStatefulSetLogs(ctx, client, request.Namespace, request.Name, request)
-
-	case "DaemonSet":
-		return fetchDaemonSetLogs(ctx, client, request.Namespace, request.Name, request)
-	}
-
-	return nil, fmt.Errorf("unsupported kind: %s", request.Kind)
-}
-
-func fetchStatefulSetLogs(ctx context.Context, client kubernetes.Interface, namespace, name string, request Request) ([]logs.LogResult, error) {
-	sts, err := client.AppsV1().StatefulSets(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get StatefulSet %s/%s: %w", namespace, name, err)
-	}
-
-	selector := metav1.FormatLabelSelector(sts.Spec.Selector)
-	return fetchPodsLogs(ctx, client, selector, request)
-}
-
-func fetchDaemonSetLogs(ctx context.Context, client kubernetes.Interface, namespace, name string, request Request) ([]logs.LogResult, error) {
-	ds, err := client.AppsV1().DaemonSets(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get DaemonSet %s/%s: %w", namespace, name, err)
-	}
-
-	selector := metav1.FormatLabelSelector(ds.Spec.Selector)
-	return fetchPodsLogs(ctx, client, selector, request)
-}
-
-func fetchDeploymentLogs(ctx context.Context, client kubernetes.Interface, namespace, name string, request Request) ([]logs.LogResult, error) {
-	deploy, err := client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get Deployment %s/%s: %w", namespace, name, err)
-	}
-
-	selector := metav1.FormatLabelSelector(deploy.Spec.Selector)
-	return fetchPodsLogs(ctx, client, selector, request)
-}
-
-func fetchPodsLogs(ctx context.Context, client kubernetes.Interface, selector string, request Request) ([]logs.LogResult, error) {
-	podList, err := client.CoreV1().Pods(request.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return nil, fmt.Errorf("failed to list pods in namespace %q with selector %q: %w", request.Namespace, selector, err)
-	}
-
+// Fetch reads logs from the already-resolved pods. Target discovery belongs to
+// the query provider so one selector and one resource cap govern every kind.
+func Fetch(ctx context.Context, client kubernetes.Interface, pods []corev1.Pod, request Request) ([]logs.LogResult, error) {
 	var logGroups []logs.LogResult
-	for _, pod := range podList.Items {
+	for _, pod := range pods {
 		if logs, err := fetchPodLogs(ctx, client, pod, request); err != nil {
 			return nil, err
 		} else if logs != nil {
@@ -124,6 +47,26 @@ func fetchPodsLogs(ctx context.Context, client kubernetes.Interface, selector st
 	}
 
 	return logGroups, nil
+}
+
+// SelectPods narrows already-resolved pods to those a selection matches. An
+// empty selection matches everything, so a caller with nothing to narrow by
+// passes it through unchanged.
+//
+// It exists as its own gate rather than as more entries on Request.Pods because
+// ResourceSelectors are a union: one list holding a profile's declared pods and
+// an operator's picked pod would read the two as alternatives and return both.
+func SelectPods(pods []corev1.Pod, selectors types.ResourceSelectors) []corev1.Pod {
+	if len(selectors) == 0 {
+		return pods
+	}
+	matched := make([]corev1.Pod, 0, len(pods))
+	for _, pod := range pods {
+		if selectors.Matches(podSelectable(pod)) {
+			matched = append(matched, pod)
+		}
+	}
+	return matched
 }
 
 // podSelectable exposes a pod to the resource-selector machinery.
@@ -172,8 +115,25 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, pod co
 		Timestamps: true,
 	}
 
-	if s, err := request.GetStart(); err == nil {
-		opt.SinceTime = &metav1.Time{Time: s}
+	// A start nobody could parse used to mean "from the beginning of the
+	// container's history", which is the most expensive read available and the
+	// opposite of what a narrowing bound asked for.
+	if request.Start != "" {
+		start, err := request.GetStart()
+		if err != nil {
+			return nil, fmt.Errorf("start %q is not a time or date math: %w", request.Start, err)
+		}
+		opt.SinceTime = &metav1.Time{Time: start}
+	}
+
+	// The kubelet serves no upper bound, so an end is enforced while scanning.
+	var end time.Time
+	if request.End != "" {
+		parsed, err := request.GetEnd()
+		if err != nil {
+			return nil, fmt.Errorf("end %q is not a time or date math: %w", request.End, err)
+		}
+		end = parsed
 	}
 
 	if request.Limit != "" {
@@ -221,8 +181,15 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, pod co
 		if err != nil {
 			continue
 		}
+		if !end.IsZero() && t.After(end) {
+			continue
+		}
 
 		line := &logs.LogLine{
+			// The id is what makes the result's order total: a timestamp ties
+			// across containers, and a line's position in its own stream is the
+			// only thing that never does.
+			ID:      fmt.Sprintf("%s/%s/%s#%d", pod.Namespace, pod.Name, reportedContainer, len(output.Logs)),
 			Count:   1,
 			Message: parts[1],
 			// Cloned: pod.Labels belongs to the client-go object and is shared

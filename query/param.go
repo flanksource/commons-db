@@ -27,6 +27,11 @@ const (
 	// list first — `{{ join .params.ids "','" }}` — because rendering the
 	// parameter bare would emit Go's `[a b c]`.
 	ParamTypeList ParamType = "list"
+
+	// ParamTypeLabels is a Kubernetes label value selector bound to one
+	// labels.<key> field. It has the same include/exclude wire form as list, but
+	// lets the browser render a label-aware control.
+	ParamTypeLabels ParamType = "labels"
 )
 
 // ParamRole assigns a profile parameter to a first-class table control. Filter
@@ -129,7 +134,7 @@ func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, []
 			}
 		}
 
-		if def.Type == ParamTypeList {
+		if def.Type == ParamTypeList || def.Type == ParamTypeLabels {
 			include, exclude, err := def.coerceList(raw)
 			if err != nil {
 				return nil, nil, fmt.Errorf("param %q: %w", def.Name, err)

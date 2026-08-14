@@ -3,6 +3,8 @@ package connection
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/flanksource/commons-db/context"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
@@ -14,6 +16,33 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+const DefaultKubernetesMaxResources = 20
+
+// KubernetesMaxResources resolves the resource-discovery cap stored on a
+// Kubernetes connection. An unnamed ambient connection and an unset property
+// both use the documented default.
+func KubernetesMaxResources(ctx context.Context, connectionName string) (int, error) {
+	if connectionName == "" {
+		return DefaultKubernetesMaxResources, nil
+	}
+	model, err := ctx.HydrateConnectionByURL(connectionName)
+	if err != nil {
+		return 0, err
+	}
+	if model == nil {
+		return 0, fmt.Errorf("connection[%s] not found", connectionName)
+	}
+	raw := strings.TrimSpace(model.Properties["max_resources"])
+	if raw == "" {
+		return DefaultKubernetesMaxResources, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit <= 0 {
+		return 0, fmt.Errorf("connection[%s] property max_resources must be a positive integer, got %q", connectionName, raw)
+	}
+	return limit, nil
+}
 
 // +kubebuilder:object:generate=true
 type KubeconfigConnection struct {

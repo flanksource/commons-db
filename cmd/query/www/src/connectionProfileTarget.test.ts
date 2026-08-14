@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { connectionProfileTargetOptions } from "./connectionProfileTarget";
 
 describe("connection profile target options", () => {
-  it("carries a selected Kubernetes workload into Build Profile", () => {
+  it("never carries Kubernetes targets as provider options", () => {
     expect(
       connectionProfileTargetOptions(
         {
@@ -21,11 +21,7 @@ describe("connection profile target options", () => {
           limit: "200",
         },
       ),
-    ).toEqual({
-      kind: "DaemonSet",
-      namespace: "observability",
-      name: "node-agent",
-    });
+    ).toBeUndefined();
   });
 
   it("does not emit a partial Kubernetes target", () => {

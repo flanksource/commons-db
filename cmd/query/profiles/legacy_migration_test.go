@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -107,16 +108,17 @@ func TestLegacyKubernetesTargetBecomesK8sProvider(t *testing.T) {
 			if profile.Provider.Type != "k8s" {
 				t.Fatalf("provider = %q, want k8s", profile.Provider.Type)
 			}
-			if got := profile.Provider.Options["kind"]; got != tt.wantKind {
-				t.Errorf("kind = %v, want %v", got, tt.wantKind)
+			wantQuery := fmt.Sprintf("kind=%s namespace={{.params.namespace}} name=%s", tt.wantKind, tt.wantName)
+			if profile.Query != wantQuery {
+				t.Errorf("query = %q, want %q", profile.Query, wantQuery)
 			}
-			if got := profile.Provider.Options["name"]; got != tt.wantName {
-				t.Errorf("name = %v, want %v", got, tt.wantName)
+			if len(profile.Provider.Options) != 0 {
+				t.Errorf("provider options = %#v, want no target options", profile.Provider.Options)
 			}
 			// The legacy reader took the namespace from the active kubecontext;
-			// the provider needs it stated, so it becomes a parameter.
-			if got := profile.Provider.Options["namespace"]; got != "{{.params.namespace}}" {
-				t.Errorf("namespace = %v, want the namespace parameter", got)
+			// the query grammar needs it stated, so it becomes a parameter.
+			if len(profile.Params) != 1 || profile.Params[0].Name != "namespace" {
+				t.Errorf("params = %#v, want the namespace parameter", profile.Params)
 			}
 		})
 	}
@@ -133,9 +135,21 @@ func TestLegacyKubernetesSinceAndTail(t *testing.T) {
 	if got := profile.Provider.Options["limit"]; got != "5000" {
 		t.Errorf("limit = %v, want \"5000\"", got)
 	}
-	// A base profile is imported, never run, so having no target is not an error.
-	if _, ok := profile.Provider.Options["name"]; ok {
-		t.Errorf("a target-less base profile should not set name")
+	if profile.Query != "namespace={{.params.namespace}}" {
+		t.Errorf("query = %q, want a broad namespace selector", profile.Query)
+	}
+}
+
+func TestLegacyKubernetesExplicitNamespaceUsesQueryGrammar(t *testing.T) {
+	profile, err := convertLegacyTraceSource("name: logs\nkubernetes:\n  target: ds/agent\n  namespace: monitoring\n")
+	if err != nil {
+		t.Fatalf("convertLegacyTraceSource() error = %v", err)
+	}
+	if profile.Query != "kind=DaemonSet namespace=monitoring name=agent" {
+		t.Errorf("query = %q, want the explicit namespace selector", profile.Query)
+	}
+	if len(profile.Params) != 0 {
+		t.Errorf("params = %#v, want no namespace parameter", profile.Params)
 	}
 }
 

@@ -1,4 +1,8 @@
-import { CacheBrowser, type EntityDetailBodyRenderContext, type EntityDetailHeaderRenderContext } from "@flanksource/clicky-ui";
+import {
+  CacheBrowser,
+  type EntityDetailBodyRenderContext,
+  type EntityDetailHeaderRenderContext,
+} from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import { useMemo, useState, type ReactNode } from "react";
 import {
@@ -57,6 +61,7 @@ function ConnectionBrowser({
   // author left off. It is reported by the browser rather than picked here —
   // the picker lives in the browser's navigator.
   const [selectedOptions, setSelectedOptions] = useState<Record<string, unknown>>({});
+  const [selectedQuery, setSelectedQuery] = useState<string>();
   const profileOptions = useMemo(
     () => connectionProfileTargetOptions(descriptor.data, selectedOptions),
     [descriptor.data, selectedOptions],
@@ -88,12 +93,14 @@ function ConnectionBrowser({
       </div>
     );
   }
+  const profileQuery = selectedQuery ?? descriptor.data.defaultQuery;
   const profileAction =
     descriptor.data.provider && renderProfileAction
       ? renderProfileAction({
           connectionName,
           providerType: descriptor.data.provider,
           ...(profileOptions ? { providerOptions: profileOptions } : {}),
+          ...(profileQuery ? { profileQuery } : {}),
         })
       : null;
   return (
@@ -106,6 +113,7 @@ function ConnectionBrowser({
         baseUrl={baseUrl}
         descriptor={descriptor.data}
         onOptionsChange={setSelectedOptions}
+        onQueryChange={setSelectedQuery}
       />
     </div>
   );

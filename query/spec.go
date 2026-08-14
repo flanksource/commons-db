@@ -159,6 +159,11 @@ func (p Profile) Validate() error {
 	if err != nil {
 		return fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	runtimeBindings, err := p.RuntimeFilterBindings()
+	if err != nil {
+		return fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	bindings = append(bindings, runtimeBindings...)
 	params := make(map[string]bool, len(p.Params))
 	for _, parameter := range p.Params {
 		params[parameter.Name] = true

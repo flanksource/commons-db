@@ -26,10 +26,15 @@ func resolveProfileInput(profile Profile, input map[string]any) (map[string]any,
 }
 
 func partitionProfileInput(profile Profile, input map[string]any) (map[string]any, []ColumnFilterValue, error) {
-	bindings, err := profile.ColumnFilterBindings()
+	columns, err := profile.ColumnFilterBindings()
 	if err != nil {
 		return nil, nil, err
 	}
+	runtime, err := profile.RuntimeFilterBindings()
+	if err != nil {
+		return nil, nil, err
+	}
+	bindings := append(columns, runtime...)
 	byKey := make(map[string]ColumnFilterBinding, len(bindings))
 	for _, binding := range bindings {
 		byKey[binding.Key] = binding
@@ -37,32 +42,57 @@ func partitionProfileInput(profile Profile, input map[string]any) (map[string]an
 	params := make(map[string]any, len(input))
 	values := make(map[string]ColumnFilterValue, len(bindings))
 	for key, value := range input {
-		if !strings.HasPrefix(key, columnFilterPrefix) {
+		binding, isFilter := byKey[key]
+		if !isFilter {
+			// Only a "filter."-prefixed key claims to be a column filter, so one
+			// that matches no binding is a mistake worth naming rather than a
+			// param the profile happens not to declare.
+			if strings.HasPrefix(key, columnFilterPrefix) {
+				return nil, nil, fmt.Errorf("column filter %q is not supported by profile %q", key, profile.Name)
+			}
 			params[key] = value
 			continue
 		}
-		binding, ok := byKey[key]
-		if !ok {
-			return nil, nil, fmt.Errorf("column filter %q is not supported by profile %q", key, profile.Name)
-		}
-		selection, err := binding.parseSelection(value)
+		selection, err := binding.resolveSelection(value)
 		if err != nil {
 			return nil, nil, fmt.Errorf("column filter %q: %w", key, err)
 		}
 		if selection.IsZero() {
 			continue
 		}
-		selection.Column, selection.Key, selection.Field = binding.Column, binding.Key, binding.Field
-		selection.Nested, selection.Where = binding.Nested, binding.Where
 		values[key] = selection
 	}
 	filters := make([]ColumnFilterValue, 0, len(values))
 	for _, binding := range bindings {
-		if value, ok := values[binding.Key]; ok {
+		value, ok := values[binding.Key]
+		if !ok && binding.Default != "" {
+			// A default stands in for the request that named nothing, so it is
+			// read under the binding's own grammar rather than trusted as a
+			// pre-parsed value — a default that cannot be selected by hand is a
+			// default nobody could have reproduced.
+			defaulted, err := binding.resolveSelection(binding.Default)
+			if err != nil {
+				return nil, nil, fmt.Errorf("column filter %q default: %w", binding.Key, err)
+			}
+			value, ok = defaulted, !defaulted.IsZero()
+		}
+		if ok {
 			filters = append(filters, value)
 		}
 	}
 	return params, filters, nil
+}
+
+// resolveSelection parses one request value and stamps the binding's identity
+// onto it, which is what every consumer downstream reads it by.
+func (b ColumnFilterBinding) resolveSelection(value any) (ColumnFilterValue, error) {
+	selection, err := b.parseSelection(value)
+	if err != nil {
+		return ColumnFilterValue{}, err
+	}
+	selection.Column, selection.Key, selection.Field = b.Column, b.Key, b.Field
+	selection.Nested, selection.Where = b.Nested, b.Where
+	return selection, nil
 }
 
 func LookupFilterValues(ctx context.Context, profile Profile, input map[string]any, key, search string, limit int) ([]FilterOption, *Total, error) {

@@ -121,6 +121,11 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	if err != nil {
 		return err
 	}
+	runtimeBindings, err := profile.RuntimeFilterBindings()
+	if err != nil {
+		return err
+	}
+	bindings = append(bindings, runtimeBindings...)
 	parameters := make([]rpc.OpenAPIParameter, 0, len(profile.Params)+len(bindings)+2)
 	filterKeys := make(map[string]string, len(bindings))
 	for _, binding := range bindings {
@@ -132,7 +137,11 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		roles[param.Role] = true
 	}
 	for _, binding := range bindings {
-		filterName := profileFilterName(profile.Name, binding.Column)
+		filterOwner := binding.Column
+		if filterOwner == "" {
+			filterOwner = binding.Key
+		}
+		filterName := profileFilterName(profile.Name, filterOwner)
 		ensureProfileFilterComponent(spec, entity.FilterSpec{
 			Name: filterName, Label: binding.Label,
 			Type: binding.ControlType(), Multi: binding.Multi,
@@ -141,6 +150,13 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		schema := &rpc.OpenAPISchema{Type: "string", Title: binding.Label}
 		for _, option := range binding.Options {
 			schema.Enum = append(schema.Enum, option)
+		}
+		// A generated control's default is the selection the server applies when
+		// the request names none, so it belongs in the contract rather than only
+		// in the resolver — a caller reading the spec must see the query they
+		// will actually get.
+		if binding.Default != "" {
+			schema.Default = binding.Default
 		}
 		parameter := rpc.OpenAPIParameter{
 			Name: binding.Key, In: "query",
@@ -258,6 +274,10 @@ func profileFilterDescription(binding query.ColumnFilterBinding) string {
 		return "Match " + binding.Label + " by substring; prefix a value with ! to exclude it"
 	case query.ColumnFilterKindExact:
 		return "Match " + binding.Label + " exactly against values you type; prefix a value with ! to exclude it"
+	case query.ColumnFilterKindWorkload:
+		return "Select one workload inside the profile target scope"
+	case query.ColumnFilterKindLabels:
+		return "Narrow the profile target scope by Kubernetes labels"
 	default:
 		return "Include or exclude " + binding.Label + " values; prefix a value with ! to exclude it"
 	}
@@ -305,7 +325,7 @@ func profileParameter(spec *rpc.OpenAPISpec, profile query.Profile, param query.
 	}
 	// A list travels as one comma-joined string, so its schema stays a string;
 	// the allowed values live on the filter component the lookup points at.
-	if param.Type != query.ParamTypeList {
+	if param.Type != query.ParamTypeList && param.Type != query.ParamTypeLabels {
 		for _, option := range param.Options {
 			schema.Enum = append(schema.Enum, option)
 		}
@@ -325,7 +345,7 @@ func profileParameter(spec *rpc.OpenAPISpec, profile query.Profile, param query.
 		Schema:      schema,
 		Clicky:      &rpc.ClickyParameterMeta{Role: role},
 	}
-	if param.Type != query.ParamTypeList || param.Field == "" {
+	if (param.Type != query.ParamTypeList && param.Type != query.ParamTypeLabels) || param.Field == "" {
 		return parameter
 	}
 
@@ -346,8 +366,12 @@ func profileParameter(spec *rpc.OpenAPISpec, profile query.Profile, param query.
 		source = entity.FilterSourceSpec{Kind: entity.SourceStatic, Options: options}
 		lookup.URL, lookup.SearchParam = "", ""
 	}
+	controlType := "multi-filter"
+	if param.Type == query.ParamTypeLabels {
+		controlType = "labels"
+	}
 	ensureProfileFilterComponent(spec, entity.FilterSpec{
-		Name: filterName, Label: param.DisplayLabel(), Type: "multi-filter", Multi: true, Source: source,
+		Name: filterName, Label: param.DisplayLabel(), Type: controlType, Multi: true, Source: source,
 	})
 	parameter.Lookup = lookup
 	if parameter.Description == "" {

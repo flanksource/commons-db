@@ -4,7 +4,7 @@
 
 Query
   = aq:AndQuery _ oq:OrQuery* _ {
-    return makeAndQuery(aq,oq)
+    return makeTopQuery(aq,oq)
   }
 
 OrQuery
@@ -125,7 +125,7 @@ Float
     }
 
 Identifier
-  = [@a-zA-Z0-9_*\\,-:\\[\]]+ {
+  = [@a-zA-Z0-9_*\\,-:\\[\]/]+ {
       return string(c.text), nil
   }
 

@@ -18,11 +18,13 @@ export function ConnectionQueryBrowser({
   baseUrl,
   descriptor,
   onOptionsChange,
+  onQueryChange,
 }: {
   id: string;
   baseUrl: string;
   descriptor: BrowserDescriptor;
   onOptionsChange: (options: Record<string, unknown>) => void;
+  onQueryChange?: (query: string) => void;
 }) {
   const [selection, setSelection] = useState<{
     query?: string;
@@ -67,9 +69,10 @@ export function ConnectionQueryBrowser({
       inspection={inspection}
       onDatabaseChange={setSelectedDatabase}
       query={selection.query ?? descriptor.defaultQuery ?? ""}
-      onQueryChange={(next: string) =>
-        setSelection((current) => ({ ...current, query: next }))
-      }
+      onQueryChange={(next: string) => {
+        setSelection((current) => ({ ...current, query: next }));
+        onQueryChange?.(next);
+      }}
       options={options}
       onOptionsChange={(next: Record<string, unknown>) => {
         setLiveOptions(next);
@@ -85,6 +88,7 @@ export function ConnectionQueryBrowser({
       onCatalogSelect={(node: CatalogNode) => {
         setSelection({ query: node.query, options: node.options });
         setLiveOptions(node.options ?? {});
+        onQueryChange?.(node.query ?? "");
       }}
       {...(lookupFilterValues ? { lookupFilterValues } : {})}
       execute={(request: QueryBrowserRequest) =>

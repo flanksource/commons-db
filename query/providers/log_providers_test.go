@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -300,14 +303,24 @@ var _ = Describe("log provider option validation", func() {
 			To(MatchError(ContainSubstring("project")))
 	})
 
-	It("rejects a k8s kind that has no pods to resolve", func() {
-		err := execute("k8s", map[string]any{"kind": "CronJob", "namespace": "prod", "name": "x"})
-		Expect(err).To(MatchError(ContainSubstring("kind")))
-	})
+	DescribeTable("rejects Kubernetes target options",
+		func(key string, value any) {
+			err := execute("k8s", map[string]any{key: value})
+			Expect(err).To(MatchError(ContainSubstring("declare kind, namespace, name, uid, or labels.<key> in query")))
+		},
+		Entry("kind", "kind", "Deployment"),
+		Entry("API version", "apiVersion", "apps/v1"),
+		Entry("namespace", "namespace", "payments"),
+		Entry("name", "name", "api"),
+		Entry("UID", "uid", "resource-id"),
+		Entry("labels", "labels", map[string]any{"app": "api"}),
+	)
 
-	It("requires a namespace and name for k8s", func() {
-		err := execute("k8s", map[string]any{"kind": "Deployment"})
-		Expect(err).To(MatchError(ContainSubstring("namespace")))
+	It("rejects unsupported Kubernetes target fields before connecting", func() {
+		provider, err := query.GetProvider("k8s")
+		Expect(err).ToNot(HaveOccurred())
+		_, err = provider.Execute(ctx, query.ProviderRequest{Query: "resource=Deployment"})
+		Expect(err).To(MatchError(ContainSubstring("field \"resource\" is unsupported")))
 	})
 })
 
@@ -343,12 +356,28 @@ var _ = Describe("k8s logs provider", func() {
 		logRequests = nil
 		mux := http.NewServeMux()
 
-		mux.HandleFunc("/apis/apps/v1/namespaces/prod/deployments/billing", func(w http.ResponseWriter, r *http.Request) {
+		mux.HandleFunc("/apis/apps/v1/deployments", func(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, map[string]any{
-				"apiVersion": "apps/v1", "kind": "Deployment",
-				"metadata": map[string]any{"name": "billing", "namespace": "prod"},
-				"spec": map[string]any{
-					"selector": map[string]any{"matchLabels": map[string]any{"app": "billing"}},
+				"apiVersion": "apps/v1", "kind": "DeploymentList", "items": []any{map[string]any{
+					"metadata": map[string]any{"name": "billing", "namespace": "prod", "uid": "uid-billing", "labels": map[string]any{"app": "billing"}},
+					"spec": map[string]any{
+						"selector": map[string]any{"matchLabels": map[string]any{"app": "billing"}},
+					},
+				}},
+			})
+		})
+		for _, resource := range []string{"statefulsets", "daemonsets"} {
+			mux.HandleFunc("/apis/apps/v1/"+resource, func(w http.ResponseWriter, r *http.Request) {
+				writeJSON(w, map[string]any{"apiVersion": "apps/v1", "items": []any{}})
+			})
+		}
+
+		mux.HandleFunc("/api/v1/pods", func(w http.ResponseWriter, r *http.Request) {
+			writeJSON(w, map[string]any{
+				"apiVersion": "v1", "kind": "PodList",
+				"items": []any{
+					podJSON("billing-1", map[string]any{"app": "billing", "role": "worker"}, "app", "sidecar"),
+					podJSON("billing-2", map[string]any{"app": "billing", "role": "canary"}, "app"),
 				},
 			})
 		})
@@ -380,23 +409,21 @@ var _ = Describe("k8s logs provider", func() {
 		}), nil)
 	})
 
-	execute := func(options map[string]any) ([]query.Row, error) {
+	execute := func(selector string, options map[string]any) ([]query.Row, error) {
 		provider, err := query.GetProvider("k8s")
 		Expect(err).ToNot(HaveOccurred())
 		return provider.Execute(ctx, query.ProviderRequest{
-			Connection: "connection://kube", Options: options,
+			Connection: "connection://kube", Query: selector, Options: options,
 		})
 	}
 
 	It("reads every pod of a deployment, tagging each line with where it came from", func() {
-		rows, err := execute(map[string]any{
-			"kind": "Deployment", "namespace": "prod", "name": "billing",
-		})
+		rows, err := execute("kind=Deployment namespace=prod name=billing", map[string]any{})
 		Expect(err).ToNot(HaveOccurred())
 
-		// Two pods, two lines each.
+		// Two pods, two lines each, newest first.
 		Expect(rows).To(HaveLen(4))
-		Expect(rows[0]).To(HaveKeyWithValue("message", "settlement gateway rejected batch 88213"))
+		Expect(rows[0]).To(HaveKeyWithValue("message", "retry scheduled"))
 		Expect(rows[0]).To(HaveKeyWithValue("namespace", "prod"))
 		Expect(rows[0]).To(HaveKeyWithValue("pod", "billing-1"))
 		// No container was asked for, so the kubelet served the pod's first —
@@ -406,9 +433,35 @@ var _ = Describe("k8s logs provider", func() {
 		Expect(rows[0]).To(HaveKeyWithValue("role", "worker"))
 	})
 
+	It("returns the newest line first, breaking timestamp ties by stream position", func() {
+		rows, err := execute("kind=Deployment namespace=prod name=billing", map[string]any{})
+		Expect(err).ToNot(HaveOccurred())
+
+		// Both pods emit the same two instants, so the timestamp alone leaves
+		// every row tied with one from the other pod; the id is what settles it.
+		Expect(rowValues(rows, "id")).To(Equal([]string{
+			"prod/billing-1/app#1", "prod/billing-2/app#1",
+			"prod/billing-1/app#0", "prod/billing-2/app#0",
+		}))
+	})
+
+	It("declares an order a page can be cut from", func() {
+		provider, err := query.GetProvider("k8s")
+		Expect(err).ToNot(HaveOccurred())
+		ordering, ok := provider.(query.OrderingProvider)
+		Expect(ok).To(BeTrue())
+
+		order, err := ordering.NaturalOrder(query.ProviderConfig{Type: "k8s"})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(order).To(Equal(query.Order{
+			{Column: "timestamp", Desc: true},
+			{Column: "id", Unique: true},
+		}))
+		Expect(order.Pageable()).To(Succeed())
+	})
+
 	It("reads only the containers asked for", func() {
-		_, err := execute(map[string]any{
-			"kind": "Deployment", "namespace": "prod", "name": "billing",
+		_, err := execute("kind=Deployment namespace=prod name=billing", map[string]any{
 			"containers": []any{"sidecar"},
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -429,9 +482,9 @@ var _ = Describe("k8s logs provider", func() {
 
 		provider, err := query.GetProvider("k8s")
 		Expect(err).ToNot(HaveOccurred())
-		_, err = provider.Execute(ctx, query.ProviderRequest{Options: map[string]any{
-			"kind": "Deployment", "namespace": "prod", "name": "billing",
-		}})
+		_, err = provider.Execute(ctx, query.ProviderRequest{
+			Query: "kind=Deployment namespace=prod name=billing",
+		})
 		Expect(err).To(MatchError(ContainSubstring("no kubernetes cluster configured")))
 	})
 
@@ -442,16 +495,15 @@ var _ = Describe("k8s logs provider", func() {
 
 		provider, err := query.GetProvider("k8s")
 		Expect(err).ToNot(HaveOccurred())
-		rows, err := provider.Execute(ctx, query.ProviderRequest{Options: map[string]any{
-			"kind": "Deployment", "namespace": "prod", "name": "billing",
-		}})
+		rows, err := provider.Execute(ctx, query.ProviderRequest{
+			Query: "kind=Deployment namespace=prod name=billing",
+		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rows).To(HaveLen(4))
 	})
 
 	It("narrows a workload's pods with a resource selector", func() {
-		rows, err := execute(map[string]any{
-			"kind": "Deployment", "namespace": "prod", "name": "billing",
+		rows, err := execute("kind=Deployment namespace=prod name=billing", map[string]any{
 			"pods": []any{map[string]any{"labelSelector": "role=canary"}},
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -459,6 +511,137 @@ var _ = Describe("k8s logs provider", func() {
 		Expect(rows).To(HaveLen(2))
 		for _, row := range rows {
 			Expect(row).To(HaveKeyWithValue("pod", "billing-2"))
+		}
+	})
+
+	It("narrows the profile selector with runtime workload and label controls", func() {
+		profile := query.Profile{
+			Name: "Pod logs",
+			Provider: query.ProviderConfig{
+				Type: "k8s", Connection: "connection://kube",
+			},
+			Query: "kind=Pod namespace=prod",
+		}
+		result, err := query.Execute(ctx, profile, map[string]any{
+			"workload": "prod/Pod/billing-1",
+			"labels":   "role=worker",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(2))
+		for _, row := range result.Rows {
+			Expect(row).To(HaveKeyWithValue("pod", "billing-1"))
+		}
+	})
+
+	It("narrows a controller scope to one of its pods without emptying the selector", func() {
+		// A pod is not a Deployment, so folding this pick into the target
+		// selector would AND two kinds together and match nothing. It narrows
+		// the pods the Deployment resolved to instead.
+		result, err := query.Execute(ctx, k8sProfile("kind=Deployment namespace=prod name=billing"), map[string]any{
+			"workload": "prod/Pod/billing-2",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(2))
+		for _, row := range result.Rows {
+			Expect(row).To(HaveKeyWithValue("pod", "billing-2"))
+		}
+	})
+
+	It("bounds the read by the generated time control, defaulting to the last hour", func() {
+		_, err := query.Execute(ctx, k8sProfile("kind=Pod namespace=prod name=billing-1"), nil)
+		Expect(err).ToNot(HaveOccurred())
+		// Nothing was supplied, so the binding's own default is what reached the
+		// kubelet — an unbounded read is never what a log query meant.
+		Expect(logRequests).To(HaveLen(1))
+		Expect(logRequests[0]).To(ContainSubstring("sinceTime="))
+		since := sinceTimeOf(logRequests[0])
+		Expect(since).To(BeTemporally("~", time.Now().Add(-time.Hour), time.Minute))
+
+		logRequests = nil
+		result, err := query.Execute(ctx, k8sProfile("kind=Pod namespace=prod name=billing-1"), map[string]any{
+			"time": ">=2026-04-19T11:00:00Z,<=2026-04-19T11:23:41Z",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sinceTimeOf(logRequests[0])).To(BeTemporally("==", time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC)))
+		// The kubelet serves no upper bound, so the end is applied while
+		// scanning: the 11:23:41.310 line falls outside it.
+		Expect(rowValues(result.Rows, "message")).To(Equal([]string{
+			"settlement gateway rejected batch 88213",
+		}))
+	})
+
+	It("rejects a time bound nothing could resolve", func() {
+		_, err := query.Execute(ctx, k8sProfile("kind=Pod namespace=prod"), map[string]any{
+			"time": ">=yesterday",
+		})
+		Expect(err).To(MatchError(ContainSubstring("date math")))
+	})
+
+	It("offers the pods a scoped workload resolves to", func() {
+		// The profile already names one Deployment, so the only narrowing left
+		// is which of its pods to read.
+		workloads, _, err := query.LookupFilterValues(
+			ctx, k8sProfile("kind=Deployment namespace=prod name=billing"), nil, "workload", "", 50)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(workloads).To(ConsistOf(
+			query.FilterOption{Value: "prod/Deployment/billing", Count: 1},
+			query.FilterOption{Value: "prod/Pod/billing-1", Count: 1},
+			query.FilterOption{Value: "prod/Pod/billing-2", Count: 1},
+		))
+	})
+
+	It("looks up workloads, grouped labels and one explicit label key inside the profile scope", func() {
+		profile := query.Profile{
+			Name: "Pod logs",
+			Provider: query.ProviderConfig{
+				Type: "k8s", Connection: "connection://kube",
+			},
+			Query: "kind=Pod namespace=prod",
+			Params: []query.ParamDef{{
+				Name: "roles", Type: query.ParamTypeLabels, Field: "labels.role",
+			}},
+		}
+		workloads, total, err := query.LookupFilterValues(ctx, profile, nil, "workload", "", 50)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(total).To(Equal(&query.Total{Value: 2, Exact: true}))
+		Expect(workloads).To(ConsistOf(
+			query.FilterOption{Value: "prod/Pod/billing-1", Count: 1},
+			query.FilterOption{Value: "prod/Pod/billing-2", Count: 1},
+		))
+
+		labels, _, err := query.LookupFilterValues(ctx, profile, nil, "labels", "role=", 50)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(labels).To(ConsistOf(
+			query.FilterOption{Value: "role=canary", Count: 1},
+			query.FilterOption{Value: "role=worker", Count: 1},
+		))
+
+		roles, _, err := query.LookupFilterValues(ctx, profile, nil, "roles", "", 50)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(roles).To(ConsistOf(
+			query.FilterOption{Value: "canary", Count: 1},
+			query.FilterOption{Value: "worker", Count: 1},
+		))
+	})
+
+	It("marks a broad result truncated when the connection resource cap selects the first match", func() {
+		limited := dbcontext.New().WithDB(connectionsDB(models.Connection{
+			ID: uuid.New(), Name: "limited-kube", Type: models.ConnectionTypeKubernetes,
+			Certificate: kubeconfigFor(server.URL),
+			Properties:  types.JSONStringMap{"max_resources": "1"},
+		}), nil)
+		result, err := query.Execute(limited, query.Profile{
+			Name: "Limited pod logs",
+			Provider: query.ProviderConfig{
+				Type: "k8s", Connection: "connection://limited-kube",
+			},
+			Query: "kind=Pod namespace=prod",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Truncated).To(BeTrue())
+		Expect(result.Rows).To(HaveLen(2))
+		for _, row := range result.Rows {
+			Expect(row).To(HaveKeyWithValue("pod", "billing-1"))
 		}
 	})
 })
@@ -474,6 +657,32 @@ func podJSON(name string, labels map[string]any, containers ...string) map[strin
 		},
 		"spec": map[string]any{"containers": specContainers},
 	}
+}
+
+func k8sProfile(selector string) query.Profile {
+	return query.Profile{
+		Name:     "Pod logs",
+		Provider: query.ProviderConfig{Type: "k8s", Connection: "connection://kube"},
+		Query:    selector,
+	}
+}
+
+func sinceTimeOf(request string) time.Time {
+	_, rawQuery, _ := strings.Cut(request, "?")
+	values, err := url.ParseQuery(rawQuery)
+	Expect(err).ToNot(HaveOccurred())
+	since, err := time.Parse(time.RFC3339, values.Get("sinceTime"))
+	Expect(err).ToNot(HaveOccurred())
+	return since
+}
+
+func rowValues(rows []query.Row, key string) []string {
+	values := make([]string, 0, len(rows))
+	for _, row := range rows {
+		value, _ := row[key].(string)
+		values = append(values, value)
+	}
+	return values
 }
 
 func writeJSON(w http.ResponseWriter, body map[string]any) {

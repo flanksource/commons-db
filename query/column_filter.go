@@ -183,6 +183,15 @@ type ColumnFilterBinding struct {
 	// declared none. Zero is not "no values": it is what leaves the choice to
 	// whoever asks, which is why an inferred binding never fills it in.
 	Limit int
+
+	// Default is the selection a request that names no value is executed under,
+	// written in the same wire grammar a request would send. It exists for a
+	// generated control whose absence is not a sensible query — a log profile
+	// with no time bound reads every line a container ever wrote — and it is
+	// resolved through the same parse a supplied value takes, so the two can
+	// never mean different things. Empty means the filter is simply absent when
+	// nobody selects anything.
+	Default string
 }
 
 // ControlType is the clicky filter type this binding registers as.
@@ -269,7 +278,7 @@ func (v ColumnFilterValue) IsZero() bool {
 func SupportsNativeFilters(providerType string) bool {
 	switch providerType {
 	case "opensearch", "opentelemetry",
-		"sql", "postgres", "mysql", "sqlserver", "clickhouse":
+		"sql", "postgres", "mysql", "sqlserver", "clickhouse", "k8s":
 		return true
 	default:
 		return false
@@ -277,7 +286,7 @@ func SupportsNativeFilters(providerType string) bool {
 }
 
 func (p Profile) ColumnFilterBindings() ([]ColumnFilterBinding, error) {
-	if !SupportsNativeFilters(p.Provider.Type) {
+	if !supportsColumnFilters(p.Provider.Type) {
 		return nil, nil
 	}
 	bindings := make([]ColumnFilterBinding, 0, len(p.Columns))
@@ -291,6 +300,10 @@ func (p Profile) ColumnFilterBindings() ([]ColumnFilterBinding, error) {
 		}
 	}
 	return bindings, nil
+}
+
+func supportsColumnFilters(providerType string) bool {
+	return SupportsNativeFilters(providerType) && providerType != "k8s"
 }
 
 // sqlIdentifierField matches the only shape a SQL backend field may take: one
@@ -328,7 +341,7 @@ func validateSQLFilterField(providerType, owner, field string) error {
 func (p Profile) ParamFilterBindings() []ColumnFilterBinding {
 	bindings := make([]ColumnFilterBinding, 0, len(p.Params))
 	for _, param := range p.Params {
-		if param.Type != ParamTypeList || param.Field == "" {
+		if (param.Type != ParamTypeList && param.Type != ParamTypeLabels) || param.Field == "" {
 			continue
 		}
 		bindings = append(bindings, ColumnFilterBinding{
@@ -342,11 +355,11 @@ func (p Profile) ParamFilterBindings() []ColumnFilterBinding {
 // filterBinding resolves a lookup key against the column and param bindings a
 // profile offers.
 func (p Profile) filterBinding(key string) (ColumnFilterBinding, error) {
-	columns, err := p.ColumnFilterBindings()
+	bindings, err := p.allFilterBindings()
 	if err != nil {
 		return ColumnFilterBinding{}, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	for _, binding := range append(columns, p.ParamFilterBindings()...) {
+	for _, binding := range bindings {
 		if binding.Key == key {
 			return binding, nil
 		}

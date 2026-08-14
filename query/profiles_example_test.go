@@ -74,3 +74,18 @@ var _ = Describe("the structured application log examples", func() {
 		Entry("logfmt", "logfmt-app-logs.yaml", "logs.logfmt", "logfmt"),
 	)
 })
+
+var _ = Describe("the Kubernetes pod logs example", func() {
+	It("declares its workload with query grammar instead of provider options", func() {
+		body, err := os.ReadFile("../profiles/k8s-pod-logs.yaml")
+		Expect(err).ToNot(HaveOccurred())
+
+		var profile query.Profile
+		Expect(yaml.Unmarshal(body, &profile)).To(Succeed())
+		Expect(profile.Query).To(Equal("kind={{.params.kind}} namespace={{.params.namespace}} name={{.params.name}}"))
+		Expect(profile.Provider.Options).To(HaveKeyWithValue("limit", "500"))
+		for _, key := range []string{"kind", "apiVersion", "namespace", "name", "uid", "labels"} {
+			Expect(profile.Provider.Options).ToNot(HaveKey(key))
+		}
+	})
+})

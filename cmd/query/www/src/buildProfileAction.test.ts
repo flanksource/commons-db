@@ -48,4 +48,21 @@ describe("buildProfileInitialValue", () => {
       },
     });
   });
+
+  it("carries the selected Kubernetes target query into the profile draft", () => {
+    expect(
+      buildProfileInitialValue(
+        "Production",
+        "kubernetes-logs",
+        undefined,
+        "kind=Deployment namespace=payments name=api",
+      ),
+    ).toEqual({
+      provider: {
+        type: "kubernetes-logs",
+        connection: "connection://Production",
+      },
+      query: "kind=Deployment namespace=payments name=api",
+    });
+  });
 });

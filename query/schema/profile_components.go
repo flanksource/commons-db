@@ -136,14 +136,6 @@ func providerOptions(typ string) Schema {
 		// time range has to be written into the SQL itself.
 		props["mapping"] = fieldMappingProp()
 	case "k8s":
-		props["kind"] = Schema{
-			"type": "string", "title": "Kind",
-			"description": "Workload to read logs from; a workload resolves to its current pods",
-			"enum":        []string{"Pod", "Deployment", "StatefulSet", "DaemonSet"},
-		}
-		props["apiVersion"] = strProp("API version", "")
-		props["namespace"] = strProp("Namespace", "Namespace of the workload")
-		props["name"] = strProp("Name", "Name of the workload")
 		props["pods"] = Schema{
 			"type": "array", "title": "Pods",
 			"description": "Resource selectors narrowing which of the workload's pods are read",

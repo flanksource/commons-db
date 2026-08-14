@@ -282,6 +282,40 @@ func TestProfileOpenAPIAdvertisesBoundListParamsAsMultiFilters(t *testing.T) {
 	}
 }
 
+func TestProfileOpenAPIAdvertisesKubernetesRuntimeFilters(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	profile := query.Profile{
+		Name:     "Kubernetes logs",
+		Provider: query.ProviderConfig{Type: "k8s"},
+		Query:    "kind=Deployment namespace=payments",
+		Params: []query.ParamDef{{
+			Name: "applications", Type: query.ParamTypeLabels, Field: "labels.app",
+		}},
+	}
+	if err := addProfileToSpec(spec, profile); err != nil {
+		t.Fatal(err)
+	}
+	op := spec.Paths["/api/v1/profile/profile-kubernetes-logs"]["get"]
+	byName := map[string]rpc.OpenAPIParameter{}
+	for _, parameter := range op.Parameters {
+		byName[parameter.Name] = parameter
+	}
+	for key := range map[string]bool{"workload": true, "labels": true, "applications": true} {
+		if byName[key].Lookup == nil {
+			t.Fatalf("Kubernetes filter %q has no lookup metadata: %+v", key, byName[key])
+		}
+	}
+	if filter := spec.Components.ClickyFilters[profileFilterName(profile.Name, "workload")]; filter.Type != "workload" || filter.Multi {
+		t.Fatalf("workload filter = %+v", filter)
+	}
+	if filter := spec.Components.ClickyFilters[profileFilterName(profile.Name, "labels")]; filter.Type != "labels" || !filter.Multi {
+		t.Fatalf("grouped labels filter = %+v", filter)
+	}
+	if filter := spec.Components.ClickyFilters[profileParamFilterName(profile.Name, "applications")]; filter.Type != "labels" || !filter.Multi {
+		t.Fatalf("label-key filter = %+v", filter)
+	}
+}
+
 // A cursor is only offered by a profile that can serve one. A UI shown a cursor
 // param enters cursor mode, so advertising it on a profile that has no total
 // order to name a position in would put every page it then asks for into a

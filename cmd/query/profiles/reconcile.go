@@ -195,7 +195,7 @@ func validateReconcileFilters(profile query.Profile, filters map[string]string, 
 			allowed[param.Name] = struct{}{}
 		}
 	}
-	bindings, err := profile.ColumnFilterBindings()
+	bindings, err := profile.FilterBindings()
 	if err != nil {
 		return fmt.Errorf("%s profile %q filters: %w", side, profile.Name, err)
 	}

@@ -160,7 +160,10 @@ var _ = Describe("Connection schema", func() {
 
 	It("surfaces certificate per type: optional for kubernetes, required for GCP", func() {
 		k8s := branchFor(s, models.ConnectionTypeKubernetes)
-		Expect(k8s["properties"].(schema.Schema)).To(HaveKey("certificate"))
+		k8sProperties := k8s["properties"].(schema.Schema)
+		Expect(k8sProperties).To(HaveKey("certificate"))
+		settings := k8sProperties["properties"].(schema.Schema)["properties"].(schema.Schema)
+		Expect(settings["max_resources"].(schema.Schema)["type"]).To(Equal("integer"))
 		// Kubernetes cert is optional: only the universal name/type fields are required.
 		Expect(k8s["required"]).To(ConsistOf("name", "type"))
 
@@ -313,6 +316,19 @@ var _ = Describe("Profile schema", func() {
 		typeProp := provider["properties"].(schema.Schema)["type"].(schema.Schema)
 		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
 		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(17))
+	})
+
+	It("keeps Kubernetes targets out of provider options", func() {
+		k8s := schema.ProfileComponents()["k8s"]
+		options := k8s["properties"].(schema.Schema)["options"].(schema.Schema)
+		optionProps := options["properties"].(schema.Schema)
+
+		for _, key := range []string{"pods", "containers", "start", "end", "limit"} {
+			Expect(optionProps).To(HaveKey(key))
+		}
+		for _, key := range []string{"kind", "apiVersion", "namespace", "name", "uid", "labels"} {
+			Expect(optionProps).ToNot(HaveKey(key))
+		}
 	})
 
 	It("exposes the reconcile block a profile stores its habitual join in", func() {

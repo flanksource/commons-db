@@ -379,17 +379,20 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 				Source: source,
 			})
 		}
-		// A bound list param offers the same include/exclude control a column
-		// does. profileFilterSource takes an opaque key, so the param's own name
-		// routes it through the same lookup without a second source type.
-		for _, binding := range resolved.Profile.ParamFilterBindings() {
+		runtimeBindings, err := resolved.Profile.RuntimeFilterBindings()
+		if err != nil {
+			return fmt.Errorf("build runtime filters for profile %q: %w", name, err)
+		}
+		inputBindings := append(resolved.Profile.ParamFilterBindings(), runtimeBindings...)
+		// Bound params and runtime controls filter inputs the rows do not carry.
+		for _, binding := range inputBindings {
 			filterName := profileParamFilterName(resolved.Profile.Name, binding.Key)
 			if _, exists := entity.GetFilter(filterName); exists {
 				s.unmarkRegistered(name)
 				return fmt.Errorf("profile filter %q is already registered", filterName)
 			}
 			entity.RegisterFilter(entity.NamedFilter{
-				Name: filterName, Label: binding.Label, Type: "multi-filter", Multi: true,
+				Name: filterName, Label: binding.Label, Type: binding.ControlType(), Multi: binding.Multi,
 				Limit:  filterLookupLimit(binding),
 				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
 			})
@@ -397,7 +400,7 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 		builder := entity.NewDynamicEntity(profileSurfaceKey(name), schemaJSON)
 		// A param filters on an input the rows never carry, so it has no schema
 		// property to bind through; it is offered by key instead.
-		for _, binding := range resolved.Profile.ParamFilterBindings() {
+		for _, binding := range inputBindings {
 			builder = builder.Filter(binding.Key, profileParamFilterName(resolved.Profile.Name, binding.Key))
 		}
 		builder.

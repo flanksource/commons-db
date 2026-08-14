@@ -4,6 +4,7 @@ export function buildProfileInitialValue(
   connectionName?: string,
   providerType?: string,
   providerOptions?: Record<string, unknown>,
+  profileQuery?: string,
 ): Record<string, unknown> {
   if (!connectionName || !providerType) return {};
   return {
@@ -14,6 +15,7 @@ export function buildProfileInitialValue(
         ? { options: providerOptions }
         : {}),
     },
+    ...(profileQuery ? { query: profileQuery } : {}),
   };
 }
 

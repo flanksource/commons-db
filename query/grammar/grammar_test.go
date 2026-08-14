@@ -178,4 +178,10 @@ var _ = Describe("grammar", func() {
 		Expect(resultJSON).To(MatchJSON(expected))
 
 	})
+
+	It("parses Kubernetes label keys containing a slash", func() {
+		result, err := ParsePEG("labels.app.kubernetes.io/name=payments-api")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(FlatFields(result)).To(ConsistOf("labels.app.kubernetes.io/name"))
+	})
 })

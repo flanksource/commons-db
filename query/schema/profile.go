@@ -17,11 +17,11 @@ import (
 var (
 	paramTypeIcons = map[string]string{
 		"string": "cursor-text", "number": "sigma", "boolean": "toggle-on",
-		"date": "calendar", "enum": "tag", "list": "list-dashes",
+		"date": "calendar", "enum": "tag", "list": "list-dashes", "labels": "tags",
 	}
 	paramTypeTones = map[string]string{
 		"string": "slate", "number": "violet", "boolean": "amber",
-		"date": "sky", "enum": "teal", "list": "indigo",
+		"date": "sky", "enum": "teal", "list": "indigo", "labels": "emerald",
 	}
 	paramRoleIcons = map[string]string{
 		"filter": "filter", "limit": "list-ordered", "offset": "arrow-right",
@@ -99,12 +99,12 @@ func ProfileSource() Schema {
 			},
 			"type": Schema{
 				"type": "string", "title": "Type", "x-clicky-order": 2,
-				"enum":           []string{"string", "number", "boolean", "date", "enum", "list"},
-				"x-enum-labels":  map[string]string{"list": "List (multi-select)"},
+				"enum":           []string{"string", "number", "boolean", "date", "enum", "list", "labels"},
+				"x-enum-labels":  map[string]string{"list": "List (multi-select)", "labels": "Kubernetes labels"},
 				"x-enum-icons":   paramTypeIcons,
 				"x-enum-tones":   paramTypeTones,
 				"x-enum-display": "combobox",
-				"description":    "A list accepts several values at once; bind it to a field to allow excluding them",
+				"description":    "A list accepts several values; labels binds a Kubernetes labels.<key> field",
 			},
 			"role": Schema{
 				"type": "string", "title": "Role", "x-clicky-order": 3,
@@ -116,7 +116,7 @@ func ProfileSource() Schema {
 			},
 			"field": Schema{
 				"type": "string", "title": "Field", "x-clicky-order": 4,
-				"description":        "Backend field this parameter filters on; enables excluding a value and requires a provider that applies native filters (OpenSearch, OpenTelemetry, or SQL)",
+				"description":        "Backend field this parameter filters on; Kubernetes label parameters use labels.<key>",
 				"x-clicky-component": "es-param-field",
 			},
 			"default":  Schema{"title": "Default", "x-clicky-order": 5},
@@ -680,6 +680,18 @@ func ProfileInstance(p query.Profile) (Schema, error) {
 			required = append(required, def.Name)
 		}
 	}
+	runtimeBindings, err := p.RuntimeFilterBindings()
+	if err != nil {
+		return nil, err
+	}
+	for _, binding := range runtimeBindings {
+		props[binding.Key] = Schema{
+			"type": "string", "title": binding.Label,
+			"x-clicky-filter": Schema{
+				"kind": string(binding.Kind), "lookup": binding.Lookup, "multi": binding.Multi,
+			},
+		}
+	}
 
 	// The bindings are what the browser needs to render a filter and what the
 	// request must name to apply one, so a profile whose filters cannot be
@@ -761,7 +773,7 @@ func paramSchema(def query.ParamDef) Schema {
 	case query.ParamTypeDate:
 		s["type"] = "string"
 		s["format"] = "date-time"
-	case query.ParamTypeList:
+	case query.ParamTypeList, query.ParamTypeLabels:
 		s["type"] = "array"
 		s["items"] = Schema{"type": "string"}
 	default:
@@ -769,7 +781,7 @@ func paramSchema(def query.ParamDef) Schema {
 	}
 	if len(def.Options) > 0 {
 		// A list constrains its elements, not the selection as a whole.
-		if def.Type == query.ParamTypeList {
+		if def.Type == query.ParamTypeList || def.Type == query.ParamTypeLabels {
 			s["items"] = Schema{"type": "string", "enum": def.Options}
 		} else {
 			s["enum"] = def.Options

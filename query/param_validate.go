@@ -34,14 +34,22 @@ func (p Profile) validateParams() error {
 }
 
 func (p Profile) validateParamField(param ParamDef) error {
-	if param.Type == ParamTypeList && param.Role != "" && param.Role != ParamRoleFilter {
+	if (param.Type == ParamTypeList || param.Type == ParamTypeLabels) && param.Role != "" && param.Role != ParamRoleFilter {
 		return fmt.Errorf(
 			"profile %q param %q is a list, which cannot take the %q role", p.Name, param.Name, param.Role)
+	}
+	if param.Type == ParamTypeLabels {
+		if p.Provider.Type != "k8s" {
+			return fmt.Errorf("profile %q param %q type labels is only supported by provider \"k8s\"", p.Name, param.Name)
+		}
+		if !strings.HasPrefix(param.Field, "labels.") || strings.TrimPrefix(param.Field, "labels.") == "" {
+			return fmt.Errorf("profile %q param %q type labels requires field labels.<key>", p.Name, param.Name)
+		}
 	}
 	if param.Field == "" {
 		return nil
 	}
-	if param.Type != ParamTypeList {
+	if param.Type != ParamTypeList && param.Type != ParamTypeLabels {
 		return fmt.Errorf(
 			"profile %q param %q sets field but is type %q; only a list parameter binds to a backend field",
 			p.Name, param.Name, param.Type)
@@ -62,7 +70,7 @@ func (p Profile) validateParamField(param ParamDef) error {
 // validateParamOptions rejects static options that cannot survive the
 // comma-joined, "!"-excludes wire form a selection travels in.
 func (p Profile) validateParamOptions(param ParamDef) error {
-	if param.Type != ParamTypeList {
+	if param.Type != ParamTypeList && param.Type != ParamTypeLabels {
 		return nil
 	}
 	if err := validateFilterOptions(param.Options); err != nil {

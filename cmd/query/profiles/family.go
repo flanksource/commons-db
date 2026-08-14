@@ -121,13 +121,12 @@ func (s *Service) profileSurface(p query.Profile) (entity.DynamicEntitySpec, err
 // date bound and a toggle are typed rather than chosen from — an empty option
 // set is the accurate answer to "what can this be filtered to".
 func (s *Service) profileFilters(p query.Profile) ([]entity.DynamicFilter, error) {
-	columns, err := p.ColumnFilterBindings()
+	bindings, err := p.FilterBindings()
 	if err != nil {
 		return nil, fmt.Errorf("build filters for profile %q: %w", p.Name, err)
 	}
-	params := p.ParamFilterBindings()
-	filters := make([]entity.DynamicFilter, 0, len(columns)+len(params))
-	for _, binding := range append(columns, params...) {
+	filters := make([]entity.DynamicFilter, 0, len(bindings))
+	for _, binding := range bindings {
 		filters = append(filters, s.profileFilter(p.Name, binding))
 	}
 	return filters, nil

@@ -217,16 +217,20 @@ func convertLegacyTraceProfile(legacy legacyTraceProfile, source string) (query.
 	provider := query.ProviderConfig{Type: legacyTraceProvider, Options: map[string]any{
 		"kind": legacyTraceKind(legacy), "source": source,
 	}}
+	profileQuery := ""
 	kind := legacyTraceKind(legacy)
 	if kind == "kubernetes" {
-		options, err := legacyKubernetesOptions(legacy)
+		config, err := legacyKubernetesConfigFor(legacy)
 		if err != nil {
 			return query.Profile{}, err
 		}
-		provider = query.ProviderConfig{Type: "k8s", Options: options}
-		params = ensureParam(params, query.ParamDef{
-			Name: "namespace", Description: "Kubernetes namespace to read logs from",
-		})
+		provider = query.ProviderConfig{Type: "k8s", Options: config.Options}
+		profileQuery = config.Query
+		if config.NeedsNamespaceParam {
+			params = ensureParam(params, query.ParamDef{
+				Name: "namespace", Description: "Kubernetes namespace to read logs from",
+			})
+		}
 	}
 	if kind == "opensearch" || kind == "import" {
 		search, err := legacyOpenTelemetrySearch(legacy.Params)
@@ -246,6 +250,7 @@ func convertLegacyTraceProfile(legacy legacyTraceProfile, source string) (query.
 	}
 	return query.Profile{
 		Name: legacy.Name, Imports: legacy.Imports, Provider: provider,
+		Query:  profileQuery,
 		Params: params, Columns: columns, Aliases: []query.AliasDef(legacy.Aliases), Ignore: legacy.Ignore,
 		Filters: legacy.Filters,
 	}, nil
@@ -271,32 +276,42 @@ var legacyKubernetesWorkloadKinds = map[string]string{
 	"ds": "DaemonSet", "daemonset": "DaemonSet", "daemonsets": "DaemonSet",
 }
 
-// legacyKubernetesOptions maps a legacy `kubernetes:` block onto the k8s log
-// provider's options.
-//
-// A base profile carries only defaults and no target — it exists to be imported
-// — so an absent target is not an error here; the provider rejects a profile
-// that is actually run without one.
-func legacyKubernetesOptions(legacy legacyTraceProfile) (map[string]any, error) {
+type legacyKubernetesConfig struct {
+	Query               string
+	Options             map[string]any
+	NeedsNamespaceParam bool
+}
+
+// legacyKubernetesConfigFor moves target scope into the query grammar while
+// preserving log-reading settings as provider options.
+func legacyKubernetesConfigFor(legacy legacyTraceProfile) (legacyKubernetesConfig, error) {
+	config := legacyKubernetesConfig{Options: map[string]any{}}
+	selector := make([]string, 0, 3)
+	var name string
 	options := map[string]any{}
 	if target, _ := legacy.Kubernetes["target"].(string); target != "" {
-		shorthand, name, found := strings.Cut(target, "/")
-		if !found || name == "" {
-			return nil, fmt.Errorf("kubernetes.target %q is not a kind/name reference", target)
+		shorthand, targetName, found := strings.Cut(target, "/")
+		if !found || targetName == "" {
+			return config, fmt.Errorf("kubernetes.target %q is not a kind/name reference", target)
 		}
 		kind, ok := legacyKubernetesWorkloadKinds[strings.ToLower(shorthand)]
 		if !ok {
-			return nil, fmt.Errorf("kubernetes.target %q has an unsupported kind %q", target, shorthand)
+			return config, fmt.Errorf("kubernetes.target %q has an unsupported kind %q", target, shorthand)
 		}
-		options["kind"], options["name"] = kind, name
+		selector = append(selector, "kind="+kind)
+		name = targetName
 	}
 	// The legacy reader resolved an empty namespace from the active kubecontext.
 	// The provider requires one, so it becomes a parameter the caller supplies
 	// rather than an ambient value the profile silently inherits.
 	if namespace, _ := legacy.Kubernetes["namespace"].(string); namespace != "" {
-		options["namespace"] = namespace
+		selector = append(selector, "namespace="+namespace)
 	} else {
-		options["namespace"] = "{{.params.namespace}}"
+		selector = append(selector, "namespace={{.params.namespace}}")
+		config.NeedsNamespaceParam = true
+	}
+	if name != "" {
+		selector = append(selector, "name="+name)
 	}
 	if since, _ := legacy.Kubernetes["since"].(string); since != "" {
 		options["start"] = "now-" + since
@@ -308,10 +323,12 @@ func legacyKubernetesOptions(legacy legacyTraceProfile) (map[string]any, error) 
 	// and quietly widening what the profile reads.
 	for _, unsupported := range []string{"selector", "container", "grep", "previous"} {
 		if value, ok := legacy.Kubernetes[unsupported]; ok && value != nil && value != "" {
-			return nil, fmt.Errorf("kubernetes.%s is not supported by the k8s provider", unsupported)
+			return config, fmt.Errorf("kubernetes.%s is not supported by the k8s provider", unsupported)
 		}
 	}
-	return options, nil
+	config.Query = strings.Join(selector, " ")
+	config.Options = options
+	return config, nil
 }
 
 func legacyOpenTelemetryOptions(legacy legacyTraceProfile) map[string]any {

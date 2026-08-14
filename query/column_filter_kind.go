@@ -55,6 +55,14 @@ const (
 	// never inferred — a column asks for it explicitly.
 	ColumnFilterKindText ColumnFilterKind = "text"
 
+	// ColumnFilterKindWorkload selects one Kubernetes workload inside the broad
+	// target scope declared by a profile query.
+	ColumnFilterKindWorkload ColumnFilterKind = "workload"
+
+	// ColumnFilterKindLabels selects Kubernetes label key/value pairs, grouped
+	// by key in the browser and compiled into the target selector.
+	ColumnFilterKindLabels ColumnFilterKind = "labels"
+
 	// ColumnFilterKindNone marks a column that offers no filter. It is what a
 	// structured type infers, and what an author sets to suppress one.
 	ColumnFilterKindNone ColumnFilterKind = "none"
@@ -75,7 +83,8 @@ func (k ColumnFilterKind) Valid() bool {
 	case ColumnFilterKindTerms, ColumnFilterKindExact, ColumnFilterKindText,
 		ColumnFilterKindRange, ColumnFilterKindDuration,
 		ColumnFilterKindTime, ColumnFilterKindDate,
-		ColumnFilterKindBoolean, ColumnFilterKindNone:
+		ColumnFilterKindBoolean, ColumnFilterKindWorkload,
+		ColumnFilterKindLabels, ColumnFilterKindNone:
 		return true
 	default:
 		return false
@@ -108,7 +117,12 @@ func (k ColumnFilterKind) CompilesAs() ColumnFilterKind {
 // and an exact match are typed, not picked — the last because the values it
 // compares are identifiers rather than a vocabulary.
 func (k ColumnFilterKind) Lookupable() bool {
-	return k.Normalized() == ColumnFilterKindTerms
+	switch k.Normalized() {
+	case ColumnFilterKindTerms, ColumnFilterKindWorkload, ColumnFilterKindLabels:
+		return true
+	default:
+		return false
+	}
 }
 
 // ControlType is the clicky filter type this kind registers as, which decides
@@ -138,6 +152,10 @@ func (k ColumnFilterKind) ControlType() string {
 		return "day-range"
 	case ColumnFilterKindBoolean:
 		return "bool"
+	case ColumnFilterKindWorkload:
+		return "workload"
+	case ColumnFilterKindLabels:
+		return "labels"
 	default:
 		return ""
 	}

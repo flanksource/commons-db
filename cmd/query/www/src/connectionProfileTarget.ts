@@ -9,11 +9,5 @@ export function connectionProfileTargetOptions(
       ? { index: options.index }
       : undefined;
   }
-  if (descriptor?.target?.kind !== "kubernetes-workload") return undefined;
-
-  const kind = typeof options.kind === "string" ? options.kind : "";
-  const namespace =
-    typeof options.namespace === "string" ? options.namespace : "";
-  const name = typeof options.name === "string" ? options.name : "";
-  return kind && namespace && name ? { kind, namespace, name } : undefined;
+  return undefined;
 }

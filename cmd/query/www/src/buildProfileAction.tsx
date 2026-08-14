@@ -18,6 +18,7 @@ type BuildProfileButtonProps = {
   connectionName?: string;
   providerType?: string;
   providerOptions?: Record<string, unknown>;
+  profileQuery?: string;
 };
 
 export function BuildProfileButton({
@@ -25,14 +26,15 @@ export function BuildProfileButton({
   connectionName,
   providerType,
   providerOptions,
+  profileQuery,
 }: BuildProfileButtonProps) {
   const queryClient = useQueryClient();
   const { operations, isLoading } = useOperations(client);
   const createAction = findProfileCreateOperation(operations);
   const [open, setOpen] = useState(false);
   const initialValue = useMemo<Record<string, unknown>>(
-    () => buildProfileInitialValue(connectionName, providerType, providerOptions),
-    [connectionName, providerOptions, providerType],
+    () => buildProfileInitialValue(connectionName, providerType, providerOptions, profileQuery),
+    [connectionName, profileQuery, providerOptions, providerType],
   );
 
   return (

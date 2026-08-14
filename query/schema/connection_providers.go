@@ -92,7 +92,8 @@ type RedisProvider struct {
 // KubernetesProvider models a Kubernetes cluster connection: an optional
 // kubeconfig (in-cluster config is used when empty).
 type KubernetesProvider struct {
-	Certificate types.EnvVar `json:"certificate" clicky:"type=k8s-secret-selector,title=Kubeconfig,source=secret,order=6,desc=Leave empty to use the ambient cluster ($KUBECONFIG or the in-cluster service account)"`
+	Certificate  types.EnvVar `json:"certificate" clicky:"type=k8s-secret-selector,title=Kubeconfig,source=secret,order=6,desc=Leave empty to use the ambient cluster ($KUBECONFIG or the in-cluster service account)"`
+	MaxResources int          `json:"max_resources" clicky:"property=max_resources,title=Maximum resources,order=7,desc=Maximum matching workloads read by one query (default 20)"`
 }
 
 // GCPProvider models a Google Cloud connection: optional endpoint + the required
