@@ -321,6 +321,8 @@ func profileParameter(spec *rpc.OpenAPISpec, profile query.Profile, param query.
 	case query.ParamTypeBoolean:
 		schema.Type = "boolean"
 	case query.ParamTypeDate:
+		schema.Format = "date"
+	case query.ParamTypeDateTime:
 		schema.Format = "date-time"
 	}
 	// A list travels as one comma-joined string, so its schema stays a string;

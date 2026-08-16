@@ -89,6 +89,9 @@ func paramSchema(def query.ParamDef) Schema {
 		s["type"] = "boolean"
 	case query.ParamTypeDate:
 		s["type"] = "string"
+		s["format"] = "date"
+	case query.ParamTypeDateTime:
+		s["type"] = "string"
 		s["format"] = "date-time"
 	case query.ParamTypeList, query.ParamTypeLabels:
 		s["type"] = "array"

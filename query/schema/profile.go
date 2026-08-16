@@ -15,11 +15,13 @@ import (
 var (
 	paramTypeIcons = map[string]string{
 		"string": "cursor-text", "number": "sigma", "boolean": "toggle-on",
-		"date": "calendar", "enum": "tag", "list": "list-dashes", "labels": "tags",
+		"date": "calendar", "datetime": "clock", "duration": "timer",
+		"enum": "tag", "list": "list-dashes", "labels": "tags",
 	}
 	paramTypeTones = map[string]string{
 		"string": "slate", "number": "violet", "boolean": "amber",
-		"date": "sky", "enum": "teal", "list": "indigo", "labels": "emerald",
+		"date": "sky", "datetime": "rose", "duration": "neutral",
+		"enum": "teal", "list": "indigo", "labels": "emerald",
 	}
 	paramRoleIcons = map[string]string{
 		"filter": "filter", "limit": "list-ordered", "offset": "arrow-right",
@@ -97,12 +99,12 @@ func ProfileSource() Schema {
 			},
 			"type": Schema{
 				"type": "string", "title": "Type", "x-clicky-order": 2,
-				"enum":           []string{"string", "number", "boolean", "date", "enum", "list", "labels"},
-				"x-enum-labels":  map[string]string{"list": "List (multi-select)", "labels": "Kubernetes labels"},
+				"enum":           []string{"string", "number", "boolean", "date", "datetime", "duration", "enum", "list", "labels"},
+				"x-enum-labels":  map[string]string{"datetime": "Date & time", "duration": "Duration", "list": "List (multi-select)", "labels": "Kubernetes labels"},
 				"x-enum-icons":   paramTypeIcons,
 				"x-enum-tones":   paramTypeTones,
 				"x-enum-display": "combobox",
-				"description":    "A list accepts several values; labels binds a Kubernetes labels.<key> field",
+				"description":    "Date resolves to YYYY-MM-DD; date & time resolves to RFC3339; duration resolves to whole milliseconds; list accepts several values; labels binds a Kubernetes labels.<key> field",
 			},
 			"role": Schema{
 				"type": "string", "title": "Role", "x-clicky-order": 3,

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/query/datetime"
+	"github.com/flanksource/commons/duration"
 )
 
 // ParamType is the declared type of a Profile parameter. It drives validation,
@@ -15,11 +16,13 @@ import (
 type ParamType string
 
 const (
-	ParamTypeString  ParamType = "string"
-	ParamTypeNumber  ParamType = "number"
-	ParamTypeBoolean ParamType = "boolean"
-	ParamTypeDate    ParamType = "date"
-	ParamTypeEnum    ParamType = "enum"
+	ParamTypeString   ParamType = "string"
+	ParamTypeNumber   ParamType = "number"
+	ParamTypeBoolean  ParamType = "boolean"
+	ParamTypeDate     ParamType = "date"
+	ParamTypeDateTime ParamType = "datetime"
+	ParamTypeDuration ParamType = "duration"
+	ParamTypeEnum     ParamType = "enum"
 
 	// ParamTypeList accepts several values at once. `params.<Name>` holds the
 	// included values as a []string, which an esdsl multi-operand condition
@@ -117,6 +120,7 @@ func (d ParamDef) DisplayLabel() string {
 func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, []ColumnFilterValue, error) {
 	resolved := make(map[string]any, len(defs))
 	var filters []ColumnFilterValue
+	now := time.Now()
 	for _, def := range defs {
 		if def.Name == "" {
 			return nil, nil, fmt.Errorf("param declaration is missing a name")
@@ -157,7 +161,7 @@ func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, []
 			continue
 		}
 
-		val, err := def.coerce(raw)
+		val, err := def.coerce(raw, now)
 		if err != nil {
 			return nil, nil, fmt.Errorf("param %q: %w", def.Name, err)
 		}
@@ -216,17 +220,32 @@ func paramRoles(defs []ParamDef) map[string]ParamRole {
 
 // coerce converts a raw value to the param's declared type and validates it
 // against Options, failing fast on a type mismatch or a value outside the enum.
-func (d ParamDef) coerce(raw any) (any, error) {
+func (d ParamDef) coerce(raw any, now time.Time) (any, error) {
 	var val any
 	switch d.Type {
 	case "", ParamTypeString, ParamTypeEnum:
 		val = fmt.Sprintf("%v", raw)
-	case ParamTypeDate:
+	case ParamTypeDate, ParamTypeDateTime:
 		s := fmt.Sprintf("%v", raw)
-		if _, err := datetime.Parse(s, time.Now()); err != nil {
+		parsed, err := datetime.Parse(s, now)
+		if err != nil {
 			return nil, err
 		}
-		val = s
+		if d.Type == ParamTypeDate {
+			val = parsed.Time.Format(time.DateOnly)
+		} else {
+			val = parsed.Time.Format(time.RFC3339Nano)
+		}
+	case ParamTypeDuration:
+		parsed, err := duration.ParseDuration(strings.TrimSpace(fmt.Sprintf("%v", raw)))
+		if err != nil {
+			return nil, err
+		}
+		value := time.Duration(parsed)
+		if value%time.Millisecond != 0 {
+			return nil, fmt.Errorf("duration %q must resolve to a whole number of milliseconds", raw)
+		}
+		val = value.Milliseconds()
 	case ParamTypeNumber:
 		switch v := raw.(type) {
 		case float64, float32, int, int32, int64:
