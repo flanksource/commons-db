@@ -1,8 +1,6 @@
 package schema
 
 import (
-	"strings"
-
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
@@ -262,7 +260,7 @@ func ProfileSource() Schema {
 					},
 				},
 			},
-			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for CEL and processors", "x-clicky-order": 11},
+			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for later column and style CEL", "x-clicky-order": 11},
 			"style": Schema{
 				"type": "string", "title": "Style",
 				"description":        `CEL returning this cell's presentation classes, e.g. level == "ERROR" ? "text-red-500" : ""`,
@@ -393,7 +391,7 @@ func ProfileSource() Schema {
 			},
 			"processors": Schema{
 				"type": "array", "title": "Processors", "x-layout": "table", "items": processorSpec(),
-				"description": "Post-query steps applied in order, after columns and aliases",
+				"description": "Raw-row steps applied in order before aliases, filters, columns, and styles",
 				// The order of this array is semantic — a stack-trace merge has to
 				// run before a dedupe, or every frame dedupes as its own line — and
 				// `config` is an untyped object no schema-driven control can check.
@@ -401,185 +399,11 @@ func ProfileSource() Schema {
 				"x-clicky-component": "processor-pipeline",
 				"x-clicky-presets":   namedProcessorPresets(),
 			},
+			"trace":     traceSpec(),
 			"replay":    replaySpec(),
 			"reconcile": reconcileSpec(),
 			"output":    Schema{"type": "array", "title": "Output", "items": Schema{"type": "string"}},
 			"render":    Schema{"type": "string", "title": "Render", "enum": []string{"table", "logs"}, "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)"},
-		},
-	}
-}
-
-// processorSpec describes one post-query step. Both pickers are driven by the
-// live registries, so a processor or library preset that is registered but not
-// listed here cannot happen. The enums are omitted rather than emitted empty
-// when nothing is registered — an empty JSON Schema enum admits no value at
-// all, which would render as a dead control.
-func processorSpec() Schema {
-	use := Schema{
-		"type": "string", "title": "Library processor", "x-clicky-order": 0,
-		"description": "Reusable preset supplying the type and its configuration; anything set below is merged over it",
-	}
-	if names := query.NamedProcessorNames(); len(names) > 0 {
-		use["enum"] = names
-		use["x-enum-labels"] = namedProcessorLabels()
-		use["x-enum-display"] = "combobox"
-		use["description"] = use["description"].(string) + ".\n\n" + namedProcessorHelp()
-	}
-
-	typ := Schema{
-		"type": "string", "title": "Type", "x-clicky-order": 1,
-		"description": "Registered processor key; leave blank when a library processor is chosen",
-	}
-	if types := query.RegisteredProcessors(); len(types) > 0 {
-		typ["enum"] = types
-	}
-
-	return Schema{
-		"type":  "object",
-		"title": "Processor",
-		"properties": Schema{
-			"use":    use,
-			"type":   typ,
-			"config": Schema{"type": "object", "title": "Config", "x-clicky-order": 2, "description": "Processor-specific configuration"},
-		},
-	}
-}
-
-// namedProcessorPresets is what each library key actually resolves to.
-//
-// `use: java.stacktrace` runs eleven configuration keys the author never typed,
-// and `Resolve()` merges their own `config` over them — so an editor showing
-// only the override is showing a fraction of what runs. The enum alone cannot
-// say that, which is why the resolved spec travels with the schema.
-func namedProcessorPresets() Schema {
-	presets := Schema{}
-	for _, named := range query.NamedProcessors() {
-		presets[named.Name] = Schema{
-			"type":        named.Spec.Type,
-			"title":       named.Title,
-			"description": named.Description,
-			"config":      named.Spec.Config,
-		}
-	}
-	return presets
-}
-
-// namedProcessorLabels maps each library key to its short title, which is what
-// the picker lists.
-func namedProcessorLabels() map[string]string {
-	labels := map[string]string{}
-	for _, entry := range query.NamedProcessors() {
-		if entry.Title != "" {
-			labels[entry.Name] = entry.Title
-		}
-	}
-	return labels
-}
-
-// namedProcessorHelp spells out what each preset does, so the author choosing
-// one does not have to open its source to find out.
-func namedProcessorHelp() string {
-	var help []string
-	for _, entry := range query.NamedProcessors() {
-		if entry.Description != "" {
-			help = append(help, "- `"+entry.Name+"`: "+entry.Description)
-		}
-	}
-	return strings.Join(help, "\n")
-}
-
-// replaySpec describes the profile's replay block. Every field except target
-// and kind is a CEL expression over the result row, so the form labels them as
-// such rather than as literal values.
-func replaySpec() Schema {
-	return Schema{
-		"type":        "object",
-		"title":       "Replay",
-		"description": "Turn one result row back into an outbound HTTP request",
-		"properties": Schema{
-			"kind": Schema{
-				"type": "string", "title": "Kind", "enum": []string{"http"}, "default": "http",
-				"x-clicky-order": 1,
-			},
-			"target": Schema{
-				"type":               "object",
-				"title":              "Target",
-				"description":        "Connection the request is sent to; required for a relative URL",
-				"properties":         Schema{"connection": connectionProp(""), "url": strProp("URL", "Base URL")},
-				"x-clicky-order":     2,
-				"x-clicky-component": "connection-http",
-			},
-			"method": strProp("Method", `CEL expression yielding the HTTP method, e.g. "POST" (defaults to POST)`),
-			"url":    strProp("URL", "CEL expression yielding an absolute URL or a path relative to the target"),
-			"body": Schema{
-				"type": "string", "title": "Body", "format": "textarea",
-				"description": "CEL expression yielding the request body; non-string values are JSON encoded",
-			},
-			"headers": Schema{
-				"type":                 "object",
-				"title":                "Headers",
-				"description":          "Header name to CEL expression; an expression yielding blank omits the header",
-				"additionalProperties": Schema{"type": "string"},
-			},
-		},
-	}
-}
-
-// reconcileSpec describes the profile's reconcile block: the profile this one is
-// habitually joined against, each side's filters, and how the shared identity is
-// derived. Columns and CEL are alternatives, not a pair — the engine rejects a
-// key that sets both — so the description says so where the form cannot enforce
-// it.
-func reconcileSpec() Schema {
-	return Schema{
-		"type":        "object",
-		"title":       "Reconcile",
-		"description": "Join this profile's rows against another profile on a shared identity",
-		"properties": Schema{
-			"dest": Schema{
-				"type": "string", "title": "Destination profile",
-				"description":     "The profile to reconcile against",
-				"x-clicky-order":  1,
-				"x-clicky-lookup": profileRefLookup(false),
-			},
-			"key": Schema{
-				"type":           "object",
-				"title":          "Key",
-				"description":    "How the shared identity is read from a row on either side; set columns or cel, never both",
-				"x-clicky-order": 2,
-				"properties": Schema{
-					"columns": Schema{
-						"type": "array", "title": "Columns", "items": Schema{"type": "string"},
-						"description": "Row keys whose values, joined in order, form the key — only when both sides name them the same",
-					},
-					"cel": Schema{
-						"type": "string", "title": "CEL", "format": "textarea",
-						"description": "Expression evaluated against a row on either side; required when the two sides name the identity differently",
-					},
-				},
-			},
-			"timeColumn": strProp("Time column",
-				"Row key holding each side's event time; defaults to the profile's timestamp column"),
-			"range": Schema{
-				"type": "object", "title": "Key range",
-				"description": "Span of keys to reconcile; empty covers all of them. A range cuts both sides at the same keys, so a key missing from one side inside it is missing rather than merely unread",
-				"properties": Schema{
-					"from": strProp("From", "Reconcile keys at or after this one; empty starts at the first key"),
-					"to":   strProp("To", "Reconcile keys before this one; empty runs to the last key"),
-				},
-			},
-			"sourceFilters": Schema{
-				"type":                 "object",
-				"title":                "Source filters",
-				"description":          "Filter values applied only to this source profile",
-				"additionalProperties": Schema{"type": "string"},
-			},
-			"destFilters": Schema{
-				"type":                 "object",
-				"title":                "Destination filters",
-				"description":          "Filter values applied only to the destination profile",
-				"additionalProperties": Schema{"type": "string"},
-			},
 		},
 	}
 }
@@ -666,132 +490,4 @@ func connectionProp(providerType string) Schema {
 			},
 		},
 	}
-}
-
-// ProfileInstance returns a per-profile schema: the top-level `properties`
-// describe the FilterBar inputs (from the profile's Params) and `x-clicky-columns`
-// describes the DataTable (from the profile's Columns).
-func ProfileInstance(p query.Profile) (Schema, error) {
-	props := Schema{}
-	var required []string
-	for _, def := range p.Params {
-		props[def.Name] = paramSchema(def)
-		if def.Required {
-			required = append(required, def.Name)
-		}
-	}
-	runtimeBindings, err := p.RuntimeFilterBindings()
-	if err != nil {
-		return nil, err
-	}
-	for _, binding := range runtimeBindings {
-		props[binding.Key] = Schema{
-			"type": "string", "title": binding.Label,
-			"x-clicky-filter": Schema{
-				"kind": string(binding.Kind), "lookup": binding.Lookup, "multi": binding.Multi,
-			},
-		}
-	}
-
-	// The bindings are what the browser needs to render a filter and what the
-	// request must name to apply one, so a profile whose filters cannot be
-	// resolved describes no columns rather than columns with no filters.
-	bindings, err := p.ColumnFilterBindings()
-	if err != nil {
-		return nil, err
-	}
-	filterByColumn := make(map[string]query.ColumnFilterBinding, len(bindings))
-	for _, binding := range bindings {
-		if binding.Column != "" {
-			filterByColumn[binding.Column] = binding
-		}
-	}
-
-	columns := make([]any, 0, len(p.Columns))
-	for _, c := range p.Columns {
-		if c.Hidden {
-			continue
-		}
-		col := Schema{
-			"name":  c.Name,
-			"label": labelOr(c.Label, c.Name),
-		}
-		if binding, ok := filterByColumn[c.Name]; ok {
-			filter := Schema{
-				"key":    binding.Key,
-				"kind":   string(binding.Kind),
-				"multi":  binding.Multi,
-				"lookup": binding.Lookup,
-			}
-			if binding.Limit > 0 {
-				filter["limit"] = binding.Limit
-			}
-			if len(binding.Options) > 0 {
-				filter["options"] = binding.Options
-			}
-			col["filter"] = filter
-		}
-		if c.Type != "" {
-			col["type"] = string(c.Type)
-		}
-		if c.Kind != "" {
-			col["kind"] = string(c.Kind)
-		}
-		if c.Format != "" {
-			col["format"] = c.Format
-		}
-		if c.Unit != "" {
-			col["unit"] = c.Unit
-		}
-		columns = append(columns, col)
-	}
-
-	s := Schema{
-		"$schema":          Draft,
-		"title":            p.Name,
-		"type":             "object",
-		"properties":       props,
-		"x-clicky-columns": columns,
-	}
-	if render := p.RenderMode(); render != "" {
-		s["x-clicky-render"] = render
-	}
-	if len(required) > 0 {
-		s["required"] = required
-	}
-	return s, nil
-}
-
-// paramSchema maps a ParamDef to its JSON Schema property for the FilterBar.
-func paramSchema(def query.ParamDef) Schema {
-	s := Schema{"title": def.DisplayLabel()}
-	switch def.Type {
-	case query.ParamTypeNumber:
-		s["type"] = "number"
-	case query.ParamTypeBoolean:
-		s["type"] = "boolean"
-	case query.ParamTypeDate:
-		s["type"] = "string"
-		s["format"] = "date-time"
-	case query.ParamTypeList, query.ParamTypeLabels:
-		s["type"] = "array"
-		s["items"] = Schema{"type": "string"}
-	default:
-		s["type"] = "string"
-	}
-	if len(def.Options) > 0 {
-		// A list constrains its elements, not the selection as a whole.
-		if def.Type == query.ParamTypeList || def.Type == query.ParamTypeLabels {
-			s["items"] = Schema{"type": "string", "enum": def.Options}
-		} else {
-			s["enum"] = def.Options
-		}
-	}
-	if def.Default != nil {
-		s["default"] = def.Default
-	}
-	if def.Description != "" {
-		s["description"] = def.Description
-	}
-	return s
 }

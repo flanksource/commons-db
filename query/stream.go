@@ -4,7 +4,6 @@ import (
 	stdcontext "context"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -64,6 +63,21 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	req.Filters = filters
+	if p.Trace.Buffer == nil {
+		label, err := nonPageProcessor(p.Processors)
+		if err != nil {
+			return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		}
+		if label != "" {
+			return nil, fmt.Errorf(
+				"profile %q: processor %q needs the whole result; configure trace.buffer.maxRows or trace.buffer.maxWait",
+				p.Name, label)
+		}
+	}
+	pipeline, err := newTracePipeline(ctx, p)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
 
 	session := newRegisteredSession(reg, p, resolved, reg.ClampEvents(p.Trace.EventLimit()))
 	if err := reg.Add(session); err != nil {
@@ -72,35 +86,164 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 	runCtx, cancel := ctx.WithTimeout(reg.ClampDuration(p.Trace.DurationLimit()))
 	session.setCancel(cancel)
 
-	go runTrace(runCtx, cancel, sp, session, p, req)
+	go runTrace(runCtx, cancel, sp, session, req, pipeline, p.Trace.Buffer)
 	return session, nil
 }
 
-func runTrace(ctx context.Context, cancel stdcontext.CancelFunc, sp StreamProvider, s *Session, p Profile, req ProviderRequest) {
+func runTrace(
+	ctx context.Context,
+	cancel stdcontext.CancelFunc,
+	sp StreamProvider,
+	session *Session,
+	req ProviderRequest,
+	pipeline *tracePipeline,
+	buffer *TraceBufferSpec,
+) {
 	defer cancel()
-	s.markRunning()
-
-	var emitErr error
-	var once sync.Once
-	err := sp.Stream(ctx, req, func(row Row) {
-		rows, _, cerr := applyRowTransforms(ctx, p, []Row{row})
-		if cerr != nil {
-			once.Do(func() {
-				emitErr = fmt.Errorf("profile %q: %w", p.Name, cerr)
-				cancel()
-			})
-			return
-		}
-		// A filtered-out event is simply not emitted.
-		if len(rows) == 0 {
-			return
-		}
-		s.Emit(Event{Row: rows[0]})
-	})
-	if emitErr != nil {
-		err = emitErr
+	session.markRunning()
+	rows, done := streamTraceRows(ctx, sp, req)
+	runner := traceRunner{
+		ctx: ctx, session: session, pipeline: pipeline, buffer: buffer,
+		rows: rows, done: done,
 	}
-	s.markDone(normalizeStreamErr(err))
+	session.markDone(normalizeStreamErr(runner.run()))
+}
+
+type tracePipeline struct {
+	ctx      context.Context
+	profile  Profile
+	page     *pageProcessorChain
+	buffered bool
+}
+
+func newTracePipeline(ctx context.Context, profile Profile) (*tracePipeline, error) {
+	pipeline := &tracePipeline{ctx: ctx, profile: profile, buffered: profile.Trace.Buffer != nil}
+	if pipeline.buffered || len(profile.Processors) == 0 {
+		return pipeline, nil
+	}
+	page, err := newPageProcessorChain(profile.Processors, nil)
+	if err != nil {
+		return nil, err
+	}
+	pipeline.page = page
+	return pipeline, nil
+}
+
+func (p *tracePipeline) Process(rows []Row) ([]Row, error) {
+	result := &Result{Profile: p.profile.Name, Rows: rows}
+	var err error
+	if p.buffered {
+		result, err = applyProcessors(p.ctx, p.profile.Processors, result)
+	} else if p.page != nil {
+		var page Page
+		page, err = p.page.Process(p.ctx, Page{Rows: rows})
+		result.Rows = page.Rows
+	}
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.profile.Name, err)
+	}
+	mapped, _, err := applyRowTransforms(p.ctx, p.profile, result.Rows)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.profile.Name, err)
+	}
+	return mapped, nil
+}
+
+func streamTraceRows(ctx context.Context, provider StreamProvider, req ProviderRequest) (<-chan Row, <-chan error) {
+	rows := make(chan Row)
+	done := make(chan error, 1)
+	go func() {
+		done <- provider.Stream(ctx, req, func(row Row) {
+			select {
+			case rows <- row:
+			case <-ctx.Done():
+			}
+		})
+	}()
+	return rows, done
+}
+
+type traceRunner struct {
+	ctx      context.Context
+	session  *Session
+	pipeline *tracePipeline
+	buffer   *TraceBufferSpec
+	rows     <-chan Row
+	done     <-chan error
+	pending  []Row
+	timer    *time.Timer
+	timerC   <-chan time.Time
+}
+
+func (r *traceRunner) run() error {
+	defer r.stopTimer()
+	for {
+		select {
+		case row := <-r.rows:
+			if err := r.add(row); err != nil {
+				return err
+			}
+		case err := <-r.done:
+			return r.finish(err)
+		case <-r.ctx.Done():
+			return r.finish(r.ctx.Err())
+		case <-r.timerC:
+			if err := r.flush(); err != nil {
+				return err
+			}
+		}
+	}
+}
+
+func (r *traceRunner) add(row Row) error {
+	if r.buffer == nil {
+		return r.emit([]Row{row})
+	}
+	r.pending = append(r.pending, row)
+	if len(r.pending) == 1 && r.buffer.MaxWait.Duration > 0 {
+		r.timer = time.NewTimer(r.buffer.MaxWait.Duration)
+		r.timerC = r.timer.C
+	}
+	if r.buffer.MaxRows > 0 && len(r.pending) >= r.buffer.MaxRows {
+		return r.flush()
+	}
+	return nil
+}
+
+func (r *traceRunner) finish(streamErr error) error {
+	if err := r.flush(); err != nil {
+		return err
+	}
+	return streamErr
+}
+
+func (r *traceRunner) flush() error {
+	if len(r.pending) == 0 {
+		return nil
+	}
+	r.stopTimer()
+	rows := r.pending
+	r.pending = nil
+	return r.emit(rows)
+}
+
+func (r *traceRunner) emit(raw []Row) error {
+	rows, err := r.pipeline.Process(raw)
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		r.session.Emit(Event{Row: row})
+	}
+	return nil
+}
+
+func (r *traceRunner) stopTimer() {
+	if r.timer != nil {
+		r.timer.Stop()
+	}
+	r.timer = nil
+	r.timerC = nil
 }
 
 func startTop(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Session, error) {

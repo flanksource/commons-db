@@ -109,7 +109,7 @@ type ColumnDef struct {
 	Filter *ColumnFilterDef `json:"filter,omitempty" yaml:"filter,omitempty"`
 
 	// Hidden excludes the column from rendered output while keeping it available
-	// to CEL and processors.
+	// to later column and style CEL expressions.
 	Hidden bool `json:"hidden,omitempty" yaml:"hidden,omitempty"`
 
 	// Style is an optional CEL expression returning this cell's presentation

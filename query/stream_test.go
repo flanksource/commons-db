@@ -79,6 +79,109 @@ var _ = Describe("ExecuteStream trace", func() {
 		Expect(events[0].Sequence).To(Equal(int64(1)))
 	})
 
+	It("runs page-capable processors before per-event column mapping", func() {
+		query.RegisterProcessor(rawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{typ: "stream-processor-order", rows: []query.Row{{"raw": "alpha"}}})
+		profile := rawFirstProfile("stream-processor-order", "stream-processor-order", "test.raw-first")
+		profile.Trace = &query.TraceSpec{}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+
+		Expect(session.Events()).To(HaveLen(1))
+		Expect(session.Events()[0].Row).To(HaveKeyWithValue("mapped", "alpha-processed-aliased-mapped"))
+	})
+
+	It("requires a buffer for a whole-result trace processor", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{typ: "stream-unbuffered-whole"})
+		profile := traceProfile("stream-unbuffered-whole")
+		profile.Processors = []query.ProcessorSpec{{Type: "test.whole-raw-first"}}
+
+		_, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+
+		Expect(err).To(MatchError(ContainSubstring("trace.buffer")))
+		Expect(err).To(MatchError(ContainSubstring("test.whole-raw-first")))
+	})
+
+	It("flushes whole-result processors at the configured raw row count", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{
+			typ:  "stream-count-buffer",
+			rows: []query.Row{{"raw": "alpha"}, {"raw": "beta"}, {"raw": "gamma"}},
+		})
+		profile := rawFirstProfile("stream-count-buffer", "stream-count-buffer", "test.whole-raw-first")
+		profile.Trace = &query.TraceSpec{Buffer: &query.TraceBufferSpec{MaxRows: 2}}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+
+		events := session.Events()
+		Expect(events).To(HaveLen(3))
+		Expect(events[0].Row).To(HaveKeyWithValue("batchSize", int64(2)))
+		Expect(events[1].Row).To(HaveKeyWithValue("batchSize", int64(2)))
+		Expect(events[2].Row).To(HaveKeyWithValue("batchSize", int64(1)))
+		Expect(events[2].Row).To(HaveKeyWithValue("mapped", "gamma-processed-aliased-mapped"))
+	})
+
+	It("flushes a partial buffer when maxWait elapses", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{
+			typ: "stream-time-buffer", rows: []query.Row{{"raw": "alpha"}}, block: true,
+		})
+		profile := rawFirstProfile("stream-time-buffer", "stream-time-buffer", "test.whole-raw-first")
+		profile.Trace = &query.TraceSpec{Buffer: &query.TraceBufferSpec{
+			MaxRows: 100,
+			MaxWait: types.Duration{Duration: 25 * time.Millisecond},
+		}}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(session.Events, "5s", "10ms").Should(HaveLen(1))
+		Expect(session.Snapshot().State).To(Equal(query.SessionRunning))
+		session.Stop()
+		waitState(session, query.SessionStopped)
+	})
+
+	It("flushes a partial buffer before an explicit stop becomes terminal", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{
+			typ: "stream-stop-buffer", rows: []query.Row{{"raw": "alpha"}}, block: true,
+		})
+		profile := rawFirstProfile("stream-stop-buffer", "stream-stop-buffer", "test.whole-raw-first")
+		profile.Trace = &query.TraceSpec{Buffer: &query.TraceBufferSpec{MaxRows: 100}}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionRunning)
+		session.Stop()
+		waitState(session, query.SessionStopped)
+
+		Expect(session.Events()).To(HaveLen(1))
+		Expect(session.Events()[0].Row).To(HaveKeyWithValue("mapped", "alpha-processed-aliased-mapped"))
+	})
+
+	It("flushes a partial buffer when the session deadline is reached", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{
+			typ: "stream-deadline-buffer", rows: []query.Row{{"raw": "alpha"}}, block: true,
+		})
+		profile := rawFirstProfile("stream-deadline-buffer", "stream-deadline-buffer", "test.whole-raw-first")
+		profile.Trace = &query.TraceSpec{
+			MaxDuration: types.Duration{Duration: 30 * time.Millisecond},
+			Buffer:      &query.TraceBufferSpec{MaxRows: 100},
+		}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+
+		Expect(session.Events()).To(HaveLen(1))
+		Expect(session.Events()[0].Row).To(HaveKeyWithValue("mapped", "alpha-processed-aliased-mapped"))
+	})
+
 	It("fails the session when the provider errors", func() {
 		query.RegisterProvider(&fakeStreamProvider{typ: "stream-err", err: errors.New("socket closed")})
 

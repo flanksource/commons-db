@@ -3,7 +3,6 @@ package query
 import (
 	"encoding/json"
 	"fmt"
-	"maps"
 	"reflect"
 	"sort"
 	"strings"
@@ -15,9 +14,9 @@ import (
 	"github.com/flanksource/commons-db/context"
 )
 
-// SampleResult is the bounded output used by profile authoring tools. It is raw
-// with respect to processors unless PreviewProcessors was explicitly requested.
-// Columns are inferred only from top-level row keys.
+// SampleResult is the bounded output used by profile authoring tools. It skips
+// processors unless PreviewProcessors was explicitly requested, but always
+// applies the profile's row mapping. Columns are inferred from top-level keys.
 type SampleResult struct {
 	Rows             []Row                `json:"rows"`
 	Columns          []ColumnDef          `json:"columns"`
@@ -54,9 +53,9 @@ type ProcessorPreviewStage struct {
 }
 
 // Sample renders and executes a profile through its provider while bypassing
-// context queries. Processors are also bypassed by default; PreviewProcessors
-// runs them over the bounded sample and records every stage. Configured row
-// transforms still shape the preview, and only providers whose request can be
+// context queries. Processors are bypassed by default; PreviewProcessors runs
+// them over the bounded raw page and records every stage. Row mapping runs only
+// after that optional processor chain, and only providers whose request can be
 // proven read-only are allowed.
 func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResult, error) {
 	if err := p.Validate(); err != nil {
@@ -104,7 +103,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	if err != nil {
 		return nil, WithDiagnostics(fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err), diagnostics)
 	}
-	rows := page.Rows
+	rows := cloneSampleRows(page.Rows)
 	if rows == nil {
 		rows = []Row{}
 	}
@@ -114,6 +113,13 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 		if err != nil {
 			return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 		}
+	}
+	rows, _, err = applyRowTransforms(ctx, p, rows)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	if rows == nil {
+		rows = []Row{}
 	}
 	return &SampleResult{
 		Rows:             rows,
@@ -127,44 +133,8 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	}, nil
 }
 
-func previewSampleProcessors(ctx context.Context, profile Profile, input []Row) (*ProcessorPreview, []Row, error) {
-	preview := &ProcessorPreview{Input: cloneSampleRows(input), Stages: []ProcessorPreviewStage{}}
-	result := &Result{Profile: profile.Name, Rows: cloneSampleRows(input)}
-	for index, spec := range profile.Processors {
-		resolved, err := spec.Resolve()
-		if err != nil {
-			return nil, nil, fmt.Errorf("processor %d: %w", index, err)
-		}
-		registered, err := GetProcessor(resolved.Type)
-		if err != nil {
-			return nil, nil, err
-		}
-		rowsIn := len(result.Rows)
-		result, err = registered.Process(ctx, resolved, result)
-		if err != nil {
-			return nil, nil, fmt.Errorf("processor %q: %w", resolved.Label(), err)
-		}
-		if result == nil {
-			return nil, nil, fmt.Errorf("processor %q returned a nil result", resolved.Label())
-		}
-		preview.Stages = append(preview.Stages, ProcessorPreviewStage{
-			Index: index, Label: resolved.Label(), Type: resolved.Type,
-			RowsIn: rowsIn, RowsOut: len(result.Rows), Rows: cloneSampleRows(result.Rows),
-		})
-	}
-	return preview, cloneSampleRows(result.Rows), nil
-}
-
-func cloneSampleRows(rows []Row) []Row {
-	cloned := make([]Row, len(rows))
-	for index, row := range rows {
-		cloned[index] = maps.Clone(row)
-	}
-	return cloned
-}
-
 func samplePage(ctx context.Context, profile Profile, params map[string]any, request PageRequest) (Page, error) {
-	for page, err := range ExecutePages(ctx, profile, request, params) {
+	for page, err := range executeRawPages(ctx, profile, request, params) {
 		return page, err
 	}
 	return Page{}, nil

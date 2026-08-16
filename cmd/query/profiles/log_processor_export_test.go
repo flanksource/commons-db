@@ -29,6 +29,12 @@ var _ = Describe("streamable log processors", func() {
 				Query:      "rows",
 				Order:      query.Order{{Column: "id", Unique: true}},
 				Processors: []query.ProcessorSpec{{Use: "logs.json"}},
+				Columns: []query.ColumnDef{
+					{Name: "message"},
+					{Name: "severity"},
+					{Name: "request_id"},
+					{Name: "request", CEL: `row.request_id + "-mapped"`},
+				},
 			})).To(Succeed())
 
 			handler := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
@@ -44,6 +50,7 @@ var _ = Describe("streamable log processors", func() {
 				HaveKeyWithValue("message", "request failed"),
 				HaveKeyWithValue("severity", "error"),
 				HaveKeyWithValue("request_id", "req-41"),
+				HaveKeyWithValue("request", "req-41-mapped"),
 			))
 		},
 		Entry("one page", "page", "page"),

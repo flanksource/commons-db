@@ -61,9 +61,36 @@ reads.
 
 Profile results export as JSON, NDJSON, CSV, YAML, Markdown, HTML, XLSX, or
 PDF. SQL and OpenSearch all-row exports keep bounded memory by consuming a
-backend cursor directly; processors and top/global sorting retain the buffered
-compatibility path. PDF is capped at 1,000 rows. Schema-less all-row results can
-use JSON, NDJSON, or YAML; table-oriented formats require declared columns.
+backend cursor directly when every processor supports pages; whole-result
+processors and top/global sorting use the buffered compatibility path. PDF is
+capped at 1,000 rows. Schema-less all-row results can use JSON, NDJSON, or YAML;
+table-oriented formats require declared columns.
+
+Every execution path uses the same row pipeline:
+
+```
+provider rows → processors → aliases → ignore → row filters → columns → styles
+```
+
+Processors therefore read provider-native fields, while columns and aliases may
+read fields produced by processors. Sampling skips processors unless processor
+preview is enabled; the preview records the raw input and each raw processor
+stage before mapping its final rows.
+
+A trace streams page-capable processors one row at a time. A processor that
+needs a whole result requires a bounded raw-row batch under `trace.buffer`:
+
+```yaml
+trace:
+  buffer:
+    maxRows: 200
+    maxWait: 250ms
+```
+
+At least one bound is required and the first reached flushes the batch. A group
+cannot cross a flush boundary. The remaining batch flushes when the provider
+ends, the session is stopped, or its deadline is reached; `maxEvents` caps the
+final emitted event ring rather than the raw input buffer.
 
 ## Architecture
 

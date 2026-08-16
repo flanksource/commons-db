@@ -41,6 +41,30 @@ type TraceSpec struct {
 
 	// MaxEvents caps the in-memory event ring buffer.
 	MaxEvents int `json:"maxEvents,omitempty" yaml:"maxEvents,omitempty"`
+
+	// Buffer batches raw provider rows before running the full processor chain.
+	// Without it every trace processor must implement PageProcessor.
+	Buffer *TraceBufferSpec `json:"buffer,omitempty" yaml:"buffer,omitempty"`
+}
+
+// TraceBufferSpec bounds a raw-row processor batch by count, elapsed time, or
+// both. When both are set, the first bound reached flushes the batch.
+type TraceBufferSpec struct {
+	MaxRows int            `json:"maxRows,omitempty" yaml:"maxRows,omitempty"`
+	MaxWait types.Duration `json:"maxWait,omitempty" yaml:"maxWait,omitempty"`
+}
+
+func (s TraceBufferSpec) Validate() error {
+	if s.MaxRows < 0 {
+		return fmt.Errorf("maxRows must be positive, got %d", s.MaxRows)
+	}
+	if s.MaxWait.Duration < 0 {
+		return fmt.Errorf("maxWait must be positive, got %s", s.MaxWait.Duration)
+	}
+	if s.MaxRows == 0 && s.MaxWait.Duration == 0 {
+		return fmt.Errorf("at least one of maxRows or maxWait must be positive")
+	}
+	return nil
 }
 
 // DurationLimit returns MaxDuration, defaulted when unset.
@@ -130,6 +154,11 @@ func (p Profile) ValidateQuerySource() error {
 func (p Profile) Validate() error {
 	if err := p.ValidateKind(); err != nil {
 		return err
+	}
+	if p.Trace != nil && p.Trace.Buffer != nil {
+		if err := p.Trace.Buffer.Validate(); err != nil {
+			return fmt.Errorf("profile %q: trace.buffer: %w", p.Name, err)
+		}
 	}
 	if err := p.ValidateQuerySource(); err != nil {
 		return err

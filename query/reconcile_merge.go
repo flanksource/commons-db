@@ -28,10 +28,10 @@ const (
 // Mergeable reports whether a run can be joined by walking both sides, and says
 // why not when it cannot.
 //
-// The requirement is that the key is a prefix of both orders. Then rows sharing
-// a key are adjacent on both sides, which is the whole basis of a merge join —
-// a key can be finished and emitted as soon as a larger one appears, without
-// holding anything else.
+// The requirement is that every processor can run page by page and the key is
+// a prefix of both orders. Then rows sharing a key are adjacent on both sides,
+// which is the whole basis of a merge join — a key can be finished and emitted
+// as soon as a larger one appears, without holding anything else.
 func (r ReconcileRun) Mergeable() (bool, string) {
 	if len(r.Config.Key.Columns) == 0 {
 		return false, "the key is a CEL expression, so no order can be known to group it"
@@ -40,6 +40,13 @@ func (r ReconcileRun) Mergeable() (bool, string) {
 		name    string
 		profile Profile
 	}{{"source", r.Source}, {"dest", r.Dest}} {
+		label, err := nonPageProcessor(side.profile.Processors)
+		if err != nil {
+			return false, fmt.Sprintf("%s profile %q: %s", side.name, side.profile.Name, err)
+		}
+		if label != "" {
+			return false, fmt.Sprintf("%s profile %q processor %q needs the whole result", side.name, side.profile.Name, label)
+		}
 		if err := side.profile.Order.Pageable(); err != nil {
 			return false, fmt.Sprintf("%s profile %q: %s", side.name, side.profile.Name, err)
 		}

@@ -64,13 +64,22 @@ func walkRequest(p Profile, batch int) PageRequest {
 }
 
 // ExecutePages resolves profile parameters and templates exactly like Execute,
-// then yields the requested page and every page after it, applying the
-// Profile's CEL columns to each batch as it passes.
+// then yields the requested page and every page after it. Each raw provider
+// page runs through page-capable processors before aliases, filters, columns,
+// and styles. A processor that needs the whole result makes paging invalid.
 //
 // The sequence ends when the source is exhausted or the consumer stops ranging.
 // A caller wanting a single page breaks after the first, which is also what
 // releases the backend cursor.
 func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...map[string]any) iter.Seq2[Page, error] {
+	return executePages(ctx, p, page, true, params...)
+}
+
+func executeRawPages(ctx context.Context, p Profile, page PageRequest, params ...map[string]any) iter.Seq2[Page, error] {
+	return executePages(ctx, p, page, false, params...)
+}
+
+func executePages(ctx context.Context, p Profile, page PageRequest, applyPipeline bool, params ...map[string]any) iter.Seq2[Page, error] {
 	if err := page.Validate(); err != nil {
 		return ErrorPage(err)
 	}
@@ -79,6 +88,15 @@ func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...ma
 	}
 	if p.Kind() == KindTrace {
 		return ErrorPage(fmt.Errorf("profile %q is a trace; use ExecuteStream", p.Name))
+	}
+	if applyPipeline {
+		label, err := nonPageProcessor(p.Processors)
+		if err != nil {
+			return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		}
+		if label != "" {
+			return ErrorPage(fmt.Errorf("profile %q cannot be paged: processor %q needs the whole result", p.Name, label))
+		}
 	}
 
 	// Resolved once and used for both the provider request and the cursor scope
@@ -145,14 +163,17 @@ func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...ma
 	}
 	req.Position = position
 
-	// The processors run before the cursor is minted, because a processor that
-	// folds rows across pages contributes to the position: the token has to
+	// The processors run on raw rows and before the cursor is minted. A processor
+	// that folds rows across pages contributes to the position: the token has to
 	// carry what it has already emitted, or the page after it emits the same
 	// group again. That is why the chain is assembled here rather than wrapped
 	// around ExecutePages by the caller, which is where it used to live.
-	rows := withRowTransforms(ctx, p, providerPages(ctx, p, req, page))
-	if page.ApplyProcessors && len(p.Processors) > 0 {
+	rows := providerPages(ctx, p, req, page)
+	if applyPipeline && len(p.Processors) > 0 {
 		rows = ProcessPages(ctx, p.Processors, position.State, rows)
+	}
+	if applyPipeline {
+		rows = withRowTransforms(ctx, p, rows)
 	}
 	return withConnectionLogging(operation, withCursors(scope, rows))
 }

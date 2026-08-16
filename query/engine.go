@@ -10,8 +10,8 @@ import (
 )
 
 // Execute runs a Profile end-to-end: resolve the supplied params, render the
-// query, dispatch to the provider, evaluate CEL columns, run any context
-// SubQueries, and apply processors.
+// query, dispatch to the provider, run processors, and then evaluate aliases,
+// filters, columns, and styles. Context SubQueries are available to processors.
 //
 // params carries the server-side filter values for the Profile's declared Params
 // (omit when there are none). They are validated/coerced against the
@@ -43,9 +43,9 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 	return executeResolved(ctx, p, resolved, filters)
 }
 
-// executeResolved runs the post-param pipeline: render → provider → columns →
-// context sub-queries → processors (→ top sort/limit). Shared by Execute and
-// each top-session tick.
+// executeResolved runs the post-param pipeline: render → provider → context
+// sub-queries → processors → row mapping (→ top sort/limit). Shared by Execute
+// and each top-session tick.
 func executeResolved(ctx context.Context, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Result, error) {
 	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
@@ -62,13 +62,13 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 
-	rows, styles, truncated, err := drainPages(ctx, p, req)
+	rows, truncated, err := drainPages(ctx, p, req)
 	operation.Finish(len(rows), err)
 	if err != nil {
 		return nil, err
 	}
 
-	result := &Result{Profile: p.Name, Rows: rows, Styles: styles, Truncated: truncated}
+	result := &Result{Profile: p.Name, Rows: rows, Truncated: truncated}
 
 	for name, sub := range p.Context {
 		subRows, err := executeSubQuery(ctx, sub, p.Params, resolved)
@@ -85,7 +85,10 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-
+	result.Rows, result.Styles, err = applyRowTransforms(ctx, p, result.Rows)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
 	if p.Top != nil {
 		var cut bool
 		result.Rows, cut = sortAndLimit(result.Rows, p.Top.SortBy, p.Top.Limit)
@@ -123,7 +126,7 @@ func sortAndLimit(rows []Row, sortBy string, limit int) ([]Row, bool) {
 // invisible — a backend default quietly limiting a read is otherwise
 // indistinguishable from a small table, which is how "read everything" came to
 // mean "read the first 500 and say nothing".
-func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, []map[string]string, bool, error) {
+func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, bool, error) {
 	maxRows := p.RowLimits().MaxExportRows
 	batch := walkBatchSize
 	if maxRows > 0 && maxRows < batch {
@@ -132,27 +135,20 @@ func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, []m
 	walk := walkRequest(p, batch)
 
 	var rows []Row
-	var styles []map[string]string
 	var truncated bool
-	for page, err := range withRowTransforms(ctx, p, providerPages(ctx, p, req, walk)) {
+	for page, err := range providerPages(ctx, p, req, walk) {
 		if err != nil {
-			return nil, nil, false, err
+			return nil, false, err
 		}
 		truncated = truncated || page.Truncated
 		rows = append(rows, page.Rows...)
-		styles = append(styles, page.Styles...)
 		if maxRows > 0 && len(rows) >= maxRows {
 			truncated = truncated || len(rows) > maxRows || page.HasMore
 			rows = rows[:maxRows]
-			// Styles stay positionally parallel to rows, so the cut applies to
-			// both or the colours slide onto the wrong lines.
-			if len(styles) > maxRows {
-				styles = styles[:maxRows]
-			}
 			break
 		}
 	}
-	return rows, styles, truncated, nil
+	return rows, truncated, nil
 }
 
 // compareRowValues orders numbers numerically and everything else by its

@@ -180,6 +180,12 @@ type Page struct {
 	// snapshot rather than on the index as it has since become.
 	PIT string
 
+	// State is what each processor asked to carry into the next page, keyed by
+	// label. Like PIT it travels inside Next rather than being returned to the
+	// caller, so a resumed walk hands each processor back its own memory.
+	// Providers never set it; ProcessPages does.
+	State map[string][]byte
+
 	// HasMore reports that the source had rows beyond this Page.
 	//
 	// It is the provider's answer rather than an inference from len(Rows),

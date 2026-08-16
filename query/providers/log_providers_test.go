@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,9 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	// Registers the processors and the named library presets a profile reaches
+	// by `use:`, so a spec can page one the way a real profile would.
+	_ "github.com/flanksource/commons-db/query/processor"
 	_ "github.com/flanksource/commons-db/query/providers"
 	"github.com/flanksource/commons-db/types"
 )
@@ -395,9 +399,10 @@ var _ = Describe("k8s logs provider", func() {
 		mux.HandleFunc("/api/v1/namespaces/prod/pods/", func(w http.ResponseWriter, r *http.Request) {
 			logRequests = append(logRequests, r.URL.Path+"?"+r.URL.RawQuery)
 			w.Header().Set("Content-Type", "text/plain")
-			_, err := fmt.Fprint(w, "2026-04-19T11:23:40.207Z settlement gateway rejected batch 88213\n"+
-				"2026-04-19T11:23:41.310Z retry scheduled\n")
-			Expect(err).ToNot(HaveOccurred())
+			for _, line := range serveKubeletLines(r, podLogLines) {
+				_, err := fmt.Fprintln(w, line)
+				Expect(err).ToNot(HaveOccurred())
+			}
 		})
 
 		server = httptest.NewServer(mux)
@@ -421,9 +426,9 @@ var _ = Describe("k8s logs provider", func() {
 		rows, err := execute("kind=Deployment namespace=prod name=billing", map[string]any{})
 		Expect(err).ToNot(HaveOccurred())
 
-		// Two pods, two lines each, newest first.
+		// Two pods, two lines each, oldest first.
 		Expect(rows).To(HaveLen(4))
-		Expect(rows[0]).To(HaveKeyWithValue("message", "retry scheduled"))
+		Expect(rows[0]).To(HaveKeyWithValue("message", "settlement gateway rejected batch 88213"))
 		Expect(rows[0]).To(HaveKeyWithValue("namespace", "prod"))
 		Expect(rows[0]).To(HaveKeyWithValue("pod", "billing-1"))
 		// No container was asked for, so the kubelet served the pod's first —
@@ -433,19 +438,182 @@ var _ = Describe("k8s logs provider", func() {
 		Expect(rows[0]).To(HaveKeyWithValue("role", "worker"))
 	})
 
-	It("returns the newest line first, breaking timestamp ties by stream position", func() {
+	It("returns the oldest line first, breaking timestamp ties by stream", func() {
 		rows, err := execute("kind=Deployment namespace=prod name=billing", map[string]any{})
 		Expect(err).ToNot(HaveOccurred())
 
 		// Both pods emit the same two instants, so the timestamp alone leaves
 		// every row tied with one from the other pod; the id is what settles it.
-		Expect(rowValues(rows, "id")).To(Equal([]string{
-			"prod/billing-1/app#1", "prod/billing-2/app#1",
-			"prod/billing-1/app#0", "prod/billing-2/app#0",
+		Expect(logPositions(rows)).To(Equal([]string{
+			"11:23:40.207 prod/billing-1/app#0",
+			"11:23:40.207 prod/billing-2/app#0",
+			"11:23:41.310 prod/billing-1/app#0",
+			"11:23:41.310 prod/billing-2/app#0",
 		}))
 	})
 
-	It("declares an order a page can be cut from", func() {
+	// The counter is scoped to the instant, not to the fetch, which is what lets
+	// a cursor name a line that a later request can still find. A window that
+	// starts later must not renumber the lines it does return.
+	It("stamps a line with the same id however the read window is bounded", func() {
+		whole, err := execute("kind=Pod namespace=prod name=billing-1", map[string]any{})
+		Expect(err).ToNot(HaveOccurred())
+
+		narrowed, err := query.Execute(ctx, k8sProfile("kind=Pod namespace=prod name=billing-1"), map[string]any{
+			"time": ">=2026-04-19T11:23:41Z",
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(logPositions(narrowed.Rows)).To(Equal([]string{"11:23:41.310 prod/billing-1/app#0"}))
+		Expect(logPositions(whole)).To(ContainElement("11:23:41.310 prod/billing-1/app#0"))
+	})
+
+	// The point of the whole scheme: page two asks the kubelet to start at the
+	// cursor's second rather than at the window's start, so its cost does not
+	// grow with how far the walk has already gone.
+	It("resumes a cursor page from the cursor's second, not the window start", func() {
+		profile := k8sProfile("kind=Deployment namespace=prod name=billing")
+		params := map[string]any{"time": fixtureLogWindow}
+
+		var pages [][]query.Row
+		var cursors []query.Cursor
+		request := query.PageRequest{Limit: 2, Strategy: query.PagingCursor}
+		for {
+			logRequests = nil
+			var page query.Page
+			for next, err := range query.ExecutePages(ctx, profile, request, params) {
+				Expect(err).ToNot(HaveOccurred())
+				page = next
+				break
+			}
+			pages = append(pages, page.Rows)
+			cursors = append(cursors, page.Next)
+			if !page.HasMore {
+				break
+			}
+			request = query.PageRequest{Limit: 2, Cursor: page.Next}
+		}
+
+		// Two pods × two lines, two rows to a page.
+		Expect(pages).To(HaveLen(2))
+		Expect(logPositions(pages[0])).To(Equal([]string{
+			"11:23:40.207 prod/billing-1/app#0",
+			"11:23:40.207 prod/billing-2/app#0",
+		}))
+		Expect(logPositions(pages[1])).To(Equal([]string{
+			"11:23:41.310 prod/billing-1/app#0",
+			"11:23:41.310 prod/billing-2/app#0",
+		}))
+		Expect(cursors[0]).ToNot(BeEmpty())
+		// The walk is over, so there is no position past it to hand back.
+		Expect(cursors[1]).To(BeEmpty())
+
+		// logRequests still holds the reads the *last* page made: one per pod,
+		// each seeking to the second the previous page ended on rather than to
+		// the 11:00 window start.
+		Expect(logRequests).To(HaveLen(2))
+		for _, request := range logRequests {
+			Expect(sinceTimeOf(request)).To(BeTemporally("==", time.Date(2026, 4, 19, 11, 23, 40, 0, time.UTC)))
+		}
+	})
+
+	It("refuses to cursor a profile ordered in a direction the API cannot seek", func() {
+		profile := k8sProfile("kind=Deployment namespace=prod name=billing")
+		profile.Order = query.Order{
+			{Column: "timestamp", Desc: true},
+			{Column: "id", Unique: true},
+		}
+		request := query.PageRequest{Limit: 2, Strategy: query.PagingCursor}
+		for _, err := range query.ExecutePages(ctx, profile, request, map[string]any{"time": fixtureLogWindow}) {
+			Expect(err).To(MatchError(ContainSubstring("pages only by `timestamp` ascending then `id`")))
+			return
+		}
+		Fail("expected the descending order to be refused")
+	})
+
+	// SinceTime names whole seconds, so a resume always re-reads from the top of
+	// the cursor's second. Everything already served out of that second has to
+	// be dropped by id — which only works because the id counts within the
+	// instant rather than within the fetch.
+	It("resumes mid-second without repeating or skipping a line", func() {
+		base := time.Now().Add(-10 * time.Minute).UTC().Truncate(time.Second)
+		stub := newKubeletStubWith([]string{
+			base.Format(time.RFC3339Nano) + " first",
+			base.Add(10 * time.Millisecond).Format(time.RFC3339Nano) + " second",
+			base.Add(20 * time.Millisecond).Format(time.RFC3339Nano) + " third",
+		})
+		DeferCleanup(stub.server.Close)
+
+		profile := query.Profile{
+			Name:     "Same second",
+			Provider: query.ProviderConfig{Type: "k8s", Connection: "connection://kube"},
+			Query:    "kind=Pod namespace=prod name=logs",
+		}
+
+		var seen []string
+		request := query.PageRequest{Limit: 2, Strategy: query.PagingCursor}
+		for {
+			var page query.Page
+			for next, err := range query.ExecutePages(stub.context(), profile, request) {
+				Expect(err).ToNot(HaveOccurred())
+				page = next
+				break
+			}
+			seen = append(seen, rowValues(page.Rows, "message")...)
+			if !page.HasMore {
+				break
+			}
+			request = query.PageRequest{Limit: 2, Cursor: page.Next}
+		}
+
+		// All three share a second, so the second page's read starts at the same
+		// instant the first one did.
+		Expect(seen).To(Equal([]string{"first", "second", "third"}))
+	})
+
+	// The pipeline end to end: the provider resumes from SinceTime, dedupe folds
+	// each page, and the groups it has already emitted ride in the cursor so a
+	// line repeated three pages later is not shown again.
+	It("carries dedupe's memory across a cursor walk", func() {
+		base := time.Now().Add(-10 * time.Minute).UTC().Truncate(time.Second)
+		messages := []string{"boom", "boom", "ok", "boom", "ok", "done"}
+		lines := make([]string, 0, len(messages))
+		for i, message := range messages {
+			lines = append(lines, base.Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano)+" "+message)
+		}
+		stub := newKubeletStubWith(lines)
+		DeferCleanup(stub.server.Close)
+
+		profile := query.Profile{
+			Name:       "Deduped logs",
+			Provider:   query.ProviderConfig{Type: "k8s", Connection: "connection://kube"},
+			Query:      "kind=Pod namespace=prod name=logs",
+			Processors: []query.ProcessorSpec{{Use: "logs.dedupe"}},
+		}
+		Expect(profile.Streamable()).To(BeTrue())
+
+		var seen []string
+		request := query.PageRequest{Limit: 2, Strategy: query.PagingCursor}
+		for {
+			var page query.Page
+			for next, err := range query.ExecutePages(stub.context(), profile, request) {
+				Expect(err).ToNot(HaveOccurred())
+				page = next
+				break
+			}
+			seen = append(seen, rowValues(page.Rows, "message")...)
+			if !page.HasMore {
+				break
+			}
+			request = query.PageRequest{Limit: 2, Cursor: page.Next}
+		}
+
+		// "boom" spans pages one and two and "ok" pages two and three; each
+		// surfaces once across the whole walk.
+		Expect(seen).To(Equal([]string{"boom", "ok", "done"}))
+	})
+
+	It("declares an ascending order a page can be cut from", func() {
 		provider, err := query.GetProvider("k8s")
 		Expect(err).ToNot(HaveOccurred())
 		ordering, ok := provider.(query.OrderingProvider)
@@ -453,8 +621,10 @@ var _ = Describe("k8s logs provider", func() {
 
 		order, err := ordering.NaturalOrder(query.ProviderConfig{Type: "k8s"})
 		Expect(err).ToNot(HaveOccurred())
+		// Ascending is not a presentation choice: SinceTime is the only handle
+		// the API offers to resume from, and it only seeks forward.
 		Expect(order).To(Equal(query.Order{
-			{Column: "timestamp", Desc: true},
+			{Column: "timestamp"},
 			{Column: "id", Unique: true},
 		}))
 		Expect(order.Pageable()).To(Succeed())
@@ -523,6 +693,7 @@ var _ = Describe("k8s logs provider", func() {
 			Query: "kind=Pod namespace=prod",
 		}
 		result, err := query.Execute(ctx, profile, map[string]any{
+			"time":     fixtureLogWindow,
 			"workload": "prod/Pod/billing-1",
 			"labels":   "role=worker",
 		})
@@ -538,6 +709,7 @@ var _ = Describe("k8s logs provider", func() {
 		// selector would AND two kinds together and match nothing. It narrows
 		// the pods the Deployment resolved to instead.
 		result, err := query.Execute(ctx, k8sProfile("kind=Deployment namespace=prod name=billing"), map[string]any{
+			"time":     fixtureLogWindow,
 			"workload": "prod/Pod/billing-2",
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -636,7 +808,7 @@ var _ = Describe("k8s logs provider", func() {
 				Type: "k8s", Connection: "connection://limited-kube",
 			},
 			Query: "kind=Pod namespace=prod",
-		})
+		}, map[string]any{"time": fixtureLogWindow})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Truncated).To(BeTrue())
 		Expect(result.Rows).To(HaveLen(2))
@@ -674,6 +846,60 @@ func sinceTimeOf(request string) time.Time {
 	since, err := time.Parse(time.RFC3339, values.Get("sinceTime"))
 	Expect(err).ToNot(HaveOccurred())
 	return since
+}
+
+// fixtureLogWindow covers the instants the fixture's lines carry. A spec about
+// something other than time says so explicitly, because the generated time
+// control otherwise defaults to the last hour and the fixture is dated.
+const fixtureLogWindow = ">=2026-04-19T11:00:00Z,<=2026-04-19T12:00:00Z"
+
+// podLogLines is what every container in the fixture has ever written, oldest
+// first — the shape a kubelet streams.
+var podLogLines = []string{
+	"2026-04-19T11:23:40.207Z settlement gateway rejected batch 88213",
+	"2026-04-19T11:23:41.310Z retry scheduled",
+}
+
+// serveKubeletLines applies the only windowing a kubelet actually performs:
+// sinceTime is an inclusive lower bound, and tailLines counts from the newest
+// end. Filtering here rather than in the assertions is what makes a resumed
+// read return less than the first one, which is the whole behaviour under test.
+func serveKubeletLines(r *http.Request, lines []string) []string {
+	served := make([]string, 0, len(lines))
+	since := r.URL.Query().Get("sinceTime")
+	for _, line := range lines {
+		if since != "" {
+			stamp, _, _ := strings.Cut(line, " ")
+			at, err := time.Parse(time.RFC3339, stamp)
+			Expect(err).ToNot(HaveOccurred())
+			bound, err := time.Parse(time.RFC3339, since)
+			Expect(err).ToNot(HaveOccurred())
+			if at.Before(bound) {
+				continue
+			}
+		}
+		served = append(served, line)
+	}
+	if tail := r.URL.Query().Get("tailLines"); tail != "" {
+		count, err := strconv.Atoi(tail)
+		Expect(err).ToNot(HaveOccurred())
+		if count < len(served) {
+			served = served[len(served)-count:]
+		}
+	}
+	return served
+}
+
+// logPositions renders each row as the (timestamp, id) pair the order is cut
+// from, which is what a cursor carries.
+func logPositions(rows []query.Row) []string {
+	positions := make([]string, 0, len(rows))
+	for _, row := range rows {
+		stamp, _ := row["timestamp"].(time.Time)
+		id, _ := row["id"].(string)
+		positions = append(positions, fmt.Sprintf("%s %s", stamp.UTC().Format("15:04:05.000"), id))
+	}
+	return positions
 }
 
 func rowValues(rows []query.Row, key string) []string {

@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"sigs.k8s.io/yaml"
@@ -19,11 +20,16 @@ provider:
 trace:
   maxDuration: 5m
   maxEvents: 500
+  buffer:
+    maxRows: 200
+    maxWait: 250ms
 `), &p)).To(Succeed())
 
 		Expect(p.Kind()).To(Equal(query.KindTrace))
 		Expect(p.Trace.MaxDuration.Duration).To(Equal(5 * time.Minute))
 		Expect(p.Trace.MaxEvents).To(Equal(500))
+		Expect(p.Trace.Buffer.MaxRows).To(Equal(200))
+		Expect(p.Trace.Buffer.MaxWait.Duration).To(Equal(250 * time.Millisecond))
 		Expect(p.ValidateKind()).To(Succeed())
 	})
 
@@ -104,6 +110,16 @@ top:
 		Expect(s.DurationLimit()).To(Equal(time.Minute))
 		Expect(s.EventLimit()).To(Equal(42))
 	})
+
+	DescribeTable("validates trace buffers",
+		func(buffer *query.TraceBufferSpec, message string) {
+			profile := query.Profile{Name: "trace-buffer", Trace: &query.TraceSpec{Buffer: buffer}}
+			Expect(profile.Validate()).To(MatchError(ContainSubstring(message)))
+		},
+		Entry("empty", &query.TraceBufferSpec{}, "at least one"),
+		Entry("negative rows", &query.TraceBufferSpec{MaxRows: -1}, "maxRows"),
+		Entry("negative wait", &query.TraceBufferSpec{MaxWait: types.Duration{Duration: -time.Second}}, "maxWait"),
+	)
 
 	It("defaults and floors the top interval", func() {
 		Expect(query.TopSpec{}.TickInterval()).To(Equal(5 * time.Second))

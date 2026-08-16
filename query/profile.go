@@ -6,8 +6,8 @@ import (
 )
 
 // Profile is a declarative, CEL-driven view over a data provider. It names the
-// backend to read from, the provider-native query, the output columns (with
-// optional CEL formatting), post-query processors, and named context objects.
+// backend to read from, the provider-native query, raw-row processors, output
+// columns (with optional CEL formatting), and named context objects.
 //
 // A Profile is the unifying abstraction across legacy "trace profiles", duty
 // View specs, and ad-hoc reports.
@@ -52,11 +52,11 @@ type Profile struct {
 	// provider's raw row keys are used.
 	Columns []ColumnDef `json:"columns,omitempty" yaml:"columns,omitempty"`
 
-	// Aliases are ordered CEL projections applied to each provider row. Later
-	// aliases can reference values produced by earlier aliases.
+	// Aliases are ordered CEL projections applied after processors. Later aliases
+	// can reference values produced by earlier aliases.
 	Aliases []AliasDef `json:"aliases,omitempty" yaml:"aliases,omitempty"`
 
-	// Ignore removes provider fields after aliases have been evaluated.
+	// Ignore removes processed row fields after aliases have been evaluated.
 	Ignore []string `json:"ignore,omitempty" yaml:"ignore,omitempty"`
 
 	// Filters are named row predicates evaluated after aliases, dropping rows
@@ -64,7 +64,8 @@ type Profile struct {
 	// togglable and inert until named in FilterEnabledParam.
 	Filters []FilterDef `json:"filters,omitempty" yaml:"filters,omitempty"`
 
-	// Processors are post-query steps (e.g. sqlite merge/recon) applied in order.
+	// Processors consume raw provider rows in order before aliases, ignores, row
+	// filters, columns, and styles.
 	Processors []ProcessorSpec `json:"processors,omitempty" yaml:"processors,omitempty"`
 
 	// Context defines secondary queries whose single result becomes a named side

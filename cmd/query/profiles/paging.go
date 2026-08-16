@@ -137,7 +137,10 @@ func exportPage(
 		}, nil
 	}
 
-	pages := query.ProcessPages(ctx, p.Processors, query.ExecutePages(ctx, p, request.pageRequest(), params))
+	// ExecutePages applies the profile's processors itself, before row mapping
+	// and the cursor it mints. A folding processor's carried state has to be
+	// inside that token, so the chain cannot be wrapped around the walk here.
+	pages := query.ExecutePages(ctx, p, request.pageRequest(), params)
 	for page, err := range pages {
 		if err != nil {
 			return exportResponse{}, err
@@ -182,7 +185,7 @@ func exportAll(
 		}, nil
 	}
 
-	processed := query.ProcessPages(ctx, p.Processors, query.ExecutePages(ctx, p, request.pageRequest(), params))
+	processed := query.ExecutePages(ctx, p, request.pageRequest(), params)
 	pages, first, err := peekPages(processed)
 	if err != nil {
 		return exportResponse{}, err

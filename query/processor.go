@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"iter"
+	"maps"
 	"sort"
 	"strings"
 
@@ -21,63 +22,120 @@ type Processor interface {
 	Process(ctx context.Context, spec ProcessorSpec, in *Result) (*Result, error)
 }
 
-// PageProcessor is an optional Processor capability: a processor whose output
-// for a row depends only on that row can run on one page at a time, so a
-// profile using nothing else can still be served page by page.
+// PageProcessor is an optional Processor capability: a processor that can run
+// on one page at a time, so a profile using nothing else can still be served
+// page by page.
 //
-// A processor that does not implement it is not deficient — a merge or a
+// state is what this processor returned from the previous page of the same
+// walk, and is nil on the first. It travels inside the cursor, which is the only
+// thing a resumed request carries — so a processor that folds rows across the
+// whole result can still run incrementally by remembering what it has already
+// emitted. Whatever it returns is handed back on the next page; returning nil
+// keeps the processor stateless, which is all a per-row transform needs.
+//
+// A processor that does not implement this is not deficient — a merge or a
 // reconcile genuinely needs every row before any row is correct. It just means
 // the profile answering with it has to run its query in full, which is a cost
 // worth being able to name rather than discover.
 type PageProcessor interface {
 	Processor
-	ProcessPage(ctx context.Context, spec ProcessorSpec, page Page) (Page, error)
+	ProcessPage(ctx context.Context, spec ProcessorSpec, page Page, state []byte) (Page, []byte, error)
 }
 
 // StreamableProcessors reports whether every processor in specs can run page by
 // page.
 func StreamableProcessors(specs []ProcessorSpec) (bool, error) {
-	for index, spec := range specs {
-		resolved, err := spec.Resolve()
-		if err != nil {
-			return false, fmt.Errorf("processor %d: %w", index, err)
-		}
-		p, err := GetProcessor(resolved.Type)
-		if err != nil {
-			return false, err
-		}
-		if _, ok := p.(PageProcessor); !ok {
-			return false, nil
-		}
-	}
-	return true, nil
+	label, err := nonPageProcessor(specs)
+	return label == "", err
 }
 
-// ProcessPages applies a streamable processor chain to each page while
-// preserving its cursor, totals and provider metadata. Ordinary sampling does
-// not call this helper; processor previews run the bounded rows through the full
-// Processor interface so whole-result stages can be inspected too.
-func ProcessPages(ctx context.Context, specs []ProcessorSpec, pages iter.Seq2[Page, error]) iter.Seq2[Page, error] {
-	type stage struct {
-		label     string
-		spec      ProcessorSpec
-		processor PageProcessor
-	}
-	stages := make([]stage, 0, len(specs))
+func nonPageProcessor(specs []ProcessorSpec) (string, error) {
 	for index, spec := range specs {
 		resolved, err := spec.Resolve()
 		if err != nil {
-			return ErrorPage(fmt.Errorf("processor %d: %w", index, err))
+			return "", fmt.Errorf("processor %d: %w", index, err)
 		}
 		registered, err := GetProcessor(resolved.Type)
 		if err != nil {
-			return ErrorPage(err)
+			return "", err
+		}
+		if _, ok := registered.(PageProcessor); !ok {
+			return resolved.Label(), nil
+		}
+	}
+	return "", nil
+}
+
+type pageProcessorStage struct {
+	label     string
+	spec      ProcessorSpec
+	processor PageProcessor
+}
+
+type pageProcessorChain struct {
+	stages []pageProcessorStage
+	state  map[string][]byte
+}
+
+func newPageProcessorChain(specs []ProcessorSpec, carried map[string][]byte) (*pageProcessorChain, error) {
+	chain := &pageProcessorChain{state: maps.Clone(carried)}
+	if chain.state == nil {
+		chain.state = map[string][]byte{}
+	}
+	for index, spec := range specs {
+		resolved, err := spec.Resolve()
+		if err != nil {
+			return nil, fmt.Errorf("processor %d: %w", index, err)
+		}
+		registered, err := GetProcessor(resolved.Type)
+		if err != nil {
+			return nil, err
 		}
 		processor, ok := registered.(PageProcessor)
 		if !ok {
-			return ErrorPage(fmt.Errorf("processor %q cannot run page by page", resolved.Label()))
+			return nil, fmt.Errorf("processor %q cannot run page by page", resolved.Label())
 		}
-		stages = append(stages, stage{label: resolved.Label(), spec: resolved, processor: processor})
+		chain.stages = append(chain.stages, pageProcessorStage{
+			label: resolved.Label(), spec: resolved, processor: processor,
+		})
+	}
+	return chain, nil
+}
+
+func (c *pageProcessorChain) Process(ctx context.Context, page Page) (Page, error) {
+	for _, stage := range c.stages {
+		var next []byte
+		var err error
+		page, next, err = stage.processor.ProcessPage(ctx, stage.spec, page, c.state[stage.label])
+		if err != nil {
+			return Page{}, fmt.Errorf("processor %q: %w", stage.label, err)
+		}
+		if len(next) == 0 {
+			delete(c.state, stage.label)
+		} else {
+			c.state[stage.label] = next
+		}
+	}
+	return page, nil
+}
+
+// ProcessPages applies a streamable processor chain to each page while
+// preserving its cursor, totals and provider metadata.
+//
+// carried is the state each processor left on the previous page, keyed by
+// label, and each page's own state is written back onto Page.State for the
+// cursor to carry. ExecutePages calls this before the cursor is minted; a
+// preview or a sample calls it with no carried state because it reads one
+// bounded batch rather than walking.
+func ProcessPages(
+	ctx context.Context,
+	specs []ProcessorSpec,
+	carried map[string][]byte,
+	pages iter.Seq2[Page, error],
+) iter.Seq2[Page, error] {
+	chain, err := newPageProcessorChain(specs, carried)
+	if err != nil {
+		return ErrorPage(err)
 	}
 
 	return func(yield func(Page, error) bool) {
@@ -86,12 +144,15 @@ func ProcessPages(ctx context.Context, specs []ProcessorSpec, pages iter.Seq2[Pa
 				yield(Page{}, err)
 				return
 			}
-			for _, stage := range stages {
-				page, err = stage.processor.ProcessPage(ctx, stage.spec, page)
-				if err != nil {
-					yield(Page{}, fmt.Errorf("processor %q: %w", stage.label, err))
-					return
-				}
+			page, err = chain.Process(ctx, page)
+			if err != nil {
+				yield(Page{}, err)
+				return
+			}
+			// Only a page that resumes carries state forward; the last page of a
+			// walk has nowhere to carry it to.
+			if len(chain.state) > 0 && page.HasMore {
+				page.State = maps.Clone(chain.state)
 			}
 			if !yield(page, nil) {
 				return
@@ -143,6 +204,9 @@ func applyProcessors(ctx context.Context, specs []ProcessorSpec, result *Result)
 		result, err = p.Process(ctx, resolved, result)
 		if err != nil {
 			return nil, fmt.Errorf("processor %q: %w", resolved.Label(), err)
+		}
+		if result == nil {
+			return nil, fmt.Errorf("processor %q returned a nil result", resolved.Label())
 		}
 	}
 	return result, nil
