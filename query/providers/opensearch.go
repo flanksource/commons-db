@@ -123,6 +123,7 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (*opensear
 	if backend.Address == "" {
 		return nil, opts, fmt.Errorf("opensearch address is required")
 	}
+	transport = dbconnection.ApplyHTTPObservability(ctx, "opensearch", transport, nil)
 
 	// A debug run watches the wire as well as the body: which URL the search
 	// went to and which headers the connection put on it are half of "where did
@@ -142,5 +143,6 @@ func openSearchClientForConnection(ctx context.Context, conn *models.Connection)
 	if err != nil {
 		return nil, err
 	}
-	return opensearch.NewWithTransport(ctx, opensearch.Backend{Address: conn.URL}, nil, httpConnection.Transport())
+	transport := dbconnection.ApplyHTTPObservability(ctx, "opensearch", httpConnection.Transport(), nil)
+	return opensearch.NewWithTransport(ctx, opensearch.Backend{Address: conn.URL}, nil, transport)
 }

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/flanksource/commons-db/query/schema"
@@ -196,6 +197,26 @@ var _ = Describe("Connection schema", func() {
 		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(56))
 		firstBundledBranch := bundled["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstBundledBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("#/$defs/"))
+	})
+
+	It("describes provider-specific connection logging in every component", func() {
+		components := schema.ConnectionComponents()
+		for connectionType, family := range map[string]observability.ProviderFamily{
+			models.ConnectionTypePostgres:   observability.ProviderSQL,
+			models.ConnectionTypeOpenSearch: observability.ProviderHTTP,
+			models.ConnectionTypeAWS:        observability.ProviderGeneric,
+		} {
+			logging := components[connectionType]["properties"].(schema.Schema)["logging"].(schema.Schema)
+			Expect(logging["x-clicky-component"]).To(Equal("connection-logging-policy"))
+			capability := logging["x-clicky-logging"].(observability.Capability)
+			Expect(capability.Family).To(Equal(family))
+			Expect(capability.SlowThreshold).To(Equal("1s"))
+			Expect(capability.Events).NotTo(BeEmpty())
+			for _, event := range capability.Events {
+				Expect(event.PrettyExample).NotTo(BeEmpty(), "missing pretty example for %s/%s", connectionType, event.Event)
+				Expect(event.Example).To(HaveKeyWithValue("event", string(event.Event)))
+			}
+		}
 	})
 })
 

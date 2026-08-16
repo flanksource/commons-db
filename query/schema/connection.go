@@ -7,6 +7,7 @@ import (
 
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -71,6 +72,7 @@ func ConnectionComponents() map[string]Schema {
 			props[name] = Schema(raw.(map[string]any))
 		}
 		props["type"] = Schema{"type": "string", "title": "Type", "const": typ}
+		props["logging"] = connectionLoggingSchema(typ)
 		required := []string{"name", "type"}
 		if cfg, ok := tailoredProviders[typ]; ok {
 			branch := tailoredBranch(typ, cfg)["then"].(Schema)
@@ -89,6 +91,18 @@ func ConnectionComponents() map[string]Schema {
 		}
 	}
 	return components
+}
+
+func connectionLoggingSchema(connectionType string) Schema {
+	return Schema{
+		"type":                 "object",
+		"title":                "Logging",
+		"description":          "Choose which sanitized connection activity is emitted at each log level.",
+		"x-clicky-order":       8,
+		"x-clicky-component":   "connection-logging-policy",
+		"x-clicky-logging":     observability.CapabilityFor(connectionType),
+		"additionalProperties": false,
+	}
 }
 
 // Connection returns the bundled schema consumed by clicky-ui.

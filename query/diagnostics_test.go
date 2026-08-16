@@ -66,7 +66,7 @@ var _ = Describe("ProviderDiagnostics", func() {
 		Expect(snapshot.Request.Options).To(Equal(map[string]any{"password": "********"}))
 	})
 
-	It("leaves an ordinary execution with no recorder attached", func() {
+	It("attaches a rendered-only recorder to an ordinary execution", func() {
 		provider := &mockProvider{typ: "sink-absent", rows: []query.Row{{"id": 1}}}
 		query.RegisterProvider(provider)
 
@@ -74,7 +74,8 @@ var _ = Describe("ProviderDiagnostics", func() {
 			Name: "plain", Provider: query.ProviderConfig{Type: "sink-absent"}, Query: "select 1",
 		})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(provider.last.Diagnostics).To(BeNil())
+		Expect(provider.last.Diagnostics).NotTo(BeNil())
+		Expect(provider.last.Diagnostics.WantsPreview()).To(BeFalse())
 	})
 
 	It("caps provider response previews and says they were truncated", func() {

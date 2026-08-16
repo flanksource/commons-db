@@ -30,6 +30,7 @@ import {
 } from "@flanksource/clicky-ui/profiles";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
 import { jsonPathFormExtensions } from "./jsonPathPicker";
+import { connectionLoggingFormExtensions } from "./connectionLogging";
 import { BuildProfileButton } from "./buildProfileAction";
 import { EditProfileButton, ProfileEditorPage } from "./editProfileAction";
 import { isProfileSurface } from "./profileUpdateOperation";
@@ -54,7 +55,11 @@ const unitFormExtensions = createUnitFormExtensions();
 // schema — the CEL editor, the processor pipeline, the namespace and secret
 // pickers — falls back to a plain control.
 export const formExtensions = {
-  pre: [...unitFormExtensions.pre, ...esParamOptionsFormExtensions.pre],
+  pre: [
+    ...unitFormExtensions.pre,
+    ...esParamOptionsFormExtensions.pre,
+    ...connectionLoggingFormExtensions.pre,
+  ],
   post: [
     ...namespaceFormExtensions.post,
     ...secretFormExtensions.post,
@@ -64,6 +69,7 @@ export const formExtensions = {
     ...jsonPathFormExtensions.post,
     ...celEditorFormExtensions.post,
     ...processorPipelineFormExtensions.post,
+    ...connectionLoggingFormExtensions.post,
   ],
 };
 

@@ -13,6 +13,7 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -280,7 +281,7 @@ func createConnection(db *gorm.DB, body map[string]any) (*models.Connection, err
 	if err != nil {
 		return nil, err
 	}
-	if err := validateNestedConnection(db, c); err != nil {
+	if err := validateConnection(db, c); err != nil {
 		return nil, err
 	}
 	c.ID = uuid.Nil // let the DB assign the id
@@ -301,7 +302,7 @@ func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Conn
 	if err != nil {
 		return nil, err
 	}
-	if err := validateNestedConnection(db, incoming); err != nil {
+	if err := validateConnection(db, incoming); err != nil {
 		return nil, err
 	}
 	applyConnectionUpdate(existing, incoming)
@@ -310,6 +311,13 @@ func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Conn
 	}
 	redactConnection(existing)
 	return existing, nil
+}
+
+func validateConnection(db *gorm.DB, candidate *models.Connection) error {
+	if _, err := observability.PolicyFor(candidate); err != nil {
+		return err
+	}
+	return validateNestedConnection(db, candidate)
 }
 
 func validateNestedConnection(db *gorm.DB, candidate *models.Connection) error {

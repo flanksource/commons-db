@@ -124,8 +124,10 @@ func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...ma
 	if req.Diagnostics == nil {
 		req.Diagnostics = DiagnosticSink(ctx)
 	}
-	req.Diagnostics.RecordRendered(req.Query, req.Options)
-	req.Diagnostics.RecordConnection(req.Connection)
+	ctx, req, operation, err := prepareConnectionOperation(ctx, req)
+	if err != nil {
+		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+	}
 	scope := CursorScope{
 		Profile:    p.Name,
 		Provider:   p.Provider.Type,
@@ -143,7 +145,16 @@ func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...ma
 	}
 	req.Position = position
 
-	return withCursors(scope, withRowTransforms(ctx, p, providerPages(ctx, p, req, page)))
+	// The processors run before the cursor is minted, because a processor that
+	// folds rows across pages contributes to the position: the token has to
+	// carry what it has already emitted, or the page after it emits the same
+	// group again. That is why the chain is assembled here rather than wrapped
+	// around ExecutePages by the caller, which is where it used to live.
+	rows := withRowTransforms(ctx, p, providerPages(ctx, p, req, page))
+	if page.ApplyProcessors && len(p.Processors) > 0 {
+		rows = ProcessPages(ctx, p.Processors, position.State, rows)
+	}
+	return withConnectionLogging(operation, withCursors(scope, rows))
 }
 
 // withCursors mints each Page's Next from the keys its provider handed back.
@@ -157,7 +168,7 @@ func withCursors(scope CursorScope, pages iter.Seq2[Page, error]) iter.Seq2[Page
 				return
 			}
 			if len(page.NextKeys) > 0 {
-				cursor, err := EncodeCursor(scope, page.NextKeys, page.PIT)
+				cursor, err := EncodeCursor(scope, page.NextKeys, page.PIT, page.State)
 				if err != nil {
 					yield(Page{}, err)
 					return

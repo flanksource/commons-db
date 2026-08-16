@@ -56,6 +56,13 @@ func (k Context) connectionResolver() ConnectionResolver {
 	return resolver
 }
 
+// CanResolveConnectionReferences reports whether this context owns connection
+// reference resolution. Providers may also accept connection:// references and
+// resolve them through a provider-specific seam.
+func (k Context) CanResolveConnectionReferences() bool {
+	return k.connectionResolver() != nil || k.DB() != nil
+}
+
 func (k Context) WithConnectionLeaseResolver(resolver ConnectionLeaseResolver) Context {
 	if resolver == nil {
 		panic("connection lease resolver is required")

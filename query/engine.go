@@ -57,12 +57,13 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	req.Diagnostics = DiagnosticSink(ctx)
-	req.Diagnostics.RecordRendered(req.Query, req.Options)
-	// The rendered connection is otherwise discarded with the request, and it is
-	// half of what "where did these rows come from" means.
-	req.Diagnostics.RecordConnection(req.Connection)
+	ctx, req, operation, err := prepareConnectionOperation(ctx, req)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
 
 	rows, styles, truncated, err := drainPages(ctx, p, req)
+	operation.Finish(len(rows), err)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +205,13 @@ func executeSubQuery(ctx context.Context, sub SubQuery, defs []ParamDef, params 
 	if err != nil {
 		return nil, err
 	}
-	return provider.Execute(ctx, req)
+	ctx, req, operation, err := prepareConnectionOperation(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := provider.Execute(ctx, req)
+	operation.Finish(len(rows), err)
+	return rows, err
 }
 
 // buildProviderRequest renders everything the provider is handed — the query,

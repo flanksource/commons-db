@@ -14,6 +14,8 @@ const HARMaxBodySizeDefault = 64 * 1024
 // context objects (e.g. "log.level", "mission-control/log.level").
 var annotationPrefixes = []string{"", "mission-control/", "canary-checker/"}
 
+type requestHARLevelKey struct{}
+
 func annotationValue(annotations map[string]string, key string) string {
 	for _, prefix := range annotationPrefixes {
 		if v, ok := annotations[prefix+key]; ok {
@@ -35,6 +37,13 @@ func (k Context) HARCollector() *har.Collector {
 		return v
 	}
 	return nil
+}
+
+// WithRequestHARLevel raises HAR capture for this request without enabling the
+// process-wide HTTP logger. Connection policies use it to collect exactly the
+// detail that their configured log records need.
+func (k Context) WithRequestHARLevel(level logger.LogLevel) Context {
+	return k.WithValue(requestHARLevelKey{}, level)
 }
 
 // EffectiveLogLevel resolves the effective HTTP log level for a feature.
@@ -128,6 +137,11 @@ func (k Context) effectiveObservabilityLevel(feature string, harCapture bool) (l
 			if v := annotationValue(annotations, key); v != "" {
 				add(logger.ParseLevel(k.Logger, v), "annotation:"+key)
 			}
+		}
+	}
+	if harCapture {
+		if requestLevel, ok := k.Value(requestHARLevelKey{}).(logger.LogLevel); ok {
+			add(requestLevel, "request")
 		}
 	}
 
