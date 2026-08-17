@@ -7,9 +7,13 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"time"
+
+	"github.com/google/uuid"
 
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -63,6 +67,9 @@ func runPagingConformance(f pagingFixture) {
 		}
 
 		It("serves exactly the page it was asked for", func() {
+			if !modes().Supports(query.PagingOffset) {
+				Skip(f.name + " does not serve offset paging")
+			}
 			ids, _ := f.walk(query.PageRequest{Limit: 2, Offset: 2})
 			Expect(ids[:2]).To(Equal(conformanceIDs[2:4]))
 		})
@@ -112,6 +119,59 @@ func runPagingConformance(f pagingFixture) {
 			}
 		})
 	})
+}
+
+// kubeletStub serves conformanceIDs the way a kubelet does: one line per
+// second, oldest first, honouring sinceTime and tailLines and nothing else.
+// There is no offset to honour, which is the constraint the k8s cursor exists
+// to work around — a stub that served one would test a backend that does not
+// exist.
+type kubeletStub struct {
+	server *httptest.Server
+	lines  []string
+}
+
+func newKubeletStub() *kubeletStub {
+	// Inside the generated time control's one-hour default, so a walk that
+	// passes no params still sees every line.
+	base := time.Now().Add(-30 * time.Minute).UTC().Truncate(time.Second)
+	lines := make([]string, 0, len(conformanceIDs))
+	for i, id := range conformanceIDs {
+		lines = append(lines, base.Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano)+" "+id)
+	}
+	return newKubeletStubWith(lines)
+}
+
+func newKubeletStubWith(lines []string) *kubeletStub {
+	stub := &kubeletStub{lines: lines}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/pods", func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, map[string]any{
+			"apiVersion": "v1", "kind": "PodList",
+			"items": []any{podJSON("logs", map[string]any{"app": "logs"}, "app")},
+		})
+	})
+	for _, resource := range []string{"deployments", "statefulsets", "daemonsets"} {
+		mux.HandleFunc("/apis/apps/v1/"+resource, func(w http.ResponseWriter, _ *http.Request) {
+			writeJSON(w, map[string]any{"apiVersion": "apps/v1", "items": []any{}})
+		})
+	}
+	mux.HandleFunc("/api/v1/namespaces/prod/pods/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		for _, line := range serveKubeletLines(r, stub.lines) {
+			_, _ = fmt.Fprintln(w, line)
+		}
+	})
+	stub.server = httptest.NewServer(mux)
+	return stub
+}
+
+func (s *kubeletStub) context() context.Context {
+	return context.New().WithDB(connectionsDB(models.Connection{
+		ID: uuid.New(), Name: "kube", Type: models.ConnectionTypeKubernetes,
+		Certificate: kubeconfigFor(s.server.URL),
+	}), nil)
 }
 
 // pagingStub serves conformanceIDs the way an index does: honouring from/size,
@@ -255,6 +315,37 @@ var _ = Describe("provider paging contract", func() {
 				}
 			},
 			released: func() bool { return stub.closedPITs == stub.openedPITs && stub.openedPITs > 0 },
+		})
+	})
+
+	// The Kubernetes log API has no offset and no continuation token, so its
+	// cursor is synthesised from SinceTime. Holding it to the same contract as
+	// the backends that page natively is the only way to know the synthesis is
+	// sound rather than merely plausible.
+	Context("k8s", func() {
+		var stub *kubeletStub
+		BeforeEach(func() {
+			stub = newKubeletStub()
+			DeferCleanup(stub.server.Close)
+		})
+
+		runPagingConformance(pagingFixture{
+			name: "k8s",
+			ctx:  func() context.Context { return stub.context() },
+			key:  func(row query.Row) string { return fmt.Sprint(row["message"]) },
+			profile: func() query.Profile {
+				return query.Profile{
+					Name: "conformance-k8s",
+					Provider: query.ProviderConfig{
+						Type: "k8s", Connection: "connection://kube",
+					},
+					Query: "kind=Pod namespace=prod name=logs",
+					Order: query.Order{
+						{Column: "timestamp"},
+						{Column: "id", Unique: true},
+					},
+				}
+			},
 		})
 	})
 

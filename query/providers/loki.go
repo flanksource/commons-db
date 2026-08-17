@@ -85,6 +85,11 @@ func logLineToRow(line *logs.LogLine) query.Row {
 		"timestamp": line.FirstObserved,
 		"message":   line.Message,
 	}
+	// id identifies the line within its result, which is what an order ending in
+	// it can page by. A backend that mints none simply contributes no key.
+	if line.ID != "" {
+		row["id"] = line.ID
+	}
 	// hash is the message with its variable parts tokenized out, which is what
 	// makes "cel.dedupe" able to see two spellings of one error as one row. It
 	// is already computed by the backends, and dropping it here would leave the

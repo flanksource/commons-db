@@ -414,6 +414,10 @@ var _ = Describe("k8s logs provider", func() {
 		}), nil)
 	})
 
+	It("advertises cursor paging without an offset fallback", func() {
+		Expect(query.SupportsPaging("k8s")).To(Equal(query.PagingCursor))
+	})
+
 	execute := func(selector string, options map[string]any) ([]query.Row, error) {
 		provider, err := query.GetProvider("k8s")
 		Expect(err).ToNot(HaveOccurred())
@@ -539,8 +543,8 @@ var _ = Describe("k8s logs provider", func() {
 		base := time.Now().Add(-10 * time.Minute).UTC().Truncate(time.Second)
 		stub := newKubeletStubWith([]string{
 			base.Format(time.RFC3339Nano) + " first",
-			base.Add(10 * time.Millisecond).Format(time.RFC3339Nano) + " second",
-			base.Add(20 * time.Millisecond).Format(time.RFC3339Nano) + " third",
+			base.Add(10*time.Millisecond).Format(time.RFC3339Nano) + " second",
+			base.Add(20*time.Millisecond).Format(time.RFC3339Nano) + " third",
 		})
 		DeferCleanup(stub.server.Close)
 
