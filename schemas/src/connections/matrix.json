@@ -2,6 +2,89 @@
   "$id": "matrix.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "logging": {
+      "additionalProperties": false,
+      "description": "Choose which sanitized connection activity is emitted at each log level.",
+      "title": "Logging",
+      "type": "object",
+      "x-clicky-component": "connection-logging-policy",
+      "x-clicky-logging": {
+        "family": "generic",
+        "slowThreshold": "1s",
+        "thresholdLabel": "Slow threshold",
+        "events": [
+          {
+            "event": "error",
+            "property": "log.level.error",
+            "label": "Errors",
+            "description": "Failed operations, including the sanitized request identity.",
+            "default": "error",
+            "captures": [
+              "error",
+              "operation",
+              "duration"
+            ],
+            "example": {
+              "connection": "cache",
+              "connection_level": "error",
+              "duration_ms": 82,
+              "error": "operation failed",
+              "event": "error",
+              "provider": "matrix",
+              "rows": 0,
+              "sql": "SCAN cache"
+            },
+            "prettyExample": "[matrix/cache] ERROR \u003e=[82ms] [rows:0] SCAN cache operation failed"
+          },
+          {
+            "event": "slow",
+            "property": "log.level.slow",
+            "label": "Slow operations",
+            "description": "Successful operations at or above the slow threshold.",
+            "default": "warn",
+            "captures": [
+              "operation",
+              "duration",
+              "slow threshold"
+            ],
+            "example": {
+              "connection": "cache",
+              "connection_level": "warn",
+              "duration_ms": 1200,
+              "event": "slow",
+              "provider": "matrix",
+              "rows": 25,
+              "slow_threshold_ms": 1000,
+              "sql": "SCAN cache"
+            },
+            "prettyExample": "[matrix/cache] SLOW \u003e= [1200ms] [rows:25] SCAN cache"
+          },
+          {
+            "event": "operation",
+            "property": "log.level.operation",
+            "label": "Operation summary",
+            "description": "One completion record for a successful provider operation.",
+            "default": "debug",
+            "captures": [
+              "operation",
+              "duration",
+              "result summary"
+            ],
+            "example": {
+              "connection": "cache",
+              "connection_level": "debug",
+              "duration_ms": 18,
+              "event": "operation",
+              "provider": "matrix",
+              "rows": 12,
+              "sql": "SCAN cache"
+            },
+            "prettyExample": "[matrix/cache] [18ms] [rows:12] SCAN cache"
+          }
+        ]
+      },
+      "x-clicky-order": 8
+    },
     "name": {
       "title": "Name",
       "type": "string",

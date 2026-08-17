@@ -150,7 +150,7 @@
             }
           },
           "hidden": {
-            "description": "Hide the column from default output while retaining it for CEL and processors",
+            "description": "Hide the column from default output while retaining it for later column and style CEL",
             "title": "Hidden",
             "type": "boolean",
             "x-clicky-order": 11
@@ -471,12 +471,14 @@
             "x-clicky-order": 6
           },
           "type": {
-            "description": "A list accepts several values; labels binds a Kubernetes labels.\u003ckey\u003e field",
+            "description": "Date resolves to YYYY-MM-DD; date \u0026 time resolves to RFC3339; duration resolves to whole milliseconds; list accepts several values; labels binds a Kubernetes labels.\u003ckey\u003e field",
             "enum": [
               "string",
               "number",
               "boolean",
               "date",
+              "datetime",
+              "duration",
               "enum",
               "list",
               "labels"
@@ -488,6 +490,8 @@
             "x-enum-icons": {
               "boolean": "toggle-on",
               "date": "calendar",
+              "datetime": "clock",
+              "duration": "timer",
               "enum": "tag",
               "labels": "tags",
               "list": "list-dashes",
@@ -495,12 +499,16 @@
               "string": "cursor-text"
             },
             "x-enum-labels": {
+              "datetime": "Date \u0026 time",
+              "duration": "Duration",
               "labels": "Kubernetes labels",
               "list": "List (multi-select)"
             },
             "x-enum-tones": {
               "boolean": "amber",
               "date": "sky",
+              "datetime": "rose",
+              "duration": "neutral",
               "enum": "teal",
               "labels": "emerald",
               "list": "indigo",
@@ -545,7 +553,7 @@
       }
     },
     "processors": {
-      "description": "Post-query steps applied in order, after columns and aliases",
+      "description": "Raw-row steps applied in order before aliases, filters, columns, and styles",
       "items": {
         "properties": {
           "config": {
@@ -568,7 +576,7 @@
             "x-clicky-order": 1
           },
           "use": {
-            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.\n- `logs.dedupe`: Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.\n- `logs.json`: Extracts message, severity, source and host from a JSON log body, promotes the remaining fields as columns, and hashes the parsed message for later deduplication. Non-JSON lines pass through unchanged, so this can precede a multiline processor.\n- `logs.logfmt`: Extracts message and severity from a logfmt body, promotes the remaining key/value pairs as columns, and hashes the parsed message for later deduplication. Non-logfmt lines pass through unchanged.",
+            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Traces longer than 500 lines are emitted in bounded chunks. Assumes newest-first rows — set `order: asc` for a chronological query.\n- `logs.dedupe`: Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Works in either sort direction — set `partition` yourself for a different key. Paged, it folds each page and remembers the groups it has already emitted, so a line surfaces once per walk carrying the count from the page it appeared on.\n- `logs.json`: Extracts message, severity, source and host from a JSON log body, promotes the remaining fields as columns, and hashes the parsed message for later deduplication. Non-JSON lines pass through unchanged, so this can precede a multiline processor.\n- `logs.logfmt`: Extracts message and severity from a logfmt body, promotes the remaining key/value pairs as columns, and hashes the parsed message for later deduplication. Non-logfmt lines pass through unchanged.",
             "enum": [
               "java.stacktrace",
               "logs.dedupe",
@@ -598,6 +606,7 @@
           "config": {
             "continuation": "(row.message + \"\").matches(\"^\\\\s*(at\\\\s|Caused by:|Suppressed:|\\\\.\\\\.\\\\.\\\\s*[0-9]+\\\\s+more\\\\s*$)\")",
             "keep": "first",
+            "max": 500,
             "order": "desc",
             "partition": [
               "pod",
@@ -610,7 +619,7 @@
             },
             "when": "count \u003e 1"
           },
-          "description": "Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.",
+          "description": "Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Traces longer than 500 lines are emitted in bounded chunks. Assumes newest-first rows — set `order: asc` for a chronological query.",
           "title": "Java stack trace merge",
           "type": "cel.batch"
         },
@@ -622,11 +631,11 @@
             ],
             "set": {
               "count": "count",
-              "firstSeen": "dyn(batch)[count - 1].timestamp",
-              "lastSeen": "dyn(batch)[0].timestamp"
+              "firstSeen": "dyn(batch)[0].timestamp \u003e dyn(batch)[count - 1].timestamp ? dyn(batch)[count - 1].timestamp : dyn(batch)[0].timestamp",
+              "lastSeen": "dyn(batch)[0].timestamp \u003e dyn(batch)[count - 1].timestamp ? dyn(batch)[0].timestamp : dyn(batch)[count - 1].timestamp"
             }
           },
-          "description": "Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.",
+          "description": "Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Works in either sort direction — set `partition` yourself for a different key. Paged, it folds each page and remembers the groups it has already emitted, so a line surfaces once per walk carrying the count from the page it appeared on.",
           "title": "Collapse repeated log lines",
           "type": "cel.dedupe"
         },
@@ -1260,6 +1269,54 @@
         }
       },
       "title": "Replay",
+      "type": "object"
+    },
+    "trace": {
+      "description": "Long-running stream configuration",
+      "properties": {
+        "buffer": {
+          "anyOf": [
+            {
+              "required": [
+                "maxRows"
+              ]
+            },
+            {
+              "required": [
+                "maxWait"
+              ]
+            }
+          ],
+          "description": "Collect raw rows before running whole-result processors; the first configured bound reached flushes the batch",
+          "properties": {
+            "maxRows": {
+              "description": "Raw provider rows per processor batch",
+              "minimum": 1,
+              "title": "Maximum rows",
+              "type": "integer"
+            },
+            "maxWait": {
+              "description": "Time from the first pending raw row to a flush, for example 250ms",
+              "title": "Maximum wait",
+              "type": "string"
+            }
+          },
+          "title": "Processor buffer",
+          "type": "object"
+        },
+        "maxDuration": {
+          "description": "Session lifetime, for example 15m",
+          "title": "Maximum duration",
+          "type": "string"
+        },
+        "maxEvents": {
+          "description": "Final emitted rows retained in the session ring",
+          "minimum": 1,
+          "title": "Maximum events",
+          "type": "integer"
+        }
+      },
+      "title": "Trace",
       "type": "object"
     }
   },
