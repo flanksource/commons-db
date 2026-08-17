@@ -113,15 +113,22 @@ func (logParseProcessor) Process(_ context.Context, spec query.ProcessorSpec, in
 	return &result, nil
 }
 
-func (logParseProcessor) ProcessPage(_ context.Context, spec query.ProcessorSpec, page query.Page) (query.Page, error) {
+// ProcessPage parses each line of one page. Parsing reads a row and nothing
+// else, so there is no state to carry between pages.
+func (logParseProcessor) ProcessPage(
+	_ context.Context,
+	spec query.ProcessorSpec,
+	page query.Page,
+	_ []byte,
+) (query.Page, []byte, error) {
 	config, err := query.DecodeOptions[LogParseConfig](spec.Config)
 	if err != nil {
-		return query.Page{}, err
+		return query.Page{}, nil, err
 	}
 	rows, err := ApplyLogParse(page.Rows, config)
 	if err != nil {
-		return query.Page{}, err
+		return query.Page{}, nil, err
 	}
 	page.Rows = rows
-	return page, nil
+	return page, nil, nil
 }

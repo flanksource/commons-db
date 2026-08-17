@@ -3,10 +3,10 @@ package profiles
 import (
 	"cmp"
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/entity"
@@ -21,6 +21,12 @@ type profileOpenAPIHandler struct {
 	generator  *rpc.OpenAPIGenerator
 	store      Store
 	extensions []OpenAPIExtension
+	mu         sync.Mutex
+	// Documents already encoded for the profiles named by fingerprint. Cleared
+	// whenever that fingerprint changes, so a cached body is never served for a
+	// different set of profiles than the one it was built from.
+	fingerprint string
+	documents   map[openAPIRepresentation]openAPIDocument
 }
 
 type OpenAPIExtension func(*rpc.OpenAPISpec)
@@ -44,31 +50,86 @@ func (h *profileOpenAPIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	spec, err := h.generator.GenerateFromCobraWithConfig(h.root, h.config)
+	representation := negotiateOpenAPIRepresentation(r.Header.Get("Accept"))
+	document, err := h.document(r.Context(), representation)
 	if err != nil {
-		http.Error(w, fmt.Sprintf("generate OpenAPI: %v", err), http.StatusInternalServerError)
-		return
-	}
-	if err := mergeStoredProfiles(spec, h.store); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	w.Header().Set("Content-Type", document.contentType)
+	w.Header().Set("ETag", document.etag)
+	// The document changes whenever a profile does, so it is never served
+	// unconditionally — but a revalidation that matches costs a round trip
+	// instead of half a megabyte.
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Add("Vary", "Accept")
+	if matchesETag(r.Header.Get("If-None-Match"), document.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if _, err := w.Write(document.body); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+	}
+}
+
+// document returns the requested representation, regenerating only when the
+// stored profiles have changed since the cached one was built.
+func (h *profileOpenAPIHandler) document(ctx context.Context, representation openAPIRepresentation) (openAPIDocument, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	profiles, err := h.store.List(ctx)
+	if err != nil {
+		return openAPIDocument{}, fmt.Errorf("load profile surfaces: %w", err)
+	}
+	fingerprint, err := fingerprintProfiles(profiles)
+	if err != nil {
+		return openAPIDocument{}, err
+	}
+	if fingerprint != h.fingerprint {
+		h.fingerprint, h.documents = fingerprint, map[openAPIRepresentation]openAPIDocument{}
+	}
+	if document, ok := h.documents[representation]; ok {
+		return document, nil
+	}
+
+	spec, err := h.generator.GenerateFromCobraWithConfig(h.root, h.config)
+	if err != nil {
+		return openAPIDocument{}, fmt.Errorf("generate OpenAPI: %v", err)
+	}
+	if err := mergeStoredProfiles(ctx, spec, newSnapshotStore(profiles)); err != nil {
+		return openAPIDocument{}, err
 	}
 	for _, extend := range h.extensions {
 		extend(spec)
 	}
-	w.Header().Set("Content-Type", "application/json")
-	if err := json.NewEncoder(w).Encode(spec); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+	document, err := encodeOpenAPIDocument(spec, representation)
+	if err != nil {
+		return openAPIDocument{}, err
 	}
+	h.documents[representation] = document
+	return document, nil
+}
+
+// A conditional request may carry several tags, and a proxy may weaken one.
+func matchesETag(header, etag string) bool {
+	for _, candidate := range strings.Split(header, ",") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "*" || strings.TrimPrefix(candidate, "W/") == etag {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeStoredProfiles replaces startup-snapshotted profile surfaces with a
 // fresh view of the YAML store. The resulting operations execute through the
 // generic /profile/profile-<slug> handler, so no live Cobra mutation is needed.
-func mergeStoredProfiles(spec *rpc.OpenAPISpec, store Store) error {
+func mergeStoredProfiles(ctx context.Context, spec *rpc.OpenAPISpec, store Store) error {
 	if spec.Clicky == nil {
 		spec.Clicky = &rpc.ClickySpecMeta{}
 	}
+	dropProfileFilterComponents(spec)
 	surfaces := make([]rpc.ClickySurface, 0, len(spec.Clicky.Surfaces))
 	for _, surface := range spec.Clicky.Surfaces {
 		if surface.Parent != profileSurfaceParent {
@@ -88,12 +149,12 @@ func mergeStoredProfiles(spec *rpc.OpenAPISpec, store Store) error {
 		}
 	}
 
-	profiles, err := store.List(context.Background())
+	profiles, err := store.List(ctx)
 	if err != nil {
 		return fmt.Errorf("load profile surfaces: %w", err)
 	}
 	for _, profile := range profiles {
-		resolved, err := ResolveWithoutTouch(context.Background(), store, profile.Name)
+		resolved, err := ResolveWithoutTouch(ctx, store, profile.Name)
 		if err != nil {
 			return fmt.Errorf("resolve profile surface %q: %w", profile.Name, err)
 		}
@@ -188,7 +249,8 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	// order — the same rule the cursor below is held to, and the same one
 	// ExecutePages enforces when the request arrives. A profile that cannot page
 	// still takes a limit: capping rows needs no order.
-	if !roles[query.ParamRoleOffset] && profile.Pageable() == nil {
+	if !roles[query.ParamRoleOffset] && profile.Pageable() == nil &&
+		query.SupportsPaging(profile.Provider.Type).Supports(query.PagingOffset) {
 		parameters = append(parameters,
 			rpc.OpenAPIParameter{
 				Name: "offset", In: "query", Description: "Rows to skip",

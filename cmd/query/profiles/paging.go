@@ -27,6 +27,7 @@ type exportRequest struct {
 	// pageable reports whether the profile can serve a position past its first
 	// page. A response that cannot must not report one as available.
 	pageable bool
+	paging   query.PagingMode
 
 	// diagnostics is set only for an info request, which runs the export it is
 	// asked about purely to report what the provider was sent.
@@ -36,6 +37,10 @@ type exportRequest struct {
 // pageRequest renders the transport request as the engine's page.
 func (r exportRequest) pageRequest() query.PageRequest {
 	page := query.PageRequest{Limit: r.limit, Offset: r.offset, Cursor: r.cursor, Diagnostics: r.diagnostics}
+	if r.offset == 0 && r.cursor.IsZero() &&
+		!r.paging.Supports(query.PagingOffset) && r.paging.Supports(query.PagingCursor) {
+		page.Strategy = query.PagingCursor
+	}
 	if r.scope == "all" {
 		// An export reads forward to the ceiling and never jumps, so it takes
 		// the strategy that does not get more expensive the further it goes.
@@ -382,7 +387,9 @@ func setExportHeaders(w http.ResponseWriter, r *http.Request, profileName string
 		// Offset is withheld for the same reason — it names a position that
 		// cannot be asked for.
 		if request.pageable {
-			header.Set("X-Page-Offset", strconv.Itoa(request.offset))
+			if request.pageRequest().Mode() == query.PagingOffset {
+				header.Set("X-Page-Offset", strconv.Itoa(request.offset))
+			}
 			header.Set("X-Has-More", strconv.FormatBool(response.hasMore))
 			if response.next != "" {
 				header.Set("X-Next-Cursor", string(response.next))

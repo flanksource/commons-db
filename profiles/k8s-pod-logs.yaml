@@ -9,17 +9,30 @@
 # line with the container it was read from — Host carries only the pod name, so
 # a multi-container pod would otherwise be unattributable.
 #
+# The time range, the workload picker and the label controls are not declared
+# here: the k8s provider generates them for every profile it backs. The time
+# range defaults to the last hour and the workload picker offers the pods this
+# target resolves to.
+#
+# Rows come back oldest first, and no `order:` is needed because the provider
+# supplies one. The direction is not a preference: the Kubernetes log API can
+# only resume forward from a timestamp, so ascending is the only order a cursor
+# can page. Each page seeks to where the last one stopped rather than re-reading
+# the window.
+#
 # logs.dedupe collapses lines whose message matches once ids and durations are
 # tokenized out, which turns a crashlooping container's repeated stack into one
-# row with a count. It reads every row before any count is final, so a profile
-# using it is not served page by page.
+# row with a count. Paged, it folds each page and carries the groups it has
+# already emitted in the cursor, so a line surfaces once per walk with the count
+# from the page it appeared on.
 profile: Kubernetes Pod Logs
 render: logs
 provider:
   type: k8s
   connection: connection://kubernetes
-  options:
-    limit: "500"
+limits:
+  pageSize: 500
+  maxPageSize: 500
 query: "kind={{.params.kind}} namespace={{.params.namespace}} name={{.params.name}}"
 processors:
   - use: logs.dedupe

@@ -415,6 +415,7 @@ func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, 
 		limit:    limits.PageSize,
 		maxRows:  limits.MaxExportRows,
 		pageable: profile.Pageable() == nil,
+		paging:   query.SupportsPaging(profile.Provider.Type),
 	}
 	if request.scope == "" {
 		request.scope = "page"

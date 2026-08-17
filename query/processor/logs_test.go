@@ -111,13 +111,15 @@ var _ = Describe("logs.parse", func() {
 		Expect(ok).To(BeTrue())
 
 		total := query.Total{Value: 8, Exact: true}
-		page, err := pageProcessor.ProcessPage(ctx, query.ProcessorSpec{Config: map[string]any{"format": "json"}}, query.Page{
+		page, state, err := pageProcessor.ProcessPage(ctx, query.ProcessorSpec{Config: map[string]any{"format": "json"}}, query.Page{
 			Rows:    []query.Row{{"message": `{"msg":"ready"}`}},
 			Styles:  []map[string]string{{"message": "text-green-500"}},
 			HasMore: true,
 			Total:   &total,
-		})
+		}, nil)
 		Expect(err).ToNot(HaveOccurred())
+		// Parsing reads one row at a time, so nothing needs carrying forward.
+		Expect(state).To(BeNil())
 		Expect(page.Rows[0]).To(HaveKeyWithValue("message", "ready"))
 		Expect(page.Styles).To(Equal([]map[string]string{{"message": "text-green-500"}}))
 		Expect(page.HasMore).To(BeTrue())

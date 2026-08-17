@@ -397,6 +397,7 @@ var _ = Describe("processor library", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(resolved.Type).To(Equal("cel.batch"))
 		Expect(resolved.Config).To(HaveKeyWithValue("order", processor.OrderDescending))
+		Expect(resolved.Config).To(HaveKeyWithValue("max", 500))
 	})
 
 	It("merges an override into the preset without dropping its siblings", func() {

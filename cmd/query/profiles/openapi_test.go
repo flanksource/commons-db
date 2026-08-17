@@ -31,7 +31,7 @@ func TestMergeStoredProfilesTracksStoreImmediately(t *testing.T) {
 			{Key: "profile-stale", Entity: "profile-stale", Parent: profileSurfaceParent},
 		}},
 	}
-	if err := mergeStoredProfiles(spec, store); err != nil {
+	if err := mergeStoredProfiles(context.Background(), spec, store); err != nil {
 		t.Fatal(err)
 	}
 	if _, exists := spec.Paths["/api/v1/profile-stale"]; exists {
@@ -83,7 +83,7 @@ func TestMergeStoredProfilesTracksStoreImmediately(t *testing.T) {
 	if err := store.Delete(context.Background(), profile.Name); err != nil {
 		t.Fatal(err)
 	}
-	if err := mergeStoredProfiles(spec, store); err != nil {
+	if err := mergeStoredProfiles(context.Background(), spec, store); err != nil {
 		t.Fatal(err)
 	}
 	if _, exists := spec.Paths["/api/v1/profile/profile-live-sales"]; exists {
@@ -314,6 +314,20 @@ func TestProfileOpenAPIAdvertisesKubernetesRuntimeFilters(t *testing.T) {
 	if filter := spec.Components.ClickyFilters[profileParamFilterName(profile.Name, "applications")]; filter.Type != "labels" || !filter.Multi {
 		t.Fatalf("label-key filter = %+v", filter)
 	}
+
+	// A range has no value list to enumerate, so it carries no lookup — but it
+	// does carry the bound the server applies when nobody sends one, which is
+	// what lets a generated client and the browser show the query they get.
+	timeParam := byName["time"]
+	if timeParam.Lookup != nil {
+		t.Fatalf("time filter should advertise no lookup: %+v", timeParam)
+	}
+	if timeParam.Schema == nil || timeParam.Schema.Default != query.KubernetesDefaultTimeRange {
+		t.Fatalf("time filter default = %+v", timeParam.Schema)
+	}
+	if filter := spec.Components.ClickyFilters[profileFilterName(profile.Name, "time")]; filter.Type != "date-range" {
+		t.Fatalf("time filter = %+v", filter)
+	}
 }
 
 // A cursor is only offered by a profile that can serve one. A UI shown a cursor
@@ -348,7 +362,7 @@ func TestProfileAdvertisesCursorOnlyWhenItCanServeOne(t *testing.T) {
 				Paths:  map[string]rpc.OpenAPIPath{},
 				Clicky: &rpc.ClickySpecMeta{Surfaces: []rpc.ClickySurface{{Key: "profiles", Entity: "profiles"}}},
 			}
-			if err := mergeStoredProfiles(spec, store); err != nil {
+			if err := mergeStoredProfiles(context.Background(), spec, store); err != nil {
 				t.Fatal(err)
 			}
 			op := spec.Paths["/api/v1/profile/profile-cursor-probe"]["get"]

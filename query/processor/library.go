@@ -16,6 +16,8 @@ import (
 // and failing the predicate.
 const javaContinuationCEL = `(row.message + "").matches("^\\s*(at\\s|Caused by:|Suppressed:|\\.\\.\\.\\s*[0-9]+\\s+more\\s*$)")`
 
+const javaStackTraceMax = 500
+
 // javaExceptionCEL lifts the thrown type out of the first line, so the merged
 // row can be filtered and grouped by exception class without parsing the
 // message again downstream. A line that does not name a throwable yields "".
@@ -31,12 +33,18 @@ const javaExceptionCEL = `
 const javaMessageCEL = `dyn(batch).map(line, line.message + "").join("\n")`
 
 // dedupeLastSeenCEL is the timestamp of the newest row that collapsed into the
-// group. Rows keep arrival order within a group, so with the newest-first shape
-// of a log query that is the first row, not the last.
-const dedupeLastSeenCEL = `dyn(batch)[0].timestamp`
+// group, and dedupeFirstSeenCEL the other end of the same span.
+//
+// A group keeps arrival order and a log query arrives in timestamp order, so
+// the two extremes are always the two ends of the batch — but which end is
+// which depends on the direction. Reading both and comparing them is what makes
+// the preset correct under either: a Loki profile returns newest-first, and a
+// Kubernetes one is ascending because that is the only direction its API can
+// page in. Pinning this to a position silently swapped the two labels for
+// whichever profile disagreed.
+const dedupeLastSeenCEL = `dyn(batch)[0].timestamp > dyn(batch)[count - 1].timestamp ? dyn(batch)[0].timestamp : dyn(batch)[count - 1].timestamp`
 
-// dedupeFirstSeenCEL is the other end of the same span.
-const dedupeFirstSeenCEL = `dyn(batch)[count - 1].timestamp`
+const dedupeFirstSeenCEL = `dyn(batch)[0].timestamp > dyn(batch)[count - 1].timestamp ? dyn(batch)[count - 1].timestamp : dyn(batch)[0].timestamp`
 
 func init() {
 	query.RegisterNamedProcessor(query.NamedProcessor{
@@ -64,7 +72,8 @@ func init() {
 		Title: "Collapse repeated log lines",
 		Description: "Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying " +
 			"`count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. " +
-			"Assumes newest-first rows — set `partition` yourself for a different key. A profile using this cannot be paged: every row has to be read before any count is final.",
+			"Works in either sort direction — set `partition` yourself for a different key. Paged, it folds each page and remembers the groups it has " +
+			"already emitted, so a line surfaces once per walk carrying the count from the page it appeared on.",
 		Spec: query.ProcessorSpec{
 			Type: "cel.dedupe",
 			Config: map[string]any{
@@ -84,12 +93,14 @@ func init() {
 		Title: "Java stack trace merge",
 		Description: "Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, " +
 			"so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` " +
-			"to turn that off. Assumes newest-first rows — set `order: asc` for a chronological query.",
+			"to turn that off. Traces longer than 500 lines are emitted in bounded chunks. Assumes newest-first rows — set `order: asc` " +
+			"for a chronological query.",
 		Spec: query.ProcessorSpec{
 			Type: "cel.batch",
 			Config: map[string]any{
 				"partition":    []any{"pod", "container"},
 				"order":        OrderDescending,
+				"max":          javaStackTraceMax,
 				"continuation": javaContinuationCEL,
 				"when":         "count > 1",
 				"keep":         KeepFirst,
