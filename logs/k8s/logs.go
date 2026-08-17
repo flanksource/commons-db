@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/samber/lo"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -32,6 +31,32 @@ type Request struct {
 
 	// Containers filters logs from only these containers.
 	Containers types.MatchExpressions `json:"containers,omitempty"`
+
+	// After resumes a forward walk immediately past a line already read.
+	//
+	// The kubelet has no cursor and SinceTime only names whole seconds, so a
+	// resume re-reads from the start of that second and this is what discards
+	// the part already served. Lines are compared on (timestamp, id), which is
+	// the order the provider declares.
+	After *Position `json:"-"`
+}
+
+// Position identifies one log line within the ascending (timestamp, id) order.
+type Position struct {
+	Timestamp time.Time
+	ID        string
+}
+
+// reached reports whether line is at or before this position, and so was
+// already served by the page that issued it.
+func (p Position) reached(timestamp time.Time, id string) bool {
+	if timestamp.Before(p.Timestamp) {
+		return true
+	}
+	if timestamp.After(p.Timestamp) {
+		return false
+	}
+	return id <= p.ID
 }
 
 // Fetch reads logs from the already-resolved pods. Target discovery belongs to
@@ -136,12 +161,21 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, pod co
 		end = parsed
 	}
 
+	// Limit caps how many lines are read forward from the window's start, not
+	// how many are taken off its end.
+	//
+	// TailLines, which this used to set, counts backwards from the newest line
+	// the container ever wrote. That is the wrong end for a forward walk, and it
+	// silently disagreed with an End bound too: with both set, the tail lines
+	// are all newer than the bound and every one of them is discarded, so a
+	// bounded query with a limit returned nothing at all.
+	var limit int
 	if request.Limit != "" {
-		limit, err := strconv.ParseInt(request.Limit, 10, 32)
+		parsed, err := strconv.Atoi(request.Limit)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("limit %q is not a number: %w", request.Limit, err)
 		}
-		opt.TailLines = lo.ToPtr(limit)
+		limit = parsed
 	}
 
 	req := client.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opt)
@@ -170,6 +204,14 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, pod co
 			"container": reportedContainer,
 		},
 	}
+	stream := fmt.Sprintf("%s/%s/%s", pod.Namespace, pod.Name, reportedContainer)
+	// ordinal counts the lines sharing one instant, and resets when the instant
+	// does. Numbering within the timestamp rather than within the fetch is what
+	// makes an id reproducible: a resume re-reads from the start of the cursor's
+	// second, so every line of that instant is seen from position 0 again and
+	// gets the same id it had on the page that issued the cursor.
+	var previous time.Time
+	ordinal := 0
 	scanner := bufio.NewScanner(podLogs)
 	for scanner.Scan() {
 		parts := strings.SplitN(scanner.Text(), " ", 2)
@@ -181,15 +223,32 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, pod co
 		if err != nil {
 			continue
 		}
+		if t.Equal(previous) {
+			ordinal++
+		} else {
+			previous, ordinal = t, 0
+		}
+		// A container's own stream is ascending, so the first line past the end
+		// bound ends this read rather than merely being skipped.
 		if !end.IsZero() && t.After(end) {
+			break
+		}
+		id := fmt.Sprintf("%s#%d", stream, ordinal)
+		if request.After != nil && request.After.reached(t, id) {
 			continue
+		}
+		// One past the cap is read on purpose: the caller cuts at the limit and
+		// reads the extra as "there is more", which is a different fact from a
+		// page that happened to come up short.
+		if limit > 0 && len(output.Logs) > limit {
+			break
 		}
 
 		line := &logs.LogLine{
 			// The id is what makes the result's order total: a timestamp ties
-			// across containers, and a line's position in its own stream is the
-			// only thing that never does.
-			ID:      fmt.Sprintf("%s/%s/%s#%d", pod.Namespace, pod.Name, reportedContainer, len(output.Logs)),
+			// across containers, and a line's position within its own instant is
+			// the only thing that never does.
+			ID:      id,
 			Count:   1,
 			Message: parts[1],
 			// Cloned: pod.Labels belongs to the client-go object and is shared
@@ -203,6 +262,8 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, pod co
 		output.Logs = append(output.Logs, line)
 	}
 
+	// A read stopped early by a break leaves the body unread, which is not an
+	// error — only a genuine read failure is.
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("error reading logs: %w", err)
 	}

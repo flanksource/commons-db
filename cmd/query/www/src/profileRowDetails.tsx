@@ -43,18 +43,29 @@ type DefaultResultProps = {
 
 export type ProfileRowDetailsRemoteProps = Pick<
   ClickyProps,
-  "download" | "pagination" | "url"
+  "download" | "pagination" | "url" | "dataFormat"
 >;
 
+// The URL travels with the rows so the view switcher and the export menu have
+// an endpoint to act on. The rows themselves came from that endpoint's clicky
+// representation, which is what dataFormat says — without it the table is
+// fetched a second time to be handed back the bytes it is already rendering.
 export function profileRowDetailsRemoteProps(
-  response: { requestUrl?: string } | null,
+  response: { requestUrl?: string; contentType?: string } | null,
   defaultView: ReactNode,
 ): ProfileRowDetailsRemoteProps {
   const resultProps = isValidElement<DefaultResultProps>(defaultView)
     ? defaultView.props
     : {};
+  const contentType = (response?.contentType?.split(";")[0] ?? "").trim();
+  const servedAsClicky =
+    contentType === "application/clicky+json" ||
+    contentType === "application/json+clicky";
   return {
     ...(response?.requestUrl ? { url: response.requestUrl } : {}),
+    ...(response?.requestUrl && servedAsClicky
+      ? { dataFormat: "clicky" as const }
+      : {}),
     ...(resultProps.download ? { download: resultProps.download } : {}),
     ...(resultProps.pagination ? { pagination: resultProps.pagination } : {}),
   };

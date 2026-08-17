@@ -1,11 +1,8 @@
 import {
   LogsTable,
-  type ClickyDownloadOptions,
-  type DataTablePagination,
-  type OperationResultFilterConfig,
+  type ClickyNode,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
-import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { useProfiles } from "./profilesQuery";
 
@@ -19,19 +16,6 @@ function slugify(name: string): string {
     else if (ch === " " || ch === "-" || ch === "_" || ch === "/" || ch === ".") out += "-";
   }
   return out.replace(/^-+|-+$/g, "");
-}
-
-// asArray pulls the row/item array out of whatever envelope an endpoint returns
-// (a bare array, or a { rows } / { data } / { items } wrapper).
-function asArray(payload: unknown): Record<string, unknown>[] {
-  if (Array.isArray(payload)) return payload as Record<string, unknown>[];
-  if (payload && typeof payload === "object") {
-    for (const key of ["rows", "data", "items"]) {
-      const v = (payload as Record<string, unknown>)[key];
-      if (Array.isArray(v)) return v as Record<string, unknown>[];
-    }
-  }
-  return [];
 }
 
 // entitySegment returns the trailing path segment of a request URL, e.g.
@@ -56,58 +40,9 @@ export function useLogsEntityNames(): Set<string> {
   return names;
 }
 
-// LogsResult re-fetches the profile's rows as plain JSON from the same request URL
-// that produced the result (so the active server-side filters are preserved) and
-// renders them through clicky-ui's canonical LogsTable. Client-side filtering and
-// sorting are disabled — filtering stays server-side via the profile's params.
-function LogsResult({
-  requestUrl,
-  filterConfig,
-  columnFilterKeys,
-  pagination,
-  download,
-}: {
-  requestUrl: string;
-  filterConfig?: OperationResultFilterConfig;
-  columnFilterKeys: Record<string, string>;
-  pagination?: DataTablePagination;
-  download?: ClickyDownloadOptions;
-}): ReactNode {
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["logs-rows", requestUrl],
-    queryFn: async () => {
-      const res = await fetch(requestUrl, { headers: { Accept: "application/json" } });
-      if (!res.ok) throw new Error(`failed to load rows: ${res.status}`);
-      return asArray(await res.json());
-    },
-  });
-
-  if (isLoading) return <div className="text-sm text-muted-foreground">Loading logs…</div>;
-  if (isError || !data) return null;
-
-  return (
-    <LogsTable
-      logs={data}
-      autoFilter={false}
-      fullscreenTitle="Logs"
-      columnFilterKeys={columnFilterKeys}
-      cellFilters={filterConfig?.cellFilters}
-      onCellFilterChange={filterConfig?.onCellFilterChange}
-      // A logs profile is paged by the server exactly like every other one, so
-      // it gets the same pager and download menu. Dropping them here is what
-      // made the first page look like the whole log.
-      {...(pagination ? { pagination } : {})}
-      {...(download ? { download } : {})}
-    />
-  );
-}
-
 export function logsColumnFilterKeys(payload: unknown): Record<string, string> {
-  if (!payload || typeof payload !== "object") return {};
-  const node = (payload as { node?: unknown }).node;
-  if (!node || typeof node !== "object") return {};
-  const table = node as { kind?: unknown; columns?: unknown };
-  if (table.kind !== "table" || !Array.isArray(table.columns)) return {};
+  const table = clickyTable(payload);
+  if (!table || !Array.isArray(table.columns)) return {};
 
   return Object.fromEntries(
     table.columns.flatMap((value) => {
@@ -120,20 +55,74 @@ export function logsColumnFilterKeys(payload: unknown): Record<string, string> {
   );
 }
 
+export function clickyLogsRows(payload: unknown): Record<string, unknown>[] | undefined {
+  const table = clickyTable(payload);
+  if (!table) return undefined;
+  return (table.rows ?? []).map((row) =>
+    Object.fromEntries(
+      Object.entries(row.cells).map(([key, value]) => [key, clickyNodeValue(value)]),
+    ),
+  );
+}
+
+function clickyTable(payload: unknown): ClickyNode | undefined {
+  if (!payload || typeof payload !== "object") return undefined;
+  const candidate = payload as Partial<ClickyNode> & { node?: unknown };
+  const node = candidate.node && typeof candidate.node === "object"
+    ? (candidate.node as ClickyNode)
+    : (candidate as ClickyNode);
+  if (node.kind === "table") return node;
+  for (const child of [
+    ...(node.children ?? []),
+    ...(node.items ?? []),
+    ...(node.fields ?? []).map((field) => field.value),
+  ]) {
+    const table = clickyTable(child);
+    if (table) return table;
+  }
+  return undefined;
+}
+
+function clickyNodeValue(node: ClickyNode): unknown {
+  if (node.kind === "map") {
+    return Object.fromEntries(
+      (node.fields ?? []).map((field) => [field.name, clickyNodeValue(field.value)]),
+    );
+  }
+  if (node.kind === "list") return (node.items ?? []).map(clickyNodeValue);
+  if (node.plain !== undefined) return node.plain;
+  if (node.text !== undefined) return node.text;
+  if (node.source !== undefined) return node.source;
+  if (node.filterValue !== undefined) return node.filterValue;
+  if (node.children) return node.children.map(clickyNodeValue).join("");
+  return "";
+}
+
 // logsResultRenderer is the EntityExplorerApp result override: when the result's
-// request URL targets a logs entity it renders LogsResult, otherwise it returns
-// the default view unchanged.
+// request URL targets a logs entity it renders its current page through
+// LogsTable, otherwise it returns the default view unchanged.
 export function logsResultRenderer(
   logsEntityNames: Set<string>,
 ): (ctx: ResultRenderContext) => ReactNode {
-  return ({ response, defaultView, filterConfig, pagination, download }) => {
+  return ({ response, loading, defaultView, filterConfig, pagination, download }) => {
     const requestUrl = response?.requestUrl;
     if (!requestUrl || !logsEntityNames.has(entitySegment(requestUrl))) return defaultView;
+    const logs = clickyLogsRows(response.parsed);
+    if (!logs) return defaultView;
     return (
-      <LogsResult
-        requestUrl={requestUrl}
-        filterConfig={filterConfig}
+      <LogsTable
+        logs={logs}
+        loading={loading}
+        autoFilter={false}
+        fullscreenTitle="Logs"
         columnFilterKeys={logsColumnFilterKeys(response.parsed)}
+        cellFilters={filterConfig?.cellFilters}
+        onCellFilterChange={filterConfig?.onCellFilterChange}
+        {...(filterConfig?.filters && filterConfig.filters.length > 0
+          ? { externalFilters: filterConfig.filters }
+          : {})}
+        {...(filterConfig?.search ? { externalSearch: filterConfig.search } : {})}
+        {...(filterConfig?.timeRange ? { externalTimeRange: filterConfig.timeRange } : {})}
         {...(pagination ? { pagination } : {})}
         {...(download ? { download } : {})}
       />

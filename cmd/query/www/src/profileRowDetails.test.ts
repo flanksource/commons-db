@@ -68,4 +68,29 @@ describe("profile row details", () => {
       ),
     ).toEqual({ download, pagination, url: requestUrl });
   });
+
+  // The rows handed to the table came from this URL's clicky representation.
+  // Saying so is what stops the table fetching the same payload a second time
+  // to render bytes it already holds.
+  it("declares rows served as clicky as the payload for that URL", () => {
+    const requestUrl = "/api/v1/profile/profile-orders";
+
+    expect(
+      profileRowDetailsRemoteProps(
+        { requestUrl, contentType: "application/json+clicky" },
+        createElement("div"),
+      ),
+    ).toEqual({ url: requestUrl, dataFormat: "clicky" });
+  });
+
+  it("leaves rows from any other representation to be refreshed", () => {
+    const requestUrl = "/api/v1/profile/profile-orders";
+
+    expect(
+      profileRowDetailsRemoteProps(
+        { requestUrl, contentType: "application/json" },
+        createElement("div"),
+      ),
+    ).toEqual({ url: requestUrl });
+  });
 });
