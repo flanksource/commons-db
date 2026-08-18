@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"net/http"
+	"time"
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
@@ -38,6 +39,16 @@ type opensearchOptions struct {
 	// Search is the structured search specification. It is mutually exclusive
 	// with the profile's raw query.
 	Search *esdsl.Search `json:"search,omitempty"`
+
+	// TailPoll is how long a caught-up tail waits before asking the index
+	// again. Empty is openSearchDefaultTailPoll. It has no effect on a query.
+	TailPoll string `json:"tailPoll,omitempty"`
+
+	// TailLag holds a tail's cursor that far behind now, so a document indexed
+	// later than it was written still lands ahead of the cursor rather than
+	// behind it. Empty is no lag: lines appear as soon as they are searchable,
+	// and one that arrives late is never emitted. See openSearchTailBound.
+	TailLag string `json:"tailLag,omitempty"`
 }
 
 // PagingModes reports both strategies. Offset is served by from/size and is
@@ -89,6 +100,86 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 		}
 		walk.run(ctx, req, page, yield)
 	}
+}
+
+// Stream tails the index by re-asking for the documents written past the last
+// one it emitted.
+//
+// OpenSearch has no tail: its whole read surface is request/response, so unlike
+// Loki's websocket or the kubelet's held-open read this is a poll, and the two
+// consequences are worth naming because neither is visible in the rows.
+//
+// It opens no point-in-time. A PIT is what makes a cursor walk read one
+// unchanging view of the index, and it is exactly wrong here — a frozen view
+// cannot contain a document that did not exist when it was taken, which is the
+// only kind of document a tail is waiting for.
+//
+// And a document is emitted only if it is indexed before the cursor passes its
+// instant. Ingest is not instantaneous, so one buffered past that point is
+// skipped and nothing here can tell: search_after moves forward and never looks
+// back. options.tailLag holds the cursor behind now to leave room for it.
+func (p opensearchProvider) Stream(ctx context.Context, req query.ProviderRequest, emit func(query.Row)) error {
+	searcher, opts, err := openSearchClient(ctx, req)
+	if err != nil {
+		return err
+	}
+	settings, err := openSearchTailOptions(opts)
+	if err != nil {
+		return err
+	}
+	tailOrder, err := openSearchTailOrder(req, opts)
+	if err != nil {
+		return err
+	}
+	// A cursor's keys are the sort values of the order that cut them, so keys
+	// cut under the profile's order would resume a tail sorted differently at
+	// whatever position those values happen to name — silently, and in the
+	// wrong place.
+	if len(req.Position.Keys) > 0 && tailOrder.Fingerprint() != req.Order.Fingerprint() {
+		return fmt.Errorf(
+			"this cursor was cut under %v but a tail follows %v, so it cannot resume from it",
+			req.Order.Columns(), tailOrder.Columns())
+	}
+
+	var timeFieldMapping *esdsl.TimeFieldMapping
+	if opts.Search != nil {
+		// Resolved once, before the first poll: the mapping carries the instant
+		// the window's date math resolves against, so re-resolving it per poll
+		// would slide the tail's lower bound forward under it.
+		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(
+			ctx, searcher, opts.Index, *opts.Search, openSearchParamBindings(req),
+		)
+		if err != nil {
+			return err
+		}
+	}
+	boundField, boundValue, err := openSearchTailBound(opts, settings.lag, timeFieldMapping, time.Now().UTC())
+	if err != nil {
+		return err
+	}
+
+	// The tail reads in its own ascending order rather than the profile's — see
+	// openSearchTailOrder — and the request is what carries that to the sort.
+	tailReq := req
+	tailReq.Order = tailOrder
+
+	walk := openSearchWalk{
+		searcher:    searcher,
+		index:       opts.Index,
+		diagnostics: req.Diagnostics,
+		build: func(position openSearchPage) (openSearchRequest, error) {
+			built, err := buildOpenSearchRequest(tailReq, opts, position, timeFieldMapping)
+			if err != nil {
+				return openSearchRequest{}, err
+			}
+			applyOpenSearchTailBound(built.body, boundField, boundValue)
+			return built, nil
+		},
+		mapRows: func(raw opensearch.Response) []query.Row {
+			return logResultToRows(searcher.ParseResponse(ctx, raw))
+		},
+	}
+	return walk.tail(ctx, tailReq, settings, emit)
 }
 
 func openSearchClient(ctx context.Context, req query.ProviderRequest) (*opensearch.Searcher, opensearchOptions, error) {

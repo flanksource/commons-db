@@ -171,17 +171,42 @@ func normalizeTimeBound(raw any, role string, search Search, mapping *TimeFieldM
 	if exclusive {
 		parsed.Time = parsed.Time.UTC().AddDate(0, 0, 1)
 	}
-	if mapping.Type == "date" || mapping.Type == "date_nanos" {
-		if parsed.DateMath {
-			return input, false, nil
-		}
-		return parsed.Time.UTC().Format(time.RFC3339Nano), exclusive, nil
+	if parsed.DateMath && (mapping.Type == "date" || mapping.Type == "date_nanos") {
+		// Date math is left for OpenSearch to resolve, which it can only do on a
+		// real date field.
+		return input, false, nil
 	}
-	encoded := encodeEpoch(parsed.Time, search.TimeFieldFormat)
-	if err := validateEpochRange(mapping.Type, encoded); err != nil {
+	encoded, err := EncodeTimeBound(parsed.Time, search, mapping)
+	if err != nil {
 		return nil, false, fmt.Errorf("%s parameter for timeField %q: %w", role, search.TimeField, err)
 	}
 	return encoded, exclusive, nil
+}
+
+// EncodeTimeBound renders instant as a value comparable against search.TimeField
+// under mapping: an RFC3339 string for a date field, an epoch integer in the
+// declared unit for a numeric one.
+//
+// It is exported because a tail bounds its polls at an instant of its own
+// choosing (see the OpenSearch provider's tailLag) rather than at a parameter
+// somebody supplied. Encoding that instant anywhere else would be a second
+// answer to "how does this index spell a time", and the two would disagree the
+// day one of them learned a new mapping type.
+func EncodeTimeBound(instant time.Time, search Search, mapping *TimeFieldMapping) (any, error) {
+	if mapping == nil {
+		return nil, fmt.Errorf("timeField %q has no resolved mapping to encode against", search.TimeField)
+	}
+	if err := validateTimeFieldMapping(search, mapping.Type); err != nil {
+		return nil, err
+	}
+	if mapping.Type == "date" || mapping.Type == "date_nanos" {
+		return instant.UTC().Format(time.RFC3339Nano), nil
+	}
+	encoded := encodeEpoch(instant, search.TimeFieldFormat)
+	if err := validateEpochRange(mapping.Type, encoded); err != nil {
+		return nil, err
+	}
+	return encoded, nil
 }
 
 func validateTimeFieldMapping(search Search, mappedType string) error {

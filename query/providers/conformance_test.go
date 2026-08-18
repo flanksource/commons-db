@@ -315,8 +315,13 @@ var _ = Describe("provider paging contract", func() {
 
 		runPagingConformance(pagingFixture{
 			name: "opensearch",
-			ctx:  func() context.Context { return context.New() },
-			key:  func(row query.Row) string { return fmt.Sprint(row["message"]) },
+			// Paged by search_after over a point-in-time, tailed by the same
+			// search_after with no point-in-time at all. The two capabilities are
+			// served by one mechanism here, which is exactly why the suite asks
+			// about them separately.
+			streams: true,
+			ctx:     func() context.Context { return context.New() },
+			key:     func(row query.Row) string { return fmt.Sprint(row["message"]) },
 			profile: func() query.Profile {
 				return query.Profile{
 					Name: "conformance-opensearch",
@@ -377,7 +382,7 @@ var _ = Describe("provider paging contract", func() {
 			name:    "k8s",
 			streams: true,
 			ctx:     func() context.Context { return stub.context() },
-			key:  func(row query.Row) string { return fmt.Sprint(row["message"]) },
+			key:     func(row query.Row) string { return fmt.Sprint(row["message"]) },
 			profile: func() query.Profile {
 				return query.Profile{
 					Name: "conformance-k8s",
