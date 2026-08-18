@@ -169,7 +169,14 @@ func (operation *connectionOperation) summary(event observability.Event, duratio
 			values["url"] = snapshot.Request.URL
 			values["status"] = snapshot.Response.Status
 		} else if snapshot.Request.Query != "" {
-			values["sql"] = logger.StripSecrets(snapshot.Request.Query)
+			if operation.policy.Family == observability.ProviderSQL {
+				values["sql"] = logger.StripSecrets(snapshot.Request.Query)
+			} else {
+				values["query"] = logger.StripSecrets(snapshot.Request.Query)
+			}
+		}
+		if len(snapshot.Request.Details) > 0 {
+			values["filters"] = snapshot.Request.Details
 		}
 	}
 	if runErr != nil {

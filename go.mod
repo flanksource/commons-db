@@ -38,6 +38,7 @@ require (
 	github.com/flanksource/deps v1.0.39
 	github.com/flanksource/gomplate/v3 v3.24.88
 	github.com/flanksource/is-healthy v1.0.90
+	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.1
 	github.com/go-sql-driver/mysql v1.10.0
@@ -56,6 +57,7 @@ require (
 	github.com/jackc/pgx/v5 v5.10.0
 	github.com/joho/godotenv v1.5.1
 	github.com/json-iterator/go v1.1.12
+	github.com/klauspost/compress v1.18.3
 	github.com/labstack/echo/v4 v4.15.0
 	github.com/liamylian/jsontime/v2 v2.0.0
 	github.com/lib/pq v1.10.9
@@ -195,7 +197,6 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
-	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
 	github.com/go-faster/city v1.0.1 // indirect
@@ -266,7 +267,6 @@ require (
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/jmespath/go-jmespath v0.4.1-0.20220621161143-b0104c826a24 // indirect
 	github.com/kevinburke/ssh_config v1.2.0 // indirect
-	github.com/klauspost/compress v1.18.3 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect

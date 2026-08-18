@@ -83,7 +83,10 @@ var _ = Describe("the Kubernetes pod logs example", func() {
 		var profile query.Profile
 		Expect(yaml.Unmarshal(body, &profile)).To(Succeed())
 		Expect(profile.Query).To(Equal("kind={{.params.kind}} namespace={{.params.namespace}} name={{.params.name}}"))
-		Expect(profile.Provider.Options).To(HaveKeyWithValue("limit", "500"))
+		Expect(profile.Provider.Options).ToNot(HaveKey("limit"))
+		Expect(profile.RowLimits()).To(Equal(query.RowLimits{
+			PageSize: 500, MaxPageSize: 500, MaxExportRows: query.DefaultMaxExportRows,
+		}))
 		for _, key := range []string{"kind", "apiVersion", "namespace", "name", "uid", "labels"} {
 			Expect(profile.Provider.Options).ToNot(HaveKey(key))
 		}

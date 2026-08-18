@@ -8,7 +8,7 @@ import (
 var _ = Describe("column filter kind", func() {
 	DescribeTable("derives the control from the column type",
 		func(columnType ColumnType, expected ColumnFilterKind) {
-			Expect(columnFilterKindFor(columnType)).To(Equal(expected))
+			Expect(columnFilterKindFor(ColumnDef{Type: columnType})).To(Equal(expected))
 		},
 		Entry("an undeclared type", ColumnType(""), ColumnFilterKindTerms),
 		Entry("string", ColumnTypeString, ColumnFilterKindTerms),
@@ -29,6 +29,28 @@ var _ = Describe("column filter kind", func() {
 		Entry("json", ColumnTypeJSON, ColumnFilterKindNone),
 	)
 
+	// The timestamp role is documented as the column the table's date-range
+	// control filters through, and the schema offers it as "Role" beside a
+	// separate Type. An author who sets only the role and leaves the type alone
+	// otherwise gets a value selection — a control that cannot express a bound.
+	DescribeTable("gives the timestamp role a time bound whatever the type says",
+		func(columnType ColumnType, expected ColumnFilterKind) {
+			column := ColumnDef{Type: columnType, Kind: ColumnKindTimestamp}
+			Expect(columnFilterKindFor(column)).To(Equal(expected))
+		},
+		Entry("an undeclared type", ColumnType(""), ColumnFilterKindTime),
+		Entry("string", ColumnTypeString, ColumnFilterKindTime),
+		Entry("datetime", ColumnTypeDateTime, ColumnFilterKindTime),
+	)
+
+	// The other roles say how a cell renders, not what it compares as.
+	It("leaves the tags and status roles filtering by their type", func() {
+		Expect(columnFilterKindFor(ColumnDef{Type: ColumnTypeString, Kind: ColumnKindTags})).
+			To(Equal(ColumnFilterKindTerms))
+		Expect(columnFilterKindFor(ColumnDef{Type: ColumnTypeNumber, Kind: ColumnKindStatus})).
+			To(Equal(ColumnFilterKindRange))
+	})
+
 	// A substring match and a day-granularity bound are choices an author makes:
 	// no column type implies either, because every type they could apply to has
 	// an exact comparison or a full instant available already.
@@ -38,8 +60,11 @@ var _ = Describe("column filter kind", func() {
 			ColumnTypeDuration, ColumnTypeBytes, ColumnTypeDateTime, ColumnTypeBoolean,
 			ColumnTypeUUID,
 		} {
-			Expect(columnFilterKindFor(columnType)).ToNot(Equal(ColumnFilterKindText))
-			Expect(columnFilterKindFor(columnType)).ToNot(Equal(ColumnFilterKindDate))
+			for _, kind := range []ColumnKind{"", ColumnKindTimestamp} {
+				column := ColumnDef{Type: columnType, Kind: kind}
+				Expect(columnFilterKindFor(column)).ToNot(Equal(ColumnFilterKindText))
+				Expect(columnFilterKindFor(column)).ToNot(Equal(ColumnFilterKindDate))
+			}
 		}
 	})
 

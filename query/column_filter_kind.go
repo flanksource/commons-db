@@ -189,8 +189,15 @@ func ColumnFilterKindValues() []string {
 // has one grammar, but a size literal has two bases (1024 and 1000, which
 // clicky distinguishes), so "5MB" would mean different numbers depending on a
 // unit the author may never have set.
-func columnFilterKindFor(columnType ColumnType) ColumnFilterKind {
-	switch columnType {
+func columnFilterKindFor(column ColumnDef) ColumnFilterKind {
+	// The timestamp role means "this is the column the date-range control
+	// filters through", which is a claim about the bound and not only about
+	// how the cell renders. Reading it here is what keeps that promise true
+	// for a column whose type was left as the default.
+	if column.Kind == ColumnKindTimestamp {
+		return ColumnFilterKindTime
+	}
+	switch column.Type {
 	case ColumnTypeNumber, ColumnTypeBytes:
 		return ColumnFilterKindRange
 	case ColumnTypeDuration:
@@ -223,7 +230,7 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 	if def != nil && def.Disabled {
 		return ColumnFilterBinding{}, false, nil
 	}
-	kind := columnFilterKindFor(column.Type)
+	kind := columnFilterKindFor(column)
 	if def != nil && def.Kind != "" {
 		kind = def.Kind
 	}

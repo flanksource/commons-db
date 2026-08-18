@@ -1,6 +1,12 @@
 package query_test
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/json"
+
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -90,7 +96,7 @@ var _ = Describe("Cursor", func() {
 	})
 
 	It("round-trips the position it was issued for", func() {
-		cursor, err := query.EncodeCursor(scope, keys, "pit-1")
+		cursor, err := query.EncodeCursor(scope, keys, "pit-1", nil)
 		Expect(err).ToNot(HaveOccurred())
 
 		position, err := query.DecodeCursor(cursor, scope)
@@ -101,7 +107,7 @@ var _ = Describe("Cursor", func() {
 
 	It("round-trips unsigned keys above JSON's exact integer range", func() {
 		large := uint64(1<<63 + 17)
-		cursor, err := query.EncodeCursor(scope, []any{"2026-01-01T00:00:00Z", large}, "")
+		cursor, err := query.EncodeCursor(scope, []any{"2026-01-01T00:00:00Z", large}, "", nil)
 		Expect(err).ToNot(HaveOccurred())
 
 		position, err := query.DecodeCursor(cursor, scope)
@@ -109,22 +115,76 @@ var _ = Describe("Cursor", func() {
 		Expect(position.Keys).To(Equal([]any{"2026-01-01T00:00:00Z", large}))
 	})
 
+	// A processor that folds rows across pages is only correct page by page if
+	// it can remember what it already emitted, and the cursor is the only thing
+	// a resumed request brings with it.
+	It("carries each processor's state back to the page that resumes", func() {
+		state := map[string][]byte{"cel.dedupe": {0x01, 0x02}, "logs.parse": {0xff}}
+		cursor, err := query.EncodeCursor(scope, keys, "", state)
+		Expect(err).ToNot(HaveOccurred())
+
+		position, err := query.DecodeCursor(cursor, scope)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(position.State).To(Equal(state))
+	})
+
+	It("carries a compressible page processor state without exceeding the transport ceiling", func() {
+		state := map[string][]byte{
+			"java.stacktrace": bytes.Repeat([]byte("\tat com.acme.billing.InvoiceJob.run(InvoiceJob.java:64)\n"), 200),
+		}
+		cursor, err := query.EncodeCursor(scope, keys, "", state)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(len(cursor)).To(BeNumerically("<=", query.MaxCursorBytes))
+
+		position, err := query.DecodeCursor(cursor, scope)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(position.State).To(Equal(state))
+	})
+
+	It("refuses to issue a cursor larger than one can be carried in", func() {
+		stateBytes := make([]byte, query.MaxCursorBytes*4)
+		block := make([]byte, 8)
+		for offset := 0; offset < len(stateBytes); offset += sha256.Size {
+			binary.BigEndian.PutUint64(block, uint64(offset))
+			digest := sha256.Sum256(block)
+			copy(stateBytes[offset:], digest[:])
+		}
+		state := map[string][]byte{"cel.dedupe": stateBytes}
+		_, err := query.EncodeCursor(scope, keys, "", state)
+		Expect(err).To(MatchError(ContainSubstring("no longer fits in a cursor")))
+		Expect(err).To(MatchError(ContainSubstring("cel.dedupe")))
+	})
+
 	// A cursor holds one key per ordered column; anything else would resume from
 	// a position the order cannot locate.
 	It("refuses to issue a cursor whose keys do not match the order", func() {
-		_, err := query.EncodeCursor(scope, []any{"only-one"}, "")
+		_, err := query.EncodeCursor(scope, []any{"only-one"}, "", nil)
 		Expect(err).To(MatchError(ContainSubstring("one key per order column")))
 	})
 
 	It("refuses to issue a cursor for an order that cannot be paged", func() {
 		unordered := scope
 		unordered.Order = query.Order{{Column: "created_at"}}
-		_, err := query.EncodeCursor(unordered, []any{"x"}, "")
+		_, err := query.EncodeCursor(unordered, []any{"x"}, "", nil)
 		Expect(err).To(MatchError(ContainSubstring("not declared unique")))
 	})
 
 	Describe("staleness", func() {
-		cursor, _ := query.EncodeCursor(scope, keys, "")
+		cursor, _ := query.EncodeCursor(scope, keys, "", nil)
+
+		// Cursors issued before compressed transport must not be mistaken for the
+		// current format.
+		It("rejects an uncompressed cursor from an older transport", func() {
+			payload, err := json.Marshal(map[string]any{
+				"v": 2, "n": "logs", "k": []map[string]string{{"t": "string", "v": "row-9"}},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			stale := query.Cursor(base64.RawURLEncoding.EncodeToString(payload))
+
+			_, err = query.DecodeCursor(stale, scope)
+			Expect(err).To(MatchError(query.ErrCursorStale))
+			Expect(err).To(MatchError(ContainSubstring("not a cursor this server issued")))
+		})
 
 		It("rejects a cursor replayed after a filter changed", func() {
 			_, err := query.DecodeCursor(cursor, scopeWith(map[string]any{"tenant": "other"}))
@@ -167,7 +227,7 @@ var _ = Describe("Cursor", func() {
 		first := scopeWith(map[string]any{"tenant": "acme", "limit": 50, "offset": 0})
 		second := scopeWith(map[string]any{"tenant": "acme", "limit": 200, "offset": 400})
 
-		cursor, err := query.EncodeCursor(first, keys, "")
+		cursor, err := query.EncodeCursor(first, keys, "", nil)
 		Expect(err).ToNot(HaveOccurred())
 
 		position, err := query.DecodeCursor(cursor, second)

@@ -10,7 +10,10 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/klauspost/compress/zstd"
 )
 
 // Cursor is a position in an ordered result set, resumed from by the request
@@ -28,7 +31,45 @@ func (c Cursor) IsZero() bool { return c == "" }
 
 // cursorVersion is stamped into every cursor so a format change invalidates
 // outstanding cursors loudly rather than decoding them into wrong positions.
-const cursorVersion = 2
+const cursorVersion = 4
+
+// MaxCursorBytes bounds an issued cursor. A cursor travels as a query parameter
+// and is echoed in a response header, so this leaves room for the request path,
+// other parameters and header name within common 8 KiB HTTP line budgets.
+//
+// It is a ceiling rather than a trimming point. The only thing that grows a
+// cursor is a processor's carried state, and that state is what stops an
+// already-emitted group being emitted again — so silently dropping part of it
+// would not shorten the answer, it would corrupt it. Refusing says which walk
+// outgrew the mechanism, which is a thing an author can act on.
+const MaxCursorBytes = 7 << 10
+
+// maxCursorPayloadBytes bounds inflation when decoding a forged compressed
+// cursor. Valid page state is much smaller; this is only a defensive ceiling.
+const maxCursorPayloadBytes = 1 << 20
+
+var cursorEncoder = func() *zstd.Encoder {
+	encoder, err := zstd.NewWriter(nil,
+		zstd.WithEncoderConcurrency(1),
+		zstd.WithEncoderLevel(zstd.SpeedBetterCompression),
+		zstd.WithWindowSize(maxCursorPayloadBytes),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("create cursor encoder: %v", err))
+	}
+	return encoder
+}()
+
+var cursorDecoder = func() *zstd.Decoder {
+	decoder, err := zstd.NewReader(nil,
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxMemory(maxCursorPayloadBytes),
+	)
+	if err != nil {
+		panic(fmt.Sprintf("create cursor decoder: %v", err))
+	}
+	return decoder
+}()
 
 // ErrCursorStale is returned when a cursor is replayed against a query it did
 // not come from — a changed filter, param or order. The position it holds is
@@ -39,13 +80,14 @@ var ErrCursorStale = errors.New("cursor no longer matches this query")
 
 // cursorPayload is a Cursor's decoded form.
 type cursorPayload struct {
-	Version int         `json:"v"`
-	Profile string      `json:"n"`
-	Order   string      `json:"o"`
-	Inputs  string      `json:"i"`
-	Filters string      `json:"f"`
-	Keys    []cursorKey `json:"k"`
-	PIT     string      `json:"p,omitempty"`
+	Version int               `json:"v"`
+	Profile string            `json:"n"`
+	Order   string            `json:"o"`
+	Inputs  string            `json:"i"`
+	Filters string            `json:"f"`
+	Keys    []cursorKey       `json:"k"`
+	PIT     string            `json:"p,omitempty"`
+	State   map[string][]byte `json:"s,omitempty"`
 }
 
 type cursorKey struct {
@@ -63,6 +105,13 @@ type CursorPosition struct {
 	// PIT identifies the backend snapshot this walk is reading, when it has
 	// one. Empty means the walk sees the index as it changes.
 	PIT string
+
+	// State is what each processor carried forward from the previous page,
+	// keyed by its label. A processor that folds rows across the whole result —
+	// a dedupe, say — is only correct page by page if it can remember what it
+	// has already emitted, and the cursor is where that memory lives, because
+	// the cursor is the only thing a resumed request brings with it.
+	State map[string][]byte
 }
 
 // IsZero reports whether this position names the start of the result set.
@@ -89,8 +138,9 @@ type CursorScope struct {
 
 // EncodeCursor issues a cursor resuming after keys, which must be the sort
 // values of the last row of the page being returned, in the order's column
-// order.
-func EncodeCursor(scope CursorScope, keys []any, pit string) (Cursor, error) {
+// order. state is what each processor asked to carry into the next page, keyed
+// by its label, and may be nil.
+func EncodeCursor(scope CursorScope, keys []any, pit string, state map[string][]byte) (Cursor, error) {
 	if err := scope.Order.Pageable(); err != nil {
 		return "", err
 	}
@@ -109,7 +159,7 @@ func EncodeCursor(scope CursorScope, keys []any, pit string) (Cursor, error) {
 	if err != nil {
 		return "", err
 	}
-	encoded, err := json.Marshal(cursorPayload{
+	payload, err := json.Marshal(cursorPayload{
 		Version: cursorVersion,
 		Profile: scope.Profile,
 		Order:   scope.Order.Fingerprint(),
@@ -117,11 +167,35 @@ func EncodeCursor(scope CursorScope, keys []any, pit string) (Cursor, error) {
 		Filters: filters,
 		Keys:    encodedKeys,
 		PIT:     pit,
+		State:   state,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode cursor: %w", err)
 	}
-	return Cursor(base64.RawURLEncoding.EncodeToString(encoded)), nil
+	encoded := cursorEncoder.EncodeAll(payload, nil)
+	cursor := Cursor(base64.RawURLEncoding.EncodeToString(encoded))
+	if len(cursor) > MaxCursorBytes {
+		return "", fmt.Errorf(
+			"this walk's position no longer fits in a cursor (%d bytes, limit %d): %s",
+			len(cursor), MaxCursorBytes, cursorOverflowAdvice(state))
+	}
+	return cursor, nil
+}
+
+// cursorOverflowAdvice names what actually grew, because the fix differs: a
+// position is a handful of sort values and never overflows on its own.
+func cursorOverflowAdvice(state map[string][]byte) string {
+	if len(state) == 0 {
+		return "the sort keys are too large to page on; order by narrower columns"
+	}
+	labels := make([]string, 0, len(state))
+	for label := range state {
+		labels = append(labels, label)
+	}
+	sort.Strings(labels)
+	return fmt.Sprintf(
+		"%s carries what it has already emitted so it can run page by page, and this result has too many groups for that; narrow the query or drop the processor",
+		strings.Join(labels, ", "))
 }
 
 // DecodeCursor validates c against the query it is being replayed on and
@@ -135,9 +209,16 @@ func DecodeCursor(c Cursor, scope CursorScope) (CursorPosition, error) {
 	if err := scope.Order.Pageable(); err != nil {
 		return CursorPosition{}, err
 	}
-	decoded, err := base64.RawURLEncoding.DecodeString(string(c))
+	encoded, err := base64.RawURLEncoding.DecodeString(string(c))
 	if err != nil {
 		return CursorPosition{}, fmt.Errorf("%w: it is not a cursor this server issued", ErrCursorStale)
+	}
+	decoded, err := cursorDecoder.DecodeAll(encoded, nil)
+	if err != nil {
+		return CursorPosition{}, fmt.Errorf("%w: it is not a cursor this server issued", ErrCursorStale)
+	}
+	if len(decoded) > maxCursorPayloadBytes {
+		return CursorPosition{}, fmt.Errorf("%w: its payload exceeds %d bytes", ErrCursorStale, maxCursorPayloadBytes)
 	}
 	var payload cursorPayload
 	if err := json.Unmarshal(decoded, &payload); err != nil {
@@ -169,7 +250,7 @@ func DecodeCursor(c Cursor, scope CursorScope) (CursorPosition, error) {
 	if err != nil {
 		return CursorPosition{}, fmt.Errorf("%w: %v", ErrCursorStale, err)
 	}
-	return CursorPosition{Keys: keys, PIT: payload.PIT}, nil
+	return CursorPosition{Keys: keys, PIT: payload.PIT, State: payload.State}, nil
 }
 
 func encodeCursorKeys(values []any) ([]cursorKey, error) {

@@ -107,6 +107,14 @@ func executePages(ctx context.Context, p Profile, page PageRequest, applyPipelin
 	if err != nil {
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}
+	// A cursor-only provider's first page has no token yet, so without an
+	// explicit strategy it looks like offset zero. Resolve that ambiguity here
+	// rather than making every transport know which providers have no offset.
+	modes := SupportsPaging(p.Provider.Type)
+	if page.Strategy == 0 && page.Offset == 0 && page.Cursor.IsZero() &&
+		!modes.Supports(PagingOffset) && modes.Supports(PagingCursor) {
+		page.Strategy = PagingCursor
+	}
 
 	// A position past the first row only means something under a total order,
 	// so the profile is held to declaring one before it can be asked for one.
@@ -115,9 +123,9 @@ func executePages(ctx context.Context, p Profile, page PageRequest, applyPipelin
 			return ErrorPage(fmt.Errorf("profile %q cannot be paged: %w", p.Name, err))
 		}
 	}
-	if mode := page.Mode(); !SupportsPaging(p.Provider.Type).Supports(mode) {
+	if mode := page.Mode(); !modes.Supports(mode) {
 		return ErrorPage(fmt.Errorf("profile %q: provider %q cannot page by %s (it serves %s)",
-			p.Name, p.Provider.Type, mode, SupportsPaging(p.Provider.Type)))
+			p.Name, p.Provider.Type, mode, modes))
 	}
 
 	if p.Namespace != "" {

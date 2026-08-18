@@ -18,14 +18,16 @@ import (
 )
 
 type connectionLoggingProvider struct {
-	typ  string
-	last query.ProviderRequest
+	typ     string
+	details map[string]any
+	last    query.ProviderRequest
 }
 
 func (p *connectionLoggingProvider) Type() string { return p.typ }
 
 func (p *connectionLoggingProvider) Execute(_ dbcontext.Context, req query.ProviderRequest) ([]query.Row, error) {
 	p.last = req
+	req.Diagnostics.RecordRequest(req.Query, nil, p.details)
 	return []query.Row{{"id": 7}}, nil
 }
 
@@ -70,7 +72,14 @@ var _ = Describe("Connection logging", func() {
 		properties.Set("log.json", "true")
 		DeferCleanup(properties.Set, "log.json", previousJSON)
 
-		provider := &connectionLoggingProvider{typ: "connection-logging-json"}
+		provider := &connectionLoggingProvider{
+			typ: "connection-logging-json",
+			details: map[string]any{
+				"namespace": "prod",
+				"pods":      []string{"prod/cache-0"},
+				"start":     "2026-08-16T09:00:00Z",
+			},
+		}
 		query.RegisterProvider(provider)
 		var output bytes.Buffer
 		log := logger.NewWithWriter(&output)
@@ -97,6 +106,12 @@ var _ = Describe("Connection logging", func() {
 			HaveKeyWithValue("connection", "inline"),
 			HaveKeyWithValue("rows", float64(1)),
 			HaveKey("duration_ms"),
+			HaveKeyWithValue("query", "scan cache"),
+			HaveKeyWithValue("filters", map[string]any{
+				"namespace": "prod",
+				"pods":      []any{"prod/cache-0"},
+				"start":     "2026-08-16T09:00:00Z",
+			}),
 		))
 		Expect(strings.TrimSpace(output.String())).NotTo(ContainSubstring("event="))
 	})

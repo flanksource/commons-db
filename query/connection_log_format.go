@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky/api"
@@ -81,6 +82,9 @@ func (operation *connectionOperation) prettySummary(event observability.Event, d
 	} else if snapshot != nil && snapshot.Request.Query != "" {
 		text = text.AddText(" " + logger.StripSecrets(snapshot.Request.Query))
 	}
+	if snapshot != nil && len(snapshot.Request.Details) > 0 {
+		text = text.Space().AddText("filters="+formatLogDetails(snapshot.Request.Details), "text-muted")
+	}
 	if runErr != nil {
 		text = text.AddText(" " + logger.StripSecrets(runErr.Error()))
 	}
@@ -90,7 +94,24 @@ func (operation *connectionOperation) prettySummary(event observability.Event, d
 func (operation *connectionOperation) prettyParams(params []any) api.Textable {
 	return operation.withIdentity(api.Text{}.
 		AddText("params ", "font-bold text-muted").
-		AddText(fmt.Sprintf("%v", params)))
+		AddText(oneLineLogValue(params)))
+}
+
+func formatLogDetails(details map[string]any) string {
+	keys := make([]string, 0, len(details))
+	for key := range details {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	formatted := make([]string, 0, len(keys))
+	for _, key := range keys {
+		formatted = append(formatted, key+": "+oneLineLogValue(details[key]))
+	}
+	return strings.Join(formatted, ", ")
+}
+
+func oneLineLogValue(value any) string {
+	return strings.Join(strings.Fields(fmt.Sprint(value)), " ")
 }
 
 func (operation *connectionOperation) prettyHTTPEntry(entry har.Entry, options har.DetailOptions) api.Textable {
