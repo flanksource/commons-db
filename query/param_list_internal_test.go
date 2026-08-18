@@ -1,6 +1,8 @@
 package query
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -87,7 +89,7 @@ var _ = Describe("list param coercion", func() {
 		It("applies a list default when nothing is supplied", func() {
 			def := listDef("region")
 			def.Default = []any{"us-east", "eu"}
-			resolved, _, err := resolveParams([]ParamDef{def}, nil)
+			resolved, _, err := resolveParams([]ParamDef{def}, nil, time.Now())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved["regions"]).To(Equal([]string{"us-east", "eu"}))
 		})
@@ -95,7 +97,7 @@ var _ = Describe("list param coercion", func() {
 		It("accepts a comma-joined string as the default", func() {
 			def := listDef("region")
 			def.Default = "us-east,eu"
-			resolved, _, err := resolveParams([]ParamDef{def}, nil)
+			resolved, _, err := resolveParams([]ParamDef{def}, nil, time.Now())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved["regions"]).To(Equal([]string{"us-east", "eu"}))
 		})
@@ -103,14 +105,14 @@ var _ = Describe("list param coercion", func() {
 		It("fails a required list whose supplied value holds no usable values", func() {
 			def := listDef("region")
 			def.Required = true
-			_, _, err := resolveParams([]ParamDef{def}, map[string]any{"regions": " , "})
+			_, _, err := resolveParams([]ParamDef{def}, map[string]any{"regions": " , "}, time.Now())
 			Expect(err).To(MatchError(ContainSubstring("required")))
 		})
 
 		It("counts an exclude-only selection as satisfying required", func() {
 			def := listDef("region")
 			def.Required = true
-			resolved, filters, err := resolveParams([]ParamDef{def}, map[string]any{"regions": "!eu"})
+			resolved, filters, err := resolveParams([]ParamDef{def}, map[string]any{"regions": "!eu"}, time.Now())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved["regions"]).To(Equal([]string{}))
 			Expect(filters).To(Equal([]ColumnFilterValue{{
@@ -123,7 +125,7 @@ var _ = Describe("list param coercion", func() {
 	Describe("resolveParams filter output", func() {
 		It("exposes only the includes to the template and routes both sides to a filter", func() {
 			resolved, filters, err := resolveParams(
-				[]ParamDef{listDef("region")}, map[string]any{"regions": "us-east,!eu"})
+				[]ParamDef{listDef("region")}, map[string]any{"regions": "us-east,!eu"}, time.Now())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved).To(Equal(map[string]any{"regions": []string{"us-east"}}))
 			Expect(filters).To(Equal([]ColumnFilterValue{{
@@ -134,7 +136,7 @@ var _ = Describe("list param coercion", func() {
 
 		It("contributes no filter when the param declares no backend field", func() {
 			resolved, filters, err := resolveParams(
-				[]ParamDef{listDef("")}, map[string]any{"regions": "us-east,us-west"})
+				[]ParamDef{listDef("")}, map[string]any{"regions": "us-east,us-west"}, time.Now())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved).To(Equal(map[string]any{"regions": []string{"us-east", "us-west"}}))
 			Expect(filters).To(BeEmpty())
@@ -165,7 +167,7 @@ var _ = Describe("list param coercion", func() {
 				{Name: "region", Type: ParamTypeEnum, Options: []string{"US", "EU"}},
 				{Name: "rows", Type: ParamTypeNumber},
 				{Name: "live", Type: ParamTypeBoolean},
-			}, map[string]any{"region": "EU", "rows": "50", "live": "true"})
+			}, map[string]any{"region": "EU", "rows": "50", "live": "true"}, time.Now())
 			Expect(err).ToNot(HaveOccurred())
 			Expect(resolved).To(Equal(map[string]any{"region": "EU", "rows": float64(50), "live": true}))
 			Expect(filters).To(BeEmpty())

@@ -5,8 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/query/datetime"
 	"github.com/flanksource/commons/tokenizer"
-	"github.com/timberio/go-datemath"
 )
 
 type LogLine struct {
@@ -131,10 +131,25 @@ type LogsRequestBase struct {
 	Limit string `json:"limit,omitempty" template:"true"`
 }
 
+// GetStart resolves the lower edge of the read window.
+//
+// It goes through datetime.Parse rather than go-datemath directly because the
+// two grammars are not the same: a bound written as date math ("now-1h") is
+// go-datemath's, but a bound a profile parameter already resolved is an
+// RFC3339Nano instant, and go-datemath's fraction stops at milliseconds — it
+// rejects the very timestamps this package is handed.
 func (r *LogsRequestBase) GetStart() (time.Time, error) {
-	return datemath.ParseAndEvaluate(r.Start, datemath.WithNow(time.Now()))
+	parsed, err := datetime.Parse(r.Start, time.Now())
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.Time, nil
 }
 
 func (r *LogsRequestBase) GetEnd() (time.Time, error) {
-	return datemath.ParseAndEvaluate(r.End, datemath.WithNow(time.Now()))
+	parsed, err := datetime.Parse(r.End, time.Now())
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.Time, nil
 }

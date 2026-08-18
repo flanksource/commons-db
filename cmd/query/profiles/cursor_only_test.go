@@ -19,6 +19,10 @@ import (
 type cursorOnlyProvider struct {
 	pages        []query.PageRequest
 	executeCalls int
+	// windows is the resolved value of the profile's time-from param on each
+	// page, so a walk can assert it resolved its date math once rather than
+	// once per request.
+	windows []string
 }
 
 func (*cursorOnlyProvider) Type() string { return "cursor-only-profile-test" }
@@ -36,6 +40,9 @@ func (p *cursorOnlyProvider) Pages(
 	request query.PageRequest,
 ) iter.Seq2[query.Page, error] {
 	p.pages = append(p.pages, request)
+	if start, ok := req.Params["Start"]; ok {
+		p.windows = append(p.windows, fmt.Sprint(start))
+	}
 	rowID := "row-1"
 	hasMore := true
 	if len(req.Position.Keys) > 0 {
@@ -111,6 +118,72 @@ var _ = Describe("cursor-only profile paging", func() {
 		Expect(secondRows).To(Equal([]query.Row{{"id": "row-2"}}))
 		Expect(provider.pages).To(HaveLen(2))
 		Expect(provider.pages[1].Mode()).To(Equal(query.PagingCursor))
+	})
+
+	// A profile whose window is a time-from/time-to parameter pair resolves its
+	// date math per request, and the resolved value is fingerprinted into the
+	// cursor. Without a pinned clock "now-2d" landed on a different nanosecond on
+	// every page, so the second request could never match the first and every
+	// walk died on page two with cursor_stale.
+	It("resumes a walk whose window is written as date math", func() {
+		rolling := profile
+		rolling.Name = "Cursor rolling"
+		rolling.Params = []query.ParamDef{
+			{Name: "Start", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom},
+			{Name: "End", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo},
+		}
+		provider := &cursorOnlyProvider{}
+		handler := newCursorOnlyHandler(rolling, provider)
+		window := "&Start=now-2d&End=now"
+
+		first := httptest.NewRecorder()
+		handler.ServeHTTP(first, httptest.NewRequest(
+			http.MethodGet, "/api/v1/profile/cursor-rolling?format=json&limit=1"+window, nil,
+		))
+		Expect(first.Code).To(Equal(http.StatusOK), first.Body.String())
+		cursor := first.Header().Get("X-Next-Cursor")
+		Expect(cursor).ToNot(BeEmpty())
+
+		second := httptest.NewRecorder()
+		handler.ServeHTTP(second, httptest.NewRequest(
+			http.MethodGet,
+			"/api/v1/profile/cursor-rolling?format=json&limit=1"+window+"&cursor="+url.QueryEscape(cursor),
+			nil,
+		))
+		Expect(second.Code).To(Equal(http.StatusOK), second.Body.String())
+
+		var secondRows []query.Row
+		Expect(json.Unmarshal(second.Body.Bytes(), &secondRows)).To(Succeed())
+		Expect(secondRows).To(Equal([]query.Row{{"id": "row-2"}}))
+		// One walk, one window: the second page read the clock off the cursor
+		// rather than taking its own.
+		Expect(provider.windows).To(HaveLen(2))
+		Expect(provider.windows[1]).To(Equal(provider.windows[0]))
+	})
+
+	It("stales the cursor when the window itself changes", func() {
+		rolling := profile
+		rolling.Name = "Cursor rewound"
+		rolling.Params = []query.ParamDef{
+			{Name: "Start", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom},
+		}
+		handler := newCursorOnlyHandler(rolling, &cursorOnlyProvider{})
+
+		first := httptest.NewRecorder()
+		handler.ServeHTTP(first, httptest.NewRequest(
+			http.MethodGet, "/api/v1/profile/cursor-rewound?format=json&limit=1&Start=now-2d", nil,
+		))
+		Expect(first.Code).To(Equal(http.StatusOK), first.Body.String())
+		cursor := first.Header().Get("X-Next-Cursor")
+
+		second := httptest.NewRecorder()
+		handler.ServeHTTP(second, httptest.NewRequest(
+			http.MethodGet,
+			"/api/v1/profile/cursor-rewound?format=json&limit=1&Start=now-4h&cursor="+url.QueryEscape(cursor),
+			nil,
+		))
+		Expect(second.Code).To(Equal(http.StatusBadRequest), second.Body.String())
+		Expect(second.Body.String()).To(ContainSubstring("cursor_stale"))
 	})
 
 	It("advertises a cursor but no offset", func() {

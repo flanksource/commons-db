@@ -76,4 +76,22 @@ var _ = Describe("Kubernetes log reads", func() {
 			LogsRequestBase: logs.LogsRequestBase{Start: "now-1h", End: "whenever"},
 		}, `end "whenever" is not a time or date math`),
 	)
+
+	// A profile parameter of type datetime resolves to RFC3339Nano before the
+	// read ever sees it, and go-datemath's fraction stops at milliseconds — so
+	// reading the bound as date math alone rejected the instants this package is
+	// handed, and a window the operator picked came back as a 400.
+	DescribeTable("a resolved instant is a bound the read accepts",
+		func(bound string) {
+			client := fake.NewSimpleClientset()
+			_, err := k8s.Fetch(dbcontext.New(), client, pods[:1], k8s.Request{
+				LogsRequestBase: logs.LogsRequestBase{Start: bound, End: bound},
+			})
+			Expect(err).ToNot(HaveOccurred())
+		},
+		Entry("microsecond precision", "2026-08-18T04:00:18.185744Z"),
+		Entry("nanosecond precision", "2026-08-18T04:00:18.185744321Z"),
+		Entry("whole seconds", "2026-08-18T04:00:18Z"),
+		Entry("date math", "now-30m"),
+	)
 })

@@ -219,21 +219,13 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		if binding.Default != "" {
 			schema.Default = binding.Default
 		}
-		parameter := rpc.OpenAPIParameter{
+		parameters = append(parameters, rpc.OpenAPIParameter{
 			Name: binding.Key, In: "query",
 			Description: profileFilterDescription(binding),
 			Schema:      schema,
 			Clicky:      &rpc.ClickyParameterMeta{Role: "filter"},
-		}
-		// Only a filter the backend can enumerate gets a lookup URL; pointing one
-		// at a range would advertise a list that has no answer.
-		if binding.Lookup {
-			parameter.Lookup = &rpc.ClickyLookupMeta{
-				Ref: "#/components/x-clicky-filters/" + filterName, URL: path,
-				Filter: binding.Key, SearchParam: "__lookup_q", Multi: binding.Multi,
-			}
-		}
-		parameters = append(parameters, parameter)
+			Lookup:      profileFilterLookupMeta(filterName, binding.Key, path, binding.Multi, binding.Lookup),
+		})
 	}
 	if !roles[query.ParamRoleLimit] {
 		limits := profile.RowLimits()
@@ -313,6 +305,27 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		}}
 	}
 	return nil
+}
+
+// profileFilterLookupMeta names a filter's shape component, and — only when the
+// backend can enumerate it — where to fetch its options.
+//
+// The two are separate concerns that happen to travel in one object. Ref is the
+// control's shape, which every generated filter has and which never varies with
+// the values currently selected, so it is emitted unconditionally: a client that
+// reads shapes from the spec renders the right control on first paint and keeps
+// it across a filter change. URL and SearchParam are the option source, and a
+// range has no list to offer — pointing one at a lookup would advertise a list
+// that has no answer.
+func profileFilterLookupMeta(filterName, key, path string, multi, enumerable bool) *rpc.ClickyLookupMeta {
+	lookup := &rpc.ClickyLookupMeta{
+		Ref:    "#/components/x-clicky-filters/" + filterName,
+		Filter: key, Multi: multi,
+	}
+	if enumerable {
+		lookup.URL, lookup.SearchParam = path, "__lookup_q"
+	}
+	return lookup
 }
 
 // profileFilterDescription says what this filter's wire value means, which
@@ -418,18 +431,17 @@ func profileParameter(spec *rpc.OpenAPISpec, profile query.Profile, param query.
 	// unenumerated one asks the provider for its distinct values.
 	filterName := profileParamFilterName(profile.Name, param.Name)
 	source := entity.FilterSourceSpec{Kind: entity.SourceCustom}
-	lookup := &rpc.ClickyLookupMeta{
-		Ref: "#/components/x-clicky-filters/" + filterName, URL: path,
-		Filter: param.Name, SearchParam: "__lookup_q", Multi: true,
-	}
-	if len(param.Options) > 0 {
+	// Options declared in the profile are inlined into the component, so the
+	// browser already holds the whole set and has nothing to ask a lookup for.
+	enumerable := len(param.Options) == 0
+	if !enumerable {
 		options := make(map[string]string, len(param.Options))
 		for _, option := range param.Options {
 			options[option] = option
 		}
 		source = entity.FilterSourceSpec{Kind: entity.SourceStatic, Options: options}
-		lookup.URL, lookup.SearchParam = "", ""
 	}
+	lookup := profileFilterLookupMeta(filterName, param.Name, path, true, enumerable)
 	controlType := "multi-filter"
 	if param.Type == query.ParamTypeLabels {
 		controlType = "labels"

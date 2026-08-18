@@ -418,11 +418,17 @@ var _ = Describe("k8s logs provider", func() {
 		Expect(query.SupportsPaging("k8s")).To(Equal(query.PagingCursor))
 	})
 
+	// Every read is floored at the last hour, so a spec about something other
+	// than time has to say where the dated fixture starts or read nothing.
 	execute := func(selector string, options map[string]any) ([]query.Row, error) {
 		provider, err := query.GetProvider("k8s")
 		Expect(err).ToNot(HaveOccurred())
+		bounded := map[string]any{"start": fixtureLogStart}
+		for key, value := range options {
+			bounded[key] = value
+		}
 		return provider.Execute(ctx, query.ProviderRequest{
-			Connection: "connection://kube", Query: selector, Options: options,
+			Connection: "connection://kube", Query: selector, Options: bounded,
 		})
 	}
 
@@ -519,6 +525,40 @@ var _ = Describe("k8s logs provider", func() {
 		for _, request := range logRequests {
 			Expect(sinceTimeOf(request)).To(BeTemporally("==", time.Date(2026, 4, 19, 11, 23, 40, 0, time.UTC)))
 		}
+	})
+
+	// The same walk, but bounded by the profile's own time-from/time-to pair
+	// rather than the generated control. A declared bound resolves date math to
+	// an instant and that instant is fingerprinted into the cursor, so a rolling
+	// window can only be walked if every page resolves under the clock the first
+	// page pinned.
+	It("resumes a walk bounded by a rolling declared window", func() {
+		profile := k8sTimeRangeProfile("kind=Deployment namespace=prod name=billing")
+		// Rolling rather than absolute — that is the whole point — but wide enough
+		// to reach the dated fixture.
+		params := map[string]any{"Start": "now-10y", "End": "now"}
+
+		var pages [][]query.Row
+		request := query.PageRequest{Limit: 2, Strategy: query.PagingCursor}
+		for {
+			var page query.Page
+			for next, err := range query.ExecutePages(ctx, profile, request, params) {
+				Expect(err).ToNot(HaveOccurred())
+				page = next
+				break
+			}
+			pages = append(pages, page.Rows)
+			if !page.HasMore {
+				break
+			}
+			request = query.PageRequest{Limit: 2, Cursor: page.Next}
+		}
+
+		Expect(pages).To(HaveLen(2))
+		Expect(logPositions(pages[1])).To(Equal([]string{
+			"11:23:41.310 prod/billing-1/app#0",
+			"11:23:41.310 prod/billing-2/app#0",
+		}))
 	})
 
 	It("refuses to cursor a profile ordered in a direction the API cannot seek", func() {
@@ -670,7 +710,8 @@ var _ = Describe("k8s logs provider", func() {
 		provider, err := query.GetProvider("k8s")
 		Expect(err).ToNot(HaveOccurred())
 		rows, err := provider.Execute(ctx, query.ProviderRequest{
-			Query: "kind=Deployment namespace=prod name=billing",
+			Query:   "kind=Deployment namespace=prod name=billing",
+			Options: map[string]any{"start": fixtureLogStart},
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rows).To(HaveLen(4))
@@ -749,6 +790,46 @@ var _ = Describe("k8s logs provider", func() {
 	It("rejects a time bound nothing could resolve", func() {
 		_, err := query.Execute(ctx, k8sProfile("kind=Pod namespace=prod"), map[string]any{
 			"time": ">=yesterday",
+		})
+		Expect(err).To(MatchError(ContainSubstring("date math")))
+	})
+
+	// An upper bound is not a window: the kubelet still needs somewhere to start,
+	// and without one it streams every line the container has ever retained.
+	It("keeps the one-hour floor under a bound that only names an end", func() {
+		_, err := query.Execute(ctx, k8sProfile("kind=Pod namespace=prod name=billing-1"), map[string]any{
+			"time": "<=2026-04-19T11:23:41Z",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(logRequests).To(HaveLen(1))
+		Expect(sinceTimeOf(logRequests[0])).To(BeTemporally("~", time.Now().Add(-time.Hour), time.Minute))
+	})
+
+	It("bounds the read by the profile's own time-from/time-to parameters", func() {
+		profile := k8sTimeRangeProfile("kind=Pod namespace=prod name=billing-1")
+		result, err := query.Execute(ctx, profile, map[string]any{
+			"Start": "2026-04-19T11:00:00Z",
+			"End":   "2026-04-19T11:23:41Z",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sinceTimeOf(logRequests[0])).To(BeTemporally("==", time.Date(2026, 4, 19, 11, 0, 0, 0, time.UTC)))
+		// The same client-side truncation the generated control gets: the
+		// 11:23:41.310 line falls outside the declared end.
+		Expect(rowValues(result.Rows, "message")).To(Equal([]string{
+			"settlement gateway rejected batch 88213",
+		}))
+	})
+
+	It("floors a declared bound the request left open at the last hour", func() {
+		_, err := query.Execute(ctx, k8sTimeRangeProfile("kind=Pod namespace=prod name=billing-1"), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(logRequests).To(HaveLen(1))
+		Expect(sinceTimeOf(logRequests[0])).To(BeTemporally("~", time.Now().Add(-time.Hour), time.Minute))
+	})
+
+	It("rejects a declared bound nothing could resolve", func() {
+		_, err := query.Execute(ctx, k8sTimeRangeProfile("kind=Pod namespace=prod"), map[string]any{
+			"Start": "yesterday",
 		})
 		Expect(err).To(MatchError(ContainSubstring("date math")))
 	})
@@ -843,6 +924,17 @@ func k8sProfile(selector string) query.Profile {
 	}
 }
 
+// k8sTimeRangeProfile declares its own window, which is what stops the provider
+// generating a time control and makes it read these parameters instead.
+func k8sTimeRangeProfile(selector string) query.Profile {
+	profile := k8sProfile(selector)
+	profile.Params = []query.ParamDef{
+		{Name: "Start", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom},
+		{Name: "End", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo},
+	}
+	return profile
+}
+
 func sinceTimeOf(request string) time.Time {
 	_, rawQuery, _ := strings.Cut(request, "?")
 	values, err := url.ParseQuery(rawQuery)
@@ -856,6 +948,10 @@ func sinceTimeOf(request string) time.Time {
 // something other than time says so explicitly, because the generated time
 // control otherwise defaults to the last hour and the fixture is dated.
 const fixtureLogWindow = ">=2026-04-19T11:00:00Z,<=2026-04-19T12:00:00Z"
+
+// fixtureLogStart is that window's lower edge as a provider option, for the
+// specs that reach the provider directly and so have no time control to carry.
+const fixtureLogStart = "2026-04-19T11:00:00Z"
 
 // podLogLines is what every container in the fixture has ever written, oldest
 // first — the shape a kubelet streams.

@@ -67,7 +67,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
-	resolved, filters, err := resolveProfileInput(p, options.Params)
+	resolved, filters, err := resolveProfileInput(p, options.Params, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}

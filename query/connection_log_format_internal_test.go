@@ -39,10 +39,10 @@ var _ = Describe("Connection log formatting", func() {
 
 	It("renders arguments containing newlines on one line", func() {
 		operation := connectionOperation{provider: "k8s", connection: "kube"}
-		pretty := operation.prettyParams([]any{"start: now-1w\nend: now", []string{"oipa", "tenant-x"}})
+		pretty := operation.prettyParams([]any{"start: now-1w\nend: now", []string{"acme", "tenant-x"}})
 		ansi := strings.ReplaceAll(clickytext.StripANSI(pretty.ANSI()), "\u00a0", " ")
 
-		Expect(ansi).To(ContainSubstring("params [start: now-1w end: now [oipa tenant-x]]"))
+		Expect(ansi).To(ContainSubstring("params [start: now-1w end: now [acme tenant-x]]"))
 		Expect(ansi).ToNot(ContainSubstring("\n"))
 	})
 })

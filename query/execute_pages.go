@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"iter"
+	"time"
 
 	"github.com/flanksource/commons-db/context"
 )
@@ -135,7 +136,16 @@ func executePages(ctx context.Context, p Profile, page PageRequest, applyPipelin
 	if len(params) > 0 {
 		supplied = params[0]
 	}
-	resolved, filters, err := resolveProfileInput(p, supplied)
+	// The first page of a walk picks the clock its date math resolves against and
+	// stamps it into the cursor; every later page reads it back. Resolving afresh
+	// per page would move a rolling window ("now-2d") between requests, which
+	// changes the result set the cursor named — and, because the params are
+	// fingerprinted, would stale every cursor this profile ever issued.
+	now := time.Now()
+	if pinned, ok := CursorWalkClock(page.Cursor); ok {
+		now = pinned
+	}
+	resolved, filters, err := resolveProfileInput(p, supplied, now)
 	if err != nil {
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}
@@ -164,6 +174,7 @@ func executePages(ctx context.Context, p Profile, page PageRequest, applyPipelin
 		Params:     resolved,
 		Roles:      paramRoles(p.Params),
 		Filters:    filters,
+		Now:        now,
 	}
 	position, err := DecodeCursor(page.Cursor, scope)
 	if err != nil {

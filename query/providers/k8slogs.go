@@ -227,11 +227,17 @@ func (k8sLogsProvider) resolve(ctx context.Context, req query.ProviderRequest) (
 	pods = k8s.SelectPods(pods, podFilters)
 	request := k8s.Request{Pods: opts.Pods, Containers: opts.Containers}
 	request.Start, request.End, request.Limit = opts.Start, opts.End, opts.Limit
-	// The generated time control is the operator's answer and the option is the
-	// author's, so a bound the request carries replaces the profile's default
-	// rather than intersecting with it.
-	if start, end := kubernetesTimeRange(req.Filters); start != "" || end != "" {
+	// The time control is the operator's answer and the option is the author's, so
+	// a bound the request carries replaces the profile's default rather than
+	// intersecting with it.
+	if start, end := kubernetesTimeRange(req); start != "" || end != "" {
 		request.Start, request.End = start, end
+	}
+	// A read is always bounded below, whichever control bounded it: an upper edge
+	// on its own, or a declared parameter pair nobody filled in, would otherwise
+	// buffer every line every pod in scope still retains before serving a row.
+	if request.Start == "" {
+		request.Start = query.KubernetesDefaultStart
 	}
 	return &k8sLogTarget{
 		client: client, pods: pods, request: request, query: req.Query,

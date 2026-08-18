@@ -104,12 +104,13 @@ func newProfileFamilyTest(t *testing.T, profiles ...query.Profile) (http.Handler
 // Truncated and Total are what decide between a list to scroll and a box to type
 // into, so they are as load-bearing as the options themselves.
 type lookupFilter struct {
-	Label     string                    `json:"label"`
-	Type      string                    `json:"type"`
-	Multi     bool                      `json:"multi"`
-	Options   map[string]map[string]any `json:"options"`
-	Truncated bool                      `json:"truncated"`
-	Total     int                       `json:"total"`
+	Label       string                    `json:"label"`
+	Type        string                    `json:"type"`
+	Multi       bool                      `json:"multi"`
+	Options     map[string]map[string]any `json:"options"`
+	Truncated   bool                      `json:"truncated"`
+	Total       int                       `json:"total"`
+	TimeEnabled *bool                     `json:"timeEnabled"`
 }
 
 func requestLookup(t *testing.T, handler http.Handler, target string) map[string]lookupFilter {
@@ -192,6 +193,53 @@ func TestProfileFamilyLookupSearchesTheNamedFilter(t *testing.T) {
 	}
 	if _, matched := service.Options["api"]; matched {
 		t.Error(`"api" matched the query "pay"`)
+	}
+}
+
+// The browser pairs a profile's time-from/time-to parameters into one range
+// control by their roles, but nothing in the roles says how precise the window
+// is. Without these entries the pair is read as a whole-day bound, and a log
+// profile measured in minutes loses every sub-day preset it had.
+func TestProfileFamilyDescribesTheClockOnADeclaredTimeRange(t *testing.T) {
+	profile := lookupProfile("Windowed")
+	profile.Params = []query.ParamDef{
+		{Name: "Start", Label: "From", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom},
+		{Name: "End", Label: "To", Type: query.ParamTypeDate, Role: query.ParamRoleTimeTo},
+	}
+	handler, _ := newProfileFamilyTest(t, profile)
+
+	filters := requestLookup(t, handler, "/api/v1/profile/profile-windowed?__lookup=filters")
+
+	for _, want := range []struct {
+		key         string
+		label       string
+		filterType  string
+		timeEnabled bool
+	}{
+		// A datetime parameter resolves to the nanosecond, so the control offers
+		// a clock; a date parameter is truncated to whole days when it resolves,
+		// so offering one would offer a precision the value cannot carry.
+		{key: "Start", label: "From", filterType: "from", timeEnabled: true},
+		{key: "End", label: "To", filterType: "to", timeEnabled: false},
+	} {
+		edge, ok := filters[want.key]
+		if !ok {
+			t.Fatalf("no filter keyed %s in %v", want.key, filters)
+		}
+		if edge.Label != want.label || edge.Type != want.filterType {
+			t.Errorf("%s label=%q type=%q, want %q/%q", want.key, edge.Label, edge.Type, want.label, want.filterType)
+		}
+		if edge.TimeEnabled == nil || *edge.TimeEnabled != want.timeEnabled {
+			t.Errorf("%s timeEnabled=%v, want %v", want.key, edge.TimeEnabled, want.timeEnabled)
+		}
+		if len(edge.Options) != 0 {
+			t.Errorf("%s offers %v, want a typed bound with nothing to pick from", want.key, optionKeys(edge))
+		}
+	}
+
+	// Every other control keeps saying nothing about a clock it has no use for.
+	if service := filters["filter.service"]; service.TimeEnabled != nil {
+		t.Errorf("filter.service reports timeEnabled=%v, want it absent", *service.TimeEnabled)
 	}
 }
 

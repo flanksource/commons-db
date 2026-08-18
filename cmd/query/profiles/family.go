@@ -129,7 +129,44 @@ func (s *Service) profileFilters(p query.Profile) ([]entity.DynamicFilter, error
 	for _, binding := range bindings {
 		filters = append(filters, s.profileFilter(p.Name, binding))
 	}
-	return filters, nil
+	return append(filters, timeRangeParamFilters(p)...), nil
+}
+
+// timeRangeParamFilters describes the two edges of a profile-declared time
+// bound. They enumerate nothing — the browser already pairs the parameters by
+// their roles — but an undescribed edge is read as a whole-day one, which would
+// take the clock off a window the parameter resolves to the nanosecond.
+//
+// The clock follows the declared type rather than the role: a date parameter is
+// truncated to whole days when it resolves (query.ParamDef.coerce), so offering
+// an hour there would offer a precision the value cannot carry.
+func timeRangeParamFilters(p query.Profile) []entity.DynamicFilter {
+	types := []struct {
+		role    query.ParamRole
+		control string
+	}{
+		{role: query.ParamRoleTimeFrom, control: "from"},
+		{role: query.ParamRoleTimeTo, control: "to"},
+	}
+	declared := p.TimeRangeParams()
+	filters := make([]entity.DynamicFilter, 0, len(types))
+	for _, edge := range types {
+		param, ok := declared[edge.role]
+		if !ok {
+			continue
+		}
+		timeEnabled := param.Type == query.ParamTypeDateTime
+		filters = append(filters, entity.DynamicFilter{
+			Key:         param.Name,
+			Label:       param.DisplayLabel(),
+			Type:        edge.control,
+			TimeEnabled: &timeEnabled,
+			Options: func(context.Context, map[string]string, string, int) (map[string]api.Textable, int, error) {
+				return nil, 0, nil
+			},
+		})
+	}
+	return filters
 }
 
 func (s *Service) profileFilter(profileName string, binding query.ColumnFilterBinding) entity.DynamicFilter {

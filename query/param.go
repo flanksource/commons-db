@@ -117,10 +117,12 @@ func (d ParamDef) DisplayLabel() string {
 // clause, so an exclusion travels the same path a column filter's does rather
 // than needing a second transport. Undeclared keys in supplied are ignored — the
 // caller decides which request values map to params.
-func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, []ColumnFilterValue, error) {
+// now is injected rather than read here so one paged walk resolves its date
+// math once: a rolling window that resolved afresh on every page would name a
+// different result set each time, and no cursor cut from it could be replayed.
+func resolveParams(defs []ParamDef, supplied map[string]any, now time.Time) (map[string]any, []ColumnFilterValue, error) {
 	resolved := make(map[string]any, len(defs))
 	var filters []ColumnFilterValue
-	now := time.Now()
 	for _, def := range defs {
 		if def.Name == "" {
 			return nil, nil, fmt.Errorf("param declaration is missing a name")

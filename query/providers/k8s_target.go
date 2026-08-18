@@ -80,11 +80,20 @@ func kubernetesPodSelectors(filters []query.ColumnFilterValue) (types.ResourceSe
 	return selectors, nil
 }
 
-// kubernetesTimeRange is the bound the generated time control carries, in the
-// date-math form it was written in — logs.LogsRequestBase resolves it, so
-// resolving it here would only throw away "now-1h" and the intent with it.
-func kubernetesTimeRange(filters []query.ColumnFilterValue) (start, end string) {
-	for _, filter := range filters {
+// kubernetesTimeRange is the bound the request carries, in the date-math form it
+// was written in — logs.LogsRequestBase resolves it, so resolving it here would
+// only throw away "now-1h" and the intent with it.
+//
+// A profile declaring a time-from/time-to parameter pair owns its window, and
+// query.RuntimeFilterBindings generates no time control for it; every other k8s
+// profile is bound by that generated control instead. The two are alternatives,
+// never both, so the declared pair is read first and the filter scan answers for
+// the rest.
+func kubernetesTimeRange(req query.ProviderRequest) (start, end string) {
+	if start, end := kubernetesParamTimeRange(req); start != "" || end != "" {
+		return start, end
+	}
+	for _, filter := range req.Filters {
 		if filter.Kind != query.ColumnFilterKindTime || filter.Range == nil {
 			continue
 		}
@@ -93,6 +102,25 @@ func kubernetesTimeRange(filters []query.ColumnFilterValue) (start, end string) 
 		}
 		if filter.Range.Max != nil {
 			end = fmt.Sprint(filter.Range.Max.Value)
+		}
+	}
+	return start, end
+}
+
+// kubernetesParamTimeRange reads the edges off the parameters the profile gave
+// the time roles to. A role with no resolved value is an edge the request left
+// open, not an error — the caller floors an open lower edge.
+func kubernetesParamTimeRange(req query.ProviderRequest) (start, end string) {
+	for name, role := range req.ParamRoles {
+		value, ok := req.Params[name]
+		if !ok || value == nil {
+			continue
+		}
+		switch role {
+		case query.ParamRoleTimeFrom:
+			start = fmt.Sprint(value)
+		case query.ParamRoleTimeTo:
+			end = fmt.Sprint(value)
 		}
 	}
 	return start, end

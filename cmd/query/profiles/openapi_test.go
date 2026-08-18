@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/flanksource/clicky/entity"
@@ -113,6 +114,11 @@ func TestProfileOpenAPIPreservesMappedPagingAndTimeRoles(t *testing.T) {
 		if op.Parameters[i].Clicky == nil || op.Parameters[i].Clicky.Role != role {
 			t.Fatalf("parameter %d role = %+v, want %q", i, op.Parameters[i].Clicky, role)
 		}
+		// A scalar param's shape is its own schema, so it registers no filter
+		// component and must name none — a ref here would point at nothing.
+		if op.Parameters[i].Lookup != nil {
+			t.Fatalf("parameter %d (%s) must carry no lookup: %+v", i, role, op.Parameters[i].Lookup)
+		}
 	}
 }
 
@@ -195,7 +201,10 @@ func TestProfileOpenAPIAdvertisesEachFilterKindsOwnControl(t *testing.T) {
 	for _, parameter := range op.Parameters {
 		byName[parameter.Name] = parameter
 	}
-	for key, wantLookup := range map[string]bool{
+	// Shape and option source are separate: every filter names the component
+	// describing its control, but only one whose values the backend can
+	// enumerate names an endpoint to fetch them from.
+	for key, wantURL := range map[string]bool{
 		"filter.region":     true,
 		"filter.latency_ms": false,
 		"filter.created_at": false,
@@ -207,8 +216,11 @@ func TestProfileOpenAPIAdvertisesEachFilterKindsOwnControl(t *testing.T) {
 		if !ok {
 			t.Fatalf("parameter %q is missing from %+v", key, op.Parameters)
 		}
-		if (parameter.Lookup != nil) != wantLookup {
-			t.Fatalf("parameter %q lookup = %+v, want present=%v", key, parameter.Lookup, wantLookup)
+		if parameter.Lookup == nil || parameter.Lookup.Ref == "" {
+			t.Fatalf("parameter %q must name its shape component: %+v", key, parameter.Lookup)
+		}
+		if (parameter.Lookup.URL != "") != wantURL {
+			t.Fatalf("parameter %q lookup URL = %+v, want present=%v", key, parameter.Lookup, wantURL)
 		}
 	}
 	if got := byName["filter.env"].Schema.Enum; len(got) != 2 || got[0] != "prod" {
@@ -225,6 +237,9 @@ func TestProfileOpenAPIAdvertisesEachFilterKindsOwnControl(t *testing.T) {
 		}
 		if filter.Type != want {
 			t.Fatalf("filter %q type = %q, want %q", name, filter.Type, want)
+		}
+		if ref := byName["filter."+name].Lookup.Ref; ref != "#/components/x-clicky-filters/"+profileFilterName("orders", name) {
+			t.Fatalf("filter %q ref = %q, does not name its own component", name, ref)
 		}
 	}
 }
@@ -315,18 +330,34 @@ func TestProfileOpenAPIAdvertisesKubernetesRuntimeFilters(t *testing.T) {
 		t.Fatalf("label-key filter = %+v", filter)
 	}
 
-	// A range has no value list to enumerate, so it carries no lookup — but it
-	// does carry the bound the server applies when nobody sends one, which is
+	// A range has no value list to enumerate, so it advertises no lookup
+	// endpoint — but it still has a shape, and the ref naming that shape is what
+	// lets a client render the control before (and without) any lookup call. It
+	// also carries the bound the server applies when nobody sends one, which is
 	// what lets a generated client and the browser show the query they get.
 	timeParam := byName["time"]
-	if timeParam.Lookup != nil {
-		t.Fatalf("time filter should advertise no lookup: %+v", timeParam)
+	wantRef := "#/components/x-clicky-filters/" + profileFilterName(profile.Name, "time")
+	if timeParam.Lookup == nil || timeParam.Lookup.Ref != wantRef {
+		t.Fatalf("time filter must name its shape component %q: %+v", wantRef, timeParam.Lookup)
+	}
+	if timeParam.Lookup.URL != "" || timeParam.Lookup.SearchParam != "" {
+		t.Fatalf("time filter has nothing to enumerate and must advertise no lookup endpoint: %+v", timeParam.Lookup)
 	}
 	if timeParam.Schema == nil || timeParam.Schema.Default != query.KubernetesDefaultTimeRange {
 		t.Fatalf("time filter default = %+v", timeParam.Schema)
 	}
 	if filter := spec.Components.ClickyFilters[profileFilterName(profile.Name, "time")]; filter.Type != "date-range" {
 		t.Fatalf("time filter = %+v", filter)
+	}
+
+	// Every generated filter's ref must resolve, or a client reading shapes from
+	// the spec silently falls back to a plain text box for that control.
+	for _, key := range []string{"workload", "labels", "time"} {
+		ref := byName[key].Lookup.Ref
+		name := strings.TrimPrefix(ref, "#/components/x-clicky-filters/")
+		if _, ok := spec.Components.ClickyFilters[name]; !ok {
+			t.Fatalf("filter %q ref %q resolves to no component", key, ref)
+		}
 	}
 }
 

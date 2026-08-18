@@ -38,7 +38,7 @@ func ExecuteStream(ctx context.Context, reg *SessionRegistry, p Profile, params 
 	if len(params) > 0 {
 		supplied = params[0]
 	}
-	resolved, filters, err := resolveProfileInput(p, supplied)
+	resolved, filters, err := resolveProfileInput(p, supplied, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}

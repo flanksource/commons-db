@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
+	"time"
 
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
@@ -235,4 +236,60 @@ var _ = Describe("Cursor", func() {
 		Expect(position.Keys).To(Equal(keys))
 	})
 
+	// A rolling window resolves to a fresh instant on every request, so the walk
+	// records the clock it resolved under and every later page resolves against
+	// that. Without it the params of page two never match the params page one was
+	// fingerprinted from, and a cursor could not survive its own next request.
+	Describe("a walk's clock", func() {
+		walkClock := time.Date(2026, 8, 18, 4, 12, 33, 918274000, time.UTC)
+
+		pinnedScope := func(now time.Time) query.CursorScope {
+			// What "now-2d" resolves to under that clock — the shape
+			// ParamDef.coerce produces for a datetime param.
+			scope := scopeWith(map[string]any{
+				"tenant": "acme",
+				"start":  now.Add(-48 * time.Hour).Format(time.RFC3339Nano),
+			})
+			scope.Now = now
+			return scope
+		}
+
+		It("is carried by the cursor so a later page resolves the same window", func() {
+			cursor, err := query.EncodeCursor(pinnedScope(walkClock), keys, "", nil)
+			Expect(err).ToNot(HaveOccurred())
+
+			pinned, ok := query.CursorWalkClock(cursor)
+			Expect(ok).To(BeTrue())
+			Expect(pinned).To(BeTemporally("==", walkClock))
+
+			// The next page resolves under the clock it read back, not the wall.
+			position, err := query.DecodeCursor(cursor, pinnedScope(pinned))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(position.Keys).To(Equal(keys))
+		})
+
+		It("stales the cursor when a later page resolves under a different clock", func() {
+			cursor, err := query.EncodeCursor(pinnedScope(walkClock), keys, "", nil)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, err = query.DecodeCursor(cursor, pinnedScope(walkClock.Add(time.Second)))
+			Expect(err).To(MatchError(query.ErrCursorStale))
+			Expect(err).To(MatchError(ContainSubstring("filters changed")))
+		})
+
+		It("is absent from a cursor that pinned none", func() {
+			cursor, err := query.EncodeCursor(scope, keys, "", nil)
+			Expect(err).ToNot(HaveOccurred())
+
+			_, ok := query.CursorWalkClock(cursor)
+			Expect(ok).To(BeFalse())
+		})
+
+		It("is absent from no cursor and from one this server did not issue", func() {
+			_, ok := query.CursorWalkClock("")
+			Expect(ok).To(BeFalse())
+			_, ok = query.CursorWalkClock("not-a-cursor!!")
+			Expect(ok).To(BeFalse())
+		})
+	})
 })

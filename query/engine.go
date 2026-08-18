@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons-db/context"
 )
@@ -36,7 +37,7 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
-	resolved, filters, err := resolveProfileInput(p, supplied)
+	resolved, filters, err := resolveProfileInput(p, supplied, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}

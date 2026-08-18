@@ -1,6 +1,8 @@
 package query
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -76,6 +78,48 @@ var _ = Describe("Kubernetes runtime filters", func() {
 		Expect(candidate.Validate()).To(MatchError(ContainSubstring("conflicts with native column filter")))
 	})
 
+	// Two controls over one window is one too many, and the declared pair is the
+	// one the author asked for. The workload and label controls narrow something
+	// else, so neither is affected.
+	It("generates no time control for a profile that declares its own bound", func() {
+		candidate := profile("kind=Deployment namespace=payments")
+		candidate.Params = []ParamDef{
+			{Name: "Start", Type: ParamTypeDate, Role: ParamRoleTimeFrom},
+			{Name: "End", Type: ParamTypeDate, Role: ParamRoleTimeTo},
+		}
+		bindings, err := candidate.RuntimeFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(Equal([]ColumnFilterBinding{workloadBinding, labelsBinding}))
+	})
+
+	It("generates no time control for a profile that declares only a lower bound", func() {
+		candidate := profile("kind=Deployment namespace=payments")
+		candidate.Params = []ParamDef{{Name: "Start", Type: ParamTypeDate, Role: ParamRoleTimeFrom}}
+		bindings, err := candidate.RuntimeFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(Equal([]ColumnFilterBinding{workloadBinding, labelsBinding}))
+	})
+
+	// The name is only reserved while the control that owns it is generated, and
+	// declaring the pair is what stops it being generated.
+	It("accepts a bound parameter named after the control it replaces", func() {
+		candidate := profile("kind=Deployment")
+		candidate.Params = []ParamDef{{Name: "time", Type: ParamTypeDate, Role: ParamRoleTimeFrom}}
+		Expect(candidate.Validate()).To(Succeed())
+	})
+
+	It("leaves a declared bound out of the runtime filter values", func() {
+		candidate := profile("kind=Deployment")
+		candidate.Params = []ParamDef{
+			{Name: "Start", Type: ParamTypeDate, Role: ParamRoleTimeFrom},
+			{Name: "End", Type: ParamTypeDate, Role: ParamRoleTimeTo},
+		}
+		params, filters, err := partitionProfileInput(candidate, map[string]any{"Start": "now-15m"})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(params).To(Equal(map[string]any{"Start": "now-15m"}))
+		Expect(filters).To(BeEmpty())
+	})
+
 	It("rejects malformed grouped label selections", func() {
 		_, _, err := partitionProfileInput(profile("kind=Deployment"), map[string]any{
 			"labels": "api",
@@ -92,7 +136,7 @@ var _ = Describe("Kubernetes runtime filters", func() {
 
 		resolved, filters, err := resolveParams(candidate.Params, map[string]any{
 			"applications": "api,!worker",
-		})
+		}, time.Now())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(resolved["applications"]).To(Equal([]string{"api"}))
 		Expect(filters).To(Equal([]ColumnFilterValue{{

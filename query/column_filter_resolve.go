@@ -3,6 +3,7 @@ package query
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons-db/context"
 )
@@ -13,12 +14,15 @@ import (
 // same []ColumnFilterValue, so an exclusion has exactly one transport whichever
 // end of the profile declared it. Column filters come first, then params in
 // declaration order, so a request builds the same body every time.
-func resolveProfileInput(profile Profile, input map[string]any) (map[string]any, []ColumnFilterValue, error) {
+//
+// now is the clock date-math params resolve against, injected so a paged walk
+// can hand every page the instant its first page picked.
+func resolveProfileInput(profile Profile, input map[string]any, now time.Time) (map[string]any, []ColumnFilterValue, error) {
 	profileParams, filters, err := partitionProfileInput(profile, input)
 	if err != nil {
 		return nil, nil, err
 	}
-	resolved, paramFilters, err := resolveParams(profile.Params, profileParams)
+	resolved, paramFilters, err := resolveParams(profile.Params, profileParams, now)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -102,7 +106,7 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 	if profile.Namespace != "" {
 		ctx = ctx.WithNamespace(profile.Namespace)
 	}
-	resolved, filters, err := resolveProfileInput(profile, input)
+	resolved, filters, err := resolveProfileInput(profile, input, time.Now())
 	if err != nil {
 		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}

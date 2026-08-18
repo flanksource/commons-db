@@ -88,6 +88,13 @@ type cursorPayload struct {
 	Keys    []cursorKey       `json:"k"`
 	PIT     string            `json:"p,omitempty"`
 	State   map[string][]byte `json:"s,omitempty"`
+
+	// Now is the clock the walk resolved its date math against, RFC3339Nano.
+	// Without it a rolling window ("now-2d") resolves to a different instant on
+	// every page, and the fingerprint of a walk could never match its own next
+	// request. Carried rather than hashed: it is the clock the digests above
+	// were computed under, so hashing it would be circular.
+	Now string `json:"w,omitempty"`
 }
 
 type cursorKey struct {
@@ -134,6 +141,12 @@ type CursorScope struct {
 	Params     map[string]any
 	Roles      map[string]ParamRole
 	Filters    []ColumnFilterValue
+
+	// Now is the clock Params were resolved against. One walk resolves its date
+	// math once — the first page picks the instant, every later page reads it
+	// back off the cursor — so a rolling window names one result set for as long
+	// as the walk lasts.
+	Now time.Time
 }
 
 // EncodeCursor issues a cursor resuming after keys, which must be the sort
@@ -168,6 +181,7 @@ func EncodeCursor(scope CursorScope, keys []any, pit string, state map[string][]
 		Keys:    encodedKeys,
 		PIT:     pit,
 		State:   state,
+		Now:     encodeWalkClock(scope.Now),
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode cursor: %w", err)
@@ -198,6 +212,63 @@ func cursorOverflowAdvice(state map[string][]byte) string {
 		strings.Join(labels, ", "))
 }
 
+// unpackCursor decodes a cursor's payload without checking it against any
+// query. It is separate from DecodeCursor because the walk's clock has to be
+// read before the params it validates are resolved — see CursorWalkClock.
+func unpackCursor(c Cursor) (cursorPayload, error) {
+	encoded, err := base64.RawURLEncoding.DecodeString(string(c))
+	if err != nil {
+		return cursorPayload{}, fmt.Errorf("%w: it is not a cursor this server issued", ErrCursorStale)
+	}
+	decoded, err := cursorDecoder.DecodeAll(encoded, nil)
+	if err != nil {
+		return cursorPayload{}, fmt.Errorf("%w: it is not a cursor this server issued", ErrCursorStale)
+	}
+	if len(decoded) > maxCursorPayloadBytes {
+		return cursorPayload{}, fmt.Errorf("%w: its payload exceeds %d bytes", ErrCursorStale, maxCursorPayloadBytes)
+	}
+	var payload cursorPayload
+	if err := json.Unmarshal(decoded, &payload); err != nil {
+		return cursorPayload{}, fmt.Errorf("%w: it is not a cursor this server issued", ErrCursorStale)
+	}
+	return payload, nil
+}
+
+// encodeWalkClock renders a walk's clock for the token. A zero clock is a walk
+// that pinned none, and is left off rather than written as year one.
+func encodeWalkClock(now time.Time) string {
+	if now.IsZero() {
+		return ""
+	}
+	return now.Format(time.RFC3339Nano)
+}
+
+// CursorWalkClock is the instant the walk that issued c resolved its date math
+// at. Resolving a later page against it is what lets a rolling window like
+// "now-2d" name one result set for the whole walk, rather than a new one — and
+// so a new fingerprint — on every request.
+//
+// It reads the clock without validating the cursor, because the params the
+// validation compares cannot be resolved until the clock is known. DecodeCursor
+// still runs immediately afterwards, so a cursor this server did not issue is
+// refused exactly as before; the only thing an unchecked clock can move is the
+// caller's own window. Reports false for no cursor, an unreadable one, and one
+// minted before this field existed.
+func CursorWalkClock(c Cursor) (time.Time, bool) {
+	if c.IsZero() {
+		return time.Time{}, false
+	}
+	payload, err := unpackCursor(c)
+	if err != nil || payload.Now == "" {
+		return time.Time{}, false
+	}
+	now, err := time.Parse(time.RFC3339Nano, payload.Now)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return now, true
+}
+
 // DecodeCursor validates c against the query it is being replayed on and
 // returns the position to resume from. Every mismatch is ErrCursorStale: from
 // the caller's side a forged cursor and an outdated one are the same event —
@@ -209,20 +280,9 @@ func DecodeCursor(c Cursor, scope CursorScope) (CursorPosition, error) {
 	if err := scope.Order.Pageable(); err != nil {
 		return CursorPosition{}, err
 	}
-	encoded, err := base64.RawURLEncoding.DecodeString(string(c))
+	payload, err := unpackCursor(c)
 	if err != nil {
-		return CursorPosition{}, fmt.Errorf("%w: it is not a cursor this server issued", ErrCursorStale)
-	}
-	decoded, err := cursorDecoder.DecodeAll(encoded, nil)
-	if err != nil {
-		return CursorPosition{}, fmt.Errorf("%w: it is not a cursor this server issued", ErrCursorStale)
-	}
-	if len(decoded) > maxCursorPayloadBytes {
-		return CursorPosition{}, fmt.Errorf("%w: its payload exceeds %d bytes", ErrCursorStale, maxCursorPayloadBytes)
-	}
-	var payload cursorPayload
-	if err := json.Unmarshal(decoded, &payload); err != nil {
-		return CursorPosition{}, fmt.Errorf("%w: it is not a cursor this server issued", ErrCursorStale)
+		return CursorPosition{}, err
 	}
 	filters, err := scope.fingerprint()
 	if err != nil {
