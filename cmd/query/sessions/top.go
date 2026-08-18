@@ -36,7 +36,7 @@ func (r *Runner) RunTop(ctx context.Context, name string, options TopOptions) er
 	if p.Top == nil && interval == "" {
 		interval = query.DefaultTopInterval.String()
 	}
-	if p, err = applySessionSpecOverrides(p, interval, options.Duration); err != nil {
+	if p, err = applySessionSpecOverrides(p, sessionSpec{Interval: interval, Duration: options.Duration}); err != nil {
 		return err
 	}
 	params, err := parseSessionParams(options.Params)

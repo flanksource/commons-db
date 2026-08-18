@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/types"
 )
 
 // StreamProvider is an optional provider capability for continuous sources
@@ -19,6 +20,61 @@ type StreamProvider interface {
 	// Stream runs req, calling emit for each row until ctx is cancelled or the
 	// source ends. It blocks; a nil return means the source ended normally.
 	Stream(ctx context.Context, req ProviderRequest, emit func(Row)) error
+}
+
+// followBufferRows and followBufferWait bound the raw-row batches a followed
+// profile hands its processors. tracePipeline without a buffer processes one row
+// at a time, so a page-capable processor — logs.dedupe is the one every log
+// profile reaches for — is handed a single row and folds nothing. The same bound
+// decides how many SSE frames a busy tail produces, which is the other reason
+// not to leave it at one row per frame.
+const (
+	followBufferRows = 200
+	followBufferWait = time.Second
+)
+
+// Follow rewrites p as a session that tails its source from here onward: the
+// promotion a plain query profile gets when a caller asks to follow it rather
+// than run it once. The provider must implement StreamProvider — SupportsStreaming
+// answers that, and the transport is expected to have asked before promoting, so
+// a surface never offers a Follow control it cannot honour.
+//
+// Dropping the time-to parameter is the whole of "from here onward". It reads as
+// the opposite of what a cursor walk does, and it is: a walk pins the instant its
+// date math resolved against (see the clock stamped into the cursor by
+// ExecutePages) because every page after the first must name the same result set,
+// and a rolling window that moved between pages would stale the token. A follow
+// has no result set to name — it is waiting for rows that do not exist yet — so
+// an upper bound resolved at start is simply the moment it stops tailing. Only
+// that edge goes; the lower bound is where "here" begins, and a follow that
+// replayed from the beginning of retention every time would be a different
+// feature.
+//
+// The returned profile shares nothing mutable with p: the caller's profile came
+// out of a store other requests read too.
+func Follow(p Profile) Profile {
+	params := make([]ParamDef, 0, len(p.Params))
+	for _, param := range p.Params {
+		if param.Role == ParamRoleTimeTo {
+			continue
+		}
+		params = append(params, param)
+	}
+	p.Params = params
+
+	spec := TraceSpec{}
+	if p.Trace != nil {
+		spec = *p.Trace
+	}
+	if spec.Buffer == nil {
+		spec.Buffer = &TraceBufferSpec{
+			MaxRows: followBufferRows,
+			MaxWait: types.Duration{Duration: followBufferWait},
+		}
+	}
+	spec.Follow = true
+	p.Trace = &spec
+	return p
 }
 
 // ExecuteStream starts a trace or top session and returns immediately with the
@@ -63,6 +119,9 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	req.Filters = filters
+	if p.Trace.Follow {
+		req.Filters = openTailWindow(filters)
+	}
 	if p.Trace.Buffer == nil {
 		label, err := nonPageProcessor(p.Processors)
 		if err != nil {
@@ -88,6 +147,42 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 
 	go runTrace(runCtx, cancel, sp, session, req, pipeline, p.Trace.Buffer)
 	return session, nil
+}
+
+// openTailWindow drops the closing edge of a followed trace's time selections.
+//
+// A follow reads from now onward, so an end instant resolved when it started is
+// not a bound on what it reads but the moment it would stop reading. It is the
+// exact inverse of what a cursor walk needs, where the window is pinned so that
+// every page names one result set; the two rules look contradictory and are,
+// because a walk reads a result that already exists and a tail waits for one
+// that does not.
+//
+// It applies only to a session promoted by ?follow=true, never to a trace an
+// author declared — see TraceSpec.Follow. A profile that writes down a window is
+// making a statement about what the session is, and quietly deleting half of it
+// would be a worse answer than honouring a bound the author can see and change.
+//
+// Only selections are opened here. The other closing edge a profile can carry is
+// a time-to parameter, which is also interpolated into the query text, so
+// removing it rewrites the profile rather than one request — see Follow.
+func openTailWindow(filters []ColumnFilterValue) []ColumnFilterValue {
+	open := make([]ColumnFilterValue, 0, len(filters))
+	for _, filter := range filters {
+		bounded := filter.Kind == ColumnFilterKindTime || filter.Kind == ColumnFilterKindDate
+		if !bounded || filter.Range == nil || filter.Range.Max == nil {
+			open = append(open, filter)
+			continue
+		}
+		if filter.Range.Min == nil {
+			// The selection was only an end; with it gone nothing is selected, and
+			// an empty range would compile to a clause matching everything anyway.
+			continue
+		}
+		filter.Range = &FilterRange{Min: filter.Range.Min}
+		open = append(open, filter)
+	}
+	return open
 }
 
 func runTrace(

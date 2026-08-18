@@ -145,6 +145,64 @@ func TestSessionAPISynthesizesTopForPlainProfile(t *testing.T) {
 	s.Stop()
 }
 
+// followProfile is a plain query profile whose provider can tail, declaring the
+// window pair a follow session has to reopen.
+func followProfile(name, providerType string) query.Profile {
+	p := execProfile(name)
+	p.Provider.Type = providerType
+	p.Params = append(p.Params,
+		query.ParamDef{Name: "Start", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom, Default: "now-1h"},
+		query.ParamDef{Name: "End", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo, Default: "now"},
+	)
+	return p
+}
+
+func TestSessionAPIFollowsPlainProfileAsTrace(t *testing.T) {
+	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-follow", rows: []query.Row{{"n": 1.0}}, block: true})
+	h, reg := newSessionAPITest(t, 5, followProfile("plain-follow", "sess-api-follow"))
+
+	info := startSession(t, h, "/api/v1/profile/plain-follow/sessions?follow=true&region=EU")
+	require.Equal(t, query.KindTrace, info.Kind)
+	require.Equal(t, "EU", info.Params["region"], "filter params flow through, follow does not")
+	require.NotContains(t, info.Params, "follow")
+	require.Contains(t, info.Params, "Start", "a follow still starts somewhere")
+	require.NotContains(t, info.Params, "End", "an end instant is where the tail would stop")
+
+	s, ok := reg.Get(info.ID)
+	require.True(t, ok)
+	s.Stop()
+	// Awaited, not just requested: a session still running past its own test
+	// reads the provider registry while the next test writes to it.
+	waitSessionState(t, reg, info.ID, query.SessionStopped)
+}
+
+func TestSessionAPIRejectsFollowForNonStreamingProvider(t *testing.T) {
+	query.RegisterProvider(&execMock{rows: []query.Row{{"id": 1}}})
+	h, _ := newSessionAPITest(t, 5, execProfile("plain-nofollow"))
+
+	rec := doReq(h, http.MethodPost, "/api/v1/profile/plain-nofollow/sessions?follow=true")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "plain-nofollow")
+	require.Contains(t, rec.Body.String(), "session-exec-mock")
+}
+
+func TestSessionAPIRejectsFollowCombinedWithInterval(t *testing.T) {
+	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-follow-interval", block: true})
+	h, _ := newSessionAPITest(t, 5, followProfile("both", "sess-api-follow-interval"))
+
+	rec := doReq(h, http.MethodPost, "/api/v1/profile/both/sessions?follow=true&interval=1s")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestSessionAPIRejectsAnUnreadableFollowFlag(t *testing.T) {
+	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-follow-garbage", block: true})
+	h, _ := newSessionAPITest(t, 5, followProfile("garbage", "sess-api-follow-garbage"))
+
+	rec := doReq(h, http.MethodPost, "/api/v1/profile/garbage/sessions?follow=perhaps")
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+	require.Contains(t, rec.Body.String(), "perhaps")
+}
+
 func TestSessionAPIReturnsConflictAtCapacity(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-block", block: true})
 	h, reg := newSessionAPITest(t, 1, traceTestProfile("blocker", "sess-api-block"))

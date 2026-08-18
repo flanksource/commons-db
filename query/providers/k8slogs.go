@@ -5,14 +5,17 @@ import (
 	"iter"
 	"sort"
 	"strconv"
+	"sync"
 	"time"
 
+	"golang.org/x/sync/errgroup"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/kubernetes/workload"
+	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons-db/logs/k8s"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/types"
@@ -140,6 +143,87 @@ func (p k8sLogsProvider) cursorPages(
 			}
 		}
 	}
+}
+
+// Stream tails every container the profile selects, emitting each line as the
+// kubelet writes it.
+//
+// A tail is the same read as a page with no end to it, so the target, the
+// bounds and the ids are resolved exactly the way cursorPages resolves them: a
+// session started from a page's cursor continues that walk rather than
+// beginning a second one alongside it.
+func (p k8sLogsProvider) Stream(ctx context.Context, req query.ProviderRequest, emit func(query.Row)) error {
+	// Lines arrive in the order the containers write them, which is the
+	// ascending order this provider declares. A profile that declared any other
+	// one is asking for rows a tail cannot produce, so it is refused rather than
+	// answered out of order. A profile that declared none has nothing to
+	// disagree with — the tail's own order stands.
+	if len(req.Order) > 0 {
+		if err := assertAscendingLogOrder(req.Order); err != nil {
+			return err
+		}
+	}
+	target, err := p.resolve(ctx, req)
+	if err != nil {
+		return err
+	}
+	after, err := logPositionFromKeys(req.Position.Keys)
+	if err != nil {
+		return err
+	}
+	request := target.request
+	request.After = after
+	if after != nil {
+		// SinceTime names whole seconds, so the tail opens at the top of the
+		// cursor's second and After discards the part of it already served.
+		request.Start = after.Timestamp.Truncate(time.Second).Format(time.RFC3339)
+	}
+	target.diagnostics.RecordRequest(target.query, nil, kubernetesLogRequestDetails(target.pods, request))
+
+	// A query that matches nothing is an empty answer, but a tail that follows
+	// nothing is a session that can never produce a row — and one that ended the
+	// instant it started reads exactly like a source that went quiet.
+	containers := k8s.Targets(target.pods, request)
+	if len(containers) == 0 {
+		return fmt.Errorf("nothing to tail: %q matched no containers", req.Query)
+	}
+
+	// One goroutine per container, because tailing two containers is two
+	// connections held open at once rather than one read after another. They
+	// interleave into a single emit, which was handed over once and so is
+	// serialised here rather than at each caller.
+	tailCtx, cancel := ctx.WithCancel()
+	defer cancel()
+	var mu sync.Mutex
+	var group errgroup.Group
+	for _, container := range containers {
+		group.Go(func() error {
+			err := k8s.Follow(tailCtx, target.client, container, request, func(result logs.LogResult) {
+				mu.Lock()
+				defer mu.Unlock()
+				for _, row := range logResultsToRows([]logs.LogResult{result}) {
+					emit(row)
+				}
+			})
+			if err != nil {
+				// One container failing ends the whole tail: its siblings are
+				// stopped here so none of them is still emitting rows after
+				// the caller has been told the stream is over. A container
+				// whose stream simply ended returns nil and leaves the others
+				// reading.
+				cancel()
+			}
+			return err
+		})
+	}
+	// Stopping a tail is how every tail ends — a session's deadline, or an
+	// operator closing it — and the read failures cancellation raises are that
+	// stop rather than a fault. Anything reported while the context was still
+	// live is real, and is returned.
+	if err := group.Wait(); err != nil && ctx.Err() == nil {
+		return err
+	}
+	return nil
 }
 
 // assertAscendingLogOrder refuses a cursor walk under an order this provider

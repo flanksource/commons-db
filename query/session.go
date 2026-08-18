@@ -170,11 +170,25 @@ func (s *Session) Events() []Event {
 // subsequent ones — no gap, no duplication. The channel is closed when the
 // session reaches a terminal state; cancel detaches the subscriber.
 func (s *Session) Subscribe() (replay []Event, live <-chan Event, cancel func()) {
+	return s.SubscribeFrom(0)
+}
+
+// SubscribeFrom is Subscribe for a consumer that already holds every event up
+// to and including after — a reconnecting SSE client naming its Last-Event-ID.
+// Sequences start at 1, so 0 replays the whole ring and is what Subscribe asks
+// for.
+//
+// A sequence older than the ring's oldest surviving event replays what is left
+// rather than failing: the evicted span is unrecoverable whichever way it is
+// answered, and the alternative is a client that reconnects into silence.
+func (s *Session) SubscribeFrom(after int64) (replay []Event, live <-chan Event, cancel func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	replay = make([]Event, s.count)
+	replay = make([]Event, 0, s.count)
 	for i := 0; i < s.count; i++ {
-		replay[i] = s.ring[(s.head+i)%len(s.ring)]
+		if event := s.ring[(s.head+i)%len(s.ring)]; event.Sequence > after {
+			replay = append(replay, event)
+		}
 	}
 	ch := make(chan Event, subscriberBuffer)
 	if s.state.Terminal() {

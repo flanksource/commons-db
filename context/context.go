@@ -158,6 +158,21 @@ func (k Context) WithTimeout(timeout time.Duration) (Context, gocontext.CancelFu
 	}, cancelFunc
 }
 
+// WithCancel derives a context this caller can stop, keeping everything the
+// parent carries — the database, the logger, the connection resolver and the
+// rest of its values.
+//
+// It is what a fan-out needs and neither WithTimeout nor WithDeadline can give
+// it: work stopped by its siblings failing is stopped at no particular instant.
+// Only the cancellation is swapped, because reconstructing the commons context
+// would drop the debug and trace predicates it holds unexported.
+func (k Context) WithCancel() (Context, gocontext.CancelFunc) {
+	ctx, cancelFunc := gocontext.WithCancel(k.Context)
+	inner := k.Context
+	inner.Context = ctx
+	return Context{Context: inner}, cancelFunc
+}
+
 func (k Context) WithDeadline(deadline time.Time) (Context, gocontext.CancelFunc) {
 	ctx, cancelFunc := k.Context.WithDeadline(deadline)
 	return Context{

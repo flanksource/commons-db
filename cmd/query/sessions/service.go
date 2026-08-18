@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,11 +59,12 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 
 // sessionHandler serves the trace/top session lifecycle:
 //
-//	POST   {prefix}/profile/{name}/sessions   start (?interval samples any profile)
+//	POST   {prefix}/profile/{name}/sessions   start (?interval samples, ?follow tails)
 //	GET    {prefix}/sessions                  list (live ∪ persisted)
 //	GET    {prefix}/sessions/{id}             info
 //	DELETE {prefix}/sessions/{id}             stop
-//	GET    {prefix}/sessions/{id}/events      SSE stream (?format=ndjson exports)
+//	GET    {prefix}/sessions/{id}/events      SSE stream, resumable via Last-Event-ID
+//	                                          (?format=ndjson exports)
 //	GET    {prefix}/sessions/{id}/result      materialized rows
 //
 // Live sessions are served from the in-memory registry; the optional
@@ -120,8 +123,17 @@ func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name stri
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
+	follow, err := queryFlag(r.URL.Query(), "follow")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	p := resolved.Profile
-	if p, err = applySessionSpecOverrides(p, r.URL.Query().Get("interval"), r.URL.Query().Get("duration")); err != nil {
+	if p, err = applySessionSpecOverrides(p, sessionSpec{
+		Interval: r.URL.Query().Get("interval"),
+		Duration: r.URL.Query().Get("duration"),
+		Follow:   follow,
+	}); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -146,15 +158,40 @@ func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name stri
 	writeSessionJSON(w, http.StatusCreated, session.Snapshot())
 }
 
-// applySessionSpecOverrides maps the transport inputs (HTTP query params or CLI
-// flags) onto the profile: interval samples any plain profile as top (or
-// overrides a declared interval), and duration lowers the session bound (the
-// registry still clamps it).
-func applySessionSpecOverrides(p query.Profile, interval, duration string) (query.Profile, error) {
-	if interval != "" {
-		d, err := time.ParseDuration(interval)
+// sessionSpec is the transport's side of a session request: the HTTP query
+// params, or the equivalent CLI flags.
+type sessionSpec struct {
+	Interval string
+	Duration string
+	Follow   bool
+}
+
+// applySessionSpecOverrides maps the transport inputs onto the profile: follow
+// tails any plain profile as a trace, interval samples one as top (or overrides
+// a declared interval), and duration lowers the session bound (the registry
+// still clamps it).
+//
+// Follow is applied first so that asking for both it and an interval is caught
+// by the trace/interval guard below rather than needing a rule of its own —
+// they are two answers to one question, and a profile cannot be sampled on a
+// clock and tailed continuously at the same time.
+func applySessionSpecOverrides(p query.Profile, spec sessionSpec) (query.Profile, error) {
+	if spec.Follow {
+		// Asked here rather than left to ExecuteStream so the refusal names the
+		// capability the caller asked for. Falling back to polling would answer a
+		// question nobody asked: an interval is a different session with a
+		// different cost, and choosing it silently hides that the provider cannot
+		// do what the Follow control offered.
+		if !query.SupportsStreaming(p.Provider.Type) {
+			return p, fmt.Errorf("profile %q cannot be followed: provider %q does not stream; pass ?interval to sample it instead",
+				p.Name, p.Provider.Type)
+		}
+		p = query.Follow(p)
+	}
+	if spec.Interval != "" {
+		d, err := time.ParseDuration(spec.Interval)
 		if err != nil {
-			return p, fmt.Errorf("invalid interval %q: %w", interval, err)
+			return p, fmt.Errorf("invalid interval %q: %w", spec.Interval, err)
 		}
 		if p.Kind() == query.KindTrace {
 			return p, fmt.Errorf("profile %q is a trace; interval does not apply", p.Name)
@@ -165,12 +202,12 @@ func applySessionSpecOverrides(p query.Profile, interval, duration string) (quer
 		p.Top.Interval = types.Duration{Duration: d}
 	}
 	if p.Kind() == query.KindQuery {
-		return p, fmt.Errorf("profile %q declares neither trace nor top; pass ?interval to sample it", p.Name)
+		return p, fmt.Errorf("profile %q declares neither trace nor top; pass ?follow to tail it or ?interval to sample it", p.Name)
 	}
-	if duration != "" {
-		d, err := time.ParseDuration(duration)
+	if spec.Duration != "" {
+		d, err := time.ParseDuration(spec.Duration)
 		if err != nil {
-			return p, fmt.Errorf("invalid duration %q: %w", duration, err)
+			return p, fmt.Errorf("invalid duration %q: %w", spec.Duration, err)
 		}
 		if p.Trace != nil {
 			p.Trace.MaxDuration = types.Duration{Duration: d}
@@ -245,12 +282,17 @@ func (h *sessionHandler) lookup(w http.ResponseWriter, id string) (query.Session
 }
 
 func (h *sessionHandler) events(w http.ResponseWriter, r *http.Request, id string) {
+	after, err := lastEventSequence(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if session, ok := h.registry.Get(id); ok {
 		if r.URL.Query().Get("format") == "ndjson" {
 			writeNDJSON(w, id, session.Events())
 			return
 		}
-		h.streamSSE(w, r, session)
+		sseStream{session: session, after: after, keepalive: defaultSSEKeepalive}.run(w, r)
 		return
 	}
 
@@ -267,47 +309,7 @@ func (h *sessionHandler) events(w http.ResponseWriter, r *http.Request, id strin
 		writeNDJSON(w, id, events)
 		return
 	}
-	// Persisted sessions are terminal: replay then done.
-	flusher := beginSSE(w)
-	for _, e := range events {
-		if writeSSEEvent(w, "event", e) != nil {
-			return
-		}
-	}
-	_ = writeSSEEvent(w, "done", info)
-	flusher.Flush()
-}
-
-// streamSSE replays the buffered events then follows the live channel until
-// the session ends or the client disconnects.
-func (h *sessionHandler) streamSSE(w http.ResponseWriter, r *http.Request, session *query.Session) {
-	replay, live, cancel := session.Subscribe()
-	defer cancel()
-
-	flusher := beginSSE(w)
-	for _, e := range replay {
-		if writeSSEEvent(w, "event", e) != nil {
-			return
-		}
-	}
-	flusher.Flush()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case e, open := <-live:
-			if !open {
-				_ = writeSSEEvent(w, "done", session.Snapshot())
-				flusher.Flush()
-				return
-			}
-			if writeSSEEvent(w, "event", e) != nil {
-				return
-			}
-			flusher.Flush()
-		}
-	}
+	sseHistory{events: events, info: info, after: after}.write(w)
 }
 
 func (h *sessionHandler) result(w http.ResponseWriter, r *http.Request, id string) {
@@ -346,9 +348,28 @@ func (h *sessionHandler) result(w http.ResponseWriter, r *http.Request, id strin
 	writeSessionJSON(w, http.StatusOK, rows)
 }
 
+// queryFlag reads a boolean query parameter in both the forms a caller writes
+// it: `?follow` and `?follow=true`. A value that is neither is refused rather
+// than read as false, because a misspelled flag that quietly does nothing is
+// indistinguishable from a feature that does not work.
+func queryFlag(values url.Values, key string) (bool, error) {
+	raw, ok := values[key]
+	if !ok || len(raw) == 0 {
+		return false, nil
+	}
+	if raw[0] == "" {
+		return true, nil
+	}
+	flag, err := strconv.ParseBool(raw[0])
+	if err != nil {
+		return false, fmt.Errorf("invalid %s %q: expected a boolean", key, raw[0])
+	}
+	return flag, nil
+}
+
 // sessionReservedParam extends reservedParam with the session transport keys.
 func sessionReservedParam(key string) bool {
-	return profiles.IsReservedParam(key) || key == "interval" || key == "duration"
+	return profiles.IsReservedParam(key) || key == "interval" || key == "duration" || key == "follow"
 }
 
 func writeSessionJSON(w http.ResponseWriter, status int, v any) {
@@ -357,38 +378,5 @@ func writeSessionJSON(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
-}
-
-func beginSSE(w http.ResponseWriter) http.Flusher {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		panic("session SSE requires a flushable ResponseWriter")
-	}
-	return flusher
-}
-
-// writeSSEEvent writes one SSE frame; an error means the client disconnected
-// and the stream should stop.
-func writeSSEEvent(w http.ResponseWriter, event string, v any) error {
-	data, err := json.Marshal(v)
-	if err != nil {
-		data = []byte(fmt.Sprintf(`{"error":%q}`, err.Error()))
-	}
-	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
-	return err
-}
-
-func writeNDJSON(w http.ResponseWriter, id string, events []query.Event) {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "session-"+id+".ndjson"))
-	enc := json.NewEncoder(w)
-	for _, e := range events {
-		if err := enc.Encode(e); err != nil {
-			return
-		}
 	}
 }

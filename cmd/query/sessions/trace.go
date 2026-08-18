@@ -64,7 +64,7 @@ func (r *Runner) RunTrace(ctx context.Context, name string, options TraceOptions
 	if p.Kind() != query.KindTrace {
 		return fmt.Errorf("profile %q is not a trace; use `query top` to sample it", p.Name)
 	}
-	if p, err = applySessionSpecOverrides(p, "", options.Duration); err != nil {
+	if p, err = applySessionSpecOverrides(p, sessionSpec{Duration: options.Duration}); err != nil {
 		return err
 	}
 	params, err := parseSessionParams(options.Params)

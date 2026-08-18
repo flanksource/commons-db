@@ -45,6 +45,19 @@ type TraceSpec struct {
 	// Buffer batches raw provider rows before running the full processor chain.
 	// Without it every trace processor must implement PageProcessor.
 	Buffer *TraceBufferSpec `json:"buffer,omitempty" yaml:"buffer,omitempty"`
+
+	// Follow marks a session promoted from a plain query profile by ?follow=true
+	// rather than one an author declared. It is set by Follow and is not part of
+	// the document, which is why it does not serialize: a profile cannot ask to
+	// be followed, a request can.
+	//
+	// It exists because the two kinds want opposite things from a closing time
+	// bound. A followed profile is being read from now onward, so an end instant
+	// is the moment it would stop rather than a bound on what it reads, and
+	// openTailWindow drops it. A declared trace is an author's whole statement of
+	// what the session is, and silently discarding half of a window they wrote
+	// down would be a worse answer than honouring it.
+	Follow bool `json:"-" yaml:"-"`
 }
 
 // TraceBufferSpec bounds a raw-row processor batch by count, elapsed time, or

@@ -37,6 +37,11 @@ type pagingFixture struct {
 	// backend snapshot kept that cursor valid. Nil for a backend that holds
 	// nothing.
 	released func() bool
+
+	// streams is whether this backend can also follow its source rather than
+	// only walk a result that already exists. Paging and streaming are separate
+	// capabilities, and a surface offering a Follow control reads this one.
+	streams bool
 }
 
 func (f pagingFixture) walk(page query.PageRequest) ([]string, []query.Page) {
@@ -91,6 +96,14 @@ func runPagingConformance(f pagingFixture) {
 			Expect(pages[len(pages)-1].HasMore).To(BeFalse())
 		})
 
+		// Advertised capability is what a caller builds against: a Follow
+		// control offered over a backend that cannot tail is a button that can
+		// only fail, and one withheld from a backend that can is a feature
+		// nobody can reach.
+		It("advertises streaming only where it can follow its source", func() {
+			Expect(query.SupportsStreaming(f.profile().Provider.Type)).To(Equal(f.streams))
+		})
+
 		It("never returns more rows than the page asked for", func() {
 			_, pages := f.walk(query.PageRequest{Limit: 2})
 			for _, page := range pages {
@@ -129,6 +142,12 @@ func runPagingConformance(f pagingFixture) {
 type kubeletStub struct {
 	server *httptest.Server
 	lines  []string
+
+	// live carries the lines the container writes after a read has begun. A
+	// followed read holds its connection open and takes from it, which is the
+	// only way a spec can tell a tail apart from a read that happened to return
+	// everything at once.
+	live chan string
 }
 
 func newKubeletStub() *kubeletStub {
@@ -143,7 +162,7 @@ func newKubeletStub() *kubeletStub {
 }
 
 func newKubeletStubWith(lines []string) *kubeletStub {
-	stub := &kubeletStub{lines: lines}
+	stub := &kubeletStub{lines: lines, live: make(chan string, 8)}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/pods", func(w http.ResponseWriter, _ *http.Request) {
@@ -158,13 +177,38 @@ func newKubeletStubWith(lines []string) *kubeletStub {
 		})
 	}
 	mux.HandleFunc("/api/v1/namespaces/prod/pods/", func(w http.ResponseWriter, r *http.Request) {
+		defer GinkgoRecover()
 		w.Header().Set("Content-Type", "text/plain")
 		for _, line := range serveKubeletLines(r, stub.lines) {
 			_, _ = fmt.Fprintln(w, line)
 		}
+		if r.URL.Query().Get("follow") != "true" {
+			return
+		}
+		// A followed read is served the same lines and then never ended: what
+		// the container has already written is flushed, and each further line
+		// goes out as it is written.
+		flusher, ok := w.(http.Flusher)
+		Expect(ok).To(BeTrue(), "the stub cannot follow without flushing")
+		flusher.Flush()
+		for {
+			select {
+			case line := <-stub.live:
+				_, _ = fmt.Fprintln(w, line)
+				flusher.Flush()
+			case <-r.Context().Done():
+				return
+			}
+		}
 	})
 	stub.server = httptest.NewServer(mux)
 	return stub
+}
+
+// write hands the followed read one more line, as the container writing to it
+// would.
+func (s *kubeletStub) write(line string) {
+	s.live <- line
 }
 
 func (s *kubeletStub) context() context.Context {
@@ -330,8 +374,9 @@ var _ = Describe("provider paging contract", func() {
 		})
 
 		runPagingConformance(pagingFixture{
-			name: "k8s",
-			ctx:  func() context.Context { return stub.context() },
+			name:    "k8s",
+			streams: true,
+			ctx:     func() context.Context { return stub.context() },
 			key:  func(row query.Row) string { return fmt.Sprint(row["message"]) },
 			profile: func() query.Profile {
 				return query.Profile{

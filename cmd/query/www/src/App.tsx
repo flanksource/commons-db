@@ -15,7 +15,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { secretFormExtensions } from "./secretKeySelector";
 import { namespaceFormExtensions } from "./namespacePicker";
 import { connectionFormActions } from "./connectionActions";
-import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
+import { logsResultRenderer, useLogsSurfaces } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
 import { connectionDashboardResultRenderer } from "./connectionDashboardRenderer";
 import { getMonacoWorker } from "./monacoWorkers";
@@ -107,8 +107,8 @@ function Explorer() {
   const pathname = useRouter().pathname;
   const editingProfile = profileEditSurfaceKey(pathname);
   const reconcilingProfile = reconcileSurfaceKey(pathname);
-  const logsEntityNames = useLogsEntityNames();
-  const renderLogsResult = logsResultRenderer(logsEntityNames);
+  const logsSurfaces = useLogsSurfaces();
+  const renderLogsResult = logsResultRenderer(logsSurfaces);
   const renderResult = (context: ResultRenderContext) => {
     const connectionResult = connectionDashboardResultRenderer(context);
     if (connectionResult !== context.defaultView) return connectionResult;

@@ -46,6 +46,23 @@ func PagesNatively(providerType string) bool {
 	return ok
 }
 
+// SupportsStreaming reports whether this provider can follow its source — tail a
+// log, subscribe to an event feed — rather than answer one question and stop.
+//
+// It is the third question in this family and deliberately separate from the
+// other two: paging walks a result set that already exists, and streaming waits
+// for one that does not yet. A provider can do either, both or neither, and a
+// surface offering a Follow control against a provider that cannot is offering a
+// button that can only fail.
+func SupportsStreaming(providerType string) bool {
+	provider, err := GetProvider(providerType)
+	if err != nil {
+		return false
+	}
+	_, ok := provider.(StreamProvider)
+	return ok
+}
+
 // walkRequest is the page a full forward walk asks for.
 //
 // It prefers a cursor wherever one is available: it is the only strategy that

@@ -237,6 +237,123 @@ var _ = Describe("ExecuteStream trace", func() {
 	})
 })
 
+// filterCapturingStream records the native filters its request carried, which
+// is the only place a resolved time selection is observable.
+type filterCapturingStream struct {
+	typ     string
+	filters chan []query.ColumnFilterValue
+}
+
+func (f *filterCapturingStream) Type() string { return f.typ }
+
+func (f *filterCapturingStream) Execute(context.Context, query.ProviderRequest) ([]query.Row, error) {
+	return nil, nil
+}
+
+func (f *filterCapturingStream) Stream(_ context.Context, req query.ProviderRequest, _ func(query.Row)) error {
+	f.filters <- req.Filters
+	return nil
+}
+
+var _ = Describe("Follow", func() {
+	newRegistry := func() *query.SessionRegistry {
+		return query.NewSessionRegistry(query.RegistryOptions{})
+	}
+
+	windowedProfile := func(providerType string) query.Profile {
+		return query.Profile{
+			Name:     "window-" + providerType,
+			Provider: query.ProviderConfig{Type: providerType},
+			Params: []query.ParamDef{
+				{Name: "Start", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom, Default: "now-1h"},
+				{Name: "End", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo, Default: "now"},
+			},
+		}
+	}
+
+	It("resolves a lower bound but no upper one, so the tail never expires", func() {
+		query.RegisterProvider(&fakeStreamProvider{typ: "follow-window"})
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), query.Follow(windowedProfile("follow-window")))
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+
+		params := session.Snapshot().Params
+		Expect(params).To(HaveKey("Start"))
+		Expect(params).ToNot(HaveKey("End"), "an end instant is a deadline the tail would stop at")
+	})
+
+	// windowedTraceFilters runs p with a bounded time selection and returns the
+	// filters the provider was actually sent.
+	//
+	// Registered under a provider type that accepts native column filters: the
+	// binding gate is what decides whether a time control exists at all, and no
+	// real backend is linked into this suite.
+	windowedTraceFilters := func(name string, trace *query.TraceSpec) []query.ColumnFilterValue {
+		captured := make(chan []query.ColumnFilterValue, 1)
+		query.RegisterProvider(&filterCapturingStream{typ: "opensearch", filters: captured})
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), query.Profile{
+			Name:     name,
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Trace:    trace,
+			Columns: []query.ColumnDef{{
+				Name: "timestamp", Type: query.ColumnTypeDateTime,
+				Filter: &query.ColumnFilterDef{Field: "@timestamp"},
+			}},
+		}, map[string]any{"filter.timestamp": ">=now-1h,<=now"})
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+		return <-captured
+	}
+
+	It("keeps the start of a followed profile's time selection and drops its end", func() {
+		followed := query.Follow(query.Profile{Name: "tail-window"})
+
+		filters := windowedTraceFilters("tail-window", followed.Trace)
+
+		Expect(filters).To(HaveLen(1))
+		Expect(filters[0].Range.Min).ToNot(BeNil(), "the tail still starts somewhere")
+		Expect(filters[0].Range.Max).To(BeNil(), "an end instant is where the tail would stop")
+	})
+
+	It("leaves a declared trace's window alone", func() {
+		// The inverse of the case above, and the reason TraceSpec.Follow exists. A
+		// profile that writes down a window is stating what the session is; a
+		// request that asks to follow one is stating something about this run. Only
+		// the second may reach in and delete half of the first.
+		filters := windowedTraceFilters("declared-window", &query.TraceSpec{})
+
+		Expect(filters).To(HaveLen(1))
+		Expect(filters[0].Range.Max).ToNot(BeNil(), "an author's closing bound is theirs to keep")
+	})
+
+	It("buffers raw rows so a whole-result processor still sees a batch", func() {
+		followed := query.Follow(query.Profile{Name: "unbuffered"})
+		Expect(followed.Trace.Buffer).To(Equal(&query.TraceBufferSpec{
+			MaxRows: 200, MaxWait: types.Duration{Duration: time.Second},
+		}))
+	})
+
+	It("keeps a buffer the profile declared for itself", func() {
+		declared := query.Profile{
+			Name:  "declared",
+			Trace: &query.TraceSpec{Buffer: &query.TraceBufferSpec{MaxRows: 7}},
+		}
+		Expect(query.Follow(declared).Trace.Buffer.MaxRows).To(Equal(7))
+	})
+
+	It("leaves the profile it was handed untouched", func() {
+		stored := windowedProfile("follow-copy")
+		stored.Trace = &query.TraceSpec{}
+
+		_ = query.Follow(stored)
+
+		Expect(stored.Trace.Buffer).To(BeNil())
+		Expect(stored.Params).To(HaveLen(2))
+	})
+})
+
 // countingProvider returns a scripted result per call, erroring at failAt.
 type countingProvider struct {
 	typ    string

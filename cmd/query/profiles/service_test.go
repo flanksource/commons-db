@@ -77,7 +77,7 @@ func TestProfileSurfacePath(t *testing.T) {
 }
 
 func TestProfileItemTableProvider(t *testing.T) {
-	p := profileItem{sampleProfile("Sales Report")}
+	p := newProfileItem(sampleProfile("Sales Report"))
 
 	cols := p.Columns()
 	wantOrder := []string{"name", "type", "connection", "access", "expires", "query"}
@@ -102,6 +102,65 @@ func TestProfileItemTableProvider(t *testing.T) {
 	}
 	if row["access"] != "editable" {
 		t.Errorf("row access = %v, want editable", row["access"])
+	}
+}
+
+// tailProvider stands in for a provider that can follow its source. The
+// capability is read off the provider registry, and this package links no real
+// provider of its own.
+type tailProvider struct{ typ string }
+
+func (t tailProvider) Type() string { return t.typ }
+
+func (t tailProvider) Execute(dbcontext.Context, query.ProviderRequest) ([]query.Row, error) {
+	return nil, nil
+}
+
+func (t tailProvider) Stream(dbcontext.Context, query.ProviderRequest, func(query.Row)) error {
+	return nil
+}
+
+// The listing is what tells the browser a Follow control is worth showing, so a
+// profile whose provider can tail says so on the wire.
+func TestProfileItemReportsFollowForATailableProvider(t *testing.T) {
+	query.RegisterProvider(tailProvider{typ: "profile-tailable"})
+	p := sampleProfile("Tailable")
+	p.Provider.Type = "profile-tailable"
+
+	item := newProfileItem(p)
+	if !item.Follow {
+		t.Errorf("Follow = false for a provider that implements StreamProvider")
+	}
+
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal profile item: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal profile item: %v", err)
+	}
+	if doc["follow"] != true {
+		t.Errorf("follow = %v, want true", doc["follow"])
+	}
+}
+
+func TestProfileItemOmitsFollowForAOneShotProvider(t *testing.T) {
+	item := newProfileItem(sampleProfile("Sales Report")) // sql, answers once
+	if item.Follow {
+		t.Errorf("Follow = true for a provider that cannot stream")
+	}
+
+	raw, err := json.Marshal(item)
+	if err != nil {
+		t.Fatalf("marshal profile item: %v", err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatalf("unmarshal profile item: %v", err)
+	}
+	if _, ok := doc["follow"]; ok {
+		t.Errorf("a profile that cannot be followed must not emit follow, got %v", doc["follow"])
 	}
 }
 

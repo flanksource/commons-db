@@ -103,6 +103,19 @@ func profileSurfacePath(name string) string {
 // the UI to pre-fill the edit form).
 type profileItem struct {
 	query.Profile
+
+	// Follow reports whether this profile's provider can tail its source rather
+	// than answer once and stop — what decides whether the browser offers a
+	// Follow control instead of one that could only fail. It is derived rather
+	// than authored, and so lives on the transport item and not on the profile
+	// document, where an author could assert a capability the provider lacks.
+	Follow bool `json:"follow,omitempty"`
+}
+
+// newProfileItem is the only way a profileItem is built, so no response can be
+// served with a derived capability left at its zero value.
+func newProfileItem(p query.Profile) profileItem {
+	return profileItem{Profile: p, Follow: query.SupportsStreaming(p.Provider.Type)}
 }
 
 func (p profileItem) GetID() string   { return p.Name }
@@ -169,7 +182,7 @@ func (s *Service) RegisterClicky() {
 			}
 			items := make([]profileItem, len(ps))
 			for i, p := range ps {
-				items[i] = profileItem{p}
+				items[i] = newProfileItem(p)
 			}
 			return items, nil
 		}).
@@ -178,15 +191,15 @@ func (s *Service) RegisterClicky() {
 			if err != nil {
 				return profileItem{}, err
 			}
-			return profileItem{p}, nil
+			return newProfileItem(p), nil
 		}).
 		CreateWithContext(func(ctx context.Context, body map[string]any) (profileItem, error) {
 			profile, err := s.Save(ctx, body, "")
-			return profileItem{profile}, err
+			return newProfileItem(profile), err
 		}).
 		UpdateWithContext(func(ctx context.Context, id string, body map[string]any) (profileItem, error) {
 			profile, err := s.Save(ctx, body, id)
-			return profileItem{profile}, err
+			return newProfileItem(profile), err
 		}).
 		DeleteWithContext(func(ctx context.Context, id string) error {
 			return s.Delete(ctx, id)

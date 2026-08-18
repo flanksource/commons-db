@@ -1,6 +1,9 @@
 package providers
 
 import (
+	"fmt"
+	"strconv"
+
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
@@ -61,6 +64,61 @@ func (lokiProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 	}
 
 	return logResultToRows(result), nil
+}
+
+// Stream tails the query over Loki's websocket endpoint, which is the only one
+// that serves lines as they are written — the range query Execute runs answers
+// a window and stops.
+//
+// A tail is the future of a stream rather than a view of its past, so only the
+// options that still mean something there carry over: the query, the instant
+// the backfill starts at and how much of it to send. An end, a step or a
+// direction describe a window nobody is asking for here.
+func (lokiProvider) Stream(ctx context.Context, req query.ProviderRequest, emit func(query.Row)) error {
+	opts, err := query.DecodeOptions[lokiOptions](req.Options)
+	if err != nil {
+		return err
+	}
+
+	request := loki.StreamRequest{Query: req.Query, Start: opts.Start}
+	if opts.Limit != "" {
+		// Loki's own default backfill takes over when the limit is absent, so a
+		// limit nobody can read has to fail rather than quietly become that.
+		if request.Limit, err = strconv.Atoi(opts.Limit); err != nil {
+			return fmt.Errorf("limit %q is not a number: %w", opts.Limit, err)
+		}
+	}
+
+	conn := connection.Loki{HTTPConnection: connection.HTTPConnection{ConnectionName: req.Connection}}
+	if opts.URL != "" {
+		conn.URL, err = resolveInlineURL(ctx, opts.URL, "loki")
+		if err != nil {
+			return err
+		}
+	}
+
+	items, err := loki.New(conn, nil).Stream(ctx, request)
+	if err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			// The websocket read is not bound to ctx — the dial's context covers
+			// the handshake alone — so the tail can still be blocked on a frame
+			// that will never arrive. Returning here rather than waiting for the
+			// channel to close is what makes a stopped tail stop.
+			return nil
+		case item, open := <-items:
+			if !open {
+				return nil
+			}
+			if item.Error != nil {
+				return item.Error
+			}
+			emit(logLineToRow(item.LogLine))
+		}
+	}
 }
 
 // logResultToRows flattens a logs.LogResult into generic rows. Shared by the
