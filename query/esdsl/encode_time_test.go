@@ -16,19 +16,26 @@ var _ = Describe("EncodeTimeBound", func() {
 	// parameter somebody supplied, so it needs the same field spelling the
 	// parameter path produces — hence one encoder rather than two.
 	DescribeTable("spells an instant the way the field is mapped",
-		func(mappedType string, format TimeFieldFormat, expected any) {
+		func(mapping TimeFieldMapping, format TimeFieldFormat, expected any) {
 			search := Search{TimeField: "@timestamp", TimeFieldFormat: format}
-			encoded, err := EncodeTimeBound(instant, search, &TimeFieldMapping{Type: mappedType, Now: instant})
+			encoded, err := EncodeTimeBound(instant, search, &mapping)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(encoded).To(Equal(expected))
 		},
-		Entry("date", "date", TimeFieldFormat(""), "2026-04-19T11:30:15.5Z"),
-		Entry("date_nanos", "date_nanos", TimeFieldFormat(""), "2026-04-19T11:30:15.5Z"),
-		Entry("epoch seconds", "long", TimeFieldFormatEpochSecond, int64(1776598215)),
-		Entry("epoch millis", "long", TimeFieldFormatEpochMillis, int64(1776598215500)),
-		Entry("epoch micros", "long", TimeFieldFormatEpochMicros, int64(1776598215500000)),
-		Entry("epoch nanos", "long", TimeFieldFormatEpochNanos, int64(1776598215500000000)),
+		Entry("date", TimeFieldMapping{Type: "date"}, TimeFieldFormat(""), "2026-04-19T11:30:15.5Z"),
+		Entry("date_nanos", TimeFieldMapping{Type: "date_nanos"}, TimeFieldFormat(""), "2026-04-19T11:30:15.5Z"),
+		Entry("date with epoch millis format", TimeFieldMapping{Type: "date", Format: "epoch_millis"}, TimeFieldFormat(""), int64(1776598215500)),
+		Entry("date with epoch seconds format", TimeFieldMapping{Type: "date", Format: "epoch_second"}, TimeFieldFormat(""), int64(1776598215)),
+		Entry("epoch seconds", TimeFieldMapping{Type: "long"}, TimeFieldFormatEpochSecond, int64(1776598215)),
+		Entry("epoch millis", TimeFieldMapping{Type: "long"}, TimeFieldFormatEpochMillis, int64(1776598215500)),
+		Entry("epoch micros", TimeFieldMapping{Type: "long"}, TimeFieldFormatEpochMicros, int64(1776598215500000)),
+		Entry("epoch nanos", TimeFieldMapping{Type: "long"}, TimeFieldFormatEpochNanos, int64(1776598215500000000)),
 	)
+
+	It("refuses a date mapping whose only format cannot encode an RFC3339 or epoch bound", func() {
+		_, err := EncodeTimeBound(instant, Search{TimeField: "@timestamp"}, &TimeFieldMapping{Type: "date", Format: "yyyy-MM-dd"})
+		Expect(err).To(MatchError(ContainSubstring(`unsupported date format "yyyy-MM-dd"`)))
+	})
 
 	It("refuses a numeric field that does not say which epoch unit it stores", func() {
 		_, err := EncodeTimeBound(instant, Search{TimeField: "ts"}, &TimeFieldMapping{Type: "long"})

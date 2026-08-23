@@ -180,6 +180,27 @@ var _ = Describe("OpenSearch column filters", func() {
 		}))
 	})
 
+	It("lets declared time roles own the timestamp column filter", func() {
+		profile := query.Profile{
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Params: []query.ParamDef{
+				{Name: "from", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom},
+				{Name: "to", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo},
+			},
+			Columns: []query.ColumnDef{
+				{Name: "startTimeMillis", Kind: query.ColumnKindTimestamp},
+				{Name: "created_at", Type: query.ColumnTypeDateTime},
+			},
+		}
+
+		bindings, err := profile.ColumnFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(bindings).To(Equal([]query.ColumnFilterBinding{{
+			Column: "created_at", Key: "filter.created_at", Field: "created_at", Label: "created_at",
+			Kind: query.ColumnFilterKindTime,
+		}}))
+	})
+
 	It("offers no lookup for a filter whose values are typed rather than picked", func() {
 		profile := query.Profile{
 			Provider: query.ProviderConfig{Type: "opensearch"},

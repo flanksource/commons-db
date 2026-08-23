@@ -291,6 +291,9 @@ func (p Profile) ColumnFilterBindings() ([]ColumnFilterBinding, error) {
 	}
 	bindings := make([]ColumnFilterBinding, 0, len(p.Columns))
 	for _, column := range p.Columns {
+		if p.HasTimeRangeParams() && column.Kind == ColumnKindTimestamp {
+			continue
+		}
 		binding, ok, err := resolveColumnFilterBinding(p, column)
 		if err != nil {
 			return nil, err

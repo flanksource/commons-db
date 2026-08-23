@@ -20,19 +20,23 @@ import (
 type SampleResult struct {
 	Rows             []Row                `json:"rows"`
 	Columns          []ColumnDef          `json:"columns"`
+	ResultColumns    []ResultColumn       `json:"resultColumns"`
 	RenderedQuery    string               `json:"renderedQuery"`
 	Truncated        bool                 `json:"truncated,omitempty"`
 	DurationMS       float64              `json:"durationMs"`
 	Pagination       PageInfo             `json:"pagination"`
 	Diagnostics      *ProviderDiagnostics `json:"diagnostics,omitempty"`
 	ProcessorPreview *ProcessorPreview    `json:"processorPreview,omitempty"`
+	Inspection       *InspectionStatus    `json:"inspection,omitempty"`
 }
 
 type SampleOptions struct {
 	Params            map[string]any
+	Filters           map[string]string
+	FilterColumns     []ColumnDef
 	Page              PageRequest
-	Debug             bool
 	PreviewProcessors bool
+	Inspection        InspectionOptions
 }
 
 // ProcessorPreview carries the source sample and the output after each ordered
@@ -67,7 +71,12 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
-	resolved, filters, err := resolveProfileInput(p, options.Params, time.Now())
+	input, err := sampleInput(options.Params, options.Filters)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
+	filterProfile := sampleFilterProfile(p, options.FilterColumns)
+	resolved, filters, err := resolveProfileInput(filterProfile, input, time.Now())
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
@@ -92,13 +101,21 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	if pageRequest.Strategy == 0 && p.Pageable() == nil && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
 		pageRequest.Strategy = PagingCursor
 	}
+	pageRequest.Inspection = options.Inspection
+	req.Inspection = options.Inspection
+	// A sample explains itself when — and only as far as — the request that
+	// asked for it was armed. The alternative, a flag on the sample body, let a
+	// caller ask for full detail on a surface nobody was watching.
 	var diagnostics *ProviderDiagnostics
-	if options.Debug {
-		diagnostics = NewProviderDiagnostics(p.Provider.Type, req.Query, req.Options)
+	if recorder := RecorderFrom(ctx); recorder != nil {
+		diagnostics = NewDiagnostics(DiagnosticOptions{
+			Provider: p.Provider.Type, Query: req.Query, Options: req.Options,
+			Detail: recorder.DiagnosticDetail(),
+		})
 		pageRequest.Diagnostics = diagnostics
 	}
 	started := time.Now()
-	page, err := samplePage(ctx, p, options.Params, pageRequest)
+	page, err := samplePage(ctx, filterProfile, input, pageRequest)
 	duration := time.Since(started)
 	if err != nil {
 		return nil, WithDiagnostics(fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err), diagnostics)
@@ -107,6 +124,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	if rows == nil {
 		rows = []Row{}
 	}
+	rawColumns := InferSampleColumns(rows)
 	var processorPreview *ProcessorPreview
 	if options.PreviewProcessors {
 		processorPreview, rows, err = previewSampleProcessors(ctx, p, rows)
@@ -121,15 +139,27 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	if rows == nil {
 		rows = []Row{}
 	}
+	columns, inspectionStatus, err := inspectColumns(ctx, p, req, InferSampleColumns(rows), rawColumns)
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: inspect columns: %w", p.Name, err)
+	}
+	resultProfile := p
+	resultProfile.Columns = columns
+	resultColumns, err := DescribeResultColumns(ResultColumnOptions{Profile: resultProfile})
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: describe result columns: %w", p.Name, err)
+	}
 	return &SampleResult{
 		Rows:             rows,
-		Columns:          InferSampleColumns(rows),
+		Columns:          columns,
+		ResultColumns:    resultColumns,
 		RenderedQuery:    req.Query,
 		Truncated:        page.Truncated,
 		DurationMS:       float64(duration) / float64(time.Millisecond),
 		Pagination:       NewPageInfo(pageRequest, page),
 		Diagnostics:      diagnostics.Snapshot(),
 		ProcessorPreview: processorPreview,
+		Inspection:       inspectionStatus,
 	}, nil
 }
 
@@ -142,7 +172,7 @@ func samplePage(ctx context.Context, profile Profile, params map[string]any, req
 
 func validateSampleReadOnly(providerType, query string, options map[string]any) error {
 	switch providerType {
-	case "sql", "postgres", "mysql", "sqlserver", "clickhouse":
+	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
 		return validateReadOnlySQL(query)
 	case "http":
 		method := "GET"
@@ -153,7 +183,8 @@ func validateSampleReadOnly(providerType, query string, options map[string]any) 
 			return fmt.Errorf("sampling requires a read-only HTTP GET request; method %s is not allowed", method)
 		}
 		return nil
-	case "prometheus", "postgrest", "loki", "opensearch", "jaeger", "k8s":
+	case "prometheus", "postgrest", "loki", "opensearch", "opentelemetry", "jaeger", "k8s",
+		"cloudwatch", "gcpcloudlogging", "azureloganalytics":
 		return nil
 	default:
 		return fmt.Errorf("sampling provider %q is disabled because read-only execution cannot be established", providerType)

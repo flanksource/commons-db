@@ -32,8 +32,9 @@ type CompileRequest struct {
 
 // TimeFieldMapping is runtime metadata and is never persisted in a profile.
 type TimeFieldMapping struct {
-	Type string
-	Now  time.Time
+	Type   string
+	Format string
+	Now    time.Time
 }
 
 // Compiled is a search request ready to send.

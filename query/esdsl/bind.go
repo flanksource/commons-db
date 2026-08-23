@@ -200,7 +200,22 @@ func EncodeTimeBound(instant time.Time, search Search, mapping *TimeFieldMapping
 		return nil, err
 	}
 	if mapping.Type == "date" || mapping.Type == "date_nanos" {
-		return instant.UTC().Format(time.RFC3339Nano), nil
+		formats := strings.Split(mapping.Format, "||")
+		for _, format := range formats {
+			switch strings.TrimSpace(format) {
+			case "", "date_optional_time", "strict_date_optional_time", "date_optional_time_nanos", "strict_date_optional_time_nanos":
+				return instant.UTC().Format(time.RFC3339Nano), nil
+			}
+		}
+		for _, format := range formats {
+			switch strings.TrimSpace(format) {
+			case string(TimeFieldFormatEpochSecond):
+				return instant.Unix(), nil
+			case string(TimeFieldFormatEpochMillis):
+				return instant.UnixMilli(), nil
+			}
+		}
+		return nil, fmt.Errorf("timeField %q is mapped as %q with unsupported date format %q", search.TimeField, mapping.Type, mapping.Format)
 	}
 	encoded := encodeEpoch(instant, search.TimeFieldFormat)
 	if err := validateEpochRange(mapping.Type, encoded); err != nil {
