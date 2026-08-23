@@ -23,8 +23,10 @@ type openSearchCapture struct {
 	body          map[string]any
 	size          string
 	fieldCaps     int
+	fieldMappings int
 	fieldName     string
 	fieldType     string
+	fieldFormat   string
 	fieldCapsBody string
 	openedPITs    int
 	closedPITs    int
@@ -51,6 +53,17 @@ func stubOpenSearch(capture *openSearchCapture) *httptest.Server {
 			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"fields":{"%s":{"%s":{"searchable":true,"aggregatable":true}}}}`, capture.fieldName, fieldType)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/_mapping/field/") {
+			capture.fieldMappings++
+			format := capture.fieldFormat
+			if format == "" {
+				format = "strict_date_optional_time||epoch_millis"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"logs-2026":{"mappings":{"%s":{"full_name":"%s","mapping":{"%s":{"type":"date","format":"%s"}}}}}}}`,
+				capture.fieldName, capture.fieldName, capture.fieldName, format)
 			return
 		}
 		// A structured profile derives an order, and an order is walked by
@@ -189,6 +202,38 @@ var _ = Describe("opensearch structured search", func() {
 				"observed_at": map[string]any{
 					"gte": float64(dayStart.UnixMilli()),
 					"lt":  float64(dayStart.AddDate(0, 0, 1).UnixMilli()),
+				},
+			}}},
+		}}))
+	})
+
+	It("encodes a date field whose mapping accepts only epoch millis", func() {
+		capture := openSearchCapture{fieldType: "date", fieldFormat: "epoch_millis"}
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"timeField": "startTimeMillis",
+				"query":     map[string]any{"op": "match_all"},
+			},
+		})
+		profile.Params = []query.ParamDef{
+			{Name: "start", Type: query.ParamTypeDate, Role: query.ParamRoleTimeFrom},
+			{Name: "end", Type: query.ParamTypeDate, Role: query.ParamRoleTimeTo},
+		}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"start": "2026-07-21T00:00:00Z", "end": "2026-08-21T00:00:00Z",
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.fieldMappings).To(Equal(1))
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{
+				"startTimeMillis": map[string]any{
+					"gte": float64(time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC).UnixMilli()),
+					"lt":  float64(time.Date(2026, time.August, 22, 0, 0, 0, 0, time.UTC).UnixMilli()),
 				},
 			}}},
 		}}))

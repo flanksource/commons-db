@@ -27,7 +27,7 @@ describe("reconcile profile filters", () => {
   it.each([
     ["source", "Source filters"],
     ["dest", "Destination filters"],
-  ] as const)("renders the %s filter form inline", (side, label) => {
+  ] as const)("renders the %s filters with the table FilterBar", (side, label) => {
     const html = renderToStaticMarkup(
       <QueryClientProvider client={new QueryClient()}>
         <ProfileFilters
@@ -41,7 +41,8 @@ describe("reconcile profile filters", () => {
     );
 
     expect(html).toContain(label);
+    expect(html).toContain('data-slot="filter-bar"');
+    expect(html).toContain('data-filter-bar-item="region"');
     expect(html).toContain('aria-label="Region"');
-    expect(html).not.toContain('aria-haspopup="menu"');
   });
 });

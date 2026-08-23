@@ -79,9 +79,10 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 		}
 		var timeFieldMapping *esdsl.TimeFieldMapping
 		if opts.Search != nil {
-			timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(
-				ctx, searcher, opts.Index, *opts.Search, openSearchParamBindings(req),
-			)
+			timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
+				Searcher: searcher, Index: opts.Index, Search: *opts.Search,
+				Params: openSearchParamBindings(req), Inspection: req.Inspection,
+			})
 			if err != nil {
 				yield(query.Page{}, err)
 				return
@@ -146,9 +147,10 @@ func (p opensearchProvider) Stream(ctx context.Context, req query.ProviderReques
 		// Resolved once, before the first poll: the mapping carries the instant
 		// the window's date math resolves against, so re-resolving it per poll
 		// would slide the tail's lower bound forward under it.
-		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(
-			ctx, searcher, opts.Index, *opts.Search, openSearchParamBindings(req),
-		)
+		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
+			Searcher: searcher, Index: opts.Index, Search: *opts.Search,
+			Params: openSearchParamBindings(req), Inspection: req.Inspection,
+		})
 		if err != nil {
 			return err
 		}
@@ -205,6 +207,7 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (*opensear
 		if backend.Address == "" {
 			backend.Address = conn.URL
 		}
+		backend.InspectionKey = fmt.Sprintf("%s:connection:%s:%d", ctx.ConnectionCacheScope(), conn.ID, conn.UpdatedAt.UnixNano())
 		httpConnection, err := dbconnection.NewHTTPConnection(ctx, *conn)
 		if err != nil {
 			return nil, opts, err
@@ -235,5 +238,7 @@ func openSearchClientForConnection(ctx context.Context, conn *models.Connection)
 		return nil, err
 	}
 	transport := dbconnection.ApplyHTTPObservability(ctx, "opensearch", httpConnection.Transport(), nil)
-	return opensearch.NewWithTransport(ctx, opensearch.Backend{Address: conn.URL}, nil, transport)
+	return opensearch.NewWithTransport(ctx, opensearch.Backend{
+		Address: conn.URL, InspectionKey: fmt.Sprintf("%s:connection:%s:%d", ctx.ConnectionCacheScope(), conn.ID, conn.UpdatedAt.UnixNano()),
+	}, nil, transport)
 }

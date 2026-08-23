@@ -8,6 +8,7 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	opensearchinspect "github.com/flanksource/commons-db/inspect/opensearch"
 	"github.com/flanksource/commons-db/logs/opensearch"
+	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
 )
 
@@ -16,44 +17,56 @@ const openSearchTimeMappingTimeout = 15 * time.Second
 // ResolveOpenSearchTimeFieldMapping reads the exact field used by active
 // time-role parameters. The mapping is runtime metadata and never becomes part
 // of the stored profile.
-func ResolveOpenSearchTimeFieldMapping(
-	ctx dbcontext.Context,
-	searcher *opensearch.Searcher,
-	index string,
-	search esdsl.Search,
-	params []esdsl.ParamBinding,
-) (*esdsl.TimeFieldMapping, error) {
-	if !NeedsOpenSearchTimeFieldMapping(params) {
+type OpenSearchTimeFieldMappingRequest struct {
+	Searcher   *opensearch.Searcher
+	Index      string
+	Search     esdsl.Search
+	Params     []esdsl.ParamBinding
+	Inspection query.InspectionOptions
+}
+
+func ResolveOpenSearchTimeFieldMapping(ctx dbcontext.Context, request OpenSearchTimeFieldMappingRequest) (*esdsl.TimeFieldMapping, error) {
+	if !NeedsOpenSearchTimeFieldMapping(request.Params) {
 		return nil, nil
 	}
-	if strings.TrimSpace(index) == "" {
-		return nil, fmt.Errorf("OpenSearch index is required to inspect timeField %q", search.TimeField)
+	if request.Searcher == nil {
+		return nil, fmt.Errorf("OpenSearch searcher is required to inspect timeField %q", request.Search.TimeField)
 	}
-	if strings.TrimSpace(search.TimeField) == "" {
+	if strings.TrimSpace(request.Index) == "" {
+		return nil, fmt.Errorf("OpenSearch index is required to inspect timeField %q", request.Search.TimeField)
+	}
+	if strings.TrimSpace(request.Search.TimeField) == "" {
 		return nil, fmt.Errorf("a time-from/time-to parameter requires timeField on the search specification")
 	}
 	now := time.Now().UTC()
-	inspector, err := opensearchinspect.New(searcher.GetRawClient(), opensearchinspect.Options{})
+	inspector, err := opensearchinspect.New(request.Searcher.GetRawClient(), opensearchinspect.Options{
+		CacheKey: request.Searcher.InspectionKey(),
+	})
 	if err != nil {
 		return nil, err
 	}
 	mappingCtx, cancel := ctx.WithTimeout(openSearchTimeMappingTimeout)
 	defer cancel()
 	catalog, err := inspector.Fields(mappingCtx, opensearchinspect.FieldRequest{
-		Target: openSearchTimeTarget(index),
-		Names:  []string{search.TimeField},
+		Target:         openSearchTimeTarget(request.Index),
+		Names:          []string{request.Search.TimeField},
+		IncludeFormats: true,
+		Refresh:        request.Inspection.Refresh,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("inspect OpenSearch timeField %q on %q: %w", search.TimeField, index, err)
+		return nil, fmt.Errorf("inspect OpenSearch timeField %q on %q: %w", request.Search.TimeField, request.Index, err)
 	}
-	if len(catalog.Fields) != 1 || catalog.Fields[0].Name != search.TimeField {
-		return nil, fmt.Errorf("OpenSearch timeField %q is not mapped on %q", search.TimeField, index)
+	if len(catalog.Fields) != 1 || catalog.Fields[0].Name != request.Search.TimeField {
+		return nil, fmt.Errorf("OpenSearch timeField %q is not mapped on %q", request.Search.TimeField, request.Index)
 	}
 	field := catalog.Fields[0]
 	if field.Conflicting || len(field.Types) != 1 {
-		return nil, fmt.Errorf("OpenSearch timeField %q has conflicting mapping types %v on %q", search.TimeField, field.Types, index)
+		return nil, fmt.Errorf("OpenSearch timeField %q has conflicting mapping types %v on %q", request.Search.TimeField, field.Types, request.Index)
 	}
-	return &esdsl.TimeFieldMapping{Type: field.Types[0], Now: now}, nil
+	if field.FormatConflicting {
+		return nil, fmt.Errorf("OpenSearch timeField %q has conflicting date formats on %q", request.Search.TimeField, request.Index)
+	}
+	return &esdsl.TimeFieldMapping{Type: field.Types[0], Format: field.Format, Now: now}, nil
 }
 
 // NeedsOpenSearchTimeFieldMapping reports whether resolved parameters contain

@@ -122,6 +122,38 @@ func TestProfileOpenAPIPreservesMappedPagingAndTimeRoles(t *testing.T) {
 	}
 }
 
+func TestProfileOpenAPITimeRolesOwnTimestampFilter(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "events",
+		Provider: query.ProviderConfig{Type: "opensearch"},
+		Params: []query.ParamDef{
+			{Name: "from", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom},
+			{Name: "to", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo},
+		},
+		Columns: []query.ColumnDef{
+			{Name: "startTimeMillis", Kind: query.ColumnKindTimestamp},
+			{Name: "created_at", Type: query.ColumnTypeDateTime},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	parameters := map[string]rpc.OpenAPIParameter{}
+	for _, parameter := range spec.Paths["/api/v1/profile/profile-events"]["get"].Parameters {
+		parameters[parameter.Name] = parameter
+	}
+	if _, exists := parameters["filter.startTimeMillis"]; exists {
+		t.Fatalf("timestamp column duplicated the role-owned time range: %+v", parameters)
+	}
+	if _, exists := parameters["filter.created_at"]; !exists {
+		t.Fatalf("non-primary date filter was removed: %+v", parameters)
+	}
+	if parameters["from"].Clicky.Role != "time-from" || parameters["to"].Clicky.Role != "time-to" {
+		t.Fatalf("time roles missing: %+v", parameters)
+	}
+}
+
 func TestProfileOpenAPIAdvertisesStructuredColumnShapes(t *testing.T) {
 	schema := profileResponseSchema(query.Profile{Columns: []query.ColumnDef{
 		{Name: "labels", Type: query.ColumnTypeKeyValue},

@@ -53,6 +53,11 @@ var _ = Describe("opentelemetry provider", func() {
 				_, _ = fmt.Fprint(w, `{"fields":{"startTimeMillis":{"long":{"searchable":true,"aggregatable":true}}}}`)
 				return
 			}
+			if strings.Contains(r.URL.Path, "/_mapping/field/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"jaeger-span-2026":{"mappings":{"startTimeMillis":{"full_name":"startTimeMillis","mapping":{"startTimeMillis":{"type":"long"}}}}}}`)
+				return
+			}
 			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_id":"one","_source":{"traceID":"trace-1","spanID":"span-1","operationName":"process message","startTimeMillis":1710000000000,"duration":123000,"process":{"serviceName":"prod-api"},"tags":[{"key":"otel@status_code","value":"ERROR"},{"key":"input@xml","value":"<request/>"}]},"fields":{"custom_field":["from-fields"]}}]}}`)
@@ -112,6 +117,11 @@ var _ = Describe("opentelemetry provider", func() {
 				Expect(r.URL.Query().Get("fields")).To(Equal("startTimeMillis"))
 				w.Header().Set("Content-Type", "application/json")
 				_, _ = fmt.Fprint(w, `{"fields":{"startTimeMillis":{"long":{"searchable":true,"aggregatable":true}}}}`)
+				return
+			}
+			if strings.Contains(r.URL.Path, "/_mapping/field/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"jaeger-span-2026":{"mappings":{"startTimeMillis":{"full_name":"startTimeMillis","mapping":{"startTimeMillis":{"type":"long"}}}}}}`)
 				return
 			}
 			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
@@ -244,11 +254,11 @@ var _ = Describe("opensearch column filtering", func() {
 			}},
 			Columns: []query.ColumnDef{{Name: "service"}, {Name: "environment"}},
 		}
-		options, total, err := query.LookupFilterValues(
-			context.New(), profile,
-			map[string]any{"filter.service": "current", "filter.environment": "prod"},
-			"filter.service", `pay+@#&<>~"`, 10,
-		)
+		options, total, err := query.LookupFilterValues(context.New(), query.FilterValueLookupRequest{
+			Profile: profile,
+			Input:   map[string]any{"filter.service": "current", "filter.environment": "prod"},
+			Key:     "filter.service", Search: `pay+@#&<>~"`, Limit: 10,
+		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(options).To(Equal([]query.FilterOption{{Value: "payments", Count: 12}}))
 		// A cardinality aggregation is an estimate, so the total is reported as

@@ -2,6 +2,8 @@ package connections
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,6 +13,7 @@ import (
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
+	inspection "github.com/flanksource/commons-db/inspect"
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
@@ -24,10 +27,11 @@ import (
 // params have been interpolated into it, so the preview goes through the same
 // templating a profile does at execution time.
 type browserCompileRequest struct {
-	Index  string            `json:"index,omitempty"`
-	Search json.RawMessage   `json:"search"`
-	Params map[string]any    `json:"params,omitempty"`
-	Roles  map[string]string `json:"roles,omitempty"`
+	Index             string            `json:"index,omitempty"`
+	Search            json.RawMessage   `json:"search"`
+	Params            map[string]any    `json:"params,omitempty"`
+	Roles             map[string]string `json:"roles,omitempty"`
+	RefreshInspection bool              `json:"refreshInspection,omitempty"`
 }
 
 type browserCompileResult struct {
@@ -39,7 +43,7 @@ type browserCompileResult struct {
 // serveCompile compiles a specification to DSL. Time-role parameters inspect
 // the selected index so the preview uses the field's actual mapping type.
 func (h *connectionBrowserHandler) serveCompile(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
-	if conn.Type != models.ConnectionTypeOpenSearch {
+	if !openSearchBacked(conn.Type) {
 		http.Error(w, fmt.Sprintf("connection type %q has no query DSL to compile", conn.Type), http.StatusBadRequest)
 		return
 	}
@@ -78,14 +82,15 @@ func (h *connectionBrowserHandler) serveCompile(w http.ResponseWriter, r *http.R
 	}
 	if providers.NeedsOpenSearchTimeFieldMapping(bindings) {
 		requestCtx := h.ctx.Wrap(r.Context())
-		searcher, err := h.openSearchSearcher(requestCtx, conn)
+		searcher, err := h.inspectionOpenSearchSearcher(requestCtx, conn)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
 		}
-		compileRequest.TimeFieldMapping, err = providers.ResolveOpenSearchTimeFieldMapping(
-			requestCtx, searcher, request.Index, search, bindings,
-		)
+		compileRequest.TimeFieldMapping, err = providers.ResolveOpenSearchTimeFieldMapping(requestCtx, providers.OpenSearchTimeFieldMappingRequest{
+			Searcher: searcher, Index: request.Index, Search: search, Params: bindings,
+			Inspection: query.InspectionOptions{Refresh: request.RefreshInspection},
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
@@ -109,25 +114,32 @@ func (h *connectionBrowserHandler) serveCompile(w http.ResponseWriter, r *http.R
 // specification with the condition being edited removed, so a half-typed value
 // never filters its own suggestions away. Absent, the whole index is asked.
 type browserValuesRequest struct {
-	Index  string            `json:"index"`
-	Field  string            `json:"field"`
-	Query  string            `json:"q,omitempty"`
-	Limit  int               `json:"limit,omitempty"`
-	Search json.RawMessage   `json:"search,omitempty"`
-	Params map[string]any    `json:"params,omitempty"`
-	Roles  map[string]string `json:"roles,omitempty"`
+	Index             string            `json:"index"`
+	Field             string            `json:"field"`
+	Query             string            `json:"q,omitempty"`
+	Limit             int               `json:"limit,omitempty"`
+	Search            json.RawMessage   `json:"search,omitempty"`
+	Params            map[string]any    `json:"params,omitempty"`
+	Roles             map[string]string `json:"roles,omitempty"`
+	RefreshInspection bool              `json:"refreshInspection,omitempty"`
 }
 
 type browserValuesResult struct {
-	Values []opensearch.Value `json:"values"`
-	Total  int                `json:"total"`
-	Scoped bool               `json:"scoped"`
+	Values []opensearch.Value        `json:"values"`
+	Total  int                       `json:"total"`
+	Scoped bool                      `json:"scoped"`
+	Cache  *inspection.CacheMetadata `json:"cache,omitempty"`
 }
+
+var browserValuesCache = inspection.NewMemo(inspection.MemoOptions[opensearch.ValuesResult]{
+	Policy: inspection.Policy(inspection.CacheClassFilterValues),
+	Weight: func(result opensearch.ValuesResult) int { return len(result.Values) },
+})
 
 // serveValues answers a field's distinct values, so an author picks what the
 // index actually holds instead of typing a value from memory.
 func (h *connectionBrowserHandler) serveValues(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
-	if conn.Type != models.ConnectionTypeOpenSearch {
+	if !openSearchBacked(conn.Type) {
 		http.Error(w, fmt.Sprintf("connection type %q has no field values to look up", conn.Type), http.StatusBadRequest)
 		return
 	}
@@ -182,15 +194,16 @@ func (h *connectionBrowserHandler) serveValues(w http.ResponseWriter, r *http.Re
 	}
 
 	requestCtx := h.ctx.Wrap(r.Context())
-	searcher, err := h.openSearchSearcher(requestCtx, conn)
+	searcher, err := h.inspectionOpenSearchSearcher(requestCtx, conn)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
 	if search != nil {
-		compileRequest.TimeFieldMapping, err = providers.ResolveOpenSearchTimeFieldMapping(
-			requestCtx, searcher, request.Index, *search, compileRequest.Params,
-		)
+		compileRequest.TimeFieldMapping, err = providers.ResolveOpenSearchTimeFieldMapping(requestCtx, providers.OpenSearchTimeFieldMappingRequest{
+			Searcher: searcher, Index: request.Index, Search: *search, Params: compileRequest.Params,
+			Inspection: query.InspectionOptions{Refresh: request.RefreshInspection},
+		})
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 			return
@@ -205,18 +218,57 @@ func (h *connectionBrowserHandler) serveValues(w http.ResponseWriter, r *http.Re
 		body = compiled.Body
 	}
 
-	result, err := searcher.DistinctValues(requestCtx, opensearch.ValuesRequest{
-		Index:  request.Index,
-		Field:  request.Field,
-		Search: request.Query,
-		Limit:  request.Limit,
-		Body:   body,
-	})
+	cacheKey, err := browserValuesCacheKey(h.ctx, conn, searcher.InspectionKey(), request, body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
-	writeJSON(w, browserValuesResult{Values: result.Values, Total: result.Total, Scoped: body != nil})
+	result, err := browserValuesCache.Get(requestCtx, inspection.GetOptions[opensearch.ValuesResult]{
+		Key: cacheKey, Refresh: request.RefreshInspection,
+		Load: func(fillContext context.Context) (opensearch.ValuesResult, error) {
+			return searcher.DistinctValues(h.ctx.Wrap(fillContext), opensearch.ValuesRequest{
+				Index: request.Index, Field: request.Field, Search: request.Query,
+				Limit: request.Limit, Body: body,
+			})
+		},
+	})
+	if err != nil && !result.Cache.Cached {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	writeJSON(w, browserValuesResult{
+		Values: result.Value.Values, Total: result.Value.Total,
+		Scoped: body != nil, Cache: &result.Cache,
+	})
+}
+
+func browserValuesCacheKey(
+	ctx dbcontext.Context,
+	conn *models.Connection,
+	searcherIdentity string,
+	request browserValuesRequest,
+	body map[string]any,
+) (string, error) {
+	payload, err := json.Marshal(struct {
+		Scope            string
+		ConnectionID     string
+		ConnectionUpdate int64
+		Searcher         string
+		Index            string
+		Field            string
+		Query            string
+		Limit            int
+		Body             map[string]any
+	}{
+		Scope: ctx.ConnectionCacheScope(), ConnectionID: conn.ID.String(),
+		ConnectionUpdate: conn.UpdatedAt.UnixNano(), Searcher: searcherIdentity,
+		Index: request.Index, Field: request.Field, Query: request.Query,
+		Limit: request.Limit, Body: body,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode browser value cache key: %w", err)
+	}
+	return fmt.Sprintf("browser-values:%x", sha256.Sum256(payload)), nil
 }
 
 // decodeSearch reads a specification strictly, so a misspelt key is reported
@@ -272,7 +324,7 @@ func (h *connectionBrowserHandler) executeOpenSearch(
 	if err != nil {
 		return browserQueryResult{}, err
 	}
-	fields, err := h.openSearchFieldCatalog(r.Context(), searcher, index)
+	fields, err := h.openSearchFieldCatalog(r.Context(), searcher, index, request.RefreshInspection)
 	if err != nil {
 		return browserQueryResult{}, err
 	}
@@ -410,5 +462,7 @@ func (h *connectionBrowserHandler) openSearchSearcher(ctx dbcontext.Context, con
 	if err != nil {
 		return nil, err
 	}
-	return opensearch.NewWithTransport(ctx, opensearch.Backend{Address: conn.URL}, nil, httpConnection.Transport())
+	return opensearch.NewWithTransport(ctx, opensearch.Backend{
+		Address: conn.URL, InspectionKey: fmt.Sprintf("%s:connection:%s:%d", h.ctx.ConnectionCacheScope(), conn.ID, conn.UpdatedAt.UnixNano()),
+	}, nil, httpConnection.Transport())
 }

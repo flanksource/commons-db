@@ -294,6 +294,7 @@ export function ProfileFilters({
           method={operation.method}
           parameters={parameters}
           initialValues={values}
+          presentation="filter-bar"
           autoSubmit
           onSubmit={onChange}
         />

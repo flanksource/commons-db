@@ -311,6 +311,10 @@ func newOpenSearchTailStub(docs ...tailDoc) *openSearchTailStub {
 				r.URL.Query().Get("fields"))
 			return
 		}
+		if strings.Contains(r.URL.Path, "/_mapping/field/") {
+			_, _ = fmt.Fprint(w, `{"logs-2026":{"mappings":{"@timestamp":{"full_name":"@timestamp","mapping":{"@timestamp":{"type":"date","format":"strict_date_optional_time||epoch_millis"}}}}}}`)
+			return
+		}
 		if strings.Contains(r.URL.Path, "/_search/point_in_time") {
 			stub.mu.Lock()
 			stub.openedPITs++

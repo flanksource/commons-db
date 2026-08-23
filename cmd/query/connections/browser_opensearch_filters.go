@@ -254,14 +254,19 @@ func (h *connectionBrowserHandler) openSearchFieldCatalog(
 	ctx context.Context,
 	searcher *opensearch.Searcher,
 	index string,
+	refresh bool,
 ) ([]opensearchinspect.Field, error) {
-	inspector, err := opensearchinspect.New(searcher.GetRawClient(), opensearchinspect.Options{})
+	inspector, err := opensearchinspect.New(searcher.GetRawClient(), opensearchinspect.Options{
+		CacheKey: searcher.InspectionKey(),
+	})
 	if err != nil {
 		return nil, err
 	}
 	mappingCtx, cancel := context.WithTimeout(ctx, openSearchMappingTimeout)
 	defer cancel()
-	catalog, err := inspector.Fields(mappingCtx, opensearchinspect.FieldRequest{Target: openSearchFilterTarget(index)})
+	catalog, err := inspector.Fields(mappingCtx, opensearchinspect.FieldRequest{
+		Target: openSearchFilterTarget(index), Refresh: refresh,
+	})
 	if err != nil {
 		return nil, err
 	}
