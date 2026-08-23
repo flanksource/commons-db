@@ -31,7 +31,7 @@ func TestInspectorTargetsAndFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	targets, err := inspector.Targets(context.Background())
+	targets, err := inspector.Targets(context.Background(), TargetRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,6 +74,41 @@ func TestInspectorRequestsOnlyNamedFields(t *testing.T) {
 		t.Fatalf("field_caps fields = %q, want startTimeMillis", requested)
 	}
 	if len(catalog.Fields) != 1 || catalog.Fields[0].Name != "startTimeMillis" || catalog.Fields[0].Types[0] != "long" {
+		t.Fatalf("catalog = %#v", catalog)
+	}
+}
+
+func TestInspectorCarriesNamedFieldMappingFormat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/traces-*/_field_caps":
+			_, _ = w.Write([]byte(`{"fields":{"startTimeMillis":{"date":{"searchable":true,"aggregatable":true}}}}`))
+		case "/traces-*/_mapping/field/startTimeMillis":
+			if r.URL.Query().Get("include_defaults") != "true" {
+				t.Errorf("include_defaults = %q, want true", r.URL.Query().Get("include_defaults"))
+			}
+			_, _ = w.Write([]byte(`{"traces-2026":{"mappings":{"startTimeMillis":{"full_name":"startTimeMillis","mapping":{"startTimeMillis":{"type":"date","format":"epoch_millis"}}}}}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client, err := opensearch.NewClient(opensearch.Config{Addresses: []string{server.URL}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspector, err := New(client, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := inspector.Fields(context.Background(), FieldRequest{
+		Target: Target{Name: "traces-*", Kind: "pattern"}, Names: []string{"startTimeMillis"}, IncludeFormats: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Fields) != 1 || catalog.Fields[0].Format != "epoch_millis" || catalog.Fields[0].FormatConflicting {
 		t.Fatalf("catalog = %#v", catalog)
 	}
 }

@@ -12,6 +12,9 @@ type Backend struct {
 	Username    *types.EnvVar `json:"username,omitempty"`
 	Password    *types.EnvVar `json:"password,omitempty"`
 	InsecureTLS bool          `json:"insecureTLS,omitempty"`
+	// InspectionKey identifies the resolved connection without placing its URL
+	// or credentials in metadata cache keys.
+	InspectionKey string `json:"-"`
 }
 
 // DefaultPITKeepAlive is how long a point-in-time is held between pages. It

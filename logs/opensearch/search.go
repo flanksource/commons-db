@@ -1,9 +1,10 @@
 package opensearch
 
 import (
+	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
-	"io"
+	"fmt"
 	"net/http"
 	"os"
 	"strconv"
@@ -32,6 +33,14 @@ type RawClientMixin interface {
 
 func (t *Searcher) GetRawClient() *opensearch.Client {
 	return t.client
+}
+
+func (t *Searcher) InspectionKey() string {
+	if t.config.InspectionKey != "" {
+		return t.config.InspectionKey
+	}
+	digest := sha256.Sum256([]byte(t.config.Address))
+	return fmt.Sprintf("opensearch:%x", digest)
 }
 
 func New(ctx context.Context, backend Backend, mappingConfig *logs.FieldMappingConfig) (*Searcher, error) {
@@ -133,7 +142,6 @@ func (t *Searcher) SearchRaw(ctx context.Context, q Request) (Response, error) {
 		t.client.Search.WithContext(ctx),
 		t.client.Search.WithBody(strings.NewReader(q.Query)),
 		t.client.Search.WithSize(limit),
-		t.client.Search.WithErrorTrace(),
 	}
 	// A point-in-time already names the indices it was opened over, and
 	// OpenSearch rejects a search that names them again.
@@ -145,15 +153,10 @@ func (t *Searcher) SearchRaw(ctx context.Context, q Request) (Response, error) {
 	if err != nil {
 		return Response{}, ctx.Oops().Wrapf(err, "error searching")
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	if res.IsError() {
-		body, err := io.ReadAll(res.Body)
-		if err != nil {
-			return Response{}, ctx.Oops().Wrapf(err, "failed to read error response body from opensearch")
-		}
-
-		return Response{}, ctx.Oops().Errorf("opensearch: search failed with status %s: %s", res.Status(), string(body))
+		return Response{}, readOpenSearchError("search", res.StatusCode, res.Status(), res.Body)
 	}
 
 	var r Response
@@ -191,13 +194,9 @@ func (t *Searcher) OpenPIT(ctx context.Context, index string, keepAlive time.Dur
 		return "", ctx.Oops().Wrapf(err, "error opening point-in-time")
 	}
 	if res != nil {
-		defer res.Body.Close()
+		defer func() { _ = res.Body.Close() }()
 		if res.IsError() {
-			body, readErr := io.ReadAll(res.Body)
-			if readErr != nil {
-				return "", ctx.Oops().Wrapf(readErr, "failed to read error response body from opensearch")
-			}
-			return "", ctx.Oops().Errorf("opensearch: open point-in-time failed with status %s: %s", res.Status(), string(body))
+			return "", readOpenSearchError("open point-in-time", res.StatusCode, res.Status(), res.Body)
 		}
 	}
 	if created == nil || created.PitID == "" {
@@ -223,13 +222,9 @@ func (t *Searcher) ClosePIT(ctx context.Context, pitID string) error {
 	if res == nil {
 		return nil
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	if res.IsError() {
-		payload, readErr := io.ReadAll(res.Body)
-		if readErr != nil {
-			return ctx.Oops().Wrapf(readErr, "failed to read error response body from opensearch")
-		}
-		return ctx.Oops().Errorf("opensearch: close point-in-time failed with status %s: %s", res.Status(), string(payload))
+		return readOpenSearchError("close point-in-time", res.StatusCode, res.Status(), res.Body)
 	}
 	return nil
 }
