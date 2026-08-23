@@ -150,8 +150,13 @@ type GitProvider struct {
 // (HTTP-family, SQL, cert/cloud). Kept in sync with allConnectionTypes by the
 // drift-guard test.
 var tailoredProviders = map[string]any{
-	models.ConnectionTypeHTTP:          HTTPProvider{},
-	models.ConnectionTypeOpenSearch:    OpenSearchProvider{},
+	models.ConnectionTypeHTTP:       HTTPProvider{},
+	models.ConnectionTypeOpenSearch: OpenSearchProvider{},
+	// Elasticsearch is read by the same searcher as OpenSearch (logs/opensearch
+	// speaks both wire protocols), so it wears the same form rather than a
+	// near-duplicate of it. Without an entry here the type falls back to the
+	// base fields and the connection cannot be given an endpoint at all.
+	models.ConnectionTypeElasticSearch: OpenSearchProvider{},
 	models.ConnectionTypeOpenTelemetry: OpenTelemetryProvider{},
 	models.ConnectionTypePrometheus:    PrometheusProvider{},
 	models.ConnectionTypeLoki:          LokiProvider{},

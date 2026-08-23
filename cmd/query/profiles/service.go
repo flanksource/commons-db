@@ -478,7 +478,8 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 	if err != nil {
 		return nil, err
 	}
-	expression := newSampleExpressionHandler(prefix, s.context(), newSampleJSONPathHandler(prefix, next))
+	filterValues := newProfileSampleFilterValuesHandler(prefix, s.context(), next)
+	expression := newSampleExpressionHandler(prefix, s.context(), newSampleJSONPathHandler(prefix, filterValues))
 	sample := newProfileSampleHandler(prefix, s.context(), expression)
 	return newExecHandler(prefix, s.context(), store, sample), nil
 }
@@ -588,7 +589,11 @@ func (source profileFilterSource) Options(fc entity.FilterContext, search string
 		return nil, 0, err
 	}
 	options, total, err := query.LookupFilterValues(
-		source.service.context().Wrap(fc.Ctx()), resolved.Profile, filterLookupParams(resolved.Profile, fc.Params), source.key, search, limit,
+		source.service.context().Wrap(fc.Ctx()),
+		query.FilterValueLookupRequest{
+			Profile: resolved.Profile, Input: filterLookupParams(resolved.Profile, fc.Params),
+			Key: source.key, Search: search, Limit: limit,
+		},
 	)
 	if err != nil {
 		return nil, 0, err

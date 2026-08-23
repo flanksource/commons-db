@@ -71,7 +71,7 @@ func newReconcileSideRecorder(side string, profile Profile, filters map[string]a
 		// A walk recorder even on the buffered path: Execute drains pages too,
 		// so a buffered side is a many-page read that happens to be collected
 		// before the join starts.
-		sink: NewWalkDiagnostics(profile.Provider.Type),
+		sink: NewDiagnostics(DiagnosticOptions{Provider: profile.Provider.Type, Walk: true}),
 	}
 }
 

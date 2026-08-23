@@ -3,6 +3,7 @@ package providers
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/Masterminds/squirrel"
 	"github.com/flanksource/commons-db/context"
@@ -45,6 +46,10 @@ func (p sqlProvider) LookupFilterValues(
 	if err != nil {
 		return nil, nil, err
 	}
+	started := time.Now()
+	req.Diagnostics.RecordRequest(statement, args, map[string]any{
+		"dialect": string(dialect), "operation": "filter-values",
+	})
 
 	// statement wraps the author's query in a CTE built from constant syntax;
 	// the looked-up column is validated and quoted, and the search term is bound.
@@ -69,6 +74,9 @@ func (p sqlProvider) LookupFilterValues(
 	if err := rows.Err(); err != nil {
 		return nil, nil, fmt.Errorf("failed to read filter values: %w", err)
 	}
+	req.Diagnostics.RecordResponse(started, len(options), map[string]any{
+		"distinctValues": total,
+	})
 	// COUNT(*) OVER () over the grouped set is the number of distinct values,
 	// not an estimate of it.
 	return options, &query.Total{Value: int64(total), Exact: true}, nil

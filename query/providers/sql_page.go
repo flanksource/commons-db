@@ -103,7 +103,7 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		if err == nil || request.Diagnostics != nil {
 			return
 		}
-		failure := query.NewProviderDiagnostics(string(dialect), request.Query, nil)
+		failure := query.NewDiagnostics(query.DiagnosticOptions{Provider: string(dialect), Query: request.Query, Detail: query.DiagnosticFull})
 		failure.RecordRequest(statement, args, requestDetails)
 		err = query.WithDiagnostics(err, failure)
 	}()

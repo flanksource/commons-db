@@ -17,6 +17,8 @@ func init() {
 
 type openTelemetryProvider struct{}
 
+var _ query.ColumnInspectionProvider = openTelemetryProvider{}
+
 func (openTelemetryProvider) Type() string { return "opentelemetry" }
 
 type openTelemetryOptions struct {
@@ -49,6 +51,53 @@ func (p openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRe
 	return drainOpenSearch(ctx, p, req)
 }
 
+func (openTelemetryProvider) InspectColumnFilters(
+	ctx context.Context,
+	req query.ProviderRequest,
+	columns []query.ColumnDef,
+) (query.ColumnInspectionResult, error) {
+	searcher, options, err := openTelemetrySearchClient(ctx, req)
+	if err != nil {
+		return query.ColumnInspectionResult{}, err
+	}
+	search := openTelemetrySearch(options)
+	return inspectOpenSearchColumnFilters(
+		ctx,
+		req,
+		openTelemetryInspectionColumns(columns, options),
+		searcher,
+		openSearchInspectionSource{
+			Index:  options.Index,
+			Search: &search,
+			Build: func(mapping *esdsl.TimeFieldMapping) (openSearchRequest, error) {
+				return buildOpenTelemetryRequest(req, options, openSearchPage{}, mapping)
+			},
+		},
+	)
+}
+
+func openTelemetryInspectionColumns(columns []query.ColumnDef, options openTelemetryOptions) []query.ColumnDef {
+	statusField := "status"
+	if len(options.StatusFields) > 0 && options.StatusFields[0] != "" {
+		statusField = options.StatusFields[0]
+	}
+	fields := map[string]string{
+		"timestamp": options.DateField, "trace_id": options.TraceIDField,
+		"span_id": options.SpanIDField, "id": options.SpanIDField,
+		"parent_id": options.ParentIDField,
+		"service":   options.ServiceField, "service_name": options.ServiceField,
+		"operation": options.OperationField, "operation_name": options.OperationField,
+		"status": statusField,
+	}
+	mapped := append([]query.ColumnDef(nil), columns...)
+	for index := range mapped {
+		if mapped[index].Source == "" && mapped[index].Filter == nil {
+			mapped[index].Source = fields[mapped[index].Name]
+		}
+	}
+	return mapped
+}
+
 // Pages walks the trace index the same way the OpenSearch provider walks a log
 // index; only the row shape differs.
 func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
@@ -59,9 +108,10 @@ func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequ
 			return
 		}
 		search := openTelemetrySearch(options)
-		timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(
-			ctx, searcher, options.Index, search, openSearchParamBindings(req),
-		)
+		timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
+			Searcher: searcher, Index: options.Index, Search: search,
+			Params: openSearchParamBindings(req), Inspection: req.Inspection,
+		})
 		if err != nil {
 			yield(query.Page{}, err)
 			return

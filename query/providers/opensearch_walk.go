@@ -288,7 +288,7 @@ func openSearchFailure(err error, index, body, limit, pit string) error {
 	if pit != "" {
 		details["pit"] = pit
 	}
-	diagnostics := query.NewProviderDiagnostics("opensearch", body, nil)
+	diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "opensearch", Query: body, Detail: query.DiagnosticFull})
 	diagnostics.RecordRequest(body, nil, details)
 	return query.WithDiagnostics(err, diagnostics)
 }

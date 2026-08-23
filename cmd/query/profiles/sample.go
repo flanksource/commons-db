@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/samber/oops"
@@ -30,9 +31,11 @@ type profileSampleHandler struct {
 type profileSampleRequest struct {
 	Profile           query.Profile           `json:"profile"`
 	Params            map[string]any          `json:"params,omitempty"`
+	Filters           map[string]string       `json:"filters,omitempty"`
+	FilterColumns     []query.ColumnDef       `json:"filterColumns,omitempty"`
 	Pagination        samplePaginationRequest `json:"pagination,omitempty"`
-	Debug             bool                    `json:"debug,omitempty"`
 	PreviewProcessors bool                    `json:"previewProcessors,omitempty"`
+	RefreshInspection bool                    `json:"refreshInspection,omitempty"`
 }
 
 type samplePaginationRequest struct {
@@ -70,13 +73,18 @@ func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := h.ctx.WithTimeout(profileSampleTimeout)
 	defer cancel()
+	// How much this sample explains about itself is the console's decision, sent
+	// as the arming header — the profile builder no longer asks for diagnostics
+	// with a flag of its own, so what it shows and what the console shows are
+	// the same capture rather than two runs that agree by luck.
+	ctx = devtools.WithRequestRecorder(ctx, r)
 	result, err := query.Sample(ctx.WithName("sample"), request.Profile, query.SampleOptions{
-		Params: request.Params,
+		Params: request.Params, Filters: request.Filters, FilterColumns: request.FilterColumns,
 		Page: query.PageRequest{
 			Limit: request.Pagination.Limit, Cursor: request.Pagination.Cursor,
 		},
-		Debug:             request.Debug,
 		PreviewProcessors: request.PreviewProcessors,
+		Inspection:        query.InspectionOptions{Refresh: request.RefreshInspection},
 	})
 	if err != nil {
 		status := http.StatusBadRequest

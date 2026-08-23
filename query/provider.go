@@ -25,6 +25,10 @@ type FilterOption struct {
 	Count int64
 }
 
+type InspectionOptions struct {
+	Refresh bool
+}
+
 // FilterLookupProvider resolves distinct backend values for one bound column.
 //
 // The total is a *Total rather than an int because not every backend can count
@@ -82,6 +86,8 @@ type ProviderRequest struct {
 	// Providers record their final native request and response details here so
 	// failures can return the same evidence as successful executions.
 	Diagnostics *ProviderDiagnostics
+
+	Inspection InspectionOptions
 }
 
 var providerRegistry = map[string]Provider{}

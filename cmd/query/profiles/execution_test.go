@@ -330,7 +330,6 @@ func (m *leakProbeMock) Pages(_ dbcontext.Context, _ query.ProviderRequest, page
 // took — a connection for SQL, a point-in-time for OpenSearch. peekPages stops
 // the pull on that path; this pins it, because nothing else covers the error
 // branch and the resource is only observable by its release.
-//
 func TestExecHandlerReleasesTheWalkWhenTheFirstPageFails(t *testing.T) {
 	mock := &leakProbeMock{
 		rows:          []query.Row{{"id": 1}, {"id": 2}, {"id": 3}},
@@ -662,7 +661,7 @@ func TestExecHandlerReturnsStructuredErrors(t *testing.T) {
 // it ran to the error; a body that dropped it would leave the caller with
 // "column does not exist" and no column and no query to look at.
 func TestExecErrorBodyCarriesProviderDiagnostics(t *testing.T) {
-	diagnostics := query.NewProviderDiagnostics("postgres", "SELECT scheme, premum FROM policies", nil)
+	diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "postgres", Query: "SELECT scheme, premum FROM policies", Detail: query.DiagnosticFull})
 	diagnostics.RecordRequest("SELECT scheme, premum FROM policies WHERE start >= $1", []any{"2026-07-01"}, nil)
 	failure := query.WithDiagnostics(
 		errors.New(`profile "om-malawi-scheme": failed to execute sql query: column "premum" does not exist`),

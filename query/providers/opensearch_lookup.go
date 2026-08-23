@@ -14,9 +14,10 @@ func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.Prov
 	}
 	var timeFieldMapping *esdsl.TimeFieldMapping
 	if options.Search != nil {
-		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(
-			ctx, searcher, options.Index, *options.Search, openSearchParamBindings(req),
-		)
+		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
+			Searcher: searcher, Index: options.Index, Search: *options.Search,
+			Params: openSearchParamBindings(req), Inspection: req.Inspection,
+		})
 		if err != nil {
 			return nil, nil, err
 		}
@@ -36,9 +37,10 @@ func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.P
 		return nil, nil, err
 	}
 	structured := openTelemetrySearch(options)
-	timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(
-		ctx, searcher, options.Index, structured, openSearchParamBindings(req),
-	)
+	timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
+		Searcher: searcher, Index: options.Index, Search: structured,
+		Params: openSearchParamBindings(req), Inspection: req.Inspection,
+	})
 	if err != nil {
 		return nil, nil, err
 	}

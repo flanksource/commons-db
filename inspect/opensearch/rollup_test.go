@@ -47,8 +47,8 @@ func TestRollupTargetsFoldsRotations(t *testing.T) {
 
 	patterns := map[string]Target{}
 	for _, target := range rolled {
-		if target.Kind == "pattern" {
-			patterns[target.Name] = target
+		if target.Kind == "group" {
+			patterns[target.Pattern] = target
 		}
 	}
 	if len(patterns) != 1 {
@@ -57,6 +57,9 @@ func TestRollupTargetsFoldsRotations(t *testing.T) {
 	span := patterns["jaeger-span-*"]
 	if span.Count != 2 {
 		t.Errorf("jaeger-span-* count = %d, want 2", span.Count)
+	}
+	if got := span.QueryName(); got != "jaeger-span-2026-07-11,jaeger-span-2026-07-12" {
+		t.Errorf("jaeger-span-* query target = %q", got)
 	}
 
 	members := map[string]string{}

@@ -35,7 +35,7 @@ var _ = Describe("ProviderDiagnostics HTTPTransport", func() {
 	}
 
 	It("records the exchange carrying the request the provider described, credentials masked", func() {
-		diagnostics := query.NewProviderDiagnostics("opensearch", "", nil)
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "opensearch", Query: "", Detail: query.DiagnosticFull})
 		client := &http.Client{Transport: diagnostics.HTTPTransport(nil)}
 
 		// A client pings before it searches, and a ping the provider never
@@ -62,7 +62,7 @@ var _ = Describe("ProviderDiagnostics HTTPTransport", func() {
 	})
 
 	It("keeps a walk's first page rather than its last", func() {
-		diagnostics := query.NewWalkDiagnostics("opensearch")
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "opensearch", Walk: true})
 		client := &http.Client{Transport: diagnostics.HTTPTransport(nil)}
 
 		diagnostics.RecordRequest(`{"from":0}`, nil, nil)

@@ -217,7 +217,11 @@ func executeSubQuery(ctx context.Context, sub SubQuery, defs []ParamDef, params 
 // interpolation instead of only those driven by a query string. Callers set
 // Filters, Order and Position on the result.
 func buildProviderRequest(ctx context.Context, cfg ProviderConfig, rawQuery string, defs []ParamDef, resolved map[string]any) (ProviderRequest, error) {
-	template := newParamTemplate(ctx, resolved)
+	templateParams, err := providerTemplateParams(cfg, defs, resolved)
+	if err != nil {
+		return ProviderRequest{}, err
+	}
+	template := newParamTemplate(ctx, templateParams)
 	query, err := template.render("query", rawQuery)
 	if err != nil {
 		return ProviderRequest{}, err

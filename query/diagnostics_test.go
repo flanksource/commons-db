@@ -12,10 +12,13 @@ import (
 
 var _ = Describe("ProviderDiagnostics", func() {
 	It("redacts secret-shaped options while preserving native query details", func() {
-		diagnostics := query.NewProviderDiagnostics("clickhouse", "SELECT 1", map[string]any{
-			"database": "analytics",
-			"nested": map[string]any{
-				"api_key": "sensitive",
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{
+			Provider: "clickhouse", Query: "SELECT 1", Detail: query.DiagnosticFull,
+			Options: map[string]any{
+				"database": "analytics",
+				"nested": map[string]any{
+					"api_key": "sensitive",
+				},
 			},
 		})
 		diagnostics.RecordRequest("SELECT * FROM events WHERE tenant = ?", []any{"acme"}, nil)
@@ -32,10 +35,13 @@ var _ = Describe("ProviderDiagnostics", func() {
 	})
 
 	It("strips the credentials out of a connection string an option carries", func() {
-		diagnostics := query.NewProviderDiagnostics("sql", "SELECT 1", map[string]any{
-			"url":      "postgres://reader:hunter2@db.example.com:5432/analytics?sslmode=require&api_key=abcd",
-			"dsn":      "server=db.example.com;user id=reader;password=hunter2",
-			"database": "analytics",
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{
+			Provider: "sql", Query: "SELECT 1", Detail: query.DiagnosticFull,
+			Options: map[string]any{
+				"url":      "postgres://reader:hunter2@db.example.com:5432/analytics?sslmode=require&api_key=abcd",
+				"dsn":      "server=db.example.com;user id=reader;password=hunter2",
+				"database": "analytics",
+			},
 		})
 
 		snapshot := diagnostics.Snapshot()
@@ -48,7 +54,7 @@ var _ = Describe("ProviderDiagnostics", func() {
 
 	It("records the rendered query of a buffered execution into a context sink", func() {
 		query.RegisterProvider(&mockProvider{typ: "sink-buffered", rows: []query.Row{{"id": 1}}})
-		diagnostics := query.NewProviderDiagnostics("sink-buffered", "", nil)
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "sink-buffered", Query: "", Detail: query.DiagnosticFull})
 		profile := query.Profile{
 			Name:     "regional",
 			Provider: query.ProviderConfig{Type: "sink-buffered", Options: map[string]any{"password": "hunter2"}},
@@ -79,7 +85,7 @@ var _ = Describe("ProviderDiagnostics", func() {
 	})
 
 	It("caps provider response previews and says they were truncated", func() {
-		diagnostics := query.NewProviderDiagnostics("http", "/events", nil)
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "http", Query: "/events", Detail: query.DiagnosticFull})
 		diagnostics.RecordPreview("application/json", []byte(strings.Repeat("x", query.DiagnosticPreviewLimit+1)))
 		diagnostics.RecordResponse(time.Now(), 1, nil)
 
@@ -90,7 +96,7 @@ var _ = Describe("ProviderDiagnostics", func() {
 	})
 
 	It("keeps the rendered query beside the statement a provider issued", func() {
-		diagnostics := query.NewProviderDiagnostics("sql", "", nil)
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "sql", Query: "", Detail: query.DiagnosticFull})
 		diagnostics.RecordRendered("select * from events where tenant = 'acme'", nil)
 		diagnostics.RecordRequest("SELECT * FROM events WHERE tenant = 'acme' LIMIT 100", nil, nil)
 
@@ -100,11 +106,11 @@ var _ = Describe("ProviderDiagnostics", func() {
 	})
 
 	It("records a connection reference verbatim and strips an inline DSN", func() {
-		reference := query.NewProviderDiagnostics("sql", "", nil)
+		reference := query.NewDiagnostics(query.DiagnosticOptions{Provider: "sql", Query: "", Detail: query.DiagnosticFull})
 		reference.RecordConnection("connection://ops/warehouse")
 		Expect(reference.Snapshot().Request.Connection).To(Equal("connection://ops/warehouse"))
 
-		inline := query.NewProviderDiagnostics("sql", "", nil)
+		inline := query.NewDiagnostics(query.DiagnosticOptions{Provider: "sql", Query: "", Detail: query.DiagnosticFull})
 		inline.RecordConnection("postgres://reader:hunter2@db.example.com:5432/analytics")
 		Expect(inline.Snapshot().Request.Connection).To(Equal("postgres://reader@db.example.com:5432/analytics"))
 		Expect(inline.Snapshot().Request.Connection).ToNot(ContainSubstring("hunter2"))
@@ -112,7 +118,7 @@ var _ = Describe("ProviderDiagnostics", func() {
 
 	Describe("walk diagnostics", func() {
 		It("reports the first statement and sums what every page cost", func() {
-			diagnostics := query.NewWalkDiagnostics("sql")
+			diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "sql", Walk: true})
 			diagnostics.RecordRendered("select * from events", nil)
 
 			diagnostics.RecordRequest("SELECT * FROM events LIMIT 100 OFFSET 0", []any{0}, map[string]any{"page": 1})
@@ -133,9 +139,9 @@ var _ = Describe("ProviderDiagnostics", func() {
 		})
 
 		It("declines the previews and instrumentation only a debug run pays for", func() {
-			walk := query.NewWalkDiagnostics("sql")
+			walk := query.NewDiagnostics(query.DiagnosticOptions{Provider: "sql", Walk: true})
 			Expect(walk.WantsPreview()).To(BeFalse())
-			Expect(query.NewProviderDiagnostics("sql", "", nil).WantsPreview()).To(BeTrue())
+			Expect(query.NewDiagnostics(query.DiagnosticOptions{Provider: "sql", Query: "", Detail: query.DiagnosticFull}).WantsPreview()).To(BeTrue())
 
 			var absent *query.ProviderDiagnostics
 			Expect(absent.WantsPreview()).To(BeFalse())

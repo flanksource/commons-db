@@ -20,10 +20,15 @@ type connectionOperation struct {
 	policy      observability.Policy
 	diagnostics *ProviderDiagnostics
 	collector   *har.Collector
-	connection  string
-	provider    string
-	started     time.Time
-	finishOnce  sync.Once
+	// record is this operation's slot in an armed request's devtools record, and
+	// nil for the ordinary unarmed run. Every method on it tolerates nil.
+	record *Operation
+	// armed is the level the console asked for, and Info when nothing did.
+	armed      logger.LogLevel
+	connection string
+	provider   string
+	started    time.Time
+	finishOnce sync.Once
 }
 
 func prepareConnectionOperation(ctx context.Context, req ProviderRequest) (context.Context, ProviderRequest, *connectionOperation, error) {
@@ -35,14 +40,23 @@ func prepareConnectionOperation(ctx context.Context, req ProviderRequest) (conte
 	if err != nil {
 		return ctx, req, nil, err
 	}
+	recorder := RecorderFrom(ctx)
+	// A run nobody armed keeps recording at DiagnosticRendered, which is what it
+	// already did: the summary is cheap enough that ordinary execution has always
+	// paid for it. An armed run takes its detail from the level the caller asked
+	// for, so a paged profile read can be a walk explained in full.
 	if req.Diagnostics == nil {
-		req.Diagnostics = NewWalkDiagnostics(req.Provider)
+		req.Diagnostics = NewDiagnostics(DiagnosticOptions{
+			Provider: req.Provider, Walk: true, Detail: recorder.DiagnosticDetail(),
+		})
 	}
 	req.Diagnostics.RecordRendered(req.Query, req.Options)
 	req.Diagnostics.RecordConnection(req.Connection)
 
 	operation := &connectionOperation{
 		ctx: ctx, policy: policy, diagnostics: req.Diagnostics,
+		record:     recorder.Operation(req.Provider),
+		armed:      recorder.Level(),
 		connection: loggingConnectionName(connection, req.Diagnostics),
 		provider:   req.Provider, started: time.Now(),
 	}
@@ -125,7 +139,18 @@ func loggingConnectionName(connection *models.Connection, diagnostics *ProviderD
 }
 
 func requestHARLevel(ctx context.Context, policy observability.Policy) (logger.LogLevel, bool) {
-	if policy.Family != observability.ProviderHTTP || ctx.Logger == nil {
+	if policy.Family != observability.ProviderHTTP {
+		return logger.Info, false
+	}
+	// An armed request raises capture for itself alone. Raising the process
+	// logger instead would put every other request's headers and bodies on the
+	// operator's terminal because one browser tab opened a console — which is
+	// what WithRequestHARLevel exists to avoid, and this is the same idea one
+	// gate earlier.
+	if recorder := RecorderFrom(ctx); recorder != nil {
+		return recorder.Level(), true
+	}
+	if ctx.Logger == nil {
 		return logger.Info, false
 	}
 	level := logger.Debug
@@ -143,6 +168,27 @@ func eventCanLog(log logger.Logger, policy observability.Policy, event observabi
 	return policy.Enabled(event) && log.IsLevelEnabled(policy.Level(event))
 }
 
+// wants reports whether an event is worth producing at all — for the operator's
+// log, for an armed request's record, or for both.
+//
+// The two destinations are gated independently and deliberately: a console
+// asking for response bodies must not put them on the terminal, and an operator
+// running at trace must keep seeing them whether or not a console is open.
+func (operation *connectionOperation) wants(event observability.Event) bool {
+	if !operation.policy.Enabled(event) {
+		return false
+	}
+	return operation.recordWants(event) || operation.loggerWants(event)
+}
+
+func (operation *connectionOperation) recordWants(event observability.Event) bool {
+	return operation.record != nil && operation.armed >= operation.policy.Level(event)
+}
+
+func (operation *connectionOperation) loggerWants(event observability.Event) bool {
+	return operation.ctx.Logger != nil && eventCanLog(operation.ctx.Logger, operation.policy, event)
+}
+
 func (operation *connectionOperation) Finish(rows int, runErr error) {
 	if operation == nil {
 		return
@@ -153,10 +199,11 @@ func (operation *connectionOperation) Finish(rows int, runErr error) {
 		}
 		duration := time.Since(operation.started)
 		event, level := operation.policy.Completion(duration, runErr)
-		if operation.policy.Enabled(event) {
+		if operation.wants(event) {
 			operation.log(level, event, operation.summary(event, duration, rows, runErr), operation.prettySummary(event, duration, rows, runErr))
 		}
 		operation.logDetails(duration, rows)
+		operation.publish(duration, rows, runErr)
 	})
 }
 
@@ -200,7 +247,7 @@ func (operation *connectionOperation) baseValues(duration time.Duration, rows in
 
 func (operation *connectionOperation) logDetails(duration time.Duration, rows int) {
 	snapshot := operation.diagnostics.Snapshot()
-	if snapshot != nil && len(snapshot.Request.Arguments) > 0 && eventCanLog(operation.ctx.Logger, operation.policy, observability.EventSQLParams) {
+	if snapshot != nil && len(snapshot.Request.Arguments) > 0 && operation.wants(observability.EventSQLParams) {
 		params := redactArguments(snapshot.Request.Arguments)
 		operation.log(
 			operation.policy.Level(observability.EventSQLParams),
@@ -221,7 +268,7 @@ func (operation *connectionOperation) logHTTPEntry(entry har.Entry, rows int) {
 	base := mergeLogValues(operation.baseValues(time.Duration(entry.Time*float64(time.Millisecond)), rows), map[string]any{
 		"method": entry.Request.Method, "url": entry.Request.URL, "status": entry.Response.Status,
 	})
-	if eventCanLog(operation.ctx.Logger, operation.policy, observability.EventHTTPHeaders) {
+	if operation.wants(observability.EventHTTPHeaders) {
 		operation.log(
 			operation.policy.Level(observability.EventHTTPHeaders),
 			observability.EventHTTPHeaders,
@@ -231,7 +278,7 @@ func (operation *connectionOperation) logHTTPEntry(entry har.Entry, rows int) {
 			operation.prettyHTTPEntry(entry, har.DetailOptions{RequestHeaders: true, QueryString: true, ResponseHeaders: true}),
 		)
 	}
-	if entry.Request.PostData != nil && entry.Request.PostData.Text != "" && eventCanLog(operation.ctx.Logger, operation.policy, observability.EventHTTPRequestBody) {
+	if entry.Request.PostData != nil && entry.Request.PostData.Text != "" && operation.wants(observability.EventHTTPRequestBody) {
 		operation.log(
 			operation.policy.Level(observability.EventHTTPRequestBody),
 			observability.EventHTTPRequestBody,
@@ -239,7 +286,7 @@ func (operation *connectionOperation) logHTTPEntry(entry har.Entry, rows int) {
 			operation.prettyHTTPEntry(entry, har.DetailOptions{RequestBody: true}),
 		)
 	}
-	if entry.Response.Content.Text != "" && eventCanLog(operation.ctx.Logger, operation.policy, observability.EventHTTPResponseBody) {
+	if entry.Response.Content.Text != "" && operation.wants(observability.EventHTTPResponseBody) {
 		operation.log(
 			operation.policy.Level(observability.EventHTTPResponseBody),
 			observability.EventHTTPResponseBody,

@@ -10,9 +10,9 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"unicode"
 
 	"github.com/flanksource/clicky/formatters"
+	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
@@ -45,17 +45,6 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// An info request asks the same URL what it would run rather than for its
-	// rows, so it is answered before the execution branch reads it as one.
-	if (r.Method == http.MethodGet || r.Method == http.MethodHead) && wantsInfo(r) {
-		if name, ok := h.profileName(r.URL.EscapedPath()); ok {
-			if r.Method == http.MethodHead {
-				w = headResponseWriter{w}
-			}
-			h.serveInfo(w, r, name)
-			return
-		}
-	}
 	// HEAD answers the same question as GET and is how a caller reads the paging
 	// headers — the total above all — without paying for the rows. The body is
 	// discarded rather than never produced: the totals it reports are only known
@@ -85,7 +74,12 @@ func (h *execHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			// be reached.
 			setCORSHeaders(w)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			// The arming headers have to clear preflight too, or a cross-origin
+			// console silently gets an unarmed run and no record — the failure
+			// looks like the server ignoring it rather than the browser dropping
+			// the header before it left.
+			w.Header().Set("Access-Control-Allow-Headers",
+				"Content-Type, "+devtools.LevelHeader+", "+devtools.RefreshHeader)
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
@@ -192,7 +186,11 @@ func (h *execHandler) executionContext(r *http.Request) (dbcontext.Context, stdc
 		case <-base.Done():
 		}
 	}()
-	return h.ctx.Wrap(base), cancel
+	// The execution context is derived from the server's context, not the
+	// request's — only cancellation is bridged above — so an armed request's
+	// recorder has to be lifted across explicitly. Nil for every ordinary
+	// request, which query.WithRecorder and every recorder method tolerate.
+	return devtools.WithRequestRecorder(h.ctx.Wrap(base), r), cancel
 }
 
 func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name string) {
@@ -455,160 +453,11 @@ func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, 
 	return request, nil
 }
 
-func supportedExportFormat(format string) bool {
-	switch format {
-	case "clicky-json", "json", "ndjson", "yaml", "csv", "markdown", "html", "excel", "pdf":
-		return true
-	default:
-		return false
-	}
-}
-
-func requestedFormat(r *http.Request) string {
-	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
-	switch format {
-	case "xlsx":
-		return "excel"
-	case "md":
-		return "markdown"
-	case "yml":
-		return "yaml"
-	case "":
-		return acceptedFormat(r.Header.Get("Accept"))
-	default:
-		return format
-	}
-}
-
-// acceptedFormat picks the format an Accept header asks for.
-//
-// Accept is ranked, not ordered: a caller listing text/html first at q=0.1 and
-// the clicky envelope at q=0.9 is asking for the envelope. Reading the first
-// recognised entry answers with the one it weighted lowest — and a q=0 is a
-// refusal, not a low preference. Ties keep the earlier entry, which is the
-// order the caller wrote them in.
-func acceptedFormat(accept string) string {
-	best, bestQuality := "json", -1.0
-	for _, part := range strings.Split(accept, ",") {
-		fields := strings.Split(part, ";")
-		format, ok := formatForMediaType(strings.ToLower(strings.TrimSpace(fields[0])))
-		if !ok {
-			continue
-		}
-		quality := 1.0
-		for _, parameter := range fields[1:] {
-			name, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
-			if !found || strings.ToLower(strings.TrimSpace(name)) != "q" {
-				continue
-			}
-			parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
-			if err != nil {
-				continue
-			}
-			quality = parsed
-		}
-		if quality <= 0 || quality <= bestQuality {
-			continue
-		}
-		best, bestQuality = format, quality
-	}
-	return best
-}
-
-func formatForMediaType(media string) (string, bool) {
-	switch media {
-	case "application/json+clicky", "application/clicky+json":
-		return "clicky-json", true
-	case "application/x-ndjson", "application/ndjson":
-		return "ndjson", true
-	case "application/yaml", "application/x-yaml", "text/yaml":
-		return "yaml", true
-	case "text/csv", "application/csv":
-		return "csv", true
-	case "text/markdown":
-		return "markdown", true
-	case "text/html":
-		return "html", true
-	case "application/pdf":
-		return "pdf", true
-	case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
-		return "excel", true
-	case "application/json":
-		return "json", true
-	default:
-		return "", false
-	}
-}
-
-func isTabularExport(format string) bool {
-	switch format {
-	case "csv", "markdown", "html", "excel", "pdf":
-		return true
-	default:
-		return false
-	}
-}
-
-func exportContentType(format string) string {
-	switch format {
-	case "clicky-json":
-		return "application/json+clicky"
-	case "json":
-		return "application/json"
-	case "ndjson":
-		return "application/x-ndjson"
-	case "yaml":
-		return "application/yaml"
-	case "csv":
-		return "text/csv; charset=utf-8"
-	case "markdown":
-		return "text/markdown; charset=utf-8"
-	case "html":
-		return "text/html; charset=utf-8"
-	case "excel":
-		return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-	case "pdf":
-		return "application/pdf"
-	default:
-		return "application/octet-stream"
-	}
-}
-
-func exportExtension(format string) string {
-	switch format {
-	case "markdown":
-		return ".md"
-	case "excel":
-		return ".xlsx"
-	case "ndjson":
-		return ".ndjson"
-	default:
-		return "." + format
-	}
-}
-
-func sanitizeExportFilename(filename string) string {
-	filename = strings.ReplaceAll(filename, "\\", "/")
-	parts := strings.Split(filename, "/")
-	filename = parts[len(parts)-1]
-	filename = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || strings.ContainsRune(`\";`, r) {
-			return '_'
-		}
-		return r
-	}, filename)
-	filename = strings.Trim(filename, " .")
-	if filename == "" {
-		return "query-export.json"
-	}
-	return filename
-}
-
 // reservedParam reports whether a query-string key is a transport concern (paging,
 // format, content-negotiation) rather than a profile filter param.
 func IsReservedParam(key string) bool {
 	switch key {
-	case "format", "scope", "page", "limit", "offset", "filename", "_download", "args", "__schema", "__info", "__lookup", "__lookup_filter", "__lookup_q":
+	case "format", "scope", "page", "limit", "offset", "filename", "_download", "args", "__schema", "__lookup", "__lookup_filter", "__lookup_q", devtools.LevelParam:
 		return true
 	default:
 		return false

@@ -12,7 +12,7 @@ import (
 
 var _ = Describe("Connection log formatting", func() {
 	It("renders request filters on one deterministic line", func() {
-		diagnostics := NewProviderDiagnostics("k8s", "kind=Pod namespace=prod", nil)
+		diagnostics := NewDiagnostics(DiagnosticOptions{Provider: "k8s", Query: "kind=Pod namespace=prod", Detail: DiagnosticFull})
 		diagnostics.RecordRequest("kind=Pod namespace=prod", nil, map[string]any{
 			"pods":  []string{"prod/billing-2"},
 			"start": "2026-04-19T11:00:00Z",

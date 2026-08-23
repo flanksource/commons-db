@@ -1,11 +1,11 @@
 package shell
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	osExec "os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -13,22 +13,21 @@ import (
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/hash"
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/commons/utils"
 	"github.com/google/uuid"
-	"github.com/joho/godotenv"
 	"github.com/samber/lo"
 )
 
 var checkoutLocks = utils.NamedLock{}
 
 type SetupResult struct {
-	Env       []string
-	Cwd       string
-	Extra     map[string]any
-	Artifacts []Artifact
-	Cleanup   func() error
+	Env             []string
+	Cwd             string
+	Extra           map[string]any
+	Artifacts       []Artifact
+	Cleanup         func() error
+	sensitiveValues []string
 }
 
 type Setup struct {
@@ -256,14 +255,15 @@ func SetupEnv(ctx context.Context, exec *Exec) (*SetupResult, error) {
 	if cwd == "" {
 		cwd, err = defaultCommandDir(*exec)
 		if err != nil {
-			return nil, err
+			return nil, cleanupSetupFailure(err, workspaceCleanup)
 		}
 	}
 
-	envs, err := buildEnv(ctx, *exec, envParams.envs)
+	envs, sensitiveValues, err := buildEnv(*exec, envParams.envs)
 	if err != nil {
-		return nil, err
+		return nil, cleanupSetupFailure(err, workspaceCleanup)
 	}
+	sensitiveValues = append(sensitiveValues, envParams.sensitiveValues...)
 
 	cmd := osExec.CommandContext(ctx, "true")
 	cmd.Dir = cwd
@@ -271,9 +271,9 @@ func SetupEnv(ctx context.Context, exec *Exec) (*SetupResult, error) {
 
 	setupResult, err := connection.SetupConnection(ctx, exec.Connections, cmd)
 	if err != nil {
-		return nil, ctx.Oops().Wrap(err)
+		return nil, ctx.Oops().Wrap(cleanupSetupFailure(err, workspaceCleanup))
 	}
-	ctx = ctx.WithLoggingValues("connection", setupResult)
+	sensitiveValues = append(sensitiveValues, connectionSensitiveValues(exec.Connections)...)
 
 	cleanup := cleanupAll(workspaceCleanup, func() error {
 		if waitBeforeCleanup := ctx.Properties().Duration("shell.connection.wait_before_cleanup", 0); waitBeforeCleanup > 0 {
@@ -285,13 +285,22 @@ func SetupEnv(ctx context.Context, exec *Exec) (*SetupResult, error) {
 		return setupResult.Cleanup()
 	})
 
+	sensitiveValues = append(sensitiveValues, addedEnvironmentValues(envs, cmd.Env)...)
 	return &SetupResult{
-		Env:       mergeEnvSlices(cmd.Env),
-		Cwd:       cwd,
-		Extra:     envParams.extra,
-		Artifacts: exec.Artifacts,
-		Cleanup:   cleanup,
+		Env:             mergeEnvSlices(cmd.Env),
+		Cwd:             cwd,
+		Extra:           envParams.extra,
+		Artifacts:       exec.Artifacts,
+		Cleanup:         cleanup,
+		sensitiveValues: uniqueValues(sensitiveValues),
 	}, nil
+}
+
+func cleanupSetupFailure(setupErr error, cleanups ...func() error) error {
+	if cleanupErr := cleanupAll(cleanups...)(); cleanupErr != nil {
+		return errors.Join(setupErr, cleanupErr)
+	}
+	return setupErr
 }
 
 func normalizeBaseDir(exec *Exec) error {
@@ -337,90 +346,6 @@ func defaultCommandDir(exec Exec) (string, error) {
 	return cmdDir, nil
 }
 
-func buildEnv(ctx context.Context, exec Exec, resolvedEnv []string) ([]string, error) {
-	dotenv, err := loadDotEnv(exec.DotEnv...)
-	if err != nil {
-		return nil, err
-	}
-
-	return mergeEnvSlices(
-		allowedHostEnv(),
-		envMapToSlice(dotenv),
-		resolvedEnv,
-	), nil
-}
-
-func allowedHostEnv() []string {
-	var envs []string
-	for _, e := range os.Environ() {
-		key, _, ok := strings.Cut(e, "=")
-		if _, exists := allowedEnvVars[key]; exists && ok {
-			envs = append(envs, e)
-		}
-	}
-	return envs
-}
-
-func loadDotEnv(paths ...string) (map[string]string, error) {
-	merged := map[string]string{}
-	for _, path := range paths {
-		path = strings.TrimSpace(path)
-		if path == "" {
-			continue
-		}
-		env, err := godotenv.Read(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return nil, fmt.Errorf("read dotenv %s: %w", path, err)
-		}
-		for k, v := range env {
-			merged[k] = v
-		}
-	}
-	return merged, nil
-}
-
-func envMapToSlice(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(env))
-	for k := range env {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		out = append(out, fmt.Sprintf("%s=%s", k, env[k]))
-	}
-	return out
-}
-
-func mergeEnvSlices(layers ...[]string) []string {
-	values := map[string]string{}
-	var order []string
-	for _, layer := range layers {
-		for _, e := range layer {
-			key, value, ok := strings.Cut(e, "=")
-			if !ok || key == "" {
-				continue
-			}
-			if _, seen := values[key]; !seen {
-				order = append(order, key)
-			}
-			values[key] = value
-		}
-	}
-
-	out := make([]string, 0, len(order))
-	for _, key := range order {
-		out = append(out, fmt.Sprintf("%s=%s", key, values[key]))
-	}
-	return out
-}
-
 func prepareEnvironment(ctx context.Context, exec *Exec) (*commandContext, func() error, error) {
 	result := commandContext{
 		extra: make(map[string]any),
@@ -432,6 +357,7 @@ func prepareEnvironment(ctx context.Context, exec *Exec) (*commandContext, func(
 			return nil, nil, fmt.Errorf("error fetching env value (name=%s): %w", env.Name, err)
 		}
 		result.envs = append(result.envs, fmt.Sprintf("%s=%s", env.Name, val))
+		result.sensitiveValues = append(result.sensitiveValues, val)
 	}
 
 	if exec.Checkout == nil {
@@ -490,18 +416,17 @@ func prepareRemoteCheckout(ctx context.Context, baseDir string, checkout *connec
 
 func cleanupAll(cleanups ...func() error) func() error {
 	return func() error {
-		var errs []error
+		failures := 0
 		for i := len(cleanups) - 1; i >= 0; i-- {
 			if cleanups[i] == nil {
 				continue
 			}
 			if err := cleanups[i](); err != nil {
-				errs = append(errs, err)
+				failures++
 			}
 		}
-		if len(errs) > 0 {
-			logger.Errorf("shell setup cleanup errors: %v", errs)
-			return fmt.Errorf("cleanup failed: %v", errs)
+		if failures > 0 {
+			return fmt.Errorf("%d cleanup operations failed", failures)
 		}
 		return nil
 	}

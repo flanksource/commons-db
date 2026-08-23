@@ -184,7 +184,7 @@ var _ = Describe("Manager", func() {
 func reconciliation() *query.ReconcileResult {
 	source := query.Profile{Name: "outgoing", Columns: []query.ColumnDef{{Name: "id"}, {Name: "payload", Type: query.ColumnTypeJSON}}}
 	dest := query.Profile{Name: "incoming", Columns: []query.ColumnDef{{Name: "id"}}}
-	sourceDiagnostics := query.NewWalkDiagnostics("sql")
+	sourceDiagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "sql", Walk: true})
 	sourceDiagnostics.RecordRendered("select * from outgoing where region = 'eu'", nil)
 	return &query.ReconcileResult{
 		Source: source.Name, Dest: dest.Name, SourceProfile: source, DestProfile: dest,
@@ -198,7 +198,7 @@ func reconciliation() *query.ReconcileResult {
 			Mode: query.ReconcileBuffered,
 			Source: &query.ReconcileSideExecution{
 				Side: "source", Profile: source.Name, Provider: "sql",
-				Query: "select * from outgoing where region = '{{.params.region}}'",
+				Query:       "select * from outgoing where region = '{{.params.region}}'",
 				Diagnostics: sourceDiagnostics.Snapshot(), Rows: 2,
 			},
 			Dest: &query.ReconcileSideExecution{Side: "dest", Profile: dest.Name, Provider: "sql", Rows: 1},

@@ -3,9 +3,11 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/gomplate/v3"
@@ -66,6 +68,42 @@ func newParamTemplate(ctx context.Context, params map[string]any) *paramTemplate
 		templater.Context.Logger = logger.StandardLogger()
 	}
 	return &paramTemplate{templater: templater, params: params, used: map[string]bool{}}
+}
+
+func providerTemplateParams(cfg ProviderConfig, defs []ParamDef, params map[string]any) (map[string]any, error) {
+	if !isClickHouseTemplateProvider(cfg) {
+		return params, nil
+	}
+	var rendered map[string]any
+	for _, def := range defs {
+		if def.Type != ParamTypeDateTime || def.Template != "" {
+			continue
+		}
+		value, ok := params[def.Name]
+		if !ok {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339Nano, fmt.Sprint(value))
+		if err != nil {
+			return nil, fmt.Errorf("clickhouse datetime param %q is not RFC3339: %w", def.Name, err)
+		}
+		if rendered == nil {
+			rendered = maps.Clone(params)
+		}
+		rendered[def.Name] = parsed.UTC().Format("2006-01-02 15:04:05.999999999")
+	}
+	if rendered == nil {
+		return params, nil
+	}
+	return rendered, nil
+}
+
+func isClickHouseTemplateProvider(cfg ProviderConfig) bool {
+	if strings.EqualFold(cfg.Type, "clickhouse") {
+		return true
+	}
+	driver, _ := cfg.Options["driver"].(string)
+	return strings.EqualFold(cfg.Type, "sql") && strings.EqualFold(driver, "clickhouse")
 }
 
 // render templates one string. where names the field for the error message.

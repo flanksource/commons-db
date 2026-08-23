@@ -244,7 +244,7 @@ func customizeClickHousePropertiesSchema(properties Schema) {
 
 func isHTTPConnectionType(typ string) bool {
 	switch typ {
-	case "http", "opensearch", "prometheus", "loki", "jaeger":
+	case "http", "opensearch", "elasticsearch", "prometheus", "loki", "jaeger":
 		return true
 	default:
 		return false

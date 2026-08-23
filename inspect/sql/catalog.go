@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	inspection "github.com/flanksource/commons-db/inspect"
 )
 
 const (
@@ -30,13 +32,14 @@ func (l Limits) withDefaults() Limits {
 }
 
 type Catalog struct {
-	Driver         string   `json:"driver"`
-	Database       string   `json:"database,omitempty"`
-	Databases      []string `json:"databases,omitempty"`
-	DefaultSchema  string   `json:"defaultSchema,omitempty"`
-	Schemas        []Schema `json:"schemas"`
-	Truncated      bool     `json:"truncated,omitempty"`
-	TruncateReason string   `json:"truncateReason,omitempty"`
+	Driver         string                    `json:"driver"`
+	Database       string                    `json:"database,omitempty"`
+	Databases      []string                  `json:"databases,omitempty"`
+	DefaultSchema  string                    `json:"defaultSchema,omitempty"`
+	Schemas        []Schema                  `json:"schemas"`
+	Truncated      bool                      `json:"truncated,omitempty"`
+	TruncateReason string                    `json:"truncateReason,omitempty"`
+	Cache          *inspection.CacheMetadata `json:"cache,omitempty"`
 }
 
 type Schema struct {
@@ -200,7 +203,7 @@ ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`, nil
 		return `SELECT currentDatabase(), currentDatabase()`, `
 SELECT database, table, 'BASE TABLE', name, type, position
 FROM system.columns
-WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA')
+WHERE database = currentDatabase()
 ORDER BY database, table, position`, nil
 	case "sqlite":
 		return `SELECT 'snapshot', 'main'`, `

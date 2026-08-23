@@ -14,7 +14,19 @@ import (
 	"github.com/flanksource/commons/logger"
 )
 
+// log emits one event to whichever destinations asked for it.
+//
+// The record is fed from the values rather than from the logger's output: a
+// console wants the fields, not an ANSI rendering of them. Feeding it here also
+// means the operator's terminal is byte-for-byte what it was — the logger branch
+// below is unchanged and still gated only by the logger's own level.
 func (operation *connectionOperation) log(level logger.LogLevel, event observability.Event, values map[string]any, pretty api.Textable) {
+	if operation.recordWants(event) {
+		operation.recordLine(level, event, values)
+	}
+	if !operation.loggerWants(event) {
+		return
+	}
 	if logger.IsJSONLogger(operation.ctx.Logger) {
 		operation.ctx.Logger.V(level).
 			WithValues(structuredLogValues(level, event, values)...).

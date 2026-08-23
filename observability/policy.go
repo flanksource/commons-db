@@ -203,6 +203,19 @@ func SupportedLevelNames() []string {
 	return []string{"off", "error", "warn", "info", "debug", "trace", "trace1", "trace2", "trace3", "trace4"}
 }
 
+// ParseLevelName resolves one of SupportedLevelNames to its level. "off" is not
+// a level and reports ok=false along with off=true, so a caller can tell "switch
+// this feature off" from "that is not a level I know" and reject the latter
+// rather than quietly running at a level nobody asked for.
+func ParseLevelName(name string) (level logger.LogLevel, off bool, ok bool) {
+	normalized := strings.ToLower(strings.TrimSpace(name))
+	if normalized == "" || normalized == "off" {
+		return logger.Info, true, true
+	}
+	level, found := supportedLevels[normalized]
+	return level, false, found
+}
+
 func familyFor(connectionType string) ProviderFamily {
 	switch connectionType {
 	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer,

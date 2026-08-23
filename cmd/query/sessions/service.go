@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/sse"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -282,17 +283,17 @@ func (h *sessionHandler) lookup(w http.ResponseWriter, id string) (query.Session
 }
 
 func (h *sessionHandler) events(w http.ResponseWriter, r *http.Request, id string) {
-	after, err := lastEventSequence(r)
+	after, err := sse.LastEventSequence(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if session, ok := h.registry.Get(id); ok {
 		if r.URL.Query().Get("format") == "ndjson" {
-			writeNDJSON(w, id, session.Events())
+			sse.WriteNDJSON(w, sessionEventsFilename(id), session.Events())
 			return
 		}
-		sseStream{session: session, after: after, keepalive: defaultSSEKeepalive}.run(w, r)
+		sseStream{session: session, after: after, keepalive: sse.DefaultKeepalive}.run(w, r)
 		return
 	}
 
@@ -306,11 +307,13 @@ func (h *sessionHandler) events(w http.ResponseWriter, r *http.Request, id strin
 		return
 	}
 	if r.URL.Query().Get("format") == "ndjson" {
-		writeNDJSON(w, id, events)
+		sse.WriteNDJSON(w, sessionEventsFilename(id), events)
 		return
 	}
 	sseHistory{events: events, info: info, after: after}.write(w)
 }
+
+func sessionEventsFilename(id string) string { return "session-" + id + ".ndjson" }
 
 func (h *sessionHandler) result(w http.ResponseWriter, r *http.Request, id string) {
 	var result *query.Result

@@ -159,6 +159,18 @@ var _ = Describe("Connection schema", func() {
 		Expect(scope["map"].(map[string][]string)[models.ConnectionTypeOpenTelemetry]).To(Equal([]string{models.ConnectionTypeOpenSearch}))
 	})
 
+	It("gives Elasticsearch the OpenSearch endpoint form", func() {
+		// Without a tailored branch the type falls back to name/namespace and
+		// the connection cannot be given an endpoint at all — a picker entry
+		// nothing can be done with. One searcher speaks both protocols, so it
+		// wears the OpenSearch form rather than a near-duplicate of it.
+		then := branchFor(s, models.ConnectionTypeElasticSearch)
+		properties := then["properties"].(schema.Schema)
+		Expect(properties).To(HaveKey("url"))
+		authentication := properties["properties"].(schema.Schema)
+		Expect(authentication["properties"].(schema.Schema)).To(HaveKey("authType"))
+	})
+
 	It("surfaces certificate per type: optional for kubernetes, required for GCP", func() {
 		k8s := branchFor(s, models.ConnectionTypeKubernetes)
 		k8sProperties := k8s["properties"].(schema.Schema)

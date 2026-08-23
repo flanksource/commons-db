@@ -1,12 +1,36 @@
 package query
 
 import (
+	stdcontext "context"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/inspect"
 )
+
+type FilterValueLookupRequest struct {
+	Profile    Profile
+	Input      map[string]any
+	Key        string
+	Search     string
+	Limit      int
+	Inspection InspectionOptions
+}
+
+type cachedFilterValues struct {
+	Options []FilterOption
+	Total   *Total
+}
+
+var filterValueCache = inspect.NewMemo(inspect.MemoOptions[cachedFilterValues]{
+	Policy: inspect.Policy(inspect.CacheClassFilterValues),
+	Weight: func(values cachedFilterValues) int { return len(values.Options) },
+})
 
 // resolveProfileInput turns one request's input into the values exposed to the
 // query template and the native include/exclude clauses the provider applies.
@@ -99,7 +123,9 @@ func (b ColumnFilterBinding) resolveSelection(value any) (ColumnFilterValue, err
 	return selection, nil
 }
 
-func LookupFilterValues(ctx context.Context, profile Profile, input map[string]any, key, search string, limit int) ([]FilterOption, *Total, error) {
+func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) ([]FilterOption, *Total, error) {
+	profile, input := request.Profile, request.Input
+	key, search, limit := request.Key, request.Search, request.Limit
 	if err := profile.Validate(); err != nil {
 		return nil, nil, err
 	}
@@ -162,7 +188,73 @@ func LookupFilterValues(ctx context.Context, profile Profile, input map[string]a
 		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
 	req.Filters = siblings
-	return lookup.LookupFilterValues(ctx, req, binding, search, limit)
+	req.Inspection = request.Inspection
+	identity, err := ctx.ConnectionCacheIdentity(req.Connection)
+	if err != nil {
+		return nil, nil, fmt.Errorf("filter %q connection identity: %w", key, err)
+	}
+	cacheKey, err := filterValueCacheKey(identity, filterLookupProviderIdentity(lookup), req, binding, search, limit)
+	if err != nil {
+		return nil, nil, err
+	}
+	result, err := filterValueCache.Get(ctx, inspect.GetOptions[cachedFilterValues]{
+		Key: cacheKey, Refresh: request.Inspection.Refresh,
+		Load: func(fillContext stdcontext.Context) (cachedFilterValues, error) {
+			lookupContext, lookupRequest, operation, err := prepareConnectionOperation(ctx.Wrap(fillContext), req)
+			if err != nil {
+				return cachedFilterValues{}, err
+			}
+			options, total, err := lookup.LookupFilterValues(lookupContext, lookupRequest, binding, search, limit)
+			operation.Finish(len(options), err)
+			return cachedFilterValues{Options: options, Total: total}, err
+		},
+	})
+	if err != nil && !result.Cache.Cached {
+		return nil, nil, err
+	}
+	return result.Value.Options, result.Value.Total, nil
+}
+
+func filterValueCacheKey(
+	identity string,
+	providerIdentity string,
+	req ProviderRequest,
+	binding ColumnFilterBinding,
+	search string,
+	limit int,
+) (string, error) {
+	payload, err := json.Marshal(struct {
+		Identity         string
+		ProviderIdentity string
+		Provider         string
+		Query            string
+		Options          map[string]any
+		Params           map[string]any
+		ParamRoles       map[string]ParamRole
+		TemplatedParams  []string
+		Filters          []ColumnFilterValue
+		Binding          ColumnFilterBinding
+		Search           string
+		Limit            int
+	}{
+		Identity: identity, ProviderIdentity: providerIdentity,
+		Provider: req.Provider, Query: req.Query,
+		Options: req.Options, Params: req.Params, ParamRoles: req.ParamRoles,
+		TemplatedParams: req.TemplatedParams, Filters: req.Filters,
+		Binding: binding, Search: search, Limit: limit,
+	})
+	if err != nil {
+		return "", fmt.Errorf("encode filter value cache key: %w", err)
+	}
+	return fmt.Sprintf("filter-values:%x", sha256.Sum256(payload)), nil
+}
+
+func filterLookupProviderIdentity(provider FilterLookupProvider) string {
+	value := reflect.ValueOf(provider)
+	if value.Kind() == reflect.Pointer && !value.IsNil() {
+		return fmt.Sprintf("%T:%x", provider, value.Pointer())
+	}
+	return fmt.Sprintf("%T:%#v", provider, provider)
 }
 
 // ResolveColumnFilters resolves filter.<column> request values against a

@@ -174,6 +174,7 @@ func executePages(ctx context.Context, p Profile, page PageRequest, applyPipelin
 	req.Filters = filters
 	req.Order = order
 	req.Diagnostics = page.Diagnostics
+	req.Inspection = page.Inspection
 	if req.Diagnostics == nil {
 		req.Diagnostics = DiagnosticSink(ctx)
 	}

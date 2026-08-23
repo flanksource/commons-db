@@ -25,6 +25,7 @@ func init() {
 	query.RegisterProvider(sqlProvider{key: "mysql", connType: models.ConnectionTypeMySQL})
 	query.RegisterProvider(sqlProvider{key: "sqlserver", connType: models.ConnectionTypeSQLServer})
 	query.RegisterProvider(sqlProvider{key: "clickhouse", connType: models.ConnectionTypeClickHouse})
+	query.RegisterProvider(sqlProvider{key: "sqlite", connType: models.ConnectionTypeSQLite})
 }
 
 // sqlProvider runs arbitrary SQL against a postgres, mysql, sqlserver, or

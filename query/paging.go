@@ -87,6 +87,8 @@ type PageRequest struct {
 	// Diagnostics is non-nil only for an explicit debug execution. It is not a
 	// paging input and is excluded from cursor scope.
 	Diagnostics *ProviderDiagnostics `json:"-"`
+
+	Inspection InspectionOptions `json:"-"`
 }
 
 // Mode reports which strategy this request asks for.

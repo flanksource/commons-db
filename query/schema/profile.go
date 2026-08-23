@@ -61,7 +61,7 @@ var providerConnectionTypes = map[string][]string{
 	"postgrest":     {models.ConnectionTypeHTTP},
 	"prometheus":    {models.ConnectionTypePrometheus},
 	"loki":          {models.ConnectionTypeLoki},
-	"opensearch":    {models.ConnectionTypeOpenSearch},
+	"opensearch":    {models.ConnectionTypeOpenSearch, models.ConnectionTypeElasticSearch},
 	"opentelemetry": {models.ConnectionTypeOpenTelemetry},
 	"jaeger":        {models.ConnectionTypeJaeger},
 
