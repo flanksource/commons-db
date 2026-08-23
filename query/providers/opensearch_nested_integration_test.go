@@ -175,7 +175,9 @@ var _ = Describe("opensearch containers (live)", Ordered, func() {
 			Name: "app", JSONPath: "$.tags[?(@.key == 'app')].value",
 			Filter: &query.ColumnFilterDef{Nested: "tags"},
 		})
-		options, _, err := query.LookupFilterValues(ctx, profile, nil, "filter.app", "", 10)
+		options, _, err := query.LookupFilterValues(ctx, query.FilterValueLookupRequest{
+			Profile: profile, Key: "filter.app", Limit: 10,
+		})
 		Expect(err).ToNot(HaveOccurred())
 		values := make([]string, 0, len(options))
 		for _, option := range options {

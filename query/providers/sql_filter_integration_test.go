@@ -176,8 +176,9 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 	Describe("value lookup", func() {
 		lookup := func(key, search string, params map[string]any) ([]query.FilterOption, *query.Total) {
 			GinkgoHelper()
-			options, total, err := query.LookupFilterValues(
-				context.New(), profileFor(selectOrders), params, key, search, 20)
+			options, total, err := query.LookupFilterValues(context.New(), query.FilterValueLookupRequest{
+				Profile: profileFor(selectOrders), Input: params, Key: key, Search: search, Limit: 20,
+			})
 			Expect(err).ToNot(HaveOccurred())
 			return options, total
 		}
@@ -216,6 +217,41 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 			Expect(options).To(HaveLen(3))
 		})
 
+		It("records the generated lookup statement for inspection", func() {
+			recorder := query.NewRecorder(query.RecorderOptions{ID: "sql-filter-values"})
+			_, _, err := query.LookupFilterValues(query.WithRecorder(context.New(), recorder), query.FilterValueLookupRequest{
+				Profile: profileFor(selectOrders), Key: "filter.region", Search: "us", Limit: 20,
+				Inspection: query.InspectionOptions{Refresh: true},
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			operations := recorder.Detail().Operations
+			Expect(operations).To(HaveLen(1))
+			Expect(operations[0].Request.Query).To(And(
+				ContainSubstring(`WITH "__cdb_base" AS`),
+				ContainSubstring(`"region" AS value`),
+			))
+			Expect(operations[0].Request.Details).To(HaveKeyWithValue("operation", "filter-values"))
+		})
+
+		It("records a failed lookup in the inspection detail", func() {
+			profile := profileFor("SELECT id, region FROM orders ORDER BY id")
+			profile.Columns = append(profile.Columns, query.ColumnDef{
+				Name: "missing", Filter: &query.ColumnFilterDef{Field: "nosuchcolumn"},
+			})
+			recorder := query.NewRecorder(query.RecorderOptions{ID: "failed-filter-values"})
+
+			_, _, err := query.LookupFilterValues(query.WithRecorder(context.New(), recorder), query.FilterValueLookupRequest{
+				Profile: profile, Key: "filter.missing", Limit: 20,
+				Inspection: query.InspectionOptions{Refresh: true},
+			})
+
+			Expect(err).To(MatchError(ContainSubstring("nosuchcolumn")))
+			Expect(recorder.Detail().Operations).To(HaveLen(1))
+			Expect(recorder.Detail().Inspections).To(HaveLen(1))
+			Expect(recorder.Detail().Inspections[0].Error).To(ContainSubstring("failed to look up filter values"))
+		})
+
 		// Someone typing "50%" means a literal "50%", not "everything".
 		It("treats a wildcard in the search term as a literal", func() {
 			options, _ := lookup("filter.region", "50%", nil)
@@ -223,8 +259,9 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 		})
 
 		It("refuses a lookup on a filter that has no values to list", func() {
-			_, _, err := query.LookupFilterValues(
-				context.New(), profileFor(selectOrders), nil, "filter.latency_ms", "", 20)
+			_, _, err := query.LookupFilterValues(context.New(), query.FilterValueLookupRequest{
+				Profile: profileFor(selectOrders), Key: "filter.latency_ms", Limit: 20,
+			})
 			Expect(err).To(MatchError(ContainSubstring("has no values to list")))
 		})
 	})

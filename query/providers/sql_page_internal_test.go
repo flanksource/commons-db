@@ -21,7 +21,7 @@ var _ = Describe("ReadSQLPage", func() {
 		`)
 		Expect(err).ToNot(HaveOccurred())
 
-		diagnostics := query.NewProviderDiagnostics("clickhouse", "SELECT id, message FROM events", nil)
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "clickhouse", Query: "SELECT id, message FROM events", Detail: query.DiagnosticFull})
 		first, err := ReadSQLPage(context.Background(), database, models.ConnectionTypeClickHouse, SQLPageRequest{
 			Query: "SELECT id, message FROM events ORDER BY id",
 			Page:  query.PageRequest{Limit: 2}, Diagnostics: diagnostics,
@@ -75,7 +75,7 @@ var _ = Describe("ReadSQLPage", func() {
 		_, err = database.Exec(`CREATE TABLE events (id INTEGER PRIMARY KEY)`)
 		Expect(err).ToNot(HaveOccurred())
 
-		diagnostics := query.NewProviderDiagnostics("clickhouse", "SELECT premum FROM events", nil)
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "clickhouse", Query: "SELECT premum FROM events", Detail: query.DiagnosticFull})
 		_, err = ReadSQLPage(context.Background(), database, models.ConnectionTypeClickHouse, SQLPageRequest{
 			Query: "SELECT premum FROM events", Page: query.PageRequest{Limit: 2}, Diagnostics: diagnostics,
 		})

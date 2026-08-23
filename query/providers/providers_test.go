@@ -46,6 +46,9 @@ func newOpenSearchStub(hits func(call int) string) *openSearchStub {
 			stub.openedPITs++
 			_, _ = fmt.Fprint(w, `{"pit_id":"pit-1","creation_time":1}`)
 			return
+		case strings.HasSuffix(r.URL.Path, "/_field_caps"):
+			_, _ = fmt.Fprint(w, `{"fields":{"message":{"text":{"searchable":true,"aggregatable":false}}}}`)
+			return
 		default:
 			stub.sizes = append(stub.sizes, r.URL.Query().Get("size"))
 			stub.indexed = append(stub.indexed, r.URL.Path)

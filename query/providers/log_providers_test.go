@@ -837,8 +837,10 @@ var _ = Describe("k8s logs provider", func() {
 	It("offers the pods a scoped workload resolves to", func() {
 		// The profile already names one Deployment, so the only narrowing left
 		// is which of its pods to read.
-		workloads, _, err := query.LookupFilterValues(
-			ctx, k8sProfile("kind=Deployment namespace=prod name=billing"), nil, "workload", "", 50)
+		workloads, _, err := query.LookupFilterValues(ctx, query.FilterValueLookupRequest{
+			Profile: k8sProfile("kind=Deployment namespace=prod name=billing"),
+			Key:     "workload", Limit: 50,
+		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(workloads).To(ConsistOf(
 			query.FilterOption{Value: "prod/Deployment/billing", Count: 1},
@@ -858,7 +860,9 @@ var _ = Describe("k8s logs provider", func() {
 				Name: "roles", Type: query.ParamTypeLabels, Field: "labels.role",
 			}},
 		}
-		workloads, total, err := query.LookupFilterValues(ctx, profile, nil, "workload", "", 50)
+		workloads, total, err := query.LookupFilterValues(ctx, query.FilterValueLookupRequest{
+			Profile: profile, Key: "workload", Limit: 50,
+		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(total).To(Equal(&query.Total{Value: 2, Exact: true}))
 		Expect(workloads).To(ConsistOf(
@@ -866,14 +870,18 @@ var _ = Describe("k8s logs provider", func() {
 			query.FilterOption{Value: "prod/Pod/billing-2", Count: 1},
 		))
 
-		labels, _, err := query.LookupFilterValues(ctx, profile, nil, "labels", "role=", 50)
+		labels, _, err := query.LookupFilterValues(ctx, query.FilterValueLookupRequest{
+			Profile: profile, Key: "labels", Search: "role=", Limit: 50,
+		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(labels).To(ConsistOf(
 			query.FilterOption{Value: "role=canary", Count: 1},
 			query.FilterOption{Value: "role=worker", Count: 1},
 		))
 
-		roles, _, err := query.LookupFilterValues(ctx, profile, nil, "roles", "", 50)
+		roles, _, err := query.LookupFilterValues(ctx, query.FilterValueLookupRequest{
+			Profile: profile, Key: "roles", Limit: 50,
+		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(roles).To(ConsistOf(
 			query.FilterOption{Value: "canary", Count: 1},

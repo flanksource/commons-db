@@ -21,7 +21,7 @@ var _ = Describe("opensearch diagnostics", func() {
 		})
 		profile.Params = []query.ParamDef{{Name: "since", Role: query.ParamRoleTimeFrom}}
 
-		diagnostics := query.NewProviderDiagnostics("opensearch", profile.Query, profile.Provider.Options)
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "opensearch", Query: profile.Query, Options: profile.Provider.Options, Detail: query.DiagnosticFull})
 		ctx := query.WithDiagnosticSink(context.New(), diagnostics)
 		_, err := query.Execute(ctx, profile, map[string]any{"since": "now-6h"})
 		Expect(err).ToNot(HaveOccurred())
