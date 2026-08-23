@@ -43,7 +43,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -210,7 +211,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -362,7 +364,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -465,7 +468,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -644,7 +648,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -811,7 +816,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -930,7 +936,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -1064,7 +1071,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -1186,7 +1194,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -1312,7 +1321,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -1415,7 +1425,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -2463,7 +2474,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -3551,7 +3563,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -3654,7 +3667,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -3757,7 +3771,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -3883,7 +3898,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -4003,7 +4019,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -5028,7 +5045,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -5286,7 +5304,8 @@
                       "mysql"
                     ],
                     "opensearch": [
-                      "opensearch"
+                      "opensearch",
+                      "elasticsearch"
                     ],
                     "opentelemetry": [
                       "opentelemetry"
