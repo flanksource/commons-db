@@ -36,6 +36,7 @@ export function clickyUIDevAliases(command: ConfigEnv["command"]) {
       "clicky",
       "components",
       "data",
+      "devtools",
       "hooks",
       "icons",
       "jotai",

@@ -10,26 +10,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/cmd/query/devtools"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 )
 
-// browserColumnFilter says which control a column's filter renders as and where
-// its values come from. It carries no SQL and no query DSL: the browser posts
-// back a selection and this package compiles it, exactly as a stored profile's
-// filters are compiled.
-type browserColumnFilter struct {
-	// Kind is one of terms, exact, text, range, duration, date, time or boolean.
-	Kind string `json:"kind"`
-	// Lookup says the source answers POST /browser/filters/values for this key.
-	Lookup bool `json:"lookup,omitempty"`
-	// Multi allows several values at once.
-	Multi bool `json:"multi,omitempty"`
-	// Unit is the unit a duration bound is written in, so the browser labels its
-	// control in the same numbers the column is stored in. Empty means
-	// milliseconds. Unread by every other kind.
-	Unit string `json:"unit,omitempty"`
-}
+type browserColumnFilter = query.ResultColumnFilter
 
 type browserFilterOption struct {
 	Value string `json:"value"`
@@ -40,13 +27,14 @@ type browserFilterOption struct {
 // query being browsed and the filters already picked — so a suggestion list
 // only offers values that would still return rows.
 type browserFilterValuesRequest struct {
-	Query     string            `json:"query"`
-	Options   map[string]any    `json:"options,omitempty"`
-	Columns   []browserColumn   `json:"columns,omitempty"`
-	Filters   map[string]string `json:"filters,omitempty"`
-	FilterKey string            `json:"filterKey"`
-	Search    string            `json:"search,omitempty"`
-	Limit     int               `json:"limit,omitempty"`
+	Query             string            `json:"query"`
+	Options           map[string]any    `json:"options,omitempty"`
+	Columns           []browserColumn   `json:"columns,omitempty"`
+	Filters           map[string]string `json:"filters,omitempty"`
+	FilterKey         string            `json:"filterKey"`
+	Search            string            `json:"search,omitempty"`
+	Limit             int               `json:"limit,omitempty"`
+	RefreshInspection bool              `json:"refreshInspection,omitempty"`
 }
 
 type browserFilterValuesResult struct {
@@ -221,10 +209,15 @@ func browserColumnDefs(columns []browserColumn) []query.ColumnDef {
 			def.Filter = &query.ColumnFilterDef{Disabled: true}
 		} else {
 			lookup, multi := column.Filter.Lookup, column.Filter.Multi
+			options := make([]string, 0, len(column.Filter.Options))
+			for _, option := range column.Filter.Options {
+				options = append(options, option.Value)
+			}
 			def.Filter = &query.ColumnFilterDef{
-				Kind:   query.ColumnFilterKind(column.Filter.Kind),
-				Lookup: &lookup,
-				Multi:  &multi,
+				Kind:    query.ColumnFilterKind(column.Filter.Kind),
+				Lookup:  &lookup,
+				Multi:   &multi,
+				Options: options,
 			}
 		}
 		defs = append(defs, def)
@@ -240,12 +233,13 @@ func browserColumnDefs(columns []browserColumn) []query.ColumnDef {
 // how a field compares and whether it can be enumerated, so nothing is echoed
 // there: the mapping is read.
 func (h *connectionBrowserHandler) browserFilterColumns(
-	r *http.Request,
+	ctx dbcontext.Context,
 	conn *models.Connection,
 	descriptor browserDescriptor,
 	options map[string]any,
 	echoed []browserColumn,
 	requested []string,
+	refresh bool,
 ) ([]query.ColumnDef, error) {
 	if descriptor.Provider != "opensearch" {
 		return browserColumnDefs(echoed), nil
@@ -254,15 +248,15 @@ func (h *connectionBrowserHandler) browserFilterColumns(
 	if index == "" {
 		return nil, fmt.Errorf("OpenSearch index is required")
 	}
-	searcher, err := h.openSearchSearcher(h.ctx.Wrap(r.Context()), conn)
+	searcher, err := h.openSearchSearcher(ctx, conn)
 	if err != nil {
 		return nil, err
 	}
-	fields, err := h.openSearchFieldCatalog(r.Context(), searcher, index)
+	fields, err := h.openSearchFieldCatalog(ctx.Context, searcher, index, refresh)
 	if err != nil {
 		return nil, err
 	}
-	shape, err := h.openSearchSampleShape(r.Context(), searcher, index, fields)
+	shape, err := h.openSearchSampleShape(ctx.Context, searcher, index, fields)
 	if err != nil {
 		return nil, err
 	}
@@ -347,16 +341,20 @@ func (h *connectionBrowserHandler) serveFilterValues(w http.ResponseWriter, r *h
 	for _, key := range []string{"url", "address", "type"} {
 		delete(request.Options, key)
 	}
+	ctx := devtools.WithRequestRecorder(h.ctx.Wrap(r.Context()), r)
 
 	requested := append(browserFilterColumnNames(request.Filters), strings.TrimPrefix(request.FilterKey, "filter."))
-	columns, err := h.browserFilterColumns(r, conn, descriptor, request.Options, request.Columns, requested)
+	columns, err := h.browserFilterColumns(ctx, conn, descriptor, request.Options, request.Columns, requested, request.RefreshInspection)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
 	profile := browserProfile(descriptor, conn, request.Query, request.Options, columns)
-	options, total, err := query.LookupFilterValues(
-		h.ctx, profile, browserFilterInput(request.Filters), request.FilterKey, request.Search, limit)
+	options, total, err := query.LookupFilterValues(ctx, query.FilterValueLookupRequest{
+		Profile: profile, Input: browserFilterInput(request.Filters),
+		Key: request.FilterKey, Search: request.Search, Limit: limit,
+		Inspection: query.InspectionOptions{Refresh: request.RefreshInspection},
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
@@ -379,27 +377,7 @@ func (h *connectionBrowserHandler) serveFilterValues(w http.ResponseWriter, r *h
 // display each column and, where the provider can narrow on it, which key to
 // send the selection under.
 func describeBrowserColumns(profile query.Profile, databaseTypes map[string]string) ([]browserColumn, error) {
-	bindings, err := profile.ColumnFilterBindings()
-	if err != nil {
-		return nil, err
-	}
-	byColumn := make(map[string]query.ColumnFilterBinding, len(bindings))
-	for _, binding := range bindings {
-		byColumn[binding.Column] = binding
-	}
-	columns := make([]browserColumn, 0, len(profile.Columns))
-	for _, column := range profile.Columns {
-		described := browserColumn{Name: column.Name, DatabaseType: databaseTypes[column.Name]}
-		if binding, ok := byColumn[column.Name]; ok {
-			described.FilterKey = binding.Key
-			described.Filter = &browserColumnFilter{
-				Kind:   string(binding.Kind.Normalized()),
-				Lookup: binding.Lookup,
-				Multi:  binding.Multi,
-				Unit:   binding.Unit,
-			}
-		}
-		columns = append(columns, described)
-	}
-	return columns, nil
+	return query.DescribeResultColumns(query.ResultColumnOptions{
+		Profile: profile, DatabaseTypes: databaseTypes,
+	})
 }

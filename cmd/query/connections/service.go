@@ -432,8 +432,8 @@ func redactConnection(c *models.Connection) {
 
 func isHTTPAuthConnectionType(connectionType string) bool {
 	switch connectionType {
-	case models.ConnectionTypeHTTP, models.ConnectionTypeOpenSearch, models.ConnectionTypePrometheus,
-		models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
+	case models.ConnectionTypeHTTP, models.ConnectionTypeOpenSearch, models.ConnectionTypeElasticSearch,
+		models.ConnectionTypePrometheus, models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
 		return true
 	default:
 		return false

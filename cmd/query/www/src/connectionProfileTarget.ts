@@ -5,8 +5,9 @@ export function connectionProfileTargetOptions(
   options: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   if (descriptor?.target?.kind === "index") {
-    return typeof options.index === "string" && options.index
-      ? { index: options.index }
+    const value = options[descriptor.target.option];
+    return typeof value === "string" && value
+      ? { [descriptor.target.option]: value }
       : undefined;
   }
   return undefined;

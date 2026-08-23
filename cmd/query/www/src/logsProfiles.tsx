@@ -77,12 +77,10 @@ export function useLogsSurfaces(): Map<string, LogsSurfaceProfile> {
 // server drops them too, and disagreeing with it here would silently change the
 // query the tail runs.
 //
-// They do not reach the session yet. useLogTail posts them as the request body,
-// and sessionHandler.start (cmd/query/sessions/service.go) builds its params from
-// the POST's *query string* and never reads the body, so a filtered walk today
-// tails its profile unfiltered. The parameters are collected and passed anyway,
-// because the fix belongs on one of those two sides and not in a second copy of
-// this mapping here.
+// What survives the filter does reach the session: useLogTail serialises these
+// into the start request's *query string* (clicky-ui's encodeTailParams), which
+// is exactly where sessionHandler.start reads its params from — see
+// cmd/query/sessions/service.go. So a filtered walk tails what it is showing.
 const RESERVED_PARAMS = new Set([
   "format",
   "scope",

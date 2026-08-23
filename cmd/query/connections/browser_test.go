@@ -10,11 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	sqlinspect "github.com/flanksource/commons-db/inspect/sql"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	queryschema "github.com/flanksource/commons-db/query/schema"
+	"github.com/flanksource/commons/logger"
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -31,10 +33,14 @@ func TestDescriptorForConnection(t *testing.T) {
 		{models.ConnectionTypeMySQL, "query", "mysql", true},
 		{models.ConnectionTypeSQLServer, "query", "sqlserver", true},
 		{models.ConnectionTypeClickHouse, "query", "clickhouse", true},
+		{models.ConnectionTypeSQLite, "query", "sqlite", true},
 		{models.ConnectionTypeHTTP, "query", "http", false},
 		{models.ConnectionTypePrometheus, "query", "prometheus", false},
 		{models.ConnectionTypeLoki, "query", "loki", false},
 		{models.ConnectionTypeOpenSearch, "query", "opensearch", true},
+		// Elasticsearch is read by the same searcher, so it browses as OpenSearch.
+		{models.ConnectionTypeElasticSearch, "query", "opensearch", true},
+		{models.ConnectionTypeOpenTelemetry, "query", "opentelemetry", true},
 		{models.ConnectionTypeJaeger, "query", "jaeger", false},
 		{models.ConnectionTypeAWS, "query", "cloudwatch", false},
 		// One connection type, two providers: Cloud Logging is the log browser
@@ -75,6 +81,37 @@ func TestDescriptorForConnection(t *testing.T) {
 	}
 	if _, ok := descriptorForConnection(models.ConnectionTypeSlack); ok {
 		t.Fatal("notification connections must keep the default detail view")
+	}
+}
+
+// A browser query is a bounded top-N, so the order the provider returns and the
+// cut it applies are one decision. Every logs view therefore has to say which
+// way its rows already run, or the browser sorts them itself and shows the cut
+// as if it had been made the other way round.
+func TestLogsDescriptorsDeclareTheOrderTheyReturn(t *testing.T) {
+	want := map[string]string{
+		models.ConnectionTypeLoki:       "desc", // direction=backward
+		models.ConnectionTypeAWS:        "desc", // default query sorts @timestamp desc
+		models.ConnectionTypeGCP:        "desc", // logadmin.NewestFirst
+		models.ConnectionTypeAzure:      "desc", // default query tops by TimeGenerated
+		models.ConnectionTypeKubernetes: "asc",  // the kubelet API only resumes forward
+	}
+	for connectionType, dir := range want {
+		t.Run(connectionType, func(t *testing.T) {
+			descriptor, ok := descriptorForConnection(connectionType)
+			if !ok {
+				t.Fatal("expected browser descriptor")
+			}
+			if descriptor.ResultView != "logs" {
+				t.Fatalf("result view = %q, want logs", descriptor.ResultView)
+			}
+			if descriptor.ResultSort == nil {
+				t.Fatal("logs descriptor must declare the order it returns rows in")
+			}
+			if descriptor.ResultSort.Key != "timestamp" || descriptor.ResultSort.Dir != dir {
+				t.Fatalf("result sort = %#v, want timestamp %s", descriptor.ResultSort, dir)
+			}
+		})
 	}
 }
 
@@ -201,10 +238,14 @@ func TestConnectionBrowserOpenSearchInspection(t *testing.T) {
 		t.Fatalf("selected inspection = %#v", selected)
 	}
 
-	body := bytes.NewBufferString(`{"query":"{\"query\":{\"match_all\":{}}}","options":{"index":"logs"},"debug":true}`)
+	body := bytes.NewBufferString(`{"query":"{\"query\":{\"match_all\":{}}}","options":{"index":"logs"}}`)
 	recorder = httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost,
-		"/api/v1/connection/"+conn.ID.String()+"/browser/query", body))
+	// Armed the way the middleware arms it, at the level that buys a preview.
+	// The request body no longer carries a debug flag: what a query explains is
+	// the console's decision, not the caller's.
+	capture := query.NewRecorder(query.RecorderOptions{ID: "browser-query", Level: logger.Trace})
+	handler.ServeHTTP(recorder, devtools.RequestWithRecorder(httptest.NewRequest(http.MethodPost,
+		"/api/v1/connection/"+conn.ID.String()+"/browser/query", body), capture))
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("query status = %d: %s", recorder.Code, recorder.Body.String())
 	}
@@ -217,6 +258,12 @@ func TestConnectionBrowserOpenSearchInspection(t *testing.T) {
 	}
 	if result.Diagnostics.Response.Preview == "" || result.Diagnostics.Response.ReturnedRows != 1 {
 		t.Fatalf("response diagnostics = %#v", result.Diagnostics.Response)
+	}
+	// The same run is also a row in the console, which is the point of moving
+	// the flag out of the body: one execution, explained in two places.
+	operations := capture.Detail().Operations
+	if len(operations) != 1 || operations[0].Provider != "opensearch" {
+		t.Fatalf("recorded operations = %#v", operations)
 	}
 }
 

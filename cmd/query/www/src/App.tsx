@@ -10,6 +10,11 @@ import {
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { MonacoProvider } from "@flanksource/clicky-ui/monaco";
+import {
+  DebugConsoleButton,
+  DebugConsoleDock,
+  withDebugFetch,
+} from "@flanksource/clicky-ui/devtools";
 import { ChatButton, ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { secretFormExtensions } from "./secretKeySelector";
@@ -90,9 +95,14 @@ configureProfileConnectionForm({
 // The EntityExplorerApp drives list/detail/filter UI from the OpenAPI spec. The
 // schema-by-convention endpoints power the create/edit forms and the per-profile
 // FilterBar; see cmd/query/README.md for the contract.
+// Every request the explorer makes goes out armed at whatever the debug console
+// is set to, and unarmed — with no header at all — when it is closed. The
+// wrapper is applied here rather than to `window.fetch` so it captures this
+// app's API traffic and not Vite's HMR socket or the chat stream.
 const baseClient = createOperationsApiClient({
   baseUrl: "",
   openApiPath: "/api/openapi.json",
+  fetch: withDebugFetch(),
 });
 
 // EntityExplorerApp consumes both @tanstack/react-query (data fetching) and
@@ -145,7 +155,12 @@ function Explorer() {
       ) : (
         <EntityExplorerApp
           client={client}
-          actions={<ChatButton label="Open query assistant" />}
+          actions={
+            <>
+              <DebugConsoleButton />
+              <ChatButton label="Open query assistant" />
+            </>
+          }
           formExtensions={formExtensions}
           formActions={connectionFormActions}
           surfaceActionLabels={{
@@ -188,8 +203,21 @@ export function App() {
         <MonacoProvider getWorker={getMonacoWorker}>
           <RouterProvider adapter={router}>
             <ChatWindowManagerProvider storageId="query-chat">
-              <div className="min-h-0 overflow-hidden" style={{ height: "100dvh" }}>
-                <Explorer />
+              {/* The dock is a flex sibling that shrinks the page rather than an
+                  overlay, and it is mounted outside the router branch, so an
+                  open console survives navigation onto the takeover pages
+                  (profile editor, reconcile) that bypass the app shell. Its
+                  trigger is navbar chrome and lives in EntityExplorerApp's
+                  actions slot, so opening the console does start from the
+                  explorer. */}
+              <div
+                className="flex min-h-0 flex-col overflow-hidden"
+                style={{ height: "100dvh" }}
+              >
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <Explorer />
+                </div>
+                <DebugConsoleDock />
               </div>
             </ChatWindowManagerProvider>
           </RouterProvider>

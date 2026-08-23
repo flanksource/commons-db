@@ -58,6 +58,10 @@ func compileBackend(t *testing.T, field, fieldType string) *httptest.Server {
 			w.WriteHeader(http.StatusOK)
 			return
 		}
+		if strings.Contains(r.URL.Path, "/_mapping/field/") {
+			_, _ = fmt.Fprintf(w, `{"logs-000001":{"mappings":{"%s":{"full_name":%q,"mapping":{"%s":{"format":""}}}}}}`, field, field, field)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/_field_caps") {
 			http.NotFound(w, r)
 			return

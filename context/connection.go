@@ -1,6 +1,7 @@
 package context
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/url"
@@ -109,6 +110,25 @@ func IsValidConnectionURL(connectionString string) bool {
 	}
 	_, _, found := extractConnectionNameType(connectionString)
 	return found
+}
+
+// ConnectionCacheIdentity returns a credential-safe identity for metadata
+// derived through this context. Stored references include their update time so
+// an edit invalidates old metadata; inline URLs are hashed so credentials never
+// become observable cache keys.
+func (ctx Context) ConnectionCacheIdentity(connectionString string) (string, error) {
+	scope := ctx.ConnectionCacheScope()
+	if !IsValidConnectionURL(connectionString) {
+		return fmt.Sprintf("%s:inline:%x", scope, sha256.Sum256([]byte(connectionString))), nil
+	}
+	connection, err := FindConnectionByURL(ctx, connectionString)
+	if err != nil {
+		return "", fmt.Errorf("resolve connection cache identity: %w", err)
+	}
+	if connection == nil {
+		return "", fmt.Errorf("connection %q not found", connectionString)
+	}
+	return fmt.Sprintf("%s:connection:%s:%d", scope, connection.ID, connection.UpdatedAt.UnixNano()), nil
 }
 
 // FindConnectionByURL retrieves a connection from the given connection string.

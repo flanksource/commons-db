@@ -85,6 +85,10 @@ func TestServeValuesEncodesNumericTimestampFields(t *testing.T) {
 			_, _ = fmt.Fprint(w, `{"fields":{"observed_at":{"long":{"searchable":true,"aggregatable":true}}}}`)
 			return
 		}
+		if strings.Contains(r.URL.Path, "/_mapping/field/") {
+			_, _ = fmt.Fprint(w, `{"logs-000001":{"mappings":{"observed_at":{"full_name":"observed_at","mapping":{"observed_at":{"format":""}}}}}}`)
+			return
+		}
 		if err := json.NewDecoder(r.Body).Decode(&searched); err != nil {
 			t.Errorf("decode search: %v", err)
 		}

@@ -18,4 +18,17 @@ describe("clicky-ui development resolution", () => {
       ]),
     );
   });
+
+  // A sub-path missing from the list resolves to the published dist instead of
+  // the sibling source, so a dev-server edit to it silently does nothing.
+  it("maps every sub-path the app imports", () => {
+    const aliases = clickyUIDevAliases("serve");
+
+    for (const entrypoint of ["ai", "data", "devtools", "monaco", "profiles", "rpc"]) {
+      expect(aliases).toContainEqual({
+        find: `@flanksource/clicky-ui/${entrypoint}`,
+        replacement: expect.stringContaining(`/clicky-ui/packages/ui/src/${entrypoint}.ts`),
+      });
+    }
+  });
 });

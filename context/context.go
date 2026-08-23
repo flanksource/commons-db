@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	commons "github.com/flanksource/commons/context"
@@ -44,16 +45,26 @@ type ConnectionLeaseResolver func(string) (func(), error)
 type connectionResolverKey struct{}
 type connectionLeaseResolverKey struct{}
 
+type connectionResolverState struct {
+	resolver ConnectionResolver
+	scope    uint64
+}
+
+var connectionResolverScopes atomic.Uint64
+
 func (k Context) WithConnectionResolver(resolver ConnectionResolver) Context {
 	if resolver == nil {
 		panic("connection resolver is required")
 	}
-	return k.WithValue(connectionResolverKey{}, resolver)
+	return k.WithValue(connectionResolverKey{}, connectionResolverState{
+		resolver: resolver,
+		scope:    connectionResolverScopes.Add(1),
+	})
 }
 
 func (k Context) connectionResolver() ConnectionResolver {
-	resolver, _ := k.Value(connectionResolverKey{}).(ConnectionResolver)
-	return resolver
+	state, _ := k.Value(connectionResolverKey{}).(connectionResolverState)
+	return state.resolver
 }
 
 // CanResolveConnectionReferences reports whether this context owns connection
@@ -61,6 +72,16 @@ func (k Context) connectionResolver() ConnectionResolver {
 // resolve them through a provider-specific seam.
 func (k Context) CanResolveConnectionReferences() bool {
 	return k.connectionResolver() != nil || k.DB() != nil
+}
+
+func (k Context) ConnectionCacheScope() string {
+	if state, ok := k.Value(connectionResolverKey{}).(connectionResolverState); ok && state.resolver != nil {
+		return fmt.Sprintf("resolver:%d:namespace:%s", state.scope, k.GetNamespace())
+	}
+	if database := k.DB(); database != nil {
+		return fmt.Sprintf("db:%p:namespace:%s", database, k.GetNamespace())
+	}
+	return "unscoped:namespace:" + k.GetNamespace()
 }
 
 func (k Context) WithConnectionLeaseResolver(resolver ConnectionLeaseResolver) Context {
@@ -624,6 +645,12 @@ func (k Context) Wrap(ctx gocontext.Context) Context {
 		WithNamespace(k.GetNamespace())
 	if client, ok := k.Value(localKubernetesContextKey).(*dutyKubernetes.Client); ok && client != nil {
 		wrapped = wrapped.WithLocalKubernetes(client)
+	}
+	if state, ok := k.Value(connectionResolverKey{}).(connectionResolverState); ok && state.resolver != nil {
+		wrapped = wrapped.WithValue(connectionResolverKey{}, state)
+	}
+	if resolver, ok := k.Value(connectionLeaseResolverKey{}).(ConnectionLeaseResolver); ok && resolver != nil {
+		wrapped = wrapped.WithConnectionLeaseResolver(resolver)
 	}
 	return wrapped
 }

@@ -41,16 +41,33 @@ describe("connection profile target options", () => {
     ).toBeUndefined();
   });
 
-  it("keeps the existing flat index target behavior", () => {
+  it("keeps the target under the provider-owned option", () => {
     expect(
       connectionProfileTargetOptions(
         {
           kind: "query",
           provider: "opensearch",
-          target: { kind: "index", label: "Index" },
+          target: { kind: "index", label: "Index", option: "index" },
         },
         { index: "logs-*", targetKind: "pattern" },
       ),
     ).toEqual({ index: "logs-*" });
+  });
+
+  it("supports providers whose target is not named index", () => {
+    expect(
+      connectionProfileTargetOptions(
+        {
+          kind: "query",
+          provider: "azureloganalytics",
+          target: {
+            kind: "index",
+            label: "Workspace",
+            option: "workspaceID",
+          },
+        },
+        { workspaceID: "workspace-2", index: "unrelated" },
+      ),
+    ).toEqual({ workspaceID: "workspace-2" });
   });
 });

@@ -12,7 +12,10 @@ if (import.meta.env.DEV) {
 
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { setFallbackIconProvider } from "@flanksource/clicky-ui";
+import {
+  ErrorWrapper,
+  setFallbackIconProvider,
+} from "@flanksource/clicky-ui";
 import { clickyIconProvider } from "@flanksource/clicky-ui/icons";
 import {
   configureProfiles,
@@ -44,7 +47,9 @@ if (!el) {
   throw new Error("missing #root element");
 }
 createRoot(el).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
+  <ErrorWrapper>
+    <StrictMode>
+      <App />
+    </StrictMode>
+  </ErrorWrapper>,
 );

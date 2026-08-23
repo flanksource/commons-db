@@ -72,19 +72,25 @@ describe("OpenSearch index picker", () => {
   const rotated = {
     kind: "opensearch" as const,
     targets: [
-      { name: "logs-*", kind: "pattern" as const, count: 53 },
+      {
+        name: "logs-2026.07.12,logs-2026.07.13",
+        kind: "group" as const,
+        pattern: "logs-*",
+        members: ["logs-2026.07.12", "logs-2026.07.13"],
+        count: 2,
+      },
       { name: "logs-2026.07.13", kind: "index" as const, pattern: "logs-*" },
       { name: "logs-current", kind: "alias" as const },
       { name: "logs", kind: "data_stream" as const },
     ],
   };
 
-  it("leads with rotation patterns and lists concrete indexes last", () => {
+  it("leads with exact rotation groups and lists concrete indexes last", () => {
     expect(openSearchIndexOptions(rotated)).toEqual([
       expect.objectContaining({
-        value: "logs-*",
-        group: "Index patterns",
-        label: "logs-* · 53 indexes",
+        value: "logs-2026.07.12,logs-2026.07.13",
+        group: "Index groups",
+        label: "logs-* · 2 indexes",
         selectedLabel: "logs-*",
       }),
       expect.objectContaining({ value: "logs-current", group: "Aliases" }),
@@ -102,12 +108,24 @@ describe("OpenSearch index picker", () => {
   it("applies a pick over the author's other options and clears on empty", () => {
     const options = { limit: "200", index: "logs-old", targetKind: "index" };
 
-    expect(withTarget(options, { index: "logs-*", targetKind: "pattern" })).toEqual({
+    expect(
+      withTarget(options, {
+        option: "index",
+        value: "logs-*",
+        targetKind: "pattern",
+      }),
+    ).toEqual({
       limit: "200",
       index: "logs-*",
       targetKind: "pattern",
     });
-    expect(withTarget(options, { index: "", targetKind: "" })).toEqual({
+    expect(
+      withTarget(options, {
+        option: "index",
+        value: "",
+        targetKind: "",
+      }),
+    ).toEqual({
       limit: "200",
     });
   });
@@ -123,7 +141,7 @@ describe("OpenSearch index picker", () => {
     const picked = queryBrowserOptionsSchema({
       kind: "query",
       provider: "opensearch",
-      target: { kind: "index", label: "Index" },
+      target: { kind: "index", label: "Index", option: "index" },
       optionsSchema,
     });
     const unpicked = queryBrowserOptionsSchema({

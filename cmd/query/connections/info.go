@@ -117,7 +117,7 @@ func discoverServer(ctx context.Context, connectionContext dbcontext.Context, co
 	switch connection.Type {
 	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse:
 		info, err = discoverSQLServer(ctx, connectionContext, connection)
-	case models.ConnectionTypeOpenSearch:
+	case models.ConnectionTypeOpenSearch, models.ConnectionTypeElasticSearch:
 		info, err = discoverOpenSearch(ctx, connectionContext, connection)
 	case models.ConnectionTypeOpenTelemetry:
 		var openTelemetry dbconnection.OpenTelemetry

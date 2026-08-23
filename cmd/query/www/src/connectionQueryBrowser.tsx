@@ -1,4 +1,7 @@
-import type { QueryBrowserRequest, QueryBrowserResult } from "@flanksource/clicky-ui";
+import type {
+  QueryBrowserRequest,
+  QueryBrowserResult,
+} from "@flanksource/clicky-ui";
 import {
   ConnectionQueryWorkspace,
   fetchJSON,
@@ -35,6 +38,11 @@ export function ConnectionQueryBrowser({
   // Exploration is not saved anywhere, so the specification lives here for as
   // long as the browser is open. "Build profile" carries the options forward.
   const [search, setSearch] = useState<EsSearch | undefined>(undefined);
+  const targetOption =
+    descriptor.target?.kind === "index" ? descriptor.target.option : "";
+  const selectedTarget = targetOption
+    ? (liveOptions[targetOption] ?? selection.options?.[targetOption])
+    : undefined;
   const explicitTargetKind =
     liveOptions.targetKind ?? selection.options?.targetKind;
   const inspection = useInspection({
@@ -43,7 +51,8 @@ export function ConnectionQueryBrowser({
     baseUrl,
     enabled: descriptor.catalog === true,
     database: selectedDatabase,
-    target: String(liveOptions.index ?? selection.options?.index ?? ""),
+    fallbackDatabase: String(descriptor.initialOptions?.database ?? ""),
+    target: String(selectedTarget ?? ""),
     ...(typeof explicitTargetKind === "string"
       ? { targetKind: explicitTargetKind }
       : {}),

@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/rpc"
+	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/cmd/query/www"
@@ -121,6 +123,19 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	sessionStore.BindResolver(sessionRegistry.Get)
 	defer sessionRegistry.StopAll()
 
+	// The devtools record store is memory-only by design: a record holds request
+	// and response bodies, which must not outlive the process that was asked to
+	// capture them.
+	devtoolsStore := devtools.NewStore(devtools.Options{})
+	if !options.HideErrorDetails {
+		// Tee the process logger so the console's Console tab sees background work
+		// — reconciles, snapshot refreshes, unarmed requests — that no request-scoped
+		// recorder ever sees. The original writer stays in the chain, so the
+		// operator's terminal is unchanged.
+		restore := devtools.TeeProcessLogs(devtoolsStore)
+		defer restore()
+	}
+
 	server := rpc.NewSwaggerServer(
 		&rpc.ServeConfig{
 			Host: options.Host, Port: options.Port, Title: "Query", Version: "0.1.0", SkipHealth: false,
@@ -185,9 +200,22 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		return err
 	}
 
+	// Devtools sits outermost because it is a router and a middleware at once: it
+	// serves its own routes, and it has to wrap everything downstream to arm a
+	// request before the handler runs and file the record once it returns.
+	//
+	// A server told to hide error details is not one that may hand out queries,
+	// headers and response bodies through a side door, so it shares that switch.
+	devtoolsHandler := devtools.New(devtools.HandlerOptions{
+		Prefix: "/api/v1", Store: devtoolsStore, Enabled: !options.HideErrorDetails,
+	}).Handler(handler)
+
 	address := fmt.Sprintf("%s:%d", options.Host, options.Port)
 	httpServer := &http.Server{
-		Addr: address, Handler: rpc.Compress(handler), ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 90 * time.Second,
+		// TimingMiddleware goes inside Compress so `total` covers the handler, and
+		// it forwards Flush, which the event streams need.
+		Addr: address, Handler: rpc.Compress(rpchttp.TimingMiddleware(devtoolsHandler)),
+		ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 90 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()
