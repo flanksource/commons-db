@@ -66,8 +66,7 @@ tasks:
     desc: Install the query web UI dependencies
     dir: cmd/query/www
     cmds:
-      # The workspace configuration temporarily links the sibling Clicky UI checkout.
-      - pnpm install --filter query-www --no-frozen-lockfile
+      - pnpm install --frozen-lockfile
 
   www:build:
     desc: Build the query web UI into cmd/query/www/dist (embedded by go:embed)

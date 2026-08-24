@@ -63,11 +63,11 @@ jobs:
           mkdir -p .tmp "$HOME/.local/bin"
           base="https://github.com/flanksource/deps/releases/download/${DEPS_START_VERSION}"
           curl --fail --location --silent --show-error \
-            -o .tmp/deps-start-linux-amd64 "$base/deps-start-linux-amd64"
+            -o .tmp/deps-start-linux-amd64.tar.gz "$base/deps-start-linux-amd64.tar.gz"
           curl --fail --location --silent --show-error \
-            -o .tmp/deps-start-linux-amd64.sha256 "$base/deps-start-linux-amd64.sha256"
-          (cd .tmp && sha256sum --check deps-start-linux-amd64.sha256)
-          install -m 0755 .tmp/deps-start-linux-amd64 "$HOME/.local/bin/deps-start"
+            -o .tmp/deps-start-linux-amd64.tar.gz.sha256 "$base/deps-start-linux-amd64.tar.gz.sha256"
+          (cd .tmp && sha256sum --check deps-start-linux-amd64.tar.gz.sha256)
+          tar -xzf .tmp/deps-start-linux-amd64.tar.gz -C "$HOME/.local/bin"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       # deps-start writes the JSON envelope to stdout and its status line to
@@ -104,6 +104,10 @@ jobs:
       - name: Assert no scratch databases leaked
         if: always()
         run: |
+          if [[ -z "${COMMONS_DB_URL:-}" ]]; then
+            echo "COMMONS_DB_URL is unset because service startup did not complete"
+            exit 0
+          fi
           leaked=$(psql "$COMMONS_DB_URL" -tAc \
             "SELECT count(*) FROM pg_database
              WHERE left(datname, length('commons_db_test_')) = 'commons_db_test_'
