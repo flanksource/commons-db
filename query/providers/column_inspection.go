@@ -120,8 +120,7 @@ func readColumnStats(ctx context.Context, client *sql.DB, statement string, fiel
 		destinations[index] = &counts[index]
 	}
 	// statement is assembled from validated, quoted identifiers around the profile's read-only query.
-	// codeql[go/sql-injection]
-	if err := client.QueryRowContext(ctx, statement).Scan(destinations...); err != nil {
+	if err := client.QueryRowContext(ctx, statement).Scan(destinations...); err != nil { // lgtm[go/sql-injection]
 		return nil, fmt.Errorf("read column cardinality: %w", err)
 	}
 	result := make(map[string]int64, len(fields))

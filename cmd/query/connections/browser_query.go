@@ -163,8 +163,7 @@ func (h *connectionBrowserHandler) executeSQL(
 		request.diagnostics.RecordRequest(statement, nil, map[string]any{"dialect": conn.Type, "operation": "exec"})
 		// The connection browser intentionally accepts a complete operator-authored
 		// statement; no request value is interpolated into another SQL command.
-		// codeql[go/sql-injection]
-		res, err := client.ExecContext(r.Context(), statement)
+		res, err := client.ExecContext(r.Context(), statement) // lgtm[go/sql-injection]
 		if err != nil {
 			request.diagnostics.RecordError(err)
 			request.diagnostics.RecordResponse(started, 0, map[string]any{"dialect": conn.Type, "operation": "exec"})

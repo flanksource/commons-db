@@ -111,8 +111,7 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 	// statement is the author's own query, unchanged, wrapped in a CTE built
 	// from constant syntax; every filter value travels as a bound arg and every
 	// filter identifier is validated before quoting.
-	// codeql[go/sql-injection]
-	rows, err := client.QueryContext(queryContext, statement, args...)
+	rows, err := client.QueryContext(queryContext, statement, args...) // lgtm[go/sql-injection]
 	if err != nil {
 		return SQLPageResult{}, sqlExecError(dialect, request.Filters, err)
 	}

@@ -1,6 +1,7 @@
 package opensearch
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/http"
@@ -13,6 +14,20 @@ import (
 	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons-db/types"
 )
+
+func TestInspectionKeyDoesNotExposeUnkeyedCredentialDigest(t *testing.T) {
+	const address = "https://reader:example@example.test"
+	searcher := &Searcher{config: &Backend{Address: address}}
+	unkeyed := fmt.Sprintf("opensearch:%x", sha256.Sum256([]byte(address)))
+
+	key := searcher.InspectionKey()
+	if key == unkeyed {
+		t.Fatal("inspection key must not be an unkeyed digest of a credential-bearing address")
+	}
+	if key != searcher.InspectionKey() {
+		t.Fatal("inspection key must remain stable for the process lifetime")
+	}
+}
 
 func TestSearchRawSummarizesOpenSearchErrorsWithoutRemoteStackTraces(t *testing.T) {
 	var requestedErrorTrace string

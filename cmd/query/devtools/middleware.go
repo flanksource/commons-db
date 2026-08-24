@@ -95,13 +95,6 @@ func (w *statusWriter) WriteHeader(status int) {
 	w.ResponseWriter.WriteHeader(status)
 }
 
-func (w *statusWriter) Write(b []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
-	return w.ResponseWriter.Write(b)
-}
-
 func (w *statusWriter) Flush() {
 	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
 		flusher.Flush()
@@ -132,7 +125,11 @@ func (h *Handler) arm(w http.ResponseWriter, r *http.Request) (http.ResponseWrit
 	tracked := &statusWriter{ResponseWriter: StampID(w, recorder.ID())}
 	armed := RequestWithRecorder(r, recorder)
 	return tracked, armed, func() {
-		recorder.Finish(query.FinishOptions{Status: tracked.status})
+		status := tracked.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		recorder.Finish(query.FinishOptions{Status: status})
 		h.store.Add(recorder)
 	}, true
 }

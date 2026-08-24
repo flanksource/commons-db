@@ -1,6 +1,8 @@
 package opensearch
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/json"
@@ -21,6 +23,8 @@ import (
 	"github.com/flanksource/commons/logger"
 )
 
+var inspectionFingerprintKey = []byte(rand.Text())
+
 type Searcher struct {
 	client        *opensearch.Client
 	config        *Backend
@@ -39,8 +43,9 @@ func (t *Searcher) InspectionKey() string {
 	if t.config.InspectionKey != "" {
 		return t.config.InspectionKey
 	}
-	digest := sha256.Sum256([]byte(t.config.Address))
-	return fmt.Sprintf("opensearch:%x", digest)
+	digest := hmac.New(sha256.New, inspectionFingerprintKey)
+	_, _ = digest.Write([]byte(t.config.Address))
+	return fmt.Sprintf("opensearch:%x", digest.Sum(nil))
 }
 
 func New(ctx context.Context, backend Backend, mappingConfig *logs.FieldMappingConfig) (*Searcher, error) {

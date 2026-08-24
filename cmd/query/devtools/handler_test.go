@@ -85,6 +85,21 @@ var _ = Describe("Handler", func() {
 		Expect(store.Records(0)[0].Source.Surface).To(Equal("browser"))
 	})
 
+	It("records an implicit successful response status", func() {
+		implicit := devtools.New(devtools.HandlerOptions{
+			Prefix: "/api/v1", Store: store, Enabled: true,
+		}).Handler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte("ok"))
+		}))
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/profile/orders", nil)
+		request.Header.Set(devtools.LevelHeader, "debug")
+
+		implicit.ServeHTTP(httptest.NewRecorder(), request)
+
+		Expect(store.Records(0)).To(HaveLen(1))
+		Expect(store.Records(0)[0].Status).To(Equal(http.StatusOK))
+	})
+
 	It("does not answer a path that merely starts with the same letters", func() {
 		get(handler, "/api/v1/devtoolsy")
 		Expect(next.reached).To(BeTrue())
