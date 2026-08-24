@@ -9,12 +9,17 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query"
 )
 
 type Options struct {
 	Args   []string
 	Stdout io.Writer
 	Stderr io.Writer
+	// Database selects the profile and connection store. A zero value keeps the
+	// YAML file store, which is what metadata-only invocations pass so that
+	// building the command tree never starts PostgreSQL.
+	Database DatabaseOptions
 }
 
 type App struct {
@@ -35,18 +40,26 @@ func New(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	runtime, err := NewRuntime(dbcontext.NewContext(context.Background()), fileStore)
+	runtime, err := NewRuntime(dbcontext.NewContext(context.Background()), fileStore, options.Database)
 	if err != nil {
 		return nil, err
 	}
 	connectionService, err := connections.New(connections.Options{
 		Database: runtime.Database, Context: runtime.Context, DecodeBody: DecodeBody,
+		Profiles: func(ctx context.Context) ([]query.Profile, error) {
+			store, err := runtime.ProfileStore()
+			if err != nil {
+				return nil, err
+			}
+			return store.List(ctx)
+		},
 	})
 	if err != nil {
 		return nil, err
 	}
 	profileService, err := profiles.New(profiles.Options{
 		Store: runtime.ProfileStore, Context: runtime.Context, DecodeBody: DecodeBody,
+		OpenAPIExtensions: []profiles.OpenAPIExtension{connections.AddDashboardOpenAPI},
 	})
 	if err != nil {
 		return nil, err

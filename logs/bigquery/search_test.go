@@ -31,6 +31,10 @@ func TestSearch_Manual(t *testing.T) {
 		},
 	}
 
+	// The searcher takes a hydrated connection — resolving the credential is the
+	// caller's job, as it is for the bigquery provider.
+	g.Expect(conn.HydrateConnection(ctx)).To(Succeed())
+
 	searcher := New(conn, nil)
 	defer searcher.Close()
 

@@ -24,12 +24,14 @@ type Options struct {
 	Database   DatabaseProvider
 	Context    ContextProvider
 	DecodeBody BodyDecoder
+	Profiles   ProfileProvider
 }
 
 type Service struct {
 	database   DatabaseProvider
 	context    ContextProvider
 	decodeBody BodyDecoder
+	profiles   ProfileProvider
 }
 
 func New(options Options) (*Service, error) {
@@ -42,7 +44,13 @@ func New(options Options) (*Service, error) {
 	if options.DecodeBody == nil {
 		return nil, fmt.Errorf("body decoder is required")
 	}
-	return &Service{database: options.Database, context: options.Context, decodeBody: options.DecodeBody}, nil
+	if options.Profiles == nil {
+		return nil, fmt.Errorf("profile provider is required")
+	}
+	return &Service{
+		database: options.Database, context: options.Context,
+		decodeBody: options.DecodeBody, profiles: options.Profiles,
+	}, nil
 }
 
 // ListOptions are the list/filter options for the connection entity. Types is
@@ -95,7 +103,10 @@ func (s *Service) RegisterClicky() {
 
 func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	ctx := s.context()
-	return newConnectionBrowserHandler(prefix, ctx, newConnectionActionsHandler(prefix, ctx, next))
+	browser := newConnectionBrowserHandler(prefix, ctx, newConnectionActionsHandler(prefix, ctx, next))
+	return newConnectionDashboardHandler(connectionDashboardHandlerOptions{
+		Prefix: prefix, Context: ctx, Profiles: s.profiles, Next: browser,
+	})
 }
 
 func (s *Service) List(options ListOptions) ([]*models.Connection, error) {

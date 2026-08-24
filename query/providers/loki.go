@@ -46,7 +46,7 @@ func (lokiProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 	request.End = opts.End
 	request.Limit = opts.Limit
 
-	conn := connection.Loki{ConnectionName: req.Connection}
+	conn := connection.Loki{HTTPConnection: connection.HTTPConnection{ConnectionName: req.Connection}}
 	if opts.URL != "" {
 		conn.URL, err = resolveInlineURL(ctx, opts.URL, "loki")
 		if err != nil {
@@ -64,7 +64,7 @@ func (lokiProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 }
 
 // logResultToRows flattens a logs.LogResult into generic rows. Shared by the
-// loki and opensearch providers.
+// log-backed providers.
 func logResultToRows(result *logs.LogResult) []query.Row {
 	if result == nil {
 		return nil
@@ -75,25 +75,60 @@ func logResultToRows(result *logs.LogResult) []query.Row {
 		if line == nil {
 			continue
 		}
-		row := query.Row{
-			"timestamp": line.FirstObserved,
-			"message":   line.Message,
+		rows = append(rows, logLineToRow(line))
+	}
+	return rows
+}
+
+func logLineToRow(line *logs.LogLine) query.Row {
+	row := query.Row{
+		"timestamp": line.FirstObserved,
+		"message":   line.Message,
+	}
+	// hash is the message with its variable parts tokenized out, which is what
+	// makes "cel.dedupe" able to see two spellings of one error as one row. It
+	// is already computed by the backends, and dropping it here would leave the
+	// processor nothing but the raw message to key on.
+	if line.Hash != "" {
+		row["hash"] = line.Hash
+	}
+	if line.Count > 0 {
+		row["count"] = line.Count
+	}
+	if line.LastObserved != nil {
+		row["lastObserved"] = *line.LastObserved
+	}
+	if line.Severity != "" {
+		row["severity"] = line.Severity
+	}
+	if line.Host != "" {
+		row["host"] = line.Host
+	}
+	if line.Source != "" {
+		row["source"] = line.Source
+	}
+	for k, v := range line.Labels {
+		if _, taken := row[k]; !taken {
+			row[k] = v
 		}
-		if line.Severity != "" {
-			row["severity"] = line.Severity
-		}
-		if line.Host != "" {
-			row["host"] = line.Host
-		}
-		if line.Source != "" {
-			row["source"] = line.Source
-		}
-		for k, v := range line.Labels {
-			if _, taken := row[k]; !taken {
+	}
+	return row
+}
+
+// logResultsToRows flattens the per-pod/container slice a Kubernetes search
+// returns, promoting each result's Metadata onto the rows it produced. Metadata
+// wins over a label of the same name: it states where the line actually came
+// from, where a pod label named "namespace" is just a label.
+func logResultsToRows(results []logs.LogResult) []query.Row {
+	var rows []query.Row
+	for i := range results {
+		result := &results[i]
+		for _, row := range logResultToRows(result) {
+			for k, v := range result.Metadata {
 				row[k] = v
 			}
+			rows = append(rows, row)
 		}
-		rows = append(rows, row)
 	}
 	return rows
 }

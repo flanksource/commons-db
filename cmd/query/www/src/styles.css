@@ -1,0 +1,84 @@
+@layer properties, theme, base, clicky-tokens, utilities;
+
+/* www owns a Tailwind build for its own source.
+ *
+ * @flanksource/clicky-ui ships a prebuilt stylesheet (dist/styles.css) that
+ * carries preflight, the fs-token / density layer and every utility clicky-ui
+ * itself uses. It does NOT carry classes that only www writes — clicky-ui's
+ * build scans clicky-ui's source, not ours. Any such class silently compiles
+ * to nothing, which is why the profile editor's
+ * `lg:grid-cols-[minmax(22rem,0.9fr)_minmax(24rem,1.1fr)]` two-pane layout
+ * collapsed into a single stacked column, and why `bg-warning/10` and
+ * `min-h-64` render as no-ops.
+ *
+ * So: establish the shared layer order, import only the theme and utilities
+ * layers (clicky-ui supplies preflight and the token layer), and load this
+ * sheet before clicky-ui's prebuilt sheet. Shared responsive utilities must be
+ * last in the utilities layer so a later app-only `.hidden` cannot override a
+ * library-owned `md:flex` at desktop widths.
+ */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
+@source "./**/*.{ts,tsx}";
+@source "../design/**/*.{html,ts,tsx}";
+
+/* Density-aware spacing scale, mirrored from clicky-ui's tokens.css so
+ * `px-density-4`, `gap-density-2`, `h-control-h` compile here too. The values
+ * reference --spacing-unit / --control-height, which clicky-ui's
+ * @layer clicky-tokens defines per [data-density]. */
+@theme {
+  --spacing-density-1: calc(var(--spacing-unit, 0.25rem) * 1);
+  --spacing-density-2: calc(var(--spacing-unit, 0.25rem) * 2);
+  --spacing-density-3: calc(var(--spacing-unit, 0.25rem) * 3);
+  --spacing-density-4: calc(var(--spacing-unit, 0.25rem) * 4);
+  --spacing-density-6: calc(var(--spacing-unit, 0.25rem) * 6);
+  --spacing-density-8: calc(var(--spacing-unit, 0.25rem) * 8);
+  --spacing-control-h: var(--control-height, 2.25rem);
+  --spacing-control-px: var(--control-padding-x, 0.75rem);
+  --container-8xl: 96rem;
+  --container-9xl: 120rem;
+}
+
+/* `inline` emits the var() reference into each utility rather than resolving
+ * it at build time, so utilities keep responding to runtime [data-theme]
+ * switches. Same contract as clicky-ui's tokens.css. */
+@theme inline {
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --font-sans: var(--fs-font-sans);
+  --font-mono: var(--fs-font-mono);
+}
+
+/* www-only semantic tokens. clicky-ui has no --warning, so the sample-stale
+ * banner in profileEditorSections.tsx (`border-warning/40 bg-warning/10
+ * text-warning-foreground`) rendered borderless and transparent. Bind them to
+ * the fs-* warning ramp, which does ship in dist/styles.css. */
+@theme inline {
+  --color-warning: var(--fs-warning);
+  --color-warning-foreground: var(--fs-warning-700);
+}

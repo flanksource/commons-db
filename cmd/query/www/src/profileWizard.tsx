@@ -7,7 +7,7 @@ import {
 } from "@flanksource/clicky-ui";
 import { useQuery } from "@tanstack/react-query";
 import { useDeferredValue, useMemo, useState } from "react";
-import { ProfileWizardQueryStep } from "./profileWizardQueryStep";
+import { ProfileWizardQueryStep, type ProfileSample } from "./profileWizardQueryStep";
 import {
   profileConnectionID,
   profileWizardErrorMessage,
@@ -90,7 +90,7 @@ export function ProfileWizard({
     setDraft(next);
   };
 
-  const acceptSample = (columns: ProfileColumn[]) => {
+  const acceptSample = ({ columns }: ProfileSample) => {
     setDiscovered(columns);
     setActiveField((current) =>
       columns.some((field) => field.name === current)
@@ -215,7 +215,12 @@ export function ProfileWizard({
             {stepHelp[step.id]}
           </p>
         </div>
-        <div key={step.id} className="min-h-0 flex-1 overflow-auto">
+        <div
+          key={step.id}
+          className={`min-h-0 flex-1 ${
+            step.id === "query" ? "overflow-hidden" : "overflow-auto"
+          }`}
+        >
           {step.id === "source" ? (
             <SourceStep
               choices={connectionChoices}

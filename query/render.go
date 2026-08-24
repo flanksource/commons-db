@@ -22,16 +22,43 @@ func (r rowProvider) Row() map[string]any      { return r.row }
 // Table builds a clicky TextTable from the Result. When columns is empty, the
 // columns are derived from the union of row keys (sorted for determinism).
 func (r *Result) Table(columns []ColumnDef) api.TextTable {
-	cols := clickyColumns(columns, r.Rows)
+	cols := clickyColumns(columns, r.Rows, r.ColumnFilterKeys)
 	if len(r.Rows) == 0 {
 		return emptyTable(cols)
 	}
 
 	providers := make([]rowProvider, len(r.Rows))
 	for i, row := range r.Rows {
-		providers[i] = rowProvider{cols: cols, row: row}
+		providers[i] = rowProvider{cols: cols, row: styledRow(row, r.styleFor(i))}
 	}
 	return api.NewTableFrom(providers)
+}
+
+// styleFor returns the cell styles for row index, or nil when the result
+// carries none.
+func (r *Result) styleFor(index int) map[string]string {
+	if index >= len(r.Styles) {
+		return nil
+	}
+	return r.Styles[index]
+}
+
+// styledRow wraps each styled cell as an api.Text so clicky renders the class
+// with the value. The original row is left alone — it is the same map an export
+// reads — and unstyled cells pass through untouched.
+func styledRow(row Row, styles map[string]string) Row {
+	if len(styles) == 0 {
+		return row
+	}
+	out := make(Row, len(row))
+	for name, value := range row {
+		if class, ok := styles[name]; ok {
+			out[name] = api.Text{Content: fmt.Sprint(value), Style: class}
+			continue
+		}
+		out[name] = value
+	}
+	return out
 }
 
 // Render formats the Result in the given clicky format (e.g. "table", "csv",
@@ -40,15 +67,18 @@ func (r *Result) Render(columns []ColumnDef, format string) (string, error) {
 	return clicky.Format(r.Table(columns), clicky.FormatOptions{Format: format})
 }
 
-// ClickyColumns maps declared profile columns to the shared Clicky column
-// contract. Schema-less callers may pass nil and let a formatter derive fields.
-func ClickyColumns(columns []ColumnDef) []api.ColumnDef {
-	return clickyColumns(columns, nil)
+// ClickyColumns maps a profile's declared columns to the shared Clicky contract.
+func ClickyColumns(profile Profile) ([]api.ColumnDef, error) {
+	keys, err := profile.ColumnFilterKeys()
+	if err != nil {
+		return nil, err
+	}
+	return clickyColumns(profile.Columns, nil, keys), nil
 }
 
 // clickyColumns maps profile columns to clicky column definitions, deriving the
 // schema from row keys when no columns are declared.
-func clickyColumns(columns []ColumnDef, rows []Row) []api.ColumnDef {
+func clickyColumns(columns []ColumnDef, rows []Row, filterKeys map[string]string) []api.ColumnDef {
 	if len(columns) == 0 {
 		columns = deriveColumns(rows)
 	}
@@ -56,13 +86,15 @@ func clickyColumns(columns []ColumnDef, rows []Row) []api.ColumnDef {
 	out := make([]api.ColumnDef, 0, len(columns))
 	for _, c := range columns {
 		out = append(out, api.ColumnDef{
-			Name:     c.Name,
-			Label:    c.Label,
-			Kind:     string(c.Kind),
-			Type:     string(c.Type),
-			Format:   c.clickyFormat(),
-			MaxWidth: c.Width,
-			Hidden:   c.Hidden,
+			Name:      c.Name,
+			Label:     c.Label,
+			Kind:      string(c.Kind),
+			Type:      string(c.Type),
+			Format:    c.clickyFormat(),
+			Unit:      c.Unit,
+			MaxWidth:  c.Width,
+			Hidden:    c.Hidden,
+			FilterKey: filterKeys[c.Name],
 		})
 	}
 	return out
@@ -91,7 +123,9 @@ func emptyTable(cols []api.ColumnDef) api.TextTable {
 			LabelStyle:    col.HeaderStyle,
 			Type:          col.Type,
 			Format:        col.Format,
+			Unit:          col.Unit,
 			FormatOptions: col.FormatOptions,
+			FilterKey:     col.FilterKey,
 		})
 	}
 	return t

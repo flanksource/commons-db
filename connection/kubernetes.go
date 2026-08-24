@@ -31,7 +31,9 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 			return nil, nil, fmt.Errorf("connection[%s] not found", t.ConnectionName)
 		}
 
-		t.Kubeconfig.ValueStatic = connection.Certificate
+		// Assigned rather than written through: a caller naming a connection has
+		// no kubeconfig of its own, so there is no EnvVar here to overwrite.
+		t.Kubeconfig = &types.EnvVar{ValueStatic: connection.Certificate}
 	}
 
 	if t.Kubeconfig != nil && !t.Kubeconfig.IsEmpty() {
@@ -44,7 +46,21 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 		return dutyKubernetes.NewClientFromPathOrConfig(ctx.Logger, t.Kubeconfig.ValueStatic)
 	}
 
-	return dutyKubernetes.NewClient(ctx.Logger)
+	// No connection and no kubeconfig means "use the ambient cluster" —
+	// $KUBECONFIG, ~/.kube/config, or the in-cluster service account.
+	clientset, restConfig, err := dutyKubernetes.NewClient(ctx.Logger)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// NewClient hands back an empty fake clientset when it found nothing to
+	// connect to. Left alone that reads as a healthy cluster with no resources,
+	// so every query returns zero rows and no error.
+	if clientset == dutyKubernetes.Nil {
+		return nil, nil, fmt.Errorf("no kubernetes cluster configured: name a connection, or set $KUBECONFIG / ~/.kube/config")
+	}
+
+	return clientset, restConfig, nil
 }
 
 // +kubebuilder:object:generate=true

@@ -84,7 +84,7 @@ func TestHTTPConnectionAuthenticationModes(t *testing.T) {
 }
 
 func TestTLSConfigRequiresClientCertificateAndKeyTogether(t *testing.T) {
-	_, err := (TLSConfig{Cert: types.EnvVar{ValueStatic: "cert-only"}}).transportConfig()
+	_, err := (TLSConfig{Cert: types.EnvVar{ValueStatic: "cert-only"}}).TLSClientConfig()
 	if err == nil {
 		t.Fatal("expected incomplete mTLS credentials to fail")
 	}

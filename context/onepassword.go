@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+
+	"github.com/flanksource/commons-db/pkg/allowlist"
 )
 
 // onePasswordTokenProperty is the context property that overrides the
@@ -20,6 +22,8 @@ const onePasswordTokenProperty = "1password.service-account-token"
 // opReadFunc resolves a 1Password secret reference to its plaintext value. It is
 // a package var so tests can substitute a fake for the `op` CLI.
 var opReadFunc = opRead
+
+var onePasswordCommandFunc = runOnePasswordCommand
 
 // onePasswordFingerprintKey makes token fingerprints process-local. The cache
 // is also process-local, so fingerprints only need to remain stable for the
@@ -77,16 +81,25 @@ func tokenFingerprint(token string) string {
 // opRead invokes `op read` for a single reference. When a token is supplied it
 // is injected via OP_SERVICE_ACCOUNT_TOKEN for non-interactive resolution.
 func opRead(ctx Context, ref, token string) (string, error) {
-	if err := validateOnePasswordReference(ref); err != nil {
+	checked, err := validateOnePasswordReference(ref)
+	if err != nil {
 		return "", err
 	}
-	if _, err := exec.LookPath("op"); err != nil {
-		return "", fmt.Errorf("1password CLI (op) not found in PATH: %w", err)
+	stdout, err := onePasswordCommandFunc(ctx, token, "read", "--no-newline", "--", checked)
+	if err != nil {
+		return "", err
 	}
-	// The reference is a validated op:// URI and follows `--`, so the CLI cannot
-	// reinterpret any part of it as an option.
-	// codeql[go/command-injection]
-	cmd := exec.CommandContext(ctx, "op", "read", "--no-newline", "--", ref)
+	return string(stdout), nil
+}
+
+func runOnePasswordCommand(ctx Context, token string, args ...string) ([]byte, error) {
+	if _, err := exec.LookPath("op"); err != nil {
+		return nil, fmt.Errorf("1password CLI (op) not found in PATH: %w", err)
+	}
+	// The executable is fixed, and every caller-supplied argument reaches here
+	// only as the return value of a validator that rebuilt it from a constant
+	// alphabet, so no byte of argv originates outside this package.
+	cmd := exec.CommandContext(ctx, "op", args...)
 	cmd.Env = os.Environ()
 	if token != "" {
 		cmd.Env = append(cmd.Env, "OP_SERVICE_ACCOUNT_TOKEN="+token)
@@ -95,27 +108,39 @@ func opRead(ctx Context, ref, token string) (string, error) {
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("op read %q failed: %w: %s", ref, err, strings.TrimSpace(stderr.String()))
+		return nil, fmt.Errorf("op %s failed: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))
 	}
-	return stdout.String(), nil
+	return stdout.Bytes(), nil
 }
 
-func validateOnePasswordReference(ref string) error {
-	if strings.ContainsAny(ref, "\x00\r\n") {
-		return fmt.Errorf("invalid 1password reference: control characters are not allowed")
+// onePasswordRefAlphabet is every byte a reference may contain: the characters
+// RFC 3986 allows in a URI, plus the space that unencoded vault and item names
+// still carry in practice. validateOnePasswordReference returns a reference
+// copied out of this constant, so a caller cannot hand `op` a byte — an option
+// prefix, a control character, a quote — that this package did not spell out.
+const onePasswordRefAlphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~:/?#[]@!$&'()*+,;= %"
+
+// validateOnePasswordReference checks ref and returns the reference to actually
+// use. It returns the value rather than only an error so that a caller cannot
+// validate one string and then pass a different, unchecked one to the CLI.
+func validateOnePasswordReference(ref string) (string, error) {
+	invalid := fmt.Errorf("invalid 1password reference: expected op://<vault>/<item>/<field>")
+	checked, ok := allowlist.Copy(ref, onePasswordRefAlphabet)
+	if !ok {
+		return "", fmt.Errorf("invalid 1password reference: only printable URI characters are allowed")
 	}
-	u, err := url.Parse(ref)
+	u, err := url.Parse(checked)
 	if err != nil || u.Scheme != "op" || u.Host == "" || u.User != nil || u.Port() != "" || u.Fragment != "" {
-		return fmt.Errorf("invalid 1password reference: expected op://<vault>/<item>/<field>")
+		return "", invalid
 	}
 	parts := strings.Split(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
 	if len(parts) < 2 {
-		return fmt.Errorf("invalid 1password reference: expected op://<vault>/<item>/<field>")
+		return "", invalid
 	}
 	for _, value := range parts {
 		if value == "" {
-			return fmt.Errorf("invalid 1password reference: expected op://<vault>/<item>/<field>")
+			return "", invalid
 		}
 	}
-	return nil
+	return checked, nil
 }

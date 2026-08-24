@@ -15,9 +15,13 @@ import (
 const legacyTraceProvider = "legacy-trace"
 
 type legacyTraceParam struct {
-	Field       string `json:"field,omitempty" yaml:"field,omitempty"`
-	Operator    string `json:"operator,omitempty" yaml:"operator,omitempty"`
-	Format      string `json:"format,omitempty" yaml:"format,omitempty"`
+	Field    string `json:"field,omitempty" yaml:"field,omitempty"`
+	Operator string `json:"operator,omitempty" yaml:"operator,omitempty"`
+
+	// Format is parsed so an old file still loads, but it is not migrated: no
+	// version of the trace query builder ever read it.
+	Format string `json:"format,omitempty" yaml:"format,omitempty"`
+
 	Template    string `json:"template,omitempty" yaml:"template,omitempty"`
 	Clause      string `json:"clause,omitempty" yaml:"clause,omitempty"`
 	Description string `json:"description,omitempty" yaml:"description,omitempty"`
@@ -28,6 +32,7 @@ type legacyTraceParam struct {
 type legacyTraceColumn struct {
 	Name   string `json:"name" yaml:"name"`
 	Field  string `json:"field" yaml:"field"`
+	Style  string `json:"style,omitempty" yaml:"style,omitempty"`
 	Detail bool   `json:"detail,omitempty" yaml:"detail,omitempty"`
 }
 
@@ -52,6 +57,7 @@ type legacyTraceProfile struct {
 	Aliases        orderedLegacyAliases        `json:"-" yaml:"aliases,omitempty"`
 	Ignore         []string                    `json:"ignore,omitempty" yaml:"ignore,omitempty"`
 	Columns        []legacyTraceColumn         `json:"columns,omitempty" yaml:"columns,omitempty"`
+	Filters        []query.FilterDef           `json:"filters,omitempty" yaml:"filters,omitempty"`
 	SQL            map[string]any              `json:"sql,omitempty" yaml:"sql,omitempty"`
 	Kubernetes     map[string]any              `json:"kubernetes,omitempty" yaml:"kubernetes,omitempty"`
 	Arthas         map[string]any              `json:"arthas,omitempty" yaml:"arthas,omitempty"`
@@ -65,13 +71,21 @@ func (a *orderedLegacyAliases) UnmarshalYAML(node *yamlv3.Node) error {
 		return fmt.Errorf("aliases must be a mapping")
 	}
 	for index := 0; index < len(node.Content); index += 2 {
+		name, spec := node.Content[index].Value, node.Content[index+1]
+		// An alias is written either as a bare expression or as a mapping with a
+		// cel key. Both forms are in the wild, and the shorthand is the common
+		// one, so a profile using it must not be read as malformed.
+		if spec.Kind == yamlv3.ScalarNode {
+			*a = append(*a, query.AliasDef{Name: name, CEL: spec.Value})
+			continue
+		}
 		var value struct {
 			CEL string `yaml:"cel"`
 		}
-		if err := node.Content[index+1].Decode(&value); err != nil {
-			return err
+		if err := spec.Decode(&value); err != nil {
+			return fmt.Errorf("alias %q: %w", name, err)
 		}
-		*a = append(*a, query.AliasDef{Name: node.Content[index].Value, CEL: value.CEL})
+		*a = append(*a, query.AliasDef{Name: name, CEL: value.CEL})
 	}
 	return nil
 }
@@ -159,6 +173,17 @@ func legacyProfileMigration(path string) (profileMigration, bool, error) {
 	return profileMigration{path: path, data: converted}, true, nil
 }
 
+// ConvertLegacyProfile turns one legacy trace-profile document into a Profile.
+//
+// FileStore migrates a directory in place, which is the right shape for user
+// files on disk. An application whose built-in profiles are embedded has no
+// directory to migrate and needs the same mapping applied at load time, so the
+// conversion is available on its own rather than only as a side effect of
+// opening a store.
+func ConvertLegacyProfile(source []byte) (query.Profile, error) {
+	return convertLegacyTraceSource(string(source))
+}
+
 func convertLegacyTraceSource(source string) (query.Profile, error) {
 	var legacy legacyTraceProfile
 	if err := yamlv3.Unmarshal([]byte(source), &legacy); err != nil {
@@ -186,21 +211,107 @@ func convertLegacyTraceProfile(legacy legacyTraceProfile, source string) (query.
 	columns := make([]query.ColumnDef, len(legacy.Columns))
 	for i, column := range legacy.Columns {
 		columns[i] = query.ColumnDef{
-			Name: column.Name, CEL: column.Field, Hidden: column.Detail,
+			Name: column.Name, CEL: column.Field, Hidden: column.Detail, Style: column.Style,
 		}
 	}
 	provider := query.ProviderConfig{Type: legacyTraceProvider, Options: map[string]any{
 		"kind": legacyTraceKind(legacy), "source": source,
 	}}
-	if legacyTraceKind(legacy) == "opensearch" {
-		provider = query.ProviderConfig{Type: "opentelemetry", Options: legacyOpenTelemetryOptions(legacy)}
-	} else if legacyTraceKind(legacy) == "import" {
-		provider = query.ProviderConfig{Type: "opentelemetry", Options: map[string]any{"params": legacyProviderParams(legacy.Params)}}
+	kind := legacyTraceKind(legacy)
+	if kind == "kubernetes" {
+		options, err := legacyKubernetesOptions(legacy)
+		if err != nil {
+			return query.Profile{}, err
+		}
+		provider = query.ProviderConfig{Type: "k8s", Options: options}
+		params = ensureParam(params, query.ParamDef{
+			Name: "namespace", Description: "Kubernetes namespace to read logs from",
+		})
+	}
+	if kind == "opensearch" || kind == "import" {
+		search, err := legacyOpenTelemetrySearch(legacy.Params)
+		if err != nil {
+			return query.Profile{}, err
+		}
+		options := map[string]any{}
+		// An import inherits every index and field setting from its parent, so
+		// only its own filters travel with it.
+		if kind == "opensearch" {
+			options = legacyOpenTelemetryOptions(legacy)
+		}
+		if search != nil {
+			options["search"] = search
+		}
+		provider = query.ProviderConfig{Type: "opentelemetry", Options: options}
 	}
 	return query.Profile{
 		Name: legacy.Name, Imports: legacy.Imports, Provider: provider,
 		Params: params, Columns: columns, Aliases: []query.AliasDef(legacy.Aliases), Ignore: legacy.Ignore,
+		Filters: legacy.Filters,
 	}, nil
+}
+
+// ensureParam appends def unless the profile already declares that name, so a
+// parameter the conversion needs never shadows one the author wrote.
+func ensureParam(params []query.ParamDef, def query.ParamDef) []query.ParamDef {
+	for _, existing := range params {
+		if existing.Name == def.Name {
+			return params
+		}
+	}
+	return append(params, def)
+}
+
+// legacyKubernetesWorkloadKinds maps the short workload references a legacy
+// `kubernetes.target` uses onto the kinds the k8s log provider accepts.
+var legacyKubernetesWorkloadKinds = map[string]string{
+	"po": "Pod", "pod": "Pod", "pods": "Pod",
+	"deploy": "Deployment", "deployment": "Deployment", "deployments": "Deployment",
+	"sts": "StatefulSet", "statefulset": "StatefulSet", "statefulsets": "StatefulSet",
+	"ds": "DaemonSet", "daemonset": "DaemonSet", "daemonsets": "DaemonSet",
+}
+
+// legacyKubernetesOptions maps a legacy `kubernetes:` block onto the k8s log
+// provider's options.
+//
+// A base profile carries only defaults and no target — it exists to be imported
+// — so an absent target is not an error here; the provider rejects a profile
+// that is actually run without one.
+func legacyKubernetesOptions(legacy legacyTraceProfile) (map[string]any, error) {
+	options := map[string]any{}
+	if target, _ := legacy.Kubernetes["target"].(string); target != "" {
+		shorthand, name, found := strings.Cut(target, "/")
+		if !found || name == "" {
+			return nil, fmt.Errorf("kubernetes.target %q is not a kind/name reference", target)
+		}
+		kind, ok := legacyKubernetesWorkloadKinds[strings.ToLower(shorthand)]
+		if !ok {
+			return nil, fmt.Errorf("kubernetes.target %q has an unsupported kind %q", target, shorthand)
+		}
+		options["kind"], options["name"] = kind, name
+	}
+	// The legacy reader resolved an empty namespace from the active kubecontext.
+	// The provider requires one, so it becomes a parameter the caller supplies
+	// rather than an ambient value the profile silently inherits.
+	if namespace, _ := legacy.Kubernetes["namespace"].(string); namespace != "" {
+		options["namespace"] = namespace
+	} else {
+		options["namespace"] = "{{.params.namespace}}"
+	}
+	if since, _ := legacy.Kubernetes["since"].(string); since != "" {
+		options["start"] = "now-" + since
+	}
+	if tail, ok := legacy.Kubernetes["tail"]; ok {
+		options["limit"] = fmt.Sprintf("%v", tail)
+	}
+	// Fail loudly on the settings that have no home, rather than dropping them
+	// and quietly widening what the profile reads.
+	for _, unsupported := range []string{"selector", "container", "grep", "previous"} {
+		if value, ok := legacy.Kubernetes[unsupported]; ok && value != nil && value != "" {
+			return nil, fmt.Errorf("kubernetes.%s is not supported by the k8s provider", unsupported)
+		}
+	}
+	return options, nil
 }
 
 func legacyOpenTelemetryOptions(legacy legacyTraceProfile) map[string]any {
@@ -210,7 +321,7 @@ func legacyOpenTelemetryOptions(legacy legacyTraceProfile) map[string]any {
 		"parentIdField": legacy.ParentIDField, "parentRefType": legacy.ParentRefType,
 		"serviceField": legacy.ServiceField, "operationField": legacy.OperationField,
 		"statusFields": legacy.StatusFields, "selectFields": legacy.SelectFields,
-		"sourceExcludes": legacy.SourceExcludes, "params": legacyProviderParams(legacy.Params),
+		"sourceExcludes": legacy.SourceExcludes,
 	}
 	for key, value := range options {
 		switch typed := value.(type) {
@@ -229,22 +340,6 @@ func legacyOpenTelemetryOptions(legacy legacyTraceProfile) map[string]any {
 		}
 	}
 	return options
-}
-
-func legacyProviderParams(params map[string]legacyTraceParam) map[string]any {
-	converted := make(map[string]any, len(params))
-	for name, param := range params {
-		converted[name] = map[string]any{
-			"field": param.Field, "operator": param.Operator, "format": param.Format,
-			"template": param.Template, "clause": param.Clause, "internal": param.Internal,
-		}
-		for key, value := range converted[name].(map[string]any) {
-			if value == "" || value == false {
-				delete(converted[name].(map[string]any), key)
-			}
-		}
-	}
-	return converted
 }
 
 func legacyTraceKind(profile legacyTraceProfile) string {

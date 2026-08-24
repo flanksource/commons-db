@@ -13,6 +13,7 @@ tasks:
       - "{{.LOCALBIN}}/controller-gen object paths=./types/..."
       - "{{.LOCALBIN}}/controller-gen object paths=./connection/..."
       - "{{.LOCALBIN}}/controller-gen object paths=./models/..."
+      - "{{.LOCALBIN}}/controller-gen object paths=./logs/..."
       - PATH={{.LOCALBIN}}:${PATH} go generate ./...
 
   fmt:
@@ -47,12 +48,25 @@ tasks:
     cmds:
       - go build ./...
 
+  install:
+    desc: Build and install the query CLI to the default Go bin
+    deps: [www:build]
+    vars:
+      VERSION:
+        sh: basename "$(git describe --tags --always --dirty --match 'cmd/query/v*')"
+      COMMIT:
+        sh: git rev-parse --short HEAD
+      DATE:
+        sh: date -u '+%Y-%m-%dT%H:%M:%SZ'
+      LDFLAGS: -s -w -X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}
+    cmds:
+      - go -C cmd/query install -ldflags "{{.LDFLAGS}}" .
+
   www:install:
-    desc: Install the query web UI dependencies (links sibling clicky-ui when present, else npm)
+    desc: Install the query web UI dependencies
     dir: cmd/query/www
     cmds:
-      # --no-frozen-lockfile so the @flanksource/clicky-ui workspace link resolves
-      # to the local sibling when checked out, and falls back to the npm range in CI.
+      # The workspace configuration temporarily links the sibling Clicky UI checkout.
       - pnpm install --no-frozen-lockfile
 
   www:build:

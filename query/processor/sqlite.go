@@ -1,6 +1,11 @@
 // Package processor contains built-in post-query processors for the query
-// engine: sqlite-backed merge and key-based reconciliation. Each processor
-// self-registers via init(); consumers enable them with a blank import:
+// engine: sqlite-backed merge, key-based reconciliation, and CEL batch
+// transforms that fold runs of adjacent rows together. It also holds the
+// library of named presets those processors ship with, such as
+// "java.stacktrace".
+//
+// Each processor and preset self-registers via init(); consumers enable them
+// with a blank import:
 //
 //	import _ "github.com/flanksource/commons-db/query/processor"
 package processor

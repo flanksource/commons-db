@@ -9,7 +9,12 @@ import (
 const (
 	queryConfigDirEnv = "QUERY_CONFIG_DIR"
 	queryDataDirEnv   = "QUERY_DATA_DIR"
+	queryDBURLEnv     = "QUERY_DB_URL"
 )
+
+// EmbeddedDatabase is the --db value that resolves to the embedded PostgreSQL
+// cluster under the data dir — the same store `query serve` and the web UI use.
+const EmbeddedDatabase = "embedded"
 
 // defaultQueryConfigDir follows XDG on every platform: an explicit
 // XDG_CONFIG_HOME wins, otherwise state lives below ~/.config.
@@ -46,13 +51,33 @@ func ResolveProfilesDir(args []string) string {
 	return filepath.Join(resolveConfigDir(args), "profiles")
 }
 
+// ResolveDBURL reads --db before cobra parses, because the profile store the
+// command tree is generated from has to exist first. An explicitly empty value
+// is not the same as an absent one: it selects the YAML file store.
+func ResolveDBURL(args []string) string {
+	if value, ok := stringFlag(args, "--db"); ok {
+		return value
+	}
+	if value := os.Getenv(queryDBURLEnv); value != "" {
+		return value
+	}
+	return EmbeddedDatabase
+}
+
+func ResolveDataDir(args []string) string {
+	explicit, _ := stringFlag(args, "--data-dir")
+	return resolveDataDir(resolveConfigDir(args), explicit)
+}
+
 func stringFlag(args []string, name string) (string, bool) {
 	for i, arg := range args {
 		if arg == name && i+1 < len(args) {
 			return args[i+1], true
 		}
-		if len(arg) > len(name)+1 && arg[:len(name)+1] == name+"=" {
-			return arg[len(name)+1:], true
+		// `--flag=` is an explicitly empty value, not an absent flag: --db= is how
+		// a sub-command opts out of the database.
+		if value, found := strings.CutPrefix(arg, name+"="); found {
+			return value, true
 		}
 	}
 	return "", false

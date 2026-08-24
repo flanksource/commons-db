@@ -27,6 +27,12 @@ func (s resolverStore) Save(_ context.Context, profile query.Profile) error {
 	return nil
 }
 
+func (s resolverStore) Update(_ context.Context, original string, profile query.Profile, _ UpdateOptions) error {
+	delete(s, original)
+	s[profile.Name] = profile
+	return nil
+}
+
 func (s resolverStore) Delete(_ context.Context, name string) error {
 	delete(s, name)
 	return nil
@@ -66,6 +72,25 @@ var _ = Describe("Resolve", func() {
 		Expect(resolved.Profile.Ignore).To(Equal([]string{"internal"}))
 	})
 
+	// mergeProfile copies field by field, so a new model field silently vanishes
+	// from every resolved profile unless it is added there — and the sidebar
+	// reads the RESOLVED profile, so a dropped icon shows up only in a browser.
+	It("inherits an icon from an import and lets the importer override it", func() {
+		store := resolverStore{
+			"jms":          {Name: "jms", Icon: "activemq", Provider: query.ProviderConfig{Type: "opentelemetry"}},
+			"jms.incoming": {Name: "jms.incoming", Imports: []string{"jms"}},
+			"jms.outgoing": {Name: "jms.outgoing", Imports: []string{"jms"}, Icon: "kubernetes"},
+		}
+
+		inherited, err := Resolve(context.Background(), store, "jms.incoming")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(inherited.Profile.Icon).To(Equal("activemq"))
+
+		overridden, err := Resolve(context.Background(), store, "jms.outgoing")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(overridden.Profile.Icon).To(Equal("kubernetes"))
+	})
+
 	It("rejects cycles with the complete import path", func() {
 		store := resolverStore{
 			"a": {Name: "a", Imports: []string{"b"}},
@@ -86,6 +111,21 @@ var _ = Describe("Resolve", func() {
 		resolved, err := Resolve(context.Background(), store, "profile")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(resolved.ConnectionProfile).To(Equal("owner"))
+	})
+
+	// Each cap answers its own question, so an overlay that raises the export
+	// ceiling says nothing about the page the base declared.
+	It("layers row limits one cap at a time", func() {
+		merged := mergeProfile(
+			query.Profile{Limits: &query.RowLimits{PageSize: 25, MaxExportRows: 5000}},
+			query.Profile{Limits: &query.RowLimits{MaxExportRows: 250_000}},
+		)
+		Expect(*merged.Limits).To(Equal(query.RowLimits{PageSize: 25, MaxExportRows: 250_000}))
+
+		Expect(mergeProfile(
+			query.Profile{Limits: &query.RowLimits{PageSize: 25}},
+			query.Profile{},
+		).Limits).To(Equal(&query.RowLimits{PageSize: 25}))
 	})
 
 	It("clears the inherited session kind when an overlay selects the other kind", func() {

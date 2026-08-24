@@ -28,6 +28,10 @@ func NewGorm(connection string, config *gorm.Config) (*gorm.DB, error) {
 		return nil, fmt.Errorf("error setting up tracing: %w", err)
 	}
 
+	if err := gormDB.Use(NewServerTimingPlugin()); err != nil {
+		return nil, fmt.Errorf("error setting up server timing: %w", err)
+	}
+
 	return gormDB, nil
 }
 

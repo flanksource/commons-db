@@ -18,11 +18,19 @@ const (
 	ParamTypeBoolean ParamType = "boolean"
 	ParamTypeDate    ParamType = "date"
 	ParamTypeEnum    ParamType = "enum"
+
+	// ParamTypeList accepts several values at once. `params.<Name>` holds the
+	// included values as a []string, which an esdsl multi-operand condition
+	// (terms, ids) binds directly. A query template must join them, passing the
+	// list first — `{{ join .params.ids "','" }}` — because rendering the
+	// parameter bare would emit Go's `[a b c]`.
+	ParamTypeList ParamType = "list"
 )
 
 // ParamRole assigns a profile parameter to a first-class table control. Filter
 // is the default; limit/offset drive the pager and time-from/time-to are paired
-// into the table's date-range control.
+// into the table's date-range control. Cursor is a reserved transport parameter
+// because its provider-owned position must never be rendered into query text.
 type ParamRole string
 
 const (
@@ -34,11 +42,14 @@ const (
 )
 
 // ParamDef declares one server-side filter parameter of a Profile. Supplied
-// values are validated and coerced against the declaration, then exposed to the
-// query template under `params.<Name>` before the provider runs. This mirrors
-// legacy trace-profile params.
+// values are validated and coerced against the declaration, then exposed under
+// `params.<Name>` to everything the provider is handed — the query, the provider
+// options and the connection — before it runs. This mirrors legacy trace-profile
+// params.
 type ParamDef struct {
-	// Name is the parameter key, referenced in the query as `{{.params.<Name>}}`.
+	// Name is the parameter key, referenced as `{{.params.<Name>}}` (or
+	// `$(.params.<Name>)`) in the query, in any provider option, or in the
+	// connection.
 	Name string `json:"name" yaml:"name"`
 
 	// Label is the human-facing name for the FilterBar. Defaults to Name.
@@ -56,8 +67,19 @@ type ParamDef struct {
 	Default any `json:"default,omitempty" yaml:"default,omitempty"`
 
 	// Options enumerates the allowed values (an enum). When set, a supplied value
-	// must be one of these.
+	// must be one of these. A list parameter validates every selected value
+	// against them, and leaving them empty asks the provider for its distinct
+	// values instead.
 	Options []string `json:"options,omitempty" yaml:"options,omitempty"`
+
+	// Field is the backend field an include/exclude selection binds to. Declaring
+	// it makes a list parameter tri-state: a value prefixed with "!" excludes,
+	// and both halves resolve into the same native filter clauses a column filter
+	// produces. `params.<Name>` still carries only the includes, so a query
+	// template and an esdsl multi-operand condition see a plain list either way.
+	// Only a provider that applies native filters may declare it — Validate
+	// rejects the rest, so an exclusion can never be silently dropped.
+	Field string `json:"field,omitempty" yaml:"field,omitempty"`
 
 	// Required fails execution when no value (and no Default) is supplied.
 	Required bool `json:"required,omitempty" yaml:"required,omitempty"`
@@ -81,13 +103,16 @@ func (d ParamDef) DisplayLabel() string {
 // resolveParams validates and coerces the supplied values against the declared
 // params, applies defaults and per-param templates, and enforces Required. The
 // returned map (keyed by param name) is exposed to the query template as
-// `params`. Undeclared keys in supplied are ignored — the caller decides which
-// request values map to params.
-func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, error) {
+// `params`. A tri-state list parameter also yields a native include/exclude
+// clause, so an exclusion travels the same path a column filter's does rather
+// than needing a second transport. Undeclared keys in supplied are ignored — the
+// caller decides which request values map to params.
+func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, []ColumnFilterValue, error) {
 	resolved := make(map[string]any, len(defs))
+	var filters []ColumnFilterValue
 	for _, def := range defs {
 		if def.Name == "" {
-			return nil, fmt.Errorf("param declaration is missing a name")
+			return nil, nil, fmt.Errorf("param declaration is missing a name")
 		}
 
 		raw, ok := supplied[def.Name]
@@ -96,22 +121,90 @@ func resolveParams(defs []ParamDef, supplied map[string]any) (map[string]any, er
 			case def.Default != nil:
 				raw = def.Default
 			case def.Required:
-				return nil, fmt.Errorf("param %q is required", def.Name)
+				return nil, nil, fmt.Errorf("param %q is required", def.Name)
 			default:
 				continue
 			}
 		}
 
+		if def.Type == ParamTypeList {
+			include, exclude, err := def.coerceList(raw)
+			if err != nil {
+				return nil, nil, fmt.Errorf("param %q: %w", def.Name, err)
+			}
+			// A selection that reduces to nothing is the same as an absent one,
+			// so a required list is not satisfied by whitespace alone.
+			if len(include) == 0 && len(exclude) == 0 {
+				if def.Required {
+					return nil, nil, fmt.Errorf("param %q is required", def.Name)
+				}
+				continue
+			}
+			resolved[def.Name] = include
+			if def.Field != "" {
+				filters = append(filters, ColumnFilterValue{
+					Key: def.Name, Field: def.Field, Kind: ColumnFilterKindTerms,
+					Include: include, Exclude: exclude,
+				})
+			}
+			continue
+		}
+
 		val, err := def.coerce(raw)
 		if err != nil {
-			return nil, fmt.Errorf("param %q: %w", def.Name, err)
+			return nil, nil, fmt.Errorf("param %q: %w", def.Name, err)
 		}
 		if def.Template != "" {
 			val = strings.ReplaceAll(def.Template, "{value}", fmt.Sprintf("%v", val))
 		}
 		resolved[def.Name] = val
 	}
-	return resolved, nil
+	return resolved, filters, nil
+}
+
+// coerceList decodes a multi-value selection. The wire form is the one column
+// filters already use — comma-joined, "!" excludes — so the CLI, the query
+// string and a JSON body all decode through a single implementation.
+//
+// A list param is always a value selection, whatever its tokens look like: a
+// bounded parameter is already expressible as two numbers plus a query
+// template, and a bound list's whole contract is that params.<name> is a list
+// of values the query interpolates.
+func (d ParamDef) coerceList(raw any) ([]string, []string, error) {
+	selection, err := parseColumnFilterSelection(ColumnFilterKindTerms, raw)
+	if err != nil {
+		return nil, nil, err
+	}
+	include, exclude := selection.Include, selection.Exclude
+	if len(exclude) > 0 && d.Field == "" {
+		return nil, nil, fmt.Errorf(
+			"excluding a value (!%s) requires a backend field; declare `field` on the parameter", exclude[0])
+	}
+	for _, values := range [][]string{include, exclude} {
+		for i, value := range values {
+			if len(d.Options) > 0 && !slices.Contains(d.Options, value) {
+				return nil, nil, fmt.Errorf("value %q is not one of the allowed options %v", value, d.Options)
+			}
+			if d.Template != "" {
+				values[i] = strings.ReplaceAll(d.Template, "{value}", value)
+			}
+		}
+	}
+	return include, exclude, nil
+}
+
+// paramRoles indexes the declared params by name, defaulting an unset role to
+// filter so a provider never has to re-apply that default.
+func paramRoles(defs []ParamDef) map[string]ParamRole {
+	roles := make(map[string]ParamRole, len(defs))
+	for _, def := range defs {
+		if def.Role == "" {
+			roles[def.Name] = ParamRoleFilter
+			continue
+		}
+		roles[def.Name] = def.Role
+	}
+	return roles
 }
 
 // coerce converts a raw value to the param's declared type and validates it
@@ -163,9 +256,16 @@ func (d ParamDef) coerce(raw any) (any, error) {
 }
 
 func isEmptyParam(v any) bool {
-	if v == nil {
+	switch typed := v.(type) {
+	case nil:
 		return true
+	case string:
+		return typed == ""
+	case []string:
+		return len(typed) == 0
+	case []any:
+		return len(typed) == 0
+	default:
+		return false
 	}
-	s, ok := v.(string)
-	return ok && s == ""
 }

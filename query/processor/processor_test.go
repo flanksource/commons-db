@@ -1,6 +1,8 @@
 package processor_test
 
 import (
+	gocontext "context"
+
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/processor"
@@ -69,8 +71,10 @@ var _ = Describe("Recon", func() {
 		{"id": 4, "status": "D"},
 	}
 
+	ctx := context.NewContext(gocontext.Background())
+
 	It("classifies rows as unchanged/changed/added/removed", func() {
-		rows, err := processor.Recon(baseline, target, processor.ReconOptions{
+		rows, err := processor.Recon(ctx, baseline, target, processor.ReconOptions{
 			Key:     []string{"id"},
 			Compare: []string{"status"},
 		})
@@ -84,7 +88,7 @@ var _ = Describe("Recon", func() {
 	})
 
 	It("records the from/to diff for changed rows", func() {
-		rows, err := processor.Recon(baseline, target, processor.ReconOptions{Key: []string{"id"}})
+		rows, err := processor.Recon(ctx, baseline, target, processor.ReconOptions{Key: []string{"id"}})
 		Expect(err).ToNot(HaveOccurred())
 
 		var changed query.Row
@@ -100,9 +104,24 @@ var _ = Describe("Recon", func() {
 		Expect(changes["status"]).To(HaveKeyWithValue("to", "X"))
 	})
 
-	It("requires at least one key column", func() {
-		_, err := processor.Recon(baseline, target, processor.ReconOptions{})
-		Expect(err).To(MatchError(ContainSubstring("key column")))
+	It("derives the key from a CEL expression", func() {
+		nested := []query.Row{{"meta": map[string]any{"id": "a"}, "status": "A"}}
+		moved := []query.Row{{"meta": map[string]any{"id": "a"}, "status": "B"}}
+
+		rows, err := processor.Recon(ctx, nested, moved, processor.ReconOptions{KeyCEL: `row.meta.id`})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0][processor.ReconStatusColumn]).To(Equal(processor.ReconChanged))
+	})
+
+	It("requires a key", func() {
+		_, err := processor.Recon(ctx, baseline, target, processor.ReconOptions{})
+		Expect(err).To(MatchError(ContainSubstring("columns or a cel expression")))
+	})
+
+	It("rejects a key that sets both columns and cel", func() {
+		_, err := processor.Recon(ctx, baseline, target, processor.ReconOptions{Key: []string{"id"}, KeyCEL: `row.id`})
+		Expect(err).To(MatchError(ContainSubstring("pick one")))
 	})
 })
 

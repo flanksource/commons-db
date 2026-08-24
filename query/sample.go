@@ -9,26 +9,34 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/google/uuid"
+
 	"github.com/flanksource/commons-db/context"
 )
-
-const DefaultSampleLimit = 100
 
 // SampleResult is the raw, pre-column/pre-processor output used by profile
 // authoring tools. Columns are inferred only from top-level row keys.
 type SampleResult struct {
-	Rows          []Row       `json:"rows"`
-	Columns       []ColumnDef `json:"columns"`
-	RenderedQuery string      `json:"renderedQuery"`
-	Truncated     bool        `json:"truncated,omitempty"`
-	DurationMS    float64     `json:"durationMs"`
+	Rows          []Row                `json:"rows"`
+	Columns       []ColumnDef          `json:"columns"`
+	RenderedQuery string               `json:"renderedQuery"`
+	Truncated     bool                 `json:"truncated,omitempty"`
+	DurationMS    float64              `json:"durationMs"`
+	Pagination    PageInfo             `json:"pagination"`
+	Diagnostics   *ProviderDiagnostics `json:"diagnostics,omitempty"`
+}
+
+type SampleOptions struct {
+	Params map[string]any
+	Page   PageRequest
+	Debug  bool
 }
 
 // Sample renders and executes a profile through its provider while bypassing
 // context queries and processors. Configured row transforms still shape the
 // preview, and only providers whose request can be proven read-only are allowed.
-func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*SampleResult, error) {
-	if err := p.ValidateKind(); err != nil {
+func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResult, error) {
+	if err := p.Validate(); err != nil {
 		return nil, err
 	}
 	if p.Kind() != KindQuery {
@@ -37,52 +45,62 @@ func Sample(ctx context.Context, p Profile, params map[string]any, limit int) (*
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
-	resolved, err := resolveParams(p.Params, params)
+	resolved, filters, err := resolveProfileInput(p, options.Params)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	rendered, err := renderQuery(ctx, p.Query, resolved)
+	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	if err := validateSampleReadOnly(p.Provider.Type, rendered, p.Provider.Options); err != nil {
+	req.Filters = filters
+	// The rendered query and options are what run, so they are what must be
+	// proven read-only — a templated options.method would otherwise slip a
+	// non-GET request past the check.
+	if err := validateSampleReadOnly(p.Provider.Type, req.Query, req.Options); err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	provider, err := GetProvider(p.Provider.Type)
-	if err != nil {
-		return nil, err
+	pageRequest := options.Page
+	if pageRequest.Limit <= 0 {
+		pageRequest.Limit = DefaultSampleLimit
+	}
+	if maximum := p.RowLimits().MaxPageSize; pageRequest.Limit > maximum {
+		return nil, fmt.Errorf("profile %q: requested page size %d exceeds maximum page size %d", p.Name, pageRequest.Limit, maximum)
+	}
+	if pageRequest.Strategy == 0 && p.Pageable() == nil && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
+		pageRequest.Strategy = PagingCursor
+	}
+	var diagnostics *ProviderDiagnostics
+	if options.Debug {
+		diagnostics = NewProviderDiagnostics(p.Provider.Type, req.Query, req.Options)
+		pageRequest.Diagnostics = diagnostics
 	}
 	started := time.Now()
-	rows, err := provider.Execute(ctx, ProviderRequest{
-		Connection: p.Provider.Connection,
-		Query:      rendered,
-		Options:    p.Provider.Options,
-		Params:     resolved,
-	})
+	page, err := samplePage(ctx, p, options.Params, pageRequest)
 	duration := time.Since(started)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err)
+		return nil, WithDiagnostics(fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err), diagnostics)
 	}
-	if limit <= 0 {
-		limit = DefaultSampleLimit
-	}
-	truncated := len(rows) > limit
-	if truncated {
-		rows = rows[:limit]
-	}
+	rows := page.Rows
 	if rows == nil {
 		rows = []Row{}
-	}
-	if err := applyRowTransforms(ctx, p, rows); err != nil {
-		return nil, fmt.Errorf("profile %q: apply row transforms: %w", p.Name, err)
 	}
 	return &SampleResult{
 		Rows:          rows,
 		Columns:       InferSampleColumns(rows),
-		RenderedQuery: rendered,
-		Truncated:     truncated,
+		RenderedQuery: req.Query,
+		Truncated:     page.Truncated,
 		DurationMS:    float64(duration) / float64(time.Millisecond),
+		Pagination:    NewPageInfo(pageRequest, page),
+		Diagnostics:   diagnostics.Snapshot(),
 	}, nil
+}
+
+func samplePage(ctx context.Context, profile Profile, params map[string]any, request PageRequest) (Page, error) {
+	for page, err := range ExecutePages(ctx, profile, request, params) {
+		return page, err
+	}
+	return Page{}, nil
 }
 
 func validateSampleReadOnly(providerType, query string, options map[string]any) error {
@@ -312,6 +330,9 @@ func sampleColumnType(value any) ColumnType {
 		if _, err := time.Parse(time.RFC3339Nano, value); err == nil {
 			return ColumnTypeDateTime
 		}
+		if isSampleUUID(value) {
+			return ColumnTypeUUID
+		}
 		return ColumnTypeString
 	case time.Duration:
 		return ColumnTypeDuration
@@ -337,6 +358,22 @@ func sampleColumnType(value any) ColumnType {
 		}
 		return ColumnTypeString
 	}
+}
+
+// isSampleUUID recognizes an identifier by its shape rather than by its name,
+// because the backends disagree on names and only one of them has a type for
+// it: a postgres column reports "UUID" but an OpenSearch field holding the same
+// values is mapped `keyword` like every other string.
+//
+// Only the canonical hyphenated form counts. uuid.Parse also accepts 32 bare
+// hex digits, which is equally the shape of an MD5 digest — and a digest is a
+// value someone might well want to pick from a list.
+func isSampleUUID(value string) bool {
+	if len(value) != 36 {
+		return false
+	}
+	_, err := uuid.Parse(value)
+	return err == nil
 }
 
 func isStructuredSampleType(kind ColumnType) bool {

@@ -143,12 +143,26 @@ var _ = Describe("Session", func() {
 var _ = Describe("sortAndLimit", func() {
 	It("orders numeric strings numerically, not lexicographically", func() {
 		rows := []Row{{"d": "96.8"}, {"d": "136.4"}, {"d": "7"}}
-		Expect(sortAndLimit(rows, "d", 2)).To(Equal([]Row{{"d": "136.4"}, {"d": "96.8"}}))
+		sorted, _ := sortAndLimit(rows, "d", 2)
+		Expect(sorted).To(Equal([]Row{{"d": "136.4"}, {"d": "96.8"}}))
 	})
 
 	It("leaves rows untouched without sortBy or limit", func() {
 		rows := []Row{{"d": 2}, {"d": 1}}
-		Expect(sortAndLimit(rows, "", 0)).To(Equal([]Row{{"d": 2}, {"d": 1}}))
+		sorted, cut := sortAndLimit(rows, "", 0)
+		Expect(sorted).To(Equal([]Row{{"d": 2}, {"d": 1}}))
+		Expect(cut).To(BeFalse())
+	})
+
+	// A snapshot that dropped its tail must not be presented as the whole of it.
+	It("reports that the limit removed rows", func() {
+		_, cut := sortAndLimit([]Row{{"d": 3}, {"d": 2}, {"d": 1}}, "d", 2)
+		Expect(cut).To(BeTrue())
+	})
+
+	It("does not report a limit the rows never reached", func() {
+		_, cut := sortAndLimit([]Row{{"d": 2}, {"d": 1}}, "d", 5)
+		Expect(cut).To(BeFalse())
 	})
 })
 

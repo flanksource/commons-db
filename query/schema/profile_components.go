@@ -1,5 +1,13 @@
 package schema
 
+// ProviderTypeIcon returns the runtime icon name for a provider type, or "" for
+// an unknown one. It is the single source of the provider→glyph mapping: the
+// profile form reads it as x-enum-icons and the sidebar surface reads it through
+// profiles.providerIcon, so a profile wears the same mark in both places.
+func ProviderTypeIcon(providerType string) string {
+	return providerTypeIcons[providerType]
+}
+
 // providerTypeIcons are runtime icon names resolved by clicky-ui's fallback
 // icon provider. They intentionally mirror the profile surface icon families.
 var providerTypeIcons = map[string]string{
@@ -15,6 +23,12 @@ var providerTypeIcons = map[string]string{
 	"opensearch":    "opensearch",
 	"opentelemetry": "opentelemetry",
 	"jaeger":        "activity",
+
+	"cloudwatch":        "aws",
+	"bigquery":          "google-cloud",
+	"gcpcloudlogging":   "google-cloud",
+	"k8s":               "kubernetes",
+	"azureloganalytics": "azure",
 }
 
 // ProfileComponents returns one standalone provider-form component per
@@ -32,7 +46,7 @@ func ProfileComponents() map[string]Schema {
 			},
 			"properties": Schema{
 				"type":       Schema{"type": "string", "title": "Type", "const": typ},
-				"connection": connectionProp(),
+				"connection": connectionProp(typ),
 				"options":    providerOptions(typ),
 			},
 		}
@@ -88,6 +102,7 @@ func providerOptions(typ string) Schema {
 		props["address"] = inlineURLProp("Address", "Inline OpenSearch address used instead of a saved connection")
 		props["index"] = strProp("Index", "Index or index pattern")
 		props["limit"] = strProp("Limit", "Maximum number of hits")
+		props["search"] = searchSpecProp()
 	case "opentelemetry":
 		for _, field := range []string{"format", "index", "dateField", "traceIdField", "spanIdField", "parentIdField", "parentRefType", "serviceField", "operationField"} {
 			props[field] = strProp(titleCase(field), "")
@@ -95,14 +110,79 @@ func providerOptions(typ string) Schema {
 		for _, field := range []string{"statusFields", "selectFields", "sourceExcludes"} {
 			props[field] = Schema{"type": "array", "title": titleCase(field), "items": Schema{"type": "string"}}
 		}
-		props["params"] = Schema{"type": "object", "title": "Provider Params"}
+		props["search"] = searchSpecProp()
 	case "jaeger":
 		props["url"] = inlineURLProp("URL", "Inline Jaeger query URL used instead of a saved connection")
 		for _, field := range []string{"service", "operation", "lookback", "start", "end", "limit", "minDuration", "maxDuration", "tags"} {
 			props[field] = strProp(titleCase(field), "")
 		}
+	case "cloudwatch":
+		props["endpoint"] = inlineURLProp("Endpoint", "Inline CloudWatch endpoint used instead of the region's AWS endpoint")
+		props["logGroup"] = strProp("Log group", "Log group the Insights query runs against")
+		props["region"] = strProp("Region", "Overrides the region on the connection")
+		props["start"] = strProp("Start", "Date math, for example now-1h. Defaults to now-1h — Insights requires a bounded range")
+		props["end"] = strProp("End", "Date math, for example now")
+		props["limit"] = strProp("Limit", "Maximum number of log lines")
+		props["mapping"] = fieldMappingProp()
+	case "gcpcloudlogging":
+		props["project"] = strProp("Project", "Overrides the project on the connection")
+		props["start"] = strProp("Start", "Date math, for example now-1h")
+		props["end"] = strProp("End", "Date math, for example now")
+		props["limit"] = strProp("Limit", "Maximum number of log entries")
+		props["mapping"] = fieldMappingProp()
+	case "bigquery":
+		props["project"] = strProp("Project", "Overrides the project on the connection")
+		// No start/end/limit: the BigQuery request carries only a query, so a
+		// time range has to be written into the SQL itself.
+		props["mapping"] = fieldMappingProp()
+	case "k8s":
+		props["kind"] = Schema{
+			"type": "string", "title": "Kind",
+			"description": "Workload to read logs from; a workload resolves to its current pods",
+			"enum":        []string{"Pod", "Deployment", "StatefulSet", "DaemonSet"},
+		}
+		props["apiVersion"] = strProp("API version", "")
+		props["namespace"] = strProp("Namespace", "Namespace of the workload")
+		props["name"] = strProp("Name", "Name of the workload")
+		props["pods"] = Schema{
+			"type": "array", "title": "Pods",
+			"description": "Resource selectors narrowing which of the workload's pods are read",
+			"items":       Schema{"type": "object"},
+		}
+		props["containers"] = Schema{
+			"type": "array", "title": "Containers",
+			"description": "Match expressions picking which containers of each pod are read",
+			"items":       Schema{"type": "string"},
+		}
+		props["start"] = strProp("Start", "Date math, for example now-1h")
+		props["end"] = strProp("End", "Date math, for example now")
+		props["limit"] = strProp("Limit", "Maximum number of log lines")
+	case "azureloganalytics":
+		props["workspaceID"] = strProp("Workspace ID", "Log Analytics workspace the KQL query runs against")
+		props["start"] = strProp("Start", "Date math, for example now-1h")
+		props["end"] = strProp("End", "Date math, for example now")
+		props["limit"] = strProp("Limit", "Maximum number of rows")
+		props["mapping"] = fieldMappingProp()
 	}
 	return Schema{"type": "object", "title": "Options", "properties": props}
+}
+
+// fieldMappingProp is the logs.FieldMappingConfig form: which source columns
+// carry each canonical log field. Each is a list because backends disagree on
+// the name and the first one present wins.
+func fieldMappingProp() Schema {
+	props := Schema{}
+	for _, field := range []string{"id", "message", "timestamp", "host", "severity", "source", "ignore"} {
+		props[field] = Schema{
+			"type": "array", "title": titleCase(field),
+			"items": Schema{"type": "string"},
+		}
+	}
+	return Schema{
+		"type": "object", "title": "Field mapping",
+		"description": "Maps source columns onto the canonical log fields",
+		"properties":  props,
+	}
 }
 
 // BrowserOptions returns the provider-specific options form used when querying
@@ -114,6 +194,10 @@ func BrowserOptions(typ string) Schema {
 	delete(props, "url")
 	delete(props, "address")
 	delete(props, "type")
+	// endpoint redirects an AWS client the same way url does elsewhere, so it
+	// belongs on the same list — a browser must stay pointed at the connection
+	// the user picked.
+	delete(props, "endpoint")
 	return options
 }
 

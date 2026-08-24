@@ -1,6 +1,7 @@
 package loki
 
 import (
+	"maps"
 	"net/url"
 	"strconv"
 	"time"
@@ -41,7 +42,9 @@ func (t *Response) ToLogResult(mappingConfig logs.FieldMappingConfig) logs.LogRe
 				Count:         1,
 				FirstObserved: time.Unix(0, firstObserved),
 				Message:       v[1],
-				Labels:        result.Stream,
+				// Cloned: every line of a stream would otherwise share one
+				// map, so editing one line's labels would edit them all.
+				Labels: maps.Clone(result.Stream),
 			}
 
 			for k, v := range result.Stream {

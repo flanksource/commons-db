@@ -13,7 +13,6 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/cmd/query/www"
 	dbcontext "github.com/flanksource/commons-db/context"
-	"github.com/flanksource/commons-db/db"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/query"
 	"github.com/spf13/cobra"
@@ -23,6 +22,7 @@ import (
 type ServeOptions struct {
 	Host               string
 	Port               int
+	DatabaseURL        string
 	DataDir            string
 	Dev                bool
 	MaxSessions        int
@@ -32,7 +32,7 @@ type ServeOptions struct {
 
 func DefaultServeOptions() ServeOptions {
 	return ServeOptions{
-		Host: "localhost", Port: 8080, MaxSessions: 5,
+		Host: "localhost", Port: 8080, DatabaseURL: EmbeddedDatabase, MaxSessions: 5,
 		MaxSessionDuration: 15 * time.Minute, SessionRetention: 7 * 24 * time.Hour,
 	}
 }
@@ -49,36 +49,36 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	if err := ensurePrivateDir(configDir); err != nil {
 		return fmt.Errorf("create config dir %q: %w", configDir, err)
 	}
-	dsn, stop, err := db.StartEmbedded(db.EmbeddedConfig{DataDir: resolveDataDir(configDir, options.DataDir)})
-	if err != nil {
-		return fmt.Errorf("start embedded postgres: %w", err)
+	// Serve owns the cluster it starts, so unlike a sub-command it stops it on the
+	// way out. Rebinding the context first keeps the signal-aware ctx underneath
+	// the database handles EnsureDatabase layers on.
+	database := DatabaseOptions{URL: options.DatabaseURL, DataDir: resolveDataDir(configDir, options.DataDir)}
+	if !database.Enabled() {
+		return fmt.Errorf("serve requires a database; --db is empty")
 	}
-	defer func() { _ = stop() }()
-
-	gdb, pool, err := db.SetupDB(dsn, "query")
-	if err != nil {
-		return fmt.Errorf("setup db: %w", err)
-	}
-	defer pool.Close()
-	if err := migrateSchema(ctx, dsn); err != nil {
+	if err := a.Runtime.SetContext(dbcontext.NewContext(ctx)); err != nil {
 		return err
 	}
+	a.Runtime.SetDatabaseOptions(database)
+	if err := a.Runtime.EnsureDatabase(ctx); err != nil {
+		return err
+	}
+	defer func() { _ = a.Runtime.Close() }()
 
-	queryContext := dbcontext.NewContext(ctx).WithDB(gdb, pool).WithConnectionString(dsn)
-	databaseProfiles, err := profiles.NewDBStore(gdb)
+	gdb, err := a.Runtime.Database()
 	if err != nil {
 		return err
+	}
+	queryContext := a.Runtime.Context()
+	store, err := a.Runtime.ProfileStore()
+	if err != nil {
+		return err
+	}
+	databaseProfiles, ok := store.(*profiles.DBStore)
+	if !ok {
+		return fmt.Errorf("serve requires a database-backed profile store, got %T", store)
 	}
 	if err := profiles.Import(ctx, a.fileStore, databaseProfiles); err != nil {
-		return err
-	}
-	if err := a.Runtime.SetDatabase(gdb); err != nil {
-		return err
-	}
-	if err := a.Runtime.SetContext(queryContext); err != nil {
-		return err
-	}
-	if err := a.Runtime.SetProfileStore(databaseProfiles); err != nil {
 		return err
 	}
 	if err := a.Profiles.RegisterDynamic(ctx); err != nil {
@@ -145,7 +145,10 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	mux.Handle("/", ui)
 
 	kube := func() (kubernetes.Interface, error) { return queryContext.LocalKubernetes() }
-	base := newSecretsHandler("/api/v1", queryContext, kube, newSchemaHandler("/api/v1", databaseProfiles, mux))
+	base := newSecretsHandler(secretsHandlerOptions{
+		Prefix: "/api/v1", Context: queryContext, Kube: kube,
+		Next: newSchemaHandler("/api/v1", databaseProfiles, mux),
+	})
 	connectionHandler := a.Connections.Handler("/api/v1", base)
 	profileHandler, err := a.Profiles.Handler("/api/v1", connectionHandler)
 	if err != nil {
@@ -164,7 +167,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 
 	address := fmt.Sprintf("%s:%d", options.Host, options.Port)
 	httpServer := &http.Server{
-		Addr: address, Handler: handler, ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 90 * time.Second,
+		Addr: address, Handler: rpc.Compress(handler), ReadTimeout: 30 * time.Second, WriteTimeout: 0, IdleTimeout: 90 * time.Second,
 	}
 	go func() {
 		<-ctx.Done()

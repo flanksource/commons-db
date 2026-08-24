@@ -256,6 +256,16 @@ func TestProfileStoreSaveRequiresName(t *testing.T) {
 	}
 }
 
+func TestProfileStoreSaveRejectsInvalidColumnPresentation(t *testing.T) {
+	store, _ := NewFileStore(t.TempDir())
+	profile := sampleProfile("Invalid presentation")
+	profile.Columns[0].Unit = "percent"
+
+	if err := store.Save(context.Background(), profile); err == nil {
+		t.Fatal("expected error saving a string column with a numeric unit")
+	}
+}
+
 func TestProfileStoreGetMissing(t *testing.T) {
 	store, _ := NewFileStore(t.TempDir())
 	if _, err := store.Get(context.Background(), "nope"); err == nil {

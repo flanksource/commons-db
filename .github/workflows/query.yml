@@ -68,7 +68,9 @@ jobs:
         run: go work init . ./cmd/query
 
       - name: Use the checked-out parent module
-        run: go work edit -replace=github.com/flanksource/commons-db@v0.1.15=.
+        # Version-less so the replace keeps applying as cmd/query's requirement
+        # moves; pinned to one version it silently stops matching on the next bump.
+        run: go work edit -replace=github.com/flanksource/commons-db=.
 
       - name: Install web dependencies
         run: make -C cmd/query ui-install

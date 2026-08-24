@@ -4,6 +4,7 @@ import {
   ThemeProvider,
   createOperationsApiClient,
   useBrowserRouter,
+  useRouter,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { MonacoProvider } from "@flanksource/clicky-ui/monaco";
@@ -14,22 +15,42 @@ import { namespaceFormExtensions } from "./namespacePicker";
 import { connectionFormActions } from "./connectionActions";
 import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
+import { connectionDashboardResultRenderer } from "./connectionDashboard";
 import { getMonacoWorker } from "./monacoWorkers";
 import { ChatWidget } from "./chatWidget";
 import { profileBuilderFormExtensions } from "./profileBuilder";
+import { esQueryBuilderFormExtensions } from "./esQueryBuilder";
+import { esParamOptionsFormExtensions } from "./esParamOptions";
+import { jsonPathFormExtensions } from "./jsonPathPicker";
 import { BuildProfileButton } from "./buildProfileAction";
+import {
+  EditProfileButton,
+  ProfileEditorPage,
+  isProfileSurface,
+} from "./editProfileAction";
+import { profileEditSurfaceKey } from "./profileEditorModel";
+import { profileRowDetailsResult } from "./profileRowDetails";
+import { ReconcileButton } from "./reconcileAction";
+import { ReconcilePage } from "./reconcilePage";
+import { reconcileSurfaceKey } from "./reconcileModel";
 import {
   configureProfileConnectionForm,
   useProfileConnectionMapping,
 } from "./profileConnectionMapping";
 
-// Compose the form extensions: the namespace picker, plus the secret/workload
-// url selector (which reads the selected namespace from the form's root value).
+// Compose the form extensions: the namespace picker, the secret/workload url
+// selector (which reads the selected namespace from the form's root value), the
+// profile query builder, and the structured OpenSearch filter builder that
+// mounts on provider.options.search in both the create and the edit form.
 const formExtensions = {
+  pre: [...esParamOptionsFormExtensions.pre],
   post: [
     ...namespaceFormExtensions.post,
     ...secretFormExtensions.post,
     ...profileBuilderFormExtensions.post,
+    ...esQueryBuilderFormExtensions.post,
+    ...esParamOptionsFormExtensions.post,
+    ...jsonPathFormExtensions.post,
   ],
 };
 
@@ -63,20 +84,60 @@ const queryClient = new QueryClient();
 // the result renderer so `render: logs` profiles present via clicky-ui LogsTable.
 function Explorer() {
 	const { client, dialog } = useProfileConnectionMapping(baseClient);
+  const pathname = useRouter().pathname;
+  const editingProfile = profileEditSurfaceKey(pathname);
+  const reconcilingProfile = reconcileSurfaceKey(pathname);
   const logsEntityNames = useLogsEntityNames();
   const renderLogsResult = logsResultRenderer(logsEntityNames);
   const renderResult = (context: ResultRenderContext) => {
-    const result = renderLogsResult(context);
-    if (context.surfaceKey !== "profiles") return result;
+    const connectionResult = connectionDashboardResultRenderer(context);
+    if (connectionResult !== context.defaultView) return connectionResult;
+    const defaultResult = renderLogsResult(context);
+    const result =
+      defaultResult === context.defaultView && isProfileSurface(context.surfaceKey)
+        ? profileRowDetailsResult(context, client, context.surfaceKey!)
+        : defaultResult;
+    const action =
+      context.surfaceKey === "profiles" ? (
+        <BuildProfileButton client={client} />
+      ) : isProfileSurface(context.surfaceKey) ? (
+        <>
+          <EditProfileButton client={client} surfaceKey={context.surfaceKey!} />
+          <ReconcileButton client={client} surfaceKey={context.surfaceKey!} />
+        </>
+      ) : null;
+    if (!action) return result;
     return (
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <BuildProfileButton client={client} />
+          {action}
         </div>
-        <div className="min-h-0 flex-1">{result}</div>
+        <div className="flex min-h-0 flex-1 flex-col">{result}</div>
       </div>
     );
   };
+  // The editor is a route of its own rather than a dialog over the explorer:
+  // six sections and a column grid need the whole viewport, a URL, and the back
+  // button. It replaces the shell instead of nesting inside it.
+  if (editingProfile) {
+    return (
+      <>
+        <ProfileEditorPage client={client} surfaceKey={editingProfile} />
+        {dialog}
+      </>
+    );
+  }
+  // Reconciling is a route for the same reason: two schemas, a key being worked
+  // out against them, and a result read as triage all want the whole viewport.
+  if (reconcilingProfile) {
+    return (
+      <>
+        <ReconcilePage client={client} surfaceKey={reconcilingProfile} />
+        {dialog}
+      </>
+    );
+  }
+
   return (
     <>
       <EntityExplorerApp

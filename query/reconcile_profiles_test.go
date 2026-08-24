@@ -1,0 +1,201 @@
+package query_test
+
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/flanksource/commons-db/query"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"sigs.k8s.io/yaml"
+)
+
+// Both sides carry the same identities under different field names, so the join
+// needs one expression that reads either shape — the case ReconcileProfiles
+// exists for.
+func reconcileRows(prefix, field string, count int) []query.Row {
+	rows := make([]query.Row, 0, count)
+	for i := 1; i <= count; i++ {
+		rows = append(rows, query.Row{field: fmt.Sprintf("%s%03d", prefix, i)})
+	}
+	return rows
+}
+
+func reconcileProfile(name, providerType string) query.Profile {
+	return query.Profile{Name: name, Provider: query.ProviderConfig{Type: providerType}}
+}
+
+// orderedProfile names the key column as its order, which is what lets the two
+// sides be merged rather than both read in full.
+func orderedProfile(name, providerType, keyColumn string) query.Profile {
+	return query.Profile{
+		Name:     name,
+		Provider: query.ProviderConfig{Type: providerType},
+		Order:    query.Order{{Column: keyColumn, Unique: true}},
+	}
+}
+
+var _ = Describe("ReconcileProfiles", func() {
+	const keyCEL = `has(row.order_id) ? string(row.order_id) : string(row.order_ref)`
+
+	// A CEL key can be read off a row but not ordered by, so a run using one is
+	// joined by reading both sides in full.
+	run := func(sourceRows, destRows int) *query.ReconcileResult {
+		query.RegisterProvider(&mockProvider{typ: "recon-source", rows: reconcileRows("ord", "order_id", sourceRows)})
+		query.RegisterProvider(&mockProvider{typ: "recon-dest", rows: reconcileRows("ord", "order_ref", destRows)})
+
+		result, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
+			Source: reconcileProfile("orders-emitted", "recon-source"),
+			Dest:   reconcileProfile("orders-ingested", "recon-dest"),
+			Config: query.ReconcileConfig{
+				Dest:          "orders-ingested",
+				ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{CEL: keyCEL}},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		return result
+	}
+
+	It("runs both profiles and joins them on the shared key", func() {
+		result := run(4, 4)
+
+		Expect(result.Source).To(Equal("orders-emitted"))
+		Expect(result.Dest).To(Equal("orders-ingested"))
+		Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 4}))
+		Expect(result.Bounded()).To(BeFalse())
+	})
+
+	It("says it buffered a CEL-keyed run, and why", func() {
+		result := run(2, 2)
+		Expect(result.Mode).To(Equal(query.ReconcileBuffered))
+		Expect(result.BufferedReason).To(ContainSubstring("CEL expression"))
+	})
+
+	It("says nothing about bounds when both sides were read in full", func() {
+		Expect(run(2, 2).Pretty().String()).ToNot(ContainSubstring("stopped short"))
+	})
+
+	It("fails loudly when a side cannot run", func() {
+		query.RegisterProvider(&mockProvider{typ: "recon-source", rows: reconcileRows("ord", "order_id", 1)})
+
+		_, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
+			Source: reconcileProfile("orders-emitted", "recon-source"),
+			Dest:   reconcileProfile("orders-ingested", "provider-that-is-not-registered"),
+			Config: query.ReconcileConfig{Dest: "orders-ingested", ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{CEL: keyCEL}}},
+		})
+		Expect(err).To(MatchError(ContainSubstring(`dest profile "orders-ingested"`)))
+	})
+
+	Describe("merge join", func() {
+		mergeRun := func(keys *query.KeyRange, sourceRows, destRows int) *query.ReconcileResult {
+			query.RegisterProvider(&mockProvider{typ: "merge-source", rows: reconcileRows("ord", "order_id", sourceRows)})
+			query.RegisterProvider(&mockProvider{typ: "merge-dest", rows: reconcileRows("ord", "order_id", destRows)})
+
+			result, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
+				Source: orderedProfile("orders-emitted", "merge-source", "order_id"),
+				Dest:   orderedProfile("orders-ingested", "merge-dest", "order_id"),
+				Config: query.ReconcileConfig{
+					Dest: "orders-ingested",
+					ReconcileSpec: query.ReconcileSpec{
+						Range: keys,
+						Key:   query.KeySpec{Columns: []string{"order_id"}},
+					},
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			return result
+		}
+
+		It("merges when the key is the order", func() {
+			result := mergeRun(nil, 4, 4)
+			Expect(result.Mode).To(Equal(query.ReconcileMerged))
+			Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 4}))
+		})
+
+		It("finds the keys one side is missing", func() {
+			result := mergeRun(nil, 5, 3)
+			Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 3, OnlySource: 2}))
+		})
+
+		// A key range cuts both sides at the same keys, so unlike a per-side row
+		// cap it cannot turn a matched key into a one-sided one.
+		It("covers exactly the keys in the range", func() {
+			result := mergeRun(&query.KeyRange{From: "ord002", To: "ord004"}, 5, 5)
+			Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 2}))
+			for _, row := range result.Rows {
+				Expect(row.Key).To(BeElementOf("ord002", "ord003"))
+			}
+		})
+
+		It("reports the range it covered", func() {
+			keys := &query.KeyRange{From: "ord002", To: "ord004"}
+			Expect(mergeRun(keys, 5, 5).Range).To(Equal(keys))
+			Expect(keys.String()).To(Equal("keys from ord002 up to ord004"))
+		})
+
+		// The bound that used to manufacture findings: two sides cut at N rows
+		// each are two different key sets unless they happen to be identical.
+		// A range narrows both sides to the same keys, so a lopsided pair of
+		// datasets still reconciles cleanly inside it.
+		It("does not invent one-sided keys when the sides differ in size", func() {
+			result := mergeRun(&query.KeyRange{From: "ord001", To: "ord003"}, 2, 20)
+			Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 2}))
+		})
+
+		It("refuses a range that covers no keys", func() {
+			Expect((&query.KeyRange{From: "b", To: "a"}).Validate()).To(
+				MatchError(ContainSubstring("covers no keys")))
+		})
+	})
+
+	Describe("Mergeable", func() {
+		It("refuses a profile ordered by something other than the key", func() {
+			run := query.ReconcileRun{
+				Source: orderedProfile("a", "merge-source", "created_at"),
+				Dest:   orderedProfile("b", "merge-dest", "order_id"),
+				Config: query.ReconcileConfig{ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{Columns: []string{"order_id"}}}},
+			}
+			mergeable, why := run.Mergeable()
+			Expect(mergeable).To(BeFalse())
+			Expect(why).To(ContainSubstring("does not begin with the key"))
+		})
+
+		It("refuses a profile with no declared order", func() {
+			run := query.ReconcileRun{
+				Source: reconcileProfile("a", "merge-source"),
+				Dest:   orderedProfile("b", "merge-dest", "order_id"),
+				Config: query.ReconcileConfig{ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{Columns: []string{"order_id"}}}},
+			}
+			mergeable, why := run.Mergeable()
+			Expect(mergeable).To(BeFalse())
+			Expect(why).To(ContainSubstring("no order is declared"))
+		})
+	})
+})
+
+var _ = Describe("ReconcileConfig", func() {
+	config := query.ReconcileConfig{
+		Dest: "orders-ingested",
+		ReconcileSpec: query.ReconcileSpec{
+			Range:      &query.KeyRange{From: "ord100", To: "ord200"},
+			Key:        query.KeySpec{CEL: `row.id`},
+			TimeColumn: "created_at",
+		},
+	}
+
+	It("promotes the join spec so a stored reconcile is one flat block", func() {
+		encoded, err := json.Marshal(config)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(encoded)).To(Equal(
+			`{"dest":"orders-ingested","range":{"from":"ord100","to":"ord200"},"key":{"cel":"row.id"},"timeColumn":"created_at"}`))
+	})
+
+	It("round-trips through a profile document", func() {
+		document, err := yaml.Marshal(query.Profile{Name: "orders-emitted", Reconcile: &config})
+		Expect(err).ToNot(HaveOccurred())
+
+		var decoded query.Profile
+		Expect(yaml.Unmarshal(document, &decoded)).To(Succeed())
+		Expect(decoded.Reconcile).To(Equal(&config))
+	})
+})

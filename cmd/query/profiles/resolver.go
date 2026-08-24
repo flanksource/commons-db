@@ -66,6 +66,11 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 	if overlay.Namespace != "" {
 		merged.Namespace = overlay.Namespace
 	}
+	// An importing profile inherits its parent's icon unless it names its own,
+	// so a family like jms.* keeps one mark without repeating it in every file.
+	if overlay.Icon != "" {
+		merged.Icon = overlay.Icon
+	}
 	if overlay.Provider.Type != "" {
 		merged.Provider.Type = overlay.Provider.Type
 	}
@@ -85,6 +90,13 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 	}
 	if len(overlay.Ignore) > 0 {
 		merged.Ignore = slices.Clone(overlay.Ignore)
+	}
+	// An order is one choice of sequence, not a set of columns to blend: half of
+	// one order and half of another is an order the author never wrote, and its
+	// tiebreaker may not be last — which is exactly the state that makes paging
+	// silently unstable.
+	if len(overlay.Order) > 0 {
+		merged.Order = slices.Clone(overlay.Order)
 	}
 	if len(overlay.Processors) > 0 {
 		merged.Processors = slices.Clone(overlay.Processors)
@@ -111,7 +123,33 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 		merged.Trace = nil
 		merged.Top = overlay.Top
 	}
+	merged.Replay = query.MergeReplaySpec(merged.Replay, overlay.Replay)
+	merged.Reconcile = query.MergeReconcileConfig(merged.Reconcile, overlay.Reconcile)
+	merged.Limits = mergeRowLimits(merged.Limits, overlay.Limits)
 	return merged
+}
+
+// mergeRowLimits layers the caps one at a time, like provider options: a
+// profile that imports a base to raise only its export ceiling keeps the page
+// the base declared.
+func mergeRowLimits(base, overlay *query.RowLimits) *query.RowLimits {
+	if overlay == nil {
+		return base
+	}
+	if base == nil {
+		return overlay
+	}
+	merged := *base
+	if overlay.PageSize != 0 {
+		merged.PageSize = overlay.PageSize
+	}
+	if overlay.MaxPageSize != 0 {
+		merged.MaxPageSize = overlay.MaxPageSize
+	}
+	if overlay.MaxExportRows != 0 {
+		merged.MaxExportRows = overlay.MaxExportRows
+	}
+	return &merged
 }
 
 func mergeMap(base, overlay map[string]any) map[string]any {
@@ -162,6 +200,9 @@ func mergeParam(base, overlay query.ParamDef) query.ParamDef {
 	}
 	if len(overlay.Options) > 0 {
 		base.Options = slices.Clone(overlay.Options)
+	}
+	if overlay.Field != "" {
+		base.Field = overlay.Field
 	}
 	base.Required = base.Required || overlay.Required
 	if overlay.Description != "" {

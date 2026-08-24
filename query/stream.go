@@ -26,7 +26,7 @@ type StreamProvider interface {
 // session in the starting state. ctx must be a long-lived application context;
 // the run is bounded only by the session's clamped MaxDuration or Stop().
 func ExecuteStream(ctx context.Context, reg *SessionRegistry, p Profile, params ...map[string]any) (*Session, error) {
-	if err := p.ValidateKind(); err != nil {
+	if err := p.Validate(); err != nil {
 		return nil, err
 	}
 	if p.Kind() == KindQuery {
@@ -39,18 +39,18 @@ func ExecuteStream(ctx context.Context, reg *SessionRegistry, p Profile, params 
 	if len(params) > 0 {
 		supplied = params[0]
 	}
-	resolved, err := resolveParams(p.Params, supplied)
+	resolved, filters, err := resolveProfileInput(p, supplied)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 
 	if p.Kind() == KindTrace {
-		return startTrace(ctx, reg, p, resolved)
+		return startTrace(ctx, reg, p, resolved, filters)
 	}
-	return startTop(ctx, reg, p, resolved)
+	return startTop(ctx, reg, p, resolved, filters)
 }
 
-func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any) (*Session, error) {
+func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Session, error) {
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return nil, err
@@ -59,10 +59,11 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 	if !ok {
 		return nil, fmt.Errorf("profile %q: provider %q does not support streaming", p.Name, p.Provider.Type)
 	}
-	rendered, err := renderQuery(ctx, p.Query, resolved)
+	req, err := buildProviderRequest(ctx, p.Provider, p.Query, p.Params, resolved)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	req.Filters = filters
 
 	session := newRegisteredSession(reg, p, resolved, reg.ClampEvents(p.Trace.EventLimit()))
 	if err := reg.Add(session); err != nil {
@@ -71,12 +72,7 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 	runCtx, cancel := ctx.WithTimeout(reg.ClampDuration(p.Trace.DurationLimit()))
 	session.setCancel(cancel)
 
-	go runTrace(runCtx, cancel, sp, session, p, ProviderRequest{
-		Connection: p.Provider.Connection,
-		Query:      rendered,
-		Options:    p.Provider.Options,
-		Params:     resolved,
-	})
+	go runTrace(runCtx, cancel, sp, session, p, req)
 	return session, nil
 }
 
@@ -87,12 +83,16 @@ func runTrace(ctx context.Context, cancel stdcontext.CancelFunc, sp StreamProvid
 	var emitErr error
 	var once sync.Once
 	err := sp.Stream(ctx, req, func(row Row) {
-		rows := []Row{row}
-		if cerr := applyRowTransforms(ctx, p, rows); cerr != nil {
+		rows, _, cerr := applyRowTransforms(ctx, p, []Row{row})
+		if cerr != nil {
 			once.Do(func() {
 				emitErr = fmt.Errorf("profile %q: %w", p.Name, cerr)
 				cancel()
 			})
+			return
+		}
+		// A filtered-out event is simply not emitted.
+		if len(rows) == 0 {
 			return
 		}
 		s.Emit(Event{Row: rows[0]})
@@ -103,7 +103,7 @@ func runTrace(ctx context.Context, cancel stdcontext.CancelFunc, sp StreamProvid
 	s.markDone(normalizeStreamErr(err))
 }
 
-func startTop(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any) (*Session, error) {
+func startTop(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Session, error) {
 	if _, err := GetProvider(p.Provider.Type); err != nil {
 		return nil, err
 	}
@@ -114,18 +114,18 @@ func startTop(ctx context.Context, reg *SessionRegistry, p Profile, resolved map
 	runCtx, cancel := ctx.WithTimeout(reg.ClampDuration(p.Top.DurationLimit()))
 	session.setCancel(cancel)
 
-	go runTop(runCtx, cancel, session, p, resolved)
+	go runTop(runCtx, cancel, session, p, resolved, filters)
 	return session, nil
 }
 
-func runTop(ctx context.Context, cancel stdcontext.CancelFunc, s *Session, p Profile, resolved map[string]any) {
+func runTop(ctx context.Context, cancel stdcontext.CancelFunc, s *Session, p Profile, resolved map[string]any, filters []ColumnFilterValue) {
 	defer cancel()
 	s.markRunning()
 
 	ticker := time.NewTicker(p.Top.TickInterval())
 	defer ticker.Stop()
 	for {
-		result, err := executeResolved(ctx, p, resolved)
+		result, err := executeResolved(ctx, p, resolved, filters)
 		if err != nil {
 			if norm := normalizeStreamErr(err); norm != nil {
 				s.Emit(Event{Error: norm.Error()})
