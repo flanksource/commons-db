@@ -102,6 +102,27 @@ output: [table, html]
 })
 
 var _ = Describe("Execute", func() {
+	It("separates native column filters from declared template parameters", func() {
+		provider := &mockProvider{typ: "opensearch"}
+		query.RegisterProvider(provider)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "filtered logs",
+			Provider: query.ProviderConfig{Type: provider.typ},
+			Params:   []query.ParamDef{{Name: "namespace"}},
+			Columns:  []query.ColumnDef{{Name: "service"}},
+		}, map[string]any{
+			"namespace":      "prod",
+			"filter.service": "payments,!worker",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(provider.last.Params).To(Equal(map[string]any{"namespace": "prod"}))
+		Expect(provider.last.Filters).To(Equal([]query.ColumnFilterValue{{
+			Column: "service", Key: "filter.service", Field: "service", Kind: query.ColumnFilterKindTerms,
+			Include: []string{"payments"}, Exclude: []string{"worker"},
+		}}))
+	})
+
 	It("passes resolved params to providers and applies ordered aliases before ignore and columns", func() {
 		provider := &mockProvider{typ: "exec-row-pipeline", rows: []query.Row{{
 			"input.xml": "<Policy><Number>P-7</Number></Policy>",
@@ -214,5 +235,132 @@ var _ = Describe("Execute", func() {
 			Provider: query.ProviderConfig{Type: "missing-provider"},
 		})
 		Expect(err).To(MatchError(ContainSubstring("no data provider registered")))
+	})
+})
+
+// Templating is a property of the execution config, not of one provider: the
+// query, every provider's options and the connection reference all interpolate
+// the resolved params.
+var _ = Describe("param templating", func() {
+	It("renders the query, the options and the connection for any provider type", func() {
+		provider := &mockProvider{typ: "template-breadth"}
+		query.RegisterProvider(provider)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name: "templated",
+			Provider: query.ProviderConfig{
+				Type:       provider.typ,
+				Connection: "connection://{{.params.env}}-warehouse",
+				Options: map[string]any{
+					"database": "{{.params.tenant}}_reporting",
+					"service":  "$(.params.tenant)-api",
+					"body":     `{"tenant":"{{.params.tenant}}"}`,
+					"start":    "now-1h",
+					"limit":    500,
+					"headers":  map[string]any{"x-tenant": "{{.params.tenant}}"},
+					"fields":   []any{"{{.params.tenant}}.id", "name"},
+				},
+			},
+			Query:  "select * from orders where tenant = '{{.params.tenant}}'",
+			Params: []query.ParamDef{{Name: "tenant"}, {Name: "env", Default: "prod"}},
+		}, map[string]any{"tenant": "kenya"})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(provider.last.Query).To(Equal("select * from orders where tenant = 'kenya'"))
+		Expect(provider.last.Connection).To(Equal("connection://prod-warehouse"))
+		Expect(provider.last.Options).To(Equal(map[string]any{
+			"database": "kenya_reporting",
+			"service":  "kenya-api",
+			"body":     `{"tenant":"kenya"}`,
+			"start":    "now-1h",
+			"limit":    500,
+			"headers":  map[string]any{"x-tenant": "kenya"},
+			"fields":   []any{"kenya.id", "name"},
+		}))
+		Expect(provider.last.TemplatedParams).To(Equal([]string{"env", "tenant"}))
+	})
+
+	It("reports no templated params when nothing is interpolated", func() {
+		provider := &mockProvider{typ: "template-none"}
+		query.RegisterProvider(provider)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "untemplated",
+			Provider: query.ProviderConfig{Type: provider.typ, Options: map[string]any{"database": "reporting"}},
+			Query:    "select 1",
+			Params:   []query.ParamDef{{Name: "tenant", Default: "kenya"}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(provider.last.TemplatedParams).To(BeEmpty())
+	})
+
+	It("fails naming the field and the param when an option references a param with no value", func() {
+		provider := &mockProvider{typ: "template-missing-param"}
+		query.RegisterProvider(provider)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "missing param",
+			Provider: query.ProviderConfig{Type: provider.typ, Options: map[string]any{"database": "{{.params.tenant}}_reporting"}},
+		})
+		Expect(err).To(MatchError(ContainSubstring("provider.options.database")))
+		Expect(err).To(MatchError(ContainSubstring(`param "tenant"`)))
+	})
+
+	It("renders a context SubQuery against the parent's params", func() {
+		query.RegisterProvider(&mockProvider{typ: "template-sub-main"})
+		secondary := &mockProvider{typ: "template-sub-context", rows: []query.Row{{"policy": "P-1"}}}
+		query.RegisterProvider(secondary)
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name:     "templated context",
+			Provider: query.ProviderConfig{Type: "template-sub-main"},
+			Params:   []query.ParamDef{{Name: "tenant", Default: "kenya"}},
+			Context: map[string]query.SubQuery{
+				"Policy": {
+					Provider: query.ProviderConfig{Type: secondary.typ, Options: map[string]any{"index": "{{.params.tenant}}-policies"}},
+					Query:    "select policy for {{.params.tenant}}",
+				},
+			},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(secondary.last.Query).To(Equal("select policy for kenya"))
+		Expect(secondary.last.Options).To(HaveKeyWithValue("index", "kenya-policies"))
+	})
+})
+
+// Execute is what every buffered caller reaches — the CLI, a replay, a reconcile
+// that cannot merge. "Read everything" against a source with more than fits is
+// not a thing any of them can do, so the read stops at the profile's own export
+// ceiling and says that it did. A bounded read that reports nothing is
+// indistinguishable from a small table, which is the defect this pins.
+var _ = Describe("Execute row ceiling", func() {
+	profile := func(rows int, limits *query.RowLimits) query.Profile {
+		provider := &mockProvider{typ: "ceiling-mock", rows: make([]query.Row, rows)}
+		for i := range provider.rows {
+			provider.rows[i] = query.Row{"id": i + 1}
+		}
+		query.RegisterProvider(provider)
+		return query.Profile{Name: "ceiling", Provider: query.ProviderConfig{Type: provider.typ}, Limits: limits}
+	}
+
+	It("stops at the profile's export ceiling and reports it", func() {
+		result, err := query.Execute(context.New(), profile(50, &query.RowLimits{MaxExportRows: 20}))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(20))
+		Expect(result.Truncated).To(BeTrue())
+	})
+
+	It("reads a result that fits without claiming it was cut", func() {
+		result, err := query.Execute(context.New(), profile(20, &query.RowLimits{MaxExportRows: 20}))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(20))
+		Expect(result.Truncated).To(BeFalse())
+	})
+
+	It("takes the default ceiling when the profile sets none", func() {
+		result, err := query.Execute(context.New(), profile(10, nil))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(10))
+		Expect(result.Truncated).To(BeFalse())
 	})
 })

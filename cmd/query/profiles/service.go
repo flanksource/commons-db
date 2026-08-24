@@ -2,9 +2,11 @@ package profiles
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/flanksource/clicky"
@@ -20,18 +22,41 @@ type StoreProvider func() (Store, error)
 type ContextProvider func() dbcontext.Context
 type BodyDecoder func(context.Context, map[string]any) (map[string]any, error)
 
+// DecodeRequestBody is the BodyDecoder for a service hosted by clicky's RPC
+// layer: it reads the in-flight request's JSON body, falling back to the
+// arguments clicky already decoded when there is no request in context (a CLI
+// invocation, or a call made directly in a test).
+//
+// Every embedder needs exactly this, so it ships here rather than being
+// reimplemented — slightly differently — in each one.
+func DecodeRequestBody(ctx context.Context, fallback map[string]any) (map[string]any, error) {
+	request, ok := rpc.RequestFromContext(ctx)
+	if !ok || request.Body == nil {
+		return fallback, nil
+	}
+	var body map[string]any
+	if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+		return nil, fmt.Errorf("decode request body: %w", err)
+	}
+	return body, nil
+}
+
 type Options struct {
-	Store      StoreProvider
-	Context    ContextProvider
-	DecodeBody BodyDecoder
+	Store             StoreProvider
+	Context           ContextProvider
+	DecodeBody        BodyDecoder
+	Snapshots         SnapshotService
+	OpenAPIExtensions []OpenAPIExtension
 }
 
 type Service struct {
-	store      StoreProvider
-	context    ContextProvider
-	decodeBody BodyDecoder
-	mu         sync.Mutex
-	registered map[string]struct{}
+	store             StoreProvider
+	context           ContextProvider
+	decodeBody        BodyDecoder
+	snapshots         SnapshotService
+	openAPIExtensions []OpenAPIExtension
+	mu                sync.Mutex
+	registered        map[string]struct{}
 }
 
 func New(options Options) (*Service, error) {
@@ -46,19 +71,51 @@ func New(options Options) (*Service, error) {
 	}
 	return &Service{
 		store: options.Store, context: options.Context, decodeBody: options.DecodeBody,
-		registered: map[string]struct{}{},
+		snapshots:         options.Snapshots,
+		openAPIExtensions: append([]OpenAPIExtension(nil), options.OpenAPIExtensions...),
+		registered:        map[string]struct{}{},
 	}, nil
+}
+
+func (s *Service) SetSnapshots(service SnapshotService) {
+	s.snapshots = service
 }
 
 // profileSurfaceParent groups every per-profile dynamic entity under one sidebar
 // section. It is the x-clicky-parent of each generated profile entity.
 const profileSurfaceParent = "profiles"
 
+// profilePathDelimiters are the characters a profile name uses to encode its
+// place in the hierarchy: `jms.incoming.disbursements` and `logs/api` both nest
+// three and two levels deep. A hyphen is deliberately absent — it is an ordinary
+// name character, and splitting on it would shatter `remote-debugger`.
+const profilePathDelimiters = "./"
+
+// profileSurfacePath is the x-clicky-path a profile surface carries: its name
+// split on the delimiters above and rejoined with clicky's wire separator, so
+// the frontend nests the sidebar without knowing this convention exists.
+func profileSurfacePath(name string) string {
+	return entity.JoinPath(entity.SplitPath(name, profilePathDelimiters))
+}
+
 // profileItem adapts a query.Profile to clicky's EntityItem. The embedded Profile
 // is promoted in JSON, so list/get responses carry the full definition (used by
 // the UI to pre-fill the edit form).
 type profileItem struct {
 	query.Profile
+
+	// Follow reports whether this profile's provider can tail its source rather
+	// than answer once and stop — what decides whether the browser offers a
+	// Follow control instead of one that could only fail. It is derived rather
+	// than authored, and so lives on the transport item and not on the profile
+	// document, where an author could assert a capability the provider lacks.
+	Follow bool `json:"follow,omitempty"`
+}
+
+// newProfileItem is the only way a profileItem is built, so no response can be
+// served with a derived capability left at its zero value.
+func newProfileItem(p query.Profile) profileItem {
+	return profileItem{Profile: p, Follow: query.SupportsStreaming(p.Provider.Type)}
 }
 
 func (p profileItem) GetID() string   { return p.Name }
@@ -73,6 +130,8 @@ func (p profileItem) Columns() []api.ColumnDef {
 		api.Column("name").Label("Name").Style("font-bold").Build(),
 		api.Column("type").Label("Type").Build(),
 		api.Column("connection").Label("Connection").Style("text-muted").Build(),
+		api.Column("access").Label("Access").Build(),
+		api.Column("expires").Label("Expires").Style("text-muted").Build(),
 		api.Column("query").Label("Query").MaxWidth(60).Style("text-muted").Build(),
 	}
 }
@@ -83,8 +142,17 @@ func (p profileItem) Row() map[string]any {
 		"name":       p.Name,
 		"type":       p.Provider.Type,
 		"connection": p.Provider.Connection,
+		"access":     profileAccess(p.Profile),
+		"expires":    p.ExpiresAt,
 		"query":      p.Query,
 	}
+}
+
+func profileAccess(profile query.Profile) string {
+	if profile.ReadOnly {
+		return "read-only"
+	}
+	return "editable"
 }
 
 // profileListOpts are the (currently empty) list options for the profile entity.
@@ -95,7 +163,13 @@ type profileListOpts struct{}
 // handlers so the nested profile body (provider/params/columns) survives via
 // rpc.RequestFromContext instead of the executor's flag-flattening. Execution
 // (GET /{name}?params) is served by execHandler and schemas by schemaHandler.
+//
+// It also registers the profile family, which is the route each individual
+// profile answers on — see RegisterFamily. The family reads the store through
+// the same provider this service does, so swapping the YAML store for the
+// database one at serve time needs no re-registration.
 func (s *Service) RegisterClicky() {
+	s.RegisterFamily()
 	clicky.NewEntity[profileItem, profileListOpts, profileItem]("profiles").
 		List(func(profileListOpts) ([]profileItem, error) {
 			store, err := s.store()
@@ -108,7 +182,7 @@ func (s *Service) RegisterClicky() {
 			}
 			items := make([]profileItem, len(ps))
 			for i, p := range ps {
-				items[i] = profileItem{p}
+				items[i] = newProfileItem(p)
 			}
 			return items, nil
 		}).
@@ -117,19 +191,71 @@ func (s *Service) RegisterClicky() {
 			if err != nil {
 				return profileItem{}, err
 			}
-			return profileItem{p}, nil
+			return newProfileItem(p), nil
 		}).
 		CreateWithContext(func(ctx context.Context, body map[string]any) (profileItem, error) {
 			profile, err := s.Save(ctx, body, "")
-			return profileItem{profile}, err
+			return newProfileItem(profile), err
 		}).
 		UpdateWithContext(func(ctx context.Context, id string, body map[string]any) (profileItem, error) {
 			profile, err := s.Save(ctx, body, id)
-			return profileItem{profile}, err
+			return newProfileItem(profile), err
 		}).
 		DeleteWithContext(func(ctx context.Context, id string) error {
 			return s.Delete(ctx, id)
 		}).
+		WithAction(entity.ActionWithFlagsAndContext("replay", ReplayFlags{},
+			func(ctx context.Context, id string, flagMap map[string]string) (ReplayResult, error) {
+				options, err := decodeActionFlags[ReplayFlags](flagMap)
+				if err != nil {
+					return ReplayResult{}, err
+				}
+				return s.Replay(ctx, id, options)
+			}).
+			WithShort("Turn one result row back into its outbound HTTP request and preview or send it").
+			// Replaying drives a real side effect into a real system, so the
+			// action asks even where the app's default policy would not.
+			WithToolPermission(entity.ToolPermissionAsk)).
+		WithAction(entity.ActionWithFlagsAndContext("reconcile", ReconcileFlags{},
+			func(ctx context.Context, id string, flagMap map[string]string) (ReconcileSnapshotDescriptor, error) {
+				options, err := decodeActionFlags[ReconcileFlags](flagMap)
+				if err != nil {
+					return ReconcileSnapshotDescriptor{}, err
+				}
+				return s.ReconcileSnapshot(ctx, id, options)
+			}).
+			WithShort("Join two profiles and materialize an expiring result snapshot")).
+		WithAction(entity.ActionWithFlagsAndContext("reconcile-materialize", ReconcileMaterializeOptions{},
+			func(ctx context.Context, _ string, flagMap map[string]string) (ReconcileSnapshotDescriptor, error) {
+				options, err := decodeActionFlags[ReconcileMaterializeOptions](flagMap)
+				if err != nil {
+					return ReconcileSnapshotDescriptor{}, err
+				}
+				return s.MaterializeReconcile(ctx, options)
+			}).WithShort("Materialize transformed or projected reconciliation rows")).
+		WithAction(entity.ActionWithFlagsAndContext("reconcile-snapshot", ReconcileSnapshotFlags{},
+			func(ctx context.Context, id string, flagMap map[string]string) (ReconcileSnapshotDescriptor, error) {
+				options, err := decodeActionFlags[ReconcileSnapshotFlags](flagMap)
+				if err != nil {
+					return ReconcileSnapshotDescriptor{}, err
+				}
+				return s.GetReconcileSnapshot(ctx, id, options)
+			}).
+			WithShort("Read a stored reconciliation snapshot by id").
+			// Reading a stored snapshot is safe and repeatable, and its URL is a
+			// link someone bookmarks — so it is a GET, not the POST every other
+			// action defaults to.
+			WithMethod(http.MethodGet)).
+		WithAction(entity.ActionWithFlagsAndContext("run", RunFlags{},
+			func(ctx context.Context, id string, flagMap map[string]string) (*RunResult, error) {
+				options, err := decodeActionFlags[RunFlags](flagMap)
+				if err != nil {
+					return nil, err
+				}
+				return s.Run(ctx, id, options)
+			}).
+			WithShort("Read one page of this profile, or every page with --all")).
+		Filters(profileFilter{service: s}).
 		Register()
 }
 
@@ -139,6 +265,14 @@ func (s *Service) Save(ctx context.Context, body map[string]any, id string) (que
 	b, err := s.decodeBody(ctx, body)
 	if err != nil {
 		return query.Profile{}, err
+	}
+	b = cloneBody(b)
+	replaceExisting, err := updateReplaceExisting(b)
+	if err != nil {
+		return query.Profile{}, err
+	}
+	if id == "" && replaceExisting {
+		return query.Profile{}, fmt.Errorf("replaceExisting is only valid when updating a profile")
 	}
 	p, err := profileFromBody(b)
 	if err != nil && id != "" {
@@ -152,10 +286,36 @@ func (s *Service) Save(ctx context.Context, body map[string]any, id string) (que
 	if err != nil {
 		return query.Profile{}, err
 	}
-	if err := store.Save(ctx, p); err != nil {
+	if id != "" {
+		err = store.Update(ctx, id, p, UpdateOptions{ReplaceExisting: replaceExisting})
+	} else {
+		err = store.Save(ctx, p)
+	}
+	if err != nil {
 		return query.Profile{}, err
 	}
 	return p, nil
+}
+
+func cloneBody(body map[string]any) map[string]any {
+	cloned := make(map[string]any, len(body))
+	for key, value := range body {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func updateReplaceExisting(body map[string]any) (bool, error) {
+	raw, exists := body["replaceExisting"]
+	delete(body, "replaceExisting")
+	if !exists {
+		return false, nil
+	}
+	replace, ok := raw.(bool)
+	if !ok {
+		return false, fmt.Errorf("replaceExisting must be a boolean")
+	}
+	return replace, nil
 }
 
 func (s *Service) List(ctx context.Context) ([]query.Profile, error) {
@@ -174,12 +334,14 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	return store.Delete(ctx, name)
 }
 
-// registerProfileEntities registers one clicky dynamic entity per stored profile
-// so each profile appears as its own sidebar surface (with a provider-derived
-// icon) and is executable: the entity's List runs the profile and returns its
-// rows. Entities are snapshotted at startup; a newly created profile needs a
-// restart to appear as its own surface (it still executes via execHandler and
-// shows in the aggregate list until then).
+// RegisterDynamic registers one clicky dynamic entity per stored profile, which
+// is what puts each profile in the generated CLI: GenerateCLI walks the entity
+// registry, so a profile absent from it has no `query profile-<slug>` command.
+//
+// The registry is a startup snapshot and cannot be otherwise — GenerateCLI has
+// already run by the time a profile is created. That is what RegisterFamily is
+// for: over HTTP a profile is resolved per request and needs no entry here. The
+// two are not alternatives, they serve different consumers.
 func (s *Service) RegisterDynamic(ctx context.Context) error {
 	store, err := s.store()
 	if err != nil {
@@ -195,6 +357,10 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
+		bindings, err := resolved.Profile.ColumnFilterBindings()
+		if err != nil {
+			return fmt.Errorf("build filters for profile %q: %w", name, err)
+		}
 		schemaJSON, err := profileEntitySchema(resolved.Profile)
 		if err != nil {
 			return fmt.Errorf("build entity schema for profile %q: %w", name, err)
@@ -202,7 +368,55 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 		if !s.markRegistered(name) {
 			continue
 		}
-		entity.NewDynamicEntity("profile-"+slugify(name), schemaJSON).
+		for _, binding := range bindings {
+			filterName := profileFilterName(resolved.Profile.Name, binding.Column)
+			if _, exists := entity.GetFilter(filterName); exists {
+				s.unmarkRegistered(name)
+				return fmt.Errorf("profile filter %q is already registered", filterName)
+			}
+		}
+		for _, binding := range bindings {
+			// A registered filter is what tells the browser which control to render,
+			// so every binding registers — including the ones with nothing to
+			// enumerate. A range, a date bound and a toggle are typed rather than
+			// chosen from, and their empty option set is the accurate answer to
+			// "what can this be filtered to": type a value.
+			source := entity.FilterSource(entity.StaticOptions(nil))
+			if binding.Lookup {
+				source = profileFilterSource{service: s, profileName: name, key: binding.Key}
+			}
+			entity.RegisterFilter(entity.NamedFilter{
+				Name:  profileFilterName(resolved.Profile.Name, binding.Column),
+				Label: binding.Label, Type: binding.ControlType(), Multi: binding.Multi,
+				Limit:  filterLookupLimit(binding),
+				Source: source,
+			})
+		}
+		runtimeBindings, err := resolved.Profile.RuntimeFilterBindings()
+		if err != nil {
+			return fmt.Errorf("build runtime filters for profile %q: %w", name, err)
+		}
+		inputBindings := append(resolved.Profile.ParamFilterBindings(), runtimeBindings...)
+		// Bound params and runtime controls filter inputs the rows do not carry.
+		for _, binding := range inputBindings {
+			filterName := profileParamFilterName(resolved.Profile.Name, binding.Key)
+			if _, exists := entity.GetFilter(filterName); exists {
+				s.unmarkRegistered(name)
+				return fmt.Errorf("profile filter %q is already registered", filterName)
+			}
+			entity.RegisterFilter(entity.NamedFilter{
+				Name: filterName, Label: binding.Label, Type: binding.ControlType(), Multi: binding.Multi,
+				Limit:  filterLookupLimit(binding),
+				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
+			})
+		}
+		builder := entity.NewDynamicEntity(profileSurfaceKey(name), schemaJSON)
+		// A param filters on an input the rows never carry, so it has no schema
+		// property to bind through; it is offered by key instead.
+		for _, binding := range inputBindings {
+			builder = builder.Filter(binding.Key, profileParamFilterName(resolved.Profile.Name, binding.Key))
+		}
+		builder.
 			List(func(_ context.Context, opts map[string]string) ([]map[string]any, error) {
 				store, err := s.store()
 				if err != nil {
@@ -215,9 +429,17 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 				// The base profile flow needs no database; only postgres/sqlite
 				// processors do. The context provider supplies the DB-backed
 				// context under `serve` and a DB-less one on the CLI.
-				res, err := query.Execute(s.context(), live.Profile, toParams(opts))
+				queryCtx := s.context()
+				res, err := query.Execute(queryCtx, live.Profile, toParams(opts))
 				if err != nil {
 					return nil, err
+				}
+				// The entity list has no page of its own to report, so the one
+				// thing it must not do is present a bounded read as the whole
+				// table. `run --all --limit` is the surface that pages.
+				if res.Truncated {
+					queryCtx.Warnf("profile %q: listed the first %d rows of a larger result; page it with `run --cursor` or raise limits.maxExportRows",
+						name, len(res.Rows))
 				}
 				return res.Rows, nil
 			}).
@@ -237,6 +459,12 @@ func (s *Service) markRegistered(name string) bool {
 	return true
 }
 
+func (s *Service) unmarkRegistered(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.registered, slugify(name))
+}
+
 func (s *Service) Get(ctx context.Context, name string) (query.Profile, error) {
 	store, err := s.store()
 	if err != nil {
@@ -250,7 +478,10 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 	if err != nil {
 		return nil, err
 	}
-	return newExecHandler(prefix, s.context(), store, newProfileSampleHandler(prefix, s.context(), next)), nil
+	filterValues := newProfileSampleFilterValuesHandler(prefix, s.context(), next)
+	expression := newSampleExpressionHandler(prefix, s.context(), newSampleJSONPathHandler(prefix, filterValues))
+	sample := newProfileSampleHandler(prefix, s.context(), expression)
+	return newExecHandler(prefix, s.context(), store, sample), nil
 }
 
 func (s *Service) OpenAPIHandler(root *cobra.Command, config *rpc.Config) (http.Handler, error) {
@@ -258,7 +489,7 @@ func (s *Service) OpenAPIHandler(root *cobra.Command, config *rpc.Config) (http.
 	if err != nil {
 		return nil, err
 	}
-	return newProfileOpenAPIHandler(root, config, store), nil
+	return newProfileOpenAPIHandler(root, config, store, s.openAPIExtensions), nil
 }
 
 // profileEntitySchema builds the dynamic-entity JSON schema for a profile: its
@@ -267,6 +498,14 @@ func (s *Service) OpenAPIHandler(root *cobra.Command, config *rpc.Config) (http.
 // column-less profile gets a synthesized id property so the schema is valid;
 // rows still render via the map-backed dynamic item.
 func profileEntitySchema(p query.Profile) ([]byte, error) {
+	bindings, err := p.ColumnFilterBindings()
+	if err != nil {
+		return nil, err
+	}
+	filterByColumn := make(map[string]query.ColumnFilterBinding, len(bindings))
+	for _, binding := range bindings {
+		filterByColumn[binding.Column] = binding
+	}
 	props := map[string]any{}
 	idAssigned := false
 	for _, c := range p.Columns {
@@ -283,6 +522,17 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		if c.Format != "" {
 			prop["x-clicky-format"] = c.Format
 		}
+		if c.Unit != "" {
+			prop["x-clicky-unit"] = c.Unit
+		}
+		if binding, ok := filterByColumn[c.Name]; ok {
+			prop["x-clicky-filter"] = profileFilterName(p.Name, c.Name)
+			prop["x-clicky-filter-key"] = binding.Key
+			// The kind is what decides the control the browser renders, and it
+			// is not derivable from the column type alone once a profile can
+			// override it.
+			prop["x-clicky-filter-kind"] = string(binding.Kind.Normalized())
+		}
 		if !idAssigned {
 			prop["x-clicky-id"] = true
 			prop["x-clicky-name"] = true
@@ -297,7 +547,8 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		"type":            "object",
 		"properties":      props,
 		"x-clicky-parent": profileSurfaceParent,
-		"x-clicky-icon":   providerIcon(p.Provider.Type),
+		"x-clicky-icon":   profileIcon(p),
+		"x-clicky-path":   profileSurfacePath(p.Name),
 		"x-clicky-title":  p.Name,
 	}
 	// x-clicky-render lets the frontend pick a presentation (e.g. the LogsTable
@@ -307,6 +558,79 @@ func profileEntitySchema(p query.Profile) ([]byte, error) {
 		doc["x-clicky-render"] = render
 	}
 	return json.Marshal(doc)
+}
+
+func profileFilterName(profileName, columnName string) string {
+	digest := sha256.Sum256([]byte(columnName))
+	return fmt.Sprintf("profile-%s-column-%x", slugify(profileName), digest[:6])
+}
+
+// profileParamFilterName keys a list param's filter. The -param- segment keeps
+// it distinct from the column namespace, so a param and a column that share a
+// name do not collide on one registration.
+func profileParamFilterName(profileName, paramName string) string {
+	digest := sha256.Sum256([]byte(paramName))
+	return fmt.Sprintf("profile-%s-param-%x", slugify(profileName), digest[:6])
+}
+
+type profileFilterSource struct {
+	service     *Service
+	profileName string
+	key         string
+}
+
+func (source profileFilterSource) Options(fc entity.FilterContext, search string, limit int) (map[string]api.Textable, int, error) {
+	store, err := source.service.store()
+	if err != nil {
+		return nil, 0, err
+	}
+	resolved, err := Resolve(fc.Ctx(), store, source.profileName)
+	if err != nil {
+		return nil, 0, err
+	}
+	options, total, err := query.LookupFilterValues(
+		source.service.context().Wrap(fc.Ctx()),
+		query.FilterValueLookupRequest{
+			Profile: resolved.Profile, Input: filterLookupParams(resolved.Profile, fc.Params),
+			Key: source.key, Search: search, Limit: limit,
+		},
+	)
+	if err != nil {
+		return nil, 0, err
+	}
+	result := make(map[string]api.Textable, len(options))
+	for _, option := range options {
+		result[option.Value] = api.Text{Content: option.Value}
+	}
+	// This lookup surface takes a plain count; a backend that stated no total is
+	// reported as none rather than as zero options behind the ones listed.
+	count := 0
+	if total != nil {
+		count = int(total.Value)
+	}
+	return result, count, nil
+}
+
+func filterLookupParams(profile query.Profile, values map[string]string) map[string]any {
+	allowed := make(map[string]bool, len(profile.Params))
+	for _, parameter := range profile.Params {
+		allowed[parameter.Name] = true
+	}
+	params := make(map[string]any, len(values))
+	for key, value := range values {
+		if allowed[key] || strings.HasPrefix(key, "filter.") {
+			params[key] = value
+		}
+	}
+	return params
+}
+
+func (source profileFilterSource) Resolve(_ entity.FilterContext, values []string) (map[string]api.Textable, error) {
+	resolved := make(map[string]api.Textable, len(values))
+	for _, value := range values {
+		resolved[value] = api.Text{Content: value}
+	}
+	return resolved, nil
 }
 
 // columnJSONSchema maps a profile ColumnType to its preferred JSON shape.

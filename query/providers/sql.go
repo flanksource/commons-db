@@ -8,10 +8,11 @@ package providers
 import (
 	"database/sql"
 	"fmt"
+	"iter"
+	"math"
+	"strconv"
 
-	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
-	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 )
@@ -24,6 +25,7 @@ func init() {
 	query.RegisterProvider(sqlProvider{key: "mysql", connType: models.ConnectionTypeMySQL})
 	query.RegisterProvider(sqlProvider{key: "sqlserver", connType: models.ConnectionTypeSQLServer})
 	query.RegisterProvider(sqlProvider{key: "clickhouse", connType: models.ConnectionTypeClickHouse})
+	query.RegisterProvider(sqlProvider{key: "sqlite", connType: models.ConnectionTypeSQLite})
 }
 
 // sqlProvider runs arbitrary SQL against a postgres, mysql, sqlserver, or
@@ -49,104 +51,181 @@ type sqlOptions struct {
 	Database string `json:"database,omitempty"`
 }
 
+// PagingModes reports the two strategies compiled around an author's query.
+// Offset supports direct page jumps; cursor paging binds a provider-owned
+// keyset predicate against the declared total order.
+func (p sqlProvider) PagingModes() query.PagingMode {
+	return query.PagingOffset | query.PagingCursor
+}
+
 func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	iterator, err := p.OpenRows(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	defer iterator.Close()
 	var result []query.Row
-	for iterator.Next() {
-		result = append(result, iterator.Row())
-	}
-	if err := iterator.Err(); err != nil {
-		return nil, err
+	for page, err := range p.Pages(ctx, req, query.PageRequest{Limit: query.DefaultMaxPageSize}) {
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, page.Rows...)
 	}
 	return result, nil
 }
 
-func (p sqlProvider) OpenRows(ctx context.Context, req query.ProviderRequest) (query.RowIterator, error) {
-	if req.Query == "" {
-		return nil, fmt.Errorf("sql query is required")
-	}
+// Pages reads the author's statement once and hands back consecutive batches of
+// it. Ending the range closes the driver cursor and the connection, so a caller
+// taking a single page does not hold either.
+func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
+	return func(yield func(query.Page, error) bool) {
+		client, dialect, release, err := p.connect(ctx, req)
+		if err != nil {
+			yield(query.Page{}, err)
+			return
+		}
+		defer release()
+		defer func() { _ = client.Close() }()
 
+		request := req
+		current := page
+		remaining := page.Ceiling
+		for {
+			if remaining > 0 && remaining < current.Limit {
+				current.Limit = remaining
+			}
+			batch, total, more, err := p.readPage(ctx, client, dialect, request, current)
+			if err != nil {
+				yield(query.Page{}, err)
+				return
+			}
+			capped := remaining > 0 && len(batch) >= remaining && more
+			result := query.Page{Rows: batch, HasMore: more && !capped, Total: total, Truncated: capped}
+			var keys []any
+			if result.HasMore && len(req.Order) > 0 {
+				keys, err = orderKeys(batch[len(batch)-1], req.Order)
+				if err != nil {
+					yield(query.Page{}, err)
+					return
+				}
+				result.NextKeys = keys
+			}
+			if !yield(result, nil) || !result.HasMore {
+				return
+			}
+			if remaining > 0 {
+				remaining -= len(batch)
+			}
+			if page.Mode() == query.PagingCursor {
+				request.Position = query.CursorPosition{Keys: keys}
+				current.Offset = 0
+			} else {
+				current.Offset += len(batch)
+			}
+		}
+	}
+}
+
+// orderKeys reads a row's position in the declared order, which is what the
+// next page resumes after.
+func orderKeys(row query.Row, order query.Order) ([]any, error) {
+	keys := make([]any, 0, len(order))
+	for _, by := range order {
+		value, ok := row[by.Column]
+		if !ok {
+			return nil, fmt.Errorf(
+				"cannot cursor on column %q: the query does not return it, so there is no position to resume from", by.Column)
+		}
+		keys = append(keys, value)
+	}
+	return keys, nil
+}
+
+// sqlExecError explains a failure the wrapper could have caused. T-SQL rejects
+// a bare ORDER BY inside a CTE, so a statement that ran unfiltered can stop
+// running the moment a filter wraps it — and the driver's message says nothing
+// about why.
+func sqlExecError(dialect sqlDialect, filters []query.ColumnFilterValue, err error) error {
+	if dialect == dialectSQLServer && len(filters) > 0 {
+		return fmt.Errorf(
+			"failed to execute filtered sql query (an ORDER BY inside the query cannot survive column filtering on sqlserver; move it out or add OFFSET 0 ROWS): %w", err)
+	}
+	return fmt.Errorf("failed to execute sql query: %w", err)
+}
+
+// takeRowTotal removes the counting column from a row and returns what it held.
+//
+// It is removed rather than ignored: it is the server's bookkeeping, and a row
+// that carried it onward would put an internal column into every consumer —
+// exports, CEL expressions, the rendered table.
+func takeRowTotal(row query.Row) (int64, bool, error) {
+	value, ok := row[sqlTotalColumn]
+	if !ok {
+		return 0, false, nil
+	}
+	delete(row, sqlTotalColumn)
+	// Drivers spell an integer several ways depending on the column type they
+	// inferred, so the count is read by value rather than by asserting one.
+	switch typed := value.(type) {
+	case int64:
+		return typed, true, nil
+	case int32:
+		return int64(typed), true, nil
+	case int:
+		return int64(typed), true, nil
+	case uint64:
+		if typed > math.MaxInt64 {
+			return 0, false, fmt.Errorf("sql result total %d exceeds the supported maximum %d", typed, int64(math.MaxInt64))
+		}
+		return int64(typed), true, nil
+	case uint32:
+		return int64(typed), true, nil
+	case uint16:
+		return int64(typed), true, nil
+	case uint8:
+		return int64(typed), true, nil
+	case uint:
+		if uint64(typed) > math.MaxInt64 {
+			return 0, false, fmt.Errorf("sql result total %d exceeds the supported maximum %d", typed, int64(math.MaxInt64))
+		}
+		return int64(typed), true, nil
+	case float64:
+		return int64(typed), true, nil
+	case []byte:
+		parsed, err := strconv.ParseInt(string(typed), 10, 64)
+		if err != nil {
+			return 0, false, fmt.Errorf("sql result total %q is not an integer: %w", typed, err)
+		}
+		return parsed, true, nil
+	case string:
+		parsed, err := strconv.ParseInt(typed, 10, 64)
+		if err != nil {
+			return 0, false, fmt.Errorf("sql result total %q is not an integer: %w", typed, err)
+		}
+		return parsed, true, nil
+	default:
+		return 0, false, fmt.Errorf("sql result total has unsupported type %T", value)
+	}
+}
+
+func (p sqlProvider) connect(ctx context.Context, req query.ProviderRequest) (*sql.DB, sqlDialect, func(), error) {
+	if req.Query == "" {
+		return nil, "", nil, fmt.Errorf("sql query is required")
+	}
 	opts, err := query.DecodeOptions[sqlOptions](req.Options)
 	if err != nil {
-		return nil, err
+		return nil, "", nil, err
 	}
-
-	connType := p.connType
-	if connType == "" {
-		connType = opts.Type
-	}
-
-	conn := connection.SQLConnection{
-		ConnectionName: req.Connection,
-		Type:           connType,
-	}
-	if opts.URL != "" {
-		resolveType := connType
-		if resolveType == "" {
-			resolveType = models.ConnectionTypePostgres
-		}
-		resolved, err := resolveInlineURL(ctx, opts.URL, resolveType)
-		if err != nil {
-			return nil, err
-		}
-		conn.URL.ValueStatic = resolved
-	}
-
-	if err := conn.HydrateConnection(ctx); err != nil {
-		return nil, fmt.Errorf("failed to hydrate sql connection: %w", err)
-	}
-	if opts.Database != "" {
-		conn, err = conn.UseDatabase(opts.Database)
-		if err != nil {
-			return nil, fmt.Errorf("failed to select sql database: %w", err)
-		}
-	}
-
-	client, err := conn.Client(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create sql client: %w", err)
-	}
-
-	// Query is the complete provider statement supplied by its caller; it is not
-	// concatenated with SQL syntax or other request values.
-	// codeql[go/sql-injection]
-	rows, err := client.QueryContext(ctx, req.Query)
-	if err != nil {
-		client.Close()
-		return nil, fmt.Errorf("failed to execute sql query: %w", err)
-	}
-	scanner, err := db.NewRowScanner(rows)
-	if err != nil {
-		rows.Close()
-		client.Close()
-		return nil, fmt.Errorf("failed to prepare sql rows: %w", err)
-	}
-	return &sqlRowIterator{rows: rows, client: client, scanner: scanner}, nil
+	return sqlConnect(ctx, sqlConnectRequest{
+		Connection: req.Connection, ConnType: p.connType, Options: opts,
+	})
 }
 
-type sqlRowIterator struct {
-	rows    *sql.Rows
-	client  *sql.DB
-	scanner *db.RowScanner
-	closed  bool
-}
-
-func (i *sqlRowIterator) Next() bool     { return i.scanner.Next() }
-func (i *sqlRowIterator) Row() query.Row { return query.Row(i.scanner.Row()) }
-func (i *sqlRowIterator) Err() error     { return i.scanner.Err() }
-func (i *sqlRowIterator) Close() error {
-	if i.closed {
-		return nil
-	}
-	i.closed = true
-	rowErr := i.rows.Close()
-	clientErr := i.client.Close()
-	if rowErr != nil {
-		return rowErr
-	}
-	return clientErr
+func (p sqlProvider) readPage(
+	ctx context.Context,
+	client *sql.DB,
+	dialect sqlDialect,
+	req query.ProviderRequest,
+	page query.PageRequest,
+) (batch []query.Row, total *query.Total, more bool, err error) {
+	result, err := ReadSQLPage(ctx, client, string(dialect), SQLPageRequest{
+		Query: req.Query, Filters: req.Filters, Order: req.Order, Position: req.Position,
+		Page: page, Diagnostics: req.Diagnostics,
+	})
+	return result.Rows, result.Total, result.HasMore, err
 }

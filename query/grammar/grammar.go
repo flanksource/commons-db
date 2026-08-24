@@ -893,8 +893,8 @@ var g = &grammar{
 					pos: position{line: 128, col: 5, offset: 2144},
 					expr: &charClassMatcher{
 						pos:        position{line: 128, col: 5, offset: 2144},
-						val:        "[@a-zA-Z0-9_*\\\\,-:\\\\[\\]]",
-						chars:      []rune{'@', '_', '*', '\\', '\\', '[', ']'},
+						val:        "[@a-zA-Z0-9_*\\\\,-:\\\\[\\]/]",
+						chars:      []rune{'@', '_', '*', '\\', '\\', '[', ']', '/'},
 						ranges:     []rune{'a', 'z', 'A', 'Z', '0', '9', ',', ':'},
 						ignoreCase: false,
 						inverted:   false,
@@ -904,11 +904,11 @@ var g = &grammar{
 		},
 		{
 			name: "_",
-			pos:  position{line: 132, col: 1, offset: 2210},
+			pos:  position{line: 132, col: 1, offset: 2211},
 			expr: &zeroOrMoreExpr{
-				pos: position{line: 133, col: 5, offset: 2216},
+				pos: position{line: 133, col: 5, offset: 2217},
 				expr: &charClassMatcher{
-					pos:        position{line: 133, col: 5, offset: 2216},
+					pos:        position{line: 133, col: 5, offset: 2217},
 					val:        "[ \\t]",
 					chars:      []rune{' ', '\t'},
 					ignoreCase: false,
@@ -918,11 +918,11 @@ var g = &grammar{
 		},
 		{
 			name: "EOF",
-			pos:  position{line: 135, col: 1, offset: 2224},
+			pos:  position{line: 135, col: 1, offset: 2225},
 			expr: &notExpr{
-				pos: position{line: 136, col: 5, offset: 2232},
+				pos: position{line: 136, col: 5, offset: 2233},
 				expr: &anyMatcher{
-					line: 136, col: 6, offset: 2233,
+					line: 136, col: 6, offset: 2234,
 				},
 			},
 		},
@@ -930,7 +930,7 @@ var g = &grammar{
 }
 
 func (c *current) onQuery1(aq, oq any) (any, error) {
-	return makeAndQuery(aq, oq)
+	return makeTopQuery(aq, oq)
 
 }
 

@@ -1,6 +1,7 @@
 package connection
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"os"
@@ -8,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/kubernetes"
+	"github.com/flanksource/commons/logger"
 	"github.com/samber/lo"
 
 	textTemplate "text/template"
@@ -46,26 +47,45 @@ type ExecConnections struct {
 	Azure      *AzureConnection      `yaml:"azure,omitempty" json:"azure,omitempty"`
 }
 
-func saveConfig(cwd string, configTemplate *textTemplate.Template, view any) (string, error) {
+func saveConfig(cwd string, configTemplate *textTemplate.Template, view any) (configPath string, resultErr error) {
 	dirPath := filepath.Join(cwd, ".creds", fmt.Sprintf("cred-%d", rand.Intn(10000000)))
 	if err := os.MkdirAll(dirPath, 0700); err != nil {
-		return "", err
+		return "", fmt.Errorf("create credentials directory: %w", pathErrorCause(err))
 	}
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		if cleanupErr := os.RemoveAll(dirPath); cleanupErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("failed to cleanup partial credentials"))
+		}
+	}()
 
-	configPath := fmt.Sprintf("%s/credentials", dirPath)
-	logger.Tracef("Creating credentials file: %s", configPath)
+	configPath = fmt.Sprintf("%s/credentials", dirPath)
+	logger.Tracef("Creating temporary credentials file")
 
 	file, err := os.Create(configPath)
 	if err != nil {
-		return configPath, err
+		return configPath, fmt.Errorf("create credentials file: %w", pathErrorCause(err))
 	}
-	defer file.Close()
 
 	if err := configTemplate.Execute(file, view); err != nil {
+		_ = file.Close()
 		return configPath, err
+	}
+	if err := file.Close(); err != nil {
+		return configPath, fmt.Errorf("close credentials file: %w", pathErrorCause(err))
 	}
 
 	return configPath, nil
+}
+
+func pathErrorCause(err error) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	return err
 }
 
 var (
@@ -123,9 +143,18 @@ func injectKubernetesServiceAccount(ctx context.Context, cmd *osExec.Cmd) {
 }
 
 // SetupConnections creates the necessary credential files and injects env vars into the cmd
-func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osExec.Cmd) (*ConnectionSetupResult, error) {
+func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osExec.Cmd) (result *ConnectionSetupResult, resultErr error) {
 	var output ConnectionSetupResult
 	var cleaners []func() error
+	cleanup := func() error { return cleanupConnectionFiles(cleaners) }
+	defer func() {
+		if resultErr == nil {
+			return
+		}
+		if cleanupErr := cleanup(); cleanupErr != nil {
+			resultErr = errors.Join(resultErr, cleanupErr)
+		}
+	}()
 
 	if lo.FromPtr(connections.FromConfigItem) != "" {
 		return nil, fmt.Errorf("connection.fromConfigItem is not supported in commons-db (scraper configs are mission-control specific)")
@@ -204,7 +233,7 @@ func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osEx
 		output.Sources = append(output.Sources, fmt.Sprintf("azureConnection: %s", connections.Azure.ConnectionName))
 
 		// login with service principal
-		runCmd := osExec.Command("az", "login", "--service-principal", "--username", connections.Azure.ClientID.ValueStatic, "--password", connections.Azure.ClientSecret.ValueStatic, "--tenant", connections.Azure.TenantID)
+		runCmd := osExec.CommandContext(ctx, "az", "login", "--service-principal", "--username", connections.Azure.ClientID.ValueStatic, "--password", connections.Azure.ClientSecret.ValueStatic, "--tenant", connections.Azure.TenantID)
 		if err := runCmd.Run(); err != nil {
 			return nil, fmt.Errorf("failed to login: %w", err)
 		}
@@ -228,7 +257,7 @@ func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osEx
 
 		// to configure gcloud CLI to use the service account specified in GOOGLE_APPLICATION_CREDENTIALS,
 		// we need to explicitly activate it
-		runCmd := osExec.Command("gcloud", "auth", "activate-service-account", "--key-file", configPath)
+		runCmd := osExec.CommandContext(ctx, "gcloud", "auth", "activate-service-account", "--key-file", configPath)
 		if err := runCmd.Run(); err != nil {
 			return nil, fmt.Errorf("failed to activate GCP service account: %w", err)
 		}
@@ -238,20 +267,20 @@ func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osEx
 
 	output.EnvVars = cmd.Env
 
-	output.Cleanup = func() error {
-		var errorList []error
-		for _, c := range cleaners {
-			if err := c(); err != nil {
-				errorList = append(errorList, err)
-			}
-		}
-
-		if len(errorList) > 0 {
-			return fmt.Errorf("failed to cleanup: %v", errorList)
-		}
-
-		return nil
-	}
+	output.Cleanup = cleanup
 
 	return &output, nil
+}
+
+func cleanupConnectionFiles(cleaners []func() error) error {
+	failures := 0
+	for _, cleanup := range cleaners {
+		if err := cleanup(); err != nil {
+			failures++
+		}
+	}
+	if failures > 0 {
+		return fmt.Errorf("failed to cleanup %d credential locations", failures)
+	}
+	return nil
 }

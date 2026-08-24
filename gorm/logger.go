@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/clicky/api"
 	commons "github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
 	"gorm.io/gorm"
@@ -138,7 +139,31 @@ func (s SqlLogger) Error(ctx context.Context, format string, args ...interface{}
 	s.Errorf(format, args...)
 }
 
-var detailsFmt = Yellow + "[%dms] " + BlueBold + "[rows:%v]" + Reset + " %s"
+type SQLTrace struct {
+	Duration time.Duration
+	Rows     int64
+	SQL      string
+	Slow     bool
+	Err      error
+}
+
+// Pretty returns the SQL trace in the established Duty logger grammar.
+func (trace SQLTrace) Pretty() api.Text {
+	text := api.Text{}
+	statement := trace.SQL
+	switch {
+	case trace.Err != nil:
+		text = text.AddText("ERROR >=", "font-bold text-red-500")
+		statement = trace.Err.Error() + " " + statement
+	case trace.Slow:
+		text = text.AddText("SLOW SQL >= ", "font-bold text-yellow-500")
+	}
+	return text.
+		AddText(fmt.Sprintf("[%dms] ", trace.Duration.Milliseconds()), "text-yellow-500").
+		AddText(fmt.Sprintf("[rows:%v]", trace.Rows), "font-bold text-blue-500").
+		AddText(" ").
+		AddText(statement)
+}
 
 // Trace print sql message
 //
@@ -149,20 +174,18 @@ func (l *SqlLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 	}
 
 	elapsed := time.Since(begin)
-	msg := ""
 	level := l.baseLevel
+	var trace SQLTrace
 
 	switch {
 	case err != nil && (!errors.Is(err, gorm.ErrRecordNotFound) || !l.IgnoreRecordNotFoundError):
 		sql, rows := fc()
-		sql = trunc(sql, l.maxLength)
-		msg = fmt.Sprintf("ERROR >="+detailsFmt, elapsed/1e6, rows, err.Error()+" "+sql)
+		trace = SQLTrace{Duration: elapsed, Rows: rows, SQL: trunc(sql, l.maxLength), Err: err}
 		level = l.baseLevel - (commons.Error * -1)
 
 	case elapsed > l.SlowThreshold && l.SlowThreshold != 0:
 		sql, rows := fc()
-		sql = trunc(sql, l.maxLength)
-		msg = fmt.Sprintf("SLOW SQL >= "+detailsFmt, elapsed/1e6, rows, sql)
+		trace = SQLTrace{Duration: elapsed, Rows: rows, SQL: trunc(sql, l.maxLength), Slow: true}
 		level = l.baseLevel - (commons.Warn * -1)
 
 	case l.LogLevel == int(commons.Info):
@@ -170,10 +193,14 @@ func (l *SqlLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 		sql = trunc(sql, l.maxLength)
 		level = classifySQLLevel(sql, rows, l.baseLevel, isSchemaChange(ctx))
 		level += l.statementLevelOffset()
-		msg = fmt.Sprintf(detailsFmt, elapsed/1e6, rows, sql)
+		trace = SQLTrace{Duration: elapsed, Rows: rows, SQL: sql}
 	}
 	if l.IsLevelEnabled(level) {
-		l.V(level).Infof(msg)
+		if commons.IsJSONLogger(l.Logger) {
+			l.V(level).Infof("%s", trace.Pretty().String())
+		} else {
+			l.V(level).Infof("%s", trace.Pretty().ANSI())
+		}
 	}
 }
 

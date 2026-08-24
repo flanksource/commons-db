@@ -1,0 +1,37 @@
+# The upstream side of a reconcile demo: orders as the service wrote them.
+# Together with orders-ingested.yaml it shows the case reconcile exists for —
+# the same identities carried under different field names on each side, so the
+# join key has to be built by mapping one field onto the other.
+profile: Orders Emitted
+provider:
+  type: postgres
+  options:
+    url: postgres://postgres:postgres@localhost:7432/postgres?sslmode=disable
+query: |
+  SELECT * FROM (VALUES
+    ('ORD-1041', 'acme',     128.50, 'web',   timestamptz '2026-08-05 09:14:02.100+00'),
+    ('ORD-1042', 'globex',    74.20, 'api',   timestamptz '2026-08-05 09:14:03.400+00'),
+    ('ORD-1043', 'acme',      12.00, 'web',   timestamptz '2026-08-05 09:14:05.900+00'),
+    ('ORD-1044', 'umbrella', 940.00, 'batch', timestamptz '2026-08-05 09:14:07.000+00'),
+    ('ORD-1046', 'acme',     220.00, 'api',   timestamptz '2026-08-05 09:14:11.250+00'),
+    ('ORD-1048', 'umbrella',  61.40, 'batch', timestamptz '2026-08-05 09:14:15.800+00'),
+    ('ORD-1049', 'initech',  310.75, 'api',   timestamptz '2026-08-05 09:14:20.000+00'),
+    ('ORD-1049', 'initech',  310.75, 'api',   timestamptz '2026-08-05 09:14:21.900+00')
+  ) AS t(order_id, customer, amount, channel, created_at)
+columns:
+  - name: order_id
+    label: Order
+    type: string
+  - name: customer
+    label: Customer
+    type: string
+  - name: amount
+    label: Amount
+    type: number
+  - name: channel
+    label: Channel
+    type: string
+  - name: created_at
+    label: Created
+    kind: timestamp
+    type: datetime

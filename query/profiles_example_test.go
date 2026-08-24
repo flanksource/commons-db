@@ -1,0 +1,94 @@
+package query_test
+
+import (
+	"os"
+	"path/filepath"
+
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"sigs.k8s.io/yaml"
+
+	"github.com/flanksource/commons-db/query"
+
+	// The shipped profiles reference library processors by name, which only
+	// resolve once the built-in processors have registered themselves.
+	_ "github.com/flanksource/commons-db/query/processor"
+)
+
+// The profiles/ directory is the worked-example set — the thing a new author
+// copies. An example that does not parse and validate is worse than no example,
+// so every one of them is checked here rather than trusted.
+var _ = Describe("shipped example profiles", func() {
+	paths, err := filepath.Glob("../profiles/*.yaml")
+	Expect(err).ToNot(HaveOccurred())
+	Expect(paths).ToNot(BeEmpty())
+
+	for _, path := range paths {
+		It("parses and validates "+filepath.Base(path), func() {
+			body, err := os.ReadFile(path)
+			Expect(err).ToNot(HaveOccurred())
+
+			var profile query.Profile
+			Expect(yaml.Unmarshal(body, &profile)).To(Succeed())
+			Expect(profile.Name).ToNot(BeEmpty())
+			Expect(profile.Validate()).To(Succeed())
+		})
+	}
+})
+
+var _ = Describe("the Java application logs example", func() {
+	It("wires the stack trace merge in by library name, not by restating it", func() {
+		body, err := os.ReadFile("../profiles/java-app-logs.yaml")
+		Expect(err).ToNot(HaveOccurred())
+
+		var profile query.Profile
+		Expect(yaml.Unmarshal(body, &profile)).To(Succeed())
+		Expect(profile.Processors).To(HaveLen(1))
+		Expect(profile.Processors[0].Use).To(Equal("java.stacktrace"))
+		Expect(profile.Processors[0].Config).To(BeEmpty())
+
+		resolved, err := profile.Processors[0].Resolve()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(resolved.Type).To(Equal("cel.batch"))
+		Expect(resolved.Config).To(HaveKey("continuation"))
+	})
+})
+
+var _ = Describe("the structured application log examples", func() {
+	DescribeTable("uses the matching parser helper without restating its configuration",
+		func(filename, preset, format string) {
+			body, err := os.ReadFile("../profiles/" + filename)
+			Expect(err).ToNot(HaveOccurred())
+
+			var profile query.Profile
+			Expect(yaml.Unmarshal(body, &profile)).To(Succeed())
+			Expect(profile.Processors).To(HaveLen(1))
+			Expect(profile.Processors[0]).To(Equal(query.ProcessorSpec{Use: preset}))
+
+			resolved, err := profile.Processors[0].Resolve()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(resolved.Type).To(Equal("logs.parse"))
+			Expect(resolved.Config).To(HaveKeyWithValue("format", format))
+		},
+		Entry("JSON", "json-app-logs.yaml", "logs.json", "json"),
+		Entry("logfmt", "logfmt-app-logs.yaml", "logs.logfmt", "logfmt"),
+	)
+})
+
+var _ = Describe("the Kubernetes pod logs example", func() {
+	It("declares its workload with query grammar instead of provider options", func() {
+		body, err := os.ReadFile("../profiles/k8s-pod-logs.yaml")
+		Expect(err).ToNot(HaveOccurred())
+
+		var profile query.Profile
+		Expect(yaml.Unmarshal(body, &profile)).To(Succeed())
+		Expect(profile.Query).To(Equal("kind={{.params.kind}} namespace={{.params.namespace}} name={{.params.name}}"))
+		Expect(profile.Provider.Options).ToNot(HaveKey("limit"))
+		Expect(profile.RowLimits()).To(Equal(query.RowLimits{
+			PageSize: 500, MaxPageSize: 500, MaxExportRows: query.DefaultMaxExportRows,
+		}))
+		for _, key := range []string{"kind", "apiVersion", "namespace", "name", "uid", "labels"} {
+			Expect(profile.Provider.Options).ToNot(HaveKey(key))
+		}
+	})
+})

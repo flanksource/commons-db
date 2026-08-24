@@ -1,15 +1,24 @@
 packages:
   - "."
 
+# Supply-chain hardening: only install releases that have been public long enough
+# to be vetted, and never accept weakened trust signals on an update.
+minimumReleaseAge: 10080
+# First-party packages are published from our own CI, so the vetting delay that
+# protects against a compromised upstream registry account does not apply.
+minimumReleaseAgeExclude:
+  - "@flanksource/*"
+trustPolicy: no-downgrade
+
 catalog:
+  "@ai-sdk/react": 3.0.210
+  "@chromatic-com/storybook": ^5.2.1
   "@codemirror/autocomplete": ^6.20.3
   "@codemirror/commands": ^6.10.4
   "@codemirror/lang-json": ^6.0.2
   "@codemirror/lang-sql": ^6.10.0
   "@codemirror/state": ^6.7.0
   "@codemirror/view": ^6.43.4
-  "@ai-sdk/react": ^3.0.201
-  "@chromatic-com/storybook": ^5.2.1
   "@floating-ui/react": ^0.27.19
   "@mdxeditor/editor": ^4.0.4
   "@monaco-editor/react": ^4.7.0
@@ -37,20 +46,22 @@ catalog:
   "@storybook/react-vite": ^8.6.18
   "@storybook/test": ^8.6.18
   "@tailwindcss/forms": ^0.5.9
+  "@tailwindcss/vite": ^4.3.3
   "@tanstack/react-query": ^5.66.8
   "@testing-library/jest-dom": ^6.6.3
   "@testing-library/react": ^16.1.0
   "@types/node": ^24
   "@types/react": ^18.3.12
   "@types/react-dom": ^18.3.1
-  ai: ^6.0.199
+  ai: 6.0.208
   autoprefixer: ^10.4.20
   class-variance-authority: ^0.7.1
   clsx: ^2.1.1
   cmdk: ^1.0.4
+  country-flag-icons: ^1.6.20
   dompurify: ^3.4.7
-  jsdom: ^26.0.0
   jotai: ^2.20.1
+  jsdom: ^26.0.0
   marked: ^15.0.0
   monaco-editor: 0.48.0
   monaco-yaml: 5.1.1
@@ -65,8 +76,8 @@ catalog:
   shiki: ^1.24.0
   sonner: ^1.7.1
   storybook: ^8.6.18
-  tailwind-merge: ^2.6.0
-  tailwindcss: ^3.4.17
+  tailwind-merge: ^3.6.0
+  tailwindcss: ^4.3.3
   typescript: ^5.7.2
   vite: ^6.0.3
   vite-plugin-dts: ^4.3.0
@@ -74,7 +85,12 @@ catalog:
   yaml: ^2.8.3
 catalogMode: prefer
 
+overrides:
+  tailwind-merge: "catalog:"
+
 confirmModulesPurge: false
 
 linkWorkspacePackages: true
 preferWorkspacePackages: true
+allowBuilds:
+  esbuild: true

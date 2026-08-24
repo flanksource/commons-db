@@ -4,8 +4,10 @@ import {
   CatalogTree,
   completionForInspection,
   openSearchIndexOptions,
+  openSearchTargetKind,
   queryBrowserOptionsSchema,
-} from "./connectionBrowser";
+  withTarget,
+} from "@flanksource/clicky-ui/profiles";
 
 describe("connection browser inspection completion", () => {
   it("maps SQL inspection data to shared QueryBrowser completion", () => {
@@ -67,38 +69,126 @@ describe("connection browser inspection completion", () => {
 });
 
 describe("OpenSearch index picker", () => {
-  it("maps inspected targets into grouped searchable options", () => {
-    expect(
-      openSearchIndexOptions({
-        kind: "opensearch",
-        targets: [
-          { name: "logs-2026.07.13", kind: "index" },
-          { name: "logs-current", kind: "alias" },
-          { name: "logs", kind: "data_stream" },
-        ],
+  const rotated = {
+    kind: "opensearch" as const,
+    targets: [
+      {
+        name: "logs-2026.07.12,logs-2026.07.13",
+        kind: "group" as const,
+        pattern: "logs-*",
+        members: ["logs-2026.07.12", "logs-2026.07.13"],
+        count: 2,
+      },
+      { name: "logs-2026.07.13", kind: "index" as const, pattern: "logs-*" },
+      { name: "logs-current", kind: "alias" as const },
+      { name: "logs", kind: "data_stream" as const },
+    ],
+  };
+
+  it("leads with exact rotation groups and lists concrete indexes last", () => {
+    expect(openSearchIndexOptions(rotated)).toEqual([
+      expect.objectContaining({
+        value: "logs-2026.07.12,logs-2026.07.13",
+        group: "Index groups",
+        label: "logs-* · 2 indexes",
+        selectedLabel: "logs-*",
       }),
-    ).toEqual([
-      expect.objectContaining({ value: "logs-2026.07.13", group: "Indexes" }),
       expect.objectContaining({ value: "logs-current", group: "Aliases" }),
       expect.objectContaining({ value: "logs", group: "Data streams" }),
+      expect.objectContaining({ value: "logs-2026.07.13", group: "Indexes" }),
     ]);
   });
 
-  it("removes the duplicate free-text index option from OpenSearch", () => {
-    const schema = queryBrowserOptionsSchema({
+  it("resolves a picked target's kind, treating a typed wildcard as a pattern", () => {
+    expect(openSearchTargetKind(rotated, "logs-current")).toBe("alias");
+    expect(openSearchTargetKind(rotated, "jaeger-*")).toBe("pattern");
+    expect(openSearchTargetKind(rotated, "typo")).toBe("");
+  });
+
+  it("applies a pick over the author's other options and clears on empty", () => {
+    const options = { limit: "200", index: "logs-old", targetKind: "index" };
+
+    expect(
+      withTarget(options, {
+        option: "index",
+        value: "logs-*",
+        targetKind: "pattern",
+      }),
+    ).toEqual({
+      limit: "200",
+      index: "logs-*",
+      targetKind: "pattern",
+    });
+    expect(
+      withTarget(options, {
+        option: "index",
+        value: "",
+        targetKind: "",
+      }),
+    ).toEqual({
+      limit: "200",
+    });
+  });
+
+  it("removes the duplicate free-text index option when a target picker exists", () => {
+    const optionsSchema = {
+      type: "object" as const,
+      properties: {
+        index: { type: "string" as const, title: "Index" },
+        limit: { type: "string" as const, title: "Limit" },
+      },
+    };
+    const picked = queryBrowserOptionsSchema({
       kind: "query",
       provider: "opensearch",
-      optionsSchema: {
-        type: "object",
-        properties: {
-          index: { type: "string", title: "Index" },
-          limit: { type: "string", title: "Limit" },
+      target: { kind: "index", label: "Index", option: "index" },
+      optionsSchema,
+    });
+    const unpicked = queryBrowserOptionsSchema({
+      kind: "query",
+      provider: "opensearch",
+      optionsSchema,
+    });
+
+    expect(picked?.properties).not.toHaveProperty("index");
+    expect(picked?.properties).toHaveProperty("limit");
+    expect(unpicked?.properties).toHaveProperty("index");
+  });
+
+  it("hands limit to the query builder rather than repeating it as a generic field", () => {
+    const optionsSchema = {
+      type: "object" as const,
+      properties: {
+        limit: { type: "string" as const, title: "Limit" },
+        address: { type: "string" as const, title: "Address" },
+        search: {
+          type: "object" as const,
+          "x-clicky-component": "es-query-builder",
         },
+      },
+    };
+    const built = queryBrowserOptionsSchema({
+      kind: "query",
+      provider: "opensearch",
+      optionsSchema,
+    });
+
+    expect(built?.properties).not.toHaveProperty("limit");
+    expect(built?.properties).not.toHaveProperty("search");
+    expect(built?.properties).toHaveProperty("address");
+  });
+
+  it("keeps limit in the options form for a source with no query builder", () => {
+    const built = queryBrowserOptionsSchema({
+      kind: "query",
+      provider: "loki",
+      optionsSchema: {
+        type: "object" as const,
+        properties: { limit: { type: "string" as const, title: "Limit" } },
       },
     });
 
-    expect(schema?.properties).not.toHaveProperty("index");
-    expect(schema?.properties).toHaveProperty("limit");
+    expect(built?.properties).toHaveProperty("limit");
   });
 });
 

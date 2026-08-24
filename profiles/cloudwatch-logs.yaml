@@ -1,0 +1,41 @@
+# Lambda logs from CloudWatch Logs Insights. The cloudwatch provider returns
+# rows keyed timestamp/message (+ severity, host, source and hash), so the
+# canonical columns map straight through.
+#
+# Filtering is entirely in the Insights query: this provider does not compile
+# server-side column filters, so a `field:` on a param would be silently
+# dropped. The function param is templated into the log group instead.
+#
+# `start` defaults to now-1h — Insights requires a bounded range and rejects a
+# query without one.
+profile: Lambda Logs
+render: logs
+provider:
+  type: cloudwatch
+  connection: connection://aws
+  options:
+    logGroup: /aws/lambda/{{.params.function}}
+    start: "{{.params.since}}"
+    limit: "500"
+query: fields @timestamp, @message, @logStream | sort @timestamp desc
+params:
+  - name: function
+    label: Function
+    type: string
+    required: true
+  - name: since
+    label: Since
+    type: string
+    default: now-1h
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+  - name: level
+    label: Level
+    type: status
+    cel: 'has(row.severity) ? row.severity : "info"'
+  - name: source
+    label: Log stream
+  - name: message
+    label: Message

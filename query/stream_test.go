@@ -79,6 +79,109 @@ var _ = Describe("ExecuteStream trace", func() {
 		Expect(events[0].Sequence).To(Equal(int64(1)))
 	})
 
+	It("runs page-capable processors before per-event column mapping", func() {
+		query.RegisterProcessor(rawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{typ: "stream-processor-order", rows: []query.Row{{"raw": "alpha"}}})
+		profile := rawFirstProfile("stream-processor-order", "stream-processor-order", "test.raw-first")
+		profile.Trace = &query.TraceSpec{}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+
+		Expect(session.Events()).To(HaveLen(1))
+		Expect(session.Events()[0].Row).To(HaveKeyWithValue("mapped", "alpha-processed-aliased-mapped"))
+	})
+
+	It("requires a buffer for a whole-result trace processor", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{typ: "stream-unbuffered-whole"})
+		profile := traceProfile("stream-unbuffered-whole")
+		profile.Processors = []query.ProcessorSpec{{Type: "test.whole-raw-first"}}
+
+		_, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+
+		Expect(err).To(MatchError(ContainSubstring("trace.buffer")))
+		Expect(err).To(MatchError(ContainSubstring("test.whole-raw-first")))
+	})
+
+	It("flushes whole-result processors at the configured raw row count", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{
+			typ:  "stream-count-buffer",
+			rows: []query.Row{{"raw": "alpha"}, {"raw": "beta"}, {"raw": "gamma"}},
+		})
+		profile := rawFirstProfile("stream-count-buffer", "stream-count-buffer", "test.whole-raw-first")
+		profile.Trace = &query.TraceSpec{Buffer: &query.TraceBufferSpec{MaxRows: 2}}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+
+		events := session.Events()
+		Expect(events).To(HaveLen(3))
+		Expect(events[0].Row).To(HaveKeyWithValue("batchSize", int64(2)))
+		Expect(events[1].Row).To(HaveKeyWithValue("batchSize", int64(2)))
+		Expect(events[2].Row).To(HaveKeyWithValue("batchSize", int64(1)))
+		Expect(events[2].Row).To(HaveKeyWithValue("mapped", "gamma-processed-aliased-mapped"))
+	})
+
+	It("flushes a partial buffer when maxWait elapses", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{
+			typ: "stream-time-buffer", rows: []query.Row{{"raw": "alpha"}}, block: true,
+		})
+		profile := rawFirstProfile("stream-time-buffer", "stream-time-buffer", "test.whole-raw-first")
+		profile.Trace = &query.TraceSpec{Buffer: &query.TraceBufferSpec{
+			MaxRows: 100,
+			MaxWait: types.Duration{Duration: 25 * time.Millisecond},
+		}}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(session.Events, "5s", "10ms").Should(HaveLen(1))
+		Expect(session.Snapshot().State).To(Equal(query.SessionRunning))
+		session.Stop()
+		waitState(session, query.SessionStopped)
+	})
+
+	It("flushes a partial buffer before an explicit stop becomes terminal", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{
+			typ: "stream-stop-buffer", rows: []query.Row{{"raw": "alpha"}}, block: true,
+		})
+		profile := rawFirstProfile("stream-stop-buffer", "stream-stop-buffer", "test.whole-raw-first")
+		profile.Trace = &query.TraceSpec{Buffer: &query.TraceBufferSpec{MaxRows: 100}}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionRunning)
+		session.Stop()
+		waitState(session, query.SessionStopped)
+
+		Expect(session.Events()).To(HaveLen(1))
+		Expect(session.Events()[0].Row).To(HaveKeyWithValue("mapped", "alpha-processed-aliased-mapped"))
+	})
+
+	It("flushes a partial buffer when the session deadline is reached", func() {
+		query.RegisterProcessor(wholeRawFirstProcessor{})
+		query.RegisterProvider(&fakeStreamProvider{
+			typ: "stream-deadline-buffer", rows: []query.Row{{"raw": "alpha"}}, block: true,
+		})
+		profile := rawFirstProfile("stream-deadline-buffer", "stream-deadline-buffer", "test.whole-raw-first")
+		profile.Trace = &query.TraceSpec{
+			MaxDuration: types.Duration{Duration: 30 * time.Millisecond},
+			Buffer:      &query.TraceBufferSpec{MaxRows: 100},
+		}
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+
+		Expect(session.Events()).To(HaveLen(1))
+		Expect(session.Events()[0].Row).To(HaveKeyWithValue("mapped", "alpha-processed-aliased-mapped"))
+	})
+
 	It("fails the session when the provider errors", func() {
 		query.RegisterProvider(&fakeStreamProvider{typ: "stream-err", err: errors.New("socket closed")})
 
@@ -131,6 +234,123 @@ var _ = Describe("ExecuteStream trace", func() {
 		result, err := s.Result(context.New())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Rows).To(Equal([]query.Row{{"n": 1}, {"n": 2}}))
+	})
+})
+
+// filterCapturingStream records the native filters its request carried, which
+// is the only place a resolved time selection is observable.
+type filterCapturingStream struct {
+	typ     string
+	filters chan []query.ColumnFilterValue
+}
+
+func (f *filterCapturingStream) Type() string { return f.typ }
+
+func (f *filterCapturingStream) Execute(context.Context, query.ProviderRequest) ([]query.Row, error) {
+	return nil, nil
+}
+
+func (f *filterCapturingStream) Stream(_ context.Context, req query.ProviderRequest, _ func(query.Row)) error {
+	f.filters <- req.Filters
+	return nil
+}
+
+var _ = Describe("Follow", func() {
+	newRegistry := func() *query.SessionRegistry {
+		return query.NewSessionRegistry(query.RegistryOptions{})
+	}
+
+	windowedProfile := func(providerType string) query.Profile {
+		return query.Profile{
+			Name:     "window-" + providerType,
+			Provider: query.ProviderConfig{Type: providerType},
+			Params: []query.ParamDef{
+				{Name: "Start", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom, Default: "now-1h"},
+				{Name: "End", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo, Default: "now"},
+			},
+		}
+	}
+
+	It("resolves a lower bound but no upper one, so the tail never expires", func() {
+		query.RegisterProvider(&fakeStreamProvider{typ: "follow-window"})
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), query.Follow(windowedProfile("follow-window")))
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+
+		params := session.Snapshot().Params
+		Expect(params).To(HaveKey("Start"))
+		Expect(params).ToNot(HaveKey("End"), "an end instant is a deadline the tail would stop at")
+	})
+
+	// windowedTraceFilters runs p with a bounded time selection and returns the
+	// filters the provider was actually sent.
+	//
+	// Registered under a provider type that accepts native column filters: the
+	// binding gate is what decides whether a time control exists at all, and no
+	// real backend is linked into this suite.
+	windowedTraceFilters := func(name string, trace *query.TraceSpec) []query.ColumnFilterValue {
+		captured := make(chan []query.ColumnFilterValue, 1)
+		query.RegisterProvider(&filterCapturingStream{typ: "opensearch", filters: captured})
+
+		session, err := query.ExecuteStream(context.New(), newRegistry(), query.Profile{
+			Name:     name,
+			Provider: query.ProviderConfig{Type: "opensearch"},
+			Trace:    trace,
+			Columns: []query.ColumnDef{{
+				Name: "timestamp", Type: query.ColumnTypeDateTime,
+				Filter: &query.ColumnFilterDef{Field: "@timestamp"},
+			}},
+		}, map[string]any{"filter.timestamp": ">=now-1h,<=now"})
+		Expect(err).ToNot(HaveOccurred())
+		waitState(session, query.SessionCompleted)
+		return <-captured
+	}
+
+	It("keeps the start of a followed profile's time selection and drops its end", func() {
+		followed := query.Follow(query.Profile{Name: "tail-window"})
+
+		filters := windowedTraceFilters("tail-window", followed.Trace)
+
+		Expect(filters).To(HaveLen(1))
+		Expect(filters[0].Range.Min).ToNot(BeNil(), "the tail still starts somewhere")
+		Expect(filters[0].Range.Max).To(BeNil(), "an end instant is where the tail would stop")
+	})
+
+	It("leaves a declared trace's window alone", func() {
+		// The inverse of the case above, and the reason TraceSpec.Follow exists. A
+		// profile that writes down a window is stating what the session is; a
+		// request that asks to follow one is stating something about this run. Only
+		// the second may reach in and delete half of the first.
+		filters := windowedTraceFilters("declared-window", &query.TraceSpec{})
+
+		Expect(filters).To(HaveLen(1))
+		Expect(filters[0].Range.Max).ToNot(BeNil(), "an author's closing bound is theirs to keep")
+	})
+
+	It("buffers raw rows so a whole-result processor still sees a batch", func() {
+		followed := query.Follow(query.Profile{Name: "unbuffered"})
+		Expect(followed.Trace.Buffer).To(Equal(&query.TraceBufferSpec{
+			MaxRows: 200, MaxWait: types.Duration{Duration: time.Second},
+		}))
+	})
+
+	It("keeps a buffer the profile declared for itself", func() {
+		declared := query.Profile{
+			Name:  "declared",
+			Trace: &query.TraceSpec{Buffer: &query.TraceBufferSpec{MaxRows: 7}},
+		}
+		Expect(query.Follow(declared).Trace.Buffer.MaxRows).To(Equal(7))
+	})
+
+	It("leaves the profile it was handed untouched", func() {
+		stored := windowedProfile("follow-copy")
+		stored.Trace = &query.TraceSpec{}
+
+		_ = query.Follow(stored)
+
+		Expect(stored.Trace.Buffer).To(BeNil())
+		Expect(stored.Params).To(HaveLen(2))
 	})
 })
 

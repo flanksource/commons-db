@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	inspection "github.com/flanksource/commons-db/inspect"
 )
 
 const (
@@ -30,13 +32,14 @@ func (l Limits) withDefaults() Limits {
 }
 
 type Catalog struct {
-	Driver         string   `json:"driver"`
-	Database       string   `json:"database,omitempty"`
-	Databases      []string `json:"databases,omitempty"`
-	DefaultSchema  string   `json:"defaultSchema,omitempty"`
-	Schemas        []Schema `json:"schemas"`
-	Truncated      bool     `json:"truncated,omitempty"`
-	TruncateReason string   `json:"truncateReason,omitempty"`
+	Driver         string                    `json:"driver"`
+	Database       string                    `json:"database,omitempty"`
+	Databases      []string                  `json:"databases,omitempty"`
+	DefaultSchema  string                    `json:"defaultSchema,omitempty"`
+	Schemas        []Schema                  `json:"schemas"`
+	Truncated      bool                      `json:"truncated,omitempty"`
+	TruncateReason string                    `json:"truncateReason,omitempty"`
+	Cache          *inspection.CacheMetadata `json:"cache,omitempty"`
 }
 
 type Schema struct {
@@ -159,6 +162,8 @@ func normalizeDriver(driver string) string {
 		return "sqlserver"
 	case "clickhouse":
 		return "clickhouse"
+	case "sqlite", "sqlite3":
+		return "sqlite"
 	default:
 		return strings.ToLower(driver)
 	}
@@ -198,8 +203,17 @@ ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`, nil
 		return `SELECT currentDatabase(), currentDatabase()`, `
 SELECT database, table, 'BASE TABLE', name, type, position
 FROM system.columns
-WHERE database NOT IN ('system','information_schema','INFORMATION_SCHEMA')
+WHERE database = currentDatabase()
 ORDER BY database, table, position`, nil
+	case "sqlite":
+		return `SELECT 'snapshot', 'main'`, `
+SELECT 'main', m.name,
+       CASE WHEN m.type = 'view' THEN 'VIEW' ELSE 'BASE TABLE' END,
+       p.name, p.type, p.cid + 1
+FROM sqlite_master m
+JOIN pragma_table_info(m.name) p
+WHERE m.type IN ('table', 'view') AND m.name NOT LIKE 'sqlite_%'
+ORDER BY m.name, p.cid`, nil
 	default:
 		return "", "", fmt.Errorf("unsupported sql inspection driver %q", driver)
 	}
@@ -227,6 +241,8 @@ WHERE schema_name NOT IN ('sys','INFORMATION_SCHEMA','guest')
 ORDER BY schema_name`
 	case "clickhouse":
 		return `SELECT name FROM system.databases WHERE name = currentDatabase() ORDER BY name`
+	case "sqlite":
+		return `SELECT 'main'`
 	default:
 		return ""
 	}
@@ -251,6 +267,8 @@ ORDER BY schema_name`
 FROM system.databases
 WHERE name NOT IN ('system','information_schema','INFORMATION_SCHEMA')
 ORDER BY name`
+	case "sqlite":
+		return `SELECT 'snapshot'`
 	default:
 		return ""
 	}

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	commons "github.com/flanksource/commons/context"
@@ -38,13 +39,80 @@ type Context struct {
 	commons.Context
 }
 
+type ConnectionResolver func(string) (*models.Connection, error)
+type ConnectionLeaseResolver func(string) (func(), error)
+
+type connectionResolverKey struct{}
+type connectionLeaseResolverKey struct{}
+
+type connectionResolverState struct {
+	resolver ConnectionResolver
+	scope    uint64
+}
+
+var connectionResolverScopes atomic.Uint64
+
+func (k Context) WithConnectionResolver(resolver ConnectionResolver) Context {
+	if resolver == nil {
+		panic("connection resolver is required")
+	}
+	return k.WithValue(connectionResolverKey{}, connectionResolverState{
+		resolver: resolver,
+		scope:    connectionResolverScopes.Add(1),
+	})
+}
+
+func (k Context) connectionResolver() ConnectionResolver {
+	state, _ := k.Value(connectionResolverKey{}).(connectionResolverState)
+	return state.resolver
+}
+
+// CanResolveConnectionReferences reports whether this context owns connection
+// reference resolution. Providers may also accept connection:// references and
+// resolve them through a provider-specific seam.
+func (k Context) CanResolveConnectionReferences() bool {
+	return k.connectionResolver() != nil || k.DB() != nil
+}
+
+func (k Context) ConnectionCacheScope() string {
+	if state, ok := k.Value(connectionResolverKey{}).(connectionResolverState); ok && state.resolver != nil {
+		return fmt.Sprintf("resolver:%d:namespace:%s", state.scope, k.GetNamespace())
+	}
+	if database := k.DB(); database != nil {
+		return fmt.Sprintf("db:%p:namespace:%s", database, k.GetNamespace())
+	}
+	return "unscoped:namespace:" + k.GetNamespace()
+}
+
+func (k Context) WithConnectionLeaseResolver(resolver ConnectionLeaseResolver) Context {
+	if resolver == nil {
+		panic("connection lease resolver is required")
+	}
+	return k.WithValue(connectionLeaseResolverKey{}, resolver)
+}
+
+func (k Context) AcquireConnectionLease(reference string) (func(), error) {
+	resolver, _ := k.Value(connectionLeaseResolverKey{}).(ConnectionLeaseResolver)
+	if resolver == nil {
+		return func() {}, nil
+	}
+	release, err := resolver(reference)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return func() {}, nil
+	}
+	return release, nil
+}
+
 func (k Context) Oops(tags ...string) oops.OopsErrorBuilder {
 	var args []any
 
 	for k, v := range k.GetLoggingContext() {
 		args = append(args, k, v)
 	}
-	return oops.With(args...).Tags(tags...)
+	return oops.With(args...).Tags(tags...).WithContext(k.Context)
 }
 
 func New(opts ...commons.ContextOptions) Context {
@@ -109,6 +177,21 @@ func (k Context) WithTimeout(timeout time.Duration) (Context, gocontext.CancelFu
 	return Context{
 		Context: ctx,
 	}, cancelFunc
+}
+
+// WithCancel derives a context this caller can stop, keeping everything the
+// parent carries — the database, the logger, the connection resolver and the
+// rest of its values.
+//
+// It is what a fan-out needs and neither WithTimeout nor WithDeadline can give
+// it: work stopped by its siblings failing is stopped at no particular instant.
+// Only the cancellation is swapped, because reconstructing the commons context
+// would drop the debug and trace predicates it holds unexported.
+func (k Context) WithCancel() (Context, gocontext.CancelFunc) {
+	ctx, cancelFunc := gocontext.WithCancel(k.Context)
+	inner := k.Context
+	inner.Context = ctx
+	return Context{Context: inner}, cancelFunc
 }
 
 func (k Context) WithDeadline(deadline time.Time) (Context, gocontext.CancelFunc) {
@@ -562,6 +645,12 @@ func (k Context) Wrap(ctx gocontext.Context) Context {
 		WithNamespace(k.GetNamespace())
 	if client, ok := k.Value(localKubernetesContextKey).(*dutyKubernetes.Client); ok && client != nil {
 		wrapped = wrapped.WithLocalKubernetes(client)
+	}
+	if state, ok := k.Value(connectionResolverKey{}).(connectionResolverState); ok && state.resolver != nil {
+		wrapped = wrapped.WithValue(connectionResolverKey{}, state)
+	}
+	if resolver, ok := k.Value(connectionLeaseResolverKey{}).(ConnectionLeaseResolver); ok && resolver != nil {
+		wrapped = wrapped.WithConnectionLeaseResolver(resolver)
 	}
 	return wrapped
 }

@@ -3,7 +3,6 @@ package processor
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -27,7 +26,13 @@ const (
 // ReconOptions configures a reconciliation.
 type ReconOptions struct {
 	// Key is the set of columns that uniquely identify a row across both sets.
+	// Mutually exclusive with KeyCEL.
 	Key []string
+
+	// KeyCEL derives the identity from an expression instead of column values,
+	// for the cases where the identity is nested or computed. Mutually exclusive
+	// with Key.
+	KeyCEL string
 
 	// Compare restricts which columns are compared for the "changed" status.
 	// When empty, all non-key columns present in either row are compared.
@@ -39,20 +44,34 @@ type ReconOptions struct {
 // ReconStatusColumn of added/removed/changed/unchanged. Changed rows also carry
 // a ReconChangesColumn mapping each differing column to {from, to}.
 //
+// This is a snapshot diff of one schema against itself. To join two *different*
+// profiles on a shared identity and report presence and latency, use
+// query.Reconcile instead.
+//
 // Pure logic — no database required.
-func Recon(baseline, target []query.Row, opts ReconOptions) ([]query.Row, error) {
-	if len(opts.Key) == 0 {
-		return nil, fmt.Errorf("recon requires at least one key column")
+func Recon(ctx context.Context, baseline, target []query.Row, opts ReconOptions) ([]query.Row, error) {
+	keyOf, err := query.KeySpec{Columns: opts.Key, CEL: opts.KeyCEL}.Resolver(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("recon: %w", err)
 	}
 
-	baseIndex := indexByKey(baseline, opts.Key)
-	targetIndex := indexByKey(target, opts.Key)
+	baseIndex, err := indexByKey(baseline, keyOf)
+	if err != nil {
+		return nil, fmt.Errorf("recon: baseline: %w", err)
+	}
+	targetIndex, err := indexByKey(target, keyOf)
+	if err != nil {
+		return nil, fmt.Errorf("recon: target: %w", err)
+	}
 
 	out := make([]query.Row, 0, len(target))
 
 	// Walk target rows in order: added, changed, or unchanged.
 	for _, trow := range target {
-		key := keyOf(trow, opts.Key)
+		key, err := keyOf(trow)
+		if err != nil {
+			return nil, fmt.Errorf("recon: target: %w", err)
+		}
 		brow, existed := baseIndex[key]
 		if !existed {
 			out = append(out, withStatus(trow, ReconAdded))
@@ -72,7 +91,11 @@ func Recon(baseline, target []query.Row, opts ReconOptions) ([]query.Row, error)
 
 	// Walk baseline rows in order: anything not in target is removed.
 	for _, brow := range baseline {
-		if _, stillPresent := targetIndex[keyOf(brow, opts.Key)]; !stillPresent {
+		key, err := keyOf(brow)
+		if err != nil {
+			return nil, fmt.Errorf("recon: baseline: %w", err)
+		}
+		if _, stillPresent := targetIndex[key]; !stillPresent {
 			out = append(out, withStatus(brow, ReconRemoved))
 		}
 	}
@@ -124,20 +147,16 @@ func equalValues(a, b any) bool {
 	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
 }
 
-func indexByKey(rows []query.Row, key []string) map[string]query.Row {
+func indexByKey(rows []query.Row, keyOf query.KeyFunc) (map[string]query.Row, error) {
 	idx := make(map[string]query.Row, len(rows))
 	for _, row := range rows {
-		idx[keyOf(row, key)] = row
+		key, err := keyOf(row)
+		if err != nil {
+			return nil, err
+		}
+		idx[key] = row
 	}
-	return idx
-}
-
-func keyOf(row query.Row, key []string) string {
-	parts := make([]string, len(key))
-	for i, k := range key {
-		parts[i] = fmt.Sprintf("%v", row[k])
-	}
-	return strings.Join(parts, "\x00")
+	return idx, nil
 }
 
 // withStatus returns a shallow copy of row with the reconciliation status set.
@@ -200,17 +219,18 @@ func (reconProcessor) Type() string { return "sqlite.recon" }
 
 type reconConfig struct {
 	Key      []string    `json:"key"`
+	KeyCEL   string      `json:"keyCel"`
 	Compare  []string    `json:"compare"`
 	Baseline []query.Row `json:"baseline"`
 }
 
-func (reconProcessor) Process(_ context.Context, spec query.ProcessorSpec, in *query.Result) (*query.Result, error) {
+func (reconProcessor) Process(ctx context.Context, spec query.ProcessorSpec, in *query.Result) (*query.Result, error) {
 	cfg, err := query.DecodeOptions[reconConfig](spec.Config)
 	if err != nil {
 		return nil, err
 	}
 
-	rows, err := Recon(cfg.Baseline, in.Rows, ReconOptions{Key: cfg.Key, Compare: cfg.Compare})
+	rows, err := Recon(ctx, cfg.Baseline, in.Rows, ReconOptions{Key: cfg.Key, KeyCEL: cfg.KeyCEL, Compare: cfg.Compare})
 	if err != nil {
 		return nil, err
 	}

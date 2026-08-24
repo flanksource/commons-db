@@ -3,7 +3,7 @@ import type { ResolvedOperation } from "@flanksource/clicky-ui";
 import {
   buildProfileInitialValue,
   findProfileCreateOperation,
-} from "./buildProfileAction";
+} from "./profileCreateOperation";
 
 function operation(
   surface: string,
@@ -46,6 +46,23 @@ describe("buildProfileInitialValue", () => {
         connection: "connection://OS",
         options: { index: "top_queries-2026.07.13-44509" },
       },
+    });
+  });
+
+  it("carries the selected Kubernetes target query into the profile draft", () => {
+    expect(
+      buildProfileInitialValue(
+        "Production",
+        "kubernetes-logs",
+        undefined,
+        "kind=Deployment namespace=payments name=api",
+      ),
+    ).toEqual({
+      provider: {
+        type: "kubernetes-logs",
+        connection: "connection://Production",
+      },
+      query: "kind=Deployment namespace=payments name=api",
     });
   });
 });

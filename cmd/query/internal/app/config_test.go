@@ -71,3 +71,45 @@ func TestConfigAndProfilePathPrecedence(t *testing.T) {
 		t.Fatalf("derived data = %q, want %q", got, want)
 	}
 }
+
+func TestResolveDBURLPrecedence(t *testing.T) {
+	unsetEnv(t, queryDBURLEnv)
+	if got := ResolveDBURL(nil); got != EmbeddedDatabase {
+		t.Fatalf("default db = %q, want %q", got, EmbeddedDatabase)
+	}
+
+	t.Setenv(queryDBURLEnv, "postgres://env/query")
+	if got := ResolveDBURL(nil); got != "postgres://env/query" {
+		t.Fatalf("env db = %q", got)
+	}
+	if got := ResolveDBURL([]string{"--db", "postgres://flag/query"}); got != "postgres://flag/query" {
+		t.Fatalf("flag db = %q", got)
+	}
+	if got := ResolveDBURL([]string{"--db=postgres://eq/query"}); got != "postgres://eq/query" {
+		t.Fatalf("flag=value db = %q", got)
+	}
+
+	// An explicitly empty --db is a choice, not an absent flag: it selects the
+	// YAML file store even when the environment names a database.
+	for _, args := range [][]string{{"--db", ""}, {"--db="}} {
+		if got := ResolveDBURL(args); got != "" {
+			t.Fatalf("ResolveDBURL(%q) = %q, want empty", args, got)
+		}
+	}
+}
+
+func TestResolveDataDirFromArgs(t *testing.T) {
+	root := t.TempDir()
+	unsetEnv(t, queryDataDirEnv)
+	t.Setenv(queryConfigDirEnv, filepath.Join(root, "env-config"))
+
+	if got, want := ResolveDataDir(nil), filepath.Join(root, "env-config", "postgres"); got != want {
+		t.Fatalf("derived data = %q, want %q", got, want)
+	}
+	if got, want := ResolveDataDir([]string{"--data-dir", filepath.Join(root, "flag-data")}), filepath.Join(root, "flag-data"); got != want {
+		t.Fatalf("flag data = %q, want %q", got, want)
+	}
+	if got, want := ResolveDataDir([]string{"--config-dir", filepath.Join(root, "flag-config")}), filepath.Join(root, "flag-config", "postgres"); got != want {
+		t.Fatalf("data dir under --config-dir = %q, want %q", got, want)
+	}
+}

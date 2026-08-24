@@ -12,14 +12,29 @@
         "scope": {
           "from": "provider.type",
           "map": {
+            "azureloganalytics": [
+              "azure"
+            ],
+            "bigquery": [
+              "google_cloud"
+            ],
             "clickhouse": [
               "clickhouse"
+            ],
+            "cloudwatch": [
+              "aws"
+            ],
+            "gcpcloudlogging": [
+              "google_cloud"
             ],
             "http": [
               "http"
             ],
             "jaeger": [
               "jaeger"
+            ],
+            "k8s": [
+              "kubernetes"
             ],
             "loki": [
               "loki"
@@ -28,7 +43,8 @@
               "mysql"
             ],
             "opensearch": [
-              "opensearch"
+              "opensearch",
+              "elasticsearch"
             ],
             "opentelemetry": [
               "opentelemetry"

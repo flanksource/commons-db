@@ -60,6 +60,13 @@ func makeFQFromField(f interface{}) (*QueryField, error) {
 	return f.(*QueryField), nil
 }
 
+func makeTopQuery(a, b any) (*QueryField, error) {
+	if alternatives, ok := b.([]interface{}); ok && len(alternatives) > 0 {
+		return makeQuery(a, b)
+	}
+	return makeAndQuery(a, b)
+}
+
 //nolint:unused
 func makeQuery(a, b interface{}) (*QueryField, error) {
 	q := &QueryField{

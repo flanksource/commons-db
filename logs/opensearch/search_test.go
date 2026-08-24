@@ -1,16 +1,100 @@
 package opensearch
 
 import (
+	"crypto/sha256"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	dutyContext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons-db/types"
 )
+
+func TestInspectionKeyDoesNotExposeUnkeyedCredentialDigest(t *testing.T) {
+	const address = "https://reader:example@example.test"
+	searcher := &Searcher{config: &Backend{Address: address}}
+	unkeyed := fmt.Sprintf("opensearch:%x", sha256.Sum256([]byte(address)))
+
+	key := searcher.InspectionKey()
+	if key == unkeyed {
+		t.Fatal("inspection key must not be an unkeyed digest of a credential-bearing address")
+	}
+	if key != searcher.InspectionKey() {
+		t.Fatal("inspection key must remain stable for the process lifetime")
+	}
+}
+
+func TestSearchRawSummarizesOpenSearchErrorsWithoutRemoteStackTraces(t *testing.T) {
+	var requestedErrorTrace string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		requestedErrorTrace = r.URL.Query().Get("error_trace")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = fmt.Fprint(w, `{"error":{"root_cause":[{"type":"parse_exception","reason":"failed to parse date field [2026-08-14T00:00:00Z] with format [epoch_millis]","stack_trace":"OpenSearchParseException\n\tat org.opensearch.security.transport.SecurityRequestHandler.messageReceivedDecorate(SecurityRequestHandler.java:217)"}],"type":"search_phase_execution_exception","reason":"all shards failed","failed_shards":[{"reason":{"type":"parse_exception","reason":"failed to parse date field [2026-08-14T00:00:00Z] with format [epoch_millis]","caused_by":{"type":"illegal_argument_exception","reason":"failed to parse date field [2026-08-14T00:00:00Z] with format [epoch_millis]"}}}]},"status":400}`)
+	}))
+	defer server.Close()
+
+	ctx := dutyContext.New()
+	searcher, err := New(ctx, Backend{Address: server.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`, Limit: "10"})
+	if err == nil {
+		t.Fatal("expected the rejected search to fail")
+	}
+	if requestedErrorTrace != "" {
+		t.Fatalf("error_trace = %q, want no remote stack trace", requestedErrorTrace)
+	}
+	message := err.Error()
+	for _, unwanted := range []string{"stack_trace", "SecurityRequestHandler", `"root_cause"`} {
+		if strings.Contains(message, unwanted) {
+			t.Fatalf("error contains %q: %s", unwanted, message)
+		}
+	}
+	if !strings.Contains(message, "parse_exception: failed to parse date field [2026-08-14T00:00:00Z] with format [epoch_millis]") {
+		t.Fatalf("error lost the root cause: %s", message)
+	}
+	var openSearchError *OpenSearchError
+	if !errors.As(err, &openSearchError) || openSearchError.StatusCode != http.StatusBadRequest {
+		t.Fatalf("error = %#v, want typed OpenSearch status 400", err)
+	}
+}
+
+func TestSearchRawBoundsMalformedOpenSearchErrorBodies(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = fmt.Fprint(w, strings.Repeat("x", openSearchErrorBodyLimit+1024))
+	}))
+	defer server.Close()
+
+	ctx := dutyContext.New()
+	searcher, err := New(ctx, Backend{Address: server.URL}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`, Limit: "10"})
+	var openSearchError *OpenSearchError
+	if !errors.As(err, &openSearchError) || !openSearchError.BodyTruncated {
+		t.Fatalf("error = %#v, want a typed truncated OpenSearch error", err)
+	}
+	if len(err.Error()) > openSearchReasonLimit+256 || !strings.Contains(err.Error(), "[response truncated]") {
+		t.Fatalf("error is not explicitly bounded: %s", err)
+	}
+}
 
 func TestSearchRawPreservesNativeEnvelope(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +119,7 @@ func TestSearchRawPreservesNativeEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`})
+	result, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`, Limit: "10"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +160,7 @@ func TestNewHonorsInsecureTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("insecure TLS connection failed: %v", err)
 	}
-	if _, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`}); err != nil {
+	if _, err := searcher.SearchRaw(ctx, Request{Index: "logs", Query: `{"query":{"match_all":{}}}`, Limit: "10"}); err != nil {
 		t.Fatalf("search over insecure TLS failed: %v", err)
 	}
 }

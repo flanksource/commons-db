@@ -1,8 +1,8 @@
 package shell
 
 import (
-	"bytes"
 	gocontext "context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,13 +11,13 @@ import (
 	"strings"
 	"time"
 
+	clickyexec "github.com/flanksource/clicky/exec"
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/types"
 	fileUtils "github.com/flanksource/commons/files"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
-	"github.com/samber/lo"
 	"github.com/samber/oops"
 )
 
@@ -66,6 +66,11 @@ type Exec struct {
 	DotEnv  []string
 	Chroot  string
 	BaseDir string
+
+	PassthroughEnv   []string
+	SuccessExitCodes []int
+	DisplayPath      string
+	DisplayArgs      []string
 }
 
 // +kubebuilder:object:generate=true
@@ -105,7 +110,7 @@ func JQ(ctx context.Context, path string, script string) (string, error) {
 	defer cancel()
 	dir, file := splitCommandPath(path)
 	cmd := osExec.CommandContext(_ctx, "jq", script, file)
-	result, err := RunCmd(ctx, Exec{
+	result, err := RunCmd(ctx.Wrap(_ctx), Exec{
 		Chroot: dir,
 	}, cmd)
 	if err != nil {
@@ -119,7 +124,7 @@ func YQ(ctx context.Context, path string, script string) (string, error) {
 	defer cancel()
 	dir, file := splitCommandPath(path)
 	cmd := osExec.CommandContext(_ctx, "yq", script, file)
-	result, err := RunCmd(ctx, Exec{
+	result, err := RunCmd(ctx.Wrap(_ctx), Exec{
 		Chroot: dir,
 	}, cmd)
 	if err != nil {
@@ -138,26 +143,39 @@ func Run(ctx context.Context, exec Exec) (*ExecDetails, error) {
 }
 
 func RunCmd(ctx context.Context, exec Exec, cmd *osExec.Cmd) (*ExecDetails, error) {
-	ctx.Logger.V(3).Infof("running: %s %s", cmd.Path, lo.Map(cmd.Args, func(arg string, _ int) string { return strings.TrimSpace(arg) }))
+	if cmd == nil {
+		return nil, ctx.Oops().Errorf("shell command is required")
+	}
 	setup, err := SetupEnv(ctx, &exec)
 	if err != nil {
 		return nil, ctx.Oops().Wrap(err)
 	}
-	defer func() {
-		if err := setup.Cleanup(); err != nil {
-			logger.Errorf("failed to cleanup shell setup artifacts: %v", err)
-		}
-	}()
-
-	cmd.Dir = setup.Cwd
-	cmd.Env = setup.Env
-
-	return runCmd(ctx, &commandContext{
-		cmd:        cmd,
-		artifacts:  setup.Artifacts,
-		extra:      setup.Extra,
-		mountPoint: setup.Cwd,
+	result, runErr := runCmd(ctx, &commandContext{
+		cmd:              cmd,
+		artifacts:        setup.Artifacts,
+		extra:            setup.Extra,
+		mountPoint:       setup.Cwd,
+		env:              setup.Env,
+		sensitiveValues:  setup.sensitiveValues,
+		successExitCodes: exec.SuccessExitCodes,
+		displayPath:      exec.DisplayPath,
+		displayArgs:      exec.DisplayArgs,
 	})
+	return finishRun(result, runErr, setup.Cleanup(), setup.sensitiveValues)
+}
+
+func finishRun(result *ExecDetails, runErr, cleanupErr error, sensitiveValues []string) (*ExecDetails, error) {
+	if cleanupErr == nil {
+		return result, runErr
+	}
+	safeCleanupErr := fmt.Errorf("cleanup shell setup: %s", redactText(cleanupErr.Error(), sensitiveValues))
+	if runErr != nil {
+		safeCleanupErr = errors.Join(runErr, safeCleanupErr)
+	}
+	if result != nil {
+		result.Error = safeCleanupErr
+	}
+	return result, safeCleanupErr
 }
 
 func splitCommandPath(path string) (dir, file string) {
@@ -173,41 +191,48 @@ func splitCommandPath(path string) (dir, file string) {
 }
 
 type commandContext struct {
-	cmd       *osExec.Cmd
-	artifacts []Artifact
-	EnvVars   []types.EnvVar
-	extra     map[string]any
+	cmd              *osExec.Cmd
+	artifacts        []Artifact
+	extra            map[string]any
+	env              []string
+	sensitiveValues  []string
+	successExitCodes []int
+	displayPath      string
+	displayArgs      []string
+	envs             []string
 
 	// Working directory for the command
 	mountPoint string
-
-	// Additional env vars to be exported into the shell
-	envs []string
 }
 
-func runCmd(ctx context.Context, cmd *commandContext) (*ExecDetails, error) {
-	var (
-		result ExecDetails
-		stdout bytes.Buffer
-		stderr bytes.Buffer
-	)
+func runCmd(ctx context.Context, command *commandContext) (*ExecDetails, error) {
+	displayPath, displayArgs := command.display()
+	ctx.Logger.V(3).Infof("running: %s %v", displayPath, displayArgs)
 
-	cmd.cmd.Stdout = &stdout
-	cmd.cmd.Stderr = &stderr
+	stdoutLive := redactingWriterFor(command.cmd.Stdout, command.sensitiveValues)
+	stderrLive := redactingWriterFor(command.cmd.Stderr, command.sensitiveValues)
+	process := clickyexec.NewExec(command.cmd.Path, command.cmd.Args[1:]...).
+		WithoutShell().
+		WithCwd(command.mountPoint).
+		WithExactEnv(environmentMap(command.env)).
+		WithProcessGroup().
+		WithStdin(command.cmd.Stdin).
+		WithLogger(logger.NewWithWriter(io.Discard)).
+		Stream(stdoutLive, stderrLive)
 
-	ctx.Logger.V(6).Infof("working directory: %s\nenvironment:\n%s", cmd.mountPoint, strings.Join(cmd.cmd.Env, "\n"))
+	processResult, executionErr := runProcess(ctx, process)
+	closeErr := closeRedactors(stdoutLive, stderrLive)
+	result := ExecDetails{
+		Stdout:   strings.TrimSpace(redactText(processResult.Stdout, command.sensitiveValues)),
+		Stderr:   strings.TrimSpace(redactText(processResult.Stderr, command.sensitiveValues)),
+		ExitCode: processResult.ExitCode,
+		Path:     displayPath,
+		Args:     displayArgs,
+		Extra:    command.extra,
+	}
+	ctx.Logger.V(3).Infof("%s exited with code=%d, stdout=%d bytes, stderr=%d bytes", displayPath, result.ExitCode, len(result.Stdout), len(result.Stderr))
 
-	result.Error = cmd.cmd.Run()
-	result.Args = cmd.cmd.Args
-	result.Extra = cmd.extra
-	result.Path = cmd.cmd.Path
-	result.ExitCode = cmd.cmd.ProcessState.ExitCode()
-	result.Stderr = strings.TrimSpace(stderr.String())
-	result.Stdout = strings.TrimSpace(stdout.String())
-
-	ctx.Logger.V(3).Infof("%s exited with code=%d, stdout=%d bytes, stderr=%d bytes", cmd.cmd.Path, result.ExitCode, len(result.Stdout), len(result.Stderr))
-
-	for _, artifactConfig := range cmd.artifacts {
+	for _, artifactConfig := range command.artifacts {
 		switch artifactConfig.Path {
 		case "/dev/stdout":
 			result.Artifacts = append(result.Artifacts, Artifact{
@@ -222,41 +247,56 @@ func runCmd(ctx context.Context, cmd *commandContext) (*ExecDetails, error) {
 			})
 
 		default:
-			paths, err := fileUtils.DoubleStarGlob(cmd.mountPoint, []string{artifactConfig.Path})
+			paths, err := fileUtils.DoubleStarGlob(command.mountPoint, []string{artifactConfig.Path})
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("resolve artifact files: %s", redactText(err.Error(), command.sensitiveValues))
 			}
 
 			for _, path := range paths {
 				file, err := os.Open(path)
 				if err != nil {
-					return nil, fmt.Errorf("error opening artifact file. path=%s; %w", path, err)
+					return nil, artifactFileError("open", path, err, command.sensitiveValues)
 				}
 
 				if stat, err := file.Stat(); err != nil {
-					return nil, fmt.Errorf("error getting artifact file stat. path=%s; %w", path, err)
+					_ = file.Close()
+					return nil, artifactFileError("stat", path, err, command.sensitiveValues)
 				} else if stat.IsDir() {
-					return nil, fmt.Errorf("artifact path (%s) is a directory. expected file", path)
+					_ = file.Close()
+					return nil, fmt.Errorf("artifact path (%s) is a directory; expected file", redactText(path, command.sensitiveValues))
 				}
 
 				result.Artifacts = append(result.Artifacts, Artifact{
-					Content: file,
-					Path:    path,
+					Content: newRedactingReadCloser(file, command.sensitiveValues),
+					Path:    redactText(path, command.sensitiveValues),
 				})
 			}
 		}
 	}
-	if result.ExitCode != 0 {
+	if executionErr != nil {
+		result.Error = executionErr
+		return &result, executionErr
+	}
+	if closeErr != nil {
+		result.Error = closeErr
+		return &result, closeErr
+	}
+	if !successCode(result.ExitCode, command.successExitCodes) {
+		result.Error = fmt.Errorf("command exited with %d", result.ExitCode)
 		return &result, ctx.Oops().With(
-			"cmd", cmd.cmd.Path,
-			"args", cmd.cmd.Args,
-			"error", result.Error.Error(),
-			"stderr", result.Stderr,
-			"stdout", result.Stdout,
+			"cmd", displayPath,
+			"args", displayArgs,
 			"extra", result.Extra,
 			"exit-code", result.ExitCode,
-		).Code(fmt.Sprintf("exited with %d", result.ExitCode)).Errorf("%v", result.Error.Error())
+		).Code(fmt.Sprintf("exited with %d", result.ExitCode)).Wrap(result.Error)
 	}
-
 	return &result, nil
+}
+
+func artifactFileError(action, path string, err error, sensitiveValues []string) error {
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		err = pathErr.Err
+	}
+	return fmt.Errorf("%s artifact file path=%s: %w", action, redactText(path, sensitiveValues), err)
 }

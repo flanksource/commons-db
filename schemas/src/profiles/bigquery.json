@@ -1,0 +1,155 @@
+{
+  "$id": "bigquery.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "connection": {
+      "description": "Pick a saved connection. Leave empty to use the ambient Google application default credentials",
+      "title": "Connection",
+      "type": "string",
+      "x-clicky-lookup": {
+        "filter": "connection",
+        "multi": false,
+        "scope": {
+          "from": "provider.type",
+          "map": {
+            "azureloganalytics": [
+              "azure"
+            ],
+            "bigquery": [
+              "google_cloud"
+            ],
+            "clickhouse": [
+              "clickhouse"
+            ],
+            "cloudwatch": [
+              "aws"
+            ],
+            "gcpcloudlogging": [
+              "google_cloud"
+            ],
+            "http": [
+              "http"
+            ],
+            "jaeger": [
+              "jaeger"
+            ],
+            "k8s": [
+              "kubernetes"
+            ],
+            "loki": [
+              "loki"
+            ],
+            "mysql": [
+              "mysql"
+            ],
+            "opensearch": [
+              "opensearch",
+              "elasticsearch"
+            ],
+            "opentelemetry": [
+              "opentelemetry"
+            ],
+            "postgres": [
+              "postgres"
+            ],
+            "postgrest": [
+              "http"
+            ],
+            "prometheus": [
+              "prometheus"
+            ],
+            "sql": [
+              "postgres",
+              "mysql",
+              "sql_server",
+              "clickhouse"
+            ],
+            "sqlserver": [
+              "sql_server"
+            ]
+          },
+          "param": "types"
+        },
+        "searchParam": "__lookup_q",
+        "url": "/api/v1/connection"
+      }
+    },
+    "options": {
+      "properties": {
+        "mapping": {
+          "description": "Maps source columns onto the canonical log fields",
+          "properties": {
+            "host": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Host",
+              "type": "array"
+            },
+            "id": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Id",
+              "type": "array"
+            },
+            "ignore": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Ignore",
+              "type": "array"
+            },
+            "message": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Message",
+              "type": "array"
+            },
+            "severity": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Severity",
+              "type": "array"
+            },
+            "source": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Source",
+              "type": "array"
+            },
+            "timestamp": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Timestamp",
+              "type": "array"
+            }
+          },
+          "title": "Field mapping",
+          "type": "object"
+        },
+        "project": {
+          "description": "Overrides the project on the connection",
+          "title": "Project",
+          "type": "string"
+        }
+      },
+      "title": "Options",
+      "type": "object"
+    },
+    "type": {
+      "const": "bigquery",
+      "title": "Type",
+      "type": "string"
+    }
+  },
+  "required": [
+    "type"
+  ],
+  "title": "Query provider: bigquery",
+  "type": "object"
+}

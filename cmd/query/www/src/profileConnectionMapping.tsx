@@ -8,6 +8,7 @@ import {
   type ExecutionResponse,
   type FormActionsRenderer,
   type PostExtension,
+  type PreExtension,
   type ResolvedOperation,
   type SharedOperationsApiClient,
 } from "@flanksource/clicky-ui";
@@ -246,6 +247,7 @@ function ProfileConnectionMappingDialogs({
           action={createAction}
           initialValue={{ type: "opentelemetry" }}
           submitLabel="Save Connection"
+          formPre={connectionFormPre}
           formPost={connectionFormPost}
           footerActions={connectionFooterActions}
           onSuccess={async () => {
@@ -270,13 +272,16 @@ function ProfileConnectionMappingDialogs({
   );
 }
 
+let connectionFormPre: PreExtension[] | undefined;
 let connectionFormPost: PostExtension[] | undefined;
 let connectionFooterActions: FormActionsRenderer | undefined;
 
 export function configureProfileConnectionForm(options: {
+  formPre?: PreExtension[];
   formPost?: PostExtension[];
   footerActions?: FormActionsRenderer;
 }) {
+  connectionFormPre = options.formPre;
   connectionFormPost = options.formPost;
   connectionFooterActions = options.footerActions;
 }

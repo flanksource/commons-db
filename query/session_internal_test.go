@@ -45,6 +45,33 @@ var _ = Describe("Session", func() {
 		Expect(<-live).To(HaveField("Sequence", int64(3)))
 	})
 
+	It("replays only what a resuming subscriber has not already seen", func() {
+		s := newTestSession("resume", 10)
+		for i := 1; i <= 3; i++ {
+			s.Emit(Event{Row: Row{"i": i}})
+		}
+
+		replay, live, cancel := s.SubscribeFrom(2)
+		defer cancel()
+		Expect(replay).To(HaveLen(1))
+		Expect(replay[0].Sequence).To(Equal(int64(3)))
+
+		s.Emit(Event{Row: Row{"i": 4}})
+		Expect(<-live).To(HaveField("Sequence", int64(4)))
+	})
+
+	It("serves what the ring still holds when the resumed sequence was evicted", func() {
+		s := newTestSession("resume-evicted", 2)
+		for i := 1; i <= 4; i++ {
+			s.Emit(Event{Row: Row{"i": i}})
+		}
+
+		replay, _, cancel := s.SubscribeFrom(1)
+		defer cancel()
+		Expect(replay).To(HaveLen(2))
+		Expect(replay[0].Sequence).To(Equal(int64(3)), "events 2 and 3 are gone either way; serving what survives beats serving nothing")
+	})
+
 	It("does not block Emit on a slow subscriber", func(ctx SpecContext) {
 		s := newTestSession("slow", 1000)
 		_, _, cancel := s.Subscribe()
@@ -143,12 +170,26 @@ var _ = Describe("Session", func() {
 var _ = Describe("sortAndLimit", func() {
 	It("orders numeric strings numerically, not lexicographically", func() {
 		rows := []Row{{"d": "96.8"}, {"d": "136.4"}, {"d": "7"}}
-		Expect(sortAndLimit(rows, "d", 2)).To(Equal([]Row{{"d": "136.4"}, {"d": "96.8"}}))
+		sorted, _ := sortAndLimit(rows, "d", 2)
+		Expect(sorted).To(Equal([]Row{{"d": "136.4"}, {"d": "96.8"}}))
 	})
 
 	It("leaves rows untouched without sortBy or limit", func() {
 		rows := []Row{{"d": 2}, {"d": 1}}
-		Expect(sortAndLimit(rows, "", 0)).To(Equal([]Row{{"d": 2}, {"d": 1}}))
+		sorted, cut := sortAndLimit(rows, "", 0)
+		Expect(sorted).To(Equal([]Row{{"d": 2}, {"d": 1}}))
+		Expect(cut).To(BeFalse())
+	})
+
+	// A snapshot that dropped its tail must not be presented as the whole of it.
+	It("reports that the limit removed rows", func() {
+		_, cut := sortAndLimit([]Row{{"d": 3}, {"d": 2}, {"d": 1}}, "d", 2)
+		Expect(cut).To(BeTrue())
+	})
+
+	It("does not report a limit the rows never reached", func() {
+		_, cut := sortAndLimit([]Row{{"d": 2}, {"d": 1}}, "d", 5)
+		Expect(cut).To(BeFalse())
 	})
 })
 
