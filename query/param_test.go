@@ -38,6 +38,32 @@ params:
 	})
 
 	Describe("Execute injects params into the query", func() {
+		It("hands normalized date, datetime, and duration values to the provider", func() {
+			mp := &mockProvider{typ: "param-temporal-types"}
+			query.RegisterProvider(mp)
+
+			_, err := query.Execute(context.New(), query.Profile{
+				Name:     "p",
+				Provider: query.ProviderConfig{Type: mp.typ},
+				Params: []query.ParamDef{
+					{Name: "day", Type: query.ParamTypeDate},
+					{Name: "started_at", Type: query.ParamTypeDateTime},
+					{Name: "window", Type: query.ParamTypeDuration},
+				},
+			}, map[string]any{
+				"day":        "2026-07-01T14:30:00+03:00",
+				"started_at": "2026-07-01T14:30:00.123456+03:00",
+				"window":     "1h30m",
+			})
+
+			Expect(err).ToNot(HaveOccurred())
+			Expect(mp.last.Params).To(Equal(map[string]any{
+				"day":        "2026-07-01",
+				"started_at": "2026-07-01T14:30:00.123456+03:00",
+				"window":     int64(5_400_000),
+			}))
+		})
+
 		It("templates a supplied value into the rendered query", func() {
 			mp := &mockProvider{typ: "param-render"}
 			query.RegisterProvider(mp)

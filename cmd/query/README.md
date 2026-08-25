@@ -19,15 +19,33 @@ go -C cmd/query run . serve --port 8080 --profiles-dir ../../profiles
    clicky-ui `SecretKeySelector` (Secret / ConfigMap / Value) backed by
    `GET /api/v1/secrets[/preview]`; the chosen reference is stored as an
    `EnvVar` string (`secret://<name>/<key>`) and resolved at runtime.
-2. **Create profiles** — stored in the migrated PostgreSQL `profiles` table under
-   `query serve`; standalone CLI commands continue to use YAML under
-   `--profiles-dir`. Existing YAML profiles are imported without overwriting
+2. **Create profiles** — stored in the migrated PostgreSQL `profiles` table. Every
+   command resolves its store from the root `--db` flag, so the CLI reads what the
+   web app wrote; `--db=` opts out and falls back to YAML under `--profiles-dir`.
+   Existing YAML profiles are imported without overwriting
    database rows. The form is driven by the profile-setup schema. A profile
    declares a `provider`, a `query`, server-side filter `params`, and output
    `columns`.
-3. **Run profiles** — `GET /api/v1/profile/{name}?<param>=<value>` validates the
-   params, templates them into the query (`{{.params.<name>}}`), executes via the
-   query engine, and returns the rows.
+3. **Run profiles** — `GET /api/v1/profile/{name}?<param>=<value>` validates the params, resolves their query references (`{{.params.<name>}}`), executes via the query engine, and returns the rows.
+
+SQL parameters are driver-bound values by default. Declare a database, schema, table, or column parameter as `identifier`; qualified names are validated as plain dot-separated names and each part is quoted for the connected SQL dialect:
+
+```yaml
+profile: orders
+provider:
+  type: postgres
+query: SELECT id, region FROM {{.params.table}} WHERE {{.params.column}} = {{.params.value}}
+params:
+  - name: table
+    type: identifier
+    default: public.orders
+  - name: column
+    type: identifier
+    default: region
+  - name: value
+    type: string
+    required: true
+```
 
 ## API
 
@@ -46,14 +64,50 @@ representation:
 | `GET /api/v1/profile/{name}?format=csv&scope=page` | export the current page |
 | `GET /api/v1/profile/{name}?format=ndjson&scope=all` | stream every SQL/OpenSearch row |
 | `GET /api/v1/profile/{name}` + `Accept: application/schema+json` | per-profile schema: `properties` = FilterBar inputs, `x-clicky-columns` = DataTable columns |
+| `GET /api/v1/profile/{name}?<params>` + `Accept: application/info+json` | **explain** the same execution → the provider query, its bound arguments, timings and paging headers, instead of rows |
 
-(`?__schema` is accepted as an alias for the schema Accept header.)
+(`?__schema` and `?__info` are accepted as aliases for their Accept headers.)
+
+An info request runs the page it is asked about — that is the only way to know
+what the provider was actually sent, since the query is rendered from the params
+and filters in the URL. It never runs an all-row export: the scope is forced back
+to one page, so explaining a download costs a page and not the download. A failed
+execution answers with the same diagnostics plus the error, which is the case the
+endpoint mostly exists for. It is what the result table's **Show query** menu item
+reads.
 
 Profile results export as JSON, NDJSON, CSV, YAML, Markdown, HTML, XLSX, or
 PDF. SQL and OpenSearch all-row exports keep bounded memory by consuming a
-backend cursor directly; processors and top/global sorting retain the buffered
-compatibility path. PDF is capped at 1,000 rows. Schema-less all-row results can
-use JSON, NDJSON, or YAML; table-oriented formats require declared columns.
+backend cursor directly when every processor supports pages; whole-result
+processors and top/global sorting use the buffered compatibility path. PDF is
+capped at 1,000 rows. Schema-less all-row results can use JSON, NDJSON, or YAML;
+table-oriented formats require declared columns.
+
+Every execution path uses the same row pipeline:
+
+```
+provider rows → processors → aliases → ignore → row filters → columns → styles
+```
+
+Processors therefore read provider-native fields, while columns and aliases may
+read fields produced by processors. Sampling skips processors unless processor
+preview is enabled; the preview records the raw input and each raw processor
+stage before mapping its final rows.
+
+A trace streams page-capable processors one row at a time. A processor that
+needs a whole result requires a bounded raw-row batch under `trace.buffer`:
+
+```yaml
+trace:
+  buffer:
+    maxRows: 200
+    maxWait: 250ms
+```
+
+At least one bound is required and the first reached flushes the batch. A group
+cannot cross a flush boundary. The remaining batch flushes when the provider
+ends, the session is stopped, or its deadline is reached; `maxEvents` caps the
+final emitted event ring rather than the raw input buffer.
 
 ## Architecture
 
@@ -107,6 +161,19 @@ the root with `--config-dir` or `QUERY_CONFIG_DIR`; the existing
 `--data-dir`/`QUERY_DATA_DIR` and `--profiles-dir`/`QUERY_PROFILES_DIR`
 overrides remain available. Existing `.query/pg` and `./profiles` directories
 are not migrated automatically.
+
+`--db`/`QUERY_DB_URL` picks the store for `serve` and every sub-command alike:
+
+| Value | Store |
+| --- | --- |
+| `embedded` (default) | the cluster under `--data-dir`, started or reused |
+| a PostgreSQL DSN | that database, migrated on connect |
+| empty (`--db=`) | no database — YAML profiles, and `query connection` errors |
+
+Connecting is deferred until a command needs the store, so `--help`, `version`,
+`schema` and shell completion never start PostgreSQL. A cluster started by a
+sub-command is left running for the next invocation; `serve` stops the one it
+starts.
 
 The toolbar exposes explicit **Add Connection** and **Add Profile** actions.
 Connections and profiles are persisted in the embedded database. Private YAML

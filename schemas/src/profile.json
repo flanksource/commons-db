@@ -7,7 +7,9 @@
           "cel": {
             "description": "Ordered row projection",
             "title": "CEL",
-            "type": "string"
+            "type": "string",
+            "x-clicky-cel-scope": "row",
+            "x-clicky-component": "cel-editor"
           },
           "name": {
             "description": "Dotted output path",
@@ -31,35 +33,174 @@
           "cel": {
             "description": "Expression computing the cell value from `row`",
             "title": "CEL",
-            "type": "string"
+            "type": "string",
+            "x-clicky-cel-scope": "row",
+            "x-clicky-component": "cel-editor",
+            "x-clicky-order": 8
+          },
+          "filter": {
+            "description": "How this column is filtered at the backend; a direct column or simple CEL infers the field, and Type infers the control",
+            "properties": {
+              "disabled": {
+                "description": "Offer no filter for this column while keeping the column itself rendered",
+                "title": "Disabled",
+                "type": "boolean"
+              },
+              "field": {
+                "description": "Backend field the selection applies to — the indexed field for a document store, the result column for SQL; required only when the column implies none",
+                "title": "Field",
+                "type": "string",
+                "x-clicky-component": "es-param-field"
+              },
+              "kind": {
+                "description": "Overrides the control derived from Type; set it where the rendered type and the backend storage disagree",
+                "enum": [
+                  "terms",
+                  "exact",
+                  "text",
+                  "range",
+                  "duration",
+                  "date",
+                  "time",
+                  "boolean",
+                  "none"
+                ],
+                "title": "Kind",
+                "type": "string",
+                "x-enum-display": "combobox",
+                "x-enum-labels": {
+                  "boolean": "Boolean",
+                  "date": "Date range",
+                  "duration": "Duration range",
+                  "exact": "Exact match",
+                  "none": "Not filterable",
+                  "range": "Numeric range",
+                  "terms": "Value list",
+                  "text": "Text search",
+                  "time": "Date \u0026 time range"
+                }
+              },
+              "limit": {
+                "default": 50,
+                "description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup. Value selections only",
+                "maximum": 200,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "lookup": {
+                "default": true,
+                "description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked. Value selections only",
+                "title": "Lookup",
+                "type": "boolean"
+              },
+              "multi": {
+                "default": true,
+                "description": "Allow several values at once",
+                "title": "Multi",
+                "type": "boolean"
+              },
+              "nested": {
+                "description": "The `nested` mapping the field lives inside; a selection on such a field is compiled inside a nested query, and a flat clause on one matches nothing",
+                "title": "Nested",
+                "type": "string",
+                "x-clicky-component": "es-param-field"
+              },
+              "options": {
+                "description": "Selectable values; leave empty to ask the backend for its own distinct values. Value selections only",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Options",
+                "type": "array",
+                "x-col-span": "full"
+              },
+              "where": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Constants the selection also requires, keyed by backend field — the key of a key/value tag list, whose value is what the operator picks; requires Nested",
+                "title": "Where",
+                "type": "object",
+                "x-col-span": "full"
+              }
+            },
+            "title": "Filter",
+            "type": "object",
+            "x-clicky-order": 10
           },
           "format": {
+            "description": "Optional display formatter; blank derives from Type and Unit takes precedence",
+            "enum": [
+              "date",
+              "float",
+              "duration",
+              "bytes",
+              "currency"
+            ],
             "title": "Format",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 5,
+            "x-enum-labels": {
+              "bytes": "Bytes",
+              "currency": "Currency",
+              "date": "Date/time",
+              "duration": "Duration",
+              "float": "Number"
+            }
           },
           "hidden": {
+            "description": "Hide the column from default output while retaining it for later column and style CEL",
             "title": "Hidden",
-            "type": "boolean"
+            "type": "boolean",
+            "x-clicky-order": 11
+          },
+          "jsonpath": {
+            "description": "Path computing the cell value, rooted at the row or at Source when it is set; an alternative to CEL",
+            "title": "JSONPath",
+            "type": "string",
+            "x-clicky-component": "jsonpath-picker",
+            "x-clicky-order": 9
           },
           "kind": {
-            "description": "Timestamp marks the column used by table date ranges",
+            "description": "Optional table behavior, independent of Type: timestamp adds the date-range control, tags renders filterable chips, and status applies status styling",
             "enum": [
               "timestamp",
               "tags",
               "status"
             ],
-            "title": "Kind",
-            "type": "string"
+            "title": "Role",
+            "type": "string",
+            "x-clicky-order": 4
           },
           "label": {
+            "description": "Optional column header; blank uses Name",
             "title": "Label",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 0
           },
           "name": {
+            "description": "Public field name used by tables, filters, APIs, and exports",
             "title": "Name",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 1
+          },
+          "source": {
+            "description": "Original provider field copied into Name and removed from output",
+            "title": "Source",
+            "type": "string",
+            "x-clicky-order": 2
+          },
+          "style": {
+            "description": "CEL returning this cell's presentation classes, e.g. level == \"ERROR\" ? \"text-red-500\" : \"\"",
+            "title": "Style",
+            "type": "string",
+            "x-clicky-cel-scope": "row",
+            "x-clicky-component": "cel-editor",
+            "x-clicky-order": 12
           },
           "type": {
+            "description": "Value shape and default formatting; independent of Role",
             "enum": [
               "string",
               "number",
@@ -69,25 +210,56 @@
               "bytes",
               "status",
               "health",
+              "uuid",
               "key_value",
               "key_values",
               "json"
             ],
             "title": "Type",
             "type": "string",
+            "x-clicky-order": 3,
             "x-enum-labels": {
               "json": "JSON",
               "key_value": "KeyValue{}",
-              "key_values": "[]KeyValue"
+              "key_values": "[]KeyValue",
+              "uuid": "UUID"
             }
           },
           "unit": {
+            "description": "Numeric scaling and display unit; requires Type number, duration, or bytes and takes precedence over Format",
+            "enum": [
+              "none",
+              "short",
+              "percent",
+              "percentunit",
+              "bytes",
+              "decbytes",
+              "Bps",
+              "binBps",
+              "ms",
+              "s"
+            ],
             "title": "Unit",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 6,
+            "x-enum-labels": {
+              "Bps": "Bytes/sec",
+              "binBps": "Binary bytes/sec",
+              "bytes": "Bytes (IEC)",
+              "decbytes": "Bytes (SI)",
+              "ms": "Milliseconds",
+              "none": "Compact count",
+              "percent": "Percent (0-100)",
+              "percentunit": "Percent (0-1)",
+              "s": "Seconds",
+              "short": "Short number"
+            }
           },
           "width": {
+            "description": "Maximum rendered width in characters",
             "title": "Width",
-            "type": "integer"
+            "type": "integer",
+            "x-clicky-order": 7
           }
         },
         "required": [
@@ -99,6 +271,53 @@
       "type": "array",
       "x-layout": "table"
     },
+    "filters": {
+      "items": {
+        "properties": {
+          "description": {
+            "description": "What this filter trims, for the tooltip",
+            "title": "Description",
+            "type": "string"
+          },
+          "exclude": {
+            "description": "Drop matching rows instead of keeping them",
+            "title": "Exclude",
+            "type": "boolean"
+          },
+          "fields": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "CEL predicates keyed by label, AND-ed together",
+            "title": "Fields",
+            "type": "object"
+          },
+          "hidden": {
+            "description": "Always applied, rather than offered as a toggle",
+            "title": "Hidden",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Filter identity, shown in the UI",
+            "title": "Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "fields"
+        ],
+        "type": "object"
+      },
+      "title": "Filters",
+      "type": "array",
+      "x-array-display": "accordion"
+    },
+    "icon": {
+      "description": "Overrides the glyph shown in the sidebar and pickers; blank uses the provider's own mark",
+      "title": "Icon",
+      "type": "string",
+      "x-clicky-order": 2
+    },
     "ignore": {
       "items": {
         "type": "string"
@@ -107,17 +326,59 @@
       "type": "array"
     },
     "imports": {
+      "description": "Profiles merged left to right before this one runs",
       "items": {
         "type": "string"
       },
       "title": "Imports",
-      "type": "array"
+      "type": "array",
+      "x-clicky-lookup": {
+        "filter": "profile",
+        "hierarchy": {
+          "delimiters": "./"
+        },
+        "multi": true,
+        "searchParam": "__lookup_q",
+        "url": "/api/v1/profiles"
+      }
     },
     "namespace": {
       "title": "Namespace",
       "type": "string",
       "x-clicky-component": "k8s-namespace-selector",
       "x-clicky-order": 1
+    },
+    "order": {
+      "description": "Total order the rows are returned in, ending in a column marked unique. Paging past the first page requires it: without a tiebreaker, two runs of the same query may interleave tied rows differently and a second page can repeat or skip rows from the first.",
+      "items": {
+        "properties": {
+          "column": {
+            "description": "Row key to order by",
+            "title": "Column",
+            "type": "string",
+            "x-clicky-order": 0
+          },
+          "desc": {
+            "title": "Descending",
+            "type": "boolean",
+            "x-clicky-order": 1
+          },
+          "unique": {
+            "description": "This column breaks all remaining ties, making the order total. Must be the last entry, and is what a cursor resumes from",
+            "title": "Unique",
+            "type": "boolean",
+            "x-clicky-order": 2
+          }
+        },
+        "required": [
+          "column"
+        ],
+        "title": "Order column",
+        "type": "object"
+      },
+      "title": "Order",
+      "type": "array",
+      "x-layout": "table"
     },
     "output": {
       "items": {
@@ -127,37 +388,56 @@
       "type": "array"
     },
     "params": {
+      "description": "A parameter turns a fixed query into a reusable one: give it a name and it becomes {{.params.\u003cname\u003e}} inside the query, the provider options and the connection.",
       "items": {
         "properties": {
           "default": {
-            "title": "Default"
+            "title": "Default",
+            "x-clicky-order": 5
           },
           "description": {
+            "description": "Shown as the parameter's tooltip in the filter bar",
             "title": "Description",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 9,
+            "x-col-span": "full"
+          },
+          "field": {
+            "description": "Backend field this parameter filters on; Kubernetes label parameters use labels.\u003ckey\u003e",
+            "title": "Field",
+            "type": "string",
+            "x-clicky-component": "es-param-field",
+            "x-clicky-order": 4
           },
           "label": {
+            "description": "Human-facing name in the filter bar; blank uses Name",
             "title": "Label",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 1
           },
           "name": {
-            "description": "Parameter key, referenced as {{.params.\u003cname\u003e}}",
+            "description": "Parameter key, referenced as {{.params.\u003cname\u003e}} in the query, in any provider option, or in the connection",
             "title": "Name",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 0
           },
           "options": {
+            "description": "Allowed values; leave empty on a bound list to offer the backend's own distinct values",
             "items": {
               "type": "string"
             },
             "title": "Options",
-            "type": "array"
+            "type": "array",
+            "x-clicky-order": 8,
+            "x-col-span": "full"
           },
           "required": {
             "title": "Required",
-            "type": "boolean"
+            "type": "boolean",
+            "x-clicky-order": 7
           },
           "role": {
-            "description": "Map this parameter to filtering, paging, or a date-range edge",
+            "description": "Map this parameter to filtering, paging, or a date-range edge; cursors are provider-owned transport values",
             "enum": [
               "filter",
               "limit",
@@ -166,32 +446,221 @@
               "time-to"
             ],
             "title": "Role",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 3,
+            "x-enum-display": "combobox",
+            "x-enum-icons": {
+              "filter": "filter",
+              "limit": "list-ordered",
+              "offset": "arrow-right",
+              "time-from": "clock",
+              "time-to": "timer"
+            },
+            "x-enum-labels": {
+              "filter": "filters",
+              "limit": "row limit",
+              "offset": "offset",
+              "time-from": "time from",
+              "time-to": "time to"
+            }
           },
           "template": {
             "description": "Value rewrite; {value} is the supplied value",
             "title": "Template",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 6
           },
           "type": {
+            "description": "Date resolves to YYYY-MM-DD; date \u0026 time resolves to RFC3339; duration resolves to whole milliseconds; identifier validates and quotes a SQL database, schema, table, or column name; list accepts several values; labels binds a Kubernetes labels.\u003ckey\u003e field",
             "enum": [
               "string",
               "number",
               "boolean",
               "date",
-              "enum"
+              "datetime",
+              "duration",
+              "enum",
+              "identifier",
+              "list",
+              "labels"
             ],
             "title": "Type",
-            "type": "string"
+            "type": "string",
+            "x-clicky-order": 2,
+            "x-enum-display": "combobox",
+            "x-enum-icons": {
+              "boolean": "toggle-on",
+              "date": "calendar",
+              "datetime": "clock",
+              "duration": "timer",
+              "enum": "tag",
+              "identifier": "database",
+              "labels": "tags",
+              "list": "list-dashes",
+              "number": "sigma",
+              "string": "cursor-text"
+            },
+            "x-enum-labels": {
+              "datetime": "Date \u0026 time",
+              "duration": "Duration",
+              "identifier": "SQL identifier",
+              "labels": "Kubernetes labels",
+              "list": "List (multi-select)"
+            },
+            "x-enum-tones": {
+              "boolean": "amber",
+              "date": "sky",
+              "datetime": "rose",
+              "duration": "neutral",
+              "enum": "teal",
+              "identifier": "sky",
+              "labels": "emerald",
+              "list": "indigo",
+              "number": "violet",
+              "string": "slate"
+            }
           }
         },
         "required": [
           "name"
         ],
-        "type": "object"
+        "title": "Parameter",
+        "type": "object",
+        "x-clicky-component": "es-param",
+        "x-columns": "auto",
+        "x-columns-max-width": "76rem"
       },
       "title": "Params",
-      "type": "array"
+      "type": "array",
+      "x-array-display": "accordion",
+      "x-clicky-component": "es-params",
+      "x-item": {
+        "badge": "role",
+        "fallback": "Untitled parameter",
+        "flag": "required",
+        "glyph": "type",
+        "noun": "parameter",
+        "nounPlural": "parameters",
+        "summary": [
+          {
+            "pattern": "{{.params.{}}}",
+            "property": "name"
+          },
+          {
+            "property": "field"
+          }
+        ],
+        "title": [
+          "label",
+          "name"
+        ]
+      }
+    },
+    "processors": {
+      "description": "Raw-row steps applied in order before aliases, filters, columns, and styles",
+      "items": {
+        "properties": {
+          "config": {
+            "description": "Processor-specific configuration",
+            "title": "Config",
+            "type": "object",
+            "x-clicky-order": 2
+          },
+          "type": {
+            "description": "Registered processor key; leave blank when a library processor is chosen",
+            "enum": [
+              "cel.batch",
+              "cel.dedupe",
+              "logs.parse",
+              "sqlite.merge",
+              "sqlite.recon"
+            ],
+            "title": "Type",
+            "type": "string",
+            "x-clicky-order": 1
+          },
+          "use": {
+            "description": "Reusable preset supplying the type and its configuration; anything set below is merged over it.\n\n- `java.stacktrace`: Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Traces longer than 500 lines are emitted in bounded chunks. Assumes newest-first rows — set `order: asc` for a chronological query.\n- `logs.dedupe`: Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Works in either sort direction — set `partition` yourself for a different key. Paged, it folds each page and remembers the groups it has already emitted, so a line surfaces once per walk carrying the count from the page it appeared on.\n- `logs.json`: Extracts message, severity, source and host from a JSON log body, promotes the remaining fields as columns, and hashes the parsed message for later deduplication. Non-JSON lines pass through unchanged, so this can precede a multiline processor.\n- `logs.logfmt`: Extracts message and severity from a logfmt body, promotes the remaining key/value pairs as columns, and hashes the parsed message for later deduplication. Non-logfmt lines pass through unchanged.",
+            "enum": [
+              "java.stacktrace",
+              "logs.dedupe",
+              "logs.json",
+              "logs.logfmt"
+            ],
+            "title": "Library processor",
+            "type": "string",
+            "x-clicky-order": 0,
+            "x-enum-display": "combobox",
+            "x-enum-labels": {
+              "java.stacktrace": "Java stack trace merge",
+              "logs.dedupe": "Collapse repeated log lines",
+              "logs.json": "Parse JSON logs",
+              "logs.logfmt": "Parse logfmt logs"
+            }
+          }
+        },
+        "title": "Processor",
+        "type": "object"
+      },
+      "title": "Processors",
+      "type": "array",
+      "x-clicky-component": "processor-pipeline",
+      "x-clicky-presets": {
+        "java.stacktrace": {
+          "config": {
+            "continuation": "(row.message + \"\").matches(\"^\\\\s*(at\\\\s|Caused by:|Suppressed:|\\\\.\\\\.\\\\.\\\\s*[0-9]+\\\\s+more\\\\s*$)\")",
+            "keep": "first",
+            "max": 500,
+            "order": "desc",
+            "partition": [
+              "pod",
+              "container"
+            ],
+            "set": {
+              "exception": "\n\t(first.message + \"\").matches(\"^[a-zA-Z_$][a-zA-Z0-9_$.]*(Exception|Error|Throwable):\")\n\t\t? (first.message + \"\").split(\":\")[0]\n\t\t: \"\"",
+              "message": "dyn(batch).map(line, line.message + \"\").join(\"\\n\")",
+              "stack_depth": "count - 1"
+            },
+            "when": "count \u003e 1"
+          },
+          "description": "Folds `at …`, `Caused by:`, `Suppressed:` and `… N more` continuation lines back into the log line that threw, so one exception is one row. Adjacent lines sharing a timestamp are merged too; set `boundary` instead of `continuation` to turn that off. Traces longer than 500 lines are emitted in bounded chunks. Assumes newest-first rows — set `order: asc` for a chronological query.",
+          "title": "Java stack trace merge",
+          "type": "cel.batch"
+        },
+        "logs.dedupe": {
+          "config": {
+            "keep": "first",
+            "partition": [
+              "hash"
+            ],
+            "set": {
+              "count": "count",
+              "firstSeen": "dyn(batch)[0].timestamp \u003e dyn(batch)[count - 1].timestamp ? dyn(batch)[count - 1].timestamp : dyn(batch)[0].timestamp",
+              "lastSeen": "dyn(batch)[0].timestamp \u003e dyn(batch)[count - 1].timestamp ? dyn(batch)[0].timestamp : dyn(batch)[count - 1].timestamp"
+            }
+          },
+          "description": "Folds lines whose message is the same once variable parts (ids, durations, addresses) are tokenized out into a single row carrying `count` and the first/last time it was seen. Keys on `hash`, so `Timeout after 31ms` and `Timeout after 5006ms` count as one error. Works in either sort direction — set `partition` yourself for a different key. Paged, it folds each page and remembers the groups it has already emitted, so a line surfaces once per walk carrying the count from the page it appeared on.",
+          "title": "Collapse repeated log lines",
+          "type": "cel.dedupe"
+        },
+        "logs.json": {
+          "config": {
+            "format": "json"
+          },
+          "description": "Extracts message, severity, source and host from a JSON log body, promotes the remaining fields as columns, and hashes the parsed message for later deduplication. Non-JSON lines pass through unchanged, so this can precede a multiline processor.",
+          "title": "Parse JSON logs",
+          "type": "logs.parse"
+        },
+        "logs.logfmt": {
+          "config": {
+            "format": "logfmt"
+          },
+          "description": "Extracts message and severity from a logfmt body, promotes the remaining key/value pairs as columns, and hashes the parsed message for later deduplication. Non-logfmt lines pass through unchanged.",
+          "title": "Parse logfmt logs",
+          "type": "logs.parse"
+        }
+      },
+      "x-layout": "table"
     },
     "profile": {
       "description": "Profile name",
@@ -379,6 +848,81 @@
           "then": {
             "$ref": "profiles/opentelemetry.json"
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cloudwatch"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/cloudwatch.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "gcpcloudlogging"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/gcpcloudlogging.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "bigquery"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/bigquery.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "k8s"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/k8s.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "azureloganalytics"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/azureloganalytics.json"
+          }
         }
       ],
       "properties": {
@@ -392,14 +936,29 @@
             "scope": {
               "from": "provider.type",
               "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
                 "clickhouse": [
                   "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
                 ],
                 "http": [
                   "http"
                 ],
                 "jaeger": [
                   "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
                 ],
                 "loki": [
                   "loki"
@@ -408,7 +967,8 @@
                   "mysql"
                 ],
                 "opensearch": [
-                  "opensearch"
+                  "opensearch",
+                  "elasticsearch"
                 ],
                 "opentelemetry": [
                   "opentelemetry"
@@ -455,15 +1015,25 @@
             "loki",
             "opensearch",
             "jaeger",
-            "opentelemetry"
+            "opentelemetry",
+            "cloudwatch",
+            "gcpcloudlogging",
+            "bigquery",
+            "k8s",
+            "azureloganalytics"
           ],
           "title": "Type",
           "type": "string",
           "x-enum-display": "combobox",
           "x-enum-icons": {
+            "azureloganalytics": "azure",
+            "bigquery": "google-cloud",
             "clickhouse": "clickhouse",
+            "cloudwatch": "aws",
+            "gcpcloudlogging": "google-cloud",
             "http": "globe",
             "jaeger": "activity",
+            "k8s": "kubernetes",
             "loki": "grafana",
             "mysql": "mysql",
             "opensearch": "opensearch",
@@ -490,6 +1060,88 @@
       "type": "string",
       "x-clicky-component": "profile-query-builder"
     },
+    "reconcile": {
+      "description": "Join this profile's rows against another profile on a shared identity",
+      "properties": {
+        "dest": {
+          "description": "The profile to reconcile against",
+          "title": "Destination profile",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "profile",
+            "hierarchy": {
+              "delimiters": "./"
+            },
+            "multi": false,
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/profiles"
+          },
+          "x-clicky-order": 1
+        },
+        "destFilters": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Filter values applied only to the destination profile",
+          "title": "Destination filters",
+          "type": "object"
+        },
+        "key": {
+          "description": "How the shared identity is read from a row on either side; set columns or cel, never both",
+          "properties": {
+            "cel": {
+              "description": "Expression evaluated against a row on either side; required when the two sides name the identity differently",
+              "format": "textarea",
+              "title": "CEL",
+              "type": "string"
+            },
+            "columns": {
+              "description": "Row keys whose values, joined in order, form the key — only when both sides name them the same",
+              "items": {
+                "type": "string"
+              },
+              "title": "Columns",
+              "type": "array"
+            }
+          },
+          "title": "Key",
+          "type": "object",
+          "x-clicky-order": 2
+        },
+        "range": {
+          "description": "Span of keys to reconcile; empty covers all of them. A range cuts both sides at the same keys, so a key missing from one side inside it is missing rather than merely unread",
+          "properties": {
+            "from": {
+              "description": "Reconcile keys at or after this one; empty starts at the first key",
+              "title": "From",
+              "type": "string"
+            },
+            "to": {
+              "description": "Reconcile keys before this one; empty runs to the last key",
+              "title": "To",
+              "type": "string"
+            }
+          },
+          "title": "Key range",
+          "type": "object"
+        },
+        "sourceFilters": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Filter values applied only to this source profile",
+          "title": "Source filters",
+          "type": "object"
+        },
+        "timeColumn": {
+          "description": "Row key holding each side's event time; defaults to the profile's timestamp column",
+          "title": "Time column",
+          "type": "string"
+        }
+      },
+      "title": "Reconcile",
+      "type": "object"
+    },
     "render": {
       "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)",
       "enum": [
@@ -498,6 +1150,180 @@
       ],
       "title": "Render",
       "type": "string"
+    },
+    "replay": {
+      "description": "Turn one result row back into an outbound HTTP request",
+      "properties": {
+        "body": {
+          "description": "CEL expression yielding the request body; non-string values are JSON encoded",
+          "format": "textarea",
+          "title": "Body",
+          "type": "string"
+        },
+        "headers": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "Header name to CEL expression; an expression yielding blank omits the header",
+          "title": "Headers",
+          "type": "object"
+        },
+        "kind": {
+          "default": "http",
+          "enum": [
+            "http"
+          ],
+          "title": "Kind",
+          "type": "string",
+          "x-clicky-order": 1
+        },
+        "method": {
+          "description": "CEL expression yielding the HTTP method, e.g. \"POST\" (defaults to POST)",
+          "title": "Method",
+          "type": "string"
+        },
+        "target": {
+          "description": "Connection the request is sent to; required for a relative URL",
+          "properties": {
+            "connection": {
+              "description": "Pick a saved connection or type an inline DSN/URL",
+              "title": "Connection",
+              "type": "string",
+              "x-clicky-lookup": {
+                "filter": "connection",
+                "multi": false,
+                "scope": {
+                  "from": "provider.type",
+                  "map": {
+                    "azureloganalytics": [
+                      "azure"
+                    ],
+                    "bigquery": [
+                      "google_cloud"
+                    ],
+                    "clickhouse": [
+                      "clickhouse"
+                    ],
+                    "cloudwatch": [
+                      "aws"
+                    ],
+                    "gcpcloudlogging": [
+                      "google_cloud"
+                    ],
+                    "http": [
+                      "http"
+                    ],
+                    "jaeger": [
+                      "jaeger"
+                    ],
+                    "k8s": [
+                      "kubernetes"
+                    ],
+                    "loki": [
+                      "loki"
+                    ],
+                    "mysql": [
+                      "mysql"
+                    ],
+                    "opensearch": [
+                      "opensearch",
+                      "elasticsearch"
+                    ],
+                    "opentelemetry": [
+                      "opentelemetry"
+                    ],
+                    "postgres": [
+                      "postgres"
+                    ],
+                    "postgrest": [
+                      "http"
+                    ],
+                    "prometheus": [
+                      "prometheus"
+                    ],
+                    "sql": [
+                      "postgres",
+                      "mysql",
+                      "sql_server",
+                      "clickhouse"
+                    ],
+                    "sqlserver": [
+                      "sql_server"
+                    ]
+                  },
+                  "param": "types"
+                },
+                "searchParam": "__lookup_q",
+                "url": "/api/v1/connection"
+              }
+            },
+            "url": {
+              "description": "Base URL",
+              "title": "URL",
+              "type": "string"
+            }
+          },
+          "title": "Target",
+          "type": "object",
+          "x-clicky-component": "connection-http",
+          "x-clicky-order": 2
+        },
+        "url": {
+          "description": "CEL expression yielding an absolute URL or a path relative to the target",
+          "title": "URL",
+          "type": "string"
+        }
+      },
+      "title": "Replay",
+      "type": "object"
+    },
+    "trace": {
+      "description": "Long-running stream configuration",
+      "properties": {
+        "buffer": {
+          "anyOf": [
+            {
+              "required": [
+                "maxRows"
+              ]
+            },
+            {
+              "required": [
+                "maxWait"
+              ]
+            }
+          ],
+          "description": "Collect raw rows before running whole-result processors; the first configured bound reached flushes the batch",
+          "properties": {
+            "maxRows": {
+              "description": "Raw provider rows per processor batch",
+              "minimum": 1,
+              "title": "Maximum rows",
+              "type": "integer"
+            },
+            "maxWait": {
+              "description": "Time from the first pending raw row to a flush, for example 250ms",
+              "title": "Maximum wait",
+              "type": "string"
+            }
+          },
+          "title": "Processor buffer",
+          "type": "object"
+        },
+        "maxDuration": {
+          "description": "Session lifetime, for example 15m",
+          "title": "Maximum duration",
+          "type": "string"
+        },
+        "maxEvents": {
+          "description": "Final emitted rows retained in the session ring",
+          "minimum": 1,
+          "title": "Maximum events",
+          "type": "integer"
+        }
+      },
+      "title": "Trace",
+      "type": "object"
     }
   },
   "required": [

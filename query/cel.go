@@ -6,14 +6,54 @@ import (
 	"strings"
 
 	"github.com/flanksource/gomplate/v3"
+	"github.com/ohler55/ojg/jp"
 
 	"github.com/flanksource/commons-db/context"
 )
 
 var celIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) error {
+// applyRowTransforms evaluates aliases, drops filtered rows, then projects
+// columns. It returns the surviving rows: filters run after aliases so a
+// predicate can read a synthesised field, and before columns so a row on its
+// way out is never charged for a projection nobody will read.
+//
+// The second return holds each surviving row's cell styles, parallel to the
+// first and nil when no column declares a Style. Styles ride alongside the rows
+// rather than inside them so that presentation never reaches an export.
+func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) ([]Row, []map[string]string, error) {
+	outputNames := make(map[string]struct{}, len(profile.Columns))
+	for _, column := range profile.Columns {
+		outputNames[column.Name] = struct{}{}
+	}
+	jsonPaths := make(map[string]jp.Expr, len(profile.Columns))
+	for _, column := range profile.Columns {
+		if column.JSONPath == "" {
+			continue
+		}
+		expression, err := compileColumnJSONPath(column)
+		if err != nil {
+			return nil, nil, err
+		}
+		jsonPaths[column.Name] = expression
+	}
+	filters, err := activeFilters(profile.Filters)
+	if err != nil {
+		return nil, nil, err
+	}
+	styled := false
+	for _, column := range profile.Columns {
+		if column.Style != "" {
+			styled = true
+			break
+		}
+	}
+	kept := rows[:0]
+	var styles []map[string]string
 	for index, row := range rows {
+		if err := validateAcyclicValue(row); err != nil {
+			return nil, nil, fmt.Errorf("row %d: provider row: %w", index, err)
+		}
 		projected := make([]struct {
 			name  string
 			value any
@@ -21,13 +61,15 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) error 
 		ignoredNames := make(map[string]struct{}, len(profile.Ignore))
 		for _, alias := range profile.Aliases {
 			if alias.Name == "" || alias.CEL == "" {
-				return fmt.Errorf("row %d: alias name and cel are required", index)
+				return nil, nil, fmt.Errorf("row %d: alias name and cel are required", index)
 			}
 			value, err := evalRowCEL(ctx, alias.CEL, row)
 			if err != nil {
-				return fmt.Errorf("row %d: alias %q: %w", index, alias.Name, err)
+				return nil, nil, fmt.Errorf("row %d: alias %q: %w", index, alias.Name, err)
 			}
-			setRowPath(row, alias.Name, value)
+			if err := setRowPath(row, alias.Name, value); err != nil {
+				return nil, nil, fmt.Errorf("row %d: alias %q: %w", index, alias.Name, err)
+			}
 			projected = append(projected, struct {
 				name  string
 				value any
@@ -42,24 +84,90 @@ func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) error 
 			if _, ignored := ignoredNames[alias.name]; ignored {
 				continue
 			}
-			setRowPath(row, alias.name, alias.value)
+			if err := setRowPath(row, alias.name, alias.value); err != nil {
+				return nil, nil, fmt.Errorf("row %d: alias %q: %w", index, alias.name, err)
+			}
 		}
-		for _, column := range profile.Columns {
-			if column.CEL == "" {
+		if len(filters) > 0 {
+			keep, err := keepRow(ctx, filters, row)
+			if err != nil {
+				return nil, nil, fmt.Errorf("row %d: %w", index, err)
+			}
+			if !keep {
 				continue
 			}
-			value, err := evalRowCEL(ctx, column.CEL, row)
-			if err != nil {
-				return fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
-			}
-			row[column.Name] = value
 		}
+		for _, column := range profile.Columns {
+			switch {
+			case column.CEL != "":
+				value, err := evalRowCEL(ctx, column.CEL, row)
+				if err != nil {
+					return nil, nil, fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
+				}
+				if err := setRowValue(row, column.Name, value); err != nil {
+					return nil, nil, fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
+				}
+			case column.JSONPath != "":
+				value, err := evalRowJSONPath(jsonPaths[column.Name], column.Source, row)
+				if err != nil {
+					return nil, nil, fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
+				}
+				if err := setRowValue(row, column.Name, value); err != nil {
+					return nil, nil, fmt.Errorf("row %d: column %q: %w", index, column.Name, err)
+				}
+			}
+		}
+		renamed := make(map[string]any, len(profile.Columns))
+		for _, column := range profile.Columns {
+			if column.Source == "" || column.Source == column.Name || column.JSONPath != "" {
+				continue
+			}
+			if value, ok := row[column.Source]; ok {
+				renamed[column.Name] = value
+			} else if _, alreadyProjected := row[column.Name]; !alreadyProjected {
+				renamed[column.Name] = nil
+			}
+		}
+		for name, value := range renamed {
+			row[name] = value
+		}
+		// A jsonpath column's source is the root it read, not a key it consumed:
+		// several columns share one JSON column, so deleting it would depend on
+		// which of them happened to run first.
+		for _, column := range profile.Columns {
+			if column.Source == "" || column.Source == column.Name || column.JSONPath != "" {
+				continue
+			}
+			if _, retained := outputNames[column.Source]; !retained {
+				delete(row, column.Source)
+			}
+		}
+		// Styles are evaluated last so an expression can read the projected cell
+		// beside it, not just the provider's original fields.
+		if styled {
+			rowStyles := make(map[string]string, len(profile.Columns))
+			for _, column := range profile.Columns {
+				if column.Style == "" {
+					continue
+				}
+				value, err := evalRowCEL(ctx, column.Style, row)
+				if err != nil {
+					return nil, nil, fmt.Errorf("row %d: column %q style: %w", index, column.Name, err)
+				}
+				class, ok := value.(string)
+				if !ok {
+					return nil, nil, fmt.Errorf("row %d: column %q style: expected a string, got %T",
+						index, column.Name, value)
+				}
+				if class != "" {
+					rowStyles[column.Name] = class
+				}
+			}
+			styles = append(styles, rowStyles)
+		}
+		kept = append(kept, row)
 	}
-	return nil
-}
-
-func applyColumns(ctx context.Context, columns []ColumnDef, rows []Row) error {
-	return applyRowTransforms(ctx, Profile{Columns: columns}, rows)
+	return kept, styles, nil
 }
 
 func evalRowCEL(ctx context.Context, expression string, row Row) (any, error) {
@@ -76,11 +184,18 @@ func evalRowCEL(ctx context.Context, expression string, row Row) (any, error) {
 	return gomplate.RunExpressionContext(ctx.Context, environment, template)
 }
 
-func setRowPath(row Row, path string, value any) {
+func setRowValue(row Row, name string, value any) error {
+	if err := validateContainerValue(map[string]any(row), value); err != nil {
+		return err
+	}
+	row[name] = value
+	return nil
+}
+
+func setRowPath(row Row, path string, value any) error {
 	parts := strings.Split(path, ".")
 	if len(parts) == 1 {
-		row[path] = value
-		return
+		return setRowValue(row, path, value)
 	}
 	current := map[string]any(row)
 	for _, part := range parts[:len(parts)-1] {
@@ -91,7 +206,11 @@ func setRowPath(row Row, path string, value any) {
 		}
 		current = next
 	}
+	if err := validateContainerValue(current, value); err != nil {
+		return err
+	}
 	current[parts[len(parts)-1]] = value
+	return nil
 }
 
 func deleteRowPath(row Row, path string) {
