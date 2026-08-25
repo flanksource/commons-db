@@ -14,6 +14,7 @@ import (
 	"github.com/samber/lo"
 
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/logger"
 	"github.com/patrickmn/go-cache"
@@ -348,6 +349,43 @@ func InvalidateConfigMapCache(ctx Context, namespace, name, key string) error {
 		return err
 	}
 	envCache.Delete(fmt.Sprintf("%s/cm/%s/%s/%s", scope, namespace, name, key))
+	return nil
+}
+
+// InvalidateConnectionSecrets drops every cached env value the connection
+// resolves through, so an explicit re-check reads a rotated secret instead of
+// serving the last one for the remainder of the cache TTL. Connection edits do
+// not touch the referenced Secret or ConfigMap, so nothing else invalidates
+// these entries.
+func InvalidateConnectionSecrets(ctx Context, connection *models.Connection) error {
+	if connection == nil {
+		return nil
+	}
+	namespace := connection.Namespace
+	if namespace == "" {
+		namespace = ctx.GetNamespace()
+	}
+
+	values := []string{connection.URL, connection.Username, connection.Password, connection.Certificate}
+	for _, value := range connection.Properties {
+		values = append(values, value)
+	}
+	for _, value := range values {
+		var envvar types.EnvVar
+		if err := envvar.Scan(value); err != nil || envvar.ValueFrom == nil {
+			continue
+		}
+		var err error
+		switch {
+		case envvar.ValueFrom.SecretKeyRef != nil && !envvar.ValueFrom.SecretKeyRef.IsEmpty():
+			err = InvalidateSecretCache(ctx, namespace, envvar.ValueFrom.SecretKeyRef.Name, envvar.ValueFrom.SecretKeyRef.Key)
+		case envvar.ValueFrom.ConfigMapKeyRef != nil && !envvar.ValueFrom.ConfigMapKeyRef.IsEmpty():
+			err = InvalidateConfigMapCache(ctx, namespace, envvar.ValueFrom.ConfigMapKeyRef.Name, envvar.ValueFrom.ConfigMapKeyRef.Key)
+		}
+		if err != nil {
+			return err
+		}
+	}
 	return nil
 }
 

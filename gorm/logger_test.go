@@ -1,10 +1,44 @@
 package gorm
 
 import (
+	"errors"
 	"testing"
+	"time"
 
 	commons "github.com/flanksource/commons/logger"
 )
+
+func TestSQLTracePrettyMatchesDutyGrammar(t *testing.T) {
+	tests := []struct {
+		name  string
+		trace SQLTrace
+		want  string
+	}{
+		{
+			name:  "statement",
+			trace: SQLTrace{Duration: 48 * time.Millisecond, Rows: 25, SQL: "SELECT 1"},
+			want:  "[48ms] [rows:25] SELECT 1",
+		},
+		{
+			name:  "slow",
+			trace: SQLTrace{Duration: 1200 * time.Millisecond, Rows: 25, SQL: "SELECT 1", Slow: true},
+			want:  "SLOW SQL >= [1200ms] [rows:25] SELECT 1",
+		},
+		{
+			name:  "error",
+			trace: SQLTrace{Duration: 82 * time.Millisecond, Rows: 0, SQL: "SELECT 1", Err: errors.New("boom")},
+			want:  "ERROR >=[82ms] [rows:0] boom SELECT 1",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.trace.Pretty().String(); got != test.want {
+				t.Fatalf("Pretty() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
 
 func TestClassifySQLLevel(t *testing.T) {
 	tests := []struct {

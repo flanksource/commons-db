@@ -15,11 +15,13 @@ import (
 )
 
 type integrationProvisioner struct {
-	fingerprint      string
-	templateCalls    atomic.Int32
-	instanceCalls    atomic.Int32
-	templateFailures atomic.Int32
-	instanceFailures atomic.Int32
+	fingerprint              string
+	templateCalls            atomic.Int32
+	instanceCalls            atomic.Int32
+	templateFailures         atomic.Int32
+	instanceFailures         atomic.Int32
+	templateConnectionHold   time.Duration
+	templateConnectionClosed chan error
 }
 
 func (p *integrationProvisioner) Fingerprint(context.Context) (string, error) {
@@ -31,9 +33,27 @@ func (p *integrationProvisioner) PrepareTemplate(ctx context.Context, dsn string
 	if call <= p.templateFailures.Load() {
 		return errors.New("injected template preparation failure")
 	}
-	return executeProvisionerSQL(ctx, dsn, `
+	if err := executeProvisionerSQL(ctx, dsn, `
 CREATE TABLE provisioner_events (value text NOT NULL);
-INSERT INTO provisioner_events(value) VALUES ('template')`)
+INSERT INTO provisioner_events(value) VALUES ('template')`); err != nil {
+		return err
+	}
+	if p.templateConnectionHold == 0 {
+		return nil
+	}
+	database, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return err
+	}
+	connection, err := database.Conn(ctx)
+	if err != nil {
+		return errors.Join(err, database.Close())
+	}
+	go func() {
+		time.Sleep(p.templateConnectionHold)
+		p.templateConnectionClosed <- errors.Join(connection.Close(), database.Close())
+	}()
+	return nil
 }
 
 func (p *integrationProvisioner) PrepareInstance(ctx context.Context, dsn string) error {
@@ -141,6 +161,24 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		Expect(cleanup()).To(Succeed())
 		Expect(provisioner.templateCalls.Load()).To(Equal(int32(2)))
 		Expect(provisioner.instanceCalls.Load()).To(Equal(int32(1)))
+	})
+
+	It("waits for provisioner connections to drain before sealing a template", func(ctx SpecContext) {
+		provisioner := &integrationProvisioner{
+			fingerprint:              fmt.Sprintf("connection-drain-%d", time.Now().UnixNano()),
+			templateConnectionHold:   100 * time.Millisecond,
+			templateConnectionClosed: make(chan error, 1),
+		}
+		DeferCleanup(dropProvisionerTemplates, adminURL, provisioner.fingerprint)
+
+		_, cleanup, err := acquireProvisionedScratch(
+			ctx, adminURL, "connection-drain", uniqueSuffix(), provisioner, time.Now(),
+		)
+
+		Eventually(provisioner.templateConnectionClosed).Should(Receive(Succeed()))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(expectProvisionerCleanup, cleanup)
+		Expect(cleanup()).To(Succeed())
 	})
 
 	It("drops a clone when instance reconciliation fails", func(ctx SpecContext) {

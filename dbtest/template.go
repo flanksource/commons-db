@@ -204,19 +204,26 @@ func (m templateManager) createTemplate(ctx context.Context, session *poolSessio
 			dropTemplateDatabase(ctx, session, created),
 		)
 	}
-	active, err := session.databaseHasConnections(ctx, name)
-	if err != nil {
-		return "", errors.Join(err, dropTemplateDatabase(ctx, session, created))
-	}
-	if active {
+	if _, err := session.conn.ExecContext(
+		ctx,
+		"ALTER DATABASE "+pq.QuoteIdentifier(name)+" WITH ALLOW_CONNECTIONS false",
+	); err != nil {
 		return "", errors.Join(
-			fmt.Errorf("database template %s still has active connections after preparation", name),
+			fmt.Errorf("stop connections to database template %s: %w", name, err),
+			dropTemplateDatabase(ctx, session, created),
+		)
+	}
+	drainContext, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	if err := session.waitForDatabaseConnectionsToClose(drainContext, name); err != nil {
+		return "", errors.Join(
+			fmt.Errorf("database template %s still has active connections after preparation: %w", name, err),
 			dropTemplateDatabase(ctx, session, created),
 		)
 	}
 	if _, err := session.conn.ExecContext(
 		ctx,
-		"ALTER DATABASE "+pq.QuoteIdentifier(name)+" WITH ALLOW_CONNECTIONS false IS_TEMPLATE true",
+		"ALTER DATABASE "+pq.QuoteIdentifier(name)+" WITH IS_TEMPLATE true",
 	); err != nil {
 		return "", errors.Join(
 			fmt.Errorf("seal database template %s: %w", name, err),
