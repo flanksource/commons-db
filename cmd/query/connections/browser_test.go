@@ -6,12 +6,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	sqlinspect "github.com/flanksource/commons-db/inspect/sql"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/query"
 	queryschema "github.com/flanksource/commons-db/query/schema"
+	"github.com/flanksource/commons/logger"
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -28,11 +33,21 @@ func TestDescriptorForConnection(t *testing.T) {
 		{models.ConnectionTypeMySQL, "query", "mysql", true},
 		{models.ConnectionTypeSQLServer, "query", "sqlserver", true},
 		{models.ConnectionTypeClickHouse, "query", "clickhouse", true},
+		{models.ConnectionTypeSQLite, "query", "sqlite", true},
 		{models.ConnectionTypeHTTP, "query", "http", false},
 		{models.ConnectionTypePrometheus, "query", "prometheus", false},
 		{models.ConnectionTypeLoki, "query", "loki", false},
 		{models.ConnectionTypeOpenSearch, "query", "opensearch", true},
+		// Elasticsearch is read by the same searcher, so it browses as OpenSearch.
+		{models.ConnectionTypeElasticSearch, "query", "opensearch", true},
+		{models.ConnectionTypeOpenTelemetry, "query", "opentelemetry", true},
 		{models.ConnectionTypeJaeger, "query", "jaeger", false},
+		{models.ConnectionTypeAWS, "query", "cloudwatch", false},
+		// One connection type, two providers: Cloud Logging is the log browser
+		// and BigQuery stays profile-only.
+		{models.ConnectionTypeGCP, "query", "gcpcloudlogging", false},
+		{models.ConnectionTypeAzure, "query", "azureloganalytics", false},
+		{models.ConnectionTypeKubernetes, "query", "k8s", false},
 		{models.ConnectionTypeRedis, "cache", "", false},
 	}
 	for _, tt := range tests {
@@ -45,8 +60,18 @@ func TestDescriptorForConnection(t *testing.T) {
 				t.Fatalf("descriptor = %#v", descriptor)
 			}
 			if descriptor.Kind == "query" {
+				// The browser edits the query's own limit and a profile's three
+				// caps; the connection has no profile, so it declares the defaults
+				// those caps fall back to rather than leaving the frontend to
+				// guess at 100, 1000 and 100000.
+				if descriptor.RowLimits == nil ||
+					descriptor.RowLimits.PageSize != query.DefaultPageSize ||
+					descriptor.RowLimits.MaxPageSize != query.DefaultMaxPageSize ||
+					descriptor.RowLimits.MaxExportRows != query.DefaultMaxExportRows {
+					t.Fatalf("row limits = %#v", descriptor.RowLimits)
+				}
 				props, _ := descriptor.OptionsSchema["properties"].(queryschema.Schema)
-				for _, override := range []string{"url", "address", "type"} {
+				for _, override := range []string{"url", "address", "type", "endpoint"} {
 					if _, found := props[override]; found {
 						t.Errorf("browser options expose forbidden override %q", override)
 					}
@@ -56,6 +81,37 @@ func TestDescriptorForConnection(t *testing.T) {
 	}
 	if _, ok := descriptorForConnection(models.ConnectionTypeSlack); ok {
 		t.Fatal("notification connections must keep the default detail view")
+	}
+}
+
+// A browser query is a bounded top-N, so the order the provider returns and the
+// cut it applies are one decision. Every logs view therefore has to say which
+// way its rows already run, or the browser sorts them itself and shows the cut
+// as if it had been made the other way round.
+func TestLogsDescriptorsDeclareTheOrderTheyReturn(t *testing.T) {
+	want := map[string]string{
+		models.ConnectionTypeLoki:       "desc", // direction=backward
+		models.ConnectionTypeAWS:        "desc", // default query sorts @timestamp desc
+		models.ConnectionTypeGCP:        "desc", // logadmin.NewestFirst
+		models.ConnectionTypeAzure:      "desc", // default query tops by TimeGenerated
+		models.ConnectionTypeKubernetes: "asc",  // the kubelet API only resumes forward
+	}
+	for connectionType, dir := range want {
+		t.Run(connectionType, func(t *testing.T) {
+			descriptor, ok := descriptorForConnection(connectionType)
+			if !ok {
+				t.Fatal("expected browser descriptor")
+			}
+			if descriptor.ResultView != "logs" {
+				t.Fatalf("result view = %q, want logs", descriptor.ResultView)
+			}
+			if descriptor.ResultSort == nil {
+				t.Fatal("logs descriptor must declare the order it returns rows in")
+			}
+			if descriptor.ResultSort.Key != "timestamp" || descriptor.ResultSort.Dir != dir {
+				t.Fatalf("result sort = %#v, want timestamp %s", descriptor.ResultSort, dir)
+			}
+		})
 	}
 }
 
@@ -120,6 +176,14 @@ func TestConnectionBrowserOpenSearchInspection(t *testing.T) {
 					"message":{"text":{"searchable":true,"aggregatable":false}}
 				}
 			}`))
+		case "/logs/_search":
+			_, _ = w.Write([]byte(`{
+				"took":3,
+				"timed_out":false,
+				"hits":{"total":{"value":1,"relation":"eq"},"hits":[
+					{"_index":"logs","_id":"event-1","_score":1,"_source":{"message":"ready"}}
+				]}
+			}`))
 		default:
 			http.Error(w, "unexpected path: "+r.URL.Path, http.StatusNotFound)
 		}
@@ -173,6 +237,34 @@ func TestConnectionBrowserOpenSearchInspection(t *testing.T) {
 	if selected.Selected == nil || selected.Selected.Target.Name != "logs" || len(selected.Selected.Fields) != 2 {
 		t.Fatalf("selected inspection = %#v", selected)
 	}
+
+	body := bytes.NewBufferString(`{"query":"{\"query\":{\"match_all\":{}}}","options":{"index":"logs"}}`)
+	recorder = httptest.NewRecorder()
+	// Armed the way the middleware arms it, at the level that buys a preview.
+	// The request body no longer carries a debug flag: what a query explains is
+	// the console's decision, not the caller's.
+	capture := query.NewRecorder(query.RecorderOptions{ID: "browser-query", Level: logger.Trace})
+	handler.ServeHTTP(recorder, devtools.RequestWithRecorder(httptest.NewRequest(http.MethodPost,
+		"/api/v1/connection/"+conn.ID.String()+"/browser/query", body), capture))
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("query status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var result browserQueryResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Diagnostics == nil || !strings.Contains(result.Diagnostics.Request.Query, "match_all") {
+		t.Fatalf("request diagnostics = %#v", result.Diagnostics)
+	}
+	if result.Diagnostics.Response.Preview == "" || result.Diagnostics.Response.ReturnedRows != 1 {
+		t.Fatalf("response diagnostics = %#v", result.Diagnostics.Response)
+	}
+	// The same run is also a row in the console, which is the point of moving
+	// the flag out of the body: one execution, explained in two places.
+	operations := capture.Detail().Operations
+	if len(operations) != 1 || operations[0].Provider != "opensearch" {
+		t.Fatalf("recorded operations = %#v", operations)
+	}
 }
 
 func TestSQLReturnsRows(t *testing.T) {
@@ -185,6 +277,62 @@ func TestSQLReturnsRows(t *testing.T) {
 		if sqlReturnsRows(statement) {
 			t.Errorf("expected non-row statement: %q", statement)
 		}
+	}
+}
+
+func TestBrowserPageRequestUsesBoundedOffsetPaging(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   browserPaginationRequest
+		want    query.PageRequest
+		wantErr string
+	}{
+		{name: "defaults", want: query.PageRequest{Limit: query.DefaultPageSize, Strategy: query.PagingOffset}},
+		{name: "explicit", input: browserPaginationRequest{Limit: 25, Offset: 50}, want: query.PageRequest{Limit: 25, Offset: 50, Strategy: query.PagingOffset}},
+		{name: "negative offset", input: browserPaginationRequest{Limit: 25, Offset: -1}, wantErr: "page offset"},
+		{name: "oversized", input: browserPaginationRequest{Limit: query.DefaultMaxPageSize + 1}, wantErr: "page limit"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.input.PageRequest()
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("PageRequest: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("PageRequest = %#v, want %#v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestInspectionContextHidesClickHouseDeadlineWithoutLosingTimeout(t *testing.T) {
+	ctx, cancel := inspectionContext(context.Background(), models.ConnectionTypeClickHouse, 10*time.Millisecond)
+	defer cancel()
+	if deadline, ok := ctx.Deadline(); ok {
+		t.Fatalf("clickhouse inspection exposes deadline %s", deadline)
+	}
+
+	select {
+	case <-ctx.Done():
+		if ctx.Err() != context.DeadlineExceeded {
+			t.Fatalf("clickhouse inspection context error = %v, want %v", ctx.Err(), context.DeadlineExceeded)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("clickhouse inspection context did not time out")
+	}
+}
+
+func TestInspectionContextKeepsDeadlineForOtherConnections(t *testing.T) {
+	ctx, cancel := inspectionContext(context.Background(), models.ConnectionTypePostgres, time.Minute)
+	defer cancel()
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatal("postgres inspection context must expose its deadline")
 	}
 }
 

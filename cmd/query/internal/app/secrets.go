@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/flanksource/commons-db/cmd/query/kubecatalog"
 	dbcontext "github.com/flanksource/commons-db/context"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -27,6 +28,9 @@ const helmReleaseSecretType = "helm.sh/release.v1"
 //
 //   - GET {prefix}/secrets?kind=secret|configmap|helm|serviceaccount[&namespace=] -> [{name, keys}]
 //   - GET {prefix}/secrets/preview?kind=&name=[&namespace=]        -> [{key, value}]
+//   - GET {prefix}/secrets/onepassword/vaults                     -> [{id, name}]
+//   - GET {prefix}/secrets/onepassword/items?vault=               -> [{id, name}]
+//   - GET {prefix}/secrets/onepassword/fields?vault=&item=         -> [{id, label, reference, section}]
 //   - GET {prefix}/namespaces                                      -> [name, ...]
 //   - GET {prefix}/workloads?namespace=[&kinds=service,ingress,…]  -> {kind: [{name, ports, hosts}]}
 //
@@ -35,10 +39,41 @@ const helmReleaseSecretType = "helm.sh/release.v1"
 // key. A helm preview decodes the release's merged values to surface its
 // top-level keys.
 type secretsHandler struct {
-	prefix string
-	ctx    dbcontext.Context
-	kube   func() (kubernetes.Interface, error)
-	next   http.Handler
+	prefix      string
+	ctx         dbcontext.Context
+	kube        func() (kubernetes.Interface, error)
+	onePassword onePasswordCatalog
+	next        http.Handler
+}
+
+type secretsHandlerOptions struct {
+	Prefix      string
+	Context     dbcontext.Context
+	Kube        func() (kubernetes.Interface, error)
+	OnePassword onePasswordCatalog
+	Next        http.Handler
+}
+
+type onePasswordCatalog interface {
+	Vaults() ([]dbcontext.OnePasswordVault, error)
+	Items(vaultID string) ([]dbcontext.OnePasswordItem, error)
+	Fields(vaultID, itemID string) ([]dbcontext.OnePasswordField, error)
+}
+
+type contextOnePasswordCatalog struct {
+	ctx dbcontext.Context
+}
+
+func (c contextOnePasswordCatalog) Vaults() ([]dbcontext.OnePasswordVault, error) {
+	return dbcontext.ListOnePasswordVaults(c.ctx)
+}
+
+func (c contextOnePasswordCatalog) Items(vaultID string) ([]dbcontext.OnePasswordItem, error) {
+	return dbcontext.ListOnePasswordItems(c.ctx, vaultID)
+}
+
+func (c contextOnePasswordCatalog) Fields(vaultID, itemID string) ([]dbcontext.OnePasswordField, error) {
+	return dbcontext.ListOnePasswordFields(c.ctx, vaultID, itemID)
 }
 
 // secretResource is a named Secret/ConfigMap and its data key names (no values).
@@ -53,20 +88,32 @@ type keyPreview struct {
 	Value string `json:"value"`
 }
 
-func newSecretsHandler(prefix string, ctx dbcontext.Context, kube func() (kubernetes.Interface, error), next http.Handler) *secretsHandler {
-	return &secretsHandler{prefix: strings.TrimRight(prefix, "/"), ctx: ctx, kube: kube, next: next}
+func newSecretsHandler(options secretsHandlerOptions) *secretsHandler {
+	catalog := options.OnePassword
+	if catalog == nil {
+		catalog = contextOnePasswordCatalog{ctx: options.Context}
+	}
+	return &secretsHandler{
+		prefix: strings.TrimRight(options.Prefix, "/"), ctx: options.Context,
+		kube: options.Kube, onePassword: catalog, next: options.Next,
+	}
 }
 
 func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), h.prefix), "/")
 	switch rel {
-	case "secrets", "secrets/preview", "namespaces", "workloads":
+	case "secrets", "secrets/preview", "namespaces", "workloads",
+		"secrets/onepassword/vaults", "secrets/onepassword/items", "secrets/onepassword/fields":
 	default:
 		h.next.ServeHTTP(w, r)
 		return
 	}
 	if r.Method != http.MethodGet {
 		h.next.ServeHTTP(w, r)
+		return
+	}
+	if strings.HasPrefix(rel, "secrets/onepassword/") {
+		h.serveOnePassword(w, r, rel)
 		return
 	}
 
@@ -82,9 +129,9 @@ func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var payload any
 	switch rel {
 	case "namespaces":
-		payload, err = listNamespaces(r.Context(), client)
+		payload, err = kubecatalog.ListNamespaces(r.Context(), client)
 	case "workloads":
-		payload, err = listWorkloads(r.Context(), client, ns, q.Get("kinds"))
+		payload, err = kubecatalog.ListWorkloads(r.Context(), client, ns, q.Get("kinds"))
 	case "secrets":
 		payload, err = listSecretResources(r.Context(), client, q.Get("kind"), ns)
 	case "secrets/preview":
@@ -100,11 +147,39 @@ func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeK8sJSON(w, payload)
+	writeJSON(w, payload)
 }
 
-// writeK8sJSON encodes a cluster-listing payload as CORS-enabled JSON.
-func writeK8sJSON(w http.ResponseWriter, payload any) {
+func (h *secretsHandler) serveOnePassword(w http.ResponseWriter, r *http.Request, rel string) {
+	query := r.URL.Query()
+	var payload any
+	var err error
+	switch rel {
+	case "secrets/onepassword/vaults":
+		payload, err = h.onePassword.Vaults()
+	case "secrets/onepassword/items":
+		vaultID := query.Get("vault")
+		if vaultID == "" {
+			http.Error(w, "vault is required", http.StatusBadRequest)
+			return
+		}
+		payload, err = h.onePassword.Items(vaultID)
+	case "secrets/onepassword/fields":
+		vaultID, itemID := query.Get("vault"), query.Get("item")
+		if vaultID == "" || itemID == "" {
+			http.Error(w, "vault and item are required", http.StatusBadRequest)
+			return
+		}
+		payload, err = h.onePassword.Fields(vaultID, itemID)
+	}
+	if err != nil {
+		http.Error(w, fmt.Sprintf("1password catalog unavailable: %v", err), http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, payload)
+}
+
+func writeJSON(w http.ResponseWriter, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	_ = json.NewEncoder(w).Encode(payload)
