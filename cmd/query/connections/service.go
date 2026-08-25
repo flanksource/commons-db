@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"maps"
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/clicky"
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -20,16 +22,25 @@ type DatabaseProvider func() (*gorm.DB, error)
 type ContextProvider func() dbcontext.Context
 type BodyDecoder func(context.Context, map[string]any) (map[string]any, error)
 
+type VirtualConnectionProvider interface {
+	ListConnections() []*models.Connection
+	ResolveConnection(string) (*models.Connection, error)
+}
+
 type Options struct {
 	Database   DatabaseProvider
 	Context    ContextProvider
 	DecodeBody BodyDecoder
+	Profiles   ProfileProvider
+	Virtual    VirtualConnectionProvider
 }
 
 type Service struct {
 	database   DatabaseProvider
 	context    ContextProvider
 	decodeBody BodyDecoder
+	profiles   ProfileProvider
+	virtual    VirtualConnectionProvider
 }
 
 func New(options Options) (*Service, error) {
@@ -42,7 +53,17 @@ func New(options Options) (*Service, error) {
 	if options.DecodeBody == nil {
 		return nil, fmt.Errorf("body decoder is required")
 	}
-	return &Service{database: options.Database, context: options.Context, decodeBody: options.DecodeBody}, nil
+	if options.Profiles == nil {
+		return nil, fmt.Errorf("profile provider is required")
+	}
+	return &Service{
+		database: options.Database, context: options.Context,
+		decodeBody: options.DecodeBody, profiles: options.Profiles, virtual: options.Virtual,
+	}, nil
+}
+
+func (s *Service) SetVirtual(provider VirtualConnectionProvider) {
+	s.virtual = provider
 }
 
 // ListOptions are the list/filter options for the connection entity. Types is
@@ -66,14 +87,18 @@ func (s *Service) RegisterClicky() {
 			if err != nil {
 				return nil, err
 			}
-			return listConnections(db, o)
+			stored, err := listConnections(db, o)
+			if err != nil {
+				return nil, err
+			}
+			return s.withVirtual(stored, o), nil
 		}).
 		Get(func(id string) (*models.Connection, error) {
 			db, err := s.database()
 			if err != nil {
 				return nil, err
 			}
-			c, err := findConnection(db, id)
+			c, err := s.findConnection(db, id)
 			if err != nil {
 				return nil, err
 			}
@@ -95,7 +120,11 @@ func (s *Service) RegisterClicky() {
 
 func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	ctx := s.context()
-	return newConnectionBrowserHandler(prefix, ctx, newConnectionActionsHandler(prefix, ctx, next))
+	browser := newConnectionBrowserHandler(prefix, ctx, newConnectionActionsHandler(prefix, ctx, next))
+	health := newConnectionHealthHandler(prefix, ctx, browser)
+	return newConnectionDashboardHandler(connectionDashboardHandlerOptions{
+		Prefix: prefix, Context: ctx, Profiles: s.profiles, Next: health,
+	})
 }
 
 func (s *Service) List(options ListOptions) ([]*models.Connection, error) {
@@ -103,7 +132,11 @@ func (s *Service) List(options ListOptions) ([]*models.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	return listConnections(db, options)
+	stored, err := listConnections(db, options)
+	if err != nil {
+		return nil, err
+	}
+	return s.withVirtual(stored, options), nil
 }
 
 func (s *Service) Get(id string) (*models.Connection, error) {
@@ -111,7 +144,7 @@ func (s *Service) Get(id string) (*models.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	connection, err := findConnection(db, id)
+	connection, err := s.findConnection(db, id)
 	if err != nil {
 		return nil, err
 	}
@@ -128,10 +161,16 @@ func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Conn
 	if err != nil {
 		return nil, err
 	}
+	if body["type"] == models.ConnectionTypeSQLite {
+		return nil, fmt.Errorf("sqlite connections are internal read-only snapshots")
+	}
 	return createConnection(db, body)
 }
 
 func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*models.Connection, error) {
+	if virtual, _ := s.resolveVirtual(id); virtual != nil {
+		return nil, fmt.Errorf("virtual connection %q is read-only", id)
+	}
 	db, err := s.database()
 	if err != nil {
 		return nil, err
@@ -140,15 +179,65 @@ func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*
 	if err != nil {
 		return nil, err
 	}
-	return updateConnection(db, id, body)
+	updated, err := updateConnection(db, id, body)
+	if err != nil {
+		return nil, err
+	}
+	forgetConnectionHealth(updated.ID.String())
+	return updated, nil
 }
 
 func (s *Service) Delete(id string) error {
+	if virtual, _ := s.resolveVirtual(id); virtual != nil {
+		return fmt.Errorf("virtual connection %q is read-only", id)
+	}
 	db, err := s.database()
 	if err != nil {
 		return err
 	}
-	return deleteConnection(db, id)
+	// Resolve first so both the delete and the health invalidation address the
+	// same row even when the caller named the connection rather than its id.
+	existing, err := findConnection(db, id)
+	if err != nil {
+		return err
+	}
+	if err := deleteConnection(db, existing.ID.String()); err != nil {
+		return err
+	}
+	forgetConnectionHealth(existing.ID.String())
+	return nil
+}
+
+func (s *Service) withVirtual(stored []*models.Connection, options ListOptions) []*models.Connection {
+	if s.virtual == nil {
+		return stored
+	}
+	types := connectionTypeFilter(options)
+	for _, connection := range s.virtual.ListConnections() {
+		if len(types) > 0 && !slices.Contains(types, connection.Type) {
+			continue
+		}
+		redactConnection(connection)
+		stored = append(stored, connection)
+	}
+	slices.SortFunc(stored, func(a, b *models.Connection) int { return strings.Compare(a.Name, b.Name) })
+	return stored
+}
+
+func (s *Service) resolveVirtual(id string) (*models.Connection, error) {
+	if s.virtual == nil {
+		return nil, nil
+	}
+	return s.virtual.ResolveConnection(id)
+}
+
+func (s *Service) findConnection(db *gorm.DB, id string) (*models.Connection, error) {
+	if virtual, err := s.resolveVirtual(id); err != nil {
+		return nil, err
+	} else if virtual != nil {
+		return virtual, nil
+	}
+	return findConnection(db, id)
 }
 
 func Parse(body map[string]any) (*models.Connection, error) {
@@ -192,7 +281,7 @@ func createConnection(db *gorm.DB, body map[string]any) (*models.Connection, err
 	if err != nil {
 		return nil, err
 	}
-	if err := validateNestedConnection(db, c); err != nil {
+	if err := validateConnection(db, c); err != nil {
 		return nil, err
 	}
 	c.ID = uuid.Nil // let the DB assign the id
@@ -213,7 +302,7 @@ func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Conn
 	if err != nil {
 		return nil, err
 	}
-	if err := validateNestedConnection(db, incoming); err != nil {
+	if err := validateConnection(db, incoming); err != nil {
 		return nil, err
 	}
 	applyConnectionUpdate(existing, incoming)
@@ -222,6 +311,13 @@ func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Conn
 	}
 	redactConnection(existing)
 	return existing, nil
+}
+
+func validateConnection(db *gorm.DB, candidate *models.Connection) error {
+	if _, err := observability.PolicyFor(candidate); err != nil {
+		return err
+	}
+	return validateNestedConnection(db, candidate)
 }
 
 func validateNestedConnection(db *gorm.DB, candidate *models.Connection) error {
@@ -329,12 +425,15 @@ func redactConnection(c *models.Connection) {
 	}
 	c.Password = ""
 	c.Certificate = ""
+	if c.Virtual {
+		c.URL = ""
+	}
 }
 
 func isHTTPAuthConnectionType(connectionType string) bool {
 	switch connectionType {
-	case models.ConnectionTypeHTTP, models.ConnectionTypeOpenSearch, models.ConnectionTypePrometheus,
-		models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
+	case models.ConnectionTypeHTTP, models.ConnectionTypeOpenSearch, models.ConnectionTypeElasticSearch,
+		models.ConnectionTypePrometheus, models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
 		return true
 	default:
 		return false

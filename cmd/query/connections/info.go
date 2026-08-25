@@ -16,12 +16,15 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/types"
+	"k8s.io/client-go/kubernetes"
 )
 
 type connectionInfo struct {
 	Connection   connectionInfoDetails `json:"connection"`
 	Server       serverInfo            `json:"server"`
 	DiscoveredAt time.Time             `json:"discoveredAt"`
+	Cached       bool                  `json:"cached"`
 }
 
 type connectionInfoDetails struct {
@@ -53,46 +56,27 @@ type serverInfo struct {
 	Message  string            `json:"message,omitempty"`
 }
 
+// serveConnectionInfo probes one connection through the shared health seam, so
+// the connection header and the dashboard share a single cache entry. `id` may
+// be a uuid or a name, so the cache is keyed off the resolved row's ID.
 func (h *connectionBrowserHandler) serveConnectionInfo(w http.ResponseWriter, r *http.Request, id string) {
 	raw, err := findConnection(h.ctx.DB(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	}
-	resolved := cloneConnection(raw)
-	if _, err := dbcontext.HydrateConnection(h.ctx, resolved); err != nil {
-		http.Error(w, sanitizeConnectionError(err, raw, resolved), http.StatusUnprocessableEntity)
+
+	result := probeConnectionHealth(probeOptions{
+		Context:           r.Context(),
+		ConnectionContext: h.ctx,
+		Connection:        raw,
+		Force:             r.URL.Query().Get("force") == "true",
+	})
+	if result.State == connectionHealthCredentials {
+		http.Error(w, result.Detail, http.StatusUnprocessableEntity)
 		return
 	}
-
-	discoveryContext, cancel := context.WithTimeout(r.Context(), 5*time.Second)
-	defer cancel()
-	server := discoverServer(discoveryContext, h.ctx, resolved)
-	if server.Status == "error" {
-		server.Message = sanitizeConnectionError(fmt.Errorf("%s", server.Message), raw, resolved)
-	}
-
-	writeJSON(w, connectionInfo{
-		Connection: connectionInfoDetails{
-			Name:               raw.Name,
-			Type:               raw.Type,
-			Namespace:          raw.Namespace,
-			ConfiguredEndpoint: redactConnectionURL(raw.URL),
-			ResolvedEndpoint:   redactConnectionURL(resolved.URL),
-			ConfiguredUsername: raw.Username,
-			ResolvedUsername:   resolved.Username,
-			Password: connectionPresence{
-				Configured: strings.TrimSpace(raw.Password) != "",
-				Resolved:   strings.TrimSpace(resolved.Password) != "",
-			},
-			Certificate: connectionPresence{
-				Configured: strings.TrimSpace(raw.Certificate) != "",
-				Resolved:   strings.TrimSpace(resolved.Certificate) != "",
-			},
-		},
-		Server:       server,
-		DiscoveredAt: time.Now().UTC(),
-	})
+	writeJSON(w, connectionInfoFromHealth(result))
 }
 
 func cloneConnection(source *models.Connection) *models.Connection {
@@ -133,7 +117,7 @@ func discoverServer(ctx context.Context, connectionContext dbcontext.Context, co
 	switch connection.Type {
 	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse:
 		info, err = discoverSQLServer(ctx, connectionContext, connection)
-	case models.ConnectionTypeOpenSearch:
+	case models.ConnectionTypeOpenSearch, models.ConnectionTypeElasticSearch:
 		info, err = discoverOpenSearch(ctx, connectionContext, connection)
 	case models.ConnectionTypeOpenTelemetry:
 		var openTelemetry dbconnection.OpenTelemetry
@@ -149,6 +133,8 @@ func discoverServer(ctx context.Context, connectionContext dbcontext.Context, co
 		info, err = discoverPrometheus(ctx, connectionContext, connection)
 	case models.ConnectionTypeRedis:
 		info, err = discoverRedis(ctx, connection)
+	case models.ConnectionTypeKubernetes:
+		info, err = discoverKubernetes(ctx, connectionContext, connection)
 	default:
 		return serverInfo{Status: "unavailable", Message: "Server version discovery is not available for this connection type"}
 	}
@@ -157,6 +143,48 @@ func discoverServer(ctx context.Context, connectionContext dbcontext.Context, co
 	}
 	info.Status = "available"
 	return info
+}
+
+func discoverKubernetes(
+	ctx context.Context,
+	connectionContext dbcontext.Context,
+	connection *models.Connection,
+) (serverInfo, error) {
+	_, config, err := (dbconnection.KubeconfigConnection{
+		Kubeconfig: &types.EnvVar{ValueStatic: connection.Certificate},
+	}).Populate(connectionContext)
+	if err != nil {
+		return serverInfo{}, fmt.Errorf("configure Kubernetes client: %w", err)
+	}
+	if config == nil {
+		return serverInfo{}, fmt.Errorf("configure Kubernetes client: REST config is missing")
+	}
+	config.Timeout = connectionProbeTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return serverInfo{}, fmt.Errorf("get Kubernetes server version: %w", context.DeadlineExceeded)
+		}
+		if remaining < config.Timeout {
+			config.Timeout = remaining
+		}
+	}
+	client, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return serverInfo{}, fmt.Errorf("create Kubernetes client: %w", err)
+	}
+	version, err := client.Discovery().ServerVersion()
+	if err != nil {
+		return serverInfo{}, fmt.Errorf("get Kubernetes server version: %w", err)
+	}
+	return serverInfo{
+		Product: "Kubernetes",
+		Version: version.GitVersion,
+		Details: nonEmptyDetails(map[string]string{
+			"major": version.Major, "minor": version.Minor,
+			"goVersion": version.GoVersion, "platform": version.Platform,
+		}),
+	}, nil
 }
 
 func discoverSQLServer(ctx context.Context, connectionContext dbcontext.Context, connection *models.Connection) (serverInfo, error) {

@@ -277,7 +277,9 @@ func httpProbe(ctx dbcontext.Context, c *models.Connection, displayURL string) t
 	if target.url.Scheme == "https" {
 		probeURL = "https://connection-probe.invalid/"
 	}
-	req, err := http.NewRequest(http.MethodGet, probeURL, nil)
+	// Bound by the caller's context so a batched health check cannot outrun its
+	// budget on a host that accepts the connection and then stalls.
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, probeURL, nil)
 	if err != nil {
 		return testResult{OK: false, Message: fmt.Sprintf("HTTP request failed: %v", err), URL: displayURL}
 	}
