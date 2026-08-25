@@ -79,18 +79,19 @@ type Session struct {
 	profile Profile
 	params  map[string]any
 
-	mu          sync.Mutex
-	state       SessionState
-	err         string
-	startedAt   time.Time
-	stoppedAt   *time.Time
-	cancel      stdcontext.CancelFunc
-	ring        []Event
-	head, count int
-	seq         int64
-	subscribers map[int]chan Event
-	nextSub     int
-	latest      *Result
+	mu            sync.Mutex
+	state         SessionState
+	err           string
+	startedAt     time.Time
+	stoppedAt     *time.Time
+	cancel        stdcontext.CancelFunc
+	ring          []Event
+	head, count   int
+	seq           int64
+	subscribers   map[int]chan Event
+	nextSub       int
+	latest        *Result
+	stopRequested bool
 
 	onEvent      func(Event)
 	onTransition func(SessionInfo)
@@ -169,11 +170,25 @@ func (s *Session) Events() []Event {
 // subsequent ones — no gap, no duplication. The channel is closed when the
 // session reaches a terminal state; cancel detaches the subscriber.
 func (s *Session) Subscribe() (replay []Event, live <-chan Event, cancel func()) {
+	return s.SubscribeFrom(0)
+}
+
+// SubscribeFrom is Subscribe for a consumer that already holds every event up
+// to and including after — a reconnecting SSE client naming its Last-Event-ID.
+// Sequences start at 1, so 0 replays the whole ring and is what Subscribe asks
+// for.
+//
+// A sequence older than the ring's oldest surviving event replays what is left
+// rather than failing: the evicted span is unrecoverable whichever way it is
+// answered, and the alternative is a client that reconnects into silence.
+func (s *Session) SubscribeFrom(after int64) (replay []Event, live <-chan Event, cancel func()) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	replay = make([]Event, s.count)
+	replay = make([]Event, 0, s.count)
 	for i := 0; i < s.count; i++ {
-		replay[i] = s.ring[(s.head+i)%len(s.ring)]
+		if event := s.ring[(s.head+i)%len(s.ring)]; event.Sequence > after {
+			replay = append(replay, event)
+		}
 	}
 	ch := make(chan Event, subscriberBuffer)
 	if s.state.Terminal() {
@@ -222,8 +237,8 @@ func (s *Session) Latest() *Result {
 	return s.latest
 }
 
-// Result materializes the session: the latest snapshot for top, or the
-// buffered rows run through the profile's processors for trace.
+// Result materializes the session: the latest snapshot for top, or the final
+// rows already emitted by the trace pipeline.
 func (s *Session) Result(ctx context.Context) (*Result, error) {
 	if s.profile.Kind() == KindTop {
 		if latest := s.Latest(); latest != nil {
@@ -235,10 +250,9 @@ func (s *Session) Result(ctx context.Context) (*Result, error) {
 }
 
 // MaterializeEvents turns a session's event log into a Result: the last
-// snapshot for a top profile, or the streamed rows run through the profile's
-// processors for a trace. It also serves persisted events after the live
-// session is gone.
-func MaterializeEvents(ctx context.Context, p Profile, events []Event) (*Result, error) {
+// snapshot for a top profile, or the final streamed trace rows. It also serves
+// persisted events after the live session is gone.
+func MaterializeEvents(_ context.Context, p Profile, events []Event) (*Result, error) {
 	if p.Kind() == KindTop {
 		for i := len(events) - 1; i >= 0; i-- {
 			if events[i].Rows != nil {
@@ -253,26 +267,29 @@ func MaterializeEvents(ctx context.Context, p Profile, events []Event) (*Result,
 			rows = append(rows, e.Row)
 		}
 	}
-	return applyProcessors(ctx, p.Processors, &Result{Profile: p.Name, Rows: rows})
+	return &Result{Profile: p.Name, Rows: rows}, nil
 }
 
-// Stop transitions an active session to stopped and cancels its run context.
-// A later markDone never downgrades the stopped state.
+// Stop requests cancellation. A live runner flushes its pending trace buffer
+// before markDone makes the stopped state terminal.
 func (s *Session) Stop() {
 	s.mu.Lock()
-	if s.state.Terminal() {
+	if s.state.Terminal() || s.stopRequested {
 		s.mu.Unlock()
 		return
 	}
-	s.transitionLocked(SessionStopped, "")
+	s.stopRequested = true
 	cancel := s.cancel
+	if cancel == nil {
+		s.transitionLocked(SessionStopped, "")
+	}
 	info, hook := s.snapshotLocked(), s.onTransition
 	s.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
 	}
-	if hook != nil {
+	if cancel == nil && hook != nil {
 		hook(info)
 	}
 }
@@ -335,7 +352,9 @@ func (s *Session) markDone(err error) {
 	s.mu.Lock()
 	changed := !s.state.Terminal()
 	if changed {
-		if err != nil {
+		if s.stopRequested {
+			s.transitionLocked(SessionStopped, "")
+		} else if err != nil {
 			s.transitionLocked(SessionFailed, err.Error())
 		} else {
 			s.transitionLocked(SessionCompleted, "")
