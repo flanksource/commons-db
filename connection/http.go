@@ -134,6 +134,17 @@ func (h HTTPConnection) GetEndpoint() string {
 	return h.URL
 }
 
+// IsEmpty reports whether the connection names no endpoint and carries no
+// credentials, i.e. it would hydrate into nothing usable.
+func (h HTTPConnection) IsEmpty() bool {
+	return h.ConnectionName == "" &&
+		h.URL == "" &&
+		h.Authentication.IsEmpty() &&
+		h.Bearer.IsEmpty() &&
+		h.OAuth.IsEmpty() &&
+		h.TLS.IsEmpty()
+}
+
 func (h *HTTPConnection) Hydrate(ctx ConnectionContext, namespace string) (*HTTPConnection, error) {
 	var err error
 	if h.ConnectionName != "" {
@@ -220,7 +231,7 @@ func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.
 		if !ok {
 			return nil, fmt.Errorf("cannot configure TLS on transport %T", base)
 		}
-		tlsConfig, err := conn.TLS.transportConfig()
+		tlsConfig, err := conn.TLS.TLSClientConfig()
 		if err != nil {
 			return nil, err
 		}
@@ -247,7 +258,10 @@ func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.
 	return base.RoundTrip(req)
 }
 
-func (t TLSConfig) transportConfig() (*tls.Config, error) {
+// TLSClientConfig builds the tls.Config this connection describes. Exported
+// because not every client is an http.RoundTripper — the Loki tail stream needs
+// the same certificates on a websocket dialer.
+func (t TLSConfig) TLSClientConfig() (*tls.Config, error) {
 	config := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify} //nolint:gosec // explicit per-connection opt-in
 	if !t.CA.IsEmpty() {
 		roots, err := x509.SystemCertPool()
