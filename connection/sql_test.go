@@ -1,10 +1,16 @@
 package connection
 
 import (
+	stdcontext "context"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
+	clickhouse "github.com/ClickHouse/clickhouse-go/v2"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
 	mysql "github.com/go-sql-driver/mysql"
@@ -97,6 +103,118 @@ func assertURLUser(t *testing.T, parsed *url.URL) {
 	password, ok := parsed.User.Password()
 	if !ok || password != "p@ss/word" {
 		t.Fatalf("password not applied: password-set=%t", ok)
+	}
+}
+
+func TestSQLConnectionStringUsesClickHouseURLTLS(t *testing.T) {
+	tests := []struct {
+		name       string
+		connection SQLConnection
+		wantDSN    string
+		wantTLS    bool
+	}{
+		{
+			name: "https enables TLS",
+			connection: SQLConnection{
+				Type: models.ConnectionTypeClickHouse,
+				URL:  types.EnvVar{ValueStatic: "https://clickhouse.example.com:8443/analytics?dial_timeout=200ms"},
+			},
+			wantDSN: "https://clickhouse.example.com:8443/analytics?dial_timeout=200ms&secure=true",
+			wantTLS: true,
+		},
+		{
+			name: "https retains resolved credentials",
+			connection: SQLConnection{
+				Type:     models.ConnectionTypeClickHouse,
+				URL:      types.EnvVar{ValueStatic: "https://clickhouse.example.com:8443/analytics"},
+				Username: types.EnvVar{ValueStatic: "app-user"},
+				Password: types.EnvVar{ValueStatic: "p@ss/word"},
+			},
+			wantDSN: "https://app-user:p%40ss%2Fword@clickhouse.example.com:8443/analytics?secure=true",
+			wantTLS: true,
+		},
+		{
+			name: "explicit TLS remains unchanged",
+			connection: SQLConnection{
+				Type: models.ConnectionTypeClickHouse,
+				URL:  types.EnvVar{ValueStatic: "https://clickhouse.example.com:8443/analytics?secure=true"},
+			},
+			wantDSN: "https://clickhouse.example.com:8443/analytics?secure=true",
+			wantTLS: true,
+		},
+		{
+			name: "http remains without TLS",
+			connection: SQLConnection{
+				Type: models.ConnectionTypeClickHouse,
+				URL:  types.EnvVar{ValueStatic: "http://clickhouse.example.com:8123/analytics"},
+			},
+			wantDSN: "http://clickhouse.example.com:8123/analytics",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := tt.connection.connectionString()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got != tt.wantDSN {
+				t.Fatalf("clickhouse DSN = %q, want %q", got, tt.wantDSN)
+			}
+			options, err := clickhouse.ParseDSN(got)
+			if err != nil {
+				t.Fatalf("clickhouse.ParseDSN(%q): %v", got, err)
+			}
+			if (options.TLS != nil) != tt.wantTLS {
+				t.Fatalf("clickhouse TLS configured = %t, want %t", options.TLS != nil, tt.wantTLS)
+			}
+		})
+	}
+}
+
+func TestSQLConnectionClientDisablesCertificateAuthForEmptyPassword(t *testing.T) {
+	requestHeaders := make(chan http.Header, 1)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case requestHeaders <- r.Header.Clone():
+		default:
+		}
+		http.Error(w, "expected handshake rejection", http.StatusForbidden)
+	}))
+	defer server.Close()
+
+	username := "readonly-user"
+	connection := SQLConnection{
+		Type:     models.ConnectionTypeClickHouse,
+		URL:      types.EnvVar{ValueStatic: server.URL + "/default?skip_verify=true"},
+		Username: types.EnvVar{ValueStatic: username},
+	}
+	client, err := connection.Client(dbcontext.New())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := client.Close(); err != nil {
+			t.Errorf("close clickhouse client: %v", err)
+		}
+	})
+
+	ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 5*time.Second)
+	defer cancel()
+	if err := client.PingContext(ctx); err == nil {
+		t.Fatal("clickhouse handshake unexpectedly succeeded")
+	}
+
+	select {
+	case headers := <-requestHeaders:
+		if got := headers.Get("X-ClickHouse-User"); got != username {
+			t.Fatalf("clickhouse user header = %q, want %q", got, username)
+		}
+		if got := headers.Get("X-ClickHouse-SSL-Certificate-Auth"); got != "off" {
+			t.Fatalf("clickhouse certificate auth header = %q, want %q", got, "off")
+		}
+	case <-ctx.Done():
+		t.Fatal("clickhouse handshake request was not received")
 	}
 }
 

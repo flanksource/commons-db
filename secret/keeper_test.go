@@ -10,6 +10,8 @@ import (
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"gocloud.dev/secrets"
+	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
 
@@ -84,6 +86,52 @@ var _ = Describe("KeeperFromConnection", func() {
 		keeper, err := KeeperFromConnection(connectionCtx, connectionID)
 		Expect(err).To(MatchError("connection type postgres cannot be used to create a SecretKeeper"))
 		Expect(keeper).To(BeNil())
+	})
+
+	It("hands every concurrent caller the same keeper", func() {
+		connectionCtx, connectionID := keeperTestContext(models.ConnectionTypeLocalKMS, key('a'))
+		originalConnection := KMSConnection
+		KMSConnection = connectionID
+		DeferCleanup(func() {
+			KMSConnection = originalConnection
+			InvalidateKeeper()
+		})
+		InvalidateKeeper()
+
+		const callers = 8
+		keepers := make([]*secrets.Keeper, callers)
+		var group errgroup.Group
+		for index := range keepers {
+			group.Go(func() error {
+				keeper, err := createOrGetKeeper(connectionCtx)
+				keepers[index] = keeper
+				return err
+			})
+		}
+		Expect(group.Wait()).To(Succeed())
+
+		// A keeper built by a losing racer would be overwritten in the cache
+		// without OnEvicted firing, so it would never be closed.
+		Expect(keepers).To(HaveEach(BeIdenticalTo(keepers[0])))
+	})
+
+	It("drops the cached keeper when the KMS connection changes", func() {
+		connectionCtx, connectionID := keeperTestContext(models.ConnectionTypeLocalKMS, key('a'))
+		originalConnection := KMSConnection
+		KMSConnection = connectionID
+		DeferCleanup(func() {
+			KMSConnection = originalConnection
+			InvalidateKeeper()
+		})
+		InvalidateKeeper()
+
+		first, err := createOrGetKeeper(connectionCtx)
+		Expect(err).NotTo(HaveOccurred())
+		InvalidateKeeper()
+		second, err := createOrGetKeeper(connectionCtx)
+		Expect(err).NotTo(HaveOccurred())
+
+		Expect(second).NotTo(BeIdenticalTo(first))
 	})
 
 	It("does not select local_kms when no keeper connection is configured", func() {
