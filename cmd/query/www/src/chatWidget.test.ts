@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ResolvedOperation } from "@flanksource/clicky-ui";
-import { isQueryChatOperation } from "./chatWidget";
+import { isQueryChatOperation } from "./chatOperations";
 
 function operation(operationId?: string): ResolvedOperation {
   return {

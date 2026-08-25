@@ -1,39 +1,85 @@
 import {
   EntityExplorerApp,
+  ChatLayer,
   RouterProvider,
   ThemeProvider,
+  createUnitFormExtensions,
   createOperationsApiClient,
   useBrowserRouter,
+  useRouter,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { MonacoProvider } from "@flanksource/clicky-ui/monaco";
-import { ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
+import {
+  DebugConsoleButton,
+  DebugConsoleDock,
+  withDebugFetch,
+} from "@flanksource/clicky-ui/devtools";
+import { ChatButton, ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { secretFormExtensions } from "./secretKeySelector";
 import { namespaceFormExtensions } from "./namespacePicker";
 import { connectionFormActions } from "./connectionActions";
-import { logsResultRenderer, useLogsEntityNames } from "./logsProfiles";
+import { logsResultRenderer, useLogsSurfaces } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
+import { connectionDashboardResultRenderer } from "./connectionDashboardRenderer";
 import { getMonacoWorker } from "./monacoWorkers";
-import { ChatWidget } from "./chatWidget";
-import { profileBuilderFormExtensions } from "./profileBuilder";
+import { queryChatConfig } from "./chatWidget";
+import { isQueryChatOperation } from "./chatOperations";
+import {
+  celEditorFormExtensions,
+  esQueryBuilderFormExtensions,
+  profileBuilderFormExtensions,
+  profileEditSurfaceKey,
+  processorPipelineFormExtensions,
+} from "@flanksource/clicky-ui/profiles";
+import { esParamOptionsFormExtensions } from "./esParamOptions";
+import { jsonPathFormExtensions } from "./jsonPathPicker";
+import { connectionLoggingFormExtensions } from "./connectionLogging";
 import { BuildProfileButton } from "./buildProfileAction";
+import { EditProfileButton, ProfileEditorPage } from "./editProfileAction";
+import { isProfileSurface } from "./profileUpdateOperation";
+import { profileRowDetailsResult } from "./profileRowDetails";
+import { ReconcileButton } from "./reconcileAction";
+import { ReconcilePage } from "./reconcilePage";
+import { reconcileSurfaceKey } from "./reconcileModel";
 import {
   configureProfileConnectionForm,
   useProfileConnectionMapping,
 } from "./profileConnectionMapping";
 
-// Compose the form extensions: the namespace picker, plus the secret/workload
-// url selector (which reads the selected namespace from the form's root value).
-const formExtensions = {
+const unitFormExtensions = createUnitFormExtensions();
+
+// Compose the form extensions: the namespace picker, the secret/workload url
+// selector (which reads the selected namespace from the form's root value), the
+// profile query builder, and the structured OpenSearch filter builder that
+// mounts on provider.options.search in both the create and the edit form.
+// Exported so main.tsx can hand the same list to configureProfiles: the profile
+// editor renders its own JsonSchemaForms inside clicky-ui, far from this app's
+// EntityExplorerApp, and without them every x-clicky-component in the profile
+// schema — the CEL editor, the processor pipeline, the namespace and secret
+// pickers — falls back to a plain control.
+export const formExtensions = {
+  pre: [
+    ...unitFormExtensions.pre,
+    ...esParamOptionsFormExtensions.pre,
+    ...connectionLoggingFormExtensions.pre,
+  ],
   post: [
     ...namespaceFormExtensions.post,
     ...secretFormExtensions.post,
     ...profileBuilderFormExtensions.post,
+    ...esQueryBuilderFormExtensions.post,
+    ...esParamOptionsFormExtensions.post,
+    ...jsonPathFormExtensions.post,
+    ...celEditorFormExtensions.post,
+    ...processorPipelineFormExtensions.post,
+    ...connectionLoggingFormExtensions.post,
   ],
 };
 
 configureProfileConnectionForm({
+  formPre: formExtensions.pre,
   formPost: formExtensions.post,
   footerActions: connectionFormActions,
 });
@@ -49,9 +95,14 @@ configureProfileConnectionForm({
 // The EntityExplorerApp drives list/detail/filter UI from the OpenAPI spec. The
 // schema-by-convention endpoints power the create/edit forms and the per-profile
 // FilterBar; see cmd/query/README.md for the contract.
+// Every request the explorer makes goes out armed at whatever the debug console
+// is set to, and unarmed — with no header at all — when it is closed. The
+// wrapper is applied here rather than to `window.fetch` so it captures this
+// app's API traffic and not Vite's HMR socket or the chat stream.
 const baseClient = createOperationsApiClient({
   baseUrl: "",
   openApiPath: "/api/openapi.json",
+  fetch: withDebugFetch(),
 });
 
 // EntityExplorerApp consumes both @tanstack/react-query (data fetching) and
@@ -63,47 +114,82 @@ const queryClient = new QueryClient();
 // the result renderer so `render: logs` profiles present via clicky-ui LogsTable.
 function Explorer() {
 	const { client, dialog } = useProfileConnectionMapping(baseClient);
-  const logsEntityNames = useLogsEntityNames();
-  const renderLogsResult = logsResultRenderer(logsEntityNames);
+  const pathname = useRouter().pathname;
+  const editingProfile = profileEditSurfaceKey(pathname);
+  const reconcilingProfile = reconcileSurfaceKey(pathname);
+  const logsSurfaces = useLogsSurfaces();
+  const renderLogsResult = logsResultRenderer(logsSurfaces);
   const renderResult = (context: ResultRenderContext) => {
-    const result = renderLogsResult(context);
-    if (context.surfaceKey !== "profiles") return result;
+    const connectionResult = connectionDashboardResultRenderer(context);
+    if (connectionResult !== context.defaultView) return connectionResult;
+    const defaultResult = renderLogsResult(context);
+    const result =
+      defaultResult === context.defaultView && isProfileSurface(context.surfaceKey)
+        ? profileRowDetailsResult(context, client, context.surfaceKey!)
+        : defaultResult;
+    const action =
+      context.surfaceKey === "profiles" ? (
+        <BuildProfileButton client={client} />
+      ) : isProfileSurface(context.surfaceKey) ? (
+        <>
+          <EditProfileButton client={client} surfaceKey={context.surfaceKey!} />
+          <ReconcileButton client={client} surfaceKey={context.surfaceKey!} />
+        </>
+      ) : null;
+    if (!action) return result;
     return (
       <div className="flex h-full min-h-0 flex-col gap-4">
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <BuildProfileButton client={client} />
+          {action}
         </div>
-        <div className="min-h-0 flex-1">{result}</div>
+        <div className="flex min-h-0 flex-1 flex-col">{result}</div>
       </div>
     );
   };
   return (
     <>
-      <EntityExplorerApp
+      {editingProfile ? (
+        <ProfileEditorPage client={client} surfaceKey={editingProfile} />
+      ) : reconcilingProfile ? (
+        <ReconcilePage client={client} surfaceKey={reconcilingProfile} />
+      ) : (
+        <EntityExplorerApp
+          client={client}
+          actions={
+            <>
+              <DebugConsoleButton />
+              <ChatButton label="Open query assistant" />
+            </>
+          }
+          formExtensions={formExtensions}
+          formActions={connectionFormActions}
+          surfaceActionLabels={{
+            connection: { create: "Add Connection", update: "Edit" },
+            profiles: { create: "Add Profile" },
+          }}
+          resultRenderer={renderResult}
+          entityDetailBodyRenderer={(context) =>
+            connectionDetailBodyRenderer(
+              context,
+              ({ connectionName, providerType, providerOptions, profileQuery }) => (
+                <BuildProfileButton
+                  client={client}
+                  connectionName={connectionName}
+                  providerType={providerType}
+                  {...(providerOptions ? { providerOptions } : {})}
+                  {...(profileQuery ? { profileQuery } : {})}
+                />
+              ),
+            )
+          }
+          entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
+        />
+      )}
+      <ChatLayer
         client={client}
-      formExtensions={formExtensions}
-      formActions={connectionFormActions}
-      surfaceActionLabels={{
-        connection: { create: "Add Connection", update: "Edit" },
-        profiles: { create: "Add Profile" },
-      }}
-      resultRenderer={renderResult}
-      entityDetailBodyRenderer={(context) =>
-        connectionDetailBodyRenderer(
-          context,
-          ({ connectionName, providerType, providerOptions }) => (
-            <BuildProfileButton
-              client={client}
-              connectionName={connectionName}
-              providerType={providerType}
-              providerOptions={providerOptions}
-            />
-          ),
-        )
-      }
-        entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
+        operationFilter={isQueryChatOperation}
+        {...queryChatConfig}
       />
-      <ChatWidget client={client} />
       {dialog}
     </>
   );
@@ -117,8 +203,21 @@ export function App() {
         <MonacoProvider getWorker={getMonacoWorker}>
           <RouterProvider adapter={router}>
             <ChatWindowManagerProvider storageId="query-chat">
-              <div className="min-h-0 overflow-hidden" style={{ height: "100dvh" }}>
-                <Explorer />
+              {/* The dock is a flex sibling that shrinks the page rather than an
+                  overlay, and it is mounted outside the router branch, so an
+                  open console survives navigation onto the takeover pages
+                  (profile editor, reconcile) that bypass the app shell. Its
+                  trigger is navbar chrome and lives in EntityExplorerApp's
+                  actions slot, so opening the console does start from the
+                  explorer. */}
+              <div
+                className="flex min-h-0 flex-col overflow-hidden"
+                style={{ height: "100dvh" }}
+              >
+                <div className="min-h-0 flex-1 overflow-hidden">
+                  <Explorer />
+                </div>
+                <DebugConsoleDock />
               </div>
             </ChatWindowManagerProvider>
           </RouterProvider>
