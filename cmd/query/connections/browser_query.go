@@ -133,6 +133,13 @@ func (h *connectionBrowserHandler) executeSQL(
 	database string,
 ) (browserQueryResult, error) {
 	statement := request.Query
+	// Whether the connection may be written to is settled before anything is
+	// dispatched, because it is a property of the connection and the statement
+	// alone. Asking it per branch made it a property of which branch the
+	// statement happened to take, and the branch is chosen by a keyword.
+	if err := readOnlyStatementError(conn, statement); err != nil {
+		return browserQueryResult{}, err
+	}
 	pageRequest, err := request.Pagination.PageRequest()
 	if err != nil {
 		return browserQueryResult{}, err
@@ -153,17 +160,23 @@ func (h *connectionBrowserHandler) executeSQL(
 		return browserQueryResult{}, err
 	}
 	if !sqlReturnsRows(statement) {
-		if conn.ReadOnly {
-			return browserQueryResult{}, fmt.Errorf("virtual connection %q is read-only", conn.Name)
-		}
 		if len(filters) > 0 {
 			return browserQueryResult{}, fmt.Errorf("column filters can only be applied to a row-producing SQL query")
 		}
 		started := time.Now()
 		request.diagnostics.RecordRequest(statement, nil, map[string]any{"dialect": conn.Type, "operation": "exec"})
-		// The connection browser intentionally accepts a complete operator-authored
-		// statement; no request value is interpolated into another SQL command.
-		// codeql[go/sql-injection]
+		// The statement is the operator's own, typed into a SQL console that
+		// exists to run it, and it reaches the driver whole — no request value is
+		// interpolated into it, so there is no second command to inject.
+		//
+		// CodeQL reports this as go/sql-injection (alert 70) and is right about
+		// the dataflow and wrong about the boundary: an HTTP body does reach a
+		// SQL sink, because that is the product. It has to be dismissed in the
+		// Security tab. A `// codeql[go/sql-injection]` comment used to sit on
+		// this line and was doing nothing — the alert stayed open on the line
+		// directly beneath it — so it is gone rather than left here reading like
+		// a suppression that holds. What the console does enforce is the
+		// connection's own terms; see readOnlyStatementError below.
 		res, err := client.ExecContext(r.Context(), statement)
 		if err != nil {
 			request.diagnostics.RecordError(err)
@@ -207,6 +220,31 @@ func (h *connectionBrowserHandler) executeSQL(
 	}, nil
 }
 
+// readOnlyStatementError reports why statement may not run on conn, or nil when
+// it may.
+//
+// A read-only connection is one the console must not write through, which is a
+// stronger claim than "the driver was opened read-only": the snapshot DSN that
+// backs today's read-only connections would refuse the write anyway, but the
+// refusal an operator should read is this one, and it must hold for whichever
+// connection carries the flag next.
+func readOnlyStatementError(conn *models.Connection, statement string) error {
+	if !conn.ReadOnly {
+		return nil
+	}
+	if err := query.ValidateReadOnlySQL(statement); err != nil {
+		return fmt.Errorf("connection %q is read-only: %w", conn.Name, err)
+	}
+	return nil
+}
+
+// sqlReturnsRows reports where a statement is dispatched — QueryContext for one
+// that produces a result set, ExecContext for one that reports a row count.
+//
+// It answers that and only that. It is a keyword match on the opening word, so
+// it cannot see whether a statement writes: `WITH gone AS (DELETE ...) SELECT`
+// opens with a row-producing keyword and deletes. Whether a write is permitted
+// is readOnlyStatementError's question, asked before any dispatch.
 func sqlReturnsRows(statement string) bool {
 	statement = strings.ToLower(strings.TrimSpace(statement))
 	for _, prefix := range []string{"select", "with", "show", "describe", "desc", "explain", "pragma", "values"} {

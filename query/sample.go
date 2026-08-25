@@ -177,7 +177,10 @@ func samplePage(ctx context.Context, profile Profile, params map[string]any, req
 func validateSampleReadOnly(providerType, query string, options map[string]any) error {
 	switch providerType {
 	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
-		return validateReadOnlySQL(query)
+		if err := ValidateReadOnlySQL(query); err != nil {
+			return fmt.Errorf("sampling refused this query: %w", err)
+		}
+		return nil
 	case "http":
 		method := "GET"
 		if raw, ok := options["method"]; ok && strings.TrimSpace(fmt.Sprint(raw)) != "" {
@@ -204,14 +207,26 @@ var forbiddenSQLTokens = map[string]struct{}{
 	"set": {}, "use": {}, "begin": {}, "commit": {}, "rollback": {},
 }
 
-func validateReadOnlySQL(sql string) error {
+// ValidateReadOnlySQL reports why sql may write, or nil when the statement can
+// only read.
+//
+// It is deliberately the whole answer rather than a hint a caller refines: the
+// question "does this statement write" cannot be answered from the opening
+// keyword, because postgres spells a delete that returns rows as a WITH and
+// spells an insert that runs under EXPLAIN as an EXPLAIN. Anything that decides
+// what a read-only connection may run has to ask this, and nothing else.
+//
+// The decision is by token over a comment- and literal-aware scan, so a
+// keyword inside a string or a quoted identifier is text rather than a verb,
+// and a second statement after a semicolon cannot ride along behind a SELECT.
+func ValidateReadOnlySQL(sql string) error {
 	tokens, statements, pragmaAssignment := scanSQL(sql)
 	if statements != 1 || len(tokens) == 0 {
-		return fmt.Errorf("sampling requires exactly one read-only SQL statement")
+		return fmt.Errorf("read-only execution requires exactly one SQL statement")
 	}
 	for _, token := range tokens {
 		if _, forbidden := forbiddenSQLTokens[token]; forbidden {
-			return fmt.Errorf("sampling rejected SQL keyword %q because only read-only statements are allowed", strings.ToUpper(token))
+			return fmt.Errorf("SQL keyword %q writes, and only read-only statements are allowed here", strings.ToUpper(token))
 		}
 	}
 	allowed := map[string]bool{
@@ -219,7 +234,7 @@ func validateReadOnlySQL(sql string) error {
 		"explain": true, "pragma": true, "values": true, "with": true,
 	}
 	if !allowed[tokens[0]] {
-		return fmt.Errorf("sampling only allows SELECT, WITH, VALUES, SHOW, DESCRIBE, EXPLAIN, or read-only PRAGMA statements")
+		return fmt.Errorf("only SELECT, WITH, VALUES, SHOW, DESCRIBE, EXPLAIN, or read-only PRAGMA statements can run read-only")
 	}
 	if tokens[0] == "with" {
 		hasResult := false
@@ -230,11 +245,11 @@ func validateReadOnlySQL(sql string) error {
 			}
 		}
 		if !hasResult {
-			return fmt.Errorf("sampling requires a read-only WITH statement that returns rows")
+			return fmt.Errorf("a read-only WITH statement must return rows")
 		}
 	}
 	if tokens[0] == "pragma" && pragmaAssignment {
-		return fmt.Errorf("sampling rejects PRAGMA assignments because only read-only statements are allowed")
+		return fmt.Errorf("a PRAGMA assignment writes, and only read-only statements are allowed here")
 	}
 	return nil
 }

@@ -235,7 +235,7 @@ func TestReadOnlySQLIgnoresQuotedKeywordsAndTrailingSemicolon(t *testing.T) {
 		"/* UPDATE jobs */ WITH rows AS (SELECT 1) SELECT * FROM rows",
 		"EXPLAIN SELECT * FROM [delete]",
 	} {
-		if err := validateReadOnlySQL(statement); err != nil {
+		if err := ValidateReadOnlySQL(statement); err != nil {
 			t.Errorf("%q: %v", statement, err)
 		}
 	}
