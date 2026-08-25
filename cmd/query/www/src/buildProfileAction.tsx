@@ -3,63 +3,38 @@ import {
   Icon,
   useOperations,
   type OperationsApiClient,
-  type ResolvedOperation,
 } from "@flanksource/clicky-ui";
 import { UiMagicWand } from "@flanksource/clicky-ui/icons";
 import { useQueryClient } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
-import { ProfileWizard } from "./profileWizard";
+import { ProfileWizard } from "@flanksource/clicky-ui/profiles";
+import {
+  buildProfileInitialValue,
+  findProfileCreateOperation,
+} from "./profileCreateOperation";
 
 type BuildProfileButtonProps = {
   client: OperationsApiClient;
   connectionName?: string;
   providerType?: string;
   providerOptions?: Record<string, unknown>;
+  profileQuery?: string;
 };
-
-export function buildProfileInitialValue(
-  connectionName?: string,
-  providerType?: string,
-  providerOptions?: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!connectionName || !providerType) return {};
-  return {
-    provider: {
-      type: providerType,
-      connection: `connection://${connectionName}`,
-      ...(providerOptions && Object.keys(providerOptions).length > 0
-        ? { options: providerOptions }
-        : {}),
-    },
-  };
-}
-
-export function findProfileCreateOperation(
-  operations: ResolvedOperation[],
-): ResolvedOperation | undefined {
-  return operations.find((operation) => {
-    const meta = operation.operation["x-clicky"];
-    return (
-      meta?.surface === "profiles" &&
-      meta.scope === "collection" &&
-      meta.verb === "create"
-    );
-  });
-}
 
 export function BuildProfileButton({
   client,
   connectionName,
   providerType,
   providerOptions,
+  profileQuery,
 }: BuildProfileButtonProps) {
   const queryClient = useQueryClient();
   const { operations, isLoading } = useOperations(client);
   const createAction = findProfileCreateOperation(operations);
   const [open, setOpen] = useState(false);
   const initialValue = useMemo<Record<string, unknown>>(
-    () => buildProfileInitialValue(connectionName, providerType, providerOptions),
-    [connectionName, providerOptions, providerType],
+    () => buildProfileInitialValue(connectionName, providerType, providerOptions, profileQuery),
+    [connectionName, profileQuery, providerOptions, providerType],
   );
 
   return (
