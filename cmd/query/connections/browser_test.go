@@ -280,6 +280,53 @@ func TestSQLReturnsRows(t *testing.T) {
 	}
 }
 
+// A read-only connection is read-only for every statement, not just the ones
+// that fail to look like a SELECT. sqlReturnsRows answers where a statement is
+// dispatched; it cannot answer whether the statement writes, and a write that
+// opens with a row-producing keyword used to reach the database because the
+// gate was asked the first question and read as an answer to the second.
+func TestReadOnlyConnectionRejectsRowProducingWrites(t *testing.T) {
+	readOnly := &models.Connection{Name: "snapshot", ReadOnly: true}
+	writable := &models.Connection{Name: "primary"}
+
+	writes := []string{
+		"WITH removed AS (DELETE FROM jobs RETURNING *) SELECT * FROM removed",
+		"EXPLAIN ANALYZE INSERT INTO jobs VALUES (1)",
+		"SELECT 1; DROP TABLE jobs",
+		"DELETE FROM jobs",
+		"PRAGMA journal_mode = WAL",
+	}
+	for _, statement := range writes {
+		t.Run("rejected/"+strings.Fields(statement)[0], func(t *testing.T) {
+			err := readOnlyStatementError(readOnly, statement)
+			if err == nil {
+				t.Fatalf("expected %q to be refused on a read-only connection", statement)
+			}
+			if !strings.Contains(err.Error(), "read-only") {
+				t.Fatalf("error should name the read-only connection, got %v", err)
+			}
+			if readOnlyStatementError(writable, statement) != nil {
+				t.Fatalf("%q must still run on a writable connection", statement)
+			}
+		})
+	}
+
+	reads := []string{
+		"SELECT * FROM jobs",
+		"WITH rows AS (SELECT 1) SELECT * FROM rows",
+		"EXPLAIN SELECT * FROM jobs",
+		"PRAGMA table_info(jobs)",
+		"SELECT 'DELETE FROM jobs' AS message",
+	}
+	for _, statement := range reads {
+		t.Run("allowed/"+strings.Fields(statement)[0], func(t *testing.T) {
+			if err := readOnlyStatementError(readOnly, statement); err != nil {
+				t.Fatalf("%q must still run on a read-only connection: %v", statement, err)
+			}
+		})
+	}
+}
+
 func TestBrowserPageRequestUsesBoundedOffsetPaging(t *testing.T) {
 	tests := []struct {
 		name    string
