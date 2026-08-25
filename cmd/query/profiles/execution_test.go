@@ -5,12 +5,17 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"io"
+	"iter"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
@@ -107,6 +112,14 @@ func TestExecHandlerDelegatesSchemaRequest(t *testing.T) {
 	_ = get(h, "/api/v1/profile/activities", SchemaContentType)
 	if !next.hit {
 		t.Fatal("expected schema request to be delegated to next")
+	}
+}
+
+func TestExecHandlerDelegatesNativeLookupRequest(t *testing.T) {
+	h, next, _ := newExecTest(t, execProfile("activities"))
+	_ = get(h, "/api/v1/profile/activities?__lookup=filters", "")
+	if !next.hit {
+		t.Fatal("expected native Clicky lookup request to be delegated to next")
 	}
 }
 
@@ -228,18 +241,125 @@ insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
 	}
 }
 
+// wholeResultProcessor deliberately does not implement query.PageProcessor, so
+// a profile using it cannot be served page by page.
+type wholeResultProcessor struct{}
+
+func (wholeResultProcessor) Type() string { return "test.whole-result" }
+
+func (wholeResultProcessor) Process(_ dbcontext.Context, _ query.ProcessorSpec, in *query.Result) (*query.Result, error) {
+	return in, nil
+}
+
 type execStreamMock struct {
-	rows []query.Row
-	last query.ProviderRequest
+	rows     []query.Row
+	last     query.ProviderRequest
+	lastPage query.PageRequest
 }
 
 func (m *execStreamMock) Type() string { return "exec-stream" }
+
+func (m *execStreamMock) PagingModes() query.PagingMode {
+	return query.PagingOffset | query.PagingCursor
+}
+
 func (m *execStreamMock) Execute(_ dbcontext.Context, _ query.ProviderRequest) ([]query.Row, error) {
 	return m.rows, nil
 }
-func (m *execStreamMock) OpenRows(_ dbcontext.Context, req query.ProviderRequest) (query.RowIterator, error) {
+
+func (m *execStreamMock) Pages(_ dbcontext.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
 	m.last = req
-	return query.SliceRows(m.rows), nil
+	m.lastPage = page
+	return func(yield func(query.Page, error) bool) {
+		total := query.Total{Value: int64(len(m.rows)), Exact: true}
+		for start := min(page.Offset, len(m.rows)); ; start += page.Limit {
+			end := min(start+page.Limit, len(m.rows))
+			more := end < len(m.rows)
+			if !yield(query.Page{
+				Rows:    m.rows[start:end],
+				HasMore: more,
+				Total:   &total,
+			}, nil) || !more {
+				return
+			}
+		}
+	}
+}
+
+// leakProbeMock reports whether the walk it started was released. started is set
+// when the sequence is entered — a real provider has its connection or its
+// point-in-time by then — and released when it unwinds, which is what iter.Pull2
+// does on stop(). The two are separate so a walk that never began cannot be
+// mistaken for one that was cleaned up.
+type leakProbeMock struct {
+	rows          []query.Row
+	failFirstPage bool
+	started       atomic.Bool
+	released      atomic.Bool
+}
+
+func (m *leakProbeMock) Type() string { return "leak-probe" }
+
+func (m *leakProbeMock) PagingModes() query.PagingMode {
+	return query.PagingOffset | query.PagingCursor
+}
+
+func (m *leakProbeMock) Execute(_ dbcontext.Context, _ query.ProviderRequest) ([]query.Row, error) {
+	return m.rows, nil
+}
+
+func (m *leakProbeMock) Pages(_ dbcontext.Context, _ query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
+	return func(yield func(query.Page, error) bool) {
+		m.started.Store(true)
+		defer m.released.Store(true)
+		if m.failFirstPage {
+			yield(query.Page{}, errors.New("backend failed resolving the first page"))
+			return
+		}
+		for start := 0; start < len(m.rows); start += page.Limit {
+			end := min(start+page.Limit, len(m.rows))
+			if !yield(query.Page{Rows: m.rows[start:end], HasMore: end < len(m.rows)}, nil) {
+				return
+			}
+		}
+	}
+}
+
+// An all-row export opens its walk before it writes anything, so a failure
+// while resolving the first page has to release the backend cursor it already
+// took — a connection for SQL, a point-in-time for OpenSearch. peekPages stops
+// the pull on that path; this pins it, because nothing else covers the error
+// branch and the resource is only observable by its release.
+func TestExecHandlerReleasesTheWalkWhenTheFirstPageFails(t *testing.T) {
+	mock := &leakProbeMock{
+		rows:          []query.Row{{"id": 1}, {"id": 2}, {"id": 3}},
+		failFirstPage: true,
+	}
+	query.RegisterProvider(mock)
+
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "leaky", Provider: query.ProviderConfig{Type: "leak-probe"}, Query: "rows",
+		Columns: []query.ColumnDef{{Name: "id"}},
+		Order:   query.Order{{Column: "id", Unique: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	rec := get(h, "/api/v1/profile/leaky?format=csv&scope=all", "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s, want the first-page failure this test is built on", rec.Code, rec.Body.String())
+	}
+	if !mock.started.Load() {
+		t.Fatal("the provider walk was never entered, so this test is not exercising the release it claims to")
+	}
+	if !mock.released.Load() {
+		t.Fatal("the walk was never released: the export failed resolving its first page and returned holding the backend cursor")
+	}
 }
 
 func newExecStreamTest(t *testing.T, rows []query.Row, columns []query.ColumnDef) *execHandler {
@@ -249,7 +369,13 @@ func newExecStreamTest(t *testing.T, rows []query.Row, columns []query.ColumnDef
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(context.Background(), query.Profile{Name: "export", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows", Columns: columns}); err != nil {
+	profile := query.Profile{
+		Name: "export", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows", Columns: columns,
+		// Paging past the first page needs a total order, so an export fixture
+		// declares one the way a real profile has to.
+		Order: query.Order{{Column: "id", Unique: true}},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
 		t.Fatal(err)
 	}
 	return newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
@@ -320,7 +446,11 @@ func TestExecHandlerBoundsInteractiveStreamingRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.Save(context.Background(), query.Profile{Name: "bounded", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows"}); err != nil {
+	profile := query.Profile{
+		Name: "bounded", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+		Order: query.Order{{Column: "id", Unique: true}},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
 		t.Fatal(err)
 	}
 	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
@@ -328,8 +458,315 @@ func TestExecHandlerBoundsInteractiveStreamingRequest(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if mock.last.MaxRows != 76 {
-		t.Fatalf("provider max rows = %d, want offset + limit + lookahead = 76", mock.last.MaxRows)
+	// The page the provider is asked for is the page the caller asked for. It
+	// used to be offset+limit+1, because the offset was skipped here rather
+	// than by whoever owns the cursor.
+	if mock.lastPage.Limit != 25 || mock.lastPage.Offset != 50 {
+		t.Fatalf("provider page = %+v, want limit 25 offset 50", mock.lastPage)
+	}
+	if rec.Header().Get("X-Has-More") != "true" {
+		t.Fatalf("expected X-Has-More on a page with rows behind it: %v", rec.Header())
+	}
+}
+
+// A profile with no declared order cannot be paged past its first page: two
+// executions may interleave tied rows differently, so page 2 could repeat or
+// skip rows from page 1. Refusing is the only answer that is not quietly wrong.
+func TestExecHandlerRefusesToPageAnUnorderedProfile(t *testing.T) {
+	mock := &execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}}}
+	query.RegisterProvider(mock)
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "unordered", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	if rec := get(h, "/api/v1/profile/unordered?limit=1&offset=1", ""); rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d, want 400 for a second page of an unordered profile", rec.Code)
+	}
+	// The first page is still answerable: it names no position.
+	rec := get(h, "/api/v1/profile/unordered?limit=1", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s, want the first page to be served", rec.Code, rec.Body.String())
+	}
+	// ...and it must not invite the caller to a second one. The provider has
+	// rows behind this page, but asking for them is the request refused above,
+	// so reporting "more exists" here is an invitation to a guaranteed 400.
+	if more := rec.Header().Get("X-Has-More"); more != "false" {
+		t.Fatalf("X-Has-More=%q on an unpageable profile, want false", more)
+	}
+	if offset, ok := rec.Header()["X-Page-Offset"]; ok {
+		t.Fatalf("X-Page-Offset=%v on an unpageable profile, want it omitted", offset)
+	}
+}
+
+// The paging a surface advertises has to be the paging it will serve. An
+// unpageable profile that declares an `offset` parameter puts a pager in the UI
+// whose every click is a 400.
+func TestProfileOpenAPIOmitsOffsetForAnUnpageableProfile(t *testing.T) {
+	mock := &execStreamMock{rows: []query.Row{{"id": 1}}}
+	query.RegisterProvider(mock)
+
+	roles := func(p query.Profile) map[string]string {
+		spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+		if err := addProfileToSpec(spec, p); err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]string{}
+		for _, parameter := range spec.Paths["/api/v1/profile/profile-"+slugify(p.Name)]["get"].Parameters {
+			if parameter.Clicky != nil && parameter.Clicky.Role != "" {
+				out[parameter.Name] = parameter.Clicky.Role
+			}
+		}
+		return out
+	}
+
+	unordered := query.Profile{Name: "unordered", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows"}
+	if got := roles(unordered); got["offset"] != "" || got["cursor"] != "" {
+		t.Fatalf("unpageable profile advertises paging params: %v", got)
+	} else if got["limit"] != "limit" {
+		t.Fatalf("limit is valid without an order and must stay advertised: %v", got)
+	}
+
+	ordered := unordered
+	ordered.Order = query.Order{{Column: "id", Unique: true}}
+	if got := roles(ordered); got["offset"] != "offset" {
+		t.Fatalf("pageable profile must advertise offset: %v", got)
+	}
+}
+
+// An error a browser cannot read is an error the user cannot act on: without
+// CORS the actionable message ("declare `order:` ...") is replaced by a generic
+// network failure. The header costs nothing and does not depend on the response
+// being known, so it belongs before the first thing that can fail.
+func TestExecHandlerAllowsCrossOriginReadsOfErrors(t *testing.T) {
+	mock := &execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}}}
+	query.RegisterProvider(mock)
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "cors", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	for _, tc := range []struct {
+		name, target string
+		want         int
+	}{
+		{"unknown profile", "/api/v1/profile/profile-missing", http.StatusNotFound},
+		{"bad limit", "/api/v1/profile/cors?limit=0", http.StatusBadRequest},
+		{"bad scope", "/api/v1/profile/cors?scope=sideways", http.StatusBadRequest},
+		{"unpageable second page", "/api/v1/profile/cors?limit=1&offset=1", http.StatusBadRequest},
+		{"served page", "/api/v1/profile/cors?limit=1", http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := get(h, tc.target, "")
+			if rec.Code != tc.want {
+				t.Fatalf("status=%d want %d body=%s", rec.Code, tc.want, rec.Body.String())
+			}
+			if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+				t.Fatalf("Access-Control-Allow-Origin=%q on a %d response", got, rec.Code)
+			}
+		})
+	}
+}
+
+// A preflight that does not allow the origin fails before the request it is
+// clearing is ever made, so the export behind it is unreachable cross-origin
+// no matter what that export would have allowed.
+func TestExecHandlerPreflightAllowsTheOrigin(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/profile/anything", nil)
+	req.Header.Set("Origin", "http://elsewhere.example")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("status=%d, want 204", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "*" {
+		t.Fatalf("Access-Control-Allow-Origin=%q on a preflight", got)
+	}
+}
+
+// A client that has to string-match an error message breaks when the message is
+// reworded. The 409 asking for a connection has always carried a code; every
+// other failure now does too.
+func TestExecHandlerReturnsStructuredErrors(t *testing.T) {
+	mock := &execStreamMock{rows: []query.Row{{"id": 1}}}
+	query.RegisterProvider(mock)
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "coded", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	for _, tc := range []struct {
+		name, target, code string
+		status             int
+	}{
+		{"unknown profile", "/api/v1/profile/profile-missing", "profile_not_found", http.StatusNotFound},
+		{"bad limit", "/api/v1/profile/coded?limit=0", "invalid_export_request", http.StatusBadRequest},
+		{"bad scope", "/api/v1/profile/coded?scope=sideways", "invalid_export_request", http.StatusBadRequest},
+		{"unpageable second page", "/api/v1/profile/coded?limit=1&offset=1", "query_failed", http.StatusBadRequest},
+		{"all rows as clicky-json", "/api/v1/profile/coded?scope=all", "format_not_exportable", http.StatusUnprocessableEntity},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			target := tc.target
+			if tc.name == "all rows as clicky-json" {
+				target += "&format=clicky-json"
+			}
+			rec := get(h, target, "")
+			if rec.Code != tc.status {
+				t.Fatalf("status=%d want %d body=%s", rec.Code, tc.status, rec.Body.String())
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Content-Type=%q on an error body", got)
+			}
+			var body execError
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
+			}
+			if body.Code != tc.code {
+				t.Fatalf("code=%q want %q (message %q)", body.Code, tc.code, body.Message)
+			}
+			if body.Message == "" {
+				t.Fatal("error carries a code but nothing a person can read")
+			}
+		})
+	}
+}
+
+// A failed query says which query failed. The provider attaches the statement
+// it ran to the error; a body that dropped it would leave the caller with
+// "column does not exist" and no column and no query to look at.
+func TestExecErrorBodyCarriesProviderDiagnostics(t *testing.T) {
+	diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "postgres", Query: "SELECT scheme, premum FROM policies", Detail: query.DiagnosticFull})
+	diagnostics.RecordRequest("SELECT scheme, premum FROM policies WHERE start >= $1", []any{"2026-07-01"}, nil)
+	failure := query.WithDiagnostics(
+		errors.New(`profile "om-malawi-scheme": failed to execute sql query: column "premum" does not exist`),
+		diagnostics,
+	)
+
+	rec := httptest.NewRecorder()
+	writeExecError(rec, http.StatusBadRequest, "query_failed", failure)
+
+	var body execError
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("error body is not JSON: %v (%s)", err, rec.Body.String())
+	}
+	if body.Code != "query_failed" || body.Message != failure.Error() {
+		t.Fatalf("code=%q message=%q", body.Code, body.Message)
+	}
+	if body.Diagnostics == nil {
+		t.Fatal("a failure carrying provider diagnostics served a body without them")
+	}
+	if got := body.Diagnostics.Request.Query; !strings.Contains(got, "premum") {
+		t.Fatalf("diagnostics query=%q, want the statement that ran", got)
+	}
+	if got := body.Diagnostics.Request.Arguments; len(got) != 1 || got[0] != "2026-07-01" {
+		t.Fatalf("diagnostics arguments=%v, want the bound values", got)
+	}
+	if body.Diagnostics.Provider != "postgres" {
+		t.Fatalf("diagnostics provider=%q", body.Diagnostics.Provider)
+	}
+}
+
+// An error with nothing attached must not grow an empty diagnostics object: a
+// caller reading one would take it for a query that reported nothing.
+func TestExecErrorBodyOmitsAbsentDiagnostics(t *testing.T) {
+	rec := httptest.NewRecorder()
+	writeExecError(rec, http.StatusNotFound, "profile_not_found", errors.New("no such profile"))
+
+	if strings.Contains(rec.Body.String(), "diagnostics") {
+		t.Fatalf("error body invented diagnostics: %s", rec.Body.String())
+	}
+}
+
+// HEAD is how a caller reads the paging headers — X-Total-Count above all —
+// without paying for the rows. The schema handler on this same path already
+// answers HEAD, so refusing it here made one path disagree with itself.
+func TestExecHandlerAnswersHeadWithHeadersAndNoBody(t *testing.T) {
+	mock := &execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}, {"id": 3}}}
+	query.RegisterProvider(mock)
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "head", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+		Order: query.Order{{Column: "id", Unique: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	req := httptest.NewRequest(http.MethodHead, "/api/v1/profile/head?limit=1", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Total-Count"); got != "3" {
+		t.Fatalf("X-Total-Count=%q, want the total a HEAD is asked for", got)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("HEAD returned %d body bytes", rec.Body.Len())
+	}
+}
+
+// Accept is a ranked list, not an ordered one. Reading the first recognised
+// entry hands a caller HTML when it weighted HTML lowest and asked for the
+// clicky envelope.
+func TestRequestedFormatHonoursQualityWeights(t *testing.T) {
+	for _, tc := range []struct{ accept, want string }{
+		{"text/html;q=0.1, application/json+clicky;q=0.9", "clicky-json"},
+		{"application/json+clicky;q=0.2, text/csv;q=0.8", "csv"},
+		{"text/html,application/json+clicky", "html"},
+		{"text/csv;q=0, application/json", "json"},
+		{"*/*", "json"},
+		{"", "json"},
+	} {
+		t.Run(tc.accept, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/profile/any", nil)
+			if tc.accept != "" {
+				req.Header.Set("Accept", tc.accept)
+			}
+			if got := requestedFormat(req); got != tc.want {
+				t.Fatalf("requestedFormat(%q) = %q, want %q", tc.accept, got, tc.want)
+			}
+		})
+	}
+}
+
+// An explicit ?format always wins: it is the caller naming the answer rather
+// than describing what it could accept.
+func TestRequestedFormatPrefersTheExplicitParameter(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/profile/any?format=csv", nil)
+	req.Header.Set("Accept", "application/json+clicky;q=1.0")
+	if got := requestedFormat(req); got != "csv" {
+		t.Fatalf("requestedFormat = %q, want the named format", got)
 	}
 }
 
@@ -368,6 +805,217 @@ func TestExecHandlerStreamsAllRowsAsNDJSON(t *testing.T) {
 	}
 }
 
+// An all-row export is the one request with no page to bound it, so the export
+// ceiling is what stops it. It is deliberately far above a page: maxPageSize
+// bounds one response, maxExportRows bounds the whole export. A profile that
+// exports a large table raises its own ceiling and that number is the one that
+// applies, headers included.
+func TestExecHandlerBoundsAllRowExportByExportCeiling(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		limits *query.RowLimits
+		want   int
+	}{
+		{name: "default", want: query.DefaultMaxExportRows},
+		{name: "profile", limits: &query.RowLimits{MaxExportRows: 250_000}, want: 250_000},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mock := &execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}}}
+			query.RegisterProvider(mock)
+			store, err := NewFileStore(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			profile := query.Profile{
+				Name: "ceiling", Provider: query.ProviderConfig{Type: mock.Type()},
+				Query: "rows", Limits: tt.limits,
+				Order: query.Order{{Column: "id", Unique: true}},
+			}
+			if err := store.Save(context.Background(), profile); err != nil {
+				t.Fatal(err)
+			}
+			h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+			rec := get(h, "/api/v1/profile/ceiling?format=ndjson&scope=all", "")
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if got := rec.Header().Get("X-Max-Rows"); got != strconv.Itoa(tt.want) {
+				t.Fatalf("X-Max-Rows = %q, want %d", got, tt.want)
+			}
+			// An export whose rows fit under the ceiling is complete, and must
+			// not claim otherwise.
+			if got := rec.Header().Get("X-Truncated"); got != "" {
+				t.Fatalf("X-Truncated = %q on an export that fit under its ceiling", got)
+			}
+		})
+	}
+}
+
+// An export that stopped at the ceiling and said nothing is indistinguishable
+// from one that finished, which is the defect this whole contract exists to
+// remove. The answer is only knowable after the rows are written, which is why
+// it is declared as a trailer and asserted here rather than in the headers.
+func TestExecHandlerReportsAnExportCutByItsCeiling(t *testing.T) {
+	const ceiling = 40
+	rows := make([]query.Row, 100)
+	for i := range rows {
+		rows[i] = query.Row{"id": i}
+	}
+	query.RegisterProvider(&execStreamMock{rows: rows})
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := query.Profile{
+		Name: "cut", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows",
+		Limits: &query.RowLimits{MaxExportRows: ceiling},
+		Order:  query.Order{{Column: "id", Unique: true}},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	// A real connection rather than a recorder: httptest.ResponseRecorder keeps
+	// trailers and headers in one map, so it cannot tell a header a browser can
+	// read from a trailer no browser exposes — which is the fact under test.
+	server := httptest.NewServer(h)
+	defer server.Close()
+	response, err := http.Get(server.URL + "/api/v1/profile/cut?format=ndjson&scope=all")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = response.Body.Close() }()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.StatusCode, body)
+	}
+	// This provider reports an exact total, so the cut is arithmetic the server
+	// can do before it writes a byte. Knowing it up front is what makes it a
+	// header rather than a trailer — a browser can read one and not the other.
+	if got := response.Header.Get("X-Truncated"); got != "true" {
+		t.Fatalf("X-Truncated = %q on an export cut at its %d row ceiling", got, ceiling)
+	}
+	if declared := response.Header.Get("Trailer"); declared != "" {
+		t.Fatalf("Trailer = %q declared for a cut that was already knowable", declared)
+	}
+	if count := strings.Count(strings.TrimSpace(string(body)), "\n") + 1; count != ceiling {
+		t.Fatalf("wrote %d rows, want the %d-row ceiling", count, ceiling)
+	}
+}
+
+// A buffered all-row export is bounded by the query, not by an export ceiling,
+// so it can never overflow one. Declaring a trailer it will never send costs
+// every such response its Content-Length and tells the caller to wait for an
+// answer that is not coming.
+func TestExecHandlerDeclaresNoTrailerForABufferedExport(t *testing.T) {
+	query.RegisterProvider(&execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}}})
+	query.RegisterProcessor(wholeResultProcessor{})
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "buffered", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows",
+		Columns: []query.ColumnDef{{Name: "id"}},
+		Order:   query.Order{{Column: "id", Unique: true}},
+		// A processor that needs every row before any row is correct is what
+		// puts this export on the buffered path.
+		Processors: []query.ProcessorSpec{{Type: "test.whole-result"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	rec := get(h, "/api/v1/profile/buffered?format=csv&scope=all", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if mode := rec.Header().Get("X-Export-Mode"); mode != "buffered" {
+		t.Fatalf("X-Export-Mode = %q, want buffered", mode)
+	}
+	if declared := rec.Header().Get("Trailer"); declared != "" {
+		t.Fatalf("Trailer = %q on a buffered export that cannot overflow", declared)
+	}
+}
+
+// A PDF stops being readable long before the export ceiling, so it enforces a
+// ceiling of its own. Reporting the profile's number instead would tell the
+// caller 100,000 rows were permitted for a format that accepts 1,000.
+//
+// Overshooting that ceiling is refused rather than truncated (see
+// TestExecHandlerRejectsOversizedPDFBeforeWriting), so this asserts the number
+// a PDF that fits still reports.
+func TestExecHandlerPDFReportsItsOwnCeiling(t *testing.T) {
+	rows := make([]query.Row, 10)
+	for i := range rows {
+		rows[i] = query.Row{"id": i}
+	}
+	query.RegisterProvider(&execStreamMock{rows: rows})
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "paged-pdf", Provider: query.ProviderConfig{Type: "exec-stream"}, Query: "rows",
+		Columns: []query.ColumnDef{{Name: "id"}},
+		Order:   query.Order{{Column: "id", Unique: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	rec := get(h, "/api/v1/profile/paged-pdf?format=pdf&scope=all", "")
+	if rec.Code != http.StatusOK {
+		t.Skipf("pdf rendering unavailable in this environment: %s", rec.Body.String())
+	}
+	if got := rec.Header().Get("X-Max-Rows"); got != strconv.Itoa(maxPDFRows) {
+		t.Fatalf("X-Max-Rows = %q, want the PDF ceiling %d", got, maxPDFRows)
+	}
+	// A PDF is buffered, so it never has an answer still to come.
+	if declared := rec.Header().Get("Trailer"); declared != "" {
+		t.Fatalf("Trailer = %q on a buffered PDF", declared)
+	}
+	if got := rec.Header().Get("X-Truncated"); got != "" {
+		t.Fatalf("X-Truncated = %q on a PDF that fit inside its ceiling", got)
+	}
+}
+
+// The page a caller may ask for is the profile's, not the server's: a profile
+// that widens maxPageSize accepts a page the default would have refused, and
+// says its own number when it refuses one.
+func TestExecHandlerPageLimitFollowsProfileMaxPageSize(t *testing.T) {
+	mock := &execStreamMock{rows: []query.Row{{"id": 1}, {"id": 2}}}
+	query.RegisterProvider(mock)
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := query.Profile{
+		Name: "pages", Provider: query.ProviderConfig{Type: mock.Type()}, Query: "rows",
+		Limits: &query.RowLimits{PageSize: 5, MaxPageSize: 2000},
+	}
+	if err := store.Save(context.Background(), profile); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	if rec := get(h, "/api/v1/profile/pages?format=ndjson&limit=1500", ""); rec.Code != http.StatusOK {
+		t.Fatalf("page within the profile's maximum: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	rec := get(h, "/api/v1/profile/pages?format=ndjson&limit=2500", "")
+	if rec.Code == http.StatusOK || !strings.Contains(rec.Body.String(), "between 1 and 2000") {
+		t.Fatalf("page past the profile's maximum: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if rec := get(h, "/api/v1/profile/pages?format=ndjson", ""); rec.Header().Get("X-Page-Limit") != "5" {
+		t.Fatalf("default page = %q, want the profile's 5", rec.Header().Get("X-Page-Limit"))
+	}
+}
+
 func TestExecHandlerSchemaLessAllRowsRules(t *testing.T) {
 	h := newExecStreamTest(t, []query.Row{{"id": 1}, {"id": 2, "late": true}}, nil)
 	if rec := get(h, "/api/v1/profile/export?scope=all&format=csv", ""); rec.Code != http.StatusUnprocessableEntity {
@@ -392,3 +1040,57 @@ func TestExecHandlerRejectsOversizedPDFBeforeWriting(t *testing.T) {
 }
 
 var _ = io.Discard
+
+// execMock implements no PagingProvider, so every page of it comes from running
+// the whole query and slicing the result. X-Export-Mode describes how the rows
+// were produced, not what was asked for, so it has to say so — and an all-row
+// export has to be served at all, which a cursor walk cannot do here.
+func TestExecHandlerReportsHowTheRowsWereActuallyProduced(t *testing.T) {
+	h, _, _ := newExecTest(t, query.Profile{
+		Name: "buffered", Provider: query.ProviderConfig{Type: "exec-mock"}, Query: "rows",
+		Columns: []query.ColumnDef{{Name: "id"}},
+		Order:   query.Order{{Column: "id", Unique: true}},
+	})
+	for _, scope := range []string{"page", "all"} {
+		rec := get(h, "/api/v1/profile/buffered?format=csv&scope="+scope, "")
+		if rec.Code != http.StatusOK {
+			t.Fatalf("scope=%s status=%d body=%s", scope, rec.Code, rec.Body.String())
+		}
+		if got := rec.Header().Get("X-Export-Mode"); got != "buffered" {
+			t.Fatalf("scope=%s reported X-Export-Mode=%q, but the provider cannot page: the whole query ran and the result was sliced", scope, got)
+		}
+	}
+}
+
+// A profile with no declared columns has its schema derived from the first row
+// alone, so any key that appears later is dropped without a word. scope=all has
+// always refused that; a page of the same profile in the same format has the
+// same hole, and document-shaped backends return heterogeneous rows routinely.
+// A refusal the caller can act on beats a file that is quietly missing columns.
+func TestExecHandlerRefusesTabularExportsThatWouldDropColumns(t *testing.T) {
+	mock := &execMock{rows: []query.Row{{"id": 1, "a": "x"}, {"id": 2, "b": "y"}}}
+	query.RegisterProvider(mock)
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(context.Background(), query.Profile{
+		Name: "noncols", Provider: query.ProviderConfig{Type: "exec-mock"}, Query: "rows",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	h := newExecHandler("/api/v1", dbcontext.New(), store, &nextMarker{})
+
+	for _, scope := range []string{"page", "all"} {
+		rec := get(h, "/api/v1/profile/noncols?format=csv&scope="+scope, "")
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("scope=%s status=%d body=%q, want a refusal rather than a lossy file", scope, rec.Code, rec.Body.String())
+		}
+	}
+
+	// Only the tabular formats flatten to a fixed column set. A structured one
+	// carries whatever each row has, so it keeps serving.
+	if rec := get(h, "/api/v1/profile/noncols?format=json&scope=page", ""); rec.Code != http.StatusOK {
+		t.Fatalf("json export status=%d body=%q, want it unaffected", rec.Code, rec.Body.String())
+	}
+}

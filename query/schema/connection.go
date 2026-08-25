@@ -6,6 +6,8 @@ import (
 	"slices"
 
 	"github.com/flanksource/clicky/rpc"
+	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -70,6 +72,7 @@ func ConnectionComponents() map[string]Schema {
 			props[name] = Schema(raw.(map[string]any))
 		}
 		props["type"] = Schema{"type": "string", "title": "Type", "const": typ}
+		props["logging"] = connectionLoggingSchema(typ)
 		required := []string{"name", "type"}
 		if cfg, ok := tailoredProviders[typ]; ok {
 			branch := tailoredBranch(typ, cfg)["then"].(Schema)
@@ -88,6 +91,18 @@ func ConnectionComponents() map[string]Schema {
 		}
 	}
 	return components
+}
+
+func connectionLoggingSchema(connectionType string) Schema {
+	return Schema{
+		"type":                 "object",
+		"title":                "Logging",
+		"description":          "Choose which sanitized connection activity is emitted at each log level.",
+		"x-clicky-order":       8,
+		"x-clicky-component":   "connection-logging-policy",
+		"x-clicky-logging":     observability.CapabilityFor(connectionType),
+		"additionalProperties": false,
+	}
 }
 
 // Connection returns the bundled schema consumed by clicky-ui.
@@ -155,6 +170,9 @@ func tailoredBranch(typ string, cfg any) Schema {
 
 	if len(propProps) > 0 {
 		properties := Schema{"type": "object", "title": "Properties", "properties": propProps}
+		if typ == models.ConnectionTypeClickHouse {
+			customizeClickHousePropertiesSchema(properties)
+		}
 		if len(propertyRequired) > 0 {
 			properties["required"] = propertyRequired
 			required = append(required, "properties")
@@ -182,9 +200,51 @@ func tailoredBranch(typ string, cfg any) Schema {
 	}
 }
 
+func customizeClickHousePropertiesSchema(properties Schema) {
+	properties["title"] = "Query limits"
+	properties["description"] = "Applied to every query opened through this connection. Missing values use these safe defaults."
+	properties["x-clicky-order"] = 7
+	properties["x-columns"] = 2
+	properties["x-column-min-width"] = "16rem"
+
+	fields := properties["properties"].(Schema)
+	numeric := map[string]struct {
+		defaultValue string
+		suffix       string
+		unitKind     string
+	}{
+		models.ClickHousePropertyMaxExecutionTime: {models.ClickHouseDefaultMaxExecutionTime, "seconds", ""},
+		models.ClickHousePropertyMaxRowsToRead:    {models.ClickHouseDefaultMaxRowsToRead, "rows", "count"},
+		models.ClickHousePropertyMaxBytesToRead:   {models.ClickHouseDefaultMaxBytesToRead, "", "bytes"},
+		models.ClickHousePropertyMaxMemoryUsage:   {models.ClickHouseDefaultMaxMemoryUsage, "", "bytes"},
+		models.ClickHousePropertyMaxThreads:       {models.ClickHouseDefaultMaxThreads, "threads", ""},
+	}
+	for key, metadata := range numeric {
+		field := fields[key].(Schema)
+		field["default"] = metadata.defaultValue
+		field["pattern"] = "^[1-9][0-9]*$"
+		if metadata.suffix != "" {
+			field["x-input-suffix"] = metadata.suffix
+		}
+		if metadata.unitKind != "" {
+			field["x-clicky-unit"] = metadata.unitKind
+		}
+	}
+	for key, defaultValue := range map[string]string{
+		models.ClickHousePropertyReadOverflowMode:    models.ClickHouseDefaultReadOverflowMode,
+		models.ClickHousePropertyTimeoutOverflowMode: models.ClickHouseDefaultTimeoutOverflowMode,
+	} {
+		field := fields[key].(Schema)
+		field["default"] = defaultValue
+		field["enum"] = []string{"throw", "break"}
+		field["x-enum-display"] = "segmented"
+		field["x-enum-labels"] = map[string]string{"throw": "Throw", "break": "Break"}
+	}
+}
+
 func isHTTPConnectionType(typ string) bool {
 	switch typ {
-	case "http", "opensearch", "prometheus", "loki", "jaeger":
+	case "http", "opensearch", "elasticsearch", "prometheus", "loki", "jaeger":
 		return true
 	default:
 		return false
