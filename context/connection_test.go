@@ -2,14 +2,67 @@ package context
 
 import (
 	"context"
+	"strings"
+	"time"
 
-	commons "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons-db/models"
+	commons "github.com/flanksource/commons/context"
+	"github.com/google/uuid"
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = ginkgo.Describe("Connection Tests", func() {
+	ginkgo.Describe("cache identity", func() {
+		ginkgo.It("changes with the stored connection version and resolver scope", func() {
+			updatedAt := time.Date(2026, time.August, 22, 10, 0, 0, 0, time.UTC)
+			connection := &models.Connection{ID: uuid.New(), Name: "analytics", UpdatedAt: updatedAt}
+			resolverFactory := func() ConnectionResolver {
+				return func(string) (*models.Connection, error) { return connection, nil }
+			}
+			first := NewContext(context.Background()).WithConnectionResolver(resolverFactory())
+
+			original, err := first.ConnectionCacheIdentity("connection://analytics")
+			Expect(err).NotTo(HaveOccurred())
+			connection.UpdatedAt = updatedAt.Add(time.Hour)
+			changed, err := first.ConnectionCacheIdentity("connection://analytics")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(changed).NotTo(Equal(original))
+
+			second := NewContext(context.Background()).WithConnectionResolver(resolverFactory())
+			otherScope, err := second.ConnectionCacheIdentity("connection://analytics")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(otherScope).NotTo(Equal(changed))
+
+			wrapped := first.Wrap(context.Background())
+			wrappedIdentity, err := wrapped.ConnectionCacheIdentity("connection://analytics")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(wrappedIdentity).To(Equal(changed))
+		})
+
+		ginkgo.It("hashes inline credentials instead of retaining them in the key", func() {
+			identity, err := NewContext(context.Background()).ConnectionCacheIdentity(
+				"postgres://user:sensitive-password@example.invalid/app",
+			)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(identity).To(HavePrefix("unscoped:namespace::inline:"))
+			Expect(strings.Contains(identity, "sensitive-password")).To(BeFalse())
+		})
+	})
+
+	ginkgo.It("resolves a virtual connection before consulting the database", func() {
+		virtual := &models.Connection{Name: "snapshot", Namespace: "reconciliations", Type: models.ConnectionTypeSQLite}
+		ctx := NewContext(context.Background()).WithConnectionResolver(func(reference string) (*models.Connection, error) {
+			if reference == "connection://reconciliations/snapshot" {
+				return virtual, nil
+			}
+			return nil, nil
+		})
+		resolved, err := FindConnectionByURL(ctx, "connection://reconciliations/snapshot")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resolved).To(Equal(virtual))
+	})
+
 	ginkgo.Describe("GetConnectionNameType", func() {
 		testCases := []struct {
 			name       string

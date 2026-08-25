@@ -15,6 +15,8 @@ import (
 
 const poolLockNamespace = "commons-db:ephemeral-pool:"
 
+const databaseConnectionPollInterval = 10 * time.Millisecond
+
 type poolSession struct {
 	db   *sql.DB
 	conn *sql.Conn
@@ -319,6 +321,22 @@ func (s *poolSession) databaseHasConnections(ctx context.Context, name string) (
 		return false, fmt.Errorf("inspect sessions for database %s: %w", name, err)
 	}
 	return active, nil
+}
+
+func (s *poolSession) waitForDatabaseConnectionsToClose(ctx context.Context, name string) error {
+	ticker := time.NewTicker(databaseConnectionPollInterval)
+	defer ticker.Stop()
+	for {
+		active, err := s.databaseHasConnections(ctx, name)
+		if err != nil || !active {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func (s *poolSession) dropDatabase(ctx context.Context, name string, force bool) error {

@@ -22,6 +22,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	ktesting "k8s.io/client-go/testing"
+	_ "modernc.org/sqlite"
 )
 
 func TestEnvCacheIsScopedByKubernetesAuthorization(t *testing.T) {
@@ -89,6 +90,83 @@ func TestSecretCacheInvalidationObservesRotation(t *testing.T) {
 	}
 	if got, err := GetSecretFromCache(ctx, "prod", "database", "password"); err != nil || got != "new" {
 		t.Fatalf("rotated secret = %q, %v", got, err)
+	}
+}
+
+// TestInvalidateConnectionSecretsClearsEveryReferencedValue pins that an
+// explicit re-check of a connection re-reads its rotated secrets. Editing the
+// referenced Secret never touches connections.updated_at, so nothing else
+// invalidates these entries within the cache TTL.
+func TestInvalidateConnectionSecretsClearsEveryReferencedValue(t *testing.T) {
+	envCache.Flush()
+	ctx := cacheTestContext("https://cluster", "principal", "old-password", "old-endpoint")
+	client, err := ctx.LocalKubernetes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection := &models.Connection{
+		Name: "warehouse", Namespace: "prod", Type: models.ConnectionTypePostgres,
+		Password:   "secret://database/password",
+		Properties: map[string]string{"host": "configmap://database/endpoint"},
+	}
+
+	if got, err := GetEnvStringFromCache(ctx, connection.Password, "prod"); err != nil || got != "old-password" {
+		t.Fatalf("initial password = %q, %v", got, err)
+	}
+	if got, err := GetEnvStringFromCache(ctx, connection.Properties["host"], "prod"); err != nil || got != "old-endpoint" {
+		t.Fatalf("initial endpoint = %q, %v", got, err)
+	}
+
+	secret, _ := client.CoreV1().Secrets("prod").Get(ctx, "database", metav1.GetOptions{})
+	secret.Data["password"] = []byte("new-password")
+	if _, err := client.CoreV1().Secrets("prod").Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	configMap, _ := client.CoreV1().ConfigMaps("prod").Get(ctx, "database", metav1.GetOptions{})
+	configMap.Data["endpoint"] = "new-endpoint"
+	if _, err := client.CoreV1().ConfigMaps("prod").Update(ctx, configMap, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InvalidateConnectionSecrets(ctx, connection); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := GetEnvStringFromCache(ctx, connection.Password, "prod"); err != nil || got != "new-password" {
+		t.Fatalf("rotated password = %q, %v", got, err)
+	}
+	if got, err := GetEnvStringFromCache(ctx, connection.Properties["host"], "prod"); err != nil || got != "new-endpoint" {
+		t.Fatalf("rotated endpoint = %q, %v", got, err)
+	}
+}
+
+// TestInvalidateConnectionSecretsLeavesUnreferencedValuesAlone keeps the
+// invalidation scoped: a force-check of one connection must not evict another's
+// cached credentials.
+func TestInvalidateConnectionSecretsLeavesUnreferencedValuesAlone(t *testing.T) {
+	envCache.Flush()
+	ctx := cacheTestContext("https://cluster", "principal", "cached", "endpoint")
+	client, err := ctx.LocalKubernetes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := GetSecretFromCache(ctx, "prod", "database", "password"); err != nil || got != "cached" {
+		t.Fatalf("initial secret = %q, %v", got, err)
+	}
+	secret, _ := client.CoreV1().Secrets("prod").Get(ctx, "database", metav1.GetOptions{})
+	secret.Data["password"] = []byte("rotated")
+	if _, err := client.CoreV1().Secrets("prod").Update(ctx, secret, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := InvalidateConnectionSecrets(ctx, &models.Connection{
+		Name: "other", Namespace: "prod", Password: "secret://unrelated/password",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := GetSecretFromCache(ctx, "prod", "database", "password"); err != nil || got != "cached" {
+		t.Fatalf("unrelated secret was evicted: %q, %v", got, err)
 	}
 }
 

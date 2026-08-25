@@ -1,6 +1,7 @@
 package context
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"net/url"
@@ -16,7 +17,8 @@ import (
 )
 
 var (
-	ErrNotFound = errors.New("NOT_FOUND")
+	ErrNotFound          = errors.New("NOT_FOUND")
+	ErrConnectionExpired = errors.New("connection expired")
 )
 
 // extractConnectionNameType extracts the name and connection type from a connection
@@ -110,11 +112,39 @@ func IsValidConnectionURL(connectionString string) bool {
 	return found
 }
 
+// ConnectionCacheIdentity returns a credential-safe identity for metadata
+// derived through this context. Stored references include their update time so
+// an edit invalidates old metadata; inline URLs are hashed so credentials never
+// become observable cache keys.
+func (ctx Context) ConnectionCacheIdentity(connectionString string) (string, error) {
+	scope := ctx.ConnectionCacheScope()
+	if !IsValidConnectionURL(connectionString) {
+		return fmt.Sprintf("%s:inline:%x", scope, sha256.Sum256([]byte(connectionString))), nil
+	}
+	connection, err := FindConnectionByURL(ctx, connectionString)
+	if err != nil {
+		return "", fmt.Errorf("resolve connection cache identity: %w", err)
+	}
+	if connection == nil {
+		return "", fmt.Errorf("connection %q not found", connectionString)
+	}
+	return fmt.Sprintf("%s:connection:%s:%d", scope, connection.ID, connection.UpdatedAt.UnixNano()), nil
+}
+
 // FindConnectionByURL retrieves a connection from the given connection string.
 // The connection string is expected to be in one of the following forms:
 //   - connection://<namespace>/<name> or connection://<name>
 //   - the UUID of the connection.
 func FindConnectionByURL(ctx Context, connectionString string) (*models.Connection, error) {
+	if resolver := ctx.connectionResolver(); resolver != nil {
+		connection, err := resolver(connectionString)
+		if err != nil {
+			return nil, err
+		}
+		if connection != nil {
+			return connection, nil
+		}
+	}
 	db := ctx.DB()
 
 	if db == nil {
