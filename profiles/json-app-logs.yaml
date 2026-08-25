@@ -1,0 +1,48 @@
+# JSON application logs expanded into canonical log columns.
+#
+# The `logs.json` helper reads each raw `message`, maps msg/message to message,
+# level/severity to severity, caller/logger to source and host/hostname to host.
+# Every other JSON field becomes a top-level column without replacing metadata
+# from the provider, so request ids and durations can be rendered or filtered.
+#
+# If a provider puts the raw body somewhere else, override only that default:
+#
+#   processors:
+#     - use: logs.json
+#       config:
+#         column: body
+profile: JSON Application Logs
+render: logs
+imports:
+  - Kubernetes Logs
+provider:
+  type: loki
+  connection: connection://loki
+  options:
+    limit: "1000"
+    since: 1h
+query: '{namespace="{{.params.namespace}}", pod=~"{{.params.pod}}.*"}'
+params:
+  - name: namespace
+    label: Namespace
+    type: string
+    required: true
+  - name: pod
+    label: Pod prefix
+    type: string
+    default: ""
+processors:
+  - use: logs.json
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+  - name: severity
+    label: Level
+    type: status
+  - name: source
+    label: Source
+  - name: request_id
+    label: Request
+  - name: message
+    label: Message

@@ -1,15 +1,16 @@
 package loki
 
 import (
+	"maps"
 	"net/url"
 	"strconv"
 	"time"
 
 	"github.com/flanksource/commons/logger"
 	v1 "github.com/prometheus/client_golang/api/prometheus/v1"
-	"github.com/timberio/go-datemath"
 
 	"github.com/flanksource/commons-db/logs"
+	"github.com/flanksource/commons-db/query/datetime"
 )
 
 // Response represents the top-level response from Loki's query_range API.
@@ -41,7 +42,9 @@ func (t *Response) ToLogResult(mappingConfig logs.FieldMappingConfig) logs.LogRe
 				Count:         1,
 				FirstObserved: time.Unix(0, firstObserved),
 				Message:       v[1],
-				Labels:        result.Stream,
+				// Cloned: every line of a stream would otherwise share one
+				// map, so editing one line's labels would edit them all.
+				Labels: maps.Clone(result.Stream),
 			}
 
 			for k, v := range result.Stream {
@@ -172,12 +175,17 @@ func (r *StreamRequest) Params() url.Values {
 	return params
 }
 
-// GetStart parses the start time using datemath
+// GetStart parses the start time under the same grammar LogsRequestBase reads —
+// date math and the absolute instants a resolved profile parameter carries.
 func (r *StreamRequest) GetStart() (time.Time, error) {
 	if r.Start == "" {
 		return time.Now().Add(-1 * time.Hour), nil
 	}
-	return datemath.ParseAndEvaluate(r.Start, datemath.WithNow(time.Now()))
+	parsed, err := datetime.Parse(r.Start, time.Now())
+	if err != nil {
+		return time.Time{}, err
+	}
+	return parsed.Time, nil
 }
 
 // StreamResponse represents the response from Loki's tail endpoint

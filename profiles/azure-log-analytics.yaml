@@ -1,0 +1,51 @@
+# Azure Monitor activity logs via a Log Analytics workspace, queried in KQL.
+#
+# Filtering is in the KQL: this provider does not compile server-side column
+# filters, so a `field:` on a param would be silently dropped. The level param
+# is templated into the `where` clause instead.
+#
+# The default field mapping already knows Azure Monitor's column names
+# (TimeGenerated, Level, Computer, OperationName), so `mapping` is only needed
+# for a table that departs from them.
+profile: Azure Activity Logs
+render: logs
+provider:
+  type: azureloganalytics
+  connection: connection://azure
+  options:
+    workspaceID: "{{.params.workspace}}"
+    start: "{{.params.since}}"
+    limit: "500"
+query: |
+  AzureActivity
+  | where Level == "{{.params.level}}"
+  | project TimeGenerated, Level, OperationName, Caller, ResourceGroup
+  | top 500 by TimeGenerated desc
+params:
+  - name: workspace
+    label: Workspace ID
+    type: string
+    required: true
+  - name: level
+    label: Level
+    type: enum
+    default: Error
+    options:
+      - Error
+      - Warning
+      - Informational
+  - name: since
+    label: Since
+    type: string
+    default: now-24h
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+  - name: severity
+    label: Level
+    type: status
+  - name: source
+    label: Operation
+  - name: message
+    label: Message

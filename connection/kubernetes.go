@@ -3,6 +3,8 @@ package connection
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/flanksource/commons-db/context"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
@@ -14,6 +16,33 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
+
+const DefaultKubernetesMaxResources = 20
+
+// KubernetesMaxResources resolves the resource-discovery cap stored on a
+// Kubernetes connection. An unnamed ambient connection and an unset property
+// both use the documented default.
+func KubernetesMaxResources(ctx context.Context, connectionName string) (int, error) {
+	if connectionName == "" {
+		return DefaultKubernetesMaxResources, nil
+	}
+	model, err := ctx.HydrateConnectionByURL(connectionName)
+	if err != nil {
+		return 0, err
+	}
+	if model == nil {
+		return 0, fmt.Errorf("connection[%s] not found", connectionName)
+	}
+	raw := strings.TrimSpace(model.Properties["max_resources"])
+	if raw == "" {
+		return DefaultKubernetesMaxResources, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit <= 0 {
+		return 0, fmt.Errorf("connection[%s] property max_resources must be a positive integer, got %q", connectionName, raw)
+	}
+	return limit, nil
+}
 
 // +kubebuilder:object:generate=true
 type KubeconfigConnection struct {
@@ -31,7 +60,9 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 			return nil, nil, fmt.Errorf("connection[%s] not found", t.ConnectionName)
 		}
 
-		t.Kubeconfig.ValueStatic = connection.Certificate
+		// Assigned rather than written through: a caller naming a connection has
+		// no kubeconfig of its own, so there is no EnvVar here to overwrite.
+		t.Kubeconfig = &types.EnvVar{ValueStatic: connection.Certificate}
 	}
 
 	if t.Kubeconfig != nil && !t.Kubeconfig.IsEmpty() {
@@ -44,7 +75,21 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 		return dutyKubernetes.NewClientFromPathOrConfig(ctx.Logger, t.Kubeconfig.ValueStatic)
 	}
 
-	return dutyKubernetes.NewClient(ctx.Logger)
+	// No connection and no kubeconfig means "use the ambient cluster" —
+	// $KUBECONFIG, ~/.kube/config, or the in-cluster service account.
+	clientset, restConfig, err := dutyKubernetes.NewClient(ctx.Logger)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// NewClient hands back an empty fake clientset when it found nothing to
+	// connect to. Left alone that reads as a healthy cluster with no resources,
+	// so every query returns zero rows and no error.
+	if clientset == dutyKubernetes.Nil {
+		return nil, nil, fmt.Errorf("no kubernetes cluster configured: name a connection, or set $KUBECONFIG / ~/.kube/config")
+	}
+
+	return clientset, restConfig, nil
 }
 
 // +kubebuilder:object:generate=true

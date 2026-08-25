@@ -6,6 +6,7 @@ import (
 
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/iterator"
+	"google.golang.org/api/option"
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
@@ -66,11 +67,24 @@ func (s *Searcher) initializeClients(ctx context.Context) error {
 		return nil
 	}
 
-	if err := s.conn.HydrateConnection(ctx); err != nil {
-		return fmt.Errorf("failed to hydrate connection: %w", err)
+	// The connection arrives hydrated — the provider is the single hydration
+	// point, so nothing here re-reads the row or re-resolves its secret.
+	//
+	// The connection's credentials have to be handed to the client explicitly;
+	// without this the hydrated service account is resolved and then ignored,
+	// and the client quietly authenticates as whatever ambient default
+	// credentials the process happens to have. A connection that carries none is
+	// asking for exactly that ambient chain.
+	var opts []option.ClientOption
+	if s.conn.Credentials != nil && !s.conn.Credentials.IsEmpty() {
+		opts = append(opts, option.WithCredentialsJSON([]byte(s.conn.Credentials.ValueStatic)))
 	}
 
-	client, err := bigquery.NewClient(ctx, s.conn.Project)
+	if s.conn.Endpoint != "" {
+		opts = append(opts, option.WithEndpoint(s.conn.Endpoint))
+	}
+
+	client, err := bigquery.NewClient(ctx, s.conn.Project, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to create BigQuery client: %w", err)
 	}
