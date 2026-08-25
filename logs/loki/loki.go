@@ -5,12 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	netHTTP "net/http"
 	"net/url"
 	"strconv"
 	"time"
 
-	"github.com/flanksource/commons/http"
 	"github.com/gorilla/websocket"
 	"github.com/samber/lo"
 
@@ -43,13 +43,14 @@ func (t *lokiSearcher) Search(ctx context.Context, request Request) (*logs.LogRe
 	apiURL := parsedBaseURL.JoinPath("/loki/api/v1/query_range")
 	apiURL.RawQuery = request.Params().Encode()
 
-	client := http.NewClient()
+	// CreateHTTPClient applies whichever authentication the connection carries —
+	// basic, bearer, OAuth or mTLS — rather than basic alone.
+	client, err := connection.CreateHTTPClient(ctx, t.conn.HTTPConnection)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create http client: %w", err)
+	}
 	// Maintain HAR capture / HTTP logging for the "loki" feature.
 	connection.ApplyHTTPClientObservability(ctx, "loki", client, nil)
-
-	if t.conn.Username != nil && t.conn.Password != nil {
-		client.Auth(t.conn.Username.ValueStatic, t.conn.Password.ValueStatic)
-	}
 
 	resp, err := client.R(ctx).Get(apiURL.String())
 	if err != nil {
@@ -78,6 +79,13 @@ func (t *lokiSearcher) Search(ctx context.Context, request Request) (*logs.LogRe
 
 	result := lokiResp.ToLogResult(mappingConfig)
 
+	// ToLogResult seeds Metadata from Loki's stats, which are absent on a query
+	// that matched nothing — hence the guard.
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	result.Metadata["query"] = request.Query
+
 	return &result, nil
 }
 
@@ -102,15 +110,24 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 		RawQuery: request.Params().Encode(),
 	}
 
-	dialer := websocket.DefaultDialer
-	headers := netHTTP.Header{}
+	dialer := *websocket.DefaultDialer
+	if !t.conn.TLS.IsEmpty() {
+		if dialer.TLSClientConfig, err = t.conn.TLS.TLSClientConfig(); err != nil {
+			return nil, err
+		}
+	}
 
-	if t.conn.Username != nil && t.conn.Password != nil {
-		username := t.conn.Username.ValueStatic
-		password := t.conn.Password.ValueStatic
-		auth := username + ":" + password
-		basicAuth := "Basic " + base64.StdEncoding.EncodeToString([]byte(auth))
-		headers.Set("Authorization", basicAuth)
+	headers := netHTTP.Header{}
+	switch {
+	case !t.conn.HTTPBasicAuth.IsEmpty():
+		auth := t.conn.GetUsername() + ":" + t.conn.GetPassword()
+		headers.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(auth)))
+	case !t.conn.Bearer.IsEmpty():
+		headers.Set("Authorization", "Bearer "+t.conn.Bearer.ValueStatic)
+	case !t.conn.OAuth.IsEmpty():
+		// The OAuth exchange lives in an http.RoundTripper, which a websocket
+		// handshake never runs. Saying so beats tailing unauthenticated.
+		return nil, fmt.Errorf("loki tail does not support OAuth connections; use basic auth, a bearer token or mTLS")
 	}
 
 	conn, _, err := dialer.DialContext(ctx, wsURL.String(), headers)
@@ -165,7 +182,10 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 							Count:         1,
 							FirstObserved: time.Unix(0, firstObserved),
 							Message:       v[1],
-							Labels:        stream.Stream,
+							// Cloned: every line of a stream would otherwise
+							// share one map, so editing one line's labels
+							// would edit them all.
+							Labels: maps.Clone(stream.Stream),
 						}
 
 						for k, val := range stream.Stream {
@@ -191,6 +211,6 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 }
 
 var DefaultFieldMappingConfig = logs.FieldMappingConfig{
-	Severity: []string{"detected_level"},
+	Severity: []string{"detected_level", "level"},
 	Host:     []string{"pod"},
 }

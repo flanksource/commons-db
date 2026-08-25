@@ -1,0 +1,41 @@
+# The downstream side of the reconcile demo: the same orders as the indexer saw
+# them. Every field is named differently from orders-emitted.yaml and the totals
+# are in cents, which is why the two sides only join through a mapped key.
+#
+# The rows are chosen so one run shows every outcome: matches that crossed
+# quickly, one that arrived 8s late, two that never arrived (ORD-1046, ORD-1048),
+# one with no counterpart upstream (ORD-1051), and one identity indexed twice
+# (ORD-1049) against two upstream attempts — the ambiguity the join refuses to
+# resolve for you.
+profile: Orders Ingested
+provider:
+  type: postgres
+  options:
+    url: postgres://postgres:postgres@localhost:7432/postgres?sslmode=disable
+query: |
+  SELECT * FROM (VALUES
+    ('ORD-1041', 'acme',     12850, 'orders-2026.08', timestamptz '2026-08-05 09:14:02.520+00'),
+    ('ORD-1042', 'globex',    7420, 'orders-2026.08', timestamptz '2026-08-05 09:14:04.600+00'),
+    ('ORD-1043', 'acme',       1200, 'orders-2026.08', timestamptz '2026-08-05 09:14:06.030+00'),
+    ('ORD-1044', 'umbrella',  94000, 'orders-2026.08', timestamptz '2026-08-05 09:14:15.400+00'),
+    ('ORD-1049', 'initech',   31075, 'orders-2026.08', timestamptz '2026-08-05 09:14:20.480+00'),
+    ('ORD-1049', 'initech',   31075, 'orders-2026.08', timestamptz '2026-08-05 09:14:22.310+00'),
+    ('ORD-1051', 'globex',     9900, 'orders-2026.08', timestamptz '2026-08-05 09:14:26.400+00')
+  ) AS t(order_ref, tenant, total_cents, index_name, indexed_at)
+columns:
+  - name: order_ref
+    label: Order ref
+    type: string
+  - name: tenant
+    label: Tenant
+    type: string
+  - name: total_cents
+    label: Total (cents)
+    type: number
+  - name: index_name
+    label: Index
+    type: string
+  - name: indexed_at
+    label: Indexed
+    kind: timestamp
+    type: datetime

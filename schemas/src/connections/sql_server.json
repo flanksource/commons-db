@@ -2,6 +2,111 @@
   "$id": "sql_server.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "logging": {
+      "additionalProperties": false,
+      "description": "Choose which sanitized connection activity is emitted at each log level.",
+      "title": "Logging",
+      "type": "object",
+      "x-clicky-component": "connection-logging-policy",
+      "x-clicky-logging": {
+        "family": "sql",
+        "slowThreshold": "1s",
+        "thresholdLabel": "Slow threshold",
+        "events": [
+          {
+            "event": "error",
+            "property": "log.level.error",
+            "label": "Errors",
+            "description": "Failed operations, including the sanitized request identity.",
+            "default": "error",
+            "captures": [
+              "error",
+              "operation",
+              "duration"
+            ],
+            "example": {
+              "connection": "warehouse",
+              "connection_level": "error",
+              "duration_ms": 82,
+              "error": "syntax error",
+              "event": "error",
+              "provider": "sql_server",
+              "rows": 0,
+              "sql": "SELECT * FROM orders WHERE tenant_id = ?"
+            },
+            "prettyExample": "[sql_server/warehouse] ERROR \u003e=[82ms] [rows:0] syntax error SELECT * FROM orders WHERE tenant_id = ?"
+          },
+          {
+            "event": "slow",
+            "property": "log.level.slow",
+            "label": "Slow operations",
+            "description": "Successful operations at or above the slow threshold.",
+            "default": "warn",
+            "captures": [
+              "operation",
+              "duration",
+              "slow threshold"
+            ],
+            "example": {
+              "connection": "warehouse",
+              "connection_level": "warn",
+              "duration_ms": 1200,
+              "event": "slow",
+              "provider": "sql_server",
+              "rows": 25,
+              "slow_threshold_ms": 1000,
+              "sql": "SELECT * FROM orders WHERE tenant_id = ?"
+            },
+            "prettyExample": "[sql_server/warehouse] SLOW SQL \u003e= [1200ms] [rows:25] SELECT * FROM orders WHERE tenant_id = ?"
+          },
+          {
+            "event": "sql",
+            "property": "log.level.sql",
+            "label": "SQL statement",
+            "description": "The sanitized SQL statement and its completion metrics.",
+            "default": "trace",
+            "captures": [
+              "statement",
+              "duration",
+              "rows"
+            ],
+            "example": {
+              "connection": "warehouse",
+              "connection_level": "trace",
+              "duration_ms": 48,
+              "event": "sql",
+              "provider": "sql_server",
+              "rows": 25,
+              "sql": "SELECT * FROM orders WHERE tenant_id = ?"
+            },
+            "prettyExample": "[sql_server/warehouse] [48ms] [rows:25] SELECT * FROM orders WHERE tenant_id = ?"
+          },
+          {
+            "event": "sql_params",
+            "property": "log.level.sql.params",
+            "label": "SQL parameters",
+            "description": "Bound arguments, with credential-shaped values redacted.",
+            "default": "trace1",
+            "captures": [
+              "bound arguments"
+            ],
+            "example": {
+              "connection": "warehouse",
+              "connection_level": "trace1",
+              "duration_ms": 48,
+              "event": "sql_params",
+              "params": [
+                "t****"
+              ],
+              "provider": "sql_server",
+              "rows": 25
+            },
+            "prettyExample": "[sql_server/warehouse] params [t****]"
+          }
+        ]
+      },
+      "x-clicky-order": 8
+    },
     "name": {
       "title": "Name",
       "type": "string",

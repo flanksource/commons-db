@@ -7,6 +7,190 @@
       "type": "boolean",
       "x-clicky-order": 3
     },
+    "logging": {
+      "additionalProperties": false,
+      "description": "Choose which sanitized connection activity is emitted at each log level.",
+      "title": "Logging",
+      "type": "object",
+      "x-clicky-component": "connection-logging-policy",
+      "x-clicky-logging": {
+        "family": "http",
+        "slowThreshold": "1s",
+        "thresholdLabel": "Slow threshold",
+        "events": [
+          {
+            "event": "error",
+            "property": "log.level.error",
+            "label": "Errors",
+            "description": "Failed operations, including the sanitized request identity.",
+            "default": "error",
+            "captures": [
+              "error",
+              "operation",
+              "duration"
+            ],
+            "example": {
+              "connection": "search",
+              "connection_level": "error",
+              "duration_ms": 82,
+              "error": "request timed out",
+              "event": "error",
+              "method": "POST",
+              "provider": "opensearch",
+              "rows": 0,
+              "status": 503,
+              "url": "https://api.example.test/_search"
+            },
+            "prettyExample": "[opensearch/search] ERROR \u003e=[82ms] [rows:0] POST https://api.example.test/_search [503] request timed out"
+          },
+          {
+            "event": "slow",
+            "property": "log.level.slow",
+            "label": "Slow operations",
+            "description": "Successful operations at or above the slow threshold.",
+            "default": "warn",
+            "captures": [
+              "operation",
+              "duration",
+              "slow threshold"
+            ],
+            "example": {
+              "connection": "search",
+              "connection_level": "warn",
+              "duration_ms": 1200,
+              "event": "slow",
+              "method": "POST",
+              "provider": "opensearch",
+              "rows": 1,
+              "slow_threshold_ms": 1000,
+              "status": 200,
+              "url": "https://api.example.test/_search"
+            },
+            "prettyExample": "[opensearch/search] SLOW \u003e= [1200ms] [rows:1] POST https://api.example.test/_search [200]"
+          },
+          {
+            "event": "http",
+            "property": "log.level.http",
+            "label": "Access summary",
+            "description": "One method, sanitized URL, status and duration record per request.",
+            "default": "debug",
+            "captures": [
+              "method",
+              "URL",
+              "status",
+              "duration"
+            ],
+            "example": {
+              "connection": "search",
+              "connection_level": "debug",
+              "duration_ms": 86,
+              "event": "http",
+              "method": "POST",
+              "provider": "opensearch",
+              "rows": 1,
+              "status": 200,
+              "url": "https://api.example.test/_search"
+            },
+            "prettyExample": "[opensearch/search] POST https://api.example.test/_search 200 OK 86ms 512B"
+          },
+          {
+            "event": "http_headers",
+            "property": "log.level.http.headers",
+            "label": "Headers and parameters",
+            "description": "Sanitized request and response headers plus query parameters.",
+            "default": "trace",
+            "captures": [
+              "headers",
+              "query parameters"
+            ],
+            "example": {
+              "connection": "search",
+              "connection_level": "trace",
+              "duration_ms": 86,
+              "event": "http_headers",
+              "method": "POST",
+              "provider": "opensearch",
+              "query": [
+                {
+                  "name": "namespace",
+                  "value": "tenant-x"
+                }
+              ],
+              "request_headers": [
+                {
+                  "name": "Authorization",
+                  "value": "Bearer ********"
+                },
+                {
+                  "name": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "response_headers": [
+                {
+                  "name": "Content-Type",
+                  "value": "application/json"
+                }
+              ],
+              "rows": 1,
+              "status": 200,
+              "url": "https://api.example.test/_search"
+            },
+            "prettyExample": "[opensearch/search] POST https://api.example.test/_search 200 OK 86ms 512B\nRequest Headers\nAuthorization: Bearer ********, Content-Type: application/json\nQuery Parameters\nnamespace: tenant-x\nResponse Headers\nContent-Type: application/json"
+          },
+          {
+            "event": "http_request_body",
+            "property": "log.level.http.request.body",
+            "label": "Request body",
+            "description": "A bounded sanitized request body.",
+            "default": "trace1",
+            "captures": [
+              "request body"
+            ],
+            "example": {
+              "body_size": 68,
+              "connection": "search",
+              "connection_level": "trace1",
+              "duration_ms": 86,
+              "event": "http_request_body",
+              "method": "POST",
+              "provider": "opensearch",
+              "request_body": "{\"query\":{\"match_all\":{}},\"token\":\"********\"}",
+              "rows": 1,
+              "status": 200,
+              "url": "https://api.example.test/_search"
+            },
+            "prettyExample": "[opensearch/search] POST https://api.example.test/_search 200 OK 86ms 512B\nRequest Body\n{\n  \"query\": {\n    \"match_all\": {}\n  },\n  \"token\": \"********\"\n}"
+          },
+          {
+            "event": "http_response_body",
+            "property": "log.level.http.response.body",
+            "label": "Response body",
+            "description": "A bounded sanitized response body with explicit truncation metadata.",
+            "default": "trace2",
+            "captures": [
+              "response body"
+            ],
+            "example": {
+              "body_size": 512,
+              "connection": "search",
+              "connection_level": "trace2",
+              "duration_ms": 86,
+              "event": "http_response_body",
+              "method": "POST",
+              "provider": "opensearch",
+              "response_body": "{\"hits\":[\"...\"]}",
+              "rows": 1,
+              "status": 200,
+              "truncated": true,
+              "url": "https://api.example.test/_search"
+            },
+            "prettyExample": "[opensearch/search] POST https://api.example.test/_search 200 OK 86ms 512B\nResponse Body (truncated)\n{\n  \"hits\": [\n    \"...\"\n  ]\n}"
+          }
+        ]
+      },
+      "x-clicky-order": 8
+    },
     "name": {
       "title": "Name",
       "type": "string",

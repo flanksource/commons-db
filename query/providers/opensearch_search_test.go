@@ -1,0 +1,474 @@
+package providers_test
+
+import (
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"time"
+
+	context "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+// openSearchCapture records what the provider actually sent to the backend. The
+// raw bytes are kept alongside the decoded body so a test can assert on the
+// exact JSON text where re-encoding would otherwise hide a difference.
+type openSearchCapture struct {
+	raw           string
+	body          map[string]any
+	size          string
+	fieldCaps     int
+	fieldMappings int
+	fieldName     string
+	fieldType     string
+	fieldFormat   string
+	fieldCapsBody string
+	openedPITs    int
+	closedPITs    int
+}
+
+// stubOpenSearch answers one search with no hits and captures the request.
+func stubOpenSearch(capture *openSearchCapture) *httptest.Server {
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodHead {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+			capture.fieldCaps++
+			capture.fieldName = r.URL.Query().Get("fields")
+			if capture.fieldCapsBody != "" {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, capture.fieldCapsBody)
+				return
+			}
+			fieldType := capture.fieldType
+			if fieldType == "" {
+				fieldType = "date"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"fields":{"%s":{"%s":{"searchable":true,"aggregatable":true}}}}`, capture.fieldName, fieldType)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/_mapping/field/") {
+			capture.fieldMappings++
+			format := capture.fieldFormat
+			if format == "" {
+				format = "strict_date_optional_time||epoch_millis"
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"logs-2026":{"mappings":{"%s":{"full_name":"%s","mapping":{"%s":{"type":"date","format":"%s"}}}}}}}`,
+				capture.fieldName, capture.fieldName, capture.fieldName, format)
+			return
+		}
+		// A structured profile derives an order, and an order is walked by
+		// search_after over a point-in-time, so the stub has to hand one out
+		// before it will be asked for hits.
+		if strings.Contains(r.URL.Path, "/_search/point_in_time") {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Method == http.MethodDelete {
+				capture.closedPITs++
+				_, _ = fmt.Fprint(w, `{"pits":[{"successful":true,"pit_id":"pit-1"}]}`)
+				return
+			}
+			capture.openedPITs++
+			_, _ = fmt.Fprint(w, `{"pit_id":"pit-1","creation_time":1}`)
+			return
+		}
+		raw, err := io.ReadAll(r.Body)
+		Expect(err).ToNot(HaveOccurred())
+		capture.raw = string(raw)
+		Expect(json.Unmarshal(raw, &capture.body)).To(Succeed())
+		capture.size = r.URL.Query().Get("size")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+	}))
+}
+
+func openSearchProfile(address string, options map[string]any) query.Profile {
+	options["address"] = address
+	options["index"] = "logs-*"
+	return query.Profile{
+		Name:     "logs",
+		Provider: query.ProviderConfig{Type: "opensearch", Options: options},
+		Columns:  []query.ColumnDef{{Name: "service"}},
+	}
+}
+
+var _ = Describe("opensearch structured search", func() {
+	It("compiles the specification and sends size out of band", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		_, err := query.Execute(context.New(), openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"size": 25,
+				"sort": []any{map[string]any{"field": "@timestamp", "order": "desc"}},
+				"query": map[string]any{
+					"op": "bool",
+					"conditions": []any{
+						map[string]any{"op": "term", "field": "level", "value": "error"},
+						map[string]any{"op": "match", "occur": "must", "field": "message", "value": "timeout"},
+					},
+				},
+			},
+		}), nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.size).To(Equal("25"),
+			"size must travel as a URL parameter, which the searcher would otherwise override")
+		Expect(capture.body).ToNot(HaveKey("size"))
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"term": map[string]any{"level": "error"}}},
+			"must":   []any{map[string]any{"match": map[string]any{"message": "timeout"}}},
+		}}))
+		// The specification's own sort survives, with the tiebreaker that makes
+		// it total appended. Without one, rows sharing a @timestamp could fall
+		// on either side of a page boundary and be repeated or skipped.
+		Expect(capture.body["sort"]).To(Equal([]any{
+			map[string]any{"@timestamp": map[string]any{"order": "desc"}},
+			map[string]any{"_id": map[string]any{"order": "asc"}},
+		}))
+		Expect(capture.fieldCaps).To(BeZero(), "a search without time-role params must not inspect mappings")
+	})
+
+	It("binds parameters structurally and folds the time range onto the time field", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"timeField": "@timestamp",
+				"query": map[string]any{
+					"op": "term", "field": "service", "value": map[string]any{"param": "service"},
+				},
+			},
+		})
+		profile.Params = []query.ParamDef{
+			{Name: "service", Template: "{value}-api"},
+			{Name: "since", Role: query.ParamRoleTimeFrom},
+			{Name: "rows", Role: query.ParamRoleLimit},
+		}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"service": "prod", "since": "now-6h", "rows": "75",
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.size).To(Equal("75"))
+		Expect(capture.fieldCaps).To(Equal(1))
+		Expect(capture.fieldName).To(Equal("@timestamp"))
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"term": map[string]any{"service": "prod-api"}},
+				map[string]any{"range": map[string]any{"@timestamp": map[string]any{"gte": "now-6h"}}},
+			},
+		}}))
+	})
+
+	It("encodes a date-only bound for a numeric timestamp field", func() {
+		capture := openSearchCapture{fieldType: "long"}
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"timeField":       "observed_at",
+				"timeFieldFormat": "epoch_millis",
+				"query":           map[string]any{"op": "match_all"},
+			},
+		})
+		profile.Params = []query.ParamDef{
+			{Name: "from", Role: query.ParamRoleTimeFrom},
+			{Name: "to", Role: query.ParamRoleTimeTo},
+		}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"from": "2026-08-12", "to": "2026-08-12",
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.fieldName).To(Equal("observed_at"))
+		dayStart := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{
+				"observed_at": map[string]any{
+					"gte": float64(dayStart.UnixMilli()),
+					"lt":  float64(dayStart.AddDate(0, 0, 1).UnixMilli()),
+				},
+			}}},
+		}}))
+	})
+
+	It("encodes a date field whose mapping accepts only epoch millis", func() {
+		capture := openSearchCapture{fieldType: "date", fieldFormat: "epoch_millis"}
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"timeField": "startTimeMillis",
+				"query":     map[string]any{"op": "match_all"},
+			},
+		})
+		profile.Params = []query.ParamDef{
+			{Name: "start", Type: query.ParamTypeDate, Role: query.ParamRoleTimeFrom},
+			{Name: "end", Type: query.ParamTypeDate, Role: query.ParamRoleTimeTo},
+		}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"start": "2026-07-21T00:00:00Z", "end": "2026-08-21T00:00:00Z",
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.fieldMappings).To(Equal(1))
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{
+				"startTimeMillis": map[string]any{
+					"gte": float64(time.Date(2026, time.July, 21, 0, 0, 0, 0, time.UTC).UnixMilli()),
+					"lt":  float64(time.Date(2026, time.August, 22, 0, 0, 0, 0, time.UTC).UnixMilli()),
+				},
+			}}},
+		}}))
+	})
+
+	It("rejects a numeric timestamp mapping without an epoch unit", func() {
+		capture := openSearchCapture{fieldType: "long"}
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"timeField": "observed_at",
+				"query":     map[string]any{"op": "match_all"},
+			},
+		})
+		profile.Params = []query.ParamDef{{Name: "from", Role: query.ParamRoleTimeFrom}}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{"from": "2026-08-12"})
+		Expect(err).To(MatchError(ContainSubstring(`timeField "observed_at" is mapped as "long" and requires timeFieldFormat`)))
+		Expect(capture.raw).To(BeEmpty(), "mapping validation must fail before the search request")
+	})
+
+	DescribeTable("rejects an unusable timestamp mapping before searching",
+		func(fieldCapsBody, expected string) {
+			capture := openSearchCapture{fieldCapsBody: fieldCapsBody}
+			server := stubOpenSearch(&capture)
+			defer server.Close()
+
+			profile := openSearchProfile(server.URL, map[string]any{
+				"search": map[string]any{
+					"timeField": "observed_at",
+					"query":     map[string]any{"op": "match_all"},
+				},
+			})
+			profile.Params = []query.ParamDef{{Name: "from", Role: query.ParamRoleTimeFrom}}
+
+			_, err := query.Execute(context.New(), profile, map[string]any{"from": "2026-08-12"})
+			Expect(err).To(MatchError(ContainSubstring(expected)))
+			Expect(capture.raw).To(BeEmpty())
+		},
+		Entry("missing field", `{"fields":{}}`, `timeField "observed_at" is not mapped`),
+		Entry("conflicting field types", `{"fields":{"observed_at":{"date":{"searchable":true,"aggregatable":true},"long":{"searchable":true,"aggregatable":true}}}}`, `timeField "observed_at" has conflicting mapping types [date long]`),
+	)
+
+	// The tenant-x Prod regression: an operand that reaches its param textually was
+	// sent to the backend as the template text, and the specification then
+	// reported the param as unreferenced.
+	DescribeTable("interpolates a param into a specification operand",
+		func(tenant, expected string) {
+			var capture openSearchCapture
+			server := stubOpenSearch(&capture)
+			defer server.Close()
+
+			profile := openSearchProfile(server.URL, map[string]any{
+				"search": map[string]any{
+					"query": map[string]any{
+						"op": "term", "field": "process.serviceName", "value": "{{.params.tenant}}-api",
+					},
+				},
+			})
+			profile.Params = []query.ParamDef{{
+				Name: "tenant", Type: query.ParamTypeEnum,
+				Options: []string{"tenant-x", "tenant-y"}, Default: "tenant-x",
+			}}
+
+			supplied := map[string]any{}
+			if tenant != "" {
+				supplied["tenant"] = tenant
+			}
+			_, err := query.Execute(context.New(), profile, supplied)
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(capture.body["query"]).To(Equal(
+				map[string]any{"term": map[string]any{"process.serviceName": expected}}))
+		},
+		Entry("the default value", "", "tenant-x-api"),
+		Entry("a supplied value", "tenant-y", "tenant-y-api"),
+	)
+
+	It("composes runtime column filters onto a compiled specification", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		_, err := query.Execute(context.New(), openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{
+				"query": map[string]any{"op": "match", "field": "message", "value": "failed"},
+			},
+		}), map[string]any{"filter.service": "api,!debug"})
+		Expect(err).ToNot(HaveOccurred())
+
+		outer := capture.body["query"].(map[string]any)["bool"].(map[string]any)
+		Expect(outer["filter"]).To(ConsistOf(
+			map[string]any{"match": map[string]any{"message": "failed"}},
+			map[string]any{"terms": map[string]any{"service": []any{"api"}}},
+		))
+		Expect(outer["must_not"]).To(ConsistOf(
+			map[string]any{"terms": map[string]any{"service": []any{"debug"}}},
+		))
+	})
+
+	It("emits a mapped list include once and keeps its native exclusions", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{"query": map[string]any{
+				"op": "terms", "field": "scheme.id",
+				"value": map[string]any{"param": "schemes"}, "optional": true,
+			}},
+		})
+		profile.Params = []query.ParamDef{{
+			Name: "schemes", Type: query.ParamTypeList, Field: "scheme.id",
+		}}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"schemes": []string{"one", "two", "!three"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"terms": map[string]any{"scheme.id": []any{"one", "two"}}},
+			},
+			"must_not": []any{
+				map[string]any{"terms": map[string]any{"scheme.id": []any{"three"}}},
+			},
+		}}))
+	})
+
+	It("accepts a native-only list mapping in a structured search", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		profile := openSearchProfile(server.URL, map[string]any{
+			"search": map[string]any{"query": map[string]any{"op": "match_all"}},
+		})
+		profile.Params = []query.ParamDef{{
+			Name: "schemes", Type: query.ParamTypeList, Field: "scheme.id",
+		}}
+
+		_, err := query.Execute(context.New(), profile, map[string]any{
+			"schemes": []string{"one", "!three"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"match_all": map[string]any{}},
+				map[string]any{"terms": map[string]any{"scheme.id": []any{"one"}}},
+			},
+			"must_not": []any{
+				map[string]any{"terms": map[string]any{"scheme.id": []any{"three"}}},
+			},
+		}}))
+	})
+
+	It("uses options.limit as the hit cap when the specification sets no size", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		_, err := query.Execute(context.New(), openSearchProfile(server.URL, map[string]any{
+			"limit":  "40",
+			"search": map[string]any{"query": map[string]any{"op": "match_all"}},
+		}), nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(capture.size).To(Equal("40"))
+	})
+
+	DescribeTable("asks for the smaller of the specification's size and the page",
+		func(specSize int, expected string, capped bool) {
+			var capture openSearchCapture
+			server := stubOpenSearch(&capture)
+			defer server.Close()
+
+			profile := openSearchProfile(server.URL, map[string]any{
+				"search": map[string]any{
+					"size":  specSize,
+					"query": map[string]any{"op": "match_all"},
+				},
+			})
+			for page, err := range query.ExecutePages(context.New(), profile, query.PageRequest{Limit: 1000}) {
+				Expect(err).ToNot(HaveOccurred())
+				// A page held short by the profile's own size says so, so it is
+				// not read as the end of the index.
+				Expect(page.Truncated).To(Equal(capped))
+				break
+			}
+			Expect(capture.size).To(Equal(expected))
+		},
+		Entry("a size below the page", 40, "40", true),
+		Entry("a size above the page", 5000, "1000", false),
+	)
+
+	It("preserves numeric literals in a raw query body", func() {
+		var capture openSearchCapture
+		server := stubOpenSearch(&capture)
+		defer server.Close()
+
+		// Beyond 2^53 a float64 round-trip silently rewrites the literal, which
+		// is exactly what an id or byte count must survive.
+		const exactID = "9007199254740993"
+		profile := openSearchProfile(server.URL, map[string]any{})
+		profile.Query = `{"query":{"range":{"event_id":{"gte":` + exactID + `}}}}`
+
+		_, err := query.Execute(context.New(), profile, map[string]any{"filter.service": "api"})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(capture.raw).To(ContainSubstring(`"gte":`+exactID),
+			"composing column filters must not reformat the author's numbers")
+	})
+
+	DescribeTable("rejects an ambiguous query source",
+		func(options map[string]any, rawQuery, expected string) {
+			server := stubOpenSearch(&openSearchCapture{})
+			defer server.Close()
+
+			profile := openSearchProfile(server.URL, options)
+			profile.Query = rawQuery
+			_, err := query.Execute(context.New(), profile, nil)
+			Expect(err).To(MatchError(ContainSubstring(expected)))
+		},
+		Entry("both a specification and a raw query",
+			map[string]any{"search": map[string]any{"query": map[string]any{"op": "match_all"}}},
+			`{"query":{"match_all":{}}}`,
+			"mutually exclusive"),
+		Entry("neither", map[string]any{}, "",
+			"requires a query or provider.options.search"),
+		Entry("an invalid specification",
+			map[string]any{"search": map[string]any{"query": map[string]any{"op": "term", "field": "level"}}},
+			"",
+			`operator "term" requires a value`),
+	)
+})

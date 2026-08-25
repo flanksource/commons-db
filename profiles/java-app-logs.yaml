@@ -1,0 +1,54 @@
+# Java application logs with stack traces folded back together.
+#
+# A line-oriented shipper stores every line of a stack trace as its own
+# document, so a search for a failure returns the message and then forty frames
+# as forty rows. The `java.stacktrace` library processor merges each run back
+# into the line that threw, and annotates it with the exception class and the
+# number of frames it swallowed — so the table shows one row per failure and
+# the whole trace is still there in the message.
+#
+# The processor ships as a named preset: `use` pulls in its type and its whole
+# CEL configuration, and anything under `config` is merged over it. Here the
+# defaults already fit, so nothing is overridden.
+profile: Java Application Logs
+render: logs
+imports:
+  - Kubernetes Logs
+provider:
+  type: loki
+  connection: connection://loki
+  options:
+    limit: "1000"
+    since: 1h
+query: '{namespace="{{.params.namespace}}", pod=~"{{.params.pod}}.*"}'
+params:
+  - name: namespace
+    label: Namespace
+    type: string
+    required: true
+  - name: pod
+    label: Pod prefix
+    type: string
+    default: ""
+processors:
+  - use: java.stacktrace
+columns:
+  - name: timestamp
+    label: Time
+    type: datetime
+  - name: level
+    label: Level
+    type: status
+    cel: 'has(row.severity) ? row.severity : "info"'
+  - name: pod
+    label: Pod
+    cel: 'has(row.pod) ? row.pod : ""'
+  - name: exception
+    label: Exception
+    cel: 'has(row.exception) ? row.exception : ""'
+  - name: stack_depth
+    label: Frames
+    type: number
+    cel: 'has(row.stack_depth) ? row.stack_depth : 0'
+  - name: message
+    label: Message

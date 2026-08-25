@@ -8,11 +8,11 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
-	"github.com/flanksource/commons/hash"
-	"github.com/flanksource/commons/utils"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
+	"github.com/flanksource/commons/hash"
+	"github.com/flanksource/commons/utils"
 )
 
 // +kubebuilder:object:generate=true
@@ -95,6 +95,13 @@ func (g *GCPConnection) HydrateConnection(ctx ConnectionContext) error {
 	if connection != nil {
 		g.Credentials = &types.EnvVar{ValueStatic: connection.Certificate}
 		g.Endpoint = connection.URL
+
+		// Every GCP client is scoped to a project, so a connection that stores
+		// one has to hand it over — otherwise the caller is left to supply the
+		// project a second time alongside a connection that already knows it.
+		if g.Project == "" {
+			g.Project = connection.Properties["project"]
+		}
 	}
 
 	if g.Credentials != nil {

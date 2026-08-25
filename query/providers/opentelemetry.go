@@ -1,16 +1,14 @@
 package providers
 
 import (
-	"encoding/json"
 	"fmt"
-	"sort"
-	"strconv"
-	"strings"
+	"iter"
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 func init() {
@@ -19,77 +17,120 @@ func init() {
 
 type openTelemetryProvider struct{}
 
+var _ query.ColumnInspectionProvider = openTelemetryProvider{}
+
 func (openTelemetryProvider) Type() string { return "opentelemetry" }
 
 type openTelemetryOptions struct {
-	Format         string                        `json:"format,omitempty"`
-	Index          string                        `json:"index,omitempty"`
-	DateField      string                        `json:"dateField,omitempty"`
-	TraceIDField   string                        `json:"traceIdField,omitempty"`
-	SpanIDField    string                        `json:"spanIdField,omitempty"`
-	ParentIDField  string                        `json:"parentIdField,omitempty"`
-	ParentRefType  string                        `json:"parentRefType,omitempty"`
-	ServiceField   string                        `json:"serviceField,omitempty"`
-	OperationField string                        `json:"operationField,omitempty"`
-	StatusFields   []string                      `json:"statusFields,omitempty"`
-	SelectFields   []string                      `json:"selectFields,omitempty"`
-	SourceExcludes []string                      `json:"sourceExcludes,omitempty"`
-	Params         map[string]openTelemetryParam `json:"params,omitempty"`
-	Limit          int                           `json:"limit,omitempty"`
+	Format         string   `json:"format,omitempty"`
+	Index          string   `json:"index,omitempty"`
+	DateField      string   `json:"dateField,omitempty"`
+	TraceIDField   string   `json:"traceIdField,omitempty"`
+	SpanIDField    string   `json:"spanIdField,omitempty"`
+	ParentIDField  string   `json:"parentIdField,omitempty"`
+	ParentRefType  string   `json:"parentRefType,omitempty"`
+	ServiceField   string   `json:"serviceField,omitempty"`
+	OperationField string   `json:"operationField,omitempty"`
+	StatusFields   []string `json:"statusFields,omitempty"`
+	SelectFields   []string `json:"selectFields,omitempty"`
+	SourceExcludes []string `json:"sourceExcludes,omitempty"`
+	Limit          int      `json:"limit,omitempty"`
+
+	// Search is the structured search specification. The trace-shaped options
+	// above fill whatever it leaves unset.
+	Search *esdsl.Search `json:"search,omitempty"`
 }
 
-type openTelemetryParam struct {
-	Field    string `json:"field,omitempty"`
-	Operator string `json:"operator,omitempty"`
-	Clause   string `json:"clause,omitempty"`
-	Format   string `json:"format,omitempty"`
-	Internal bool   `json:"internal,omitempty"`
+// PagingModes matches the OpenSearch provider it is backed by: from/size inside
+// the index result window, search_after over a point-in-time past it.
+func (openTelemetryProvider) PagingModes() query.PagingMode {
+	return query.PagingOffset | query.PagingCursor
 }
 
-func (openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	if req.Connection == "" {
-		return nil, fmt.Errorf("opentelemetry connection is required")
-	}
-	options, err := query.DecodeOptions[openTelemetryOptions](req.Options)
+func (p openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
+	return drainOpenSearch(ctx, p, req)
+}
+
+func (openTelemetryProvider) InspectColumnFilters(
+	ctx context.Context,
+	req query.ProviderRequest,
+	columns []query.ColumnDef,
+) (query.ColumnInspectionResult, error) {
+	searcher, options, err := openTelemetrySearchClient(ctx, req)
 	if err != nil {
-		return nil, err
+		return query.ColumnInspectionResult{}, err
 	}
-	options.withDefaults()
-	if options.Format != "jaeger" && options.Format != "flat" {
-		return nil, fmt.Errorf("unsupported opentelemetry format %q", options.Format)
+	search := openTelemetrySearch(options)
+	return inspectOpenSearchColumnFilters(
+		ctx,
+		req,
+		openTelemetryInspectionColumns(columns, options),
+		searcher,
+		openSearchInspectionSource{
+			Index:  options.Index,
+			Search: &search,
+			Build: func(mapping *esdsl.TimeFieldMapping) (openSearchRequest, error) {
+				return buildOpenTelemetryRequest(req, options, openSearchPage{}, mapping)
+			},
+		},
+	)
+}
+
+func openTelemetryInspectionColumns(columns []query.ColumnDef, options openTelemetryOptions) []query.ColumnDef {
+	statusField := "status"
+	if len(options.StatusFields) > 0 && options.StatusFields[0] != "" {
+		statusField = options.StatusFields[0]
 	}
-	outerModel, err := ctx.HydrateConnectionByURL(req.Connection)
-	if err != nil {
-		return nil, fmt.Errorf("hydrate opentelemetry connection %q: %w", req.Connection, err)
+	fields := map[string]string{
+		"timestamp": options.DateField, "trace_id": options.TraceIDField,
+		"span_id": options.SpanIDField, "id": options.SpanIDField,
+		"parent_id": options.ParentIDField,
+		"service":   options.ServiceField, "service_name": options.ServiceField,
+		"operation": options.OperationField, "operation_name": options.OperationField,
+		"status": statusField,
 	}
-	outer, err := dbconnection.NewOpenTelemetry(outerModel)
-	if err != nil {
-		return nil, err
+	mapped := append([]query.ColumnDef(nil), columns...)
+	for index := range mapped {
+		if mapped[index].Source == "" && mapped[index].Filter == nil {
+			mapped[index].Source = fields[mapped[index].Name]
+		}
 	}
-	nested, err := outer.ResolveOpenSearch(ctx)
-	if err != nil {
-		return nil, err
+	return mapped
+}
+
+// Pages walks the trace index the same way the OpenSearch provider walks a log
+// index; only the row shape differs.
+func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
+	return func(yield func(query.Page, error) bool) {
+		searcher, options, err := openTelemetrySearchClient(ctx, req)
+		if err != nil {
+			yield(query.Page{}, err)
+			return
+		}
+		search := openTelemetrySearch(options)
+		timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
+			Searcher: searcher, Index: options.Index, Search: search,
+			Params: openSearchParamBindings(req), Inspection: req.Inspection,
+		})
+		if err != nil {
+			yield(query.Page{}, err)
+			return
+		}
+		walk := openSearchWalk{
+			searcher: searcher,
+			index:    options.Index,
+			build: func(position openSearchPage) (openSearchRequest, error) {
+				return buildOpenTelemetryRequest(req, options, position, timeFieldMapping)
+			},
+			mapRows: func(raw opensearch.Response) []query.Row {
+				return openTelemetryRows(raw, options)
+			},
+		}
+		walk.run(ctx, req, page, yield)
 	}
-	searcher, err := openSearchClientForConnection(ctx, nested)
-	if err != nil {
-		return nil, err
-	}
-	body, err := buildOpenTelemetryQuery(options, req.Params)
-	if err != nil {
-		return nil, err
-	}
-	encoded, err := json.Marshal(body)
-	if err != nil {
-		return nil, fmt.Errorf("encode OpenSearch trace query: %w", err)
-	}
-	limit := options.Limit
-	if limit <= 0 {
-		limit = 500
-	}
-	result, err := searcher.SearchRaw(ctx, opensearch.Request{Index: options.Index, Query: string(encoded), Limit: strconv.Itoa(limit)})
-	if err != nil {
-		return nil, err
-	}
+}
+
+func openTelemetryRows(result opensearch.Response, options openTelemetryOptions) []query.Row {
 	rows := make([]query.Row, 0, len(result.Hits.Hits))
 	for _, hit := range result.Hits.Hits {
 		document := make(map[string]any, len(hit.Fields)+len(hit.Source))
@@ -101,7 +142,42 @@ func (openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequ
 		}
 		rows = append(rows, openTelemetryRow(document, options))
 	}
-	return rows, nil
+	return rows
+}
+
+func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (*opensearch.Searcher, openTelemetryOptions, error) {
+	if req.Connection == "" {
+		return nil, openTelemetryOptions{}, fmt.Errorf("opentelemetry connection is required")
+	}
+	options, err := query.DecodeOptions[openTelemetryOptions](req.Options)
+	if err != nil {
+		return nil, options, err
+	}
+	// options.params was the ad-hoc predecessor of options.search. Decoding is
+	// lenient, so a profile that still carries it would otherwise lose every
+	// filter it declares without a word.
+	if _, legacy := req.Options["params"]; legacy {
+		return nil, options, fmt.Errorf(
+			"provider.options.params has been replaced by provider.options.search; re-import the profile to migrate it")
+	}
+	options.withDefaults()
+	if options.Format != "jaeger" && options.Format != "flat" {
+		return nil, options, fmt.Errorf("unsupported opentelemetry format %q", options.Format)
+	}
+	outerModel, err := ctx.HydrateConnectionByURL(req.Connection)
+	if err != nil {
+		return nil, options, fmt.Errorf("hydrate opentelemetry connection %q: %w", req.Connection, err)
+	}
+	outer, err := dbconnection.NewOpenTelemetry(outerModel)
+	if err != nil {
+		return nil, options, err
+	}
+	nested, err := outer.ResolveOpenSearch(ctx)
+	if err != nil {
+		return nil, options, err
+	}
+	searcher, err := openSearchClientForConnection(ctx, nested)
+	return searcher, options, err
 }
 
 func (options *openTelemetryOptions) withDefaults() {
@@ -128,121 +204,5 @@ func (options *openTelemetryOptions) withDefaults() {
 	}
 	if options.OperationField == "" {
 		options.OperationField = "operation_name"
-	}
-}
-
-func buildOpenTelemetryQuery(options openTelemetryOptions, params map[string]any) (map[string]any, error) {
-	clauses := map[string][]map[string]any{"filter": {}, "must": {}, "should": {}, "must_not": {}}
-	names := make([]string, 0, len(params))
-	for name := range params {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		definition, ok := options.Params[name]
-		if !ok {
-			return nil, fmt.Errorf("filter %q is not supported by opentelemetry profile", name)
-		}
-		if definition.Internal {
-			return nil, fmt.Errorf("filter %q is internal to the opentelemetry profile", name)
-		}
-		built, err := buildOpenTelemetryParam(definition, params[name])
-		if err != nil {
-			return nil, fmt.Errorf("build filter %q: %w", name, err)
-		}
-		clause := definition.Clause
-		if clause == "" {
-			clause = "filter"
-		}
-		if _, ok := clauses[clause]; !ok {
-			return nil, fmt.Errorf("unsupported clause %q for filter %q", clause, name)
-		}
-		clauses[clause] = append(clauses[clause], built...)
-	}
-	body := map[string]any{"sort": []map[string]any{{options.DateField: map[string]any{"order": "desc"}}}}
-	if len(options.SelectFields) > 0 {
-		body["stored_fields"] = []string{"*"}
-		body["fields"] = options.SelectFields
-	}
-	if len(options.SourceExcludes) > 0 {
-		body["_source"] = map[string]any{"excludes": options.SourceExcludes}
-	}
-	boolQuery := map[string]any{}
-	for _, clause := range []string{"filter", "must", "should", "must_not"} {
-		if len(clauses[clause]) > 0 {
-			boolQuery[clause] = clauses[clause]
-		}
-	}
-	if len(boolQuery) == 0 {
-		body["query"] = map[string]any{"match_all": map[string]any{}}
-	} else {
-		if len(clauses["should"]) > 0 {
-			boolQuery["minimum_should_match"] = 1
-		}
-		body["query"] = map[string]any{"bool": boolQuery}
-	}
-	return body, nil
-}
-
-func buildOpenTelemetryParam(param openTelemetryParam, value any) ([]map[string]any, error) {
-	if param.Field == "" {
-		return nil, fmt.Errorf("field is required")
-	}
-	values := normalizeOpenTelemetryValues(value)
-	if len(values) == 0 {
-		return nil, nil
-	}
-	operator := param.Operator
-	if operator == "" {
-		operator = "term"
-	}
-	switch operator {
-	case "term":
-		if len(values) > 1 {
-			return []map[string]any{{"terms": map[string]any{param.Field: values}}}, nil
-		}
-		return []map[string]any{{"term": map[string]any{param.Field: values[0]}}}, nil
-	case "terms":
-		return []map[string]any{{"terms": map[string]any{param.Field: values}}}, nil
-	case "match_phrase", "wildcard":
-		result := make([]map[string]any, 0, len(values))
-		for _, item := range values {
-			result = append(result, map[string]any{operator: map[string]any{param.Field: item}})
-		}
-		return result, nil
-	case "query_string":
-		result := make([]map[string]any, 0, len(values))
-		for _, item := range values {
-			result = append(result, map[string]any{"query_string": map[string]any{"fields": []string{param.Field}, "query": item}})
-		}
-		return result, nil
-	case "exists":
-		return []map[string]any{{"exists": map[string]any{"field": param.Field}}}, nil
-	default:
-		return nil, fmt.Errorf("unsupported operator %q", operator)
-	}
-}
-
-func normalizeOpenTelemetryValues(value any) []any {
-	switch typed := value.(type) {
-	case []any:
-		return typed
-	case []string:
-		values := make([]any, len(typed))
-		for index := range typed {
-			values[index] = typed[index]
-		}
-		return values
-	case string:
-		parts := strings.Split(typed, ",")
-		values := make([]any, 0, len(parts))
-		for _, part := range parts {
-			if part = strings.TrimSpace(part); part != "" {
-				values = append(values, part)
-			}
-		}
-		return values
-	default:
-		return []any{typed}
 	}
 }

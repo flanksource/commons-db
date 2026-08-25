@@ -2,6 +2,94 @@
   "$id": "elasticsearch.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "insecure_tls": {
+      "title": "Insecure TLS",
+      "type": "boolean",
+      "x-clicky-order": 3
+    },
+    "logging": {
+      "additionalProperties": false,
+      "description": "Choose which sanitized connection activity is emitted at each log level.",
+      "title": "Logging",
+      "type": "object",
+      "x-clicky-component": "connection-logging-policy",
+      "x-clicky-logging": {
+        "family": "generic",
+        "slowThreshold": "1s",
+        "thresholdLabel": "Slow threshold",
+        "events": [
+          {
+            "event": "error",
+            "property": "log.level.error",
+            "label": "Errors",
+            "description": "Failed operations, including the sanitized request identity.",
+            "default": "error",
+            "captures": [
+              "error",
+              "operation",
+              "duration"
+            ],
+            "example": {
+              "connection": "cache",
+              "connection_level": "error",
+              "duration_ms": 82,
+              "error": "operation failed",
+              "event": "error",
+              "provider": "elasticsearch",
+              "rows": 0,
+              "sql": "SCAN cache"
+            },
+            "prettyExample": "[elasticsearch/cache] ERROR \u003e=[82ms] [rows:0] SCAN cache operation failed"
+          },
+          {
+            "event": "slow",
+            "property": "log.level.slow",
+            "label": "Slow operations",
+            "description": "Successful operations at or above the slow threshold.",
+            "default": "warn",
+            "captures": [
+              "operation",
+              "duration",
+              "slow threshold"
+            ],
+            "example": {
+              "connection": "cache",
+              "connection_level": "warn",
+              "duration_ms": 1200,
+              "event": "slow",
+              "provider": "elasticsearch",
+              "rows": 25,
+              "slow_threshold_ms": 1000,
+              "sql": "SCAN cache"
+            },
+            "prettyExample": "[elasticsearch/cache] SLOW \u003e= [1200ms] [rows:25] SCAN cache"
+          },
+          {
+            "event": "operation",
+            "property": "log.level.operation",
+            "label": "Operation summary",
+            "description": "One completion record for a successful provider operation.",
+            "default": "debug",
+            "captures": [
+              "operation",
+              "duration",
+              "result summary"
+            ],
+            "example": {
+              "connection": "cache",
+              "connection_level": "debug",
+              "duration_ms": 18,
+              "event": "operation",
+              "provider": "elasticsearch",
+              "rows": 12,
+              "sql": "SCAN cache"
+            },
+            "prettyExample": "[elasticsearch/cache] [18ms] [rows:12] SCAN cache"
+          }
+        ]
+      },
+      "x-clicky-order": 8
+    },
     "name": {
       "title": "Name",
       "type": "string",
@@ -14,22 +102,182 @@
       "x-clicky-order": 1
     },
     "properties": {
-      "additionalProperties": {
-        "type": "string"
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "authType": {
+                "const": "basic"
+              }
+            },
+            "required": [
+              "authType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "password": {
+                "format": "password",
+                "title": "Password",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "secret",
+                "x-clicky-order": 2
+              },
+              "username": {
+                "format": "password",
+                "title": "Username",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "value",
+                "x-clicky-order": 1
+              }
+            },
+            "required": [
+              "username",
+              "password"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "authType": {
+                "const": "oauth"
+              }
+            },
+            "required": [
+              "authType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "clientID": {
+                "format": "password",
+                "title": "Client ID",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "value",
+                "x-clicky-order": 1
+              },
+              "clientSecret": {
+                "format": "password",
+                "title": "Client Secret",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "secret",
+                "x-clicky-order": 2
+              },
+              "scopes": {
+                "description": "Comma-separated OAuth scopes",
+                "title": "Scopes",
+                "type": "string",
+                "x-clicky-order": 4
+              },
+              "tokenURL": {
+                "title": "Token URL",
+                "type": "string",
+                "x-clicky-order": 3
+              }
+            },
+            "required": [
+              "clientID",
+              "clientSecret",
+              "tokenURL"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "authType": {
+                "const": "mtls"
+              }
+            },
+            "required": [
+              "authType"
+            ]
+          },
+          "then": {
+            "properties": {
+              "ca": {
+                "format": "password",
+                "title": "CA Certificate",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "secret",
+                "x-clicky-order": 1
+              },
+              "cert": {
+                "format": "password",
+                "title": "Client Certificate",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "secret",
+                "x-clicky-order": 2
+              },
+              "key": {
+                "format": "password",
+                "title": "Client Private Key",
+                "type": "string",
+                "x-clicky-component": "k8s-secret-selector",
+                "x-clicky-default-source": "secret",
+                "x-clicky-order": 3
+              }
+            },
+            "required": [
+              "cert",
+              "key"
+            ]
+          }
+        }
+      ],
+      "properties": {
+        "authType": {
+          "default": "none",
+          "enum": [
+            "none",
+            "basic",
+            "oauth",
+            "mtls"
+          ],
+          "title": "Authentication",
+          "type": "string",
+          "x-clicky-order": 0,
+          "x-enum-display": "segmented",
+          "x-enum-labels": {
+            "basic": "Basic",
+            "mtls": "mTLS",
+            "none": "None",
+            "oauth": "OAuth"
+          }
+        }
       },
-      "title": "Properties",
+      "required": [
+        "authType"
+      ],
+      "title": "Authentication",
       "type": "object",
-      "x-clicky-order": 7
+      "x-clicky-order": 4
     },
     "type": {
       "const": "elasticsearch",
       "title": "Type",
       "type": "string"
+    },
+    "url": {
+      "description": "Base URL of the HTTP endpoint",
+      "title": "URL",
+      "type": "string",
+      "x-clicky-component": "k8s-url-selector",
+      "x-clicky-default-source": "value",
+      "x-clicky-order": 2
     }
   },
   "required": [
     "name",
-    "type"
+    "type",
+    "url"
   ],
   "title": "Connection: elasticsearch",
   "type": "object"

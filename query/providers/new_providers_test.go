@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"time"
 
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -17,6 +19,26 @@ import (
 	"gorm.io/gorm"
 )
 
+// traceConnections registers an OpenTelemetry connection whose nested
+// OpenSearch connection points at address.
+func traceConnections(address string) *gorm.DB {
+	database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	Expect(err).ToNot(HaveOccurred())
+	Expect(database.Exec(`CREATE TABLE connections (
+id TEXT PRIMARY KEY, name TEXT, namespace TEXT, source TEXT, type TEXT,
+url TEXT, username TEXT, password TEXT, properties TEXT, certificate TEXT,
+insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
+)`).Error).ToNot(HaveOccurred())
+	Expect(database.Create(&models.Connection{
+		ID: uuid.New(), Name: "OS", Type: models.ConnectionTypeOpenSearch, URL: address,
+	}).Error).ToNot(HaveOccurred())
+	Expect(database.Create(&models.Connection{
+		ID: uuid.New(), Name: "traces", Type: models.ConnectionTypeOpenTelemetry,
+		Properties: types.JSONStringMap{"connection": "connection://OS"},
+	}).Error).ToNot(HaveOccurred())
+	return database
+}
+
 var _ = Describe("opentelemetry provider", func() {
 	It("queries Jaeger spans through its nested OpenSearch connection", func() {
 		var requestBody map[string]any
@@ -25,27 +47,24 @@ var _ = Describe("opentelemetry provider", func() {
 				w.WriteHeader(http.StatusOK)
 				return
 			}
+			if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+				Expect(r.URL.Query().Get("fields")).To(Equal("startTimeMillis"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"fields":{"startTimeMillis":{"long":{"searchable":true,"aggregatable":true}}}}`)
+				return
+			}
+			if strings.Contains(r.URL.Path, "/_mapping/field/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"jaeger-span-2026":{"mappings":{"startTimeMillis":{"full_name":"startTimeMillis","mapping":{"startTimeMillis":{"type":"long"}}}}}}`)
+				return
+			}
 			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":1,"relation":"eq"},"hits":[{"_id":"one","_source":{"traceID":"trace-1","spanID":"span-1","operationName":"process message","startTimeMillis":1710000000000,"duration":123000,"process":{"serviceName":"prod-api"},"tags":[{"key":"otel@status_code","value":"ERROR"},{"key":"input@xml","value":"<request/>"}]},"fields":{"custom_field":["from-fields"]}}]}}`)
 		}))
 		defer server.Close()
 
-		database, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(database.Exec(`CREATE TABLE connections (
-id TEXT PRIMARY KEY, name TEXT, namespace TEXT, source TEXT, type TEXT,
-url TEXT, username TEXT, password TEXT, properties TEXT, certificate TEXT,
-insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
-)`).Error).ToNot(HaveOccurred())
-		Expect(database.Create(&models.Connection{
-			ID: uuid.New(), Name: "OS", Type: models.ConnectionTypeOpenSearch, URL: server.URL,
-		}).Error).ToNot(HaveOccurred())
-		Expect(database.Create(&models.Connection{
-			ID: uuid.New(), Name: "traces", Type: models.ConnectionTypeOpenTelemetry,
-			Properties: types.JSONStringMap{"connection": "connection://OS"},
-		}).Error).ToNot(HaveOccurred())
-
+		database := traceConnections(server.URL)
 		result, err := query.Execute(context.New().WithDB(database, nil), query.Profile{
 			Name: "jms",
 			Provider: query.ProviderConfig{
@@ -54,11 +73,14 @@ insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
 					"format": "jaeger", "index": "jaeger-span*", "dateField": "startTimeMillis",
 					"traceIdField": "traceID", "spanIdField": "spanID", "serviceField": "process.serviceName",
 					"operationField": "operationName", "statusFields": []string{"tag.otel@status_code"}, "selectFields": []string{"custom_field"},
-					"params": map[string]any{"namespace": map[string]any{"field": "process.serviceName", "operator": "term"}},
+					"search": map[string]any{"query": map[string]any{
+						"op": "term", "field": "process.serviceName", "value": map[string]any{"param": "namespace"},
+					}},
 				},
 			},
-			Params: []query.ParamDef{{Name: "namespace", Template: "{value}-api"}},
-		}, map[string]any{"namespace": "prod"})
+			Params:  []query.ParamDef{{Name: "namespace", Template: "{value}-api"}},
+			Columns: []query.ColumnDef{{Name: "service"}},
+		}, map[string]any{"namespace": "prod", "filter.service": "prod,!staging"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Rows).To(HaveLen(1))
 		Expect(result.Rows[0]).To(HaveKeyWithValue("trace_id", "trace-1"))
@@ -68,8 +90,193 @@ insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
 		Expect(result.Rows[0]).To(HaveKeyWithValue("custom_field", "from-fields"))
 
 		boolQuery := requestBody["query"].(map[string]any)["bool"].(map[string]any)
-		filter := boolQuery["filter"].([]any)
-		Expect(filter[0]).To(Equal(map[string]any{"term": map[string]any{"process.serviceName": "prod-api"}}))
+		Expect(boolQuery["filter"]).To(ConsistOf(
+			map[string]any{"term": map[string]any{"process.serviceName": "prod-api"}},
+			map[string]any{"terms": map[string]any{"process.serviceName": []any{"prod"}}},
+		))
+		Expect(boolQuery["must_not"]).To(ConsistOf(
+			map[string]any{"terms": map[string]any{"process.serviceName": []any{"staging"}}},
+		))
+
+		// The trace-shaped options fill what the specification left unset.
+		Expect(requestBody["sort"]).To(Equal([]any{
+			map[string]any{"startTimeMillis": map[string]any{"order": "desc"}},
+		}))
+		Expect(requestBody["stored_fields"]).To(Equal([]any{"*"}))
+		Expect(requestBody["fields"]).To(Equal([]any{"custom_field"}))
+	})
+
+	It("lets the specification override a trace-shaped default", func() {
+		var requestBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+				Expect(r.URL.Query().Get("fields")).To(Equal("startTimeMillis"))
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"fields":{"startTimeMillis":{"long":{"searchable":true,"aggregatable":true}}}}`)
+				return
+			}
+			if strings.Contains(r.URL.Path, "/_mapping/field/") {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = fmt.Fprint(w, `{"jaeger-span-2026":{"mappings":{"startTimeMillis":{"full_name":"startTimeMillis","mapping":{"startTimeMillis":{"type":"long"}}}}}}`)
+				return
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+		}))
+		defer server.Close()
+
+		database := traceConnections(server.URL)
+		profile := query.Profile{
+			Name: "jms",
+			Provider: query.ProviderConfig{
+				Type: "opentelemetry", Connection: "connection://traces",
+				Options: map[string]any{
+					"format": "jaeger", "index": "jaeger-span*", "dateField": "startTimeMillis",
+					"search": map[string]any{
+						"sort":  []any{map[string]any{"field": "duration", "order": "asc"}},
+						"query": map[string]any{"op": "match_all"},
+					},
+				},
+			},
+			Params: []query.ParamDef{{Name: "since", Role: query.ParamRoleTimeFrom}},
+		}
+		_, err := query.Execute(context.New().WithDB(database, nil), profile, map[string]any{"since": "2026-08-12"})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(requestBody["sort"]).To(Equal([]any{
+			map[string]any{"duration": map[string]any{"order": "asc"}},
+		}))
+		// dateField still seeds timeField, so a time-from param folds into a range.
+		Expect(requestBody["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{
+				"startTimeMillis": map[string]any{"gte": float64(time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC).UnixMilli())},
+			}}},
+		}}))
+	})
+
+	It("counts a param interpolated into the specification as referenced", func() {
+		var requestBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+		}))
+		defer server.Close()
+
+		database := traceConnections(server.URL)
+		_, err := query.Execute(context.New().WithDB(database, nil), query.Profile{
+			Name: "jms",
+			Provider: query.ProviderConfig{
+				Type: "opentelemetry", Connection: "connection://traces",
+				Options: map[string]any{
+					"format": "jaeger", "index": "jaeger-span*", "dateField": "startTimeMillis",
+					"search": map[string]any{"query": map[string]any{
+						"op": "term", "field": "process.serviceName", "value": "{{.params.country}}-api",
+					}},
+				},
+			},
+			Params: []query.ParamDef{{Name: "country", Default: "kenya"}},
+		}, nil)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(requestBody["query"]).To(Equal(
+			map[string]any{"term": map[string]any{"process.serviceName": "kenya-api"}}))
+	})
+})
+
+var _ = Describe("opensearch column filtering", func() {
+	It("ORs the included values into one terms clause and excludes them via must_not", func() {
+		var requestBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+		}))
+		defer server.Close()
+
+		_, err := query.Execute(context.New(), query.Profile{
+			Name: "logs",
+			Provider: query.ProviderConfig{Type: "opensearch", Options: map[string]any{
+				"address": server.URL, "index": "logs-*",
+			}},
+			Query:   `{"query":{"match":{"message":"failed"}}}`,
+			Columns: []query.ColumnDef{{Name: "service"}},
+		}, map[string]any{"filter.service": "api,worker,!debug"})
+		Expect(err).ToNot(HaveOccurred())
+
+		outer := requestBody["query"].(map[string]any)["bool"].(map[string]any)
+		Expect(outer["filter"]).To(ConsistOf(
+			map[string]any{"match": map[string]any{"message": "failed"}},
+			map[string]any{"terms": map[string]any{"service": []any{"api", "worker"}}},
+		))
+		Expect(outer["must_not"]).To(ConsistOf(
+			map[string]any{"terms": map[string]any{"service": []any{"debug"}}},
+		))
+	})
+
+	It("looks up distinct values with sibling filters but without the current column", func() {
+		var requestBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprint(w, `{
+				"hits":{"total":{"value":0,"relation":"eq"},"hits":[]},
+				"aggregations":{
+					"__clicky_values":{"buckets":[{"key":"payments","doc_count":12}]},
+					"__clicky_total":{"doc_count":12,"values":{"value":1}}
+				}
+			}`)
+		}))
+		defer server.Close()
+
+		profile := query.Profile{
+			Name: "logs",
+			Provider: query.ProviderConfig{Type: "opensearch", Options: map[string]any{
+				"address": server.URL, "index": "logs-*",
+				"search": map[string]any{"query": map[string]any{"op": "match", "field": "message", "value": "failed"}},
+			}},
+			Columns: []query.ColumnDef{{Name: "service"}, {Name: "environment"}},
+		}
+		options, total, err := query.LookupFilterValues(context.New(), query.FilterValueLookupRequest{
+			Profile: profile,
+			Input:   map[string]any{"filter.service": "current", "filter.environment": "prod"},
+			Key:     "filter.service", Search: `pay+@#&<>~"`, Limit: 10,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(options).To(Equal([]query.FilterOption{{Value: "payments", Count: 12}}))
+		// A cardinality aggregation is an estimate, so the total is reported as
+		// a bound rather than a count.
+		Expect(total).To(Equal(&query.Total{Value: 1}))
+		Expect(total.Relation()).To(Equal("gte"))
+
+		aggregations := requestBody["aggregations"].(map[string]any)
+		terms := aggregations["__clicky_values"].(map[string]any)["terms"].(map[string]any)
+		Expect(terms).To(SatisfyAll(
+			HaveKeyWithValue("field", "service"),
+			HaveKeyWithValue("size", float64(10)),
+			HaveKeyWithValue("include", `.*pay\+\@\#\&\<\>\~\".*`),
+		))
+		encoded, err := json.Marshal(requestBody["query"])
+		Expect(err).ToNot(HaveOccurred())
+		Expect(string(encoded)).To(ContainSubstring(`"environment":["prod"]`))
+		Expect(string(encoded)).ToNot(ContainSubstring(`"service"`))
 	})
 })
 

@@ -3,9 +3,6 @@ package opensearch
 import (
 	"time"
 
-	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/commons/utils"
-
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -15,29 +12,28 @@ type Backend struct {
 	Username    *types.EnvVar `json:"username,omitempty"`
 	Password    *types.EnvVar `json:"password,omitempty"`
 	InsecureTLS bool          `json:"insecureTLS,omitempty"`
+	// InspectionKey identifies the resolved connection without placing its URL
+	// or credentials in metadata cache keys.
+	InspectionKey string `json:"-"`
 }
+
+// DefaultPITKeepAlive is how long a point-in-time is held between pages. It
+// only has to outlive the gap between one page and the next, not the whole
+// walk: each search extends it.
+const DefaultPITKeepAlive = time.Minute
 
 // +kubebuilder:object:generate=true
 type Request struct {
 	Index string `json:"index" template:"true"`
 	Query string `json:"query" template:"true"`
+
+	// Limit is how many documents to return. It is required — "0" asks for none,
+	// which is what an aggregation-only search wants.
 	Limit string `json:"limit,omitempty" template:"true"`
-}
 
-// ScrollOptions contains configuration for scroll operations
-type ScrollOptions struct {
-	// Size is the number of documents to fetch per scroll request
-	Size int `json:"size,omitempty"`
-	// Timeout is how long to keep the scroll context alive
-	Timeout time.Duration `json:"timeout,omitempty"`
-	// Enabled determines if scroll should be used automatically for large result sets
-	Enabled bool `json:"enabled,omitempty"`
-}
-
-// ScrollRequest extends Request with scroll-specific options
-type ScrollRequest struct {
-	Request
-	Scroll ScrollOptions `json:"scroll,omitempty"`
+	// PIT pins the search to a point-in-time, so consecutive pages of one walk
+	// read the same view of the index.
+	PIT string `json:"-"`
 }
 
 type TotalHitsInfo struct {
@@ -49,29 +45,6 @@ type HitsInfo struct {
 	Total    TotalHitsInfo `json:"total"`
 	MaxScore float64       `json:"max_score"`
 	Hits     []SearchHit   `json:"hits"`
-}
-
-// NextPage returns the next page token.
-func (t *HitsInfo) NextPage(requestedRowsCount int) string {
-	if len(t.Hits) == 0 {
-		return ""
-	}
-
-	// If we got less than the requested rows count, we are at the end of the results.
-	// Note: We always request one more than the requested rows count, so we can
-	// determine if there are more results to fetch.
-	if requestedRowsCount >= len(t.Hits) {
-		return ""
-	}
-
-	lastItem := t.Hits[len(t.Hits)-2]
-	val, err := utils.Stringify(lastItem.Sort)
-	if err != nil {
-		logger.Errorf("error stringifying sort: %v", err)
-		return ""
-	}
-
-	return val
 }
 
 type Response struct {
@@ -90,12 +63,6 @@ type SearchHit struct {
 	Sort   []any          `json:"sort"`
 	Source map[string]any `json:"_source"`
 	Fields map[string]any `json:"fields,omitempty"`
-}
-
-type SearchResults struct {
-	Total    int64            `json:"total,omitempty"`
-	Results  []map[string]any `json:"results,omitempty"`
-	NextPage string           `json:"nextPage,omitempty"`
 }
 
 type Result struct {
