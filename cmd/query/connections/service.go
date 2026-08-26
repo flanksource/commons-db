@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky"
+	"github.com/flanksource/clicky/entity"
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -41,6 +42,7 @@ type Service struct {
 	decodeBody BodyDecoder
 	profiles   ProfileProvider
 	virtual    VirtualConnectionProvider
+	browser    *connectionBrowserHandler
 }
 
 func New(options Options) (*Service, error) {
@@ -59,6 +61,7 @@ func New(options Options) (*Service, error) {
 	return &Service{
 		database: options.Database, context: options.Context,
 		decodeBody: options.DecodeBody, profiles: options.Profiles, virtual: options.Virtual,
+		browser: newConnectionBrowserHandler("", options.Context(), http.NotFoundHandler()),
 	}, nil
 }
 
@@ -114,13 +117,18 @@ func (s *Service) RegisterClicky() {
 		DeleteWithContext(func(_ context.Context, id string) error {
 			return s.Delete(id)
 		}).
+		WithAction(entity.TypedActionWithContext("inspect", InspectFlags{service: s}, s.Inspect).
+			WithShort("Inspect this connection's targets, field types, and query-dependent capabilities")).
 		Filters(connectionFilter{service: s}).
 		Register()
 }
 
 func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	ctx := s.context()
-	browser := newConnectionBrowserHandler(prefix, ctx, newConnectionActionsHandler(prefix, ctx, next))
+	browser := s.browser
+	browser.prefix = strings.TrimRight(prefix, "/")
+	browser.ctx = ctx
+	browser.next = newConnectionActionsHandler(prefix, ctx, next)
 	health := newConnectionHealthHandler(prefix, ctx, browser)
 	return newConnectionDashboardHandler(connectionDashboardHandlerOptions{
 		Prefix: prefix, Context: ctx, Profiles: s.profiles, Next: health,
