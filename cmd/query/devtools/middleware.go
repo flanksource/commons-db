@@ -74,8 +74,12 @@ func armableSurface(prefix string, r *http.Request) (surface string, profile str
 	case strings.HasPrefix(path, "/connection/") &&
 		(strings.HasSuffix(path, "/browser/query") || strings.HasSuffix(path, "/browser/filters/values")):
 		return "browser", "", true
-	case strings.HasPrefix(path, "/reconcile"):
-		return "reconcile", "", true
+	case strings.HasPrefix(path, "/profiles/") && strings.HasSuffix(path, "/reconcile"):
+		name := strings.TrimSuffix(strings.TrimPrefix(path, "/profiles/"), "/reconcile")
+		if name == "" || strings.Contains(name, "/") {
+			return "", "", false
+		}
+		return "reconcile", name, true
 	default:
 		return "", "", false
 	}

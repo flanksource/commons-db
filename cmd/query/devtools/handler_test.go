@@ -85,6 +85,20 @@ var _ = Describe("Handler", func() {
 		Expect(store.Records(0)[0].Source.Surface).To(Equal("browser"))
 	})
 
+	It("arms reconciliation actions", func() {
+		request := httptest.NewRequest(http.MethodPost, "/api/v1/profiles/Orders%20Emitted/reconcile", nil)
+		request.Header.Set(devtools.LevelHeader, "debug")
+		response := httptest.NewRecorder()
+
+		handler.ServeHTTP(response, request)
+
+		Expect(next.armed).To(BeTrue())
+		Expect(response.Header().Get(devtools.IDHeader)).NotTo(BeEmpty())
+		Expect(store.Records(0)).To(HaveLen(1))
+		Expect(store.Records(0)[0].Source.Surface).To(Equal("reconcile"))
+		Expect(store.Records(0)[0].Source.Profile).To(Equal("Orders Emitted"))
+	})
+
 	It("records an implicit successful response status", func() {
 		implicit := devtools.New(devtools.HandlerOptions{
 			Prefix: "/api/v1", Store: store, Enabled: true,

@@ -22,6 +22,27 @@ func (sampleLookupProvider) Execute(dbcontext.Context, query.ProviderRequest) ([
 	return nil, nil
 }
 
+type sampleInspectionProvider struct{}
+
+func (sampleInspectionProvider) Type() string { return "opensearch" }
+
+func (sampleInspectionProvider) Execute(dbcontext.Context, query.ProviderRequest) ([]query.Row, error) {
+	return []query.Row{{"service": "api"}}, nil
+}
+
+func (sampleInspectionProvider) InspectColumnFilters(
+	dbcontext.Context,
+	query.ProviderRequest,
+	[]query.ColumnDef,
+) (query.ColumnInspectionResult, error) {
+	return query.ColumnInspectionResult{
+		Filters: map[string]*query.ColumnFilterDef{
+			"service": {Kind: query.ColumnFilterKindTerms},
+		},
+		Counts: map[string]int64{"service": 3},
+	}, nil
+}
+
 func (sampleLookupProvider) LookupFilterValues(
 	dbcontext.Context,
 	query.ProviderRequest,
@@ -64,6 +85,36 @@ var _ = Describe("profile sampling errors", func() {
 		Expect(response.Body.String()).NotTo(ContainSubstring(`unknown field \"refreshInspection\"`))
 		Expect(response.Body.String()).NotTo(ContainSubstring(`unknown field \"filters\"`))
 		Expect(response.Body.String()).NotTo(ContainSubstring(`unknown field \"filterColumns\"`))
+	})
+
+	It("serializes cardinality and resolved paging metadata for the inspection action", func() {
+		original, err := query.GetProvider("opensearch")
+		Expect(err).ToNot(HaveOccurred())
+		query.RegisterProvider(sampleInspectionProvider{})
+		DeferCleanup(func() { query.RegisterProvider(original) })
+
+		handler := newProfileSampleHandler("/api/v1", dbcontext.New(), http.NotFoundHandler())
+		response := post(handler, "/api/v1/profile/sample", `{
+			"profile":{
+				"profile":"sample",
+				"query":"{}",
+				"provider":{"type":"opensearch"},
+				"columns":[{"name":"service","type":"string"}]
+			}
+		}`)
+
+		Expect(response.Code).To(Equal(http.StatusOK))
+		var payload map[string]any
+		Expect(json.Unmarshal(response.Body.Bytes(), &payload)).To(Succeed())
+		Expect(payload).To(HaveKeyWithValue("inspection", And(
+			HaveKeyWithValue("status", "complete"),
+			HaveKeyWithValue("counts", HaveKeyWithValue("service", float64(3))),
+		)))
+		Expect(payload).To(HaveKeyWithValue("resolution", And(
+			HaveKeyWithValue("pagingModes", "offset"),
+			HaveKeyWithValue("nativePaging", false),
+			HaveKeyWithValue("limits", HaveKeyWithValue("pageSize", float64(query.DefaultPageSize))),
+		)))
 	})
 
 	It("serves draft profile filter values through the sample route", func() {

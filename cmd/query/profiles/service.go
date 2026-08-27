@@ -246,6 +246,8 @@ func (s *Service) RegisterClicky() {
 			// link someone bookmarks — so it is a GET, not the POST every other
 			// action defaults to.
 			WithMethod(http.MethodGet)).
+		WithAction(entity.TypedActionWithContext("inspect", InspectFlags{}, s.Inspect).
+			WithShort("Inspect this profile's fields, cardinality, auto-filters, paging, order, and limits")).
 		WithAction(entity.ActionWithFlagsAndContext("run", RunFlags{},
 			func(ctx context.Context, id string, flagMap map[string]string) (*RunResult, error) {
 				options, err := decodeActionFlags[RunFlags](flagMap)
