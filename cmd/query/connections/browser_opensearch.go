@@ -462,7 +462,10 @@ func (h *connectionBrowserHandler) openSearchSearcher(ctx dbcontext.Context, con
 	if err != nil {
 		return nil, err
 	}
+	// The address comes off the HTTP connection, not the model: NewHTTPConnection
+	// has already resolved a secret:// reference into a real URL, and Backend.Address
+	// is handed to the transport verbatim.
 	return opensearch.NewWithTransport(ctx, opensearch.Backend{
-		Address: conn.URL, InspectionKey: fmt.Sprintf("%s:connection:%s:%d", h.ctx.ConnectionCacheScope(), conn.ID, conn.UpdatedAt.UnixNano()),
+		Address: httpConnection.URL, InspectionKey: fmt.Sprintf("%s:connection:%s:%d", h.ctx.ConnectionCacheScope(), conn.ID, conn.UpdatedAt.UnixNano()),
 	}, nil, httpConnection.Transport())
 }
