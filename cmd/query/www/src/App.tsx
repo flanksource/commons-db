@@ -43,6 +43,7 @@ import { profileRowDetailsResult } from "./profileRowDetails";
 import { ReconcileButton } from "./reconcileAction";
 import { ReconcilePage } from "./reconcilePage";
 import { reconcileSurfaceKey } from "./reconcileModel";
+import { ProfileInspectButton } from "./profileInspectAction";
 import {
   configureProfileConnectionForm,
   useProfileConnectionMapping,
@@ -133,6 +134,7 @@ function Explorer() {
       ) : isProfileSurface(context.surfaceKey) ? (
         <>
           <EditProfileButton client={client} surfaceKey={context.surfaceKey!} />
+          <ProfileInspectButton client={client} surfaceKey={context.surfaceKey!} />
           <ReconcileButton client={client} surfaceKey={context.surfaceKey!} />
         </>
       ) : null;

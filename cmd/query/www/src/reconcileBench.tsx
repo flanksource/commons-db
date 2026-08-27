@@ -32,6 +32,7 @@ import {
   timestampField,
   type KeyPairing,
   type ProfileDocument,
+  type ProfileField,
 } from "./reconcileModel";
 
 const KEY_MODES = [
@@ -352,7 +353,7 @@ function FieldList({
   onSelect,
   clock,
 }: {
-  fields: string[];
+  fields: ProfileField[];
   selected: string | undefined;
   onSelect: (field: string) => void;
   clock: string;
@@ -368,17 +369,19 @@ function FieldList({
   return (
     <ul className="mt-2 max-h-64 space-y-0.5 overflow-auto">
       {fields.map((field) => (
-        <li key={field}>
+        <li key={field.name}>
           <button
             type="button"
-            onClick={() => onSelect(field)}
+            onClick={() => onSelect(field.name)}
             className={cn(
               "flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs hover:bg-muted",
-              selected === field && "bg-primary/10 text-primary ring-1 ring-primary/30",
+              selected === field.name && "bg-primary/10 text-primary ring-1 ring-primary/30",
             )}
           >
-            <span className="truncate font-mono">{field}</span>
-            {field === clock && (
+            <span className="truncate font-mono">
+              {field.label && field.label !== field.name ? `${field.label} (${field.name})` : field.name}
+            </span>
+            {field.name === clock && (
               <Icon icon={UiClock} className="ml-auto shrink-0 text-[12px] text-muted-foreground" />
             )}
           </button>
