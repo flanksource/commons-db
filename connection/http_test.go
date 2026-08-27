@@ -89,3 +89,24 @@ func TestTLSConfigRequiresClientCertificateAndKeyTogether(t *testing.T) {
 		t.Fatal("expected incomplete mTLS credentials to fail")
 	}
 }
+
+// Every HTTP-family connection type must be constructible: the OpenSearch
+// browser routes elasticsearch through the same searcher, so rejecting the type
+// here fails an elasticsearch connection before it ever reaches its URL.
+func TestNewHTTPConnectionAcceptsEveryHTTPFamilyType(t *testing.T) {
+	for _, connectionType := range []string{
+		models.ConnectionTypeHTTP, models.ConnectionTypePrometheus, models.ConnectionTypeOpenSearch,
+		models.ConnectionTypeElasticSearch, models.ConnectionTypeLoki, models.ConnectionTypeJaeger,
+	} {
+		t.Run(connectionType, func(t *testing.T) {
+			model := models.Connection{Type: connectionType, URL: "https://example.com"}
+			got, err := NewHTTPConnection(newStubContext(&model), model)
+			if err != nil {
+				t.Fatalf("NewHTTPConnection(%s): %s", connectionType, err)
+			}
+			if got.URL != "https://example.com" {
+				t.Fatalf("NewHTTPConnection(%s) url = %q", connectionType, got.URL)
+			}
+		})
+	}
+}
