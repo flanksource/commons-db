@@ -40,7 +40,9 @@ func (filter inspectDatabaseFilter) Lookup(options *InspectFlags) (map[string]ap
 	if err != nil {
 		return nil, err
 	}
-	connection, err := filter.service.findConnection(database, options.connectionID)
+	raw, connection, err := filter.service.resolveConnection(resolveConnectionOptions{
+		Context: options.context, Database: database, ID: options.connectionID, RefreshSecrets: options.Refresh,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +50,7 @@ func (filter inspectDatabaseFilter) Lookup(options *InspectFlags) (map[string]ap
 	defer cancel()
 	inspected, err := filter.service.browser.inspectConnection(requestContext, connection, options.Database, "", "", options.Refresh)
 	if err != nil {
-		return nil, fmt.Errorf("inspect connection %q: %s", connection.Name, sanitizeConnectionError(err, connection))
+		return nil, fmt.Errorf("inspect connection %q: %s", connection.Name, sanitizeConnectionError(err, raw, connection))
 	}
 	options.inspected = &inspected
 	if options.Database == "" {

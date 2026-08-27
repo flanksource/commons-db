@@ -326,7 +326,8 @@ func NewHTTPConnection(ctx ConnectionContext, conn models.Connection) (HTTPConne
 	var httpConn HTTPConnection
 	switch conn.Type {
 	case models.ConnectionTypeHTTP, models.ConnectionTypePrometheus,
-		models.ConnectionTypeOpenSearch, models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
+		models.ConnectionTypeOpenSearch, models.ConnectionTypeElasticSearch,
+		models.ConnectionTypeLoki, models.ConnectionTypeJaeger:
 		if err := httpConn.FromModel(conn); err != nil {
 			return httpConn, err
 		}
