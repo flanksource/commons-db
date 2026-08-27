@@ -219,14 +219,16 @@ func (s *kubeletStub) context() context.Context {
 }
 
 // pagingStub serves conformanceIDs the way an index does: honouring from/size,
-// search_after and the point-in-time a cursor walk opens. It is a stub of the
+// search_after, point-in-time, and scroll cursors. It is a stub of the
 // mechanism, not of the answer — a stub that ignored from/size could not fail
 // the conformance suite.
 type pagingStub struct {
-	server     *httptest.Server
-	ids        []string
-	openedPITs int
-	closedPITs int
+	server         *httptest.Server
+	ids            []string
+	openedPITs     int
+	closedPITs     int
+	openedScrolls  int
+	clearedScrolls int
 }
 
 func newPagingStub(ids ...string) *pagingStub {
@@ -251,6 +253,20 @@ func newPagingStub(ids ...string) *pagingStub {
 			_, _ = fmt.Fprint(w, `{"pit_id":"pit-1","creation_time":1}`)
 			return
 		}
+		if strings.Contains(r.URL.Path, "/_search/scroll") {
+			if r.Method == http.MethodDelete {
+				stub.clearedScrolls++
+				_, _ = fmt.Fprint(w, `{"succeeded":true,"num_freed":1}`)
+				return
+			}
+			var start, size int
+			if _, err := fmt.Sscanf(r.URL.Query().Get("scroll_id"), "scroll-%d-%d", &start, &size); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			_, _ = fmt.Fprint(w, withScrollID(stub.hits(start, size), fmt.Sprintf("scroll-%d-%d", min(start+size, len(stub.ids)), size)))
+			return
+		}
 
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
@@ -269,7 +285,12 @@ func newPagingStub(ids ...string) *pagingStub {
 				start = int(value) + 1
 			}
 		}
-		_, _ = fmt.Fprint(w, stub.hits(start, size))
+		response := stub.hits(start, size)
+		if r.URL.Query().Get("scroll") != "" {
+			stub.openedScrolls++
+			response = withScrollID(response, fmt.Sprintf("scroll-%d-%d", min(start+size, len(stub.ids)), size))
+		}
+		_, _ = fmt.Fprint(w, response)
 	}))
 	return stub
 }
@@ -315,7 +336,7 @@ var _ = Describe("provider paging contract", func() {
 
 		runPagingConformance(pagingFixture{
 			name: "opensearch",
-			// Paged by search_after over a point-in-time, tailed by the same
+			// Paged by scroll by default, tailed by search_after with no snapshot
 			// search_after with no point-in-time at all. The two capabilities are
 			// served by one mechanism here, which is exactly why the suite asks
 			// about them separately.
@@ -333,9 +354,8 @@ var _ = Describe("provider paging contract", func() {
 					Order: query.Order{{Column: "seq", Unique: true}},
 				}
 			},
-			// The point-in-time is the resource that keeps a returned cursor
-			// resumable, so it is released only when that cursor is exhausted.
-			released: func() bool { return stub.closedPITs == stub.openedPITs && stub.openedPITs > 0 },
+			// The scroll context stays resumable until its cursor is exhausted.
+			released: func() bool { return stub.clearedScrolls == stub.openedScrolls && stub.openedScrolls > 0 },
 		})
 	})
 
@@ -363,7 +383,7 @@ var _ = Describe("provider paging contract", func() {
 					Order: query.Order{{Column: "seq", Unique: true}},
 				}
 			},
-			released: func() bool { return stub.closedPITs == stub.openedPITs && stub.openedPITs > 0 },
+			released: func() bool { return stub.clearedScrolls == stub.openedScrolls && stub.openedScrolls > 0 },
 		})
 	})
 

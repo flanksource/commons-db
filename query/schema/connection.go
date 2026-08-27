@@ -168,7 +168,7 @@ func tailoredBranch(typ string, cfg any) Schema {
 		props[name] = fs
 	}
 
-	if len(propProps) > 0 {
+	if len(propProps) > 0 && !isHTTPConnectionType(typ) {
 		properties := Schema{"type": "object", "title": "Properties", "properties": propProps}
 		if typ == models.ConnectionTypeClickHouse {
 			customizeClickHousePropertiesSchema(properties)
@@ -180,7 +180,21 @@ func tailoredBranch(typ string, cfg any) Schema {
 		props["properties"] = properties
 	}
 	if isHTTPConnectionType(typ) {
-		props["properties"] = httpAuthenticationSchema()
+		properties := httpAuthenticationSchema()
+		for name, property := range propProps {
+			properties["properties"].(Schema)[name] = property
+		}
+		if len(propertyRequired) > 0 {
+			properties["required"] = appendUnique(stringSlice(properties["required"]), propertyRequired...)
+			required = slices.DeleteFunc(required, func(value string) bool {
+				return slices.Contains(propertyRequired, value)
+			})
+			required = appendUnique(required, "properties")
+		}
+		if typ == models.ConnectionTypeOpenSearch || typ == models.ConnectionTypeElasticSearch {
+			customizeOpenSearchPropertiesSchema(properties)
+		}
+		props["properties"] = properties
 	}
 
 	then := Schema{}
@@ -197,6 +211,18 @@ func tailoredBranch(typ string, cfg any) Schema {
 			"required":   []string{"type"},
 		},
 		"then": then,
+	}
+}
+
+func customizeOpenSearchPropertiesSchema(properties Schema) {
+	field := properties["properties"].(Schema)[models.OpenSearchPropertyPagingMode].(Schema)
+	field["description"] = "Backend cursor used for complete reads and cursor paging."
+	field["enum"] = []string{models.OpenSearchPagingModeScroll, models.OpenSearchPagingModePIT}
+	field["default"] = models.OpenSearchPagingModeScroll
+	field["x-enum-display"] = "segmented"
+	field["x-enum-labels"] = map[string]string{
+		models.OpenSearchPagingModeScroll: "Scroll",
+		models.OpenSearchPagingModePIT:    "Point in time",
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 type openSearchWalk struct {
 	searcher *opensearch.Searcher
 	index    string
+	paging   openSearchPagingMode
 
 	// diagnostics is non-nil only for a debug run, and records the search this
 	// walk actually issues — the body with every runtime filter and time range
@@ -73,10 +74,133 @@ func (w openSearchWalk) run(
 				"this profile declares no order, so a cursor has nothing to resume after; declare `order:` ending in a unique column"))
 			return
 		}
-		w.byCursor(ctx, req, page, yield)
+		if req.Position.PIT != "" && w.paging != openSearchPagingPIT {
+			yield(query.Page{}, fmt.Errorf(
+				"this cursor uses point-in-time paging, but the connection is configured for scroll paging; restart the walk without the cursor"))
+			return
+		}
+		if req.Position.Scroll != "" && w.paging != openSearchPagingScroll {
+			yield(query.Page{}, fmt.Errorf(
+				"this cursor uses scroll paging, but the connection is configured for point-in-time paging; restart the walk without the cursor"))
+			return
+		}
+		if w.paging == openSearchPagingPIT {
+			w.byCursor(ctx, req, page, yield)
+			return
+		}
+		w.byScroll(ctx, req, page, yield)
 		return
 	}
 	w.byOffset(ctx, req, page, yield)
+}
+
+// byScroll serves cursor pages from OpenSearch's scroll API. Scroll is the
+// default backend cursor because it reads the same documents as an ordinary
+// index search while keeping one stable search context across the whole walk.
+func (w openSearchWalk) byScroll(
+	ctx context.Context,
+	req query.ProviderRequest,
+	page query.PageRequest,
+	yield func(query.Page, error) bool,
+) {
+	scrollID := req.Position.Scroll
+	releaseScroll := false
+	defer func() {
+		if !releaseScroll || scrollID == "" {
+			return
+		}
+		cleanup, cancel := context.NewContext(stdcontext.WithoutCancel(ctx.Context)).WithTimeout(10 * time.Second)
+		defer cancel()
+		if err := w.searcher.ClearScroll(cleanup, scrollID); err != nil {
+			ctx.Warnf("failed to clear opensearch scroll: %v", err)
+		}
+	}()
+
+	for {
+		raw, rows, capped, err := w.scroll(ctx, page.Limit, scrollID)
+		if err != nil {
+			releaseScroll = true
+			yield(query.Page{}, err)
+			return
+		}
+		if raw.ScrollID != "" {
+			scrollID = raw.ScrollID
+		}
+		current := query.Page{
+			Rows: rows, Total: openSearchTotal(raw), Truncated: capped, Scroll: scrollID,
+		}
+		current.HasMore = len(rows) == page.Limit && scrollID != ""
+		if current.HasMore {
+			keys, err := openSearchSortKeys(raw, req.Order)
+			if err != nil {
+				releaseScroll = true
+				yield(query.Page{}, err)
+				return
+			}
+			current.NextKeys = keys
+		}
+		releaseScroll = !current.HasMore
+		if !yield(current, nil) || !current.HasMore {
+			return
+		}
+	}
+}
+
+func (w openSearchWalk) scroll(
+	ctx context.Context,
+	pageSize int,
+	scrollID string,
+) (opensearch.Response, []query.Row, bool, error) {
+	if scrollID != "" {
+		details := map[string]any{"index": w.index, "limit": pageSize, "paging": "scroll", "scroll": scrollID}
+		w.diagnostics.RecordRequest("", nil, details)
+		started := time.Now()
+		raw, err := w.searcher.ScrollNext(ctx, opensearch.ScrollPageRequest{ID: scrollID})
+		return w.finishScroll(started, raw, openSearchRequest{limit: pageSize}, err)
+	}
+	built, err := w.build(openSearchPage{size: pageSize})
+	if err != nil {
+		return opensearch.Response{}, nil, false, err
+	}
+	body, err := built.encode()
+	if err != nil {
+		return opensearch.Response{}, nil, false, err
+	}
+	details := map[string]any{"index": w.index, "limit": built.limitParam(), "paging": "scroll"}
+	w.diagnostics.RecordRequest(body, nil, details)
+	started := time.Now()
+	raw, err := w.searcher.OpenScroll(ctx, opensearch.ScrollRequest{
+		Request: opensearch.Request{Index: w.index, Query: body, Limit: built.limitParam()},
+	})
+	return w.finishScroll(started, raw, built, err)
+}
+
+func (w openSearchWalk) finishScroll(
+	started time.Time,
+	raw opensearch.Response,
+	built openSearchRequest,
+	err error,
+) (opensearch.Response, []query.Row, bool, error) {
+	details := map[string]any{"index": w.index, "paging": "scroll"}
+	if err != nil {
+		w.diagnostics.RecordError(err)
+		w.diagnostics.RecordResponse(started, 0, details)
+		return opensearch.Response{}, nil, false, err
+	}
+	rows := w.mapRows(raw)
+	if w.diagnostics.WantsPreview() {
+		w.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
+	}
+	w.diagnostics.RecordResponse(started, len(rows), map[string]any{
+		"index": w.index, "paging": "scroll", "took": raw.Took, "timedOut": raw.TimedOut,
+		"total": raw.Hits.Total.Value, "relation": raw.Hits.Total.Relation,
+	})
+	if len(rows) != len(raw.Hits.Hits) {
+		return opensearch.Response{}, nil, false, fmt.Errorf(
+			"opensearch returned %d hits but mapped to %d rows; their positions no longer line up",
+			len(raw.Hits.Hits), len(rows))
+	}
+	return raw, rows, built.capped, nil
 }
 
 // byOffset serves from/size pages, bounded by the index result window.

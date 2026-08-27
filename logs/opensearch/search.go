@@ -158,17 +158,82 @@ func (t *Searcher) SearchRaw(ctx context.Context, q Request) (Response, error) {
 	if err != nil {
 		return Response{}, ctx.Oops().Wrapf(err, "error searching")
 	}
+	return decodeSearchResponse(ctx, "search", res)
+}
+
+// OpenScroll starts a scroll-backed snapshot read.
+func (t *Searcher) OpenScroll(ctx context.Context, request ScrollRequest) (Response, error) {
+	if request.Index == "" {
+		return Response{}, ctx.Oops().Errorf("index is empty")
+	}
+	limit, err := strconv.Atoi(request.Limit)
+	if err != nil || limit <= 0 {
+		return Response{}, ctx.Oops().Errorf("scroll limit must be greater than zero, got %q", request.Limit)
+	}
+	if request.KeepAlive <= 0 {
+		request.KeepAlive = DefaultScrollKeepAlive
+	}
+	res, err := t.client.Search(
+		t.client.Search.WithContext(ctx),
+		t.client.Search.WithIndex(request.Index),
+		t.client.Search.WithBody(strings.NewReader(request.Query)),
+		t.client.Search.WithSize(limit),
+		t.client.Search.WithScroll(request.KeepAlive),
+	)
+	if err != nil {
+		return Response{}, ctx.Oops().Wrapf(err, "error opening scroll")
+	}
+	return decodeSearchResponse(ctx, "open scroll", res)
+}
+
+// ScrollNext continues a scroll-backed snapshot read.
+func (t *Searcher) ScrollNext(ctx context.Context, request ScrollPageRequest) (Response, error) {
+	if request.ID == "" {
+		return Response{}, ctx.Oops().Errorf("scroll id is empty")
+	}
+	if request.KeepAlive <= 0 {
+		request.KeepAlive = DefaultScrollKeepAlive
+	}
+	res, err := t.client.Scroll(
+		t.client.Scroll.WithContext(ctx),
+		t.client.Scroll.WithScrollID(request.ID),
+		t.client.Scroll.WithScroll(request.KeepAlive),
+	)
+	if err != nil {
+		return Response{}, ctx.Oops().Wrapf(err, "error continuing scroll")
+	}
+	return decodeSearchResponse(ctx, "continue scroll", res)
+}
+
+// ClearScroll releases a scroll context.
+func (t *Searcher) ClearScroll(ctx context.Context, scrollID string) error {
+	if scrollID == "" {
+		return nil
+	}
+	res, err := t.client.ClearScroll(
+		t.client.ClearScroll.WithContext(ctx),
+		t.client.ClearScroll.WithScrollID(scrollID),
+	)
+	if err != nil {
+		return ctx.Oops().Wrapf(err, "error clearing scroll")
+	}
 	defer func() { _ = res.Body.Close() }()
-
 	if res.IsError() {
-		return Response{}, readOpenSearchError("search", res.StatusCode, res.Status(), res.Body)
+		return readOpenSearchError("clear scroll", res.StatusCode, res.Status(), res.Body)
 	}
+	return nil
+}
 
-	var r Response
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		return Response{}, ctx.Oops().Wrapf(err, "error parsing the response body")
+func decodeSearchResponse(ctx context.Context, operation string, res *opensearchapi.Response) (Response, error) {
+	defer func() { _ = res.Body.Close() }()
+	if res.IsError() {
+		return Response{}, readOpenSearchError(operation, res.StatusCode, res.Status(), res.Body)
 	}
-	return r, nil
+	var response Response
+	if err := json.NewDecoder(res.Body).Decode(&response); err != nil {
+		return Response{}, ctx.Oops().Wrapf(err, "error parsing %s response", operation)
+	}
+	return response, nil
 }
 
 var DefaultFieldMappingConfig = logs.FieldMappingConfig{

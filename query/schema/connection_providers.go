@@ -33,7 +33,10 @@ type httpConnection struct {
 type HTTPProvider struct{ httpConnection }
 
 // OpenSearchProvider extends the HTTP form for an OpenSearch endpoint.
-type OpenSearchProvider struct{ httpConnection }
+type OpenSearchProvider struct {
+	httpConnection
+	PagingMode string `json:"paging_mode" clicky:"property=paging_mode,title=Paging mode,order=5"`
+}
 
 // OpenTelemetryProvider delegates trace storage to a nested OpenSearch
 // connection while retaining its own first-class connection identity.

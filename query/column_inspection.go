@@ -25,6 +25,7 @@ type InspectionStatus struct {
 	Status  string                     `json:"status"`
 	Message string                     `json:"message,omitempty"`
 	Cache   []inspection.CacheMetadata `json:"cache,omitempty"`
+	Counts  map[string]int64           `json:"counts,omitempty"`
 }
 
 type ColumnInspectionProvider interface {
@@ -134,7 +135,9 @@ func inspectColumns(
 			break
 		}
 	}
-	return inspected, &InspectionStatus{Status: status, Message: partialMessage, Cache: result.Cache}, nil
+	return inspected, &InspectionStatus{
+		Status: status, Message: partialMessage, Cache: result.Cache, Counts: result.Counts,
+	}, nil
 }
 
 // InspectedField is the field an inspection probe asks about on behalf of this

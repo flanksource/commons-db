@@ -31,7 +31,7 @@ func (c Cursor) IsZero() bool { return c == "" }
 
 // cursorVersion is stamped into every cursor so a format change invalidates
 // outstanding cursors loudly rather than decoding them into wrong positions.
-const cursorVersion = 4
+const cursorVersion = 5
 
 // MaxCursorBytes bounds an issued cursor. A cursor travels as a query parameter
 // and is echoed in a response header, so this leaves room for the request path,
@@ -87,6 +87,7 @@ type cursorPayload struct {
 	Filters string            `json:"f"`
 	Keys    []cursorKey       `json:"k"`
 	PIT     string            `json:"p,omitempty"`
+	Scroll  string            `json:"r,omitempty"`
 	State   map[string][]byte `json:"s,omitempty"`
 
 	// Now is the clock the walk resolved its date math against, RFC3339Nano.
@@ -112,6 +113,10 @@ type CursorPosition struct {
 	// PIT identifies the backend snapshot this walk is reading, when it has
 	// one. Empty means the walk sees the index as it changes.
 	PIT string
+
+	// Scroll identifies the OpenSearch scroll context this walk is reading.
+	// It is mutually exclusive with PIT.
+	Scroll string
 
 	// State is what each processor carried forward from the previous page,
 	// keyed by its label. A processor that folds rows across the whole result —
@@ -149,39 +154,49 @@ type CursorScope struct {
 	Now time.Time
 }
 
-// EncodeCursor issues a cursor resuming after keys, which must be the sort
-// values of the last row of the page being returned, in the order's column
-// order. state is what each processor asked to carry into the next page, keyed
-// by its label, and may be nil.
-func EncodeCursor(scope CursorScope, keys []any, pit string, state map[string][]byte) (Cursor, error) {
-	if err := scope.Order.Pageable(); err != nil {
+// CursorEncoding is everything carried by one opaque cursor.
+type CursorEncoding struct {
+	Scope  CursorScope
+	Keys   []any
+	PIT    string
+	Scroll string
+	State  map[string][]byte
+}
+
+// EncodeCursor issues a cursor resuming after the last row of a page.
+func EncodeCursor(encoding CursorEncoding) (Cursor, error) {
+	if err := encoding.Scope.Order.Pageable(); err != nil {
 		return "", err
 	}
-	if len(keys) != len(scope.Order) {
-		return "", fmt.Errorf("cursor needs one key per order column: order has %d, got %d", len(scope.Order), len(keys))
+	if encoding.PIT != "" && encoding.Scroll != "" {
+		return "", fmt.Errorf("cursor cannot carry both a point-in-time and a scroll context")
 	}
-	filters, err := scope.fingerprint()
+	if len(encoding.Keys) != len(encoding.Scope.Order) {
+		return "", fmt.Errorf("cursor needs one key per order column: order has %d, got %d", len(encoding.Scope.Order), len(encoding.Keys))
+	}
+	filters, err := encoding.Scope.fingerprint()
 	if err != nil {
 		return "", err
 	}
-	inputs, err := scope.inputFingerprint()
+	inputs, err := encoding.Scope.inputFingerprint()
 	if err != nil {
 		return "", err
 	}
-	encodedKeys, err := encodeCursorKeys(keys)
+	encodedKeys, err := encodeCursorKeys(encoding.Keys)
 	if err != nil {
 		return "", err
 	}
 	payload, err := json.Marshal(cursorPayload{
 		Version: cursorVersion,
-		Profile: scope.Profile,
-		Order:   scope.Order.Fingerprint(),
+		Profile: encoding.Scope.Profile,
+		Order:   encoding.Scope.Order.Fingerprint(),
 		Inputs:  inputs,
 		Filters: filters,
 		Keys:    encodedKeys,
-		PIT:     pit,
-		State:   state,
-		Now:     encodeWalkClock(scope.Now),
+		PIT:     encoding.PIT,
+		Scroll:  encoding.Scroll,
+		State:   encoding.State,
+		Now:     encodeWalkClock(encoding.Scope.Now),
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode cursor: %w", err)
@@ -191,7 +206,7 @@ func EncodeCursor(scope CursorScope, keys []any, pit string, state map[string][]
 	if len(cursor) > MaxCursorBytes {
 		return "", fmt.Errorf(
 			"this walk's position no longer fits in a cursor (%d bytes, limit %d): %s",
-			len(cursor), MaxCursorBytes, cursorOverflowAdvice(state))
+			len(cursor), MaxCursorBytes, cursorOverflowAdvice(encoding.State))
 	}
 	return cursor, nil
 }
@@ -310,7 +325,10 @@ func DecodeCursor(c Cursor, scope CursorScope) (CursorPosition, error) {
 	if err != nil {
 		return CursorPosition{}, fmt.Errorf("%w: %v", ErrCursorStale, err)
 	}
-	return CursorPosition{Keys: keys, PIT: payload.PIT, State: payload.State}, nil
+	if payload.PIT != "" && payload.Scroll != "" {
+		return CursorPosition{}, fmt.Errorf("%w: it carries two backend cursor mechanisms", ErrCursorStale)
+	}
+	return CursorPosition{Keys: keys, PIT: payload.PIT, Scroll: payload.Scroll, State: payload.State}, nil
 }
 
 func encodeCursorKeys(values []any) ([]cursorKey, error) {
