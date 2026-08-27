@@ -9,7 +9,10 @@ import (
 	"strings"
 
 	context "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/types"
+	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -19,11 +22,15 @@ import (
 type openSearchStub struct {
 	server *httptest.Server
 
-	sizes      []string
-	bodies     []map[string]any
-	openedPITs int
-	closedPITs int
-	indexed    []string
+	sizes            []string
+	bodies           []map[string]any
+	openedPITs       int
+	closedPITs       int
+	openedScrolls    int
+	continuedScrolls int
+	clearedScrolls   int
+	scrollIDs        []string
+	indexed          []string
 }
 
 func newOpenSearchStub(hits func(call int) string) *openSearchStub {
@@ -46,6 +53,18 @@ func newOpenSearchStub(hits func(call int) string) *openSearchStub {
 			stub.openedPITs++
 			_, _ = fmt.Fprint(w, `{"pit_id":"pit-1","creation_time":1}`)
 			return
+		case strings.Contains(r.URL.Path, "/_search/scroll"):
+			if r.Method == http.MethodDelete {
+				stub.clearedScrolls++
+				_, _ = fmt.Fprint(w, `{"succeeded":true,"num_freed":1}`)
+				return
+			}
+			stub.continuedScrolls++
+			stub.scrollIDs = append(stub.scrollIDs, r.URL.Query().Get("scroll_id"))
+			response := hits(calls)
+			calls++
+			_, _ = fmt.Fprint(w, withScrollID(response, "scroll-1"))
+			return
 		case strings.HasSuffix(r.URL.Path, "/_field_caps"):
 			_, _ = fmt.Fprint(w, `{"fields":{"message":{"text":{"searchable":true,"aggregatable":false}}}}`)
 			return
@@ -57,10 +76,23 @@ func newOpenSearchStub(hits func(call int) string) *openSearchStub {
 			stub.bodies = append(stub.bodies, body)
 			response := hits(calls)
 			calls++
+			if r.URL.Query().Get("scroll") != "" {
+				stub.openedScrolls++
+				response = withScrollID(response, "scroll-1")
+			}
 			_, _ = fmt.Fprint(w, response)
 		}
 	}))
 	return stub
+}
+
+func withScrollID(response, scrollID string) string {
+	var decoded map[string]any
+	Expect(json.Unmarshal([]byte(response), &decoded)).To(Succeed())
+	decoded["_scroll_id"] = scrollID
+	encoded, err := json.Marshal(decoded)
+	Expect(err).ToNot(HaveOccurred())
+	return string(encoded)
 }
 
 func (s *openSearchStub) profile(name string, order query.Order) query.Profile {
@@ -180,7 +212,7 @@ var _ = Describe("opensearch provider", func() {
 	// A read of everything is not a caller asking for a deep offset: it is the
 	// provider choosing how to walk, and an ordered index is walked by the one
 	// strategy that reaches the end of it.
-	It("drains an ordered index by cursor so a read of everything passes the result window", func() {
+	It("drains an ordered index with the default scroll cursor", func() {
 		// The batch a drain asks for is the provider's, and the stub has to serve
 		// full batches for a short one to mean the end of the index — so the size
 		// on the wire is asserted rather than assumed.
@@ -207,8 +239,48 @@ var _ = Describe("opensearch provider", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rows).To(HaveLen(total))
 		Expect(stub.sizes).To(HaveEach(strconv.Itoa(batch)))
+		Expect(stub.openedScrolls).To(Equal(1))
+		Expect(stub.continuedScrolls).To(Equal(12))
+		Expect(stub.clearedScrolls).To(Equal(1))
+		Expect(stub.openedPITs).To(BeZero())
+	})
+
+	It("uses point-in-time paging when the connection selects it", func() {
+		stub := newOpenSearchStub(func(int) string { return response(1, "eq", hit("one", 1)) })
+		defer stub.server.Close()
+
+		profile := stub.profile("pit", query.Order{{Column: "seq", Unique: true}})
+		profile.Provider.Connection = "connection://search"
+		delete(profile.Provider.Options, "address")
+		database := connectionsDB(models.Connection{
+			ID: uuid.New(), Name: "search", Type: models.ConnectionTypeOpenSearch, URL: stub.server.URL,
+			Properties: types.JSONStringMap{"paging_mode": "pit"},
+		})
+
+		result, err := query.Execute(context.New().WithDB(database, nil), profile)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Rows).To(HaveLen(1))
 		Expect(stub.openedPITs).To(Equal(1))
 		Expect(stub.closedPITs).To(Equal(1))
+		Expect(stub.openedScrolls).To(BeZero())
+	})
+
+	It("rejects an invalid connection paging mode", func() {
+		stub := newOpenSearchStub(func(int) string { return response(1, "eq", hit("one", 1)) })
+		defer stub.server.Close()
+
+		profile := stub.profile("invalid-paging", query.Order{{Column: "seq", Unique: true}})
+		profile.Provider.Connection = "connection://search"
+		delete(profile.Provider.Options, "address")
+		database := connectionsDB(models.Connection{
+			ID: uuid.New(), Name: "search", Type: models.ConnectionTypeOpenSearch, URL: stub.server.URL,
+			Properties: types.JSONStringMap{"paging_mode": "search_after"},
+		})
+
+		_, err := query.Execute(context.New().WithDB(database, nil), profile)
+		Expect(err).To(MatchError(ContainSubstring(`invalid OpenSearch paging mode "search_after"`)))
+		Expect(stub.openedScrolls).To(BeZero())
+		Expect(stub.openedPITs).To(BeZero())
 	})
 
 	// Offset and cursor are both useful on the same profile: offset can jump to
@@ -234,7 +306,7 @@ var _ = Describe("opensearch provider", func() {
 	Describe("cursor paging", func() {
 		order := query.Order{{Column: "@timestamp"}, {Column: "_id", Unique: true}}
 
-		It("walks by search_after over a point-in-time it opens and closes", func() {
+		It("walks with one scroll context that it opens and clears", func() {
 			stub := newOpenSearchStub(func(call int) string {
 				if call == 0 {
 					return response(3, "eq", hit("one", 1, "one"), hit("two", 2, "two"))
@@ -249,16 +321,16 @@ var _ = Describe("opensearch provider", func() {
 				seen = append(seen, page.Rows...)
 			}
 			Expect(seen).To(HaveLen(3))
-			Expect(stub.openedPITs).To(Equal(1))
-			Expect(stub.closedPITs).To(Equal(1))
-
-			// The second search resumes after the first page's last sort values.
-			Expect(stub.bodies).To(HaveLen(2))
+			Expect(stub.openedScrolls).To(Equal(1))
+			Expect(stub.continuedScrolls).To(Equal(1))
+			Expect(stub.clearedScrolls).To(Equal(1))
+			Expect(stub.openedPITs).To(BeZero())
+			Expect(stub.scrollIDs).To(Equal([]string{"scroll-1"}))
+			Expect(stub.bodies).To(HaveLen(1))
 			Expect(stub.bodies[0]).ToNot(HaveKey("search_after"))
-			Expect(stub.bodies[1]["search_after"]).To(Equal([]any{float64(2), "two"}))
 		})
 
-		It("hands back a cursor that resumes the same point-in-time", func() {
+		It("hands back a cursor that resumes the same scroll context", func() {
 			stub := newOpenSearchStub(func(call int) string {
 				if call == 0 {
 					return response(3, "eq", hit("one", 1, "one"), hit("two", 2, "two"))
@@ -274,7 +346,7 @@ var _ = Describe("opensearch provider", func() {
 				break
 			}
 			Expect(next).ToNot(BeEmpty())
-			Expect(stub.closedPITs).To(BeZero())
+			Expect(stub.clearedScrolls).To(BeZero())
 
 			for page, err := range query.ExecutePages(context.New(), stub.profile("cursored", order), query.PageRequest{Limit: 2, Cursor: next}) {
 				Expect(err).ToNot(HaveOccurred())
@@ -282,16 +354,17 @@ var _ = Describe("opensearch provider", func() {
 				Expect(page.Rows[0]).To(HaveKeyWithValue("message", "three"))
 				Expect(page.Next).To(BeEmpty())
 			}
-			Expect(stub.bodies).To(HaveLen(2))
-			Expect(stub.bodies[1]["search_after"]).To(Equal([]any{float64(2), "two"}))
-			Expect(stub.bodies[1]["pit"]).To(Equal(map[string]any{"id": "pit-1", "keep_alive": "60s"}))
-			Expect(stub.closedPITs).To(Equal(1))
+			Expect(stub.bodies).To(HaveLen(1))
+			Expect(stub.openedScrolls).To(Equal(1))
+			Expect(stub.continuedScrolls).To(Equal(1))
+			Expect(stub.scrollIDs).To(Equal([]string{"scroll-1"}))
+			Expect(stub.clearedScrolls).To(Equal(1))
 		})
 
-		// A page carrying a cursor must leave its point-in-time alive, or the
+		// A page carrying a cursor must leave its scroll context alive, or the
 		// cursor it just returned cannot be resumed. An abandoned cursor expires
-		// under the PIT keepalive.
-		It("keeps the point-in-time alive while a returned cursor can resume it", func() {
+		// under the scroll keepalive.
+		It("keeps the scroll context alive while a returned cursor can resume it", func() {
 			stub := newOpenSearchStub(func(int) string {
 				return response(9, "eq", hit("one", 1, "one"), hit("two", 2, "two"))
 			})
@@ -301,7 +374,40 @@ var _ = Describe("opensearch provider", func() {
 				Expect(err).ToNot(HaveOccurred())
 				break
 			}
-			Expect(stub.closedPITs).To(BeZero())
+			Expect(stub.clearedScrolls).To(BeZero())
+		})
+
+		It("refuses to resume a cursor after the connection paging mode changes", func() {
+			stub := newOpenSearchStub(func(int) string {
+				return response(9, "eq", hit("one", 1, "one"), hit("two", 2, "two"))
+			})
+			defer stub.server.Close()
+
+			profile := stub.profile("mode-changed", order)
+			profile.Provider.Connection = "connection://search"
+			delete(profile.Provider.Options, "address")
+			connectionID := uuid.New()
+			pitDatabase := connectionsDB(models.Connection{
+				ID: connectionID, Name: "search", Type: models.ConnectionTypeOpenSearch, URL: stub.server.URL,
+				Properties: types.JSONStringMap{"paging_mode": "pit"},
+			})
+			var next query.Cursor
+			for page, err := range query.ExecutePages(context.New().WithDB(pitDatabase, nil), profile,
+				query.PageRequest{Limit: 2, Strategy: query.PagingCursor}) {
+				Expect(err).ToNot(HaveOccurred())
+				next = page.Next
+				break
+			}
+			Expect(next).ToNot(BeEmpty())
+
+			scrollDatabase := connectionsDB(models.Connection{
+				ID: connectionID, Name: "search", Type: models.ConnectionTypeOpenSearch, URL: stub.server.URL,
+			})
+			_, err := query.CollectRows(query.Rows(query.ExecutePages(
+				context.New().WithDB(scrollDatabase, nil), profile, query.PageRequest{Limit: 2, Cursor: next})))
+			Expect(err).To(MatchError(ContainSubstring("cursor uses point-in-time paging")))
+			Expect(err).To(MatchError(ContainSubstring("connection is configured for scroll paging")))
+			Expect(stub.openedScrolls).To(BeZero())
 		})
 
 		It("refuses a cursor on a profile that declares no order", func() {

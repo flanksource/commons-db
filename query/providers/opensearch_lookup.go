@@ -8,14 +8,14 @@ import (
 )
 
 func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.ProviderRequest, binding query.ColumnFilterBinding, search string, limit int) ([]query.FilterOption, *query.Total, error) {
-	searcher, options, err := openSearchClient(ctx, req)
+	runtime, err := openSearchClient(ctx, req)
 	if err != nil {
 		return nil, nil, err
 	}
 	var timeFieldMapping *esdsl.TimeFieldMapping
-	if options.Search != nil {
+	if runtime.options.Search != nil {
 		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
-			Searcher: searcher, Index: options.Index, Search: *options.Search,
+			Searcher: runtime.searcher, Index: runtime.options.Index, Search: *runtime.options.Search,
 			Params: openSearchParamBindings(req), Inspection: req.Inspection,
 		})
 		if err != nil {
@@ -24,31 +24,31 @@ func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.Prov
 	}
 	// A value lookup reads an aggregation rather than hits, so it wants the
 	// query body without a page position on it.
-	request, err := buildOpenSearchRequest(req, options, openSearchPage{}, timeFieldMapping)
+	request, err := buildOpenSearchRequest(req, runtime.options, openSearchPage{}, timeFieldMapping)
 	if err != nil {
 		return nil, nil, err
 	}
-	return lookupOpenSearchFilterValues(ctx, searcher, options.Index, request.body, binding, search, limit)
+	return lookupOpenSearchFilterValues(ctx, runtime.searcher, runtime.options.Index, request.body, binding, search, limit)
 }
 
 func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.ProviderRequest, binding query.ColumnFilterBinding, search string, limit int) ([]query.FilterOption, *query.Total, error) {
-	searcher, options, err := openTelemetrySearchClient(ctx, req)
+	runtime, err := openTelemetrySearchClient(ctx, req)
 	if err != nil {
 		return nil, nil, err
 	}
-	structured := openTelemetrySearch(options)
+	structured := openTelemetrySearch(runtime.options)
 	timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
-		Searcher: searcher, Index: options.Index, Search: structured,
+		Searcher: runtime.searcher, Index: runtime.options.Index, Search: structured,
 		Params: openSearchParamBindings(req), Inspection: req.Inspection,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	request, err := buildOpenTelemetryRequest(req, options, openSearchPage{}, timeFieldMapping)
+	request, err := buildOpenTelemetryRequest(req, runtime.options, openSearchPage{}, timeFieldMapping)
 	if err != nil {
 		return nil, nil, err
 	}
-	return lookupOpenSearchFilterValues(ctx, searcher, options.Index, request.body, binding, search, limit)
+	return lookupOpenSearchFilterValues(ctx, runtime.searcher, runtime.options.Index, request.body, binding, search, limit)
 }
 
 // lookupOpenSearchFilterValues adapts the searcher's distinct-value lookup to

@@ -22,6 +22,8 @@ type Backend struct {
 // walk: each search extends it.
 const DefaultPITKeepAlive = time.Minute
 
+const DefaultScrollKeepAlive = time.Minute
+
 // +kubebuilder:object:generate=true
 type Request struct {
 	Index string `json:"index" template:"true"`
@@ -34,6 +36,16 @@ type Request struct {
 	// PIT pins the search to a point-in-time, so consecutive pages of one walk
 	// read the same view of the index.
 	PIT string `json:"-"`
+}
+
+type ScrollRequest struct {
+	Request
+	KeepAlive time.Duration
+}
+
+type ScrollPageRequest struct {
+	ID        string
+	KeepAlive time.Duration
 }
 
 type TotalHitsInfo struct {

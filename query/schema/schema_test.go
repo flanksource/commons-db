@@ -146,7 +146,15 @@ var _ = Describe("Connection schema", func() {
 		props := then["properties"].(schema.Schema)
 		Expect(props).To(HaveKey("url"))
 		Expect(props).To(HaveKey("insecure_tls"))
-		Expect(props["properties"].(schema.Schema)["properties"].(schema.Schema)).To(HaveKey("authType"))
+		settings := props["properties"].(schema.Schema)["properties"].(schema.Schema)
+		Expect(settings).To(HaveKey("authType"))
+		Expect(settings["paging_mode"]).To(Equal(schema.Schema{
+			"type": "string", "title": "Paging mode",
+			"description": "Backend cursor used for complete reads and cursor paging.",
+			"enum":        []string{"scroll", "pit"}, "default": "scroll",
+			"x-enum-display": "segmented", "x-enum-labels": map[string]string{"scroll": "Scroll", "pit": "Point in time"},
+			"x-clicky-order": float64(5),
+		}))
 	})
 
 	It("scopes OpenTelemetry to a required nested OpenSearch connection", func() {

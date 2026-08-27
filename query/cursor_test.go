@@ -97,7 +97,7 @@ var _ = Describe("Cursor", func() {
 	})
 
 	It("round-trips the position it was issued for", func() {
-		cursor, err := query.EncodeCursor(scope, keys, "pit-1", nil)
+		cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: keys, PIT: "pit-1"})
 		Expect(err).ToNot(HaveOccurred())
 
 		position, err := query.DecodeCursor(cursor, scope)
@@ -106,9 +106,25 @@ var _ = Describe("Cursor", func() {
 		Expect(position.PIT).To(Equal("pit-1"))
 	})
 
+	It("round-trips an OpenSearch scroll position", func() {
+		cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: keys, Scroll: "scroll-1"})
+		Expect(err).ToNot(HaveOccurred())
+
+		position, err := query.DecodeCursor(cursor, scope)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(position).To(Equal(query.CursorPosition{Keys: keys, Scroll: "scroll-1"}))
+	})
+
+	It("refuses two backend cursor mechanisms", func() {
+		_, err := query.EncodeCursor(query.CursorEncoding{
+			Scope: scope, Keys: keys, PIT: "pit-1", Scroll: "scroll-1",
+		})
+		Expect(err).To(MatchError(ContainSubstring("both a point-in-time and a scroll context")))
+	})
+
 	It("round-trips unsigned keys above JSON's exact integer range", func() {
 		large := uint64(1<<63 + 17)
-		cursor, err := query.EncodeCursor(scope, []any{"2026-01-01T00:00:00Z", large}, "", nil)
+		cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: []any{"2026-01-01T00:00:00Z", large}})
 		Expect(err).ToNot(HaveOccurred())
 
 		position, err := query.DecodeCursor(cursor, scope)
@@ -121,7 +137,7 @@ var _ = Describe("Cursor", func() {
 	// a resumed request brings with it.
 	It("carries each processor's state back to the page that resumes", func() {
 		state := map[string][]byte{"cel.dedupe": {0x01, 0x02}, "logs.parse": {0xff}}
-		cursor, err := query.EncodeCursor(scope, keys, "", state)
+		cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: keys, State: state})
 		Expect(err).ToNot(HaveOccurred())
 
 		position, err := query.DecodeCursor(cursor, scope)
@@ -133,7 +149,7 @@ var _ = Describe("Cursor", func() {
 		state := map[string][]byte{
 			"java.stacktrace": bytes.Repeat([]byte("\tat com.acme.billing.InvoiceJob.run(InvoiceJob.java:64)\n"), 200),
 		}
-		cursor, err := query.EncodeCursor(scope, keys, "", state)
+		cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: keys, State: state})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(len(cursor)).To(BeNumerically("<=", query.MaxCursorBytes))
 
@@ -151,7 +167,7 @@ var _ = Describe("Cursor", func() {
 			copy(stateBytes[offset:], digest[:])
 		}
 		state := map[string][]byte{"cel.dedupe": stateBytes}
-		_, err := query.EncodeCursor(scope, keys, "", state)
+		_, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: keys, State: state})
 		Expect(err).To(MatchError(ContainSubstring("no longer fits in a cursor")))
 		Expect(err).To(MatchError(ContainSubstring("cel.dedupe")))
 	})
@@ -159,19 +175,19 @@ var _ = Describe("Cursor", func() {
 	// A cursor holds one key per ordered column; anything else would resume from
 	// a position the order cannot locate.
 	It("refuses to issue a cursor whose keys do not match the order", func() {
-		_, err := query.EncodeCursor(scope, []any{"only-one"}, "", nil)
+		_, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: []any{"only-one"}})
 		Expect(err).To(MatchError(ContainSubstring("one key per order column")))
 	})
 
 	It("refuses to issue a cursor for an order that cannot be paged", func() {
 		unordered := scope
 		unordered.Order = query.Order{{Column: "created_at"}}
-		_, err := query.EncodeCursor(unordered, []any{"x"}, "", nil)
+		_, err := query.EncodeCursor(query.CursorEncoding{Scope: unordered, Keys: []any{"x"}})
 		Expect(err).To(MatchError(ContainSubstring("not declared unique")))
 	})
 
 	Describe("staleness", func() {
-		cursor, _ := query.EncodeCursor(scope, keys, "", nil)
+		cursor, _ := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: keys})
 
 		// Cursors issued before compressed transport must not be mistaken for the
 		// current format.
@@ -228,7 +244,7 @@ var _ = Describe("Cursor", func() {
 		first := scopeWith(map[string]any{"tenant": "acme", "limit": 50, "offset": 0})
 		second := scopeWith(map[string]any{"tenant": "acme", "limit": 200, "offset": 400})
 
-		cursor, err := query.EncodeCursor(first, keys, "", nil)
+		cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: first, Keys: keys})
 		Expect(err).ToNot(HaveOccurred())
 
 		position, err := query.DecodeCursor(cursor, second)
@@ -255,7 +271,7 @@ var _ = Describe("Cursor", func() {
 		}
 
 		It("is carried by the cursor so a later page resolves the same window", func() {
-			cursor, err := query.EncodeCursor(pinnedScope(walkClock), keys, "", nil)
+			cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: pinnedScope(walkClock), Keys: keys})
 			Expect(err).ToNot(HaveOccurred())
 
 			pinned, ok := query.CursorWalkClock(cursor)
@@ -269,7 +285,7 @@ var _ = Describe("Cursor", func() {
 		})
 
 		It("stales the cursor when a later page resolves under a different clock", func() {
-			cursor, err := query.EncodeCursor(pinnedScope(walkClock), keys, "", nil)
+			cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: pinnedScope(walkClock), Keys: keys})
 			Expect(err).ToNot(HaveOccurred())
 
 			_, err = query.DecodeCursor(cursor, pinnedScope(walkClock.Add(time.Second)))
@@ -278,7 +294,7 @@ var _ = Describe("Cursor", func() {
 		})
 
 		It("is absent from a cursor that pinned none", func() {
-			cursor, err := query.EncodeCursor(scope, keys, "", nil)
+			cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: keys})
 			Expect(err).ToNot(HaveOccurred())
 
 			_, ok := query.CursorWalkClock(cursor)

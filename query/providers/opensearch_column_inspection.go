@@ -26,15 +26,15 @@ func (opensearchProvider) InspectColumnFilters(
 	req query.ProviderRequest,
 	columns []query.ColumnDef,
 ) (query.ColumnInspectionResult, error) {
-	searcher, options, err := openSearchClient(ctx, req)
+	runtime, err := openSearchClient(ctx, req)
 	if err != nil {
 		return query.ColumnInspectionResult{}, err
 	}
-	return inspectOpenSearchColumnFilters(ctx, req, columns, searcher, openSearchInspectionSource{
-		Index:  options.Index,
-		Search: options.Search,
+	return inspectOpenSearchColumnFilters(ctx, req, columns, runtime.searcher, openSearchInspectionSource{
+		Index:  runtime.options.Index,
+		Search: runtime.options.Search,
 		Build: func(mapping *esdsl.TimeFieldMapping) (openSearchRequest, error) {
-			return buildOpenSearchRequest(req, options, openSearchPage{}, mapping)
+			return buildOpenSearchRequest(req, runtime.options, openSearchPage{}, mapping)
 		},
 	})
 }

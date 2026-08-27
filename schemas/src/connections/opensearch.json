@@ -352,6 +352,22 @@
             "none": "None",
             "oauth": "OAuth"
           }
+        },
+        "paging_mode": {
+          "default": "scroll",
+          "description": "Backend cursor used for complete reads and cursor paging.",
+          "enum": [
+            "scroll",
+            "pit"
+          ],
+          "title": "Paging mode",
+          "type": "string",
+          "x-clicky-order": 5,
+          "x-enum-display": "segmented",
+          "x-enum-labels": {
+            "pit": "Point in time",
+            "scroll": "Scroll"
+          }
         }
       },
       "required": [

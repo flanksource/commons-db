@@ -268,7 +268,9 @@ var _ = Describe("cel.dedupe", func() {
 				Profile: "logs",
 				Order:   query.Order{{Column: "id", Unique: true}},
 			}
-			_, err = query.EncodeCursor(scope, []any{"last-row"}, "", map[string][]byte{"cel.dedupe": state})
+			_, err = query.EncodeCursor(query.CursorEncoding{
+				Scope: scope, Keys: []any{"last-row"}, State: map[string][]byte{"cel.dedupe": state},
+			})
 			Expect(err).To(MatchError(ContainSubstring("no longer fits in a cursor")))
 			Expect(err).To(MatchError(ContainSubstring("narrow the query or drop the processor")))
 		})
