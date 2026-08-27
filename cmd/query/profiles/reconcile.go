@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/flanksource/clicky/rpc"
+	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -67,6 +69,9 @@ func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileF
 	}
 
 	queryCtx := s.context().Wrap(ctx)
+	if request, ok := rpc.RequestFromContext(ctx); ok {
+		queryCtx = devtools.WithRequestRecorder(queryCtx, request)
+	}
 	result, err := query.ReconcileProfiles(queryCtx, query.ReconcileRun{
 		Source:        source.Profile,
 		Dest:          dest.Profile,
