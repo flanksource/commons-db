@@ -23,7 +23,7 @@ type InspectFlags struct {
 	Target     string `flag:"target" help:"Table, view, index, alias, data stream, or pattern to inspect"`
 	TargetKind string `flag:"target-kind" hidden:"true" help:"OpenSearch target kind"`
 	Sample     bool   `flag:"sample" help:"Sample the selected target to resolve cardinality and auto-filters"`
-	Refresh    bool   `flag:"refresh" help:"Refresh cached inspection metadata"`
+	Refresh    bool   `flag:"refresh" help:"Refresh cached inspection metadata and re-read connection secrets"`
 
 	service      *Service
 	connectionID string
@@ -181,7 +181,12 @@ func (s *Service) Inspect(ctx context.Context, id string, options InspectFlags) 
 	if err != nil {
 		return nil, err
 	}
-	connection, err := s.findConnection(database, id)
+	// Resolved before the inspection deadline starts: a secret store can take
+	// several seconds per lookup, and that budget belongs to hydration, not to
+	// the catalog request it precedes.
+	raw, connection, err := s.resolveConnection(resolveConnectionOptions{
+		Context: ctx, Database: database, ID: id, RefreshSecrets: options.Refresh,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +200,7 @@ func (s *Service) Inspect(ctx context.Context, id string, options InspectFlags) 
 			requestContext, connection, options.Database, options.Target, options.TargetKind, options.Refresh,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("inspect connection %q: %s", connection.Name, sanitizeConnectionError(err, connection))
+			return nil, fmt.Errorf("inspect connection %q: %s", connection.Name, sanitizeConnectionError(err, raw, connection))
 		}
 	}
 	if options.Target != "" && inspected.Kind == "opensearch" && inspected.Selected == nil {
@@ -203,7 +208,7 @@ func (s *Service) Inspect(ctx context.Context, id string, options InspectFlags) 
 			requestContext, connection, options.Database, options.Target, options.TargetKind, options.Refresh,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("inspect connection %q: %s", connection.Name, sanitizeConnectionError(err, connection))
+			return nil, fmt.Errorf("inspect connection %q: %s", connection.Name, sanitizeConnectionError(err, raw, connection))
 		}
 	}
 	targets := connectionInspectionTargets(id, options, inspected)
@@ -234,7 +239,7 @@ func (s *Service) Inspect(ctx context.Context, id string, options InspectFlags) 
 			Inspection:        query.InspectionOptions{Refresh: options.Refresh},
 		})
 		if err != nil {
-			return nil, fmt.Errorf("sample connection %q target %q: %s", connection.Name, target.Name, sanitizeConnectionError(err, connection))
+			return nil, fmt.Errorf("sample connection %q target %q: %s", connection.Name, target.Name, sanitizeConnectionError(err, raw, connection))
 		}
 		result = mergeConnectionInspectionResult(result, query.NewProfileInspectionResult(profile, sample))
 	}
