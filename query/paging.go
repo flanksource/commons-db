@@ -59,6 +59,19 @@ type PageRequest struct {
 	// only.
 	Cursor Cursor
 
+	// Sort names the column this request orders by, overriding the order the
+	// profile declared. It is a public column name, not a backend field: the
+	// profile resolves it through the same target inference its filters use, so
+	// a caller never has to know what the backend calls anything.
+	//
+	// The requested column leads the order rather than replacing it — the
+	// profile's declared tiebreaker still has to end it, or paging past the
+	// first page would have no stable meaning. See Profile.RequestedOrder.
+	Sort string
+
+	// Desc orders Sort descending. It is inert without one.
+	Desc bool
+
 	// Strategy chooses how to page when the request does not already say.
 	//
 	// It is needed because the first page of a cursor walk carries no cursor,
@@ -182,6 +195,11 @@ type Page struct {
 	// snapshot rather than on the index as it has since become.
 	PIT string
 
+	// Scroll is the OpenSearch scroll context that resumes this page. It is
+	// mutually exclusive with PIT and travels inside Next for the same reason:
+	// the next request must continue the backend cursor that produced this page.
+	Scroll string
+
 	// State is what each processor asked to carry into the next page, keyed by
 	// label. Like PIT it travels inside Next rather than being returned to the
 	// caller, so a resumed walk hands each processor back its own memory.
@@ -231,7 +249,7 @@ func NewPageInfo(request PageRequest, page Page) PageInfo {
 		total := page.Total.Value
 		info.Total = &total
 	}
-	if page.PIT != "" {
+	if page.PIT != "" || page.Scroll != "" {
 		info.Consistency = "snapshot"
 	}
 	return info

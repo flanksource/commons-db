@@ -58,6 +58,11 @@ func (p sqlProvider) PagingModes() query.PagingMode {
 	return query.PagingOffset | query.PagingCursor
 }
 
+// SupportsRequestSort reports yes: the order reaches the statement as ORDER BY
+// and the keyset resume clause is built from the same columns, so a sort the
+// request names is applied by the backend rather than approximated here.
+func (p sqlProvider) SupportsRequestSort() bool { return true }
+
 func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
 	var result []query.Row
 	for page, err := range p.Pages(ctx, req, query.PageRequest{Limit: query.DefaultMaxPageSize}) {

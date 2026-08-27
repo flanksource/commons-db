@@ -103,6 +103,10 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	result.ColumnSortKeys, err = p.ColumnSortKeys()
+	if err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
 	return result, nil
 }
 

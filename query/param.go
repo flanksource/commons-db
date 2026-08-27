@@ -38,15 +38,18 @@ const (
 )
 
 // ParamRole assigns a profile parameter to a first-class table control. Filter
-// is the default; limit/offset drive the pager and time-from/time-to are paired
-// into the table's date-range control. Cursor is a reserved transport parameter
-// because its provider-owned position must never be rendered into query text.
+// is the default; limit/offset drive the pager, sort/order are paired into the
+// table's column sort and time-from/time-to are paired into its date-range
+// control. Cursor is a reserved transport parameter because its provider-owned
+// position must never be rendered into query text.
 type ParamRole string
 
 const (
 	ParamRoleFilter   ParamRole = "filter"
 	ParamRoleLimit    ParamRole = "limit"
 	ParamRoleOffset   ParamRole = "offset"
+	ParamRoleSort     ParamRole = "sort"
+	ParamRoleOrder    ParamRole = "order"
 	ParamRoleTimeFrom ParamRole = "time-from"
 	ParamRoleTimeTo   ParamRole = "time-to"
 )

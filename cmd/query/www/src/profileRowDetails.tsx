@@ -39,11 +39,17 @@ type ClickyTableNode = ClickyNode & {
 type DefaultResultProps = {
   download?: ClickyDownloadOptions;
   pagination?: ClickyProps["pagination"];
+  // The default view takes the sort as one control — the current value and the
+  // setter together — where Clicky takes them as two separate props.
+  sort?: {
+    value: ClickyProps["sort"];
+    onChange: NonNullable<ClickyProps["onSortChange"]>;
+  };
 };
 
 export type ProfileRowDetailsRemoteProps = Pick<
   ClickyProps,
-  "download" | "pagination" | "url" | "dataFormat"
+  "download" | "pagination" | "sort" | "onSortChange" | "url" | "dataFormat"
 >;
 
 // The URL travels with the rows so the view switcher and the export menu have
@@ -68,6 +74,12 @@ export function profileRowDetailsRemoteProps(
       : {}),
     ...(resultProps.download ? { download: resultProps.download } : {}),
     ...(resultProps.pagination ? { pagination: resultProps.pagination } : {}),
+    // A server-paged table sorts through the query rather than in the browser,
+    // so dropping this is what left its headers inert. It arrives as one
+    // control and is handed on as the two props the table takes.
+    ...(resultProps.sort
+      ? { sort: resultProps.sort.value, onSortChange: resultProps.sort.onChange }
+      : {}),
   };
 }
 

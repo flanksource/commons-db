@@ -32,7 +32,9 @@ func executeParams(r *http.Request, p query.Profile) (map[string]any, error) {
 	params := map[string]any{}
 	for key, values := range r.URL.Query() {
 		if reservedParam(key) || p.HasParamRoleName(query.ParamRoleLimit, key) ||
-			p.HasParamRoleName(query.ParamRoleOffset, key) || len(values) == 0 {
+			p.HasParamRoleName(query.ParamRoleOffset, key) ||
+			p.HasParamRoleName(query.ParamRoleSort, key) ||
+			p.HasParamRoleName(query.ParamRoleOrder, key) || len(values) == 0 {
 			continue
 		}
 		// A list param may repeat its key; a scalar one keeps taking the first.

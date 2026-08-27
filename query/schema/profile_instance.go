@@ -35,12 +35,19 @@ func ProfileInstance(p query.Profile) (Schema, error) {
 			filterByColumn[binding.Column] = binding
 		}
 	}
+	sortKeys, err := p.ColumnSortKeys()
+	if err != nil {
+		return nil, err
+	}
 	columns := make([]any, 0, len(p.Columns))
 	for _, c := range p.Columns {
 		if c.Hidden {
 			continue
 		}
 		col := Schema{"name": c.Name, "label": labelOr(c.Label, c.Name)}
+		if key, ok := sortKeys[c.Name]; ok {
+			col["sortKey"] = key
+		}
 		if binding, ok := filterByColumn[c.Name]; ok {
 			filter := Schema{
 				"key": binding.Key, "kind": string(binding.Kind), "multi": binding.Multi, "lookup": binding.Lookup,

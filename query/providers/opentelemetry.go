@@ -41,11 +41,21 @@ type openTelemetryOptions struct {
 	Search *esdsl.Search `json:"search,omitempty"`
 }
 
-// PagingModes matches the OpenSearch provider it is backed by: from/size inside
-// the index result window, search_after over a point-in-time past it.
+type openTelemetryRuntime struct {
+	searcher *opensearch.Searcher
+	options  openTelemetryOptions
+	paging   openSearchPagingMode
+}
+
+// PagingModes matches the nested OpenSearch connection: from/size inside the
+// index result window and its configured backend cursor past it.
 func (openTelemetryProvider) PagingModes() query.PagingMode {
 	return query.PagingOffset | query.PagingCursor
 }
+
+// SupportsRequestSort reports yes, for the same reason OpenSearch does: it is
+// the same search body underneath.
+func (openTelemetryProvider) SupportsRequestSort() bool { return true }
 
 func (p openTelemetryProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
 	return drainOpenSearch(ctx, p, req)
@@ -56,21 +66,21 @@ func (openTelemetryProvider) InspectColumnFilters(
 	req query.ProviderRequest,
 	columns []query.ColumnDef,
 ) (query.ColumnInspectionResult, error) {
-	searcher, options, err := openTelemetrySearchClient(ctx, req)
+	runtime, err := openTelemetrySearchClient(ctx, req)
 	if err != nil {
 		return query.ColumnInspectionResult{}, err
 	}
-	search := openTelemetrySearch(options)
+	search := openTelemetrySearch(runtime.options)
 	return inspectOpenSearchColumnFilters(
 		ctx,
 		req,
-		openTelemetryInspectionColumns(columns, options),
-		searcher,
+		openTelemetryInspectionColumns(columns, runtime.options),
+		runtime.searcher,
 		openSearchInspectionSource{
-			Index:  options.Index,
+			Index:  runtime.options.Index,
 			Search: &search,
 			Build: func(mapping *esdsl.TimeFieldMapping) (openSearchRequest, error) {
-				return buildOpenTelemetryRequest(req, options, openSearchPage{}, mapping)
+				return buildOpenTelemetryRequest(req, runtime.options, openSearchPage{}, mapping)
 			},
 		},
 	)
@@ -102,14 +112,14 @@ func openTelemetryInspectionColumns(columns []query.ColumnDef, options openTelem
 // index; only the row shape differs.
 func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
 	return func(yield func(query.Page, error) bool) {
-		searcher, options, err := openTelemetrySearchClient(ctx, req)
+		runtime, err := openTelemetrySearchClient(ctx, req)
 		if err != nil {
 			yield(query.Page{}, err)
 			return
 		}
-		search := openTelemetrySearch(options)
+		search := openTelemetrySearch(runtime.options)
 		timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
-			Searcher: searcher, Index: options.Index, Search: search,
+			Searcher: runtime.searcher, Index: runtime.options.Index, Search: search,
 			Params: openSearchParamBindings(req), Inspection: req.Inspection,
 		})
 		if err != nil {
@@ -117,13 +127,14 @@ func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequ
 			return
 		}
 		walk := openSearchWalk{
-			searcher: searcher,
-			index:    options.Index,
+			searcher: runtime.searcher,
+			index:    runtime.options.Index,
+			paging:   runtime.paging,
 			build: func(position openSearchPage) (openSearchRequest, error) {
-				return buildOpenTelemetryRequest(req, options, position, timeFieldMapping)
+				return buildOpenTelemetryRequest(req, runtime.options, position, timeFieldMapping)
 			},
 			mapRows: func(raw opensearch.Response) []query.Row {
-				return openTelemetryRows(raw, options)
+				return openTelemetryRows(raw, runtime.options)
 			},
 		}
 		walk.run(ctx, req, page, yield)
@@ -145,39 +156,42 @@ func openTelemetryRows(result opensearch.Response, options openTelemetryOptions)
 	return rows
 }
 
-func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (*opensearch.Searcher, openTelemetryOptions, error) {
+func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (openTelemetryRuntime, error) {
 	if req.Connection == "" {
-		return nil, openTelemetryOptions{}, fmt.Errorf("opentelemetry connection is required")
+		return openTelemetryRuntime{}, fmt.Errorf("opentelemetry connection is required")
 	}
 	options, err := query.DecodeOptions[openTelemetryOptions](req.Options)
 	if err != nil {
-		return nil, options, err
+		return openTelemetryRuntime{}, err
 	}
 	// options.params was the ad-hoc predecessor of options.search. Decoding is
 	// lenient, so a profile that still carries it would otherwise lose every
 	// filter it declares without a word.
 	if _, legacy := req.Options["params"]; legacy {
-		return nil, options, fmt.Errorf(
+		return openTelemetryRuntime{}, fmt.Errorf(
 			"provider.options.params has been replaced by provider.options.search; re-import the profile to migrate it")
 	}
 	options.withDefaults()
 	if options.Format != "jaeger" && options.Format != "flat" {
-		return nil, options, fmt.Errorf("unsupported opentelemetry format %q", options.Format)
+		return openTelemetryRuntime{}, fmt.Errorf("unsupported opentelemetry format %q", options.Format)
 	}
 	outerModel, err := ctx.HydrateConnectionByURL(req.Connection)
 	if err != nil {
-		return nil, options, fmt.Errorf("hydrate opentelemetry connection %q: %w", req.Connection, err)
+		return openTelemetryRuntime{}, fmt.Errorf("hydrate opentelemetry connection %q: %w", req.Connection, err)
 	}
 	outer, err := dbconnection.NewOpenTelemetry(outerModel)
 	if err != nil {
-		return nil, options, err
+		return openTelemetryRuntime{}, err
 	}
 	nested, err := outer.ResolveOpenSearch(ctx)
 	if err != nil {
-		return nil, options, err
+		return openTelemetryRuntime{}, err
 	}
-	searcher, err := openSearchClientForConnection(ctx, nested)
-	return searcher, options, err
+	runtime, err := openSearchClientForConnection(ctx, nested)
+	if err != nil {
+		return openTelemetryRuntime{}, err
+	}
+	return openTelemetryRuntime{searcher: runtime.searcher, options: options, paging: runtime.paging}, nil
 }
 
 func (options *openTelemetryOptions) withDefaults() {

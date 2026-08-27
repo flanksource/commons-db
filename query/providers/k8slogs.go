@@ -38,6 +38,11 @@ func (k8sLogsProvider) PagingModes() query.PagingMode {
 	return query.PagingCursor
 }
 
+// SupportsRequestSort reports no. SinceTime is the only seek the kubelet offers,
+// so the order is fixed at ascending time and assertAscendingLogOrder refuses
+// every other one — a sort control here would refuse every sort it offered.
+func (k8sLogsProvider) SupportsRequestSort() bool { return false }
+
 type k8sLogsOptions struct {
 	// Pods narrows the pods resolved from the selected workloads.
 	Pods types.ResourceSelectors `json:"pods,omitempty"`

@@ -69,6 +69,30 @@ describe("profile row details", () => {
     ).toEqual({ download, pagination, url: requestUrl });
   });
 
+  // The default view carries the sort as one control; the table takes the value
+  // and the setter as separate props. Handing the control straight through is
+  // what left every server-paged profile table's headers inert.
+  it("splits the default view's sort control into the table's two props", () => {
+    const onChange = () => undefined;
+    const props = profileRowDetailsRemoteProps(
+      { requestUrl: "/api/v1/profile/profile-orders" },
+      createElement("div", { sort: { value: { key: "amount", dir: "desc" }, onChange } }),
+    );
+
+    expect(props.sort).toEqual({ key: "amount", dir: "desc" });
+    expect(props.onSortChange).toBe(onChange);
+  });
+
+  it("offers no sort when the default view has no sort control", () => {
+    const props = profileRowDetailsRemoteProps(
+      { requestUrl: "/api/v1/profile/profile-orders" },
+      createElement("div", {}),
+    );
+
+    expect(props).not.toHaveProperty("sort");
+    expect(props).not.toHaveProperty("onSortChange");
+  });
+
   // The rows handed to the table came from this URL's clicky representation.
   // Saying so is what stops the table fetching the same payload a second time
   // to render bytes it already holds.

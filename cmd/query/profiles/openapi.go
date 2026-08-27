@@ -250,6 +250,43 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 				Clicky: &rpc.ClickyParameterMeta{Role: "offset"},
 			})
 	}
+	// Sorting is offered as a pair — which column, and which direction — because
+	// that is the shape the table's sort control is built from; either one alone
+	// describes half a sort and produces no control at all.
+	//
+	// It is offered only where it would actually be applied. A buffered read
+	// slices a result the provider produced in its own order, so a sort there
+	// would reorder nothing while claiming otherwise; SortBindings has already
+	// refused the providers that ignore an order, and streamable settles the
+	// profiles whose pipeline needs every row before any row is correct.
+	sortable, err := profile.SortBindings()
+	if err != nil {
+		return err
+	}
+	streamable, err := profile.Streamable()
+	if err != nil {
+		return err
+	}
+	if len(sortable) > 0 && streamable && query.PagesNatively(profile.Provider.Type) &&
+		!roles[query.ParamRoleSort] && !roles[query.ParamRoleOrder] {
+		columns := make([]any, 0, len(sortable))
+		for _, binding := range sortable {
+			columns = append(columns, binding.Column)
+		}
+		parameters = append(parameters,
+			rpc.OpenAPIParameter{
+				Name: "sort", In: "query",
+				Description: "Column to order rows by; it leads the profile's own order, whose tiebreaker still ends it",
+				Schema:      &rpc.OpenAPISchema{Type: "string", Enum: columns},
+				Clicky:      &rpc.ClickyParameterMeta{Role: "sort"},
+			},
+			rpc.OpenAPIParameter{
+				Name: "order", In: "query",
+				Description: "Direction for sort",
+				Schema:      &rpc.OpenAPISchema{Type: "string", Enum: []any{"asc", "desc"}, Default: "asc"},
+				Clicky:      &rpc.ClickyParameterMeta{Role: "order"},
+			})
+	}
 	// A cursor is only offered by a profile that can actually serve one: it
 	// needs a total order to name a position in, and a provider that resumes
 	// from one. Advertising it otherwise would put the UI into cursor mode

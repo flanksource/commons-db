@@ -121,7 +121,12 @@ func executePages(ctx context.Context, p Profile, page PageRequest, applyPipelin
 	// below: the scope is what a cursor is validated against, so serving a page
 	// under one order and scoping it under another would stale every cursor the
 	// walk mints.
-	order, err := p.EffectiveOrder()
+	//
+	// A sort the request names leads the declared order rather than replacing
+	// it, so the tiebreaker paging depends on is still where it has to be. The
+	// scope picks the resolved order up, which is what correctly stales a cursor
+	// cut under a different sort.
+	order, err := p.RequestedOrder(page.Sort, page.Desc)
 	if err != nil {
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}
@@ -230,7 +235,9 @@ func withCursors(scope CursorScope, pages iter.Seq2[Page, error]) iter.Seq2[Page
 				return
 			}
 			if len(page.NextKeys) > 0 {
-				cursor, err := EncodeCursor(scope, page.NextKeys, page.PIT, page.State)
+				cursor, err := EncodeCursor(CursorEncoding{
+					Scope: scope, Keys: page.NextKeys, PIT: page.PIT, Scroll: page.Scroll, State: page.State,
+				})
 				if err != nil {
 					yield(Page{}, err)
 					return

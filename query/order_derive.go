@@ -41,3 +41,29 @@ func NaturalOrder(config ProviderConfig) (Order, error) {
 	}
 	return ordering.NaturalOrder(config)
 }
+
+// SortingProvider is implemented by a provider that applies an order the request
+// names, rather than only the one the profile declared.
+//
+// It is opt-in and the default is no, which is the answer that keeps a sort
+// control honest. A provider with no paging implementation is served by
+// bufferedPages, which slices rows without ever applying ProviderRequest.Order;
+// offering a sort there would reorder nothing while claiming otherwise. A
+// provider whose order is fixed answers no for the same reason — see k8slogs,
+// which can only read forward from a timestamp.
+type SortingProvider interface {
+	// SupportsRequestSort reports whether an order named by the request is
+	// applied rather than ignored.
+	SupportsRequestSort() bool
+}
+
+// SupportsRequestSort reports whether this provider type orders by a column the
+// request names. An unregistered or non-sorting provider reports false.
+func SupportsRequestSort(providerType string) bool {
+	provider, err := GetProvider(providerType)
+	if err != nil {
+		return false
+	}
+	sorting, ok := provider.(SortingProvider)
+	return ok && sorting.SupportsRequestSort()
+}

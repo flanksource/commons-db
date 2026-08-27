@@ -22,7 +22,7 @@ func (r rowProvider) Row() map[string]any      { return r.row }
 // Table builds a clicky TextTable from the Result. When columns is empty, the
 // columns are derived from the union of row keys (sorted for determinism).
 func (r *Result) Table(columns []ColumnDef) api.TextTable {
-	cols := clickyColumns(columns, r.Rows, r.ColumnFilterKeys)
+	cols := clickyColumns(columns, r.Rows, r.ColumnFilterKeys, r.ColumnSortKeys)
 	if len(r.Rows) == 0 {
 		return emptyTable(cols)
 	}
@@ -78,12 +78,16 @@ func ClickyColumns(profile Profile) ([]api.ColumnDef, error) {
 	if err != nil {
 		return nil, err
 	}
-	return clickyColumns(profile.Columns, nil, keys), nil
+	sortKeys, err := profile.ColumnSortKeys()
+	if err != nil {
+		return nil, err
+	}
+	return clickyColumns(profile.Columns, nil, keys, sortKeys), nil
 }
 
 // clickyColumns maps profile columns to clicky column definitions, deriving the
 // schema from row keys when no columns are declared.
-func clickyColumns(columns []ColumnDef, rows []Row, filterKeys map[string]string) []api.ColumnDef {
+func clickyColumns(columns []ColumnDef, rows []Row, filterKeys, sortKeys map[string]string) []api.ColumnDef {
 	if len(columns) == 0 {
 		columns = deriveColumns(rows)
 	}
@@ -100,6 +104,7 @@ func clickyColumns(columns []ColumnDef, rows []Row, filterKeys map[string]string
 			MaxWidth:  c.Width,
 			Hidden:    c.Hidden,
 			FilterKey: filterKeys[c.Name],
+			SortKey:   sortKeys[c.Name],
 		})
 	}
 	return out
