@@ -3,7 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { OperationsApiClient, ResolvedOperation } from "@flanksource/clicky-ui";
 
-import { ProfileFilters } from "./reconcileBench";
+import { ProfileFilters, ReconcileBench, type BenchState } from "./reconcileBench";
+import type { ProfileDocument } from "./reconcileModel";
 
 const operation = {
   path: "/api/v1/profile/profile-orders",
@@ -44,5 +45,50 @@ describe("reconcile profile filters", () => {
     expect(html).toContain('data-slot="filter-bar"');
     expect(html).toContain('data-filter-bar-item="region"');
     expect(html).toContain('aria-label="Region"');
+  });
+});
+
+describe("reconcile field candidates", () => {
+  const state: BenchState = {
+    dest: "orders-in",
+    pairings: [],
+    mode: "mapped",
+    cel: "",
+    snapshotAge: "1h",
+    sourceFilters: {},
+    destFilters: {},
+  };
+  const source = {
+    profile: "orders-out",
+    columns: [{ name: "scheme", label: "Scheme" }],
+  } satisfies ProfileDocument;
+  const dest = {
+    profile: "orders-in",
+    columns: [{ name: "scheme", label: "scheme_id" }],
+  } satisfies ProfileDocument;
+
+  it("renders each display name with the raw field used by the join", () => {
+    const html = renderToStaticMarkup(
+      <QueryClientProvider client={new QueryClient()}>
+        <ReconcileBench
+          state={state}
+          onChange={() => {}}
+          source={source}
+          dest={dest}
+          destNames={["orders-in"]}
+          client={client}
+          sourceOperation={undefined}
+          destOperation={undefined}
+          onRun={() => {}}
+          onSave={() => {}}
+          running={false}
+          saving={false}
+          error=""
+        />
+      </QueryClientProvider>,
+    );
+
+    expect(html).toContain(">Scheme (scheme)<");
+    expect(html).toContain(">scheme_id (scheme)<");
   });
 });
