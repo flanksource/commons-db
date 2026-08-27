@@ -59,6 +59,33 @@ var _ = Describe("Manager", func() {
 		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o600)))
 	})
 
+	// A reconciliation is browsed a page at a time, so a sort has to reach the
+	// backend. It leads the join-emission order rather than replacing it: row_id
+	// is the tiebreaker every page of the snapshot is cut against.
+	It("orders a snapshot by a requested column, keeping row_id as the tiebreaker", func() {
+		descriptor, err := manager.Create(context.Background(), reconciliation(), 30*time.Minute)
+		Expect(err).NotTo(HaveOccurred())
+		profile, err := manager.Get(context.Background(), descriptor.Profile)
+		Expect(err).NotTo(HaveOccurred())
+
+		sortable, err := profile.SortBindings()
+		Expect(err).NotTo(HaveOccurred())
+		columns := make([]string, 0, len(sortable))
+		for _, binding := range sortable {
+			columns = append(columns, binding.Column)
+		}
+		Expect(columns).To(ContainElements("key", "status", "outcome"))
+		Expect(columns).ToNot(ContainElement("row_id"))
+
+		order, err := profile.RequestedOrder("status", true)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(order).To(Equal(query.Order{
+			{Column: "status", Desc: true},
+			{Column: "row_id", Unique: true},
+		}))
+		Expect(order.Pageable()).To(Succeed())
+	})
+
 	It("does not let a run exceed the configured expiry age", func() {
 		_, err := manager.Create(context.Background(), reconciliation(), 2*time.Hour)
 		Expect(err).To(MatchError(ContainSubstring("cannot exceed")))

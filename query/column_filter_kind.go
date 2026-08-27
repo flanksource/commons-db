@@ -270,23 +270,12 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 	if err := validateNestedProvider(profile.Provider.Type, owner, nested); err != nil {
 		return ColumnFilterBinding{}, false, err
 	}
-	field := target.Field
-	// A declared field is taken as written; only an inferred one still passes
-	// through the provider's own naming.
-	if declared {
-		if err := validateSQLFilterField(profile.Provider.Type, owner, field); err != nil {
-			return ColumnFilterBinding{}, false, err
-		}
-	} else {
-		field = openTelemetryFilterField(profile, field)
-		// An inferred field a SQL backend could not name simply offers no
-		// filter, rather than failing a profile that renders perfectly well.
-		if validateSQLFilterField(profile.Provider.Type, "", field) != nil {
-			return ColumnFilterBinding{}, false, nil
-		}
-	}
-	if err := validateNestedField(column.Name, field, nested); err != nil {
+	field, addressable, err := resolveBackendField(profile, column, target, declared, nested)
+	if err != nil {
 		return ColumnFilterBinding{}, false, err
+	}
+	if !addressable {
+		return ColumnFilterBinding{}, false, nil
 	}
 
 	label := column.Label

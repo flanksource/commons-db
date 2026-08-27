@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -188,10 +189,11 @@ func TestProfileOpenAPIAdvertisesNativeColumnFilters(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Two column filters plus limit. This profile declares no order, so no
-	// offset or cursor is advertised.
+	// Two column filters, limit, and the sort/order pair. This profile declares
+	// no order, so no offset or cursor is advertised — but the backend still
+	// applies a sort the request names, so one is still offered.
 	op := spec.Paths["/api/v1/profile/profile-logs"]["get"]
-	if len(op.Parameters) != 3 {
+	if len(op.Parameters) != 5 {
 		t.Fatalf("column filters plus pagination missing: %+v", op.Parameters)
 	}
 	for i, key := range []string{"filter.service", "filter.payload.user"} {
@@ -206,6 +208,66 @@ func TestProfileOpenAPIAdvertisesNativeColumnFilters(t *testing.T) {
 	item := op.Responses["200"].Content["application/json"].Schema.Items
 	if item.Properties["service"].Extensions["x-clicky-filter-key"] != "filter.service" {
 		t.Fatalf("response filter key missing: %+v", item.Properties["service"])
+	}
+}
+
+// The table's sort control is built from a pair of parameters, so advertising
+// one without the other produces no control at all. The column parameter also
+// has to enumerate what is sortable: a name the profile would refuse is a header
+// that 400s when clicked.
+func TestProfileOpenAPIAdvertisesSortAsAPair(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "snapshot",
+		Provider: query.ProviderConfig{Type: "sqlite"},
+		Query:    `SELECT "key", "status", "row_id" FROM t`,
+		Columns: []query.ColumnDef{
+			{Name: "key"},
+			{Name: "status", Type: query.ColumnTypeStatus},
+			{Name: "row_id", Type: query.ColumnTypeNumber, Hidden: true},
+		},
+		Order: query.Order{{Column: "row_id", Unique: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	byName := map[string]rpc.OpenAPIParameter{}
+	for _, parameter := range spec.Paths["/api/v1/profile/profile-snapshot"]["get"].Parameters {
+		byName[parameter.Name] = parameter
+	}
+	sort, ok := byName["sort"]
+	if !ok || sort.Clicky == nil || sort.Clicky.Role != "sort" {
+		t.Fatalf("sort parameter = %+v", sort)
+	}
+	// Hidden columns are not offered: nothing renders them, so nothing can ask.
+	if fmt.Sprint(sort.Schema.Enum) != "[key status]" {
+		t.Fatalf("sortable columns = %v", sort.Schema.Enum)
+	}
+	order, ok := byName["order"]
+	if !ok || order.Clicky == nil || order.Clicky.Role != "order" {
+		t.Fatalf("order parameter = %+v", order)
+	}
+	if fmt.Sprint(order.Schema.Enum) != "[asc desc]" || order.Schema.Default != "asc" {
+		t.Fatalf("order schema = %+v", order.Schema)
+	}
+}
+
+// A provider that never applies the order it is handed must not offer a sort:
+// the header would reorder nothing while claiming otherwise.
+func TestProfileOpenAPIOffersNoSortForABufferedProvider(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "metrics",
+		Provider: query.ProviderConfig{Type: "prometheus"},
+		Columns:  []query.ColumnDef{{Name: "instance"}, {Name: "value", Type: query.ColumnTypeNumber}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, parameter := range spec.Paths["/api/v1/profile/profile-metrics"]["get"].Parameters {
+		if parameter.Name == "sort" || parameter.Name == "order" {
+			t.Fatalf("buffered provider advertises %q", parameter.Name)
+		}
 	}
 }
 

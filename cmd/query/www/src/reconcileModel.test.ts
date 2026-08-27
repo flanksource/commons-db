@@ -46,7 +46,7 @@ import {
 const sourceProfile: ProfileDocument = {
   profile: "orders-emitted",
   columns: [
-    { name: "order_id" },
+    { name: "order_id", label: "Order ID" },
     { name: "customer" },
     { name: "created_at", kind: "timestamp" },
   ],
@@ -174,6 +174,37 @@ describe("the results route", () => {
 
     expect(parseResultsView(search)).toEqual(view);
     expect(parseReconcileQuery(search)).toEqual({});
+  });
+
+  // The order is a property of the whole result rather than of the page on
+  // screen, so it belongs in the URL beside the position: a bookmarked results
+  // page reopens on the rows it was showing.
+  it("round-trips a requested order", () => {
+    const sorted = { lane: "matched" as const, page: 0, pageSize: RESULTS_PAGE_SIZE, sort: "time_diff", desc: true };
+
+    expect(parseResultsView(resultsViewQueryString(sorted))).toEqual(sorted);
+  });
+
+  it("names only a descending order, ascending being the server's own default", () => {
+    const search = resultsViewQueryString({ lane: "matched", page: 0, pageSize: RESULTS_PAGE_SIZE, sort: "status" });
+
+    expect(new URLSearchParams(search).has("order")).toBe(false);
+    expect(parseResultsView(search)).toEqual({
+      lane: "matched",
+      page: 0,
+      pageSize: RESULTS_PAGE_SIZE,
+      sort: "status",
+      desc: false,
+    });
+  });
+
+  // A direction alone orders nothing, so it is not carried as if it did.
+  it("drops a direction that names no column", () => {
+    expect(parseResultsView("?outcome=matched&order=desc")).toEqual({
+      lane: "matched",
+      page: 0,
+      pageSize: RESULTS_PAGE_SIZE,
+    });
   });
 
   it("omits the first page and the default page size", () => {
@@ -361,7 +392,11 @@ describe("celForPairings", () => {
 
 describe("reading a profile document", () => {
   it("offers its declared columns as key candidates", () => {
-    expect(profileFields(sourceProfile)).toEqual(["order_id", "customer", "created_at"]);
+    expect(profileFields(sourceProfile)).toEqual([
+      { name: "order_id", label: "Order ID" },
+      { name: "customer" },
+      { name: "created_at" },
+    ]);
     expect(profileFields(undefined)).toEqual([]);
   });
 

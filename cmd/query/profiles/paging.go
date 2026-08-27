@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"fmt"
 	"iter"
 	"net/http"
 	"strconv"
@@ -20,6 +21,13 @@ type exportRequest struct {
 	offset int
 	cursor query.Cursor
 
+	// sort is the column the caller asked to order by, and desc its direction.
+	// An export carries them too: a download of a sorted table that arrived in
+	// the profile's own order would be a different result than the one on
+	// screen.
+	sort string
+	desc bool
+
 	// maxRows is the profile's export ceiling, resolved alongside the page so
 	// every response reports and enforces the same number.
 	maxRows int
@@ -36,7 +44,10 @@ type exportRequest struct {
 
 // pageRequest renders the transport request as the engine's page.
 func (r exportRequest) pageRequest() query.PageRequest {
-	page := query.PageRequest{Limit: r.limit, Offset: r.offset, Cursor: r.cursor, Diagnostics: r.diagnostics}
+	page := query.PageRequest{
+		Limit: r.limit, Offset: r.offset, Cursor: r.cursor,
+		Sort: r.sort, Desc: r.desc, Diagnostics: r.diagnostics,
+	}
 	if r.offset == 0 && r.cursor.IsZero() &&
 		!r.paging.Supports(query.PagingOffset) && r.paging.Supports(query.PagingCursor) {
 		page.Strategy = query.PagingCursor
@@ -57,6 +68,8 @@ func (r exportRequest) pageRequest() query.PageRequest {
 			Strategy:    query.PagingCursor,
 			Ceiling:     r.maxRows,
 			SkipTotal:   true,
+			Sort:        r.sort,
+			Desc:        r.desc,
 			Diagnostics: r.diagnostics,
 		}
 	}
@@ -107,6 +120,16 @@ func exportRows(
 	// refuse outright, and a page of one reports itself as a page that was read
 	// when the whole query ran and the result was sliced.
 	streamable = streamable && query.PagesNatively(p.Provider.Type)
+
+	// A buffered read runs the whole query and slices the result; the order the
+	// request named never reaches the provider and nothing here re-applies it.
+	// Serving those rows would answer a sort with rows in some other order, so
+	// the sort is refused rather than dropped.
+	if request.sort != "" && !streamable {
+		return exportResponse{}, fmt.Errorf(
+			"profile %q cannot be sorted: it is read in full before any row is correct, so the order a request names cannot be pushed to the backend",
+			p.Name)
+	}
 
 	if request.scope == "all" {
 		return exportAll(ctx, p, params, request, streamable)

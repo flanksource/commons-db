@@ -21,6 +21,12 @@ type Result struct {
 	// ColumnFilterKeys binds rendered columns to native server filter params.
 	ColumnFilterKeys map[string]string `json:"-" yaml:"-"`
 
+	// ColumnSortKeys binds rendered columns to the public name a request sorts
+	// them by. A column absent from it cannot be ordered on, which is what makes
+	// the table render its header inert rather than offering a sort the server
+	// would refuse.
+	ColumnSortKeys map[string]string `json:"-" yaml:"-"`
+
 	// Styles holds each row's evaluated ColumnDef.Style classes, keyed by column
 	// name and positionally parallel to Rows. It is render-only and deliberately
 	// off the wire: styling a cell must not change the value an export carries.

@@ -48,6 +48,42 @@ func columnFilterTarget(column ColumnDef) (target JSONPathFilterTarget, declared
 	return JSONPathFilterTarget{}, false, false, nil
 }
 
+// resolveBackendField settles the backend field a column addresses, applying the
+// provider's own naming to an inferred one.
+//
+// It is shared by the filter binding and the sort binding so the two can never
+// disagree about which field a column means — ordering by a field the filter
+// would have called something else is the kind of divergence that only shows up
+// as rows in the wrong order.
+//
+// A declared field is an author's claim and is reported as an error when the
+// backend cannot name it; an inferred one simply yields nothing, because a
+// profile that renders perfectly well should not fail over a field nobody asked
+// to address.
+func resolveBackendField(
+	profile Profile,
+	column ColumnDef,
+	target JSONPathFilterTarget,
+	declared bool,
+	nested string,
+) (string, bool, error) {
+	field := target.Field
+	if declared {
+		if err := validateSQLFilterField(profile.Provider.Type, fmt.Sprintf("column %q", column.Name), field); err != nil {
+			return "", false, err
+		}
+	} else {
+		field = openTelemetryFilterField(profile, field)
+		if validateSQLFilterField(profile.Provider.Type, "", field) != nil {
+			return "", false, nil
+		}
+	}
+	if err := validateNestedField(column.Name, field, nested); err != nil {
+		return "", false, err
+	}
+	return field, true, nil
+}
+
 // resolveColumnNesting settles which container a column's selection is compiled
 // inside, and the constants that address one entry of it.
 //

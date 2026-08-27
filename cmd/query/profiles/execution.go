@@ -246,7 +246,15 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
 			return
 		}
-		output, err := (&query.Result{Profile: p.Name, Rows: page, ColumnFilterKeys: filterKeys}).Render(p.Columns, "clicky-json")
+		sortKeys, err := p.ColumnSortKeys()
+		if err != nil {
+			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
+			return
+		}
+		output, err := (&query.Result{
+			Profile: p.Name, Rows: page,
+			ColumnFilterKeys: filterKeys, ColumnSortKeys: sortKeys,
+		}).Render(p.Columns, "clicky-json")
 		if err != nil {
 			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
 			return
@@ -440,6 +448,25 @@ func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, 
 		}
 		request.offset = offset
 	}
+	sortParam := profile.ParamNameForRole(query.ParamRoleSort, "sort")
+	orderParam := profile.ParamNameForRole(query.ParamRoleOrder, "order")
+	if value := strings.TrimSpace(r.URL.Query().Get(sortParam)); value != "" {
+		// The column is validated by the profile rather than here: it owns the
+		// list of what is sortable, and a second opinion could only disagree.
+		request.sort = value
+	}
+	if value := strings.TrimSpace(r.URL.Query().Get(orderParam)); value != "" {
+		switch value {
+		case "asc":
+		case "desc":
+			request.desc = true
+		default:
+			return request, fmt.Errorf("order must be asc or desc, got %q", value)
+		}
+	}
+	if request.desc && request.sort == "" {
+		return request, fmt.Errorf("order names a direction but no %s column was given", sortParam)
+	}
 	if value := r.URL.Query().Get("cursor"); value != "" {
 		request.cursor = query.Cursor(value)
 	}
@@ -457,7 +484,7 @@ func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, 
 // format, content-negotiation) rather than a profile filter param.
 func IsReservedParam(key string) bool {
 	switch key {
-	case "format", "scope", "page", "limit", "offset", "filename", "_download", "args", "__schema", "__lookup", "__lookup_filter", "__lookup_q", devtools.LevelParam:
+	case "format", "scope", "page", "limit", "offset", "sort", "order", "filename", "_download", "args", "__schema", "__lookup", "__lookup_filter", "__lookup_q", devtools.LevelParam:
 		return true
 	default:
 		return false

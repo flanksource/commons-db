@@ -49,11 +49,14 @@ type PreparedDownloadOptions = ClickyDownloadOptions & {
   }) => Promise<{ url: string; label?: string }>;
 };
 
-export function snapshotPageParams(lane: LaneId, page: number, pageSize: number): Record<string, string> {
+export function snapshotPageParams(view: ResultsView): Record<string, string> {
   return {
-    "filter.outcome": lane,
-    limit: String(pageSize),
-    offset: String(page * pageSize),
+    "filter.outcome": view.lane,
+    limit: String(view.pageSize),
+    offset: String(view.page * view.pageSize),
+    // The snapshot is paged by the server, so the order has to be too: sorting
+    // the hundred rows on screen would reorder the page and nothing else.
+    ...(view.sort ? { sort: view.sort, order: view.desc ? "desc" : "asc" } : {}),
   };
 }
 
@@ -110,12 +113,12 @@ export function ReconcileResults({
   const result = useQuery({
     // Distinct from ["reconcile-snapshot", <id>], which holds the descriptor:
     // one invalidateQueries prefix would otherwise hit both.
-    queryKey: ["reconcile-snapshot-page", active.profile, lane, page, pageSize],
+    queryKey: ["reconcile-snapshot-page", active.profile, lane, page, pageSize, view.sort ?? "", view.desc ?? false],
     queryFn: async () => {
       const response = await client.executeCommand(
         active.url,
         "get",
-        snapshotPageParams(lane, page, pageSize),
+        snapshotPageParams(view),
         { Accept: "application/json+clicky" },
       );
       if (!response.success) {
@@ -212,6 +215,16 @@ export function ReconcileResults({
             url={result.data.requestUrl ?? active.url}
             download={download}
             className="h-full min-h-0"
+            sort={view.sort ? { key: view.sort, dir: view.desc ? "desc" : "asc" } : null}
+            // A new order is a new sequence, so the reader returns to its start
+            // rather than to the offset they held in the previous one.
+            onSortChange={(next) =>
+              onView({
+                ...view,
+                page: 0,
+                ...(next ? { sort: next.key, desc: next.dir === "desc" } : { sort: undefined, desc: undefined }),
+              })
+            }
             pagination={{
               page,
               pageSize,

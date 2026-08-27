@@ -158,6 +158,7 @@ export type ReconcileConfig = {
 };
 
 export type ProfileColumn = { name?: string; label?: string; kind?: string };
+export type ProfileField = { name: string; label?: string };
 export type ProfileParam = { name?: string; label?: string };
 
 /** The parts of a profile document this surface reads. */
@@ -298,8 +299,21 @@ export function initialReconcileFilters(
 /** Rows per page on the results route, and on the virtual profile it links to. */
 export const RESULTS_PAGE_SIZE = 100;
 
-/** What the results page is showing: which outcome lane, and where in it. */
-export type ResultsView = { lane: LaneId; page: number; pageSize: number };
+/**
+ * What the results page is showing: which outcome lane, where in it, and the
+ * order it is read in.
+ *
+ * The sort lives here rather than in the table because the snapshot is paged by
+ * the server: ordering is a property of the whole result, so it travels with the
+ * position in the URL and a bookmarked page reopens on the same rows.
+ */
+export type ResultsView = {
+  lane: LaneId;
+  page: number;
+  pageSize: number;
+  sort?: string;
+  desc?: boolean;
+};
 
 const LANES: LaneId[] = ["matched", "only_source", "only_dest", "ambiguous"];
 
@@ -328,6 +342,11 @@ export function resultsViewQueryString(view: ResultsView): string {
   params.set("outcome", view.lane);
   if (view.page > 0) params.set("page", String(view.page));
   if (view.pageSize !== RESULTS_PAGE_SIZE) params.set("size", String(view.pageSize));
+  if (view.sort) {
+    params.set("sort", view.sort);
+    // Ascending is the server's default, so only the other one is worth naming.
+    if (view.desc) params.set("order", "desc");
+  }
   return `?${params.toString()}`;
 }
 
@@ -340,10 +359,14 @@ export function parseResultsView(search: string, fallback: LaneId = "matched"): 
   const params = new URLSearchParams(search);
   const page = Number.parseInt(params.get("page") ?? "", 10);
   const pageSize = Number.parseInt(params.get("size") ?? "", 10);
+  const sort = params.get("sort")?.trim();
   return {
     lane: parseLane(params.get("outcome")) ?? fallback,
     page: Number.isFinite(page) && page > 0 ? page : 0,
     pageSize: Number.isFinite(pageSize) && pageSize > 0 ? pageSize : RESULTS_PAGE_SIZE,
+    // A direction with no column to apply it to is not a sort, so it is dropped
+    // with the column rather than left behind to mean nothing.
+    ...(sort ? { sort, desc: params.get("order") === "desc" } : {}),
   };
 }
 
@@ -506,12 +529,13 @@ export function celForPairings(pairings: KeyPairing[]): string {
   return parts.join(' + "\\x00" + ');
 }
 
-/** Field names a profile document offers as key candidates. */
-export function profileFields(document: ProfileDocument | undefined): string[] {
-  const fields: string[] = [];
+/** Fields a profile document offers as key candidates. */
+export function profileFields(document: ProfileDocument | undefined): ProfileField[] {
+  const fields: ProfileField[] = [];
   for (const column of document?.columns ?? []) {
     const name = column.name?.trim() ?? "";
-    if (name !== "") fields.push(name);
+    const label = column.label?.trim() ?? "";
+    if (name !== "") fields.push(label === "" ? { name } : { name, label });
   }
   return fields;
 }
