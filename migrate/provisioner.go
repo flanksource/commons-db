@@ -57,7 +57,7 @@ func (p *SchemaProvisioner) Fingerprint(ctx context.Context) (string, error) {
 	writeFingerprintField(digest, p.config.dir)
 	writeFingerprintField(digest, p.config.name)
 	writeFingerprintField(digest, "schema="+p.config.schema)
-	writeFingerprintField(digest, fmt.Sprintf("allow-table-drops=%t", p.config.allowTableDrops))
+	writeFingerprintField(digest, fmt.Sprintf("allow-drops=%t", p.config.allowDrops))
 	for _, pattern := range sortedCopy(p.config.exclude) {
 		writeFingerprintField(digest, "exclude="+pattern)
 	}
