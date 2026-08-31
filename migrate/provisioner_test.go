@@ -87,7 +87,7 @@ var _ = Describe("migration provisioner fingerprint", func() {
 			return NewProvisioner(files, WithDir("migrations"), WithName("query"), WithExclude("audit.*"))
 		}),
 		Entry("table drop policy", func(files fstest.MapFS) *SchemaProvisioner {
-			return NewProvisioner(files, WithDir("migrations"), WithName("query"), WithTableDrops())
+			return NewProvisioner(files, WithDir("migrations"), WithName("query"), WithDrops())
 		}),
 		Entry("variables", func(files fstest.MapFS) *SchemaProvisioner {
 			return NewProvisioner(files, WithDir("migrations"), WithName("query"), WithVariables(map[string]cty.Value{

@@ -21,12 +21,12 @@ import (
 )
 
 type options struct {
-	dir             string
-	name            string
-	schema          string
-	exclude         []string
-	allowTableDrops bool
-	input           map[string]cty.Value
+	dir        string
+	name       string
+	schema     string
+	exclude    []string
+	allowDrops bool
+	input      map[string]cty.Value
 }
 
 // Option configures an HCL migration.
@@ -59,17 +59,21 @@ func WithExclude(patterns ...string) Option {
 	return func(o *options) { o.exclude = append(o.exclude, patterns...) }
 }
 
-// WithTableDrops allows HCL files to remove tables. Drops are suppressed by
-// default so a partial schema bundle cannot delete tables owned by consumers.
-func WithTableDrops() Option {
-	return func(o *options) { o.allowTableDrops = true }
+// WithDrops allows HCL files to remove tables and types. Drops are suppressed by
+// default so a partial schema bundle cannot delete objects owned by consumers.
+//
+// Tables and types share one switch because suppressing only tables is worse
+// than suppressing neither: the surviving table keeps a column typed by the enum
+// the diff still wants to drop, and PostgreSQL rejects the DROP TYPE.
+func WithDrops() Option {
+	return func(o *options) { o.allowDrops = true }
 }
 
 // Apply loads colocated HCL and SQL migrations from schemaFS. SQL scripts marked
 // phase pre run before the Atlas realm diff; all other SQL defaults to the post
 // phase. Declared PostgreSQL roles and permissions are reconciled last. Tables
-// absent from a partial schema bundle are never dropped unless WithTableDrops is
-// supplied.
+// and types absent from a partial schema bundle are never dropped unless
+// WithDrops is supplied.
 func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Option) error {
 	return apply(ctx, connection, schemaFS, resolveOptions(opts))
 }
@@ -175,8 +179,8 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if err != nil {
 		return fmt.Errorf("compute schema diff: %w", err)
 	}
-	if !cfg.allowTableDrops {
-		changes = withoutTableDrops(changes)
+	if !cfg.allowDrops {
+		changes = withoutDrops(changes)
 	}
 	restoreViews := noRestore
 	if len(changes) == 0 {
@@ -226,16 +230,36 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	return nil
 }
 
-func withoutTableDrops(changes []schema.Change) []schema.Change {
+// withoutDrops removes every destructive change a partial schema bundle would
+// otherwise emit for objects it does not declare. Object drops are filtered
+// alongside table drops because the two are load-bearing together: a bundle that
+// declares neither a table nor the enum typing one of its columns emits both a
+// DropTable and a DropObject, and keeping only the former leaves the column
+// behind to block the DROP TYPE with "other objects depend on it".
+func withoutDrops(changes []schema.Change) []schema.Change {
+	log := logger.GetLogger("migrate")
 	filtered := make([]schema.Change, 0, len(changes))
 	for _, change := range changes {
-		if drop, ok := change.(*schema.DropTable); ok {
-			logger.GetLogger("migrate").Tracef("Skipping drop table of %s", drop.T.Name)
-			continue
+		switch drop := change.(type) {
+		case *schema.DropTable:
+			log.Tracef("Skipping drop table of %s", drop.T.Name)
+		case *schema.DropObject:
+			log.Tracef("Skipping drop of %s", objectDescription(drop.O))
+		default:
+			filtered = append(filtered, change)
 		}
-		filtered = append(filtered, change)
 	}
 	return filtered
+}
+
+// objectDescription names a dropped object for the trace log. Enums are the only
+// object Atlas's PostgreSQL driver actually plans drops for (see dropObject in
+// ariga.io/atlas/sql/postgres), so anything else is reported by its Go type.
+func objectDescription(object schema.Object) string {
+	if enum, ok := object.(*schema.EnumType); ok {
+		return fmt.Sprintf("enum type %s", enum.T)
+	}
+	return fmt.Sprintf("%T", object)
 }
 
 // connectionWithLockTimeout appends a libpq `options` runtime parameter so every

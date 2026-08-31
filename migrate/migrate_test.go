@@ -9,13 +9,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestWithoutTableDrops(t *testing.T) {
+// TestWithoutDrops covers the pairing that makes suppression correct: a bundle
+// that declares neither a consumer's table nor the enum typing one of its
+// columns emits a DropTable and a DropObject, and filtering only the table would
+// leave the column behind to block the DROP TYPE.
+func TestWithoutDrops(t *testing.T) {
 	keep := &schema.AddTable{T: schema.NewTable("profiles")}
-	drop := &schema.DropTable{T: schema.NewTable("other")}
+	dropTable := &schema.DropTable{T: schema.NewTable("other")}
+	dropEnum := &schema.DropObject{O: &schema.EnumType{
+		T:      "other_status",
+		Values: []string{"pending", "done"},
+		Schema: schema.New("public"),
+	}}
 
-	got := withoutTableDrops([]schema.Change{keep, drop})
+	got := withoutDrops([]schema.Change{keep, dropTable, dropEnum})
 	require.Len(t, got, 1)
 	assert.Same(t, keep, got[0])
+}
+
+func TestObjectDescription(t *testing.T) {
+	assert.Equal(t, "enum type other_status",
+		objectDescription(&schema.EnumType{T: "other_status", Schema: schema.New("public")}))
 }
 
 func TestApplyValidatesInputsBeforeConnecting(t *testing.T) {
