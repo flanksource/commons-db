@@ -33,11 +33,11 @@ require (
 	github.com/eko/gocache/store/go_cache/v4 v4.2.5
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.57
+	github.com/flanksource/clicky v1.21.59
 	github.com/flanksource/commons v1.57.0
-	github.com/flanksource/deps v1.0.39
+	github.com/flanksource/deps v1.0.42
 	github.com/flanksource/gomplate/v3 v3.24.89
-	github.com/flanksource/is-healthy v1.0.90
+	github.com/flanksource/is-healthy v1.0.91
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.2
