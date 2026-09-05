@@ -36,11 +36,11 @@ importers:
         specifier: 3.0.210
         version: 3.0.210(react@18.3.1)(zod@4.4.3)
       '@flanksource/clicky-ui':
-        specifier: 0.3.26
-        version: 0.3.26(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)
+        specifier: 0.3.34
+        version: 0.3.34(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)
       '@flanksource/icons':
-        specifier: 1.0.63
-        version: 1.0.63(react@18.3.1)
+        specifier: 1.0.65
+        version: 1.0.65(react@18.3.1)
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.101.4(react@18.3.1)
@@ -326,8 +326,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@flanksource/clicky-ui@0.3.26':
-    resolution: {integrity: sha512-h5sDlDLnkSwYxqLuBfqWpwWKVUVeamtmgEjWovXEUrZnuz43NvsGYVfu6vimSpCuuPZXBwNntPszBoQAWNTbUg==}
+  '@flanksource/clicky-ui@0.3.34':
+    resolution: {integrity: sha512-5o1e8K2ZWbS9bWjsE0sd/rm0UkxZMbQ4/d0PRNQMHwGh3a55XG3oAkBhlBYxv2uUfhBj1zR1F6f195rDnKLvRg==}
     peerDependencies:
       '@ai-sdk/react': ^3.0.0
       '@mdxeditor/editor': ^4.0.4
@@ -368,6 +368,11 @@ packages:
 
   '@flanksource/icons@1.0.63':
     resolution: {integrity: sha512-QJ3N49jltwT4xJVvajr/6V++LqTEYKGamjtLA+2NNECDG8I/guhgH3l984rIoE4+dkYTrUPwvoUh4SiKLic8FQ==}
+    peerDependencies:
+      react: '*'
+
+  '@flanksource/icons@1.0.65':
+    resolution: {integrity: sha512-Z8EW8V0c4YJWs529wS3RNrN/1Q65eYgxqrkln3djUzBLg3acfHLYUGmXoSBQnPXQSGO4No+2wr9uLVsnE53wlA==}
     peerDependencies:
       react: '*'
 
@@ -2044,7 +2049,7 @@ snapshots:
   '@esbuild/win32-x64@0.25.12':
     optional: true
 
-  '@flanksource/clicky-ui@0.3.26(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)':
+  '@flanksource/clicky-ui@0.3.34(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4
@@ -2080,6 +2085,10 @@ snapshots:
       - '@types/react'
 
   '@flanksource/icons@1.0.63(react@18.3.1)':
+    dependencies:
+      react: 18.3.1
+
+  '@flanksource/icons@1.0.65(react@18.3.1)':
     dependencies:
       react: 18.3.1
 
