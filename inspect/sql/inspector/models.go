@@ -1,14 +1,11 @@
 package inspector
 
-import "time"
-
 // Table represents a database table or view
 type Table struct {
-	Schema     string
-	Name       string
-	Type       string // "table" or "view"
-	ViewDef    string // SQL definition for views
-	CreateDate *time.Time
+	Schema  string
+	Name    string
+	Type    string // "table" or "view"
+	ViewDef string // SQL definition for views
 }
 
 // Column represents a table column
@@ -58,7 +55,6 @@ type StoredProc struct {
 	Type       string // "procedure" or "function"
 	SQL        string // Complete SQL body/definition
 	ReturnType string // For functions: the SQL return type (e.g. "int", "TABLE"); empty for procedures
-	CreateDate *time.Time
 }
 
 // ProcParam represents a stored procedure parameter
@@ -74,8 +70,7 @@ type ProcParam struct {
 //
 // Event is one or more trigger events, comma-joined when a single trigger
 // fires on multiple DML actions (e.g. "INSERT,UPDATE"). Timing is "AFTER"
-// or "INSTEAD OF"; SQL Server "BEFORE" triggers map to "AFTER" since the
-// engine does not support true BEFORE semantics.
+// or "INSTEAD OF" for SQL Server, which does not support BEFORE triggers.
 type Trigger struct {
 	Schema     string
 	Name       string
@@ -84,5 +79,4 @@ type Trigger struct {
 	Timing     string
 	IsDisabled bool
 	SQL        string // CREATE TRIGGER body from OBJECT_DEFINITION
-	CreateDate *time.Time
 }

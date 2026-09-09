@@ -14,7 +14,6 @@ type Bounds struct {
 	Rows            int
 	DefinitionBytes int
 	Truncated       bool
-	definitionFull  bool
 }
 
 type boundedDB struct {
@@ -27,9 +26,6 @@ type boundedDB struct {
 // lookahead row to distinguish an exact fit from a truncated catalog.
 func (db *boundedDB) QueryContext(ctx context.Context, query string, args ...any) (*boundedRows, error) {
 	limit := max(db.bounds.Rows, 0)
-	if db.bounds.definitionFull {
-		limit = 0
-	}
 	query = strings.TrimSpace(query)
 	if db.driver == "sqlserver" {
 		query = strings.Replace(query, "SELECT", fmt.Sprintf("SELECT TOP (@p%d)", len(args)+1), 1)
@@ -50,7 +46,6 @@ func (db *boundedDB) definitionLimit() int {
 func (db *boundedDB) definition(value string) string {
 	if len(value) > db.bounds.DefinitionBytes {
 		db.bounds.Truncated = true
-		db.bounds.definitionFull = true
 		db.bounds.DefinitionBytes = 0
 		return ""
 	}
@@ -65,9 +60,6 @@ type boundedRows struct {
 }
 
 func (rows *boundedRows) Next() bool {
-	if rows.bounds.definitionFull {
-		return false
-	}
 	if !rows.Rows.Next() {
 		return false
 	}

@@ -17,7 +17,7 @@ import (
 // Ordering is part of the contract, not an accident: every method returns rows
 // ordered by owner and then by the object's own natural order (ordinal position,
 // index name, constraint column position, parameter id). Consumers cache and
-// diff the emitted UIR, so a non-deterministic order shows up as a phantom diff.
+// compare catalogs, so row ordering must be deterministic.
 type Inspector interface {
 	// Schema operations
 	GetSchemas(ctx context.Context) ([]string, error)

@@ -62,8 +62,7 @@ func (i *SQLServerInspector) GetTables(ctx context.Context, schema string, table
 			CASE
 				WHEN t.TABLE_TYPE = 'VIEW' THEN LEFT(OBJECT_DEFINITION(o.object_id), @p3)
 				ELSE ''
-			END AS VIEW_DEF,
-			o.create_date
+			END AS VIEW_DEF
 		FROM INFORMATION_SCHEMA.TABLES t
 		LEFT JOIN sys.objects o
 		  ON o.object_id = OBJECT_ID(t.TABLE_SCHEMA + '.' + t.TABLE_NAME)
@@ -86,16 +85,11 @@ func (i *SQLServerInspector) GetTables(ctx context.Context, schema string, table
 	for rows.Next() {
 		var t Table
 		var viewDef sql.NullString
-		var createDate sql.NullTime
-		if err := rows.Scan(&t.Schema, &t.Name, &t.Type, &viewDef, &createDate); err != nil {
+		if err := rows.Scan(&t.Schema, &t.Name, &t.Type, &viewDef); err != nil {
 			return nil, err
 		}
 		if viewDef.Valid {
 			t.ViewDef = i.db.definition(viewDef.String)
-		}
-		if createDate.Valid {
-			ts := createDate.Time
-			t.CreateDate = &ts
 		}
 		tables = append(tables, &t)
 	}
@@ -113,8 +107,7 @@ func (i *SQLServerInspector) GetTables(ctx context.Context, schema string, table
 // The width/precision/scale columns deliberately come from INFORMATION_SCHEMA
 // rather than sys.columns: sys.columns.max_length is in *bytes* (nvarchar is
 // 2x), reports 0 instead of NULL for non-character types, and disagrees on
-// text/ntext. Those three values flow straight into the emitted UIR, so the
-// view that matches what consumers already assert on is the one to keep.
+// text/ntext. The browser needs character widths rather than storage sizes.
 //
 // sys.columns is joined only for is_identity, which replaces a per-row
 // COLUMNPROPERTY(OBJECT_ID(...)) scalar call — harmless at table scope, tens of
@@ -337,7 +330,6 @@ func (i *SQLServerInspector) GetStoredProcs(ctx context.Context, schema string) 
 				ELSE 'procedure'
 			END AS proc_type,
 			LEFT(OBJECT_DEFINITION(o.object_id), @p2) AS proc_sql,
-			o.create_date,
 			CASE
 				WHEN o.type = 'FN' THEN (
 					SELECT TOP 1 t.name
@@ -365,8 +357,7 @@ func (i *SQLServerInspector) GetStoredProcs(ctx context.Context, schema string) 
 	for rows.Next() {
 		var p StoredProc
 		var procSQL, returnType sql.NullString
-		var createDate sql.NullTime
-		if err := rows.Scan(&p.Schema, &p.Name, &p.Type, &procSQL, &createDate, &returnType); err != nil {
+		if err := rows.Scan(&p.Schema, &p.Name, &p.Type, &procSQL, &returnType); err != nil {
 			return nil, err
 		}
 		if procSQL.Valid {
@@ -375,10 +366,6 @@ func (i *SQLServerInspector) GetStoredProcs(ctx context.Context, schema string) 
 		p.ID = p.Name
 		if returnType.Valid {
 			p.ReturnType = returnType.String
-		}
-		if createDate.Valid {
-			ts := createDate.Time
-			p.CreateDate = &ts
 		}
 		procs = append(procs, &p)
 	}
@@ -402,8 +389,7 @@ const sqlServerTriggersQuery = `
 		).value('.', 'nvarchar(max)'), 1, 1, '') AS events,
 		CASE WHEN tr.is_instead_of_trigger = 1 THEN 'INSTEAD OF' ELSE 'AFTER' END AS timing,
 		tr.is_disabled,
-		LEFT(OBJECT_DEFINITION(tr.object_id), @p2) AS trigger_sql,
-		tr.create_date
+		LEFT(OBJECT_DEFINITION(tr.object_id), @p2) AS trigger_sql
 	FROM sys.triggers tr
 	INNER JOIN sys.objects t ON tr.parent_id = t.object_id
 	INNER JOIN sys.schemas s ON t.schema_id = s.schema_id
@@ -426,9 +412,8 @@ func (i *SQLServerInspector) GetTriggers(ctx context.Context, schema string) ([]
 	for rows.Next() {
 		var tr Trigger
 		var events, body sql.NullString
-		var createDate sql.NullTime
 		// is_disabled is `bit` — see the note in GetIndexes. Scan it as a bool.
-		if err := rows.Scan(&tr.Schema, &tr.Name, &tr.TableName, &events, &tr.Timing, &tr.IsDisabled, &body, &createDate); err != nil {
+		if err := rows.Scan(&tr.Schema, &tr.Name, &tr.TableName, &events, &tr.Timing, &tr.IsDisabled, &body); err != nil {
 			return nil, err
 		}
 		if events.Valid {
@@ -436,10 +421,6 @@ func (i *SQLServerInspector) GetTriggers(ctx context.Context, schema string) ([]
 		}
 		if body.Valid {
 			tr.SQL = i.db.definition(body.String)
-		}
-		if createDate.Valid {
-			ts := createDate.Time
-			tr.CreateDate = &ts
 		}
 		triggers = append(triggers, &tr)
 	}

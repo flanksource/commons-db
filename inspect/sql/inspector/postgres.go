@@ -101,7 +101,7 @@ func (i *PostgresInspector) GetColumns(ctx context.Context, schema string) ([]*C
 		SELECT
 			table_name,
 			column_name,
-			COALESCE(NULLIF(data_type, 'USER-DEFINED'), udt_name),
+			CASE WHEN data_type IN ('ARRAY', 'USER-DEFINED') THEN udt_name ELSE data_type END,
 			CASE WHEN is_nullable = 'YES' THEN true ELSE false END,
 			column_default,
 			ordinal_position,
@@ -288,7 +288,7 @@ func (i *PostgresInspector) GetProcParams(ctx context.Context, schema string) ([
 		INNER JOIN pg_proc pr ON p.specific_name = pr.proname || '_' || pr.oid
 		INNER JOIN pg_namespace n ON pr.pronamespace = n.oid
 		WHERE n.nspname = $1 AND p.specific_schema = n.nspname
-		AND p.parameter_mode = 'IN'
+		AND p.parameter_mode IN ('IN', 'INOUT')
 		ORDER BY pr.proname, pr.oid, p.ordinal_position
 	`
 

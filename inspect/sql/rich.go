@@ -8,8 +8,8 @@ import (
 	"github.com/flanksource/commons-db/inspect/sql/inspector"
 )
 
-// inspectRich adapts the schema-scoped arch-unit inspector contract to the
-// browser catalog while retaining this package's global relation/column caps.
+// inspectRich assembles schema-scoped rows into the browser catalog. Optional
+// metadata budgets must not suppress table/column browsing in later schemas.
 func inspectRich(ctx context.Context, db *sql.DB, driver string, limits Limits) (Catalog, error) {
 	limits = limits.withDefaults()
 	bounds := &inspector.Bounds{Rows: limits.MaxRelations, DefinitionBytes: limits.MaxDefinitionBytes}
@@ -37,7 +37,7 @@ func inspectRich(ctx context.Context, db *sql.DB, driver string, limits Limits) 
 	catalog := Catalog{Driver: driver, Database: database, Databases: databases, DefaultSchema: defaultSchema, Schemas: []Schema{}}
 	budget := richBudget{relations: limits.MaxRelations, columns: limits.MaxColumns, routines: limits.MaxRoutines, metadata: limits.MaxColumns}
 	for _, schemaName := range schemaNames {
-		if budget.relations == 0 || budget.columns == 0 || budget.routines == 0 || budget.metadata == 0 || bounds.DefinitionBytes == 0 {
+		if budget.relations == 0 || budget.columns == 0 {
 			bounds.Truncated = true
 			break
 		}
