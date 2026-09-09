@@ -248,6 +248,49 @@ func (s *Service) findConnection(db *gorm.DB, id string) (*models.Connection, er
 	return findConnection(db, id)
 }
 
+type resolveConnectionOptions struct {
+	Context  context.Context
+	Database *gorm.DB
+	ID       string
+	// RefreshSecrets drops the cached env values the connection resolves through,
+	// so a rotated secret is read again instead of being served from the env
+	// cache for the rest of its TTL.
+	RefreshSecrets bool
+}
+
+// resolveConnection returns the stored connection row and a hydrated clone of it.
+//
+// Anything that dials the connection needs the clone: a stored field is a
+// `secret://<name>/<key>` reference, not an address, and the SQL and OpenSearch
+// clients take the URL verbatim. The raw row comes back alongside because
+// sanitizeConnectionError needs both — the raw row to redact what the operator
+// configured, the resolved one to redact what hydration just put in memory.
+//
+// This is the CLI counterpart of findConnectionMust, routed through
+// Service.findConnection so a virtual connection resolves from s.virtual rather
+// than requiring a context-level connection resolver.
+func (s *Service) resolveConnection(options resolveConnectionOptions) (*models.Connection, *models.Connection, error) {
+	raw, err := s.findConnection(options.Database, options.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	connectionContext := s.context().Wrap(options.Context)
+	if options.RefreshSecrets {
+		// Invalidation reads the references off the stored row, so it has to run
+		// before hydration replaces them with values.
+		if err := dbcontext.InvalidateConnectionSecrets(connectionContext, raw); err != nil {
+			connectionContext.Logger.V(3).Infof("connection %s: invalidate secret cache: %s", raw.Name, err)
+		}
+	}
+
+	resolved := cloneConnection(raw)
+	if _, err := dbcontext.HydrateConnection(connectionContext, resolved); err != nil {
+		return nil, nil, fmt.Errorf("resolve connection %q: %s", raw.Name, sanitizeConnectionError(err, raw))
+	}
+	return raw, resolved, nil
+}
+
 func Parse(body map[string]any) (*models.Connection, error) {
 	return connectionFromBody(body)
 }
