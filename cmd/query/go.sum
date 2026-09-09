@@ -307,8 +307,8 @@ github.com/fergusstrange/embedded-postgres v1.34.0 h1:c6RKhPKFsLVU+Tdxsx8q0UxCHs
 github.com/fergusstrange/embedded-postgres v1.34.0/go.mod h1:w0YvnCgf19o6tskInrOOACtnqfVlOvluz3hlNLY7tRk=
 github.com/firebase/genkit/go v1.11.0 h1:dmf219fDGP6IcKwPkJoTnXpcTEya7o5Bi+z5iP+FuTk=
 github.com/firebase/genkit/go v1.11.0/go.mod h1:x9h3TsbMLiuK1hgbwnkUmKQ9bmTNPORHaqG9XQhI0K8=
-github.com/flanksource/captain v0.0.58 h1:pkRnSDNIeluKdahMYbk7nA5xCMzGxNpLa65jYf69HKA=
-github.com/flanksource/captain v0.0.58/go.mod h1:jazv6lc9JT2oTxC9+VZ2QbrJIsdsbKkax7O4fU8DtKM=
+github.com/flanksource/captain v0.0.59 h1:dSK/uJOdottAGyLjZ+rHXO35VtFNADYC3QOL3/1m15Y=
+github.com/flanksource/captain v0.0.59/go.mod h1:tWq72N7BK26lJ9Pda1hslVzREoP2U+nYmTC+72FG42o=
 github.com/flanksource/clicky v1.21.61 h1:4OO6RpxGpDJr2VDvDLHEnodcXSNbk+ELU/WnERtLO8E=
 github.com/flanksource/clicky v1.21.61/go.mod h1:L+RlBYG6Ngay9pWs6iuRanfIArxEOttcQPXRL73qXrA=
 github.com/flanksource/clicky/aichat v1.21.61 h1:hTy7CHeUQ7zNd/bil4k0Zk0ajM5I3fZfGA4eWRmf4L8=
