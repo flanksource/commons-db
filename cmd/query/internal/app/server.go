@@ -5,16 +5,21 @@ import (
 	"fmt"
 	"net/http"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/flanksource/clicky/rpc"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/clicky/task"
+	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/cmd/query/schedules"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/cmd/query/www"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/fs"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/query"
 	"github.com/spf13/cobra"
@@ -105,6 +110,35 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		return fmt.Errorf("register database profiles: %w", err)
 	}
 
+	// Schedules come up before the session registry because the task store must
+	// be installed before anything can produce a run worth persisting.
+	scheduleStore, err := a.scheduleStore()
+	if err != nil {
+		return err
+	}
+	task.SetStore(ctx, scheduleStore)
+	defer task.SetStore(context.Background(), nil)
+
+	// Reports live beside the reconciliation snapshots, under the config dir
+	// rather than .tmp: a scheduled report is meant to outlive the run that
+	// produced it.
+	artifacts, err := schedules.NewArtifactStore(
+		fs.NewLocalFS(filepath.Join(configDir, "reports")), "")
+	if err != nil {
+		return err
+	}
+	a.scheduleRunner.SetArtifacts(artifacts)
+
+	a.Schedules.SetDeliverer(schedules.NewDeliverer(schedules.DelivererOptions{
+		BaseURL: fmt.Sprintf("http://%s:%d", options.Host, options.Port),
+	}))
+	a.scheduleRunner.Register()
+	if err := a.Schedules.LoadScheduler(ctx); err != nil {
+		return err
+	}
+	a.scheduler.Start(flanksourceContext.NewContext(ctx))
+	defer a.scheduler.Stop()
+
 	sessionStore, err := sessions.NewStore(gdb, options.SessionRetention)
 	if err != nil {
 		return err
@@ -158,6 +192,10 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	}
 	mux.Handle("/api/chat", chat.Handler())
 	mux.Handle("/api/chat/", chat.Handler())
+	// Live run progress and controls. The schedule store is passed as the run
+	// source so a finished run evicted from memory still answers, which is what
+	// makes a run's own page survive a restart.
+	task.RegisterHandlersWithSource(serverMux, "/api/v1", scheduleStore)
 	mux.Handle("/api/", serverMux)
 	mux.Handle("/health", serverMux)
 

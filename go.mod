@@ -31,6 +31,9 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/eko/gocache/lib/v4 v4.2.3
 	github.com/eko/gocache/store/go_cache/v4 v4.2.5
+	github.com/emersion/go-message v0.18.2
+	github.com/emersion/go-sasl v0.0.0-20241020182733-b788ff22d5a6
+	github.com/emersion/go-smtp v0.25.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/flanksource/clicky v1.21.57
@@ -76,6 +79,7 @@ require (
 	github.com/prometheus/common v0.68.1
 	github.com/samber/lo v1.53.0
 	github.com/samber/oops v1.22.0
+	github.com/slack-go/slack v0.29.0
 	github.com/stretchr/testify v1.11.1
 	github.com/timberio/go-datemath v0.1.0
 	github.com/zclconf/go-cty v1.18.1
@@ -225,7 +229,6 @@ require (
 	github.com/go-openapi/testify/enable/yaml/v2 v2.4.0 // indirect
 	github.com/go-stack/stack v1.8.1 // indirect
 	github.com/go-task/slim-sprig/v3 v3.0.0 // indirect
-	github.com/go-test/deep v1.1.1 // indirect
 	github.com/go-xmlfmt/xmlfmt v1.1.3 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
