@@ -28,6 +28,7 @@ import {
 
 export type SQLCatalog = {
   kind: "sql";
+  driver?: string;
   dialect?: "postgresql" | "mysql" | "mssql" | "standard";
   database?: string;
   databases?: string[];
@@ -200,6 +201,7 @@ export function SQLCatalogNavigator({
           <select
             className="h-8 w-full rounded-md border bg-background px-2"
             value={database}
+            disabled={catalog.driver === "sqlite"}
             onChange={(event) => onDatabaseChange(event.target.value)}
           >
             {(catalog.databases ?? []).map((name) => (
@@ -344,6 +346,7 @@ function CatalogRow({
 
 /** Match OIPA's schema/section/object hierarchy; column and key rows stay flat under their table. */
 function catalogItems(catalog: SQLCatalog): CatalogItem[] {
+  const dialect = catalog.driver === "clickhouse" ? "mysql" : catalog.dialect;
   return (catalog.schemas ?? []).map((schema) => {
     const key = JSON.stringify([schema.name]);
     const sections: CatalogItem[] = [];
@@ -366,7 +369,7 @@ function catalogItems(catalog: SQLCatalog): CatalogItem[] {
       schema.relations
         .filter((relation) => (relation.type === "view") === view)
         .map((relation) =>
-          relationItem(catalog.dialect, schema.name, relation),
+          relationItem(dialect, schema.name, relation),
         );
     section(
       "Tables",
@@ -398,7 +401,7 @@ function catalogItems(catalog: SQLCatalog): CatalogItem[] {
           kind: "routine",
           name: routine.name,
           identifier: qualifiedIdentifier(
-            catalog.dialect,
+            dialect,
             schema.name,
             routine.name,
           ),
@@ -632,6 +635,7 @@ function CatalogStatus({
 }
 
 function quoteIdentifier(dialect: SQLCatalog["dialect"], value: string) {
+  if (dialect === "mysql") return `\`${value.replace(/`/g, "``")}\``;
   return dialect === "mssql"
     ? `[${value.replace(/]/g, "]]")}]`
     : `"${value.split('"').join('""')}"`;

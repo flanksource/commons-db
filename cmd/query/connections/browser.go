@@ -164,6 +164,7 @@ type browserColumn = query.ResultColumn
 
 type browserInspection struct {
 	Kind           string                          `json:"kind"`
+	Driver         string                          `json:"driver,omitempty"`
 	Dialect        string                          `json:"dialect,omitempty"`
 	Database       string                          `json:"database,omitempty"`
 	Databases      []string                        `json:"databases,omitempty"`
