@@ -45,15 +45,68 @@ type Catalog struct {
 type Schema struct {
 	Name      string     `json:"name"`
 	Relations []Relation `json:"relations"`
+	Routines  []Routine  `json:"routines,omitempty"`
 }
 
 type Relation struct {
-	Name    string   `json:"name"`
-	Type    string   `json:"type"`
-	Columns []Column `json:"columns"`
+	Name        string       `json:"name"`
+	Type        string       `json:"type"`
+	ViewDef     string       `json:"viewDefinition,omitempty"`
+	Columns     []Column     `json:"columns"`
+	Indexes     []Index      `json:"indexes,omitempty"`
+	ForeignKeys []ForeignKey `json:"foreignKeys,omitempty"`
+	Triggers    []Trigger    `json:"triggers,omitempty"`
 }
 
 type Column struct {
+	Name             string   `json:"name"`
+	DataType         string   `json:"dataType,omitempty"`
+	Ordinal          int      `json:"ordinal,omitempty"`
+	Nullable         *bool    `json:"nullable,omitempty"`
+	Default          *string  `json:"default,omitempty"`
+	Identity         bool     `json:"identity,omitempty"`
+	PrimaryKey       bool     `json:"primaryKey,omitempty"`
+	Unique           bool     `json:"unique,omitempty"`
+	MaxLength        *int     `json:"maxLength,omitempty"`
+	NumericPrecision *int     `json:"numericPrecision,omitempty"`
+	NumericScale     *int     `json:"numericScale,omitempty"`
+	Comment          *string  `json:"comment,omitempty"`
+	EnumValues       []string `json:"enumValues,omitempty"`
+}
+
+type Index struct {
+	Name    string   `json:"name"`
+	Unique  bool     `json:"unique,omitempty"`
+	Primary bool     `json:"primary,omitempty"`
+	Columns []string `json:"columns"`
+	Type    string   `json:"type,omitempty"`
+	Filter  string   `json:"filter,omitempty"`
+}
+
+type ForeignKey struct {
+	Name              string   `json:"name"`
+	Columns           []string `json:"columns"`
+	ReferencedTable   string   `json:"referencedTable"`
+	ReferencedColumns []string `json:"referencedColumns"`
+}
+
+type Trigger struct {
+	Name     string `json:"name"`
+	Event    string `json:"event,omitempty"`
+	Timing   string `json:"timing,omitempty"`
+	Disabled bool   `json:"disabled,omitempty"`
+	SQL      string `json:"sql,omitempty"`
+}
+
+type Routine struct {
+	Name       string             `json:"name"`
+	Type       string             `json:"type"`
+	SQL        string             `json:"sql,omitempty"`
+	ReturnType string             `json:"returnType,omitempty"`
+	Parameters []RoutineParameter `json:"parameters,omitempty"`
+}
+
+type RoutineParameter struct {
 	Name     string `json:"name"`
 	DataType string `json:"dataType,omitempty"`
 	Ordinal  int    `json:"ordinal,omitempty"`
@@ -73,6 +126,9 @@ func Inspect(ctx context.Context, db *sql.DB, driver string, limits Limits) (Cat
 		return Catalog{}, fmt.Errorf("nil sql database")
 	}
 	driver = normalizeDriver(driver)
+	if driver == "postgres" || driver == "sqlserver" {
+		return inspectRich(ctx, db, driver, limits)
+	}
 	identity, statement, err := inspectionQueries(driver)
 	if err != nil {
 		return Catalog{}, err
