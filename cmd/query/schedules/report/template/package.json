@@ -1,0 +1,10 @@
+{
+  "name": "query-report",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@flanksource/facet": "0.1.71",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  }
+}
