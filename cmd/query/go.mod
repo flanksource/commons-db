@@ -3,12 +3,12 @@ module github.com/flanksource/commons-db/cmd/query
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.29
-	github.com/flanksource/clicky v1.21.57
-	github.com/flanksource/clicky/aichat v1.21.55
-	github.com/flanksource/clicky/valkey v1.21.55
-	github.com/flanksource/commons v1.57.0
-	github.com/flanksource/commons-db v0.1.27
+	github.com/flanksource/captain v0.0.58
+	github.com/flanksource/clicky v1.21.61
+	github.com/flanksource/clicky/aichat v1.21.61
+	github.com/flanksource/clicky/valkey v1.21.61
+	github.com/flanksource/commons v1.59.0
+	github.com/flanksource/commons-db v0.1.31
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -27,7 +27,7 @@ require (
 	k8s.io/api v0.36.1
 	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.36.1
-	modernc.org/sqlite v1.51.0
+	modernc.org/sqlite v1.55.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -148,7 +148,7 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.11.0 // indirect
 	github.com/flanksource/gomplate/v3 v3.24.89 // indirect
-	github.com/flanksource/is-healthy v1.0.90 // indirect
+	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
@@ -397,7 +397,7 @@ require (
 	k8s.io/streaming v0.36.2 // indirect
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 // indirect
 	layeh.com/gopher-json v0.0.0-20201124131017-552bb3c4c3bf // indirect
-	modernc.org/libc v1.72.3 // indirect
+	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	mvdan.cc/sh/v3 v3.13.0 // indirect
