@@ -3,7 +3,7 @@ module github.com/flanksource/commons-db/cmd/query
 go 1.26.1
 
 require (
-	github.com/flanksource/captain v0.0.59
+	github.com/flanksource/captain v0.0.60
 	github.com/flanksource/clicky v1.21.61
 	github.com/flanksource/clicky/aichat v1.21.61
 	github.com/flanksource/clicky/valkey v1.21.61
