@@ -36,11 +36,11 @@ require (
 	github.com/emersion/go-smtp v0.25.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.57
-	github.com/flanksource/commons v1.57.0
-	github.com/flanksource/deps v1.0.39
+	github.com/flanksource/clicky v1.21.61
+	github.com/flanksource/commons v1.59.0
+	github.com/flanksource/deps v1.0.42
 	github.com/flanksource/gomplate/v3 v3.24.89
-	github.com/flanksource/is-healthy v1.0.90
+	github.com/flanksource/is-healthy v1.0.92
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.2
