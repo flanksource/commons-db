@@ -245,3 +245,212 @@ table "profiles" {
     columns = [column.name]
   }
 }
+
+table "schedules" {
+  schema = schema.public
+
+  column "id" {
+    null    = false
+    type    = text
+    default = sql("generate_ulid()")
+  }
+  column "name" {
+    null = false
+    type = text
+  }
+  column "namespace" {
+    null = true
+    type = text
+  }
+  column "spec" {
+    null = false
+    type = jsonb
+  }
+  column "enabled" {
+    null    = false
+    type    = boolean
+    default = true
+  }
+  column "last_run" {
+    null = true
+    type = timestamptz
+  }
+  column "next_run" {
+    null = true
+    type = timestamptz
+  }
+  column "created_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+  column "updated_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+
+  primary_key {
+    columns = [column.id]
+  }
+
+  index "schedules_name_key" {
+    unique  = true
+    columns = [column.name]
+  }
+}
+
+table "schedule_runs" {
+  schema = schema.public
+
+  # id is the clicky task group id, so a persisted run and the live one the task
+  # manager still holds are the same record rather than two views of it.
+  column "id" {
+    null = false
+    type = text
+  }
+  column "schedule_name" {
+    null = true
+    type = text
+  }
+  column "name" {
+    null = false
+    type = text
+  }
+  column "kind" {
+    null = true
+    type = text
+  }
+  column "status" {
+    null = false
+    type = text
+  }
+  column "labels" {
+    null = true
+    type = jsonb
+  }
+  column "owner" {
+    null = true
+    type = text
+  }
+  column "total" {
+    null    = false
+    type    = int
+    default = 0
+  }
+  column "completed" {
+    null    = false
+    type    = int
+    default = 0
+  }
+  column "failed" {
+    null    = false
+    type    = int
+    default = 0
+  }
+  column "running" {
+    null    = false
+    type    = int
+    default = 0
+  }
+  # snapshots is the full group + child task snapshot slice, so a drill-down
+  # survives a restart. The columns above are denormalised from it so a listing
+  # never has to decode it.
+  column "snapshots" {
+    null = false
+    type = jsonb
+  }
+  column "artifact_path" {
+    null = true
+    type = text
+  }
+  column "delivery" {
+    null = true
+    type = jsonb
+  }
+  column "started_at" {
+    null = true
+    type = timestamptz
+  }
+  column "finished_at" {
+    null = true
+    type = timestamptz
+  }
+  column "created_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+  column "updated_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+
+  primary_key {
+    columns = [column.id]
+  }
+
+  index "schedule_runs_schedule_name_idx" {
+    columns = [column.schedule_name]
+  }
+
+  index "schedule_runs_started_at_idx" {
+    columns = [column.started_at]
+  }
+}
+
+table "schedule_fires" {
+  schema = schema.public
+
+  column "id" {
+    null    = false
+    type    = text
+    default = sql("generate_ulid()")
+  }
+  column "schedule_name" {
+    null = false
+    type = text
+  }
+  # scheduled_for is the cron instant this fire belongs to, which differs from
+  # fired_at for a catch-up or a late scheduler.
+  column "scheduled_for" {
+    null = false
+    type = timestamptz
+  }
+  column "fired_at" {
+    null = false
+    type = timestamptz
+  }
+  # A fire that produced no run is still a fact about the schedule: outcome
+  # records skipped and failed alongside started.
+  column "outcome" {
+    null = false
+    type = text
+  }
+  column "run_id" {
+    null = true
+    type = text
+  }
+  column "reason" {
+    null = true
+    type = text
+  }
+  column "error" {
+    null = true
+    type = text
+  }
+  column "created_at" {
+    null    = false
+    type    = timestamptz
+    default = sql("now()")
+  }
+
+  primary_key {
+    columns = [column.id]
+  }
+
+  index "schedule_fires_schedule_name_idx" {
+    columns = [column.schedule_name, column.fired_at]
+  }
+}

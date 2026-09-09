@@ -7,8 +7,10 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons-db/cmd/query/connections"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/cmd/query/schedules"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/cmd/query/snapshots"
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -26,15 +28,19 @@ type Options struct {
 }
 
 type App struct {
-	Runtime      *Runtime
-	Connections  *connections.Service
-	Profiles     *profiles.Service
-	Sessions     *sessions.Runner
-	fileStore    *profiles.FileStore
-	snapshots    *snapshots.Manager
-	profileStore profiles.StoreProvider
-	stdout       io.Writer
-	stderr       io.Writer
+	Runtime       *Runtime
+	Connections   *connections.Service
+	Profiles      *profiles.Service
+	Schedules     *schedules.Service
+	Sessions      *sessions.Runner
+	fileStore     *profiles.FileStore
+	snapshots     *snapshots.Manager
+	profileStore   profiles.StoreProvider
+	scheduleStore  schedules.StoreProvider
+	scheduleRunner *schedules.Runner
+	scheduler      *task.Scheduler
+	stdout        io.Writer
+	stderr        io.Writer
 }
 
 func New(options Options) (*App, error) {
@@ -96,9 +102,37 @@ func New(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// The schedule store resolves lazily for the same reason the profile one
+	// does: building the command tree must not start a database.
+	scheduleStore := func() (*schedules.Store, error) {
+		db, err := runtime.Database()
+		if err != nil {
+			return nil, err
+		}
+		return schedules.NewStore(db)
+	}
+	scheduler := task.NewScheduler(task.SchedulerOptions{})
+	scheduleRunner, err := schedules.NewRunner(schedules.RunnerOptions{
+		Store: scheduleStore, Profiles: profileStore, Context: runtime.Context,
+		Reconcile: profileService, Reporter: schedules.NewReporter(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	scheduleService, err := schedules.New(schedules.Options{
+		Store: scheduleStore, Scheduler: scheduler, DecodeBody: DecodeBody,
+		Runner: scheduleRunner, Context: runtime.Context,
+	})
+	if err != nil {
+		return nil, err
+	}
+
 	return &App{
-		Runtime: runtime, Connections: connectionService, Profiles: profileService, Sessions: runner,
+		Runtime: runtime, Connections: connectionService, Profiles: profileService,
+		Schedules: scheduleService, Sessions: runner,
 		fileStore: fileStore, snapshots: snapshotManager, profileStore: profileStore,
+		scheduleStore: scheduleStore, scheduleRunner: scheduleRunner, scheduler: scheduler,
 		stdout: options.Stdout, stderr: options.Stderr,
 	}, nil
 }
@@ -106,6 +140,9 @@ func New(options Options) (*App, error) {
 func (a *App) RegisterEntities(ctx context.Context) error {
 	a.Connections.RegisterClicky()
 	a.Profiles.RegisterClicky()
+	if a.Schedules != nil {
+		a.Schedules.RegisterClicky()
+	}
 	if err := a.Profiles.RegisterDynamic(ctx); err != nil {
 		return fmt.Errorf("register profile entities: %w", err)
 	}
