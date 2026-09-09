@@ -77,7 +77,7 @@ func (h *connectionBrowserHandler) inspectConnection(ctx context.Context, conn *
 			return browserInspection{}, err
 		}
 		return browserInspection{
-			Kind: "sql", Dialect: sqlDialect(conn.Type), Database: catalog.Database, Databases: catalog.Databases,
+			Kind: "sql", Driver: catalog.Driver, Dialect: sqlDialect(conn.Type), Database: catalog.Database, Databases: catalog.Databases,
 			DefaultSchema: catalog.DefaultSchema, Schemas: catalog.Schemas, Nodes: catalogNodesForSQL(conn.Type, catalog),
 			Truncated: catalog.Truncated, TruncateReason: catalog.TruncateReason, Cache: catalog.Cache,
 		}, nil

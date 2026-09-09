@@ -269,10 +269,13 @@ WHERE c.TABLE_SCHEMA NOT IN ('INFORMATION_SCHEMA','sys')
 ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION`, nil
 	case "clickhouse":
 		return `SELECT currentDatabase(), currentDatabase()`, `
-SELECT database, table, 'BASE TABLE', name, type, position
-FROM system.columns
-WHERE database = currentDatabase()
-ORDER BY database, table, position`, nil
+SELECT c.database, c.table,
+       if(t.engine IN ('View', 'MaterializedView', 'LiveView', 'WindowView'), 'VIEW', 'BASE TABLE'),
+       c.name, c.type, c.position
+FROM system.columns c
+JOIN system.tables t ON t.database = c.database AND t.name = c.table
+WHERE c.database = currentDatabase()
+ORDER BY c.database, c.table, c.position`, nil
 	case "sqlite":
 		return `SELECT 'snapshot', 'main'`, `
 SELECT 'main', m.name,

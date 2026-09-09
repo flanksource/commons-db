@@ -72,6 +72,13 @@ export function ConnectionQueryBrowser({
     () => makeBrowserFilterLookup(baseUrl),
     [baseUrl],
   );
+  const sqlCatalog =
+    inspection.data?.kind === "sql"
+      ? (inspection.data as SQLCatalog)
+      : undefined;
+  // SQLite's "snapshot" name is a display label, not a database override.
+  const sqlDatabase =
+    sqlCatalog?.driver === "sqlite" ? "" : inspection.sqlDatabase;
   const execute = useCallback(
     (request: QueryBrowserRequest) =>
       fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
@@ -81,21 +88,15 @@ export function ConnectionQueryBrowser({
           ...request,
           options: mergeProviderOptions({
             layers: [request.options],
-            database: inspection.sqlDatabase,
+            database: sqlDatabase,
             keepTargetKind: true,
           }),
         }),
       }),
-    [baseUrl, inspection.sqlDatabase],
+    [baseUrl, sqlDatabase],
   );
-  const sqlCatalog =
-    inspection.data?.kind === "sql"
-      ? (inspection.data as SQLCatalog)
-      : undefined;
-  const richSQL =
-    sqlCatalog?.dialect === "postgresql" || sqlCatalog?.dialect === "mssql";
 
-  if (richSQL) {
+  if (sqlCatalog) {
     const activeDatabase =
       inspection.sqlDatabase || sqlCatalog.database || selectedDatabase;
     const setQuery = (query: string) => {
