@@ -37,11 +37,11 @@ catalogs:
 overrides:
   tailwind-merge: ^3.6.0
 
-packageExtensionsChecksum: sha256-5ZK4nX4wAA4/WWK0AHhrAl94QKru3uiwWrIPB5lQV3M=
+packageExtensionsChecksum: sha256-0OzRrdmgTyu6FTxjZiLyZ1tcIgt8Q1grPlJEMQy1rIM=
 
 patchedDependencies:
   '@flanksource/clicky-ui@0.3.26':
-    hash: 2aa2543b55ca24be8c681e88981bc403365bc3fb4bb40ce68a45c24aa242d951
+    hash: 2f25c12d89e77b4c6411208f28ae541efe986d3f1b7e7c9c6e100963491b578f
     path: patches/@flanksource__clicky-ui@0.3.26.patch
 
 importers:
@@ -53,7 +53,7 @@ importers:
         version: 3.0.210(react@18.3.1)(zod@4.4.3)
       '@flanksource/clicky-ui':
         specifier: 0.3.26
-        version: 0.3.26(patch_hash=2aa2543b55ca24be8c681e88981bc403365bc3fb4bb40ce68a45c24aa242d951)(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)
+        version: 0.3.26(patch_hash=2f25c12d89e77b4c6411208f28ae541efe986d3f1b7e7c9c6e100963491b578f)(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)
       '@flanksource/icons':
         specifier: 1.0.63
         version: 1.0.63(react@18.3.1)
@@ -2082,7 +2082,7 @@ snapshots:
   '@esbuild/win32-x64@0.25.12':
     optional: true
 
-  '@flanksource/clicky-ui@0.3.26(patch_hash=2aa2543b55ca24be8c681e88981bc403365bc3fb4bb40ce68a45c24aa242d951)(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)':
+  '@flanksource/clicky-ui@0.3.26(patch_hash=2f25c12d89e77b4c6411208f28ae541efe986d3f1b7e7c9c6e100963491b578f)(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4

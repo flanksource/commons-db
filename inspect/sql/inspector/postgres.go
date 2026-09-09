@@ -3,12 +3,13 @@ package inspector
 import (
 	"context"
 	"database/sql"
-	"strings"
+
+	"github.com/lib/pq"
 )
 
 // PostgresInspector provides PostgreSQL database introspection
 type PostgresInspector struct {
-	db *sql.DB
+	db *boundedDB
 }
 
 // GetSchemas returns all non-system schemas in the database
@@ -65,7 +66,7 @@ func (i *PostgresInspector) GetTables(ctx context.Context, schema string, tableT
 			table_schema,
 			table_name,
 			table_type,
-			COALESCE(view_definition, '') as view_def
+			LEFT(COALESCE(view_definition, ''), $3) as view_def
 		FROM information_schema.tables
 		LEFT JOIN information_schema.views USING (table_schema, table_name)
 		WHERE table_schema = $1
@@ -73,7 +74,7 @@ func (i *PostgresInspector) GetTables(ctx context.Context, schema string, tableT
 		ORDER BY table_name
 	`
 
-	rows, err := i.db.QueryContext(ctx, query, schema, pgType)
+	rows, err := i.db.QueryContext(ctx, query, schema, pgType, i.db.definitionLimit())
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +88,7 @@ func (i *PostgresInspector) GetTables(ctx context.Context, schema string, tableT
 			return nil, err
 		}
 		if viewDef.Valid {
-			t.ViewDef = viewDef.String
+			t.ViewDef = i.db.definition(viewDef.String)
 		}
 		tables = append(tables, &t)
 	}
@@ -108,19 +109,21 @@ func (i *PostgresInspector) GetColumns(ctx context.Context, schema string) ([]*C
 			character_maximum_length,
 			numeric_precision,
 			numeric_scale,
-			EXISTS (
-				SELECT 1 FROM information_schema.table_constraints tc
-				JOIN information_schema.key_column_usage kcu USING (constraint_catalog, constraint_schema, constraint_name)
-				WHERE tc.constraint_type = 'PRIMARY KEY' AND tc.table_schema = columns.table_schema
-				  AND tc.table_name = columns.table_name AND kcu.column_name = columns.column_name
-			),
-			EXISTS (
-				SELECT 1 FROM information_schema.table_constraints tc
-				JOIN information_schema.key_column_usage kcu USING (constraint_catalog, constraint_schema, constraint_name)
-				WHERE tc.constraint_type = 'UNIQUE' AND tc.table_schema = columns.table_schema
-				  AND tc.table_name = columns.table_name AND kcu.column_name = columns.column_name
-			)
-		FROM information_schema.columns
+			COALESCE(keys.primary_key, false),
+			COALESCE(keys.unique_key, false)
+		FROM information_schema.columns c
+		LEFT JOIN (
+			SELECT t.relname, a.attname,
+			       bool_or(con.contype = 'p') AS primary_key,
+			       bool_or(con.contype = 'u') AS unique_key
+			FROM pg_constraint con
+			JOIN pg_class t ON t.oid = con.conrelid
+			JOIN pg_namespace n ON n.oid = t.relnamespace
+			CROSS JOIN LATERAL unnest(con.conkey) AS k(attnum)
+			JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = k.attnum
+			WHERE n.nspname = $1 AND con.contype IN ('p', 'u')
+			GROUP BY t.relname, a.attname
+		) keys ON keys.relname = c.table_name AND keys.attname = c.column_name
 		WHERE table_schema = $1
 		ORDER BY table_name, ordinal_position
 	`
@@ -159,7 +162,9 @@ func (i *PostgresInspector) GetIndexes(ctx context.Context, schema string) ([]*I
 			i.relname as index_name,
 			ix.indisunique as is_unique,
 			ix.indisprimary as is_primary,
-			array_agg(a.attname ORDER BY keys.ordinality) as columns,
+			array_agg(CASE WHEN keys.attnum = 0
+				THEN pg_get_indexdef(ix.indexrelid, keys.ordinality::int, true)
+				ELSE a.attname END ORDER BY keys.ordinality) as columns,
 			am.amname,
 			COALESCE(pg_get_expr(ix.indpred, ix.indrelid), '')
 		FROM pg_class t
@@ -168,8 +173,8 @@ func (i *PostgresInspector) GetIndexes(ctx context.Context, schema string) ([]*I
 		INNER JOIN pg_class i ON i.oid = ix.indexrelid
 		INNER JOIN pg_am am ON i.relam = am.oid
 		CROSS JOIN LATERAL unnest(ix.indkey) WITH ORDINALITY AS keys(attnum, ordinality)
-		INNER JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
-		WHERE n.nspname = $1
+		LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = keys.attnum
+		WHERE n.nspname = $1 AND keys.ordinality <= ix.indnkeyatts
 		GROUP BY t.relname, i.relname, ix.indisunique, ix.indisprimary, am.amname, ix.indpred, ix.indrelid
 		ORDER BY t.relname, i.relname
 	`
@@ -183,15 +188,11 @@ func (i *PostgresInspector) GetIndexes(ctx context.Context, schema string) ([]*I
 	var indexes []*Index
 	for rows.Next() {
 		var idx Index
-		var columnsArr string
+		var columnsArr pq.StringArray
 		if err := rows.Scan(&idx.TableName, &idx.IndexName, &idx.IsUnique, &idx.IsPrimary, &columnsArr, &idx.Type, &idx.Condition); err != nil {
 			return nil, err
 		}
-		// PostgreSQL returns array as {col1,col2,col3}
-		columnsArr = strings.Trim(columnsArr, "{}")
-		if columnsArr != "" {
-			idx.Columns = strings.Split(columnsArr, ",")
-		}
+		idx.Columns = []string(columnsArr)
 		indexes = append(indexes, &idx)
 	}
 	return indexes, rows.Err()
@@ -201,11 +202,12 @@ func (i *PostgresInspector) GetIndexes(ctx context.Context, schema string) ([]*I
 func (i *PostgresInspector) GetForeignKeys(ctx context.Context, schema string) ([]*ForeignKey, error) {
 	query := `
 		SELECT
-			src.relname, con.conname, src_col.attname, ref.relname, ref_col.attname
+			src.relname, con.conname, src_col.attname, ref_ns.nspname, ref.relname, ref_col.attname
 		FROM pg_constraint con
 		JOIN pg_class src ON src.oid = con.conrelid
 		JOIN pg_namespace ns ON ns.oid = src.relnamespace
 		JOIN pg_class ref ON ref.oid = con.confrelid
+		JOIN pg_namespace ref_ns ON ref_ns.oid = ref.relnamespace
 		CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY src_key(attnum, ordinality)
 		JOIN LATERAL unnest(con.confkey) WITH ORDINALITY ref_key(attnum, ordinality)
 		  ON ref_key.ordinality = src_key.ordinality
@@ -224,7 +226,7 @@ func (i *PostgresInspector) GetForeignKeys(ctx context.Context, schema string) (
 	var fks []*ForeignKey
 	for rows.Next() {
 		var fk ForeignKey
-		if err := rows.Scan(&fk.TableName, &fk.ConstraintName, &fk.ColumnName, &fk.RefTableName, &fk.RefColumnName); err != nil {
+		if err := rows.Scan(&fk.TableName, &fk.ConstraintName, &fk.ColumnName, &fk.RefSchemaName, &fk.RefTableName, &fk.RefColumnName); err != nil {
 			return nil, err
 		}
 		fks = append(fks, &fk)
@@ -236,6 +238,7 @@ func (i *PostgresInspector) GetForeignKeys(ctx context.Context, schema string) (
 func (i *PostgresInspector) GetStoredProcs(ctx context.Context, schema string) ([]*StoredProc, error) {
 	query := `
 		SELECT
+			p.proname || '_' || p.oid AS specific_name,
 			n.nspname AS schema_name,
 			p.proname AS proc_name,
 			CASE p.prokind
@@ -243,15 +246,15 @@ func (i *PostgresInspector) GetStoredProcs(ctx context.Context, schema string) (
 				WHEN 'p' THEN 'procedure'
 				ELSE 'function'
 			END AS proc_type,
-			pg_get_functiondef(p.oid) AS proc_sql
+			LEFT(pg_get_functiondef(p.oid), $2) AS proc_sql
 		FROM pg_proc p
 		INNER JOIN pg_namespace n ON p.pronamespace = n.oid
 		WHERE n.nspname = $1
 		AND p.prokind IN ('f', 'p')
-		ORDER BY p.proname
+		ORDER BY p.proname, p.oid
 	`
 
-	rows, err := i.db.QueryContext(ctx, query, schema)
+	rows, err := i.db.QueryContext(ctx, query, schema, i.db.definitionLimit())
 	if err != nil {
 		return nil, err
 	}
@@ -261,11 +264,11 @@ func (i *PostgresInspector) GetStoredProcs(ctx context.Context, schema string) (
 	for rows.Next() {
 		var p StoredProc
 		var procSQL sql.NullString
-		if err := rows.Scan(&p.Schema, &p.Name, &p.Type, &procSQL); err != nil {
+		if err := rows.Scan(&p.ID, &p.Schema, &p.Name, &p.Type, &procSQL); err != nil {
 			return nil, err
 		}
 		if procSQL.Valid {
-			p.SQL = procSQL.String
+			p.SQL = i.db.definition(procSQL.String)
 		}
 		procs = append(procs, &p)
 	}
@@ -276,16 +279,17 @@ func (i *PostgresInspector) GetStoredProcs(ctx context.Context, schema string) (
 func (i *PostgresInspector) GetProcParams(ctx context.Context, schema string) ([]*ProcParam, error) {
 	query := `
 		SELECT
+			p.specific_name,
 			pr.proname AS proc_name,
-			p.parameter_name,
+			COALESCE(p.parameter_name, ''),
 			p.data_type,
 			p.ordinal_position
 		FROM information_schema.parameters p
 		INNER JOIN pg_proc pr ON p.specific_name = pr.proname || '_' || pr.oid
 		INNER JOIN pg_namespace n ON pr.pronamespace = n.oid
-		WHERE n.nspname = $1
+		WHERE n.nspname = $1 AND p.specific_schema = n.nspname
 		AND p.parameter_mode = 'IN'
-		ORDER BY pr.proname, p.ordinal_position
+		ORDER BY pr.proname, pr.oid, p.ordinal_position
 	`
 
 	rows, err := i.db.QueryContext(ctx, query, schema)
@@ -297,7 +301,7 @@ func (i *PostgresInspector) GetProcParams(ctx context.Context, schema string) ([
 	var params []*ProcParam
 	for rows.Next() {
 		var p ProcParam
-		if err := rows.Scan(&p.ProcName, &p.ParamName, &p.DataType, &p.Position); err != nil {
+		if err := rows.Scan(&p.ProcID, &p.ProcName, &p.ParamName, &p.DataType, &p.Position); err != nil {
 			return nil, err
 		}
 		params = append(params, &p)

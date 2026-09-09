@@ -44,6 +44,7 @@ type Index struct {
 type ForeignKey struct {
 	TableName      string
 	ColumnName     string
+	RefSchemaName  string
 	RefTableName   string
 	RefColumnName  string
 	ConstraintName string
@@ -51,6 +52,7 @@ type ForeignKey struct {
 
 // StoredProc represents a stored procedure or function
 type StoredProc struct {
+	ID         string
 	Schema     string
 	Name       string
 	Type       string // "procedure" or "function"
@@ -61,6 +63,7 @@ type StoredProc struct {
 
 // ProcParam represents a stored procedure parameter
 type ProcParam struct {
+	ProcID    string
 	ProcName  string
 	ParamName string
 	DataType  string

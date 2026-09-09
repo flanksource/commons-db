@@ -11,7 +11,9 @@ import (
 // inspectRich adapts the schema-scoped arch-unit inspector contract to the
 // browser catalog while retaining this package's global relation/column caps.
 func inspectRich(ctx context.Context, db *sql.DB, driver string, limits Limits) (Catalog, error) {
-	i, err := inspector.NewInspector(db, driver)
+	limits = limits.withDefaults()
+	bounds := &inspector.Bounds{Rows: limits.MaxRelations, DefinitionBytes: limits.MaxDefinitionBytes}
+	i, err := inspector.NewInspector(db, driver, bounds)
 	if err != nil {
 		return Catalog{}, err
 	}
@@ -32,66 +34,76 @@ func inspectRich(ctx context.Context, db *sql.DB, driver string, limits Limits) 
 		return Catalog{}, fmt.Errorf("inspect sql schemas: %w", err)
 	}
 
-	limits = limits.withDefaults()
 	catalog := Catalog{Driver: driver, Database: database, Databases: databases, DefaultSchema: defaultSchema, Schemas: []Schema{}}
-	relationCount, columnCount := 0, 0
+	budget := richBudget{relations: limits.MaxRelations, columns: limits.MaxColumns, routines: limits.MaxRoutines, metadata: limits.MaxColumns}
 	for _, schemaName := range schemaNames {
-		schema, relationsSeen, columnsSeen, truncated, reason, err := inspectRichSchema(ctx, i, schemaName, limits.MaxRelations-relationCount, limits.MaxColumns-columnCount)
+		if budget.relations == 0 || budget.columns == 0 || budget.routines == 0 || budget.metadata == 0 || bounds.DefinitionBytes == 0 {
+			bounds.Truncated = true
+			break
+		}
+		schema, err := inspectRichSchema(ctx, i, schemaName, &budget, bounds)
 		if err != nil {
 			return Catalog{}, fmt.Errorf("inspect sql schema %q: %w", schemaName, err)
 		}
 		catalog.Schemas = append(catalog.Schemas, schema)
-		relationCount += relationsSeen
-		columnCount += columnsSeen
-		if truncated {
-			catalog.Truncated, catalog.TruncateReason = true, reason
-		}
+	}
+	catalog.Truncated = bounds.Truncated
+	if catalog.Truncated {
+		catalog.TruncateReason = fmt.Sprintf("catalog limits reached: %d relations, %d columns, %d routines, %d metadata rows, %d definition bytes", limits.MaxRelations, limits.MaxColumns, limits.MaxRoutines, limits.MaxColumns, limits.MaxDefinitionBytes)
 	}
 	return catalog, nil
 }
 
-func inspectRichSchema(ctx context.Context, i inspector.Inspector, schemaName string, relationBudget, columnBudget int) (Schema, int, int, bool, string, error) {
-	tables, err := i.GetTables(ctx, schemaName, "table")
+type richBudget struct {
+	relations, columns, routines, metadata int
+}
+
+// readCatalog bounds each query by the remaining global budget, not a fresh
+// allowance per schema. The inspector detects overflow with a lookahead row.
+func readCatalog[T any](bounds *inspector.Bounds, remaining *int, read func() ([]*T, error)) ([]*T, error) {
+	bounds.Rows = *remaining
+	items, err := read()
+	*remaining -= len(items)
+	return items, err
+}
+
+func inspectRichSchema(ctx context.Context, i inspector.Inspector, schemaName string, budget *richBudget, bounds *inspector.Bounds) (Schema, error) {
+	tables, err := readCatalog(bounds, &budget.relations, func() ([]*inspector.Table, error) { return i.GetTables(ctx, schemaName, "table") })
 	if err != nil {
-		return Schema{}, 0, 0, false, "", err
+		return Schema{}, err
 	}
-	views, err := i.GetTables(ctx, schemaName, "view")
+	views, err := readCatalog(bounds, &budget.relations, func() ([]*inspector.Table, error) { return i.GetTables(ctx, schemaName, "view") })
 	if err != nil {
-		return Schema{}, 0, 0, false, "", err
+		return Schema{}, err
 	}
-	columns, err := i.GetColumns(ctx, schemaName)
+	columns, err := readCatalog(bounds, &budget.columns, func() ([]*inspector.Column, error) { return i.GetColumns(ctx, schemaName) })
 	if err != nil {
-		return Schema{}, 0, 0, false, "", err
+		return Schema{}, err
 	}
-	indexes, err := i.GetIndexes(ctx, schemaName)
+	indexes, err := readCatalog(bounds, &budget.metadata, func() ([]*inspector.Index, error) { return i.GetIndexes(ctx, schemaName) })
 	if err != nil {
-		return Schema{}, 0, 0, false, "", err
+		return Schema{}, err
 	}
-	foreignKeys, err := i.GetForeignKeys(ctx, schemaName)
+	foreignKeys, err := readCatalog(bounds, &budget.metadata, func() ([]*inspector.ForeignKey, error) { return i.GetForeignKeys(ctx, schemaName) })
 	if err != nil {
-		return Schema{}, 0, 0, false, "", err
+		return Schema{}, err
 	}
-	triggers, err := i.GetTriggers(ctx, schemaName)
+	triggers, err := readCatalog(bounds, &budget.metadata, func() ([]*inspector.Trigger, error) { return i.GetTriggers(ctx, schemaName) })
 	if err != nil {
-		return Schema{}, 0, 0, false, "", err
+		return Schema{}, err
 	}
-	routines, err := i.GetStoredProcs(ctx, schemaName)
+	routines, err := readCatalog(bounds, &budget.routines, func() ([]*inspector.StoredProc, error) { return i.GetStoredProcs(ctx, schemaName) })
 	if err != nil {
-		return Schema{}, 0, 0, false, "", err
+		return Schema{}, err
 	}
-	params, err := i.GetProcParams(ctx, schemaName)
+	params, err := readCatalog(bounds, &budget.metadata, func() ([]*inspector.ProcParam, error) { return i.GetProcParams(ctx, schemaName) })
 	if err != nil {
-		return Schema{}, 0, 0, false, "", err
+		return Schema{}, err
 	}
 
 	schema := Schema{Name: schemaName, Relations: []Relation{}}
 	allTables := append(tables, views...)
-	truncated, reason := false, ""
 	for _, table := range allTables {
-		if len(schema.Relations) >= max(relationBudget, 0) {
-			truncated, reason = true, fmt.Sprintf("relation limit %d reached", relationBudget)
-			continue
-		}
 		typeName := normalizeRelationType(table.Type)
 		schema.Relations = append(schema.Relations, Relation{Name: table.Name, Type: typeName, ViewDef: table.ViewDef, Columns: []Column{}})
 	}
@@ -99,18 +111,12 @@ func inspectRichSchema(ctx context.Context, i inspector.Inspector, schemaName st
 	for index := range schema.Relations {
 		relations[schema.Relations[index].Name] = &schema.Relations[index]
 	}
-	columnsUsed := 0
 	for _, column := range columns {
 		relation := relations[column.TableName]
 		if relation == nil {
 			continue
 		}
-		if columnsUsed >= max(columnBudget, 0) {
-			truncated, reason = true, fmt.Sprintf("column limit %d reached", columnBudget)
-			continue
-		}
 		relation.Columns = append(relation.Columns, Column{Name: column.ColumnName, DataType: column.DataType, Ordinal: column.Position, Nullable: &column.IsNullable, Default: column.DefaultValue, Identity: column.IsAutoIncrement, PrimaryKey: column.IsPrimaryKey, Unique: column.IsUnique, MaxLength: column.MaxLength, NumericPrecision: column.NumericPrecision, NumericScale: column.NumericScale, Comment: column.Comment, EnumValues: column.EnumValues})
-		columnsUsed++
 	}
 	for _, index := range indexes {
 		if relation := relations[index.TableName]; relation != nil {
@@ -123,7 +129,7 @@ func inspectRichSchema(ctx context.Context, i inspector.Inspector, schemaName st
 			continue
 		}
 		if len(relation.ForeignKeys) == 0 || relation.ForeignKeys[len(relation.ForeignKeys)-1].Name != fk.ConstraintName {
-			relation.ForeignKeys = append(relation.ForeignKeys, ForeignKey{Name: fk.ConstraintName, ReferencedTable: fk.RefTableName})
+			relation.ForeignKeys = append(relation.ForeignKeys, ForeignKey{Name: fk.ConstraintName, ReferencedSchema: fk.RefSchemaName, ReferencedTable: fk.RefTableName})
 		}
 		group := &relation.ForeignKeys[len(relation.ForeignKeys)-1]
 		group.Columns = append(group.Columns, fk.ColumnName)
@@ -136,10 +142,10 @@ func inspectRichSchema(ctx context.Context, i inspector.Inspector, schemaName st
 	}
 	paramsByRoutine := map[string][]RoutineParameter{}
 	for _, param := range params {
-		paramsByRoutine[param.ProcName] = append(paramsByRoutine[param.ProcName], RoutineParameter{Name: param.ParamName, DataType: param.DataType, Ordinal: param.Position})
+		paramsByRoutine[param.ProcID] = append(paramsByRoutine[param.ProcID], RoutineParameter{Name: param.ParamName, DataType: param.DataType, Ordinal: param.Position})
 	}
 	for _, routine := range routines {
-		schema.Routines = append(schema.Routines, Routine{Name: routine.Name, Type: routine.Type, SQL: routine.SQL, ReturnType: routine.ReturnType, Parameters: paramsByRoutine[routine.Name]})
+		schema.Routines = append(schema.Routines, Routine{ID: routine.ID, Name: routine.Name, Type: routine.Type, SQL: routine.SQL, ReturnType: routine.ReturnType, Parameters: paramsByRoutine[routine.ID]})
 	}
-	return schema, len(schema.Relations), columnsUsed, truncated, reason, nil
+	return schema, nil
 }

@@ -14,7 +14,7 @@ import {
   type EsSearch,
   type QueryModeTransition,
 } from "@flanksource/clicky-ui/profiles";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { makeBrowserFilterLookup } from "./browserFilterValues";
 import { SQLCatalogNavigator, type SQLCatalog } from "./sqlCatalogNavigator";
 
@@ -72,19 +72,22 @@ export function ConnectionQueryBrowser({
     () => makeBrowserFilterLookup(baseUrl),
     [baseUrl],
   );
-  const execute = (request: QueryBrowserRequest) =>
-    fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...request,
-        options: mergeProviderOptions({
-          layers: [request.options],
-          database: inspection.sqlDatabase,
-          keepTargetKind: true,
+  const execute = useCallback(
+    (request: QueryBrowserRequest) =>
+      fetchJSON<QueryBrowserResult>(`${baseUrl}/query`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...request,
+          options: mergeProviderOptions({
+            layers: [request.options],
+            database: inspection.sqlDatabase,
+            keepTargetKind: true,
+          }),
         }),
       }),
-    });
+    [baseUrl, inspection.sqlDatabase],
+  );
   const sqlCatalog =
     inspection.data?.kind === "sql"
       ? (inspection.data as SQLCatalog)

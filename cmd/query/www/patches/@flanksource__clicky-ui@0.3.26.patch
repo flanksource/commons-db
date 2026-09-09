@@ -1,5 +1,5 @@
 diff --git a/dist/data/query-browser/QueryBrowser.cjs b/dist/data/query-browser/QueryBrowser.cjs
-index 322876814602742aa2e4d84891693df96744c72c..d3ffb80480f4040bd99834ca0b38bdaeffce0444 100644
+index 322876814602742aa2e4d84891693df96744c72c..83d1a6ac165a112b495cd82ac1ff22095e997a6c 100644
 --- a/dist/data/query-browser/QueryBrowser.cjs
 +++ b/dist/data/query-browser/QueryBrowser.cjs
 @@ -23,6 +23,7 @@ function QueryBrowser({
@@ -22,7 +22,7 @@ index 322876814602742aa2e4d84891693df96744c72c..d3ffb80480f4040bd99834ca0b38bdae
    const editor = react.useRef(null);
    const languageConfig = react.useRef(new state.Compartment());
    const executeRef = react.useRef(() => void 0);
-+  const consumedRunToken = react.useRef();
++  const consumedRunToken = react.useRef(runToken);
    const onQueryChangeRef = react.useRef(onQueryChange);
    const [options, setOptions] = react.useState(
      initialOptions ?? {}
@@ -148,7 +148,7 @@ index 95a4590a5803b8bc3a7793682c8e5945e07ef70f..8fc6048a3d48c9b9447cb913402d7a42
    if (language === "json") {
      if ((completion == null ? void 0 : completion.kind) !== "json-fields") return json();
 diff --git a/dist/data/query-browser/QueryBrowser.js b/dist/data/query-browser/QueryBrowser.js
-index f4d544aafee9075ab234e2e904d533a4a74053b5..97ad8a6dc3ac5b9825521ebbb631d07408202c24 100644
+index f4d544aafee9075ab234e2e904d533a4a74053b5..706f8ebf8d1425271d6355969fcd493207e507e1 100644
 --- a/dist/data/query-browser/QueryBrowser.js
 +++ b/dist/data/query-browser/QueryBrowser.js
 @@ -21,6 +21,7 @@ function QueryBrowser({
@@ -171,7 +171,7 @@ index f4d544aafee9075ab234e2e904d533a4a74053b5..97ad8a6dc3ac5b9825521ebbb631d074
    const editor = useRef(null);
    const languageConfig = useRef(new Compartment());
    const executeRef = useRef(() => void 0);
-+  const consumedRunToken = useRef();
++  const consumedRunToken = useRef(runToken);
    const onQueryChangeRef = useRef(onQueryChange);
    const [options, setOptions] = useState(
      initialOptions ?? {}

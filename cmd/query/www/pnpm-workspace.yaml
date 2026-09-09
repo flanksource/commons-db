@@ -100,6 +100,6 @@ allowBuilds:
 packageExtensions:
   '@flanksource/clicky-ui@0.3.26':
     dependencies:
-      '@codemirror/language': 6.12.4
+      '@codemirror/language': ^6.12.4
 patchedDependencies:
   '@flanksource/clicky-ui@0.3.26': patches/@flanksource__clicky-ui@0.3.26.patch

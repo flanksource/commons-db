@@ -12,13 +12,17 @@ import (
 )
 
 const (
-	DefaultMaxRelations = 5000
-	DefaultMaxColumns   = 50000
+	DefaultMaxRelations       = 5000
+	DefaultMaxColumns         = 50000
+	DefaultMaxRoutines        = 2000
+	DefaultMaxDefinitionBytes = 4 * 1024 * 1024
 )
 
 type Limits struct {
-	MaxRelations int
-	MaxColumns   int
+	MaxRelations       int
+	MaxColumns         int
+	MaxRoutines        int
+	MaxDefinitionBytes int
 }
 
 func (l Limits) withDefaults() Limits {
@@ -27,6 +31,12 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MaxColumns <= 0 {
 		l.MaxColumns = DefaultMaxColumns
+	}
+	if l.MaxRoutines <= 0 {
+		l.MaxRoutines = DefaultMaxRoutines
+	}
+	if l.MaxDefinitionBytes <= 0 {
+		l.MaxDefinitionBytes = DefaultMaxDefinitionBytes
 	}
 	return l
 }
@@ -86,6 +96,7 @@ type Index struct {
 type ForeignKey struct {
 	Name              string   `json:"name"`
 	Columns           []string `json:"columns"`
+	ReferencedSchema  string   `json:"referencedSchema,omitempty"`
 	ReferencedTable   string   `json:"referencedTable"`
 	ReferencedColumns []string `json:"referencedColumns"`
 }
@@ -99,6 +110,7 @@ type Trigger struct {
 }
 
 type Routine struct {
+	ID         string             `json:"id"`
 	Name       string             `json:"name"`
 	Type       string             `json:"type"`
 	SQL        string             `json:"sql,omitempty"`

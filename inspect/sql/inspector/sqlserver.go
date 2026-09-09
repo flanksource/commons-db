@@ -8,7 +8,7 @@ import (
 
 // SQLServerInspector provides SQL Server database introspection
 type SQLServerInspector struct {
-	db *sql.DB
+	db *boundedDB
 }
 
 // GetSchemas returns all non-system schemas in the database
@@ -60,7 +60,7 @@ func (i *SQLServerInspector) GetTables(ctx context.Context, schema string, table
 			t.TABLE_NAME,
 			t.TABLE_TYPE,
 			CASE
-				WHEN t.TABLE_TYPE = 'VIEW' THEN OBJECT_DEFINITION(OBJECT_ID(t.TABLE_SCHEMA + '.' + t.TABLE_NAME))
+				WHEN t.TABLE_TYPE = 'VIEW' THEN LEFT(OBJECT_DEFINITION(o.object_id), @p3)
 				ELSE ''
 			END AS VIEW_DEF,
 			o.create_date
@@ -76,7 +76,7 @@ func (i *SQLServerInspector) GetTables(ctx context.Context, schema string, table
 		ORDER BY t.TABLE_NAME
 	`
 
-	rows, err := i.db.QueryContext(ctx, query, schema, tableType)
+	rows, err := i.db.QueryContext(ctx, query, schema, tableType, i.db.definitionLimit())
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +91,7 @@ func (i *SQLServerInspector) GetTables(ctx context.Context, schema string, table
 			return nil, err
 		}
 		if viewDef.Valid {
-			t.ViewDef = viewDef.String
+			t.ViewDef = i.db.definition(viewDef.String)
 		}
 		if createDate.Valid {
 			ts := createDate.Time
@@ -132,6 +132,7 @@ func (i *SQLServerInspector) GetColumns(ctx context.Context, schema string) ([]*
 			c.NUMERIC_PRECISION,
 			c.NUMERIC_SCALE,
 			CASE WHEN pk.COLUMN_NAME IS NULL THEN 0 ELSE 1 END,
+			CASE WHEN uq.COLUMN_NAME IS NULL THEN 0 ELSE 1 END,
 			sc.is_identity
 		FROM INFORMATION_SCHEMA.COLUMNS c
 		LEFT JOIN sys.schemas ss ON ss.name = c.TABLE_SCHEMA
@@ -150,6 +151,16 @@ func (i *SQLServerInspector) GetColumns(ctx context.Context, schema string) ([]*
 		  ON pk.TABLE_SCHEMA = c.TABLE_SCHEMA
 		 AND pk.TABLE_NAME = c.TABLE_NAME
 		 AND pk.COLUMN_NAME = c.COLUMN_NAME
+		LEFT JOIN (
+			SELECT DISTINCT ku.TABLE_SCHEMA, ku.TABLE_NAME, ku.COLUMN_NAME
+			FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+			JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE ku
+			  ON ku.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
+			 AND ku.TABLE_SCHEMA = tc.TABLE_SCHEMA
+			 AND ku.TABLE_NAME = tc.TABLE_NAME
+			WHERE tc.CONSTRAINT_TYPE = 'UNIQUE' AND tc.TABLE_SCHEMA = @p1
+		) uq ON uq.TABLE_SCHEMA = c.TABLE_SCHEMA
+		 AND uq.TABLE_NAME = c.TABLE_NAME AND uq.COLUMN_NAME = c.COLUMN_NAME
 		WHERE c.TABLE_SCHEMA = @p1
 		ORDER BY c.TABLE_NAME, c.ORDINAL_POSITION
 	`
@@ -163,7 +174,7 @@ func (i *SQLServerInspector) GetColumns(ctx context.Context, schema string) ([]*
 	var columns []*Column
 	for rows.Next() {
 		var c Column
-		var isNullable, isPrimaryKey int
+		var isNullable, isPrimaryKey, isUnique int
 		var defaultVal sql.NullString
 		// CHARACTER_MAXIMUM_LENGTH is NULL for non-character types and -1 for
 		// (max); precision/scale are NULL for non-numeric ones.
@@ -173,11 +184,12 @@ func (i *SQLServerInspector) GetColumns(ctx context.Context, schema string) ([]*
 		// object join misses.
 		var isIdentity sql.NullBool
 		if err := rows.Scan(&c.TableName, &c.ColumnName, &c.DataType, &isNullable, &defaultVal, &c.Position,
-			&maxLength, &precision, &scale, &isPrimaryKey, &isIdentity); err != nil {
+			&maxLength, &precision, &scale, &isPrimaryKey, &isUnique, &isIdentity); err != nil {
 			return nil, err
 		}
 		c.IsNullable = isNullable == 1
 		c.IsPrimaryKey = isPrimaryKey == 1
+		c.IsUnique = isUnique == 1
 		c.IsAutoIncrement = isIdentity.Valid && isIdentity.Bool
 		if defaultVal.Valid {
 			c.DefaultValue = &defaultVal.String
@@ -276,6 +288,7 @@ func (i *SQLServerInspector) GetForeignKeys(ctx context.Context, schema string) 
 			t1.name AS table_name,
 			fk.name AS constraint_name,
 			c1.name AS column_name,
+			s2.name AS ref_schema_name,
 			t2.name AS ref_table_name,
 			c2.name AS ref_column_name
 		FROM sys.foreign_keys fk
@@ -284,6 +297,7 @@ func (i *SQLServerInspector) GetForeignKeys(ctx context.Context, schema string) 
 		INNER JOIN sys.schemas s1 ON t1.schema_id = s1.schema_id
 		INNER JOIN sys.columns c1 ON fkc.parent_object_id = c1.object_id AND fkc.parent_column_id = c1.column_id
 		INNER JOIN sys.tables t2 ON fk.referenced_object_id = t2.object_id
+		INNER JOIN sys.schemas s2 ON t2.schema_id = s2.schema_id
 		INNER JOIN sys.columns c2 ON fkc.referenced_object_id = c2.object_id AND fkc.referenced_column_id = c2.column_id
 		WHERE s1.name = @p1
 		ORDER BY t1.name, fk.name, fkc.constraint_column_id
@@ -298,7 +312,7 @@ func (i *SQLServerInspector) GetForeignKeys(ctx context.Context, schema string) 
 	var fks []*ForeignKey
 	for rows.Next() {
 		var fk ForeignKey
-		if err := rows.Scan(&fk.TableName, &fk.ConstraintName, &fk.ColumnName, &fk.RefTableName, &fk.RefColumnName); err != nil {
+		if err := rows.Scan(&fk.TableName, &fk.ConstraintName, &fk.ColumnName, &fk.RefSchemaName, &fk.RefTableName, &fk.RefColumnName); err != nil {
 			return nil, err
 		}
 		fks = append(fks, &fk)
@@ -322,7 +336,7 @@ func (i *SQLServerInspector) GetStoredProcs(ctx context.Context, schema string) 
 				WHEN 'TF' THEN 'function'
 				ELSE 'procedure'
 			END AS proc_type,
-			OBJECT_DEFINITION(o.object_id) AS proc_sql,
+			LEFT(OBJECT_DEFINITION(o.object_id), @p2) AS proc_sql,
 			o.create_date,
 			CASE
 				WHEN o.type = 'FN' THEN (
@@ -341,7 +355,7 @@ func (i *SQLServerInspector) GetStoredProcs(ctx context.Context, schema string) 
 		ORDER BY o.name
 	`
 
-	rows, err := i.db.QueryContext(ctx, query, schema)
+	rows, err := i.db.QueryContext(ctx, query, schema, i.db.definitionLimit())
 	if err != nil {
 		return nil, err
 	}
@@ -356,8 +370,9 @@ func (i *SQLServerInspector) GetStoredProcs(ctx context.Context, schema string) 
 			return nil, err
 		}
 		if procSQL.Valid {
-			p.SQL = procSQL.String
+			p.SQL = i.db.definition(procSQL.String)
 		}
+		p.ID = p.Name
 		if returnType.Valid {
 			p.ReturnType = returnType.String
 		}
@@ -387,7 +402,7 @@ const sqlServerTriggersQuery = `
 		).value('.', 'nvarchar(max)'), 1, 1, '') AS events,
 		CASE WHEN tr.is_instead_of_trigger = 1 THEN 'INSTEAD OF' ELSE 'AFTER' END AS timing,
 		tr.is_disabled,
-		OBJECT_DEFINITION(tr.object_id) AS trigger_sql,
+		LEFT(OBJECT_DEFINITION(tr.object_id), @p2) AS trigger_sql,
 		tr.create_date
 	FROM sys.triggers tr
 	INNER JOIN sys.objects t ON tr.parent_id = t.object_id
@@ -401,7 +416,7 @@ const sqlServerTriggersQuery = `
 // (schema, name). A single trigger firing on multiple events (e.g.
 // INSERT+UPDATE) is returned as one row with a comma-joined Event string.
 func (i *SQLServerInspector) GetTriggers(ctx context.Context, schema string) ([]*Trigger, error) {
-	rows, err := i.db.QueryContext(ctx, sqlServerTriggersQuery, schema)
+	rows, err := i.db.QueryContext(ctx, sqlServerTriggersQuery, schema, i.db.definitionLimit())
 	if err != nil {
 		return nil, err
 	}
@@ -420,7 +435,7 @@ func (i *SQLServerInspector) GetTriggers(ctx context.Context, schema string) ([]
 			tr.Event = events.String
 		}
 		if body.Valid {
-			tr.SQL = body.String
+			tr.SQL = i.db.definition(body.String)
 		}
 		if createDate.Valid {
 			ts := createDate.Time
@@ -471,6 +486,7 @@ func (i *SQLServerInspector) GetProcParams(ctx context.Context, schema string) (
 		if err := rows.Scan(&p.ProcName, &p.ParamName, &p.DataType, &p.Position); err != nil {
 			return nil, err
 		}
+		p.ProcID = p.ProcName
 		params = append(params, &p)
 	}
 	return params, rows.Err()

@@ -8,7 +8,7 @@ import (
 
 // Inspector provides database introspection capabilities.
 //
-// Every catalogue method is schema-scoped: it returns every row in the schema
+// Every catalogue method is schema-scoped: it returns a bounded set of rows
 // in one round trip, and each row carries the name of the object that owns it
 // (Column.TableName, Index.TableName, ForeignKey.TableName, ProcParam.ProcName).
 // Callers group; dialects do not. Asking per object turned a schema dump into
@@ -41,12 +41,13 @@ type Inspector interface {
 }
 
 // NewInspector creates an inspector for the given database driver
-func NewInspector(db *sql.DB, driver string) (Inspector, error) {
+func NewInspector(db *sql.DB, driver string, bounds *Bounds) (Inspector, error) {
+	reader := &boundedDB{DB: db, driver: driver, bounds: bounds}
 	switch driver {
 	case "sqlserver":
-		return &SQLServerInspector{db: db}, nil
+		return &SQLServerInspector{db: reader}, nil
 	case "postgres":
-		return &PostgresInspector{db: db}, nil
+		return &PostgresInspector{db: reader}, nil
 	default:
 		return nil, fmt.Errorf("unsupported database driver: %s", driver)
 	}

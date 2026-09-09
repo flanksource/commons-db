@@ -74,6 +74,7 @@ type SQLIndex = {
 type SQLForeignKey = {
   name: string;
   columns: string[];
+  referencedSchema?: string;
   referencedTable: string;
   referencedColumns: string[];
 };
@@ -85,6 +86,7 @@ type SQLTrigger = {
   sql?: string;
 };
 type SQLRoutine = {
+  id?: string;
   name: string;
   type: string;
   sql?: string;
@@ -143,12 +145,14 @@ export function SQLCatalogNavigator({
   const [selected, setSelected] = useState<CatalogItem | null>(null);
   const [source, setSource] = useState<Source>();
   const [notice, setNotice] = useState("");
-  const copy = (identifier: string) => {
-    void navigator.clipboard.writeText(identifier).then(
-      () => setNotice(`Copied ${identifier}`),
-      () =>
-        setNotice("Could not copy identifier. Clipboard access was denied."),
-    );
+  const copy = async (identifier: string) => {
+    try {
+      if (!navigator.clipboard?.writeText) throw new Error("Clipboard unavailable");
+      await navigator.clipboard.writeText(identifier);
+      setNotice(`Copied ${identifier}`);
+    } catch {
+      setNotice("Could not copy identifier. Clipboard access was denied.");
+    }
   };
   const actionsFor = (node: CatalogItem): DropdownMenuItem[] => [
     ...(node.query
@@ -165,7 +169,7 @@ export function SQLCatalogNavigator({
           {
             label: "Copy identifier",
             icon: UiCopy,
-            onSelect: () => copy(node.identifier!),
+            onSelect: () => void copy(node.identifier!),
           },
         ]
       : []),
@@ -386,7 +390,11 @@ function catalogItems(catalog: SQLCatalog): CatalogItem[] {
           <UiFunctionSquare className="h-3 w-3" />
         ),
         routines.map((routine) => ({
-          key: JSON.stringify([schema.name, routine.type, routine.name]),
+          key: JSON.stringify([
+            schema.name,
+            routine.type,
+            routine.id ?? routineSignature(routine),
+          ]),
           kind: "routine",
           name: routine.name,
           identifier: qualifiedIdentifier(
@@ -471,8 +479,12 @@ function relationItem(
   for (const index of relation.indexes ?? [])
     children.push({
       ...child("index", index.name),
+      identifier:
+        dialect === "postgresql"
+          ? qualifiedIdentifier(dialect, schema, index.name)
+          : quoteIdentifier(dialect, index.name),
       icon: <UiKey className="h-3 w-3 shrink-0 text-purple-400" />,
-      description: `${index.name} (${index.columns.join(", ")}) ${index.type ?? ""}${index.filter ? ` WHERE ${index.filter}` : ""}`,
+      description: `${index.name} ON ${identifier} (${index.columns.join(", ")}) ${index.type ?? ""}${index.filter ? ` WHERE ${index.filter}` : ""}`,
       detail: (
         <>
           <span className="truncate">({index.columns.join(", ")})</span>
@@ -489,20 +501,30 @@ function relationItem(
         </>
       ),
     });
-  for (const fk of relation.foreignKeys ?? [])
+  for (const fk of relation.foreignKeys ?? []) {
+    const referencedRelation = fk.referencedSchema
+      ? `${fk.referencedSchema}.${fk.referencedTable}`
+      : fk.referencedTable;
     children.push({
       ...child("foreignKey", fk.name),
+      identifier: quoteIdentifier(dialect, fk.name),
       icon: <UiLink className="h-3 w-3 shrink-0 text-teal-400" />,
       detail: (
         <span className="truncate">
-          → {fk.referencedTable} ({fk.referencedColumns.join(", ")})
+          → {referencedRelation} ({fk.referencedColumns.join(", ")})
         </span>
       ),
-      description: `${fk.name}: ${fk.columns.join(", ")} → ${fk.referencedTable} (${fk.referencedColumns.join(", ")})`,
+      description: `${fk.name} ON ${identifier}: ${fk.columns.join(", ")} → ${referencedRelation} (${fk.referencedColumns.join(", ")})`,
     });
+  }
   for (const trigger of relation.triggers ?? [])
     children.push({
       ...child("trigger", trigger.name),
+      identifier:
+        dialect === "mssql"
+          ? qualifiedIdentifier(dialect, schema, trigger.name)
+          : quoteIdentifier(dialect, trigger.name),
+      description: `${trigger.name} ON ${identifier}`,
       source: trigger.sql,
       icon: <UiZap className="h-3 w-3 shrink-0 text-amber-500" />,
       detail: (
@@ -567,6 +589,10 @@ function columnType(column: SQLColumn) {
         ? `(${column.maxLength === -1 ? "max" : column.maxLength})`
         : "";
   return `${column.dataType ?? ""}${dimensions}`;
+}
+
+function routineSignature(routine: SQLRoutine) {
+  return `${routine.name}(${(routine.parameters ?? []).map((parameter) => parameter.dataType ?? "").join(",")})`;
 }
 
 function CatalogStatus({
