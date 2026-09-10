@@ -348,10 +348,10 @@ func asStringLiteral(s string) (string, bool) {
 	return strings.ReplaceAll(inner, "''", "'"), true
 }
 
-// paramNameRe captures `@P0`, `@P12`, etc. from a declaration string.
-var paramNameRe = regexp.MustCompile(`@P\d+`)
+// paramNameRe captures `@P0`, `@p12`, etc. from a declaration string.
+var paramNameRe = regexp.MustCompile(`(?i)@p\d+`)
 
-var paramPlaceholderRe = regexp.MustCompile(`@P\d+\b`)
+var paramPlaceholderRe = regexp.MustCompile(`(?i)@p\d+\b`)
 
 // substituteParams returns `template` with @P0/@P1/... replaced by the
 // corresponding entries in `values`. Extra values beyond the declared
@@ -366,19 +366,37 @@ func substituteParams(template, paramDecl string, values []string) string {
 		names = dedupePreserveOrder(names)
 	}
 
+	// Preserve exact spelling for case-sensitive collations. A folded fallback
+	// is unambiguous only when one declared name has that spelling.
+	foldCounts := make(map[string]int, len(names))
+	for _, name := range names {
+		foldCounts[strings.ToLower(name)]++
+	}
+
 	literals := make(map[string]string, len(names))
+	foldedLiterals := make(map[string]string, len(names))
 	for i, name := range names {
 		if i >= len(values) {
 			break
 		}
 		value := values[i]
-		if lhs, rhs, assigned := strings.Cut(value, "="); assigned && strings.TrimSpace(lhs) == name {
-			value = strings.TrimSpace(rhs)
+		if lhs, rhs, assigned := strings.Cut(value, "="); assigned {
+			lhs = strings.TrimSpace(lhs)
+			if lhs == name || (foldCounts[strings.ToLower(name)] == 1 && strings.EqualFold(lhs, name)) {
+				value = strings.TrimSpace(rhs)
+			}
 		}
-		literals[name] = formatArgForDisplay(value)
+		literal := formatArgForDisplay(value)
+		literals[name] = literal
+		if folded := strings.ToLower(name); foldCounts[folded] == 1 {
+			foldedLiterals[folded] = literal
+		}
 	}
 	out := paramPlaceholderRe.ReplaceAllStringFunc(template, func(name string) string {
 		if literal, ok := literals[name]; ok {
+			return literal
+		}
+		if literal, ok := foldedLiterals[strings.ToLower(name)]; ok {
 			return literal
 		}
 		return name
