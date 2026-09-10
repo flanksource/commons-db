@@ -1,5 +1,6 @@
 packages:
   - "."
+  - "packages/*"
 
 # Supply-chain hardening: only install releases that have been public long enough
 # to be vetted, and never accept weakened trust signals on an update.
