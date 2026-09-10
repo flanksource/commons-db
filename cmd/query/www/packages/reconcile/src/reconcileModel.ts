@@ -185,7 +185,11 @@ export function profileSlug(name: string): string {
     if ((character >= "a" && character <= "z") || (character >= "0" && character <= "9")) slug += character;
     else if (" -_/.".includes(character)) slug += "-";
   }
-  return slug.replace(/^-+|-+$/g, "");
+  let start = 0;
+  let end = slug.length;
+  while (start < end && slug[start] === "-") start++;
+  while (end > start && slug[end - 1] === "-") end--;
+  return slug.slice(start, end);
 }
 
 /** The stored profile a `profile-<slug>` surface key addresses. */
