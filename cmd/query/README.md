@@ -109,6 +109,31 @@ cannot cross a flush boundary. The remaining batch flushes when the provider
 ends, the session is stopped, or its deadline is reached; `maxEvents` caps the
 final emitted event ring rather than the raw input buffer.
 
+## SQL Server XEvents
+
+SQL Server connections have a **Trace** tab beside the browser. Opening either
+tab never starts capture. Choose filters and click **Start**, then **Stop** to
+finish capture and keep the results visible. Switching tabs preserves the
+session; leaving the connection requests cleanup. The default capture limit is
+five minutes, bounded by the server's session limits.
+
+Start a connection capture with `POST /api/v1/connection/{id}/trace/sessions`
+and a JSON body such as `{"duration":"5m","minDuration":"100ms"}`. It uses the existing
+`/api/v1/sessions/{id}` status/stop, `/events` streaming, and `/result` endpoints.
+The app uses an ephemeral profile internally to reuse session limits and result
+retention. Saved trace-profile authoring and OIPA profile migration are separate
+features, not part of this connection playground.
+
+The provider uses `tracing/xetrace`, migrated from OIPA's capture implementation.
+It captures statement, RPC, batch-completion, and error events by default;
+`sp_statement_completed` is opt-in via `events`. User/application/host
+patterns support `*` and `!` exclusions.
+Duration and CPU values in result rows are nanoseconds. Permission failures
+report the required grants without applying them. Stop drains pending events
+and drops the server session before the query session becomes terminal; cleanup
+errors remain visible. This is server-scoped XEvents, not Azure SQL Database's
+database-scoped sessions.
+
 ## Architecture
 
 `cmd/query` is an independent Go module. Its reusable code is split by domain:

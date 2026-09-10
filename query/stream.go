@@ -196,12 +196,22 @@ func runTrace(
 ) {
 	defer cancel()
 	session.markRunning()
-	rows, done := streamTraceRows(ctx, sp, req)
+	deliveryCtx, stopDelivery := stdcontext.WithCancel(stdcontext.Background())
+	defer stopDelivery()
+	rows, done := streamTraceRows(ctx, sp, req, deliveryCtx)
 	runner := traceRunner{
-		ctx: ctx, session: session, pipeline: pipeline, buffer: buffer,
+		session: session, pipeline: pipeline, buffer: buffer,
 		rows: rows, done: done,
 	}
-	session.markDone(normalizeStreamErr(runner.run()))
+	err := normalizeStreamErr(runner.run())
+	cancel()
+	stopDelivery()
+	if !runner.providerFinished {
+		// A processor failure must also wait for provider cleanup. Stop accepting
+		// rows first so a provider's final drain cannot block on the failed reader.
+		err = errors.Join(err, normalizeStreamErr(<-done))
+	}
+	session.markDone(err)
 }
 
 type tracePipeline struct {
@@ -244,14 +254,14 @@ func (p *tracePipeline) Process(rows []Row) ([]Row, error) {
 	return mapped, nil
 }
 
-func streamTraceRows(ctx context.Context, provider StreamProvider, req ProviderRequest) (<-chan Row, <-chan error) {
+func streamTraceRows(ctx context.Context, provider StreamProvider, req ProviderRequest, deliveryCtx stdcontext.Context) (<-chan Row, <-chan error) {
 	rows := make(chan Row)
 	done := make(chan error, 1)
 	go func() {
 		done <- provider.Stream(ctx, req, func(row Row) {
 			select {
 			case rows <- row:
-			case <-ctx.Done():
+			case <-deliveryCtx.Done():
 			}
 		})
 	}()
@@ -259,15 +269,15 @@ func streamTraceRows(ctx context.Context, provider StreamProvider, req ProviderR
 }
 
 type traceRunner struct {
-	ctx      context.Context
-	session  *Session
-	pipeline *tracePipeline
-	buffer   *TraceBufferSpec
-	rows     <-chan Row
-	done     <-chan error
-	pending  []Row
-	timer    *time.Timer
-	timerC   <-chan time.Time
+	session          *Session
+	pipeline         *tracePipeline
+	buffer           *TraceBufferSpec
+	rows             <-chan Row
+	done             <-chan error
+	pending          []Row
+	timer            *time.Timer
+	timerC           <-chan time.Time
+	providerFinished bool
 }
 
 func (r *traceRunner) run() error {
@@ -279,9 +289,10 @@ func (r *traceRunner) run() error {
 				return err
 			}
 		case err := <-r.done:
+			r.providerFinished = true
 			return r.finish(err)
-		case <-r.ctx.Done():
-			return r.finish(r.ctx.Err())
+		// Cancellation asks the provider to stop; its return confirms that final
+		// rows and server-side teardown have finished before the session ends.
 		case <-r.timerC:
 			if err := r.flush(); err != nil {
 				return err
