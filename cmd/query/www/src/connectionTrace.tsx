@@ -1,3 +1,4 @@
+import { browserBaseUrl, useInspection } from "@flanksource/clicky-ui/profiles";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 type TraceState =
@@ -74,6 +75,15 @@ export function ConnectionTrace({
   defaultDatabase?: string;
 }) {
   const [database, setDatabase] = useState(defaultDatabase ?? "");
+  const inspection = useInspection({
+    cacheKey: "connection-browser-inspection",
+    id,
+    baseUrl: browserBaseUrl(id),
+    enabled: true,
+    database: "",
+    fallbackDatabase: defaultDatabase ?? "",
+    target: "",
+  });
   const [users, setUsers] = useState("");
   const [apps, setApps] = useState("");
   const [hosts, setHosts] = useState("");
@@ -254,13 +264,24 @@ export function ConnectionTrace({
       <div className="flex flex-wrap items-end gap-3">
         <label className="flex min-w-40 flex-1 flex-col gap-1 text-xs text-muted-foreground">
           Database
-          <input
+          <select
             className={inputClass}
             value={database}
             onChange={(e) => setDatabase(e.target.value)}
             disabled={busy}
-            placeholder="Connection default"
-          />
+          >
+            <option value="">Connection default</option>
+            {database && !inspection.databases.includes(database) ? (
+              <option value={database}>{database}</option>
+            ) : null}
+            {inspection.databases.map((name) => (
+              <option key={name} value={name}>{name}</option>
+            ))}
+          </select>
+          {inspection.loading ? <span>Loading databases…</span> : null}
+          {inspection.error ? (
+            <span role="alert">Could not load databases. Connection default is still available.</span>
+          ) : null}
         </label>
         <label className="flex min-w-40 flex-1 flex-col gap-1 text-xs text-muted-foreground">
           Users

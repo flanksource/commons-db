@@ -252,9 +252,9 @@ func applyField(e *Event, f rawXMLField) {
 	case "username":
 		e.Username = val
 	case "session_id":
-		e.SessionID = int(parseInt64(val))
+		e.SessionID, _ = strconv.Atoi(val)
 	case "error_number":
-		e.ErrorNumber = int(parseInt64(val))
+		e.ErrorNumber, _ = strconv.Atoi(val)
 	case "message":
 		e.ErrorMessage = val
 	case "object_name":

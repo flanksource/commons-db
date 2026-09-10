@@ -2,6 +2,8 @@ package xetrace
 
 import (
 	"context"
+	"database/sql"
+	"database/sql/driver"
 	"errors"
 	"io"
 	"net"
@@ -26,16 +28,17 @@ import (
 // next attempt is issued on a healthy connection — which is exactly why
 // retrying works.
 //
-// Deliberately absent: driver.ErrBadConn. database/sql never surfaces it to
-// callers, and go-mssqldb panics if it ever reaches checkBadConn, so matching
-// on it would be dead code. Also absent: ErrSessionGone, which can never
-// succeed on a retry.
+// Pinned connections can surface ErrBadConn or ErrConnDone instead of being
+// transparently replaced by database/sql. ErrSessionGone remains terminal.
 func IsTransientPollError(err error) bool {
 	if err == nil {
 		return false
 	}
 	if errors.Is(err, ErrSessionGone) {
 		return false
+	}
+	if errors.Is(err, sql.ErrConnDone) || errors.Is(err, driver.ErrBadConn) {
+		return true
 	}
 
 	// StreamError is produced as a value, not a pointer — matching on

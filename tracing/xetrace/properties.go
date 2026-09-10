@@ -52,7 +52,11 @@ const (
 // PollTimeout is the per-poll ring_buffer read deadline. Exported because the
 // registry sizes its stop-wait budget from it.
 func PollTimeout() time.Duration {
-	return properties.Duration(defaultPollTimeout, "sqltrace.poll.timeout")
+	timeout := properties.Duration(defaultPollTimeout, "sqltrace.poll.timeout")
+	if timeout <= 0 {
+		return defaultPollTimeout
+	}
+	return timeout
 }
 
 // DropTimeout is the fixed budget Session.Drop gives itself. Exported for the

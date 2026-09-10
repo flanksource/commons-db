@@ -222,7 +222,9 @@ func (s *Session) Drop(parent context.Context) error {
 	defer cancel()
 	// A cancelled DMV read can invalidate the pinned connection. Release it
 	// before using the pool so teardown can reconnect when necessary.
-	_ = s.db.Close()
+	if s.db != nil {
+		_ = s.db.Close()
+	}
 	_ = parent // retained for signature symmetry; we intentionally do not use it
 	stmt := fmt.Sprintf("DROP EVENT SESSION %s ON SERVER", quoteIdent(s.Name))
 	if _, err := s.pool.ExecContext(ctx, stmt); err != nil {
@@ -235,6 +237,11 @@ func (s *Session) Drop(parent context.Context) error {
 // plus the target's own bookkeeping. Callers are responsible for deduplication
 // via Event.Key across polls.
 func (s *Session) Poll(ctx context.Context) (RingBufferSnapshot, error) {
+	if s.db == nil {
+		if err := s.reconnect(ctx); err != nil {
+			return RingBufferSnapshot{}, err
+		}
+	}
 	const q = `SELECT CAST(target_data AS NVARCHAR(MAX)) AS target_data
 FROM sys.dm_xe_sessions s
 JOIN sys.dm_xe_session_targets t ON t.event_session_address = s.address
@@ -248,6 +255,10 @@ WHERE s.name = @p1 AND t.target_name = 'ring_buffer'`
 	if err := row.Scan(&payload); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return RingBufferSnapshot{}, fmt.Errorf("%w: %q", ErrSessionGone, s.Name)
+		}
+		if IsTransientPollError(err) || errors.Is(err, context.Canceled) {
+			_ = s.db.Close()
+			s.db = nil
 		}
 		return RingBufferSnapshot{}, fmt.Errorf("read ring_buffer target: %w", err)
 	}
@@ -276,6 +287,39 @@ WHERE s.name = @p1 AND t.target_name = 'ring_buffer'`
 	}
 	snapshot.Events = kept
 	return snapshot, nil
+}
+
+// reconnect preserves the ring target but updates each event's reader exclusion.
+// Each event has a brief capture gap while its predicate is replaced.
+func (s *Session) reconnect(ctx context.Context) error {
+	db, err := s.pool.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("reconnect ring buffer reader: %w", err)
+	}
+	opts := s.opts
+	opts.ExcludeSessionID, err = CurrentSessionID(ctx, db)
+	if err != nil {
+		_ = db.Close()
+		return err
+	}
+	events, err := NormalizeEvents(opts.Events)
+	if err != nil {
+		_ = db.Close()
+		return err
+	}
+	for _, event := range events {
+		var ddl strings.Builder
+		fmt.Fprintf(&ddl, "IF EXISTS (SELECT 1 FROM sys.server_event_session_events e JOIN sys.server_event_sessions s ON s.event_session_id = e.event_session_id WHERE s.name = N'%s' AND e.name = N'%s')\n", escapeSQLStringLiteral(s.Name), event)
+		fmt.Fprintf(&ddl, "ALTER EVENT SESSION %s ON SERVER DROP EVENT sqlserver.%s;\n", quoteIdent(s.Name), event)
+		fmt.Fprintf(&ddl, "ALTER EVENT SESSION %s ON SERVER ", quoteIdent(s.Name))
+		writeEventClause(&ddl, event, opts, wantsCausality(events))
+		if _, err := db.ExecContext(ctx, ddl.String()); err != nil {
+			_ = db.Close()
+			return fmt.Errorf("update reconnected reader exclusion: %w", err)
+		}
+	}
+	s.db, s.opts = db, opts
+	return nil
 }
 
 // CurrentSessionID returns the sqlserver session_id of the current connection,

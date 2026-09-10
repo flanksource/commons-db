@@ -63,6 +63,9 @@ func Nest(events []Event) []Event {
 		if !ok || owner == i {
 			continue
 		}
+		if _, isParent := parentEvents[e.Name]; isParent {
+			continue
+		}
 		children[owner] = append(children[owner], e)
 		claimed[i] = struct{}{}
 	}

@@ -185,6 +185,7 @@ func (c *HandleCache) Resolve(e *Event) {
 		}
 		e.SQL = fmt.Sprintf("EXEC <%s %d> (%s)", spExecuteMarker, handle, strings.Join(display, ", "))
 		deriveFromSQL(e)
+		e.Tables = nil
 		e.ParamsUnavailable = true
 		return
 	}
@@ -350,6 +351,8 @@ func asStringLiteral(s string) (string, bool) {
 // paramNameRe captures `@P0`, `@P12`, etc. from a declaration string.
 var paramNameRe = regexp.MustCompile(`@P\d+`)
 
+var paramPlaceholderRe = regexp.MustCompile(`@P\d+\b`)
+
 // substituteParams returns `template` with @P0/@P1/... replaced by the
 // corresponding entries in `values`. Extra values beyond the declared
 // parameter count are ignored; missing values leave the placeholder in
@@ -363,17 +366,19 @@ func substituteParams(template, paramDecl string, values []string) string {
 		names = dedupePreserveOrder(names)
 	}
 
-	out := template
+	literals := make(map[string]string, len(names))
 	for i, name := range names {
 		if i >= len(values) {
 			break
 		}
-		literal := formatArgForDisplay(values[i])
-		// Replace only whole-word occurrences: `@P0` should not match
-		// inside `@P01`. Use a bounded regexp per name.
-		re := regexp.MustCompile(regexp.QuoteMeta(name) + `\b`)
-		out = re.ReplaceAllLiteralString(out, literal)
+		literals[name] = formatArgForDisplay(values[i])
 	}
+	out := paramPlaceholderRe.ReplaceAllStringFunc(template, func(name string) string {
+		if literal, ok := literals[name]; ok {
+			return literal
+		}
+		return name
+	})
 	return strings.TrimSpace(out)
 }
 

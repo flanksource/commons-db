@@ -130,6 +130,14 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 			return err
 		}
 		observed := deliver(snapshot.Events) + observe(snapshot.ExcludedKeys)
+		visible := make(map[string]struct{}, len(snapshot.Events)+len(snapshot.ExcludedKeys))
+		for _, e := range snapshot.Events {
+			visible[e.Key()] = struct{}{}
+		}
+		for _, key := range snapshot.ExcludedKeys {
+			visible[key] = struct{}{}
+		}
+		seen = visible
 		reportDrops(observed, snapshot.Stats)
 		lastProcessed, haveProcessed = snapshot.Stats.TotalEventsProcessed, true
 		if opts.OnPollBatch != nil {
