@@ -168,9 +168,15 @@ func (h *connectionBrowserHandler) inspectSQL(ctx context.Context, conn *models.
 func sqlCatalogWeight(catalog sqlinspect.Catalog) int {
 	weight := len(catalog.Databases) + len(catalog.Schemas)
 	for _, schema := range catalog.Schemas {
-		weight += len(schema.Relations)
+		weight += len(schema.Relations) + len(schema.Routines)
+		for _, routine := range schema.Routines {
+			weight += len(routine.Parameters) + len(routine.SQL)/1024
+		}
 		for _, relation := range schema.Relations {
-			weight += len(relation.Columns)
+			weight += len(relation.Columns) + len(relation.Indexes) + len(relation.ForeignKeys) + len(relation.Triggers) + len(relation.ViewDef)/1024
+			for _, trigger := range relation.Triggers {
+				weight += len(trigger.SQL) / 1024
+			}
 		}
 	}
 	return weight

@@ -1,0 +1,222 @@
+diff --git a/dist/data/query-browser/QueryBrowser.cjs b/dist/data/query-browser/QueryBrowser.cjs
+index 322876814602742aa2e4d84891693df96744c72c..83d1a6ac165a112b495cd82ac1ff22095e997a6c 100644
+--- a/dist/data/query-browser/QueryBrowser.cjs
++++ b/dist/data/query-browser/QueryBrowser.cjs
+@@ -23,6 +23,7 @@ function QueryBrowser({
+   title,
+   language = "text",
+   initialQuery = "",
++  runToken,
+   queryLabel = "Query",
+   allowEmptyQuery = false,
+   optionsSchema,
+@@ -31,6 +32,7 @@ function QueryBrowser({
+   onQueryChange,
+   onOptionsChange,
+   navigator,
++  navigatorSplit = 28,
+   execute,
+   lookupFilterValues,
+   renderResults,
+@@ -41,6 +43,7 @@ function QueryBrowser({
+   const editor = react.useRef(null);
+   const languageConfig = react.useRef(new state.Compartment());
+   const executeRef = react.useRef(() => void 0);
++  const consumedRunToken = react.useRef(runToken);
+   const onQueryChangeRef = react.useRef(onQueryChange);
+   const [options, setOptions] = react.useState(
+     initialOptions ?? {}
+@@ -204,6 +207,13 @@ function QueryBrowser({
+     lastRun.current = null;
+     executedFilters.current = {};
+   }, [id]);
++  react.useEffect(() => {
++    if (runToken === consumedRunToken.current) return;
++    consumedRunToken.current = runToken;
++    if (runToken == null) return;
++    editor.current?.dispatch({ selection: { anchor: 0 } });
++    executeRef.current();
++  }, [runToken]);
+   const rows = (result == null ? void 0 : result.rows) ?? [];
+   const described = (result == null ? void 0 : result.columns) ?? [];
+   const columns = react.useMemo(
+@@ -354,7 +364,7 @@ function QueryBrowser({
+       error.diagnostics && /* @__PURE__ */ jsxRuntime.jsx(QueryBrowserDiagnosticsPanel.QueryBrowserDiagnosticsPanel, { diagnostics: error.diagnostics })
+     ] }) : result && renderResults ? renderResults({ result, defaultView: defaultResults }) : defaultResults })
+   ] });
+-  return /* @__PURE__ */ jsxRuntime.jsx("div", { className: utils.cn("h-[calc(100vh-15rem)] min-h-[32rem]", className), children: navigator ? /* @__PURE__ */ jsxRuntime.jsx(SplitPane.SplitPane, { defaultSplit: 28, left: navigator, right: workspace }) : workspace });
++  return /* @__PURE__ */ jsxRuntime.jsx("div", { className: utils.cn("h-[calc(100vh-15rem)] min-h-[32rem]", className), children: navigator ? /* @__PURE__ */ jsxRuntime.jsx(SplitPane.SplitPane, { defaultSplit: navigatorSplit, left: navigator, right: workspace }) : workspace });
+ }
+ exports.QueryBrowser = QueryBrowser;
+ //# sourceMappingURL=QueryBrowser.cjs.map
+diff --git a/dist/data/query-browser/QueryBrowser.editor.cjs b/dist/data/query-browser/QueryBrowser.editor.cjs
+index 02908bd4f13729f94307ac5a8f8800455ff1e5c5..34ee9721b556ec8fa3f8b76ae7230a64a1642708 100644
+--- a/dist/data/query-browser/QueryBrowser.editor.cjs
++++ b/dist/data/query-browser/QueryBrowser.editor.cjs
+@@ -4,6 +4,7 @@ const autocomplete = require("@codemirror/autocomplete");
+ const commands = require("@codemirror/commands");
+ const langJson = require("@codemirror/lang-json");
+ const langSql = require("@codemirror/lang-sql");
++const language = require("@codemirror/language");
+ const view = require("@codemirror/view");
+ const QueryBrowser_completion = require("./QueryBrowser.completion.cjs");
+ const MAX_HISTORY = 50;
+@@ -34,6 +35,9 @@ function rememberQueryBrowserQuery(id, query) {
+ function queryBrowserEditorExtensions(execute, onQueryChange, languageExtension) {
+   return [
+     commands.history(),
++    view.lineNumbers(),
++    view.highlightActiveLine(),
++    language.syntaxHighlighting(language.defaultHighlightStyle),
+     view.keymap.of([
+       {
+         key: "Mod-Enter",
+@@ -42,6 +46,7 @@ function queryBrowserEditorExtensions(execute, onQueryChange, languageExtension)
+           return true;
+         }
+       },
++      ...autocomplete.completionKeymap,
+       ...commands.historyKeymap
+     ]),
+     view.EditorView.lineWrapping,
+@@ -62,13 +67,13 @@ function queryBrowserEditorExtensions(execute, onQueryChange, languageExtension)
+ }
+ function queryBrowserLanguageExtension(language, completion) {
+   if (language === "sql") {
+-    if ((completion == null ? void 0 : completion.kind) !== "sql") return langSql.sql();
+-    return langSql.sql({
++    if ((completion == null ? void 0 : completion.kind) !== "sql") return [langSql.sql(), autocomplete.autocompletion()];
++    return [autocomplete.autocompletion(), langSql.sql({
+       dialect: QueryBrowser_completion.dialectFor(completion.dialect),
+       schema: QueryBrowser_completion.sqlCompletionNamespace(completion.schemas),
+       upperCaseKeywords: true,
+       ...completion.defaultSchema ? { defaultSchema: completion.defaultSchema } : {}
+-    });
++    })];
+   }
+   if (language === "json") {
+     if ((completion == null ? void 0 : completion.kind) !== "json-fields") return langJson.json();
+diff --git a/dist/data/query-browser/QueryBrowser.editor.js b/dist/data/query-browser/QueryBrowser.editor.js
+index 95a4590a5803b8bc3a7793682c8e5945e07ef70f..8fc6048a3d48c9b9447cb913402d7a4290245b71 100644
+--- a/dist/data/query-browser/QueryBrowser.editor.js
++++ b/dist/data/query-browser/QueryBrowser.editor.js
+@@ -1,8 +1,9 @@
+-import { autocompletion } from "@codemirror/autocomplete";
++import { autocompletion, completionKeymap } from "@codemirror/autocomplete";
+ import { history, historyKeymap } from "@codemirror/commands";
+ import { json } from "@codemirror/lang-json";
+ import { sql } from "@codemirror/lang-sql";
+-import { EditorView, keymap } from "@codemirror/view";
++import { syntaxHighlighting, defaultHighlightStyle } from "@codemirror/language";
++import { EditorView, keymap, lineNumbers, highlightActiveLine } from "@codemirror/view";
+ import { sqlCompletionNamespace, dialectFor, openSearchJSONCompletionSource } from "./QueryBrowser.completion.js";
+ const MAX_HISTORY = 50;
+ function historyKey(id) {
+@@ -32,6 +33,9 @@ function rememberQueryBrowserQuery(id, query) {
+ function queryBrowserEditorExtensions(execute, onQueryChange, languageExtension) {
+   return [
+     history(),
++    lineNumbers(),
++    highlightActiveLine(),
++    syntaxHighlighting(defaultHighlightStyle),
+     keymap.of([
+       {
+         key: "Mod-Enter",
+@@ -40,6 +44,7 @@ function queryBrowserEditorExtensions(execute, onQueryChange, languageExtension)
+           return true;
+         }
+       },
++      ...completionKeymap,
+       ...historyKeymap
+     ]),
+     EditorView.lineWrapping,
+@@ -60,13 +65,13 @@ function queryBrowserEditorExtensions(execute, onQueryChange, languageExtension)
+ }
+ function queryBrowserLanguageExtension(language, completion) {
+   if (language === "sql") {
+-    if ((completion == null ? void 0 : completion.kind) !== "sql") return sql();
+-    return sql({
++    if ((completion == null ? void 0 : completion.kind) !== "sql") return [sql(), autocompletion()];
++    return [autocompletion(), sql({
+       dialect: dialectFor(completion.dialect),
+       schema: sqlCompletionNamespace(completion.schemas),
+       upperCaseKeywords: true,
+       ...completion.defaultSchema ? { defaultSchema: completion.defaultSchema } : {}
+-    });
++    })];
+   }
+   if (language === "json") {
+     if ((completion == null ? void 0 : completion.kind) !== "json-fields") return json();
+diff --git a/dist/data/query-browser/QueryBrowser.js b/dist/data/query-browser/QueryBrowser.js
+index f4d544aafee9075ab234e2e904d533a4a74053b5..706f8ebf8d1425271d6355969fcd493207e507e1 100644
+--- a/dist/data/query-browser/QueryBrowser.js
++++ b/dist/data/query-browser/QueryBrowser.js
+@@ -21,6 +21,7 @@ function QueryBrowser({
+   title,
+   language = "text",
+   initialQuery = "",
++  runToken,
+   queryLabel = "Query",
+   allowEmptyQuery = false,
+   optionsSchema,
+@@ -29,6 +30,7 @@ function QueryBrowser({
+   onQueryChange,
+   onOptionsChange,
+   navigator,
++  navigatorSplit = 28,
+   execute,
+   lookupFilterValues,
+   renderResults,
+@@ -39,6 +41,7 @@ function QueryBrowser({
+   const editor = useRef(null);
+   const languageConfig = useRef(new Compartment());
+   const executeRef = useRef(() => void 0);
++  const consumedRunToken = useRef(runToken);
+   const onQueryChangeRef = useRef(onQueryChange);
+   const [options, setOptions] = useState(
+     initialOptions ?? {}
+@@ -202,6 +205,13 @@ function QueryBrowser({
+     lastRun.current = null;
+     executedFilters.current = {};
+   }, [id]);
++  useEffect(() => {
++    if (runToken === consumedRunToken.current) return;
++    consumedRunToken.current = runToken;
++    if (runToken == null) return;
++    editor.current?.dispatch({ selection: { anchor: 0 } });
++    executeRef.current();
++  }, [runToken]);
+   const rows = (result == null ? void 0 : result.rows) ?? [];
+   const described = (result == null ? void 0 : result.columns) ?? [];
+   const columns = useMemo(
+@@ -352,7 +362,7 @@ function QueryBrowser({
+       error.diagnostics && /* @__PURE__ */ jsx(QueryBrowserDiagnosticsPanel, { diagnostics: error.diagnostics })
+     ] }) : result && renderResults ? renderResults({ result, defaultView: defaultResults }) : defaultResults })
+   ] });
+-  return /* @__PURE__ */ jsx("div", { className: cn("h-[calc(100vh-15rem)] min-h-[32rem]", className), children: navigator ? /* @__PURE__ */ jsx(SplitPane, { defaultSplit: 28, left: navigator, right: workspace }) : workspace });
++  return /* @__PURE__ */ jsx("div", { className: cn("h-[calc(100vh-15rem)] min-h-[32rem]", className), children: navigator ? /* @__PURE__ */ jsx(SplitPane, { defaultSplit: navigatorSplit, left: navigator, right: workspace }) : workspace });
+ }
+ export {
+   QueryBrowser
+diff --git a/dist/data/query-browser/QueryBrowser.types.d.ts b/dist/data/query-browser/QueryBrowser.types.d.ts
+index afb524a4e94c4319d2e536ed833fdd1b2a7ffcd4..a353f9a281a11daf19ba00079aec765a9d5dad93 100644
+--- a/dist/data/query-browser/QueryBrowser.types.d.ts
++++ b/dist/data/query-browser/QueryBrowser.types.d.ts
+@@ -89,6 +89,8 @@ export type QueryBrowserProps = {
+     title?: string | undefined;
+     language?: QueryBrowserLanguage | undefined;
+     initialQuery?: string | undefined;
++    /** Change after an explicit navigator Run action to execute the full seeded query once. */
++    runToken?: number | undefined;
+     queryLabel?: string | undefined;
+     allowEmptyQuery?: boolean | undefined;
+     optionsSchema?: JsonSchemaObject | undefined;
+@@ -97,6 +99,8 @@ export type QueryBrowserProps = {
+     onQueryChange?: ((query: string) => void) | undefined;
+     onOptionsChange?: ((options: Record<string, unknown>) => void) | undefined;
+     navigator?: ReactNode | undefined;
++    /** Initial navigator width as a percentage; the splitter remains draggable. */
++    navigatorSplit?: number | undefined;
+     execute: (request: QueryBrowserRequest) => Promise<QueryBrowserResult>;
+     lookupFilterValues?: QueryBrowserFilterLookup | undefined;
+     renderResults?: ((context: QueryBrowserResultContext) => ReactNode) | undefined;
