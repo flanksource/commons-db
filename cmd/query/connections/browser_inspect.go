@@ -15,7 +15,6 @@ import (
 
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
-	inspection "github.com/flanksource/commons-db/inspect"
 	opensearchinspect "github.com/flanksource/commons-db/inspect/opensearch"
 	sqlinspect "github.com/flanksource/commons-db/inspect/sql"
 	"github.com/flanksource/commons-db/logs/opensearch"
@@ -146,40 +145,17 @@ func (h *connectionBrowserHandler) inspectionOpenSearchSearcher(ctx dbcontext.Co
 
 func (h *connectionBrowserHandler) inspectSQL(ctx context.Context, conn *models.Connection, database string, refresh bool) (sqlinspect.Catalog, error) {
 	key := fmt.Sprintf("%s:connection:%s:%d:%s:%s", h.ctx.ConnectionCacheScope(), conn.ID, conn.UpdatedAt.UnixNano(), conn.Type, database)
-	result, err := h.sqlInspection.Get(ctx, inspection.GetOptions[sqlinspect.Catalog]{
-		Key:     key,
-		Refresh: refresh,
-		Load: func(loadContext context.Context) (sqlinspect.Catalog, error) {
-			client, err := h.sqlClient(loadContext, conn, database)
-			if err != nil {
-				return sqlinspect.Catalog{}, err
-			}
-			defer func() { _ = client.Close() }()
-			return sqlinspect.Inspect(loadContext, client, conn.Type, sqlinspect.Limits{})
+	catalog, err := sqlinspect.Inspect(ctx, nil, conn.Type, sqlinspect.Limits{}, sqlinspect.Options{
+		CacheKey: key,
+		Refresh:  refresh,
+		Open: func(loadContext context.Context) (*sql.DB, error) {
+			return h.sqlClient(loadContext, conn, database)
 		},
 	})
-	if err != nil && !result.Cache.Cached {
+	if err != nil && (catalog.Cache == nil || !catalog.Cache.Cached) {
 		return sqlinspect.Catalog{}, err
 	}
-	result.Value.Cache = &result.Cache
-	return result.Value, nil
-}
-
-func sqlCatalogWeight(catalog sqlinspect.Catalog) int {
-	weight := len(catalog.Databases) + len(catalog.Schemas)
-	for _, schema := range catalog.Schemas {
-		weight += len(schema.Relations) + len(schema.Routines)
-		for _, routine := range schema.Routines {
-			weight += len(routine.Parameters) + len(routine.SQL)/1024
-		}
-		for _, relation := range schema.Relations {
-			weight += len(relation.Columns) + len(relation.Indexes) + len(relation.ForeignKeys) + len(relation.Triggers) + len(relation.ViewDef)/1024
-			for _, trigger := range relation.Triggers {
-				weight += len(trigger.SQL) / 1024
-			}
-		}
-	}
-	return weight
+	return catalog, nil
 }
 
 func (h *connectionBrowserHandler) sqlClient(ctx context.Context, conn *models.Connection, database string) (*sql.DB, error) {
