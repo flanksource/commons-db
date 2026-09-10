@@ -26,12 +26,13 @@ var DateMapper = func(ctx context.Context, val string) (any, error) {
 
 // JSONPathMapper handles JSONPath queries against JSONB columns
 var JSONPathMapper = func(ctx context.Context, tx *gorm.DB, column string, op grammar.QueryOperator, path string, val string) *gorm.DB {
-	if !slices.Contains([]grammar.QueryOperator{grammar.Eq, grammar.Neq}, op) {
-		op = grammar.Eq
+	predicate := `TRIM(BOTH '"' from jsonb_path_query_first(?, ?::jsonpath)::TEXT) = ?`
+	if op == grammar.Neq {
+		predicate = `TRIM(BOTH '"' from jsonb_path_query_first(?, ?::jsonpath)::TEXT) != ?`
 	}
 	values := strings.Split(val, ",")
 	for _, v := range values {
-		tx = tx.Where(fmt.Sprintf(`TRIM(BOTH '"' from jsonb_path_query_first(%s, '$.%s')::TEXT) %s ?`, column, path, op), v)
+		tx = tx.Where(predicate, clause.Column{Name: column}, "$."+path, v)
 	}
 	return tx
 }
