@@ -22,7 +22,7 @@ import {
   ReconcileResultSettings,
   snapshotColumnNames,
 } from "./reconcileExport";
-import { virtualProfileHref, type LaneId, type ReconcileSnapshot, type ResultsView } from "./reconcileModel";
+import { type LaneId, type ReconcileSnapshot, type ResultsView } from "./reconcileModel";
 
 const DOWNLOAD_FORMATS: ClickyRemoteFormat[] = [
   "json",
@@ -76,6 +76,7 @@ export function ReconcileResults({
   materializeAction,
   view,
   onView,
+  profileHref,
 }: {
   client: OperationsApiClient;
   snapshot: ReconcileSnapshot;
@@ -83,6 +84,7 @@ export function ReconcileResults({
   /** Lane and position, owned by the route so both live in the URL. */
   view: ResultsView;
   onView: (view: ResultsView) => void;
+  profileHref: (snapshot: ReconcileSnapshot, view: ResultsView) => string;
 }) {
   const [active, setActive] = useState(snapshot);
   const [selected, setSelected] = useState(() => snapshotColumnNames(snapshot));
@@ -192,7 +194,7 @@ export function ReconcileResults({
 
       <ReconcileResultSettings
         active={active}
-        virtualProfileHref={virtualProfileHref(active, view)}
+        virtualProfileHref={profileHref(active, view)}
         selected={selected}
         onSelected={setSelected}
         cel={cel}
