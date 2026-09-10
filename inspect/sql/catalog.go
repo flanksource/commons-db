@@ -129,11 +129,9 @@ type columnRow struct {
 	ordinal                                          int
 }
 
-// Inspect returns the current database's schemas, relations and columns using
-// set-based catalog queries. It deliberately does not inspect other databases
-// on the same server. Schemas are queried independently so empty schemas remain
-// visible to callers.
-func Inspect(ctx context.Context, db *sql.DB, driver string, limits Limits) (Catalog, error) {
+// inspect reads only the current database. Querying schemas independently keeps
+// empty schemas visible even when there are no relations to discover.
+func inspect(ctx context.Context, db *sql.DB, driver string, limits Limits) (Catalog, error) {
 	if db == nil {
 		return Catalog{}, fmt.Errorf("nil sql database")
 	}

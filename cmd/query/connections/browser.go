@@ -28,17 +28,12 @@ type connectionBrowserHandler struct {
 	prefix           string
 	ctx              dbcontext.Context
 	next             http.Handler
-	sqlInspection    *inspection.Memo[sqlinspect.Catalog]
 	kubernetesClient func(context.Context, *models.Connection) (kubernetes.Interface, error)
 }
 
 func newConnectionBrowserHandler(prefix string, ctx dbcontext.Context, next http.Handler) *connectionBrowserHandler {
 	return &connectionBrowserHandler{
 		prefix: strings.TrimRight(prefix, "/"), ctx: ctx, next: next,
-		sqlInspection: inspection.NewMemo(inspection.MemoOptions[sqlinspect.Catalog]{
-			Policy: inspection.Policy(inspection.CacheClassSQLCatalog),
-			Weight: sqlCatalogWeight,
-		}),
 		kubernetesClient: func(requestContext context.Context, connection *models.Connection) (kubernetes.Interface, error) {
 			client, _, err := (dbconnection.KubeconfigConnection{
 				ConnectionName: connection.ID.String(),

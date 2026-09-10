@@ -4,7 +4,7 @@ package inspect
 //
 // Every Memo is a package-level variable in whichever package needs it —
 // OpenSearch field mappings in inspect/opensearch, column cardinality in
-// query/providers, SQL catalogs in the connection browser. That is the right
+// query/providers, SQL catalogs in inspect/sql. That is the right
 // place for them and the wrong place for an operator: "the field list for this
 // index is stale, drop it" has no seam to say it through, and the only remedy
 // today is restarting the process.
