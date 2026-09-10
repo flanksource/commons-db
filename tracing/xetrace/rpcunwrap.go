@@ -371,7 +371,11 @@ func substituteParams(template, paramDecl string, values []string) string {
 		if i >= len(values) {
 			break
 		}
-		literals[name] = formatArgForDisplay(values[i])
+		value := values[i]
+		if lhs, rhs, assigned := strings.Cut(value, "="); assigned && strings.TrimSpace(lhs) == name {
+			value = strings.TrimSpace(rhs)
+		}
+		literals[name] = formatArgForDisplay(value)
 	}
 	out := paramPlaceholderRe.ReplaceAllStringFunc(template, func(name string) string {
 		if literal, ok := literals[name]; ok {

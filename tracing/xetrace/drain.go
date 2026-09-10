@@ -69,6 +69,7 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 	// lastProcessed tracks the server's own running total so an eviction we
 	// never read shows up as a delta rather than as nothing at all.
 	var lastProcessed int64
+	var lastDropped int64
 	var haveProcessed bool
 
 	emit := func(e Event) {
@@ -114,11 +115,12 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 		if opts.OnDropped == nil {
 			return
 		}
-		if stats.Truncated || stats.DroppedCount > 0 {
-			opts.OnDropped(stats.DroppedCount, stats)
+		dropped := max(int64(0), stats.DroppedCount-lastDropped)
+		if stats.Truncated || dropped > 0 {
+			opts.OnDropped(dropped, stats)
 		}
 		if haveProcessed && stats.TotalEventsProcessed > lastProcessed {
-			if delta := stats.TotalEventsProcessed - lastProcessed - observed; delta > 0 {
+			if delta := stats.TotalEventsProcessed - lastProcessed - observed - dropped; delta > 0 {
 				opts.OnDropped(delta, stats)
 			}
 		}
@@ -139,6 +141,7 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 		}
 		seen = visible
 		reportDrops(observed, snapshot.Stats)
+		lastDropped = snapshot.Stats.DroppedCount
 		lastProcessed, haveProcessed = snapshot.Stats.TotalEventsProcessed, true
 		if opts.OnPollBatch != nil {
 			opts.OnPollBatch()

@@ -3,6 +3,7 @@ package xetrace
 import (
 	"encoding/xml"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -299,35 +300,16 @@ var noiseStatements = map[string]struct{}{
 	"SELECT 1":                       {},
 }
 
-// noisePrefixes are canonicalized statement prefixes that are always noise
-// regardless of trailing arguments. Used for driver chatter whose payload
-// varies (e.g. sp_unprepare takes a handle id, SET TEXTSIZE takes a
-// byte count, SET QUOTED_IDENTIFIER takes ON/OFF).
-var noisePrefixes = []string{
-	"EXEC SP_UNPREPARE ",
-	"SET QUOTED_IDENTIFIER ",
-	"SET TEXTSIZE ",
-	"SET ARITHABORT ",
-	"SET NUMERIC_ROUNDABORT ",
-	"SET ANSI_NULLS ",
-	"SET ANSI_NULL_DFLT_ON ",
-	"SET ANSI_PADDING ",
-	"SET ANSI_WARNINGS ",
-	"SET CONCAT_NULL_YIELDS_NULL ",
-	"SET CURSOR_CLOSE_ON_COMMIT ",
-	"SET IMPLICIT_TRANSACTIONS ",
-	"SET LOCK_TIMEOUT ",
-	"SET DATEFORMAT ",
-	"SET DATEFIRST ",
-	"SET LANGUAGE ",
-	"SET NOCOUNT ",
-	"SET TRANSACTION ISOLATION LEVEL ",
-	"SET XACT_ABORT ",
-	"SET DEADLOCK_PRIORITY ",
-	"SET ROWCOUNT ",
-	"SET FMTONLY ",
-	"SET NO_BROWSETABLE ",
-}
+// Match whole driver statements so a SET prefix cannot hide later batch SQL.
+var noiseStatementRe = regexp.MustCompile(`^(?:` +
+	`EXEC SP_UNPREPARE [0-9]+|` +
+	`SET (?:QUOTED_IDENTIFIER|ARITHABORT|NUMERIC_ROUNDABORT|ANSI_NULLS|ANSI_NULL_DFLT_ON|ANSI_PADDING|ANSI_WARNINGS|CONCAT_NULL_YIELDS_NULL|CURSOR_CLOSE_ON_COMMIT|IMPLICIT_TRANSACTIONS|NOCOUNT|XACT_ABORT|FMTONLY|NO_BROWSETABLE) (?:ON|OFF)|` +
+	`SET (?:TEXTSIZE|LOCK_TIMEOUT|ROWCOUNT) -?[0-9]+|` +
+	`SET DATEFIRST [1-7]|SET DATEFORMAT (?:MDY|DMY|YMD|YDM|MYD|DYM)|` +
+	`SET LANGUAGE (?:[A-Z_]+|N?'(?:[^']|'')*')|` +
+	`SET TRANSACTION ISOLATION LEVEL (?:READ UNCOMMITTED|READ COMMITTED|REPEATABLE READ|SNAPSHOT|SERIALIZABLE)|` +
+	`SET DEADLOCK_PRIORITY (?:LOW|NORMAL|HIGH|-?[0-9]+)` +
+	`)$`)
 
 // isNoiseStatement reports whether stmt is a known driver chatter statement
 // that should be dropped from trace output. Exact-match only after
@@ -344,10 +326,5 @@ func isNoiseStatement(stmt string) bool {
 	if _, ok := noiseStatements[upper]; ok {
 		return true
 	}
-	for _, p := range noisePrefixes {
-		if strings.HasPrefix(upper, p) {
-			return true
-		}
-	}
-	return false
+	return noiseStatementRe.MatchString(upper)
 }

@@ -356,6 +356,17 @@ export function ConnectionTrace({
         >
           Stop
         </button>
+        {state === "error" && sessionRef.current ? (
+          <button
+            className="h-8 rounded-md border px-4 text-sm"
+            onClick={() => {
+              setError("");
+              setState(stopRequested.current ? "stopping" : "running");
+            }}
+          >
+            Retry polling
+          </button>
+        ) : null}
       </div>
       <div className="flex items-center gap-2 text-sm">
         <span className="font-medium capitalize">{state}</span>
