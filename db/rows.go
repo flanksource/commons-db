@@ -106,6 +106,9 @@ func normalizeSQLValue(databaseType string, value any) (any, error) {
 	}
 
 	typeName := strings.ToLower(databaseType)
+	if typeName == "boolean" {
+		return sqlBoolean(value)
+	}
 	if typeName != "json" && typeName != "jsonb" && !strings.HasPrefix(typeName, "_") {
 		return value, nil
 	}
@@ -139,6 +142,22 @@ func normalizeSQLValue(databaseType string, value any) (any, error) {
 		return nil, err
 	}
 	return decoded, nil
+}
+
+// sqlBoolean reads a column declared BOOLEAN. SQLite has no boolean storage
+// class: it stores the 0/1 it was given, and its driver hands a scan into any
+// the integer, so without this a boolean column reads back as a number.
+// Anything but 0 or 1 in such a column is a value no boolean wrote.
+func sqlBoolean(value any) (any, error) {
+	switch typed := value.(type) {
+	case bool:
+		return typed, nil
+	case int64:
+		if typed == 0 || typed == 1 {
+			return typed == 1, nil
+		}
+	}
+	return nil, fmt.Errorf("a boolean column holds %v (%T), which is neither 0 nor 1", value, value)
 }
 
 func nestedPostgresArray(elements []any, dimensions []pgtype.ArrayDimension) []any {

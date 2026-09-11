@@ -92,6 +92,13 @@ type ColumnFilterDef struct {
 	// Disabled offers no filter for this column while leaving the column itself
 	// rendered, which Hidden does not.
 	Disabled bool `json:"disabled,omitempty" yaml:"disabled,omitempty"`
+
+	// Array marks a backend field holding several string values rather than one.
+	// A selection matches a record holding any included element, an exclusion
+	// drops a record holding any excluded element, and lookup lists elements
+	// rather than whole arrays. Supported SQL and document providers compile it
+	// with their native element semantics; providers must advertise that support.
+	Array bool `json:"array,omitempty" yaml:"array,omitempty"`
 }
 
 // Validate rejects a filter declaration that cannot behave as written.
@@ -100,6 +107,9 @@ func (d ColumnFilterDef) Validate(column string) error {
 		return fmt.Errorf("column %q filter kind %q is unsupported", column, d.Kind)
 	}
 	if err := d.validateNesting(column); err != nil {
+		return err
+	}
+	if err := d.validateArray(column); err != nil {
 		return err
 	}
 	if d.Limit != nil {
@@ -152,6 +162,32 @@ func (d ColumnFilterDef) validateNesting(column string) error {
 	return nil
 }
 
+// validateArray rejects an array declaration no element comparison could
+// honour: only a value selection compares elements.
+func (d ColumnFilterDef) validateArray(column string) error {
+	if !d.Array {
+		return nil
+	}
+	if kind := d.Kind.Normalized(); kind != ColumnFilterKindTerms {
+		return fmt.Errorf("column %q array filter requires a %q filter, not %q", column, ColumnFilterKindTerms, kind)
+	}
+	return nil
+}
+
+// SupportsArrayFilters reports whether a provider type can compile a
+// selection over a field's elements. SQL providers compile their native array
+// or JSON representation; document providers apply terms and aggregation
+// semantics directly to multi-valued fields.
+func SupportsArrayFilters(providerType string) bool {
+	switch providerType {
+	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite",
+		"opensearch", "opentelemetry":
+		return true
+	default:
+		return false
+	}
+}
+
 // underNested reports whether field is addressed through container. A document
 // store names a nested field's members by prefix, so the prefix is the whole
 // test — and the container itself is not one of its own members.
@@ -179,6 +215,9 @@ type ColumnFilterBinding struct {
 	// the constants that address one entry of it. See ColumnFilterDef.
 	Nested string
 	Where  map[string]string
+	// Array marks a field holding several values: selections compare its
+	// elements and the lookup lists them. See ColumnFilterDef.Array.
+	Array bool
 	// Limit is the author's declared cap on the lookup, or zero when they
 	// declared none. Zero is not "no values": it is what leaves the choice to
 	// whoever asks, which is why an inferred binding never fills it in.
@@ -235,6 +274,10 @@ type ColumnFilterValue struct {
 	Nested string
 	Where  map[string]string
 
+	// Array compiles the selection against the elements of a multi-valued
+	// field rather than against the field's whole value.
+	Array bool
+
 	// Kind is the grammar the value was parsed under and the one a provider
 	// compiles it back out of. Empty means a value selection.
 	Kind ColumnFilterKind
@@ -278,7 +321,7 @@ func (v ColumnFilterValue) IsZero() bool {
 func SupportsNativeFilters(providerType string) bool {
 	switch providerType {
 	case "opensearch", "opentelemetry",
-		"sql", "postgres", "mysql", "sqlserver", "clickhouse", "k8s":
+		"sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite", "k8s":
 		return true
 	default:
 		return false
@@ -324,7 +367,7 @@ var sqlIdentifierField = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,127}$`)
 // would break profiles that are valid and working right now.
 func validateSQLFilterField(providerType, owner, field string) error {
 	switch providerType {
-	case "sql", "postgres", "mysql", "sqlserver", "clickhouse":
+	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
 	default:
 		return nil
 	}

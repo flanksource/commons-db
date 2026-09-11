@@ -260,6 +260,10 @@ func ProfileSource() Schema {
 						"type": "boolean", "title": "Disabled",
 						"description": "Offer no filter for this column while keeping the column itself rendered",
 					},
+					"array": Schema{
+						"type": "boolean", "title": "Array",
+						"description": "The backend field holds several string values: a selection matches records holding any included element, an exclusion drops records holding any excluded element, and lookup lists elements rather than whole arrays. Supported SQL and document providers use native element semantics and must advertise that support",
+					},
 				},
 			},
 			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for later column and style CEL", "x-clicky-order": 11},

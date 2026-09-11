@@ -12,10 +12,10 @@ import (
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/types"
+	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 )
 

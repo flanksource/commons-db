@@ -21,6 +21,18 @@ var _ query.ColumnInspectionProvider = openTelemetryProvider{}
 
 func (openTelemetryProvider) Type() string { return "opentelemetry" }
 
+func (openTelemetryProvider) BackendCapabilities(
+	_ context.Context,
+	req query.ProviderRequest,
+) (dbconnection.BackendCapabilities, error) {
+	options, err := query.DecodeOptions[openTelemetryOptions](req.Options)
+	if err != nil {
+		return dbconnection.BackendCapabilities{}, err
+	}
+	options.withDefaults()
+	return documentArrayCapabilities("opentelemetry", options.Index), nil
+}
+
 type openTelemetryOptions struct {
 	Format         string   `json:"format,omitempty"`
 	Index          string   `json:"index,omitempty"`

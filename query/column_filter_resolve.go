@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/inspect"
 )
@@ -119,7 +120,7 @@ func (b ColumnFilterBinding) resolveSelection(value any) (ColumnFilterValue, err
 		return ColumnFilterValue{}, err
 	}
 	selection.Column, selection.Key, selection.Field = b.Column, b.Key, b.Field
-	selection.Nested, selection.Where = b.Nested, b.Where
+	selection.Nested, selection.Where, selection.Array = b.Nested, b.Where, b.Array
 	return selection, nil
 }
 
@@ -189,11 +190,29 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 	}
 	req.Filters = siblings
 	req.Inspection = request.Inspection
+	capabilityFingerprint := ""
+	requiresArrayCapability := binding.Array
+	for _, filter := range siblings {
+		requiresArrayCapability = requiresArrayCapability || (filter.Array && !filter.IsZero())
+	}
+	if requiresArrayCapability {
+		capabilities, err := RequireBackendCapability(ctx, req, connection.BackendCapabilityArrayFilters)
+		if err != nil {
+			return nil, nil, fmt.Errorf("filter %q: %w", key, err)
+		}
+		capabilityFingerprint, err = capabilities.Fingerprint()
+		if err != nil {
+			return nil, nil, fmt.Errorf("filter %q backend capabilities: %w", key, err)
+		}
+	}
 	identity, err := ctx.ConnectionCacheIdentity(req.Connection)
 	if err != nil {
 		return nil, nil, fmt.Errorf("filter %q connection identity: %w", key, err)
 	}
-	cacheKey, err := filterValueCacheKey(identity, filterLookupProviderIdentity(lookup), req, binding, search, limit)
+	cacheKey, err := filterValueCacheKey(
+		identity, filterLookupProviderIdentity(lookup), capabilityFingerprint,
+		req, binding, search, limit,
+	)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -218,6 +237,7 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 func filterValueCacheKey(
 	identity string,
 	providerIdentity string,
+	capabilityFingerprint string,
 	req ProviderRequest,
 	binding ColumnFilterBinding,
 	search string,
@@ -226,6 +246,7 @@ func filterValueCacheKey(
 	payload, err := json.Marshal(struct {
 		Identity         string
 		ProviderIdentity string
+		Capabilities     string
 		Provider         string
 		Query            string
 		QueryArgs        []any
@@ -239,7 +260,7 @@ func filterValueCacheKey(
 		Search           string
 		Limit            int
 	}{
-		Identity: identity, ProviderIdentity: providerIdentity,
+		Identity: identity, ProviderIdentity: providerIdentity, Capabilities: capabilityFingerprint,
 		Provider: req.Provider, Query: req.Query, QueryArgs: req.QueryArgs,
 		QueryIdentifiers: req.QueryIdentifiers,
 		Options:          req.Options, Params: req.Params, ParamRoles: req.ParamRoles,

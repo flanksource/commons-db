@@ -223,33 +223,12 @@ func columnFilterKindFor(column ColumnDef) ColumnFilterKind {
 // OpenAPI surface and the provider can never disagree about what a column
 // offers.
 func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilterBinding, bool, error) {
-	if column.Hidden {
-		return ColumnFilterBinding{}, false, nil
+	kind, err := resolvedColumnFilterKind(column)
+	if err != nil || kind == ColumnFilterKindNone {
+		return ColumnFilterBinding{}, false, err
 	}
 	def := column.Filter
-	if def != nil && def.Disabled {
-		return ColumnFilterBinding{}, false, nil
-	}
-	kind := columnFilterKindFor(column)
-	if def != nil && def.Kind != "" {
-		kind = def.Kind
-	}
-	if !kind.Valid() {
-		return ColumnFilterBinding{}, false, fmt.Errorf("column %q filter kind %q is unsupported", column.Name, kind)
-	}
-	kind = kind.Normalized()
-	if kind == ColumnFilterKindNone {
-		return ColumnFilterBinding{}, false, nil
-	}
-	// A duration bound is resolved into the unit the column stores, so a unit
-	// nothing can convert into is refused where it was written rather than on
-	// the first request that types "5s".
-	if kind == ColumnFilterKindDuration {
-		if _, err := durationUnitScale(column.Unit); err != nil {
-			return ColumnFilterBinding{}, false, fmt.Errorf("column %q: %w", column.Name, err)
-		}
-	}
-
+	array := def != nil && def.Array
 	target, declared, ok, err := columnFilterTarget(column)
 	if err != nil {
 		return ColumnFilterBinding{}, false, err
@@ -269,6 +248,9 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 	owner := fmt.Sprintf("column %q", column.Name)
 	if err := validateNestedProvider(profile.Provider.Type, owner, nested); err != nil {
 		return ColumnFilterBinding{}, false, err
+	}
+	if array && !SupportsArrayFilters(profile.Provider.Type) {
+		return ColumnFilterBinding{}, false, fmt.Errorf("%s declares an array filter, which provider %q cannot compile", owner, profile.Provider.Type)
 	}
 	field, addressable, err := resolveBackendField(profile, column, target, declared, nested)
 	if err != nil {
@@ -296,12 +278,54 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 		// announcing them as multi is what made the browser render them as a
 		// comma-separated list of values to type. An exact match is a value
 		// selection that happens to have no list, so it still takes several.
-		Multi:  kind == ColumnFilterKindTerms || kind == ColumnFilterKindExact,
-		Lookup: kind.Lookupable() && column.Type.Enumerable(),
+		Multi: kind == ColumnFilterKindTerms || kind == ColumnFilterKindExact,
+		// An array's own type is json, which enumerates nothing; its elements
+		// are what the lookup lists.
+		Lookup: kind.Lookupable() && (column.Type.Enumerable() || array),
+		Array:  array,
 	}
+	if err := applyColumnFilterDeclaration(&binding, def); err != nil {
+		return ColumnFilterBinding{}, false, err
+	}
+	return binding, true, nil
+}
+
+// resolvedColumnFilterKind is the kind a column filters by, or none when it
+// offers no filter at all.
+func resolvedColumnFilterKind(column ColumnDef) (ColumnFilterKind, error) {
+	def := column.Filter
+	if column.Hidden || (def != nil && def.Disabled) {
+		return ColumnFilterKindNone, nil
+	}
+	kind := columnFilterKindFor(column)
+	if def != nil && def.Kind != "" {
+		kind = def.Kind
+	} else if def != nil && def.Array {
+		// An array column is typed json, which infers no filter at all; its
+		// elements are values, which is what the declaration says it filters.
+		kind = ColumnFilterKindTerms
+	}
+	if !kind.Valid() {
+		return "", fmt.Errorf("column %q filter kind %q is unsupported", column.Name, kind)
+	}
+	kind = kind.Normalized()
+	// A duration bound is resolved into the unit the column stores, so a unit
+	// nothing can convert into is refused where it was written rather than on
+	// the first request that types "5s".
+	if kind == ColumnFilterKindDuration {
+		if _, err := durationUnitScale(column.Unit); err != nil {
+			return "", fmt.Errorf("column %q: %w", column.Name, err)
+		}
+	}
+	return kind, nil
+}
+
+// applyColumnFilterDeclaration lays the author's overrides over an inferred
+// binding.
+func applyColumnFilterDeclaration(binding *ColumnFilterBinding, def *ColumnFilterDef) error {
 	if def != nil {
-		if err := assertLookupableDeclaration(column.Name, kind, *def); err != nil {
-			return ColumnFilterBinding{}, false, err
+		if err := assertLookupableDeclaration(binding.Column, binding.Kind, *def); err != nil {
+			return err
 		}
 		binding.Options = def.Options
 		if def.Multi != nil {
@@ -319,7 +343,7 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 	if len(binding.Options) > 0 {
 		binding.Lookup = false
 	}
-	return binding, true, nil
+	return nil
 }
 
 // assertLookupableDeclaration refuses an option list, a lookup or a limit on a

@@ -158,19 +158,20 @@ type browserQueryResult struct {
 type browserColumn = query.ResultColumn
 
 type browserInspection struct {
-	Kind           string                          `json:"kind"`
-	Driver         string                          `json:"driver,omitempty"`
-	Dialect        string                          `json:"dialect,omitempty"`
-	Database       string                          `json:"database,omitempty"`
-	Databases      []string                        `json:"databases,omitempty"`
-	DefaultSchema  string                          `json:"defaultSchema,omitempty"`
-	Nodes          []browserCatalogNode            `json:"nodes,omitempty"`
-	Schemas        []sqlinspect.Schema             `json:"schemas,omitempty"`
-	Targets        []opensearchinspect.Target      `json:"targets,omitempty"`
-	Selected       *opensearchinspect.FieldCatalog `json:"selected,omitempty"`
-	Truncated      bool                            `json:"truncated,omitempty"`
-	TruncateReason string                          `json:"truncateReason,omitempty"`
-	Cache          *inspection.CacheMetadata       `json:"cache,omitempty"`
+	Kind           string                            `json:"kind"`
+	Driver         string                            `json:"driver,omitempty"`
+	Dialect        string                            `json:"dialect,omitempty"`
+	Database       string                            `json:"database,omitempty"`
+	Databases      []string                          `json:"databases,omitempty"`
+	DefaultSchema  string                            `json:"defaultSchema,omitempty"`
+	Capabilities   *dbconnection.BackendCapabilities `json:"capabilities,omitempty"`
+	Nodes          []browserCatalogNode              `json:"nodes,omitempty"`
+	Schemas        []sqlinspect.Schema               `json:"schemas,omitempty"`
+	Targets        []opensearchinspect.Target        `json:"targets,omitempty"`
+	Selected       *opensearchinspect.FieldCatalog   `json:"selected,omitempty"`
+	Truncated      bool                              `json:"truncated,omitempty"`
+	TruncateReason string                            `json:"truncateReason,omitempty"`
+	Cache          *inspection.CacheMetadata         `json:"cache,omitempty"`
 }
 
 func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

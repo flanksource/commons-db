@@ -45,15 +45,16 @@ type connectionPresence struct {
 }
 
 type serverInfo struct {
-	Status   string            `json:"status"`
-	Product  string            `json:"product,omitempty"`
-	Version  string            `json:"version,omitempty"`
-	Database string            `json:"database,omitempty"`
-	User     string            `json:"user,omitempty"`
-	Cluster  string            `json:"cluster,omitempty"`
-	Node     string            `json:"node,omitempty"`
-	Details  map[string]string `json:"details,omitempty"`
-	Message  string            `json:"message,omitempty"`
+	Status       string                            `json:"status"`
+	Product      string                            `json:"product,omitempty"`
+	Version      string                            `json:"version,omitempty"`
+	Database     string                            `json:"database,omitempty"`
+	User         string                            `json:"user,omitempty"`
+	Cluster      string                            `json:"cluster,omitempty"`
+	Node         string                            `json:"node,omitempty"`
+	Details      map[string]string                 `json:"details,omitempty"`
+	Capabilities *dbconnection.BackendCapabilities `json:"capabilities,omitempty"`
+	Message      string                            `json:"message,omitempty"`
 }
 
 // serveConnectionInfo probes one connection through the shared health seam, so
@@ -115,8 +116,8 @@ func discoverServer(ctx context.Context, connectionContext dbcontext.Context, co
 	var info serverInfo
 	var err error
 	switch connection.Type {
-	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse:
-		info, err = discoverSQLServer(ctx, connectionContext, connection)
+	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse, models.ConnectionTypeSQLite:
+		info, err = discoverSQLBackend(ctx, connectionContext, connection)
 	case models.ConnectionTypeOpenSearch, models.ConnectionTypeElasticSearch:
 		info, err = discoverOpenSearch(ctx, connectionContext, connection)
 	case models.ConnectionTypeOpenTelemetry:
@@ -187,7 +188,7 @@ func discoverKubernetes(
 	}, nil
 }
 
-func discoverSQLServer(ctx context.Context, connectionContext dbcontext.Context, connection *models.Connection) (serverInfo, error) {
+func discoverSQLBackend(ctx context.Context, connectionContext dbcontext.Context, connection *models.Connection) (serverInfo, error) {
 	var sqlConnection dbconnection.SQLConnection
 	if err := sqlConnection.FromModel(*connection); err != nil {
 		return serverInfo{}, err
@@ -198,32 +199,45 @@ func discoverSQLServer(ctx context.Context, connectionContext dbcontext.Context,
 	}
 	defer client.Close()
 
+	capabilities, err := dbconnection.ProbeBackendCapabilities(ctx, client, connection.Type)
+	if err != nil {
+		return serverInfo{}, err
+	}
+	info := sqlBackendInfo(connection.Type, capabilities)
 	var query string
 	switch connection.Type {
 	case models.ConnectionTypePostgres:
-		query = `SELECT current_setting('server_version'), current_database(), current_user`
+		query = `SELECT current_user`
 	case models.ConnectionTypeMySQL:
-		query = `SELECT VERSION(), COALESCE(DATABASE(), ''), CURRENT_USER()`
+		query = `SELECT CURRENT_USER()`
 	case models.ConnectionTypeSQLServer:
-		query = `SELECT CAST(SERVERPROPERTY('ProductVersion') AS nvarchar(128)), DB_NAME(), SUSER_SNAME(), CAST(SERVERPROPERTY('Edition') AS nvarchar(128)), CAST(SERVERPROPERTY('ProductLevel') AS nvarchar(128))`
+		query = `SELECT SUSER_SNAME(), CAST(SERVERPROPERTY('Edition') AS nvarchar(128)), CAST(SERVERPROPERTY('ProductLevel') AS nvarchar(128))`
 	case models.ConnectionTypeClickHouse:
-		query = `SELECT version(), currentDatabase(), currentUser()`
+		query = `SELECT currentUser()`
+	case models.ConnectionTypeSQLite:
+		return info, nil
 	}
 
 	row := client.QueryRowContext(ctx, query)
-	info := serverInfo{Product: sqlProductName(connection.Type)}
 	if connection.Type == models.ConnectionTypeSQLServer {
 		var edition, productLevel sql.NullString
-		if err := row.Scan(&info.Version, &info.Database, &info.User, &edition, &productLevel); err != nil {
+		if err := row.Scan(&info.User, &edition, &productLevel); err != nil {
 			return serverInfo{}, err
 		}
 		info.Details = nonEmptyDetails(map[string]string{"edition": edition.String, "productLevel": productLevel.String})
 		return info, nil
 	}
-	if err := row.Scan(&info.Version, &info.Database, &info.User); err != nil {
+	if err := row.Scan(&info.User); err != nil {
 		return serverInfo{}, err
 	}
 	return info, nil
+}
+
+func sqlBackendInfo(connectionType string, capabilities dbconnection.BackendCapabilities) serverInfo {
+	return serverInfo{
+		Product: sqlProductName(connectionType), Version: capabilities.Version, Database: capabilities.Database,
+		Capabilities: &capabilities,
+	}
 }
 
 func sqlProductName(connectionType string) string {
@@ -236,6 +250,8 @@ func sqlProductName(connectionType string) string {
 		return "SQL Server"
 	case models.ConnectionTypeClickHouse:
 		return "ClickHouse"
+	case models.ConnectionTypeSQLite:
+		return "SQLite"
 	default:
 		return connectionType
 	}

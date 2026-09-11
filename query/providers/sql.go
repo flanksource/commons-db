@@ -12,6 +12,7 @@ import (
 	"math"
 	"strconv"
 
+	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
@@ -36,6 +37,8 @@ type sqlProvider struct {
 	// connType forces the connection driver type; empty means take it from options.
 	connType string
 }
+
+var _ query.BackendCapabilityProvider = sqlProvider{}
 
 func (p sqlProvider) Type() string { return p.key }
 
@@ -86,6 +89,10 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 		}
 		defer release()
 		defer func() { _ = client.Close() }()
+		if err := requireSQLArrayFilters(ctx, client, dialect, filtersUseArrays(req.Filters)); err != nil {
+			yield(query.Page{}, err)
+			return
+		}
 
 		request := req
 		current := page
@@ -124,6 +131,51 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 			}
 		}
 	}
+}
+
+func (p sqlProvider) BackendCapabilities(
+	ctx context.Context,
+	req query.ProviderRequest,
+) (connection.BackendCapabilities, error) {
+	connectRequest, err := p.connectRequest(req)
+	if err != nil {
+		return connection.BackendCapabilities{}, err
+	}
+	client, dialect, release, err := sqlConnect(ctx, connectRequest)
+	if err != nil {
+		return connection.BackendCapabilities{}, err
+	}
+	defer release()
+	defer func() { _ = client.Close() }()
+	return connection.ProbeBackendCapabilities(ctx, client, string(dialect))
+}
+
+func requireSQLArrayFilters(
+	ctx context.Context,
+	client *sql.DB,
+	dialect sqlDialect,
+	required bool,
+) error {
+	if !required {
+		return nil
+	}
+	capabilities, err := connection.ProbeBackendCapabilities(ctx, client, string(dialect))
+	if err != nil {
+		return fmt.Errorf("probe SQL array filter capability: %w", err)
+	}
+	if err := capabilities.Require(connection.BackendCapabilityArrayFilters); err != nil {
+		return fmt.Errorf("SQL array filtering is unavailable: %w", err)
+	}
+	return nil
+}
+
+func filtersUseArrays(filters []query.ColumnFilterValue) bool {
+	for _, filter := range filters {
+		if filter.Array && !filter.IsZero() {
+			return true
+		}
+	}
+	return false
 }
 
 // orderKeys reads a row's position in the declared order, which is what the
@@ -212,13 +264,21 @@ func (p sqlProvider) connect(ctx context.Context, req query.ProviderRequest) (*s
 	if req.Query == "" {
 		return nil, "", nil, fmt.Errorf("sql query is required")
 	}
-	opts, err := query.DecodeOptions[sqlOptions](req.Options)
+	connectRequest, err := p.connectRequest(req)
 	if err != nil {
 		return nil, "", nil, err
 	}
-	return sqlConnect(ctx, sqlConnectRequest{
+	return sqlConnect(ctx, connectRequest)
+}
+
+func (p sqlProvider) connectRequest(req query.ProviderRequest) (sqlConnectRequest, error) {
+	opts, err := query.DecodeOptions[sqlOptions](req.Options)
+	if err != nil {
+		return sqlConnectRequest{}, err
+	}
+	return sqlConnectRequest{
 		Connection: req.Connection, ConnType: p.connType, Options: opts,
-	})
+	}, nil
 }
 
 func (p sqlProvider) readPage(

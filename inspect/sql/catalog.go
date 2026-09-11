@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/flanksource/commons-db/connection"
 	inspection "github.com/flanksource/commons-db/inspect"
 )
 
@@ -42,14 +43,15 @@ func (l Limits) withDefaults() Limits {
 }
 
 type Catalog struct {
-	Driver         string                    `json:"driver"`
-	Database       string                    `json:"database,omitempty"`
-	Databases      []string                  `json:"databases,omitempty"`
-	DefaultSchema  string                    `json:"defaultSchema,omitempty"`
-	Schemas        []Schema                  `json:"schemas"`
-	Truncated      bool                      `json:"truncated,omitempty"`
-	TruncateReason string                    `json:"truncateReason,omitempty"`
-	Cache          *inspection.CacheMetadata `json:"cache,omitempty"`
+	Driver         string                         `json:"driver"`
+	Database       string                         `json:"database,omitempty"`
+	Capabilities   connection.BackendCapabilities `json:"capabilities"`
+	Databases      []string                       `json:"databases,omitempty"`
+	DefaultSchema  string                         `json:"defaultSchema,omitempty"`
+	Schemas        []Schema                       `json:"schemas"`
+	Truncated      bool                           `json:"truncated,omitempty"`
+	TruncateReason string                         `json:"truncateReason,omitempty"`
+	Cache          *inspection.CacheMetadata      `json:"cache,omitempty"`
 }
 
 type Schema struct {
@@ -136,8 +138,17 @@ func inspect(ctx context.Context, db *sql.DB, driver string, limits Limits) (Cat
 		return Catalog{}, fmt.Errorf("nil sql database")
 	}
 	driver = normalizeDriver(driver)
+	capabilities, err := connection.ProbeBackendCapabilities(ctx, db, driver)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("inspect SQL capabilities: %w", err)
+	}
 	if driver == "postgres" || driver == "sqlserver" {
-		return inspectRich(ctx, db, driver, limits)
+		catalog, err := inspectRich(ctx, db, driver, limits)
+		if err != nil {
+			return Catalog{}, err
+		}
+		catalog.Capabilities = capabilities
+		return catalog, nil
 	}
 	identity, statement, err := inspectionQueries(driver)
 	if err != nil {
@@ -187,7 +198,7 @@ func inspect(ctx context.Context, db *sql.DB, driver string, limits Limits) (Cat
 	if err := rows.Err(); err != nil {
 		return Catalog{}, fmt.Errorf("iterate sql catalog: %w", err)
 	}
-	return buildCatalog(driver, database, defaultSchema, databases, schemas, items, limits), nil
+	return buildCatalog(driver, database, defaultSchema, databases, schemas, items, limits, capabilities), nil
 }
 
 // ListDatabases returns databases accessible to the current connection user.
@@ -343,7 +354,13 @@ ORDER BY name`
 	}
 }
 
-func buildCatalog(driver, database, defaultSchema string, databases, schemas []string, rows []columnRow, limits Limits) Catalog {
+func buildCatalog(
+	driver, database, defaultSchema string,
+	databases, schemas []string,
+	rows []columnRow,
+	limits Limits,
+	capabilities connection.BackendCapabilities,
+) Catalog {
 	limits = limits.withDefaults()
 	type relationKey struct{ schema, relation string }
 	relations := make(map[relationKey]*Relation)
@@ -399,7 +416,7 @@ func buildCatalog(driver, database, defaultSchema string, databases, schemas []s
 		orderedDatabases = append(orderedDatabases, name)
 	}
 	sort.Strings(orderedDatabases)
-	catalog := Catalog{Driver: normalizeDriver(driver), Database: database, Databases: orderedDatabases, DefaultSchema: defaultSchema, Schemas: []Schema{}, Truncated: truncated, TruncateReason: reason}
+	catalog := Catalog{Driver: normalizeDriver(driver), Database: database, Capabilities: capabilities, Databases: orderedDatabases, DefaultSchema: defaultSchema, Schemas: []Schema{}, Truncated: truncated, TruncateReason: reason}
 	for _, schemaName := range names {
 		relationNames := make([]string, 0)
 		for key := range relations {

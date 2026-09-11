@@ -62,6 +62,26 @@ func TestNormalizeSQLValue(t *testing.T) {
 			value:        []byte{1, 2, 3},
 			want:         []byte{1, 2, 3},
 		},
+		// SQLite has no boolean storage class: a column declared BOOLEAN holds
+		// 0/1, and the driver hands a scan into any the integer.
+		{
+			name:         "a declared boolean stored as one",
+			databaseType: "BOOLEAN",
+			value:        int64(1),
+			want:         true,
+		},
+		{
+			name:         "a declared boolean stored as zero",
+			databaseType: "BOOLEAN",
+			value:        int64(0),
+			want:         false,
+		},
+		{
+			name:         "a boolean the driver already decoded",
+			databaseType: "BOOLEAN",
+			value:        true,
+			want:         true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -74,5 +94,13 @@ func TestNormalizeSQLValue(t *testing.T) {
 				t.Fatalf("normalizeSQLValue() = %#v (%T), want %#v (%T)", got, got, tt.want, tt.want)
 			}
 		})
+	}
+}
+
+func TestNormalizeSQLValueRefusesABooleanThatIsNeither(t *testing.T) {
+	for _, value := range []any{int64(2), "yes"} {
+		if got, err := normalizeSQLValue("BOOLEAN", value); err == nil {
+			t.Fatalf("normalizeSQLValue(BOOLEAN, %#v) = %#v, want an error", value, got)
+		}
 	}
 }

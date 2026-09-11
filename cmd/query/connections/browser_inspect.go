@@ -75,11 +75,7 @@ func (h *connectionBrowserHandler) inspectConnection(ctx context.Context, conn *
 		if err != nil {
 			return browserInspection{}, err
 		}
-		return browserInspection{
-			Kind: "sql", Driver: catalog.Driver, Dialect: sqlDialect(conn.Type), Database: catalog.Database, Databases: catalog.Databases,
-			DefaultSchema: catalog.DefaultSchema, Schemas: catalog.Schemas, Nodes: catalogNodesForSQL(conn.Type, catalog),
-			Truncated: catalog.Truncated, TruncateReason: catalog.TruncateReason, Cache: catalog.Cache,
-		}, nil
+		return sqlBrowserInspection(conn.Type, catalog), nil
 	case models.ConnectionTypeOpenSearch, models.ConnectionTypeElasticSearch, models.ConnectionTypeOpenTelemetry:
 		requestCtx := h.ctx.Wrap(ctx)
 		searcher, err := h.inspectionOpenSearchSearcher(requestCtx, conn)
@@ -125,6 +121,15 @@ func (h *connectionBrowserHandler) inspectConnection(ctx context.Context, conn *
 		return inspection, nil
 	default:
 		return browserInspection{}, fmt.Errorf("connection type %q does not support inspection", conn.Type)
+	}
+}
+
+func sqlBrowserInspection(connectionType string, catalog sqlinspect.Catalog) browserInspection {
+	return browserInspection{
+		Kind: "sql", Driver: catalog.Driver, Dialect: sqlDialect(connectionType), Database: catalog.Database, Databases: catalog.Databases,
+		DefaultSchema: catalog.DefaultSchema, Capabilities: &catalog.Capabilities,
+		Schemas: catalog.Schemas, Nodes: catalogNodesForSQL(connectionType, catalog),
+		Truncated: catalog.Truncated, TruncateReason: catalog.TruncateReason, Cache: catalog.Cache,
 	}
 }
 

@@ -40,7 +40,10 @@ func (p sqlProvider) LookupFilterValues(
 		return nil, nil, err
 	}
 	defer release()
-	defer client.Close()
+	defer func() { _ = client.Close() }()
+	if err := requireSQLArrayFilters(ctx, client, dialect, binding.Array || filtersUseArrays(req.Filters)); err != nil {
+		return nil, nil, err
+	}
 
 	statement, args, err := buildLookupSQL(dialect, req.Query, binding, req.Filters, search, limit)
 	if err != nil {
@@ -60,7 +63,7 @@ func (p sqlProvider) LookupFilterValues(
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to look up filter values: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	options := make([]query.FilterOption, 0, limit)
 	total := 0
@@ -106,6 +109,9 @@ func buildLookupSQL(
 	if !binding.Kind.Lookupable() {
 		return "", nil, fmt.Errorf(
 			"filter %q is a %s filter and has no values to list", binding.Key, binding.Kind.Normalized())
+	}
+	if binding.Array {
+		return buildArrayLookupSQL(dialect, statement, baseArgCount, binding, siblings, search, limit)
 	}
 	column, err := dialect.quote(binding.Field)
 	if err != nil {

@@ -628,6 +628,10 @@ var _ = Describe("Profile column editor schema", func() {
 		Expect(filter).ToNot(HaveKey("required"))
 		Expect(filterProps["field"].(schema.Schema)["description"]).To(ContainSubstring("required only when the column implies none"))
 		Expect(filterProps["kind"].(schema.Schema)["enum"]).To(Equal(query.ColumnFilterKindValues()))
+		array := filterProps["array"].(schema.Schema)
+		Expect(array).To(HaveKeyWithValue("type", "boolean"))
+		Expect(array["description"]).To(ContainSubstring("native element semantics"))
+		Expect(array["description"]).ToNot(ContainSubstring("SQL only"))
 		// The labels are a hand-written map beside a generated enum, so the only
 		// thing stopping a tenth kind reaching the editor unnamed is this.
 		kindLabels := filterProps["kind"].(schema.Schema)["x-enum-labels"].(map[string]string)
