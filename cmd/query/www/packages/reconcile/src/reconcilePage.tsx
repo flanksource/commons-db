@@ -88,7 +88,7 @@ export interface ReconcilePageProps {
   onProfileSaved?: () => void | Promise<void>;
 }
 
-/** Mount under the host's QueryClientProvider; key by sourceName when switching sources. */
+/** Mount under a QueryClientProvider scoped to one server and authentication context. */
 export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryKey, navigation, onProfileSaved }: ReconcilePageProps) {
   const { view, search } = navigation;
   const queryClient = useQueryClient();
@@ -173,10 +173,18 @@ export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryK
         destFilters: state.destFilters,
       }
     : benchQueryForConfig(snapshot.data?.reconcile?.config, snapshot.data?.idle_age);
-  const benchHref = withQuery(navigation.benchHref, reconcileQueryString(benchQuery));
+  const benchHref = withQuery(
+    navigation.benchHref,
+    reconcileQueryString(benchQuery),
+    ["dest", "cel", "snapshot-age", "source-filter", "dest-filter"],
+  );
   const showResults = (next: ResultsView, id: string, replace: boolean) => {
     setResultsView(next);
-    navigation.navigate(withQuery(navigation.snapshotHref(id), resultsViewQueryString(next)), { replace });
+    navigation.navigate(withQuery(
+      navigation.snapshotHref(id),
+      resultsViewQueryString(next),
+      ["outcome", "page", "size", "sort", "order"],
+    ), { replace });
   };
 
   const run = useMutation({
@@ -426,13 +434,13 @@ function ResultsBody({
   );
 }
 
-/** Preserve host route parameters when the host routes tabs through the query string. */
-function withQuery(href: string, search: string): string {
+/** Replace one serializer's state while preserving host-owned route parameters. */
+function withQuery(href: string, search: string, ownedKeys: string[]): string {
   const [base, hash] = href.split("#", 2);
   const [path, query] = base.split("?", 2);
   const params = new URLSearchParams(query);
+  for (const key of ownedKeys) params.delete(key);
   const updates = new URLSearchParams(search);
-  updates.forEach((_, key) => params.delete(key));
   updates.forEach((value, key) => params.append(key, value));
   const suffix = params.toString();
   return path + (suffix ? `?${suffix}` : "") + (hash === undefined ? "" : `#${hash}`);
