@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
+	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 )
 
@@ -18,6 +20,47 @@ type Provider interface {
 
 	// Execute runs req against the backend and returns the raw rows.
 	Execute(ctx context.Context, req ProviderRequest) ([]Row, error)
+}
+
+// BackendCapabilityProvider reports features from the live backend selected by
+// a request. It is optional because non-SQL providers need not expose SQL
+// feature metadata merely to implement Provider.
+type BackendCapabilityProvider interface {
+	BackendCapabilities(ctx context.Context, req ProviderRequest) (connection.BackendCapabilities, error)
+}
+
+func BackendCapabilitiesFor(ctx context.Context, req ProviderRequest) (connection.BackendCapabilities, error) {
+	provider, err := GetProvider(req.Provider)
+	if err != nil {
+		return connection.BackendCapabilities{}, err
+	}
+	capabilityProvider, ok := provider.(BackendCapabilityProvider)
+	if !ok {
+		return connection.BackendCapabilities{}, fmt.Errorf("provider %q does not report backend capabilities", req.Provider)
+	}
+	capabilities, err := capabilityProvider.BackendCapabilities(ctx, req)
+	if err != nil {
+		return connection.BackendCapabilities{}, fmt.Errorf("get backend capabilities from provider %q: %w", req.Provider, err)
+	}
+	if err := capabilities.Validate(); err != nil {
+		return connection.BackendCapabilities{}, fmt.Errorf("provider %q returned invalid backend capabilities: %w", req.Provider, err)
+	}
+	return capabilities, nil
+}
+
+func RequireBackendCapability(
+	ctx context.Context,
+	req ProviderRequest,
+	capability connection.BackendCapability,
+) (connection.BackendCapabilities, error) {
+	capabilities, err := BackendCapabilitiesFor(ctx, req)
+	if err != nil {
+		return connection.BackendCapabilities{}, err
+	}
+	if err := capabilities.Require(capability); err != nil {
+		return connection.BackendCapabilities{}, err
+	}
+	return capabilities, nil
 }
 
 // QueryParameterizer replaces provider-native parameter references with opaque
@@ -117,27 +160,41 @@ type ProviderRequest struct {
 	Inspection InspectionOptions
 }
 
-var providerRegistry = map[string]Provider{}
+var (
+	providerRegistryMu sync.RWMutex
+	providerRegistry   = map[string]Provider{}
+)
 
 // RegisterProvider adds p to the global provider registry, keyed by p.Type().
 // A later registration for the same type replaces the earlier one.
 func RegisterProvider(p Provider) {
-	providerRegistry[p.Type()] = p
+	typ := p.Type()
+	providerRegistryMu.Lock()
+	defer providerRegistryMu.Unlock()
+	providerRegistry[typ] = p
 }
 
 // GetProvider returns the registered Provider for typ, or an error listing the
 // available types when none is registered.
 func GetProvider(typ string) (Provider, error) {
+	providerRegistryMu.RLock()
+	defer providerRegistryMu.RUnlock()
 	p, ok := providerRegistry[typ]
 	if !ok {
 		return nil, fmt.Errorf("no data provider registered for type %q (available: %s)",
-			typ, strings.Join(RegisteredProviders(), ", "))
+			typ, strings.Join(registeredProvidersLocked(), ", "))
 	}
 	return p, nil
 }
 
 // RegisteredProviders returns the registered provider types, sorted.
 func RegisteredProviders() []string {
+	providerRegistryMu.RLock()
+	defer providerRegistryMu.RUnlock()
+	return registeredProvidersLocked()
+}
+
+func registeredProvidersLocked() []string {
 	types := make([]string, 0, len(providerRegistry))
 	for t := range providerRegistry {
 		types = append(types, t)

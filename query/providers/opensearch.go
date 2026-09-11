@@ -27,6 +27,28 @@ type opensearchProvider struct{}
 
 func (opensearchProvider) Type() string { return "opensearch" }
 
+func (opensearchProvider) BackendCapabilities(
+	_ context.Context,
+	req query.ProviderRequest,
+) (dbconnection.BackendCapabilities, error) {
+	options, err := query.DecodeOptions[opensearchOptions](req.Options)
+	if err != nil {
+		return dbconnection.BackendCapabilities{}, err
+	}
+	return documentArrayCapabilities("opensearch", options.Index), nil
+}
+
+func documentArrayCapabilities(backend, database string) dbconnection.BackendCapabilities {
+	return dbconnection.BackendCapabilities{
+		Backend: backend, Database: database,
+		Features: map[dbconnection.BackendCapability]dbconnection.BackendCapabilityStatus{
+			dbconnection.BackendCapabilityArrayFilters: {
+				Supported: true, Detail: "native multi-valued fields",
+			},
+		},
+	}
+}
+
 type opensearchOptions struct {
 	// Address is an inline OpenSearch URL used when no stored connection is referenced.
 	Address string `json:"address,omitempty"`

@@ -64,6 +64,24 @@ var _ = Describe("applyOpenSearchFilters", func() {
 		}}))
 	})
 
+	It("uses document terms semantics for included and excluded array elements", func() {
+		body := baseBody()
+		Expect(applyOpenSearchFilters(body, []query.ColumnFilterValue{{
+			Field: "labels", Array: true,
+			Include: []string{"customer", "managed"}, Exclude: []string{"internal"},
+		}}, nil)).To(Succeed())
+
+		Expect(body["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{
+				map[string]any{"match_all": map[string]any{}},
+				map[string]any{"terms": map[string]any{"labels": []any{"customer", "managed"}}},
+			},
+			"must_not": []any{
+				map[string]any{"terms": map[string]any{"labels": []any{"internal"}}},
+			},
+		}}))
+	})
+
 	It("keeps an exclude-only selection as a pure must_not", func() {
 		body := baseBody()
 		Expect(applyOpenSearchFilters(body, []query.ColumnFilterValue{{
@@ -421,6 +439,20 @@ var _ = Describe("nested column filters", func() {
 				{"terms":{"tags.value":["legacy"]}}
 			]}}}}]
 		}}}`))
+	})
+
+	It("keeps an array field inside its declared nested entry", func() {
+		array := tagFilter("web")
+		array.Array = true
+		filtered, err := FilterOpenSearch("", []query.ColumnFilterValue{array})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(filtered).To(MatchJSON(`{"query":{"bool":{"filter":[
+			{"match_all":{}},
+			{"nested":{"path":"tags","query":{"bool":{"filter":[
+				{"term":{"tags.key":"app"}},
+				{"terms":{"tags.value":["web"]}}
+			]}}}}
+		]}}}`))
 	})
 
 	// One entry cannot be keyed both "app" and "env", so folding these into one

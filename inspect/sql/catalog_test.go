@@ -1,6 +1,10 @@
 package sqlinspect
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/flanksource/commons-db/connection"
+)
 
 func TestBuildCatalogOrdersAndBoundsMetadata(t *testing.T) {
 	rows := []columnRow{
@@ -9,7 +13,7 @@ func TestBuildCatalogOrdersAndBoundsMetadata(t *testing.T) {
 		{schema: "public", relation: "users", relationType: "BASE TABLE", column: "id", dataType: "uuid", ordinal: 1},
 		{schema: "public", relation: "active_users", relationType: "VIEW", column: "id", dataType: "uuid", ordinal: 1},
 	}
-	catalog := buildCatalog("postgres", "app", "public", []string{"postgres", "app"}, []string{"public", "z"}, rows, Limits{})
+	catalog := buildCatalog("postgres", "app", "public", []string{"postgres", "app"}, []string{"public", "z"}, rows, Limits{}, connection.BackendCapabilities{})
 	if catalog.Database != "app" || catalog.DefaultSchema != "public" || len(catalog.Schemas) != 2 {
 		t.Fatalf("catalog = %#v", catalog)
 	}
@@ -23,14 +27,14 @@ func TestBuildCatalogOrdersAndBoundsMetadata(t *testing.T) {
 		t.Fatalf("relation metadata = %#v", catalog.Schemas[0].Relations)
 	}
 
-	truncated := buildCatalog("postgres", "app", "public", []string{"app"}, []string{"public", "z"}, rows, Limits{MaxRelations: 1, MaxColumns: 1})
+	truncated := buildCatalog("postgres", "app", "public", []string{"app"}, []string{"public", "z"}, rows, Limits{MaxRelations: 1, MaxColumns: 1}, connection.BackendCapabilities{})
 	if !truncated.Truncated || truncated.TruncateReason == "" {
 		t.Fatalf("expected bounded catalog: %#v", truncated)
 	}
 }
 
 func TestBuildCatalogPreservesEmptySchemas(t *testing.T) {
-	catalog := buildCatalog("postgres", "postgres", "public", []string{"postgres"}, []string{"public"}, nil, Limits{})
+	catalog := buildCatalog("postgres", "postgres", "public", []string{"postgres"}, []string{"public"}, nil, Limits{}, connection.BackendCapabilities{})
 	if len(catalog.Schemas) != 1 || catalog.Schemas[0].Name != "public" || len(catalog.Schemas[0].Relations) != 0 {
 		t.Fatalf("empty schema catalog = %#v", catalog)
 	}

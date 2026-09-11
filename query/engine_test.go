@@ -1,6 +1,10 @@
 package query_test
 
 import (
+	"fmt"
+	"sync"
+
+	"github.com/flanksource/commons-db/connection"
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
@@ -15,6 +19,19 @@ type mockProvider struct {
 	rows          []query.Row
 	last          query.ProviderRequest
 	lastNamespace string
+}
+
+type capabilityProvider struct {
+	*mockProvider
+	capabilities connection.BackendCapabilities
+	err          error
+}
+
+func (p *capabilityProvider) BackendCapabilities(
+	_ context.Context,
+	_ query.ProviderRequest,
+) (connection.BackendCapabilities, error) {
+	return p.capabilities, p.err
 }
 
 func (m *mockProvider) Type() string { return m.typ }
@@ -43,6 +60,66 @@ var _ = Describe("provider registry", func() {
 		Expect(err).To(HaveOccurred())
 		Expect(err.Error()).To(ContainSubstring("no data provider registered"))
 		Expect(err.Error()).To(ContainSubstring("known-one"))
+	})
+
+	It("gets and requires a live backend capability through an optional provider interface", func() {
+		provider := &capabilityProvider{
+			mockProvider: &mockProvider{typ: "capability-roundtrip"},
+			capabilities: connection.BackendCapabilities{
+				Backend: "postgres", Version: "17.4", Database: "warehouse",
+				Features: map[connection.BackendCapability]connection.BackendCapabilityStatus{
+					connection.BackendCapabilityArrayFilters: {Supported: true},
+				},
+			},
+		}
+		query.RegisterProvider(provider)
+		request := query.ProviderRequest{Provider: provider.Type()}
+
+		capabilities, err := query.BackendCapabilitiesFor(context.New(), request)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(capabilities).To(Equal(provider.capabilities))
+		capabilities, err = query.RequireBackendCapability(context.New(), request, connection.BackendCapabilityArrayFilters)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(capabilities).To(Equal(provider.capabilities))
+	})
+
+	It("fails when a provider does not expose backend capabilities", func() {
+		provider := &mockProvider{typ: "capability-unavailable"}
+		query.RegisterProvider(provider)
+		_, err := query.BackendCapabilitiesFor(context.New(), query.ProviderRequest{Provider: provider.Type()})
+		Expect(err).To(MatchError(ContainSubstring("does not report backend capabilities")))
+	})
+
+	It("preserves a capability probe failure", func() {
+		provider := &capabilityProvider{mockProvider: &mockProvider{typ: "capability-error"}, err: fmt.Errorf("metadata denied")}
+		query.RegisterProvider(provider)
+		_, err := query.BackendCapabilitiesFor(context.New(), query.ProviderRequest{Provider: provider.Type()})
+		Expect(err).To(MatchError(ContainSubstring("metadata denied")))
+	})
+
+	It("supports concurrent registration, lookup, and enumeration", func() {
+		const workers = 64
+		start := make(chan struct{})
+		errs := make(chan error, workers)
+		var group sync.WaitGroup
+		for worker := range workers {
+			group.Add(1)
+			go func() {
+				defer GinkgoRecover()
+				defer group.Done()
+				<-start
+				typ := fmt.Sprintf("provider-concurrent-%d", worker)
+				query.RegisterProvider(&mockProvider{typ: typ})
+				if _, err := query.GetProvider(typ); err != nil {
+					errs <- err
+				}
+				_ = query.RegisteredProviders()
+			}()
+		}
+		close(start)
+		group.Wait()
+		close(errs)
+		Expect(errs).To(BeEmpty())
 	})
 })
 

@@ -30,15 +30,18 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 				env        text,
 				latency_ms int,
 				created_at timestamptz,
-				payload    jsonb
+				payload    jsonb,
+				tables     text[],
+				tags_json  jsonb,
+				labels_json json
 			);
-			INSERT INTO orders VALUES
-				(1, 'us-east', 'prod',    100, now() - interval '2 hours',   '{"k": 1}'),
-				(2, 'us-west', 'prod',    250, now() - interval '30 minutes','{"k": 2}'),
-				(3, 'eu',      'dev',     500, now() - interval '10 minutes','{}'),
-				(4, 'us-east', NULL,       50, now() - interval '5 minutes', '{"k": 3}'),
-				(5, '50%',     'prod',     75, now() - interval '1 minute',  '{}'),
-				(6, 'US-East', 'staging', 900, now() - interval '3 hours',   '{}');
+			INSERT INTO orders (id, region, env, latency_ms, created_at, payload, tables, tags_json, labels_json) VALUES
+				(1, 'us-east', 'prod',    100, now() - interval '2 hours',   '{"k": 1}', ARRAY['policy', 'client', 'policy'], '["policy", "client", "policy", 7, null]', '["legacy", "client"]'),
+				(2, 'us-west', 'prod',    250, now() - interval '30 minutes','{"k": 2}', ARRAY['client'],                     '["client"]',                              '[]'),
+				(3, 'eu',      'dev',     500, now() - interval '10 minutes','{}',       ARRAY['policy'],                     '["policy", 7]',                           NULL),
+				(4, 'us-east', NULL,       50, now() - interval '5 minutes', '{"k": 3}', NULL,                                'null',                                    '["client"]'),
+				(5, '50%',     'prod',     75, now() - interval '1 minute',  '{}',       ARRAY[]::text[],                     '[]',                                      '[]'),
+				(6, 'US-East', 'staging', 900, now() - interval '3 hours',   '{}',       ARRAY['Policy'],                     '["Policy"]',                              '["legacy"]');
 		`)
 		Expect(err).ToNot(HaveOccurred())
 	})
@@ -54,6 +57,9 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 				{Name: "env", Type: query.ColumnTypeString},
 				{Name: "latency_ms", Type: query.ColumnTypeNumber},
 				{Name: "created_at", Type: query.ColumnTypeDateTime},
+				{Name: "tables", Type: query.ColumnTypeString, Filter: &query.ColumnFilterDef{Array: true}},
+				{Name: "tags_json", Type: query.ColumnTypeString, Filter: &query.ColumnFilterDef{Array: true}},
+				{Name: "labels_json", Type: query.ColumnTypeString, Filter: &query.ColumnFilterDef{Array: true}},
 			},
 		}
 	}
@@ -73,7 +79,7 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 		return result.Rows
 	}
 
-	const selectOrders = "SELECT id, region, env, latency_ms, created_at FROM orders ORDER BY id"
+	const selectOrders = "SELECT id, region, env, latency_ms, created_at, tables, tags_json, labels_json FROM orders ORDER BY id"
 
 	It("advertises a filter for every scalar column of a SQL profile", func() {
 		bindings, err := profileFor(selectOrders).ColumnFilterBindings()
@@ -83,11 +89,14 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 			kinds[binding.Column] = binding.Kind
 		}
 		Expect(kinds).To(Equal(map[string]query.ColumnFilterKind{
-			"id":         query.ColumnFilterKindRange,
-			"region":     query.ColumnFilterKindTerms,
-			"env":        query.ColumnFilterKindTerms,
-			"latency_ms": query.ColumnFilterKindRange,
-			"created_at": query.ColumnFilterKindTime,
+			"id":          query.ColumnFilterKindRange,
+			"region":      query.ColumnFilterKindTerms,
+			"env":         query.ColumnFilterKindTerms,
+			"latency_ms":  query.ColumnFilterKindRange,
+			"created_at":  query.ColumnFilterKindTime,
+			"tables":      query.ColumnFilterKindTerms,
+			"tags_json":   query.ColumnFilterKindTerms,
+			"labels_json": query.ColumnFilterKindTerms,
 		}))
 	})
 
@@ -116,6 +125,26 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 		Expect(ids(run(selectOrders, map[string]any{
 			"filter.region": "us-east,us-west", "filter.env": "prod",
 		}))).To(Equal([]int{1, 2}))
+	})
+
+	It("filters native text arrays by string membership", func() {
+		Expect(ids(run(selectOrders, map[string]any{"filter.tables": "policy"}))).To(Equal([]int{1, 3}))
+	})
+
+	It("keeps null and empty arrays when excluding a member", func() {
+		Expect(ids(run(selectOrders, map[string]any{"filter.tables": "!client"}))).To(Equal([]int{3, 4, 5, 6}))
+	})
+
+	DescribeTable("filters native json arrays by string members only",
+		func(filter string, expected []int) {
+			Expect(ids(run(selectOrders, map[string]any{"filter.tags_json": filter}))).To(Equal(expected))
+		},
+		Entry("a string member", "policy", []int{1, 3}),
+		Entry("not a numeric member coerced to text", "7", []int{}),
+	)
+
+	It("filters native json columns as well as jsonb", func() {
+		Expect(ids(run(selectOrders, map[string]any{"filter.labels_json": "client"}))).To(Equal([]int{1, 4}))
 	})
 
 	It("bounds a numeric column", func() {
@@ -231,6 +260,47 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 			Expect(options[0]).To(Equal(query.FilterOption{Value: "us-east", Count: 2}))
 			// SQL counts the grouped set, so the number is the number.
 			Expect(total).To(Equal(&query.Total{Value: 5, Exact: true}))
+		})
+
+		It("lists native array members once per source row", func() {
+			options, total := lookup("filter.tables", "", nil)
+			Expect(options).To(Equal([]query.FilterOption{
+				{Value: "client", Count: 2},
+				{Value: "policy", Count: 2},
+				{Value: "Policy", Count: 1},
+			}))
+			Expect(total).To(Equal(&query.Total{Value: 3, Exact: true}))
+		})
+
+		It("applies sibling filters and search when listing array members", func() {
+			options, total := lookup("filter.tables", "pol", map[string]any{"filter.env": "prod"})
+			Expect(options).To(Equal([]query.FilterOption{{Value: "policy", Count: 1}}))
+			Expect(total).To(Equal(&query.Total{Value: 1, Exact: true}))
+		})
+
+		It("binds authored parameters before array lookup siblings and search", func() {
+			profile := profileFor("SELECT id, region, env, tables, tags_json, labels_json FROM orders WHERE id >= {{.params.min_id}}")
+			profile.Params = []query.ParamDef{{Name: "min_id", Type: query.ParamTypeNumber}}
+			options, total, err := query.LookupFilterValues(context.New(), query.FilterValueLookupRequest{
+				Profile: profile,
+				Input:   map[string]any{"min_id": 1, "filter.env": "prod"},
+				Key:     "filter.tables",
+				Search:  "pol",
+				Limit:   20,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(options).To(Equal([]query.FilterOption{{Value: "policy", Count: 1}}))
+			Expect(total).To(Equal(&query.Total{Value: 1, Exact: true}))
+		})
+
+		It("omits non-string and null json array members", func() {
+			options, total := lookup("filter.tags_json", "", nil)
+			Expect(options).To(Equal([]query.FilterOption{
+				{Value: "client", Count: 2},
+				{Value: "policy", Count: 2},
+				{Value: "Policy", Count: 1},
+			}))
+			Expect(total).To(Equal(&query.Total{Value: 3, Exact: true}))
 		})
 
 		It("offers no NULL, which is not a value anyone can select", func() {

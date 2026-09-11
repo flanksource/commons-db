@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Masterminds/squirrel"
+	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
 	"github.com/timberio/go-datemath"
 )
@@ -331,6 +332,9 @@ func sqlPredicates(dialect sqlDialect, filters []query.ColumnFilterValue) (squir
 			return nil, fmt.Errorf("field %q is filtered as both %s and %s",
 				filter.Field, merged.Kind.Normalized(), filter.Kind.Normalized())
 		}
+		if merged.Array != filter.Array {
+			return nil, fmt.Errorf("field %q is filtered both as an array and as a value", filter.Field)
+		}
 		merged.Include = append(merged.Include, filter.Include...)
 		merged.Exclude = append(merged.Exclude, filter.Exclude...)
 		if err := mergeRange(merged, filter); err != nil {
@@ -398,6 +402,9 @@ func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squi
 	if err != nil {
 		return nil, err
 	}
+	if filter.Array {
+		return sqlArrayPredicate(dialect, column, filter)
+	}
 	conditions := squirrel.And{}
 	// Every kind compiles through the clause its family compiles through: an
 	// exact match as terms, a duration as a range, a date as a time. See
@@ -459,7 +466,7 @@ func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squi
 			if edge.bound == nil {
 				continue
 			}
-			value, err := sqlBoundValue(kind, edge.bound.Value)
+			value, err := sqlBoundValue(dialect, kind, edge.bound.Value)
 			if err != nil {
 				return nil, err
 			}
@@ -519,7 +526,11 @@ func sqlFilterArgs(kind query.ColumnFilterKind, filter query.ColumnFilterValue) 
 // The kind arrives already mapped through CompilesAs, so a date bound is a time
 // bound here and gets the same resolution, and a duration bound is a numeric
 // one that the parser already reduced to the column's unit.
-func sqlBoundValue(kind query.ColumnFilterKind, value any) (any, error) {
+//
+// SQLite has no time type: its instants are TEXT, so a sqlite bound is bound
+// as text in the one layout they are stored in (sqlitetable.TimeLayout). Every
+// other dialect's driver binds a time.Time as a time.
+func sqlBoundValue(dialect sqlDialect, kind query.ColumnFilterKind, value any) (any, error) {
 	if kind != query.ColumnFilterKindTime {
 		return value, nil
 	}
@@ -531,7 +542,11 @@ func sqlBoundValue(kind query.ColumnFilterKind, value any) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%q is not an RFC3339 time or date math: %w", text, err)
 	}
-	return expression.Time(datemath.WithNow(time.Now().UTC())), nil
+	resolved := expression.Time(datemath.WithNow(time.Now().UTC()))
+	if dialect == dialectSQLite {
+		return sqlitetable.FormatTime(resolved), nil
+	}
+	return resolved, nil
 }
 
 // renderClause formats one predicate for dialect.
