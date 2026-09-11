@@ -16,8 +16,10 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/keyvault/azkeys v0.10.0
 	github.com/Azure/azure-sdk-for-go/sdk/monitor/azquery v1.2.0
 	github.com/ClickHouse/clickhouse-go/v2 v2.46.0
+	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/Masterminds/squirrel v1.5.4
 	github.com/TomOnTime/utfutil v1.0.0
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/aws/aws-sdk-go-v2 v1.42.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.25
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.24
@@ -37,6 +39,7 @@ require (
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/flanksource/clicky v1.21.61
+	github.com/flanksource/clicky/valkey v1.21.61
 	github.com/flanksource/commons v1.59.0
 	github.com/flanksource/deps v1.0.42
 	github.com/flanksource/gomplate/v3 v3.24.89
@@ -82,6 +85,7 @@ require (
 	github.com/slack-go/slack v0.29.0
 	github.com/stretchr/testify v1.11.1
 	github.com/timberio/go-datemath v0.1.0
+	github.com/valkey-io/valkey-go v1.0.75
 	github.com/zclconf/go-cty v1.18.1
 	go.opentelemetry.io/otel v1.44.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.44.0
@@ -102,7 +106,6 @@ require (
 	google.golang.org/protobuf v1.36.12-0.20260120151049-f2248ac996af
 	gopkg.in/yaml.v3 v3.0.1
 	gorm.io/driver/postgres v1.6.0
-	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
 	k8s.io/api v0.36.1
 	k8s.io/apimachinery v0.36.2
@@ -128,7 +131,6 @@ require (
 	github.com/Azure/azure-sdk-for-go/sdk/keyvault/internal v0.7.1 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.7.2 // indirect
 	github.com/ClickHouse/ch-go v0.71.0 // indirect
-	github.com/DATA-DOG/go-sqlmock v1.5.2 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/detectors/gcp v1.32.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/exporter/metric v0.55.0 // indirect
 	github.com/GoogleCloudPlatform/opentelemetry-operations-go/internal/resourcemapping v0.55.0 // indirect

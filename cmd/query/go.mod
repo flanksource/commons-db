@@ -22,12 +22,10 @@ require (
 	github.com/valkey-io/valkey-go v1.0.75
 	go.yaml.in/yaml/v3 v3.0.4
 	golang.org/x/sync v0.22.0
-	gorm.io/driver/sqlite v1.6.0
 	gorm.io/gorm v1.31.2
 	k8s.io/api v0.36.1
 	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.36.1
-	modernc.org/sqlite v1.55.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -252,7 +250,6 @@ require (
 	github.com/mattn/go-isatty v0.0.22 // indirect
 	github.com/mattn/go-localereader v0.0.1 // indirect
 	github.com/mattn/go-runewidth v0.0.21 // indirect
-	github.com/mattn/go-sqlite3 v1.14.38 // indirect
 	github.com/mbleigh/raymond v0.0.0-20250414171441-6b3a58ab9e0a // indirect
 	github.com/microsoft/go-mssqldb v1.10.0 // indirect
 	github.com/mitchellh/go-wordwrap v1.0.1 // indirect
@@ -400,6 +397,7 @@ require (
 	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
+	modernc.org/sqlite v1.55.0 // indirect
 	mvdan.cc/sh/v3 v3.13.0 // indirect
 	sigs.k8s.io/gateway-api v1.5.1 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
