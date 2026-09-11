@@ -40,9 +40,15 @@ package's source with the host's Tailwind build; it does not duplicate preflight
 
 The host must update `navigation` when its location changes. Bench and snapshot
 hrefs may include host query parameters (such as `tab` and `source`); the screen
-merges its filters and result-view parameters into them. `loadProfiles` returns profile documents, not executed
-rows. Keep its query key stable and scoped to the active server/user. Remount
-the page when changing source or authentication context. `onProfileSaved` can
+replaces its filters and result-view parameters while preserving those host
+parameters. `loadProfiles` returns profile documents, not executed rows.
+
+Mount this screen under a `QueryClient` whose whole lifecycle is scoped to the
+active server and authentication context. Discard that client before changing
+server or identity. Changing `profilesQueryKey` or remounting `ReconcilePage`
+alone is insufficient: clicky-ui's OpenAPI cache and this package's snapshot
+descriptor and result caches also live in the enclosing client. Keep the
+profile query key stable within one such context. `onProfileSaved` can
 invalidate additional host caches; the supplied profile query key is always
 invalidated by the screen itself.
 
