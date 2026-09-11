@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -140,6 +141,25 @@ var _ = Describe("buildFilteredSQL", func() {
 			Expect(args[0]).To(BeAssignableToTypeOf(timeZero))
 		})
 
+		// SQLite has no time type: an instant is TEXT, compared as text, so a
+		// bound only compares as an instant when it is written exactly as the
+		// stored values are — one fixed-width UTC layout. The driver's own
+		// rendering of a time.Time is Go's String(), which sorts before every
+		// stored value of the same day.
+		It("binds a sqlite time bound as UTC text in the layout instants are stored in", func() {
+			_, args, err := buildFilteredSQL(dialectSQLite, ordersQuery,
+				[]query.ColumnFilterValue{{
+					Field: "created_at", Kind: query.ColumnFilterKindTime,
+					Range: &query.FilterRange{
+						Min: &query.FilterBound{Value: "2026-09-10T08:00:00.25+02:00", Inclusive: true},
+						Max: &query.FilterBound{Value: "2026-09-10T07:00:00Z"},
+					},
+				}})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(args).To(Equal([]any{"2026-09-10T06:00:00.250000000Z", "2026-09-10T07:00:00.000000000Z"}))
+			Expect(args[0]).To(Equal(sqlitetable.FormatTime(time.Date(2026, 9, 10, 6, 0, 0, 250_000_000, time.UTC))))
+		})
+
 		It("binds a yes/no toggle as a real boolean", func() {
 			selected := true
 			statement, args, err := buildFilteredSQL(dialectPostgres, ordersQuery,
@@ -223,6 +243,49 @@ var _ = Describe("buildFilteredSQL", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(args).To(HaveLen(1))
 			Expect(args[0]).To(BeTemporally("~", time.Now().UTC().AddDate(0, 0, -7), time.Minute))
+		})
+	})
+
+	// A column holding a JSON array is compared element by element: its whole
+	// text is not a value anyone selected.
+	Describe("an array column", func() {
+		arrayTerms := func(include, exclude []string) query.ColumnFilterValue {
+			selection := terms("tables", include, exclude)
+			selection.Array = true
+			return selection
+		}
+
+		DescribeTable("uses each dialect's native array expansion or membership operation",
+			func(dialect sqlDialect, expected string) {
+				statement, args, err := buildFilteredSQL(dialect, ordersQuery, []query.ColumnFilterValue{
+					arrayTerms([]string{"policy", "client"}, []string{"secret"}),
+				})
+				Expect(err).ToNot(HaveOccurred())
+				Expect(statement).To(Equal(expected))
+				Expect(args).To(Equal([]any{"policy", "client", "secret"}))
+			},
+			Entry("sqlite", dialectSQLite,
+				"WITH \"__cdb_base\" AS (\n"+ordersQuery+"\n)\n"+
+					`SELECT * FROM "__cdb_base" WHERE (EXISTS (SELECT 1 FROM json_each("tables") AS "__cdb_item" WHERE ("__cdb_item".type = 'text' AND "__cdb_item".value IN (?,?))) AND NOT EXISTS (SELECT 1 FROM json_each("tables") AS "__cdb_item" WHERE ("__cdb_item".type = 'text' AND "__cdb_item".value IN (?))))`),
+			Entry("postgres native arrays, json, and jsonb", dialectPostgres,
+				"WITH \"__cdb_base\" AS (\n"+ordersQuery+"\n)\n"+
+					`SELECT * FROM "__cdb_base" WHERE (EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(to_jsonb("tables"), 'null'::jsonb), '[]'::jsonb)) AS "__cdb_item"("__cdb_value") WHERE (jsonb_typeof("__cdb_item"."__cdb_value") = 'string' AND ("__cdb_item"."__cdb_value" #>> '{}') IN ($1,$2))) AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(NULLIF(to_jsonb("tables"), 'null'::jsonb), '[]'::jsonb)) AS "__cdb_item"("__cdb_value") WHERE (jsonb_typeof("__cdb_item"."__cdb_value") = 'string' AND ("__cdb_item"."__cdb_value" #>> '{}') IN ($3))))`),
+			Entry("mysql JSON", dialectMySQL,
+				"WITH `__cdb_base` AS (\n"+ordersQuery+"\n)\n"+
+					"SELECT * FROM `__cdb_base` WHERE (EXISTS (SELECT 1 FROM JSON_TABLE(IF(JSON_TYPE(`tables`) = 'ARRAY', `tables`, JSON_ARRAY()), '$[*]' COLUMNS (`__cdb_value` JSON PATH '$')) AS `__cdb_item` WHERE (JSON_TYPE(`__cdb_item`.`__cdb_value`) = 'STRING' AND JSON_UNQUOTE(`__cdb_item`.`__cdb_value`) IN (?,?))) AND NOT EXISTS (SELECT 1 FROM JSON_TABLE(IF(JSON_TYPE(`tables`) = 'ARRAY', `tables`, JSON_ARRAY()), '$[*]' COLUMNS (`__cdb_value` JSON PATH '$')) AS `__cdb_item` WHERE (JSON_TYPE(`__cdb_item`.`__cdb_value`) = 'STRING' AND JSON_UNQUOTE(`__cdb_item`.`__cdb_value`) IN (?))))"),
+			Entry("sqlserver JSON stored in text or ntext", dialectSQLServer,
+				"WITH [__cdb_base] AS (\n"+ordersQuery+"\n)\n"+
+					`SELECT * FROM [__cdb_base] WHERE (EXISTS (SELECT 1 FROM OPENJSON(COALESCE(CONVERT(nvarchar(max), [tables]), N'[]')) AS [__cdb_item] WHERE ([__cdb_item].[type] = 1 AND [__cdb_item].[value] IN (@p1,@p2))) AND NOT EXISTS (SELECT 1 FROM OPENJSON(COALESCE(CONVERT(nvarchar(max), [tables]), N'[]')) AS [__cdb_item] WHERE ([__cdb_item].[type] = 1 AND [__cdb_item].[value] IN (@p3))))`),
+			Entry("clickhouse native string arrays", dialectClickHouse,
+				"WITH \"__cdb_base\" AS (\n"+ordersQuery+"\n)\n"+
+					`SELECT * FROM "__cdb_base" WHERE ((has("tables", ?) OR has("tables", ?)) AND NOT has("tables", ?))`),
+		)
+
+		It("refuses one field selected both as an array and as a value", func() {
+			_, _, err := buildFilteredSQL(dialectSQLite, ordersQuery, []query.ColumnFilterValue{
+				arrayTerms([]string{"policy"}, nil), terms("tables", []string{"client"}, nil),
+			})
+			Expect(err).To(MatchError(ContainSubstring(`field "tables" is filtered both as an array and as a value`)))
 		})
 	})
 

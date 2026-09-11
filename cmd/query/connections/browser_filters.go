@@ -74,8 +74,10 @@ var sqlColumnTypeFamilies = map[string]query.ColumnType{
 
 	"TEXT": query.ColumnTypeString, "VARCHAR": query.ColumnTypeString, "CHAR": query.ColumnTypeString,
 	"BPCHAR": query.ColumnTypeString, "NVARCHAR": query.ColumnTypeString, "NCHAR": query.ColumnTypeString,
+	"NTEXT": query.ColumnTypeString, "XML": query.ColumnTypeString,
 	"NAME": query.ColumnTypeString, "ENUM": query.ColumnTypeString,
 	"STRING": query.ColumnTypeString,
+	"JSON":   query.ColumnTypeJSON, "JSONB": query.ColumnTypeJSON,
 
 	// An identifier compares exactly like a string; it is typed apart because
 	// enumerating one is a scan that answers with a page of the rows.
@@ -97,7 +99,14 @@ func sqlBrowserColumns(columnTypes []*sql.ColumnType) []query.ColumnDef {
 	}
 	columns := make([]query.ColumnDef, 0, len(columnTypes))
 	for _, column := range columnTypes {
-		def := query.ColumnDef{Name: column.Name(), Type: sqlColumnTypeOf(column)}
+		storage := sqlColumnStorageOf(column.DatabaseTypeName())
+		if storage.Type == "" {
+			storage.Type = sqlScanColumnType(column.ScanType())
+		}
+		def := query.ColumnDef{Name: column.Name(), Type: storage.Type}
+		if storage.Array {
+			def.Filter = &query.ColumnFilterDef{Kind: query.ColumnFilterKindTerms, Array: true}
+		}
 		if column.Name() == "" || seen[column.Name()] > 1 || def.Type == "" {
 			def.Filter = &query.ColumnFilterDef{Disabled: true}
 		}
@@ -113,10 +122,59 @@ func sqlBrowserColumns(columnTypes []*sql.ColumnType) []query.ColumnDef {
 // postgres enum, say) has no name in any driver's static table and arrives as a
 // bare OID, but it still scans into the Go type it behaves like.
 func sqlColumnTypeOf(column *sql.ColumnType) query.ColumnType {
-	if named := sqlColumnType(column.DatabaseTypeName()); named != "" {
-		return named
+	if storage := sqlColumnStorageOf(column.DatabaseTypeName()); storage.Type != "" {
+		return storage.Type
 	}
 	return sqlScanColumnType(column.ScanType())
+}
+
+type sqlColumnStorage struct {
+	Type  query.ColumnType
+	Array bool
+}
+
+func sqlColumnStorageOf(databaseType string) sqlColumnStorage {
+	name := strings.TrimSpace(databaseType)
+	if strings.HasSuffix(name, "[]") {
+		if element := sqlColumnType(strings.TrimSuffix(name, "[]")); element == query.ColumnTypeString || element == query.ColumnTypeUUID {
+			return sqlColumnStorage{Type: query.ColumnTypeJSON, Array: true}
+		}
+		return sqlColumnStorage{}
+	}
+	if strings.HasPrefix(name, "_") {
+		if element := sqlColumnType(strings.TrimPrefix(name, "_")); element == query.ColumnTypeString || element == query.ColumnTypeUUID {
+			return sqlColumnStorage{Type: query.ColumnTypeJSON, Array: true}
+		}
+	}
+	if element, ok := sqlTypeWrapper(name, "Array"); ok {
+		for {
+			unwrapped, nullable := sqlTypeWrapper(element, "Nullable")
+			if nullable {
+				element = unwrapped
+				continue
+			}
+			unwrapped, lowCardinality := sqlTypeWrapper(element, "LowCardinality")
+			if lowCardinality {
+				element = unwrapped
+				continue
+			}
+			break
+		}
+		if strings.EqualFold(strings.TrimSpace(element), "String") {
+			return sqlColumnStorage{Type: query.ColumnTypeJSON, Array: true}
+		}
+		return sqlColumnStorage{}
+	}
+	return sqlColumnStorage{Type: sqlColumnType(name)}
+}
+
+func sqlTypeWrapper(databaseType, wrapper string) (string, bool) {
+	value := strings.TrimSpace(databaseType)
+	prefix := wrapper + "("
+	if len(value) <= len(prefix) || !strings.EqualFold(value[:len(prefix)], prefix) || !strings.HasSuffix(value, ")") {
+		return "", false
+	}
+	return strings.TrimSpace(value[len(prefix) : len(value)-1]), true
 }
 
 // sqlScanColumnType reads how values compare from the Go type they scan into.
@@ -217,6 +275,7 @@ func browserColumnDefs(columns []browserColumn) []query.ColumnDef {
 				Kind:    query.ColumnFilterKind(column.Filter.Kind),
 				Lookup:  &lookup,
 				Multi:   &multi,
+				Array:   column.Filter.Array,
 				Options: options,
 			}
 		}

@@ -26,6 +26,7 @@ type ResultColumnFilter struct {
 	Options []ResultColumnFilterOption `json:"options,omitempty"`
 	Lookup  bool                       `json:"lookup,omitempty"`
 	Multi   bool                       `json:"multi,omitempty"`
+	Array   bool                       `json:"array,omitempty"`
 	Unit    string                     `json:"unit,omitempty"`
 }
 
@@ -58,7 +59,7 @@ func DescribeResultColumns(options ResultColumnOptions) ([]ResultColumn, error) 
 			result.FilterKey = binding.Key
 			result.Filter = &ResultColumnFilter{
 				Kind: string(binding.Kind.Normalized()), Lookup: binding.Lookup,
-				Multi: binding.Multi, Unit: binding.Unit,
+				Multi: binding.Multi, Array: binding.Array, Unit: binding.Unit,
 			}
 			for _, value := range binding.Options {
 				result.Filter.Options = append(result.Filter.Options, ResultColumnFilterOption{Value: value})

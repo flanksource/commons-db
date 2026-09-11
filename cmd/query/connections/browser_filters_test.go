@@ -26,7 +26,10 @@ func TestSQLColumnTypeReadsTheDriversDecoratedNames(t *testing.T) {
 		"BOOL":                        query.ColumnTypeBoolean,
 		"_TEXT":                       query.ColumnTypeString,
 		"TEXT[]":                      query.ColumnTypeString,
-		"JSONB":                       "",
+		"JSON":                        query.ColumnTypeJSON,
+		"JSONB":                       query.ColumnTypeJSON,
+		"XML":                         query.ColumnTypeString,
+		"NTEXT":                       query.ColumnTypeString,
 		"SOMETHING_NOBODY_HAS_MAPPED": "",
 	} {
 		if got := sqlColumnType(name); got != want {
