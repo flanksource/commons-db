@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -83,15 +84,15 @@ func writeSnapshotMetadata(ctx context.Context, database *sql.DB, meta snapshotM
 
 	statements := []string{
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (version INTEGER NOT NULL, document TEXT NOT NULL)`,
-			quoteIdentifier(metadataTable)),
-		fmt.Sprintf(`DELETE FROM %s`, quoteIdentifier(metadataTable)),
+			sqlitetable.QuoteIdentifier(metadataTable)),
+		fmt.Sprintf(`DELETE FROM %s`, sqlitetable.QuoteIdentifier(metadataTable)),
 	}
 	for _, statement := range statements {
 		if _, err := transaction.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("write snapshot metadata: %w", err)
 		}
 	}
-	insert := fmt.Sprintf(`INSERT INTO %s (version, document) VALUES (?, ?)`, quoteIdentifier(metadataTable))
+	insert := fmt.Sprintf(`INSERT INTO %s (version, document) VALUES (?, ?)`, sqlitetable.QuoteIdentifier(metadataTable))
 	if _, err := transaction.ExecContext(ctx, insert, snapshotMetadataVersion, string(document)); err != nil {
 		return fmt.Errorf("write snapshot metadata: %w", err)
 	}
@@ -107,7 +108,7 @@ func writeSnapshotMetadata(ctx context.Context, database *sql.DB, meta snapshotM
 func readSnapshotMetadata(ctx context.Context, database *sql.DB) (snapshotMetadata, error) {
 	var version int
 	var document string
-	statement := fmt.Sprintf(`SELECT version, document FROM %s LIMIT 1`, quoteIdentifier(metadataTable))
+	statement := fmt.Sprintf(`SELECT version, document FROM %s LIMIT 1`, sqlitetable.QuoteIdentifier(metadataTable))
 	if err := database.QueryRowContext(ctx, statement).Scan(&version, &document); err != nil {
 		return snapshotMetadata{}, fmt.Errorf("read snapshot metadata: %w", err)
 	}

@@ -23,13 +23,19 @@ type RunnerOptions struct {
 	Context  ContextProvider
 	Stdout   io.Writer
 	Stderr   io.Writer
+
+	// BeforeExecute, when set, prepares a CLI session's data as it starts and
+	// before every later sample — the hook the profile service runs, so a
+	// session reads what a one-off run of the profile would.
+	BeforeExecute profiles.BeforeExecuteFunc
 }
 
 type Runner struct {
-	profiles ProfileStoreProvider
-	context  ContextProvider
-	stdout   io.Writer
-	stderr   io.Writer
+	profiles      ProfileStoreProvider
+	context       ContextProvider
+	stdout        io.Writer
+	stderr        io.Writer
+	beforeExecute profiles.BeforeExecuteFunc
 }
 
 func NewRunner(options RunnerOptions) (*Runner, error) {
@@ -42,7 +48,10 @@ func NewRunner(options RunnerOptions) (*Runner, error) {
 	if options.Stdout == nil || options.Stderr == nil {
 		return nil, fmt.Errorf("session output writers are required")
 	}
-	return &Runner{profiles: options.Profiles, context: options.Context, stdout: options.Stdout, stderr: options.Stderr}, nil
+	return &Runner{
+		profiles: options.Profiles, context: options.Context, stdout: options.Stdout, stderr: options.Stderr,
+		beforeExecute: options.BeforeExecute,
+	}, nil
 }
 
 type TraceOptions struct {
@@ -101,6 +110,9 @@ func (r *Runner) startCLISession(p query.Profile, params map[string]any) (*query
 	registry := query.NewSessionRegistry(query.RegistryOptions{
 		MaxSessions: 1,
 		MaxDuration: sessionSpecDuration(p),
+		BeforeRead: func(ctx context.Context, p query.Profile, params map[string]any) (func(), error) {
+			return profiles.PrepareReads(ctx, r.beforeExecute, []profiles.ReadRequest{{Profile: p, Params: params}})
+		},
 	})
 	return query.ExecuteStream(r.context(), registry, p, params)
 }

@@ -26,6 +26,12 @@ func (s *Service) Inspect(ctx context.Context, name string, options InspectFlags
 	if err != nil {
 		return nil, err
 	}
+	release, err := s.prepareRead(ctx, resolved.Profile, params)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	sample, err := query.Sample(s.context().Wrap(ctx), resolved.Profile, query.SampleOptions{
 		Params: params, Inspection: query.InspectionOptions{Refresh: options.Refresh},
 	})

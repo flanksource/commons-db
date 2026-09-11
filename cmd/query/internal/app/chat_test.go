@@ -1,13 +1,17 @@
 package app
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	captools "github.com/flanksource/captain/pkg/ai/tools"
+	capchat "github.com/flanksource/captain/pkg/aichat"
 	"github.com/flanksource/captain/pkg/api"
+	"github.com/flanksource/clicky/entity"
 	"github.com/spf13/cobra"
 )
 
@@ -17,11 +21,11 @@ func TestIsQueryChatTool(t *testing.T) {
 		tool captools.ToolInfo
 		want bool
 	}{
-		{name: "connection list", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/operation": "connection"}}, want: true},
+		{name: "connection list", tool: captools.ToolInfo{Operation: &entity.RPCOperation{Name: "connection"}}, want: true},
 		{name: "dynamic profile", tool: captools.ToolInfo{Name: "profile-orders"}, want: true},
-		{name: "serve", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/operation": "serve"}}, want: false},
+		{name: "serve", tool: captools.ToolInfo{Operation: &entity.RPCOperation{Name: "serve"}}, want: false},
 		{name: "schema fallback name", tool: captools.ToolInfo{Name: "schema"}, want: false},
-		{name: "version", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/operation": "version"}}, want: false},
+		{name: "version", tool: captools.ToolInfo{Operation: &entity.RPCOperation{Name: "version"}}, want: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -32,24 +36,57 @@ func TestIsQueryChatTool(t *testing.T) {
 	}
 }
 
-func TestQueryToolPermission(t *testing.T) {
+func TestQueryToolStrategies(t *testing.T) {
 	tests := []struct {
-		name string
-		tool captools.ToolInfo
-		want api.ToolMode
+		name    string
+		tool    captools.ToolInfo
+		want    api.ToolPolicy
+		matched bool
 	}{
-		{name: "get method", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/method": "GET"}}, want: api.ToolModeOn},
-		{name: "head method", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/method": "head"}}, want: api.ToolModeOn},
-		{name: "list verb", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/verb": "list"}}, want: api.ToolModeOn},
-		{name: "post method", tool: captools.ToolInfo{Annotations: map[string]string{"clicky/method": "POST"}}, want: api.ToolModeAsk},
-		{name: "unknown defaults safe", tool: captools.ToolInfo{}, want: api.ToolModeAsk},
+		{name: "get method", tool: captools.ToolInfo{Operation: &entity.RPCOperation{Method: http.MethodGet}}, want: api.ToolPolicyAllow, matched: true},
+		{name: "head method", tool: captools.ToolInfo{Operation: &entity.RPCOperation{Method: http.MethodHead}}, want: api.ToolPolicyAllow, matched: true},
+		{name: "list verb overrides post", tool: captools.ToolInfo{Operation: &entity.RPCOperation{Method: http.MethodPost, Clicky: &entity.ClickyOperationMeta{Verb: "list"}}}, want: api.ToolPolicyAllow, matched: true},
+		{name: "post method", tool: captools.ToolInfo{Operation: &entity.RPCOperation{Method: http.MethodPost}}, want: api.ToolPolicyAsk, matched: true},
+		{name: "unknown remains unresolved", tool: captools.ToolInfo{}, want: api.ToolPolicyAuto, matched: false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := queryToolPermission(tt.tool); got != tt.want {
-				t.Fatalf("queryToolPermission(%+v) = %v, want %v", tt.tool, got, tt.want)
+			got, matched := api.ResolveStrategies(queryToolStrategies(), tt.tool)
+			if got != tt.want || matched != tt.matched {
+				t.Fatalf("query tool policy = (%v, %v), want (%v, %v)", got, matched, tt.want, tt.matched)
 			}
 		})
+	}
+}
+
+func TestQueryRuntimeProfile(t *testing.T) {
+	profile, err := queryRuntimeProfile(context.Background())
+	if err != nil {
+		t.Fatalf("queryRuntimeProfile: %v", err)
+	}
+	got := []any{
+		profile.System,
+		profile.Composed.Spec.Model.Name,
+		len(profile.Composed.Trace),
+		profile.Composed.Trace[0].Name,
+		profile.Composed.Trace[0].Scope,
+	}
+	want := []any{
+		"You are a database operations assistant. Use the available tools to inspect connections, query profiles, and profile results. Prefer tools over guessing, never invent connection details, and summarize results clearly.",
+		"api:sonnet-5",
+		1,
+		"query",
+		api.SpecLayerGlobal,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("query runtime profile = %#v, want %#v", got, want)
+	}
+}
+
+func TestQueryRuntimeProfileRejectsUnknownSelection(t *testing.T) {
+	_, err := queryRuntimeProfile(context.Background(), capchat.WithRuntimeProfileRef("missing"))
+	if err == nil {
+		t.Fatal("queryRuntimeProfile accepted an unsupported profile selection")
 	}
 }
 

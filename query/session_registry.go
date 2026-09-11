@@ -1,14 +1,22 @@
 package query
 
 import (
+	stdcontext "context"
 	"errors"
 	"fmt"
 	"sync"
 	"time"
 )
 
-// ErrMaxSessions is returned by Add when the active-session cap is reached.
-var ErrMaxSessions = errors.New("max sessions reached")
+var (
+	// ErrMaxSessions is returned by Add when the active-session cap is reached.
+	ErrMaxSessions = errors.New("max sessions reached")
+
+	// ErrPrepareRead wraps a RegistryOptions.BeforeRead failure, so a
+	// transport can answer it by its own cause rather than as a malformed
+	// session request.
+	ErrPrepareRead = errors.New("prepare read failed")
+)
 
 // RegistryOptions bounds a SessionRegistry. Zero values take the defaults;
 // profile-declared limits are clamped to these server caps, never raised.
@@ -30,6 +38,33 @@ type RegistryOptions struct {
 	// ExecuteStream — the persistence hooks.
 	OnEvent      func(Event)
 	OnTransition func(SessionInfo)
+
+	// BeforeRead, when set, prepares a profile's data before a session reads
+	// it: once as the session starts, and again before every later sample a
+	// top session takes, so each sample reads data as current as a one-off
+	// execution would. It gets the parameters the caller supplied, unresolved.
+	// The returned function releases the prepared read after that read ends. A
+	// failure refuses the start, or fails the session at that sample.
+	BeforeRead func(ctx stdcontext.Context, p Profile, params map[string]any) (release func(), err error)
+}
+
+// prepareRead runs BeforeRead, if one is set, and always returns a safe,
+// idempotent cleanup.
+func (r *SessionRegistry) prepareRead(ctx stdcontext.Context, p Profile, params map[string]any) (func(), error) {
+	if r.opts.BeforeRead == nil {
+		return func() {}, nil
+	}
+	release, err := r.opts.BeforeRead(ctx, p, params)
+	if release == nil {
+		release = func() {}
+	} else {
+		release = sync.OnceFunc(release)
+	}
+	if err != nil {
+		release()
+		return func() {}, fmt.Errorf("profile %q: %w: %w", p.Name, ErrPrepareRead, err)
+	}
+	return release, nil
 }
 
 // SessionRegistry tracks live and recently finished sessions in memory.

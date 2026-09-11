@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 
 	"github.com/flanksource/clicky"
@@ -47,6 +46,8 @@ type Options struct {
 	DecodeBody        BodyDecoder
 	Snapshots         SnapshotService
 	OpenAPIExtensions []OpenAPIExtension
+	// BeforeExecute, when set, runs before every read of a profile's data.
+	BeforeExecute BeforeExecuteFunc
 }
 
 type Service struct {
@@ -55,6 +56,7 @@ type Service struct {
 	decodeBody        BodyDecoder
 	snapshots         SnapshotService
 	openAPIExtensions []OpenAPIExtension
+	beforeExecute     BeforeExecuteFunc
 	mu                sync.Mutex
 	registered        map[string]struct{}
 }
@@ -72,6 +74,7 @@ func New(options Options) (*Service, error) {
 	return &Service{
 		store: options.Store, context: options.Context, decodeBody: options.DecodeBody,
 		snapshots:         options.Snapshots,
+		beforeExecute:     options.BeforeExecute,
 		openAPIExtensions: append([]OpenAPIExtension(nil), options.OpenAPIExtensions...),
 		registered:        map[string]struct{}{},
 	}, nil
@@ -419,31 +422,8 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 			builder = builder.Filter(binding.Key, profileParamFilterName(resolved.Profile.Name, binding.Key))
 		}
 		builder.
-			List(func(_ context.Context, opts map[string]string) ([]map[string]any, error) {
-				store, err := s.store()
-				if err != nil {
-					return nil, err
-				}
-				live, err := Resolve(context.Background(), store, name)
-				if err != nil {
-					return nil, err
-				}
-				// The base profile flow needs no database; only postgres/sqlite
-				// processors do. The context provider supplies the DB-backed
-				// context under `serve` and a DB-less one on the CLI.
-				queryCtx := s.context()
-				res, err := query.Execute(queryCtx, live.Profile, toParams(opts))
-				if err != nil {
-					return nil, err
-				}
-				// The entity list has no page of its own to report, so the one
-				// thing it must not do is present a bounded read as the whole
-				// table. `run --all --limit` is the surface that pages.
-				if res.Truncated {
-					queryCtx.Warnf("profile %q: listed the first %d rows of a larger result; page it with `run --cursor` or raise limits.maxExportRows",
-						name, len(res.Rows))
-				}
-				return res.Rows, nil
+			List(func(ctx context.Context, opts map[string]string) ([]map[string]any, error) {
+				return s.executeRows(ctx, name, opts)
 			}).
 			Register()
 	}
@@ -483,7 +463,9 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 	filterValues := newProfileSampleFilterValuesHandler(prefix, s.context(), next)
 	expression := newSampleExpressionHandler(prefix, s.context(), newSampleJSONPathHandler(prefix, filterValues))
 	sample := newProfileSampleHandler(prefix, s.context(), expression)
-	return newExecHandler(prefix, s.context(), store, sample), nil
+	exec := newExecHandler(prefix, s.context(), store, sample)
+	exec.prepare = s.beforeExecute
+	return exec, nil
 }
 
 func (s *Service) OpenAPIHandler(root *cobra.Command, config *rpc.Config) (http.Handler, error) {
@@ -573,66 +555,6 @@ func profileFilterName(profileName, columnName string) string {
 func profileParamFilterName(profileName, paramName string) string {
 	digest := sha256.Sum256([]byte(paramName))
 	return fmt.Sprintf("profile-%s-param-%x", slugify(profileName), digest[:6])
-}
-
-type profileFilterSource struct {
-	service     *Service
-	profileName string
-	key         string
-}
-
-func (source profileFilterSource) Options(fc entity.FilterContext, search string, limit int) (map[string]api.Textable, int, error) {
-	store, err := source.service.store()
-	if err != nil {
-		return nil, 0, err
-	}
-	resolved, err := Resolve(fc.Ctx(), store, source.profileName)
-	if err != nil {
-		return nil, 0, err
-	}
-	options, total, err := query.LookupFilterValues(
-		source.service.context().Wrap(fc.Ctx()),
-		query.FilterValueLookupRequest{
-			Profile: resolved.Profile, Input: filterLookupParams(resolved.Profile, fc.Params),
-			Key: source.key, Search: search, Limit: limit,
-		},
-	)
-	if err != nil {
-		return nil, 0, err
-	}
-	result := make(map[string]api.Textable, len(options))
-	for _, option := range options {
-		result[option.Value] = api.Text{Content: option.Value}
-	}
-	// This lookup surface takes a plain count; a backend that stated no total is
-	// reported as none rather than as zero options behind the ones listed.
-	count := 0
-	if total != nil {
-		count = int(total.Value)
-	}
-	return result, count, nil
-}
-
-func filterLookupParams(profile query.Profile, values map[string]string) map[string]any {
-	allowed := make(map[string]bool, len(profile.Params))
-	for _, parameter := range profile.Params {
-		allowed[parameter.Name] = true
-	}
-	params := make(map[string]any, len(values))
-	for key, value := range values {
-		if allowed[key] || strings.HasPrefix(key, "filter.") {
-			params[key] = value
-		}
-	}
-	return params
-}
-
-func (source profileFilterSource) Resolve(_ entity.FilterContext, values []string) (map[string]api.Textable, error) {
-	resolved := make(map[string]api.Textable, len(values))
-	for _, value := range values {
-		resolved[value] = api.Text{Content: value}
-	}
-	return resolved, nil
 }
 
 // columnJSONSchema maps a profile ColumnType to its preferred JSON shape.

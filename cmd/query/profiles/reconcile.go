@@ -61,12 +61,11 @@ func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileF
 		return nil, err
 	}
 
-	if err := validateReconcileFilters(source.Profile, config.SourceFilters, "source"); err != nil {
+	release, err := s.prepareReconcileSides(ctx, source.Profile, dest.Profile, config)
+	if err != nil {
 		return nil, err
 	}
-	if err := validateReconcileFilters(dest.Profile, config.DestFilters, "destination"); err != nil {
-		return nil, err
-	}
+	defer release()
 
 	queryCtx := s.context().Wrap(ctx)
 	if request, ok := rpc.RequestFromContext(ctx); ok {
@@ -86,6 +85,21 @@ func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileF
 		return nil, err
 	}
 	return result, nil
+}
+
+// prepareReconcileSides checks each side's filters against its profile, then
+// prepares each side's data exactly as a read of that profile alone would.
+func (s *Service) prepareReconcileSides(ctx context.Context, source, dest query.Profile, config query.ReconcileConfig) (func(), error) {
+	if err := validateReconcileFilters(source, config.SourceFilters, "source"); err != nil {
+		return nil, err
+	}
+	if err := validateReconcileFilters(dest, config.DestFilters, "destination"); err != nil {
+		return nil, err
+	}
+	return s.prepareReads(ctx, []ReadRequest{
+		{Profile: source, Params: reconcileFilterValues(config.SourceFilters)},
+		{Profile: dest, Params: reconcileFilterValues(config.DestFilters)},
+	})
 }
 
 func selectReconcileOutcome(result *query.ReconcileResult, outcome string) error {

@@ -78,6 +78,9 @@ func (s *OverlayStore) Save(ctx context.Context, profile query.Profile) error {
 	if s.virtual.IsVirtual(profile.Name) {
 		return fmt.Errorf("virtual profile %q is read-only", profile.Name)
 	}
+	if err := s.assertSurfaceFree(ctx, profile.Name); err != nil {
+		return err
+	}
 	return s.base.Save(ctx, profile)
 }
 
@@ -85,7 +88,28 @@ func (s *OverlayStore) Update(ctx context.Context, name string, profile query.Pr
 	if s.virtual.IsVirtual(name) || s.virtual.IsVirtual(profile.Name) {
 		return fmt.Errorf("virtual profile %q is read-only", name)
 	}
+	if err := s.assertSurfaceFree(ctx, profile.Name); err != nil {
+		return err
+	}
 	return s.base.Update(ctx, name, profile, options)
+}
+
+// assertSurfaceFree refuses a stored name whose surface key a virtual profile
+// already has. Saved, it would make that key name two profiles, which
+// resolution refuses to choose between — so it is refused here, where the
+// author can still pick another name.
+func (s *OverlayStore) assertSurfaceFree(ctx context.Context, name string) error {
+	virtual, err := s.virtual.List(ctx)
+	if err != nil {
+		return fmt.Errorf("check profile %q against virtual profiles: %w", name, err)
+	}
+	key := profileSurfaceKey(name)
+	for _, profile := range virtual {
+		if profileSurfaceKey(profile.Name) == key {
+			return fmt.Errorf("profile %q would take the surface %q of virtual profile %q; choose another name", name, key, profile.Name)
+		}
+	}
+	return nil
 }
 
 func (s *OverlayStore) Delete(ctx context.Context, name string) error {

@@ -32,6 +32,9 @@ type execHandler struct {
 	ctx    dbcontext.Context
 	store  Store
 	next   http.Handler
+	// prepare runs before the rows are read; nil when the service has no
+	// BeforeExecute hook.
+	prepare BeforeExecuteFunc
 }
 
 func newExecHandler(prefix string, ctx dbcontext.Context, store Store, next http.Handler) *execHandler {
@@ -141,8 +144,15 @@ type executionRequest struct {
 // are read. It writes its own failure response and reports false when it did.
 func (h *execHandler) resolveExecution(w http.ResponseWriter, r *http.Request, name string) (executionRequest, bool) {
 	name, err := h.storedProfileName(r.Context(), name)
-	if err != nil {
+	switch {
+	case errors.Is(err, errProfileSurfaceNotFound):
 		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
+		return executionRequest{}, false
+	case errors.Is(err, ErrProfileSurfaceConflict):
+		writeExecError(w, http.StatusInternalServerError, "profile_surface_conflict", err)
+		return executionRequest{}, false
+	case err != nil:
+		writeExecError(w, http.StatusInternalServerError, "profile_store_failed", err)
 		return executionRequest{}, false
 	}
 	resolved, err := Resolve(r.Context(), h.store, name)
@@ -221,6 +231,18 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		writeExecError(w, http.StatusUnprocessableEntity, "columns_required",
 			errors.New("tabular exports require declared profile columns"))
 		return
+	}
+	// The hook prepares data for this request, so it runs under the request's
+	// own context, as it does on every other read path: what a middleware bound
+	// to the request — whose tenant, whose store — is what it prepares for, and
+	// the execution context carries only the server's values.
+	if h.prepare != nil {
+		release, err := PrepareReads(r.Context(), h.prepare, []ReadRequest{{Profile: p, Params: params}})
+		if err != nil {
+			writePrepareError(w, err)
+			return
+		}
+		defer release()
 	}
 
 	response, err := exportRows(execCtx, p, params, export)
@@ -309,19 +331,53 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 }
 
 func (h *execHandler) storedProfileName(ctx stdcontext.Context, name string) (string, error) {
+	return storedProfileName(ctx, h.store, name)
+}
+
+var (
+	errProfileSurfaceNotFound = errors.New("profile surface not found")
+
+	// ErrProfileSurfaceConflict reports two profiles whose names slug to one
+	// surface key. Serving either would be a choice made by listing order, so
+	// the key serves neither until one is renamed.
+	ErrProfileSurfaceConflict = errors.New("profile surface claimed by more than one profile")
+)
+
+// storedProfileName maps a surface key (profile-<slug>) to the name the store
+// holds the profile under, and passes any other name through. It lists the
+// store rather than asking it, because only the whole list — virtual profiles
+// included — knows every name a slug can belong to, and whether it belongs to
+// more than one.
+func storedProfileName(ctx stdcontext.Context, store Store, name string) (string, error) {
 	if !strings.HasPrefix(name, "profile-") {
 		return name, nil
 	}
-	stored, err := h.store.List(ctx)
+	stored, err := store.List(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("list profiles for surface %q: %w", name, err)
 	}
+	var claimed []string
 	for _, profile := range stored {
 		if profileSurfaceKey(profile.Name) == name {
-			return profile.Name, nil
+			claimed = append(claimed, profile.Name)
 		}
 	}
-	return "", fmt.Errorf("profile surface %q not found", name)
+	switch len(claimed) {
+	case 0:
+		return "", fmt.Errorf("%w: %q", errProfileSurfaceNotFound, name)
+	case 1:
+		return claimed[0], nil
+	default:
+		return "", surfaceConflict(name, claimed)
+	}
+}
+
+func surfaceConflict(key string, names []string) error {
+	quoted := make([]string, len(names))
+	for index, name := range names {
+		quoted[index] = strconv.Quote(name)
+	}
+	return fmt.Errorf("%w: surface %q is claimed by profiles %s; rename one", ErrProfileSurfaceConflict, key, strings.Join(quoted, " and "))
 }
 
 // execError is the body every failed execution returns.

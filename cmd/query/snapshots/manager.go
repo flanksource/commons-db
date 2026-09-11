@@ -14,13 +14,12 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	// Pure-Go sqlite driver for the snapshot files. Must be modernc, never
-	// github.com/glebarez/go-sqlite — both register the "sqlite" driver name and
-	// linking both panics at init. See connection/sql.go for the full rationale.
-	_ "modernc.org/sqlite"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
+	// sqlitetable links the pure-Go modernc sqlite driver the snapshot files
+	// are opened with; see its import for why it must never be glebarez.
+	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 )
@@ -160,7 +159,7 @@ func (m *Manager) Create(ctx context.Context, result *query.ReconcileResult, age
 	}
 	columns := result.SnapshotColumns()
 	rows := result.SnapshotRows()
-	if err := writeTable(ctx, writer, "reconcile_rows", columns, rows); err != nil {
+	if err := sqlitetable.Write(ctx, writer, snapshotTable("reconcile_rows", columns), rows); err != nil {
 		cleanup()
 		return profiles.ReconcileSnapshotDescriptor{}, fmt.Errorf("materialize reconciliation: %w", err)
 	}

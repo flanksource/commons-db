@@ -152,8 +152,13 @@ func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name stri
 	session, err := query.ExecuteStream(h.ctx, h.registry, p, params)
 	if err != nil {
 		status := http.StatusBadRequest
-		if errors.Is(err, query.ErrMaxSessions) {
+		switch {
+		case errors.Is(err, query.ErrMaxSessions):
 			status = http.StatusConflict
+		case errors.Is(err, query.ErrPrepareRead):
+			// The registry's BeforeRead failed: answered by its cause, exactly
+			// as the profile service answers its own hook.
+			status, _ = profiles.PrepareErrorStatus(err)
 		}
 		http.Error(w, err.Error(), status)
 		return

@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/connections"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/cmd/query/recordresults"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
@@ -53,6 +54,8 @@ type sessionLibrary interface {
 
 var _ sessionLibrary = (*sessions.Runner)(nil)
 
+var _ func(recordresults.OpenOptions) (*recordresults.Results, error) = recordresults.Open
+
 var _ = Describe("public constructors", func() {
 	It("rejects incomplete dependencies", func() {
 		_, err := connections.New(connections.Options{})
@@ -63,5 +66,8 @@ var _ = Describe("public constructors", func() {
 
 		_, err = sessions.New(sessions.Options{})
 		Expect(err).To(MatchError(ContainSubstring("profile store provider")))
+
+		_, err = recordresults.Open(recordresults.OpenOptions{})
+		Expect(err).To(MatchError(ContainSubstring("directory")))
 	})
 })

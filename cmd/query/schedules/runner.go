@@ -5,10 +5,10 @@ import (
 	"fmt"
 
 	"github.com/flanksource/clicky/task"
-	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	flanksourceContext "github.com/flanksource/commons/context"
 )
 
 // Reporter renders a result to report bytes. It is an interface so the schedule
@@ -42,6 +42,12 @@ type RunnerOptions struct {
 	Reporter  Reporter
 	Deliverer Deliverer
 	Artifacts ArtifactStore
+
+	// BeforeExecute, when set, prepares a scheduled query's data before it is
+	// read — the same hook the profile service runs, so a scheduled read and a
+	// hand-run one see the same data. The reconcile mode runs it through
+	// Reconcile, the profile service's own.
+	BeforeExecute profiles.BeforeExecuteFunc
 }
 
 // Runner executes one schedule inside a clicky task group.
@@ -193,6 +199,15 @@ func (r *Runner) read(ctx dbcontext.Context, schedule Schedule) (*query.Result, 
 		params := make(map[string]any, len(schedule.Query.Params))
 		for key, value := range schedule.Query.Params {
 			params[key] = value
+		}
+		if r.options.BeforeExecute != nil {
+			release, err := profiles.PrepareReads(ctx, r.options.BeforeExecute, []profiles.ReadRequest{{
+				Profile: resolved.Profile, Params: params,
+			}})
+			if err != nil {
+				return nil, nil, fmt.Errorf("profile %q: %w", schedule.Query.Profile, err)
+			}
+			defer release()
 		}
 		result, err := query.Execute(ctx, resolved.Profile, params)
 		if err != nil {
