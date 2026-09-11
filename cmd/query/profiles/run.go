@@ -65,6 +65,11 @@ func (s *Service) Run(ctx context.Context, name string, options RunFlags) (*RunR
 	if err != nil {
 		return nil, err
 	}
+	release, err := s.prepareRead(ctx, resolved.Profile, params)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	queryCtx := s.context().Wrap(ctx)
 	response, err := exportRows(queryCtx, resolved.Profile, params, request)

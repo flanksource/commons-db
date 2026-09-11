@@ -143,6 +143,7 @@ func TestSessionAPISynthesizesTopForPlainProfile(t *testing.T) {
 	s, ok := reg.Get(info.ID)
 	require.True(t, ok)
 	s.Stop()
+	waitSessionState(t, reg, info.ID, query.SessionStopped)
 }
 
 // followProfile is a plain query profile whose provider can tail, declaring the

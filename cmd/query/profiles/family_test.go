@@ -84,7 +84,12 @@ func newProfileFamilyTest(t *testing.T, profiles ...query.Profile) (http.Handler
 	service, store := newProfileServiceTest(t, profiles...)
 	service.RegisterFamily()
 	t.Cleanup(func() { entity.UnregisterDynamicEntityFamily(profileFamilyName) })
+	return newFamilyMux(), store
+}
 
+// newFamilyMux is clicky's executor mounted the way `query serve` mounts it,
+// which is what answers a registered family's routes.
+func newFamilyMux() *http.ServeMux {
 	root := &cobra.Command{Use: "query"}
 	root.AddCommand(&cobra.Command{Use: "version", Run: func(*cobra.Command, []string) {}})
 	server := rpc.NewSwaggerServer(
@@ -97,7 +102,7 @@ func newProfileFamilyTest(t *testing.T, profiles ...query.Profile) (http.Handler
 	)
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
-	return mux, store
+	return mux
 }
 
 // lookupFilter is the part of clicky's lookup envelope the filter bar reads.

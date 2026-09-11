@@ -2,7 +2,9 @@ package profiles
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 
 	"github.com/flanksource/clicky/api"
@@ -54,7 +56,21 @@ func (s *Service) resolveSurface(ctx context.Context, name string) (entity.Dynam
 	if err != nil {
 		return entity.DynamicEntitySpec{}, err
 	}
-	resolved, err := Resolve(ctx, store, name)
+	// A virtual profile's store answers to its name only, so the surface key
+	// the route carries is mapped first, exactly as execution maps it. Only a
+	// key nothing claims is an unknown profile: a store that could not be
+	// listed is the server's failure, and a key two profiles claim is refused
+	// rather than resolved to whichever listed first.
+	stored, err := storedProfileName(ctx, store, name)
+	switch {
+	case errors.Is(err, errProfileSurfaceNotFound):
+		return entity.DynamicEntitySpec{}, entity.UnknownDynamicEntity(profileFamilyName, name)
+	case errors.Is(err, ErrProfileSurfaceConflict):
+		return entity.DynamicEntitySpec{}, entity.NewStatusError(http.StatusInternalServerError, "profile_surface_conflict", err.Error())
+	case err != nil:
+		return entity.DynamicEntitySpec{}, err
+	}
+	resolved, err := Resolve(ctx, store, stored)
 	if err != nil {
 		return entity.DynamicEntitySpec{}, entity.UnknownDynamicEntity(profileFamilyName, name)
 	}
@@ -72,6 +88,14 @@ func (s *Service) listSurfaces(ctx context.Context) ([]entity.DynamicEntitySpec,
 	stored, err := store.List(ctx)
 	if err != nil {
 		return nil, err
+	}
+	claimed := make(map[string][]string, len(stored))
+	for _, profile := range stored {
+		key := profileSurfaceKey(profile.Name)
+		claimed[key] = append(claimed[key], profile.Name)
+		if len(claimed[key]) > 1 {
+			return nil, surfaceConflict(key, claimed[key])
+		}
 	}
 	surfaces := make([]entity.DynamicEntitySpec, 0, len(stored))
 	for _, profile := range stored {
@@ -176,7 +200,7 @@ func (s *Service) profileFilter(profileName string, binding query.ColumnFilterBi
 	filterContext := func(ctx context.Context, flags map[string]string) entity.FilterContext {
 		return entity.FilterContext{Context: ctx, Key: binding.Key, Params: flags}
 	}
-	return entity.DynamicFilter{
+	filter := entity.DynamicFilter{
 		Key:        binding.Key,
 		Label:      binding.Label,
 		Type:       binding.ControlType(),
@@ -194,6 +218,12 @@ func (s *Service) profileFilter(profileName string, binding query.ColumnFilterBi
 			return source.Resolve(filterContext(ctx, flags), values)
 		},
 	}
+	if counted, ok := source.(entity.CountedFilterSource); ok {
+		filter.CountedOptions = func(ctx context.Context, flags map[string]string, search string, limit int) (entity.FilterOptions, error) {
+			return counted.CountedOptions(filterContext(ctx, flags), search, limit)
+		}
+	}
+	return filter
 }
 
 // filterLookupLimit is how many values this filter offers before the rest have
@@ -253,11 +283,18 @@ func (s *Service) executeRows(ctx context.Context, name string, opts map[string]
 	if err != nil {
 		return nil, err
 	}
+	params := toParams(opts)
+	release, err := s.prepareRead(ctx, live.Profile, params)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	// The base profile flow needs no database; only postgres/sqlite processors
 	// do. The context provider supplies the DB-backed context under `serve` and a
 	// DB-less one on the CLI.
 	queryCtx := s.context()
-	res, err := query.Execute(queryCtx, live.Profile, toParams(opts))
+	res, err := query.Execute(queryCtx, live.Profile, params)
 	if err != nil {
 		return nil, err
 	}

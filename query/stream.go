@@ -4,6 +4,7 @@ import (
 	stdcontext "context"
 	"errors"
 	"fmt"
+	"maps"
 	"time"
 
 	"github.com/google/uuid"
@@ -98,14 +99,27 @@ func ExecuteStream(ctx context.Context, reg *SessionRegistry, p Profile, params 
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	release, err := reg.prepareRead(ctx, p, supplied)
+	if err != nil {
+		return nil, err
+	}
 
 	if p.Kind() == KindTrace {
-		return startTrace(ctx, reg, p, resolved, filters)
+		return startTrace(ctx, reg, p, resolved, filters, release)
 	}
-	return startTop(ctx, reg, p, resolved, filters)
+	return startTop(ctx, reg, topSampler{
+		profile: p, resolved: resolved, filters: filters, supplied: supplied, release: release,
+	})
 }
 
-func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Session, error) {
+func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any, filters []ColumnFilterValue, release func()) (*Session, error) {
+	started := false
+	defer func() {
+		if !started {
+			release()
+		}
+	}()
+
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return nil, err
@@ -145,7 +159,8 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 	runCtx, cancel := ctx.WithTimeout(reg.ClampDuration(p.Trace.DurationLimit()))
 	session.setCancel(cancel)
 
-	go runTrace(runCtx, cancel, sp, session, req, pipeline, p.Trace.Buffer)
+	go runTrace(runCtx, cancel, sp, session, req, pipeline, p.Trace.Buffer, release)
+	started = true
 	return session, nil
 }
 
@@ -193,7 +208,9 @@ func runTrace(
 	req ProviderRequest,
 	pipeline *tracePipeline,
 	buffer *TraceBufferSpec,
+	release func(),
 ) {
+	defer release()
 	defer cancel()
 	session.markRunning()
 	deliveryCtx, stopDelivery := stdcontext.WithCancel(stdcontext.Background())
@@ -352,48 +369,86 @@ func (r *traceRunner) stopTimer() {
 	r.timerC = nil
 }
 
-func startTop(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Session, error) {
+// topSampler is one top session's query: the profile, its resolved input, and
+// the input as the caller supplied it, which every later sample is prepared
+// with.
+type topSampler struct {
+	registry *SessionRegistry
+	session  *Session
+	profile  Profile
+	resolved map[string]any
+	filters  []ColumnFilterValue
+	supplied map[string]any
+	release  func()
+}
+
+func startTop(ctx context.Context, reg *SessionRegistry, sampler topSampler) (*Session, error) {
+	started := false
+	defer func() {
+		if !started {
+			sampler.release()
+		}
+	}()
+
+	p := sampler.profile
 	if _, err := GetProvider(p.Provider.Type); err != nil {
 		return nil, err
 	}
-	session := newRegisteredSession(reg, p, resolved, reg.ClampEvents(0))
+	session := newRegisteredSession(reg, p, maps.Clone(sampler.resolved), reg.ClampEvents(0))
 	if err := reg.Add(session); err != nil {
 		return nil, err
 	}
 	runCtx, cancel := ctx.WithTimeout(reg.ClampDuration(p.Top.DurationLimit()))
 	session.setCancel(cancel)
 
-	go runTop(runCtx, cancel, session, p, resolved, filters)
+	sampler.registry, sampler.session = reg, session
+	go sampler.run(runCtx, cancel)
+	started = true
 	return session, nil
 }
 
-func runTop(ctx context.Context, cancel stdcontext.CancelFunc, s *Session, p Profile, resolved map[string]any, filters []ColumnFilterValue) {
+// run samples until the session ends. The first sample reads data
+// ExecuteStream already prepared; every later one prepares it again first.
+func (t topSampler) run(ctx context.Context, cancel stdcontext.CancelFunc) {
 	defer cancel()
-	s.markRunning()
+	t.session.markRunning()
 
-	ticker := time.NewTicker(p.Top.TickInterval())
+	ticker := time.NewTicker(t.profile.Top.TickInterval())
 	defer ticker.Stop()
-	for {
-		result, err := executeResolved(ctx, p, resolved, filters)
+	for first := true; ; first = false {
+		result, err := t.sample(ctx, first)
 		if err != nil {
 			if norm := normalizeStreamErr(err); norm != nil {
-				s.Emit(Event{Error: norm.Error()})
-				s.markDone(norm)
+				t.session.Emit(Event{Error: norm.Error()})
+				t.session.markDone(norm)
 			} else {
-				s.markDone(nil)
+				t.session.markDone(nil)
 			}
 			return
 		}
-		s.setLatest(result)
-		s.Emit(Event{Rows: result.Rows})
+		t.session.setLatest(result)
+		t.session.Emit(Event{Rows: result.Rows})
 
 		select {
 		case <-ctx.Done():
-			s.markDone(nil)
+			t.session.markDone(nil)
 			return
 		case <-ticker.C:
 		}
 	}
+}
+
+func (t topSampler) sample(ctx context.Context, prepared bool) (*Result, error) {
+	release := t.release
+	if !prepared {
+		var err error
+		release, err = t.registry.prepareRead(ctx, t.profile, t.supplied)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer release()
+	return executeResolved(ctx, t.profile, t.resolved, t.filters)
 }
 
 func newRegisteredSession(reg *SessionRegistry, p Profile, resolved map[string]any, maxEvents int) *Session {

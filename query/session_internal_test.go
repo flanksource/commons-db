@@ -239,6 +239,42 @@ var _ = Describe("SessionRegistry", func() {
 		Expect(b.Snapshot().State).To(Equal(SessionStopped))
 	})
 
+	It("returns an idempotent cleanup for a prepared read", func() {
+		releases := 0
+		r := NewSessionRegistry(RegistryOptions{BeforeRead: func(stdcontext.Context, Profile, map[string]any) (func(), error) {
+			return func() { releases++ }, nil
+		}})
+
+		release, err := r.prepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
+		Expect(err).ToNot(HaveOccurred())
+		release()
+		release()
+		Expect(releases).To(Equal(1))
+	})
+
+	It("releases a cleanup returned alongside a preparation error", func() {
+		releases := 0
+		r := NewSessionRegistry(RegistryOptions{BeforeRead: func(stdcontext.Context, Profile, map[string]any) (func(), error) {
+			return func() { releases++ }, errors.New("index unavailable")
+		}})
+
+		release, err := r.prepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
+		Expect(errors.Is(err, ErrPrepareRead)).To(BeTrue(), "%v", err)
+		release()
+		Expect(releases).To(Equal(1))
+	})
+
+	It("normalizes an absent read cleanup", func() {
+		r := NewSessionRegistry(RegistryOptions{BeforeRead: func(stdcontext.Context, Profile, map[string]any) (func(), error) {
+			return nil, nil
+		}})
+
+		release, err := r.prepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(release).ToNot(BeNil())
+		Expect(release).ToNot(Panic())
+	})
+
 	It("clamps profile limits to the server caps", func() {
 		r := NewSessionRegistry(RegistryOptions{MaxDuration: time.Minute, MaxEvents: 5})
 		Expect(r.ClampDuration(time.Hour)).To(Equal(time.Minute))

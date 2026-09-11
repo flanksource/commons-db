@@ -113,6 +113,12 @@ func (s *Service) buildReplayPreview(ctx context.Context, name string, options R
 		return nil, err
 	}
 
+	release, err := s.prepareRead(ctx, resolved.Profile, params)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+
 	queryCtx := s.context().Wrap(ctx)
 	result, err := query.Execute(queryCtx, resolved.Profile, params)
 	if err != nil {
