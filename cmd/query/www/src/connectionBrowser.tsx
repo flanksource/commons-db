@@ -12,6 +12,7 @@ import {
 } from "@flanksource/clicky-ui/profiles";
 import { ConnectionInfoHeader } from "./connectionInfoHeader";
 import { ConnectionQueryBrowser } from "./connectionQueryBrowser";
+import { ConnectionTrace } from "./connectionTrace";
 import { connectionProfileTargetOptions } from "./connectionProfileTarget";
 
 export function connectionDetailBodyRenderer(
@@ -23,6 +24,7 @@ export function connectionDetailBodyRenderer(
     typeof context.entity?.name === "string" ? context.entity.name : context.id;
   return (
     <ConnectionBrowser
+      key={context.id}
       id={context.id}
       connectionName={connectionName}
       fallback={context.defaultView}
@@ -60,8 +62,11 @@ function ConnectionBrowser({
   // The target the browser is pointed at, so "Build profile" starts where the
   // author left off. It is reported by the browser rather than picked here —
   // the picker lives in the browser's navigator.
-  const [selectedOptions, setSelectedOptions] = useState<Record<string, unknown>>({});
+  const [selectedOptions, setSelectedOptions] = useState<
+    Record<string, unknown>
+  >({});
   const [selectedQuery, setSelectedQuery] = useState<string>();
+  const [activeTab, setActiveTab] = useState<"browser" | "trace">("browser");
   const profileOptions = useMemo(
     () => connectionProfileTargetOptions(descriptor.data, selectedOptions),
     [descriptor.data, selectedOptions],
@@ -108,13 +113,46 @@ function ConnectionBrowser({
       {profileAction ? (
         <div className="flex flex-wrap items-center gap-2">{profileAction}</div>
       ) : null}
-      <ConnectionQueryBrowser
-        id={id}
-        baseUrl={baseUrl}
-        descriptor={descriptor.data}
-        onOptionsChange={setSelectedOptions}
-        onQueryChange={setSelectedQuery}
-      />
+      {descriptor.data.provider === "sqlserver" ? (
+        <div
+          className="flex gap-1 border-b"
+          role="tablist"
+          aria-label="Connection tools"
+        >
+          {(["browser", "trace"] as const).map((tab) => (
+            <button
+              key={tab}
+              role="tab"
+              aria-selected={activeTab === tab}
+              className={`border-b-2 px-3 py-2 text-sm font-medium capitalize ${activeTab === tab ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
+              onClick={() => setActiveTab(tab)}
+            >
+              {tab}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      <div hidden={activeTab !== "browser"}>
+        <ConnectionQueryBrowser
+          id={id}
+          baseUrl={baseUrl}
+          descriptor={descriptor.data}
+          onOptionsChange={setSelectedOptions}
+          onQueryChange={setSelectedQuery}
+        />
+      </div>
+      {descriptor.data.provider === "sqlserver" ? (
+        <div hidden={activeTab !== "trace"}>
+          <ConnectionTrace
+            id={id}
+            defaultDatabase={
+              typeof descriptor.data.initialOptions?.database === "string"
+                ? descriptor.data.initialOptions.database
+                : undefined
+            }
+          />
+        </div>
+      ) : null}
     </div>
   );
 }

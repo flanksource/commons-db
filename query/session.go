@@ -353,7 +353,11 @@ func (s *Session) markDone(err error) {
 	changed := !s.state.Terminal()
 	if changed {
 		if s.stopRequested {
-			s.transitionLocked(SessionStopped, "")
+			message := ""
+			if failure := normalizeStreamErr(err); failure != nil {
+				message = failure.Error()
+			}
+			s.transitionLocked(SessionStopped, message)
 		} else if err != nil {
 			s.transitionLocked(SessionFailed, err.Error())
 		} else {

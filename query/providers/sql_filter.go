@@ -265,6 +265,26 @@ func wrapAsBaseCTE(dialect sqlDialect, statement string, tail func(base string) 
 	if err := assertNoPlaceholders(dialect, statement); err != nil {
 		return "", err
 	}
+	spans := scanSQL(statement)
+	for i := len(spans) - 1; i >= 0; i-- {
+		span := spans[i]
+		text := statement[span.start:span.end]
+		if span.literal {
+			if strings.HasPrefix(text, "--") || strings.HasPrefix(text, "/*") {
+				continue
+			}
+			break
+		}
+		text = strings.TrimRight(text, " \t\r\n")
+		if text == "" {
+			continue
+		}
+		if strings.HasSuffix(text, ";") {
+			at := span.start + len(text) - 1
+			statement = statement[:at] + statement[at+1:]
+		}
+		break
+	}
 	prefix, body, cteNames, err := splitWithPrefix(statement)
 	if err != nil {
 		return "", err

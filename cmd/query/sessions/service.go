@@ -103,6 +103,8 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), h.prefix), "/")
 	parts := strings.Split(rel, "/")
 	switch {
+	case r.Method == http.MethodPost && len(parts) == 4 && parts[0] == "connection" && parts[2] == "trace" && parts[3] == "sessions":
+		h.startConnectionTrace(w, r, parts[1])
 	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "profile" && parts[2] == "sessions":
 		h.start(w, r, parts[1])
 	case parts[0] == "sessions" && len(parts) == 1 && r.Method == http.MethodGet:

@@ -1,11 +1,13 @@
 package loki
 
 import (
+	stdcontext "context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"maps"
+	"net"
 	netHTTP "net/http"
 	"net/url"
 	"strconv"
@@ -99,25 +101,43 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 		return nil, fmt.Errorf("failed to parse base URL '%s': %w", t.conn.URL, err)
 	}
 
-	wsScheme := "ws"
-	if parsedBaseURL.Scheme == "https" {
-		wsScheme = "wss"
+	host := parsedBaseURL.Hostname()
+	if host == "" {
+		return nil, fmt.Errorf("loki URL requires a host")
 	}
-	wsURL := &url.URL{
-		Scheme:   wsScheme,
-		Host:     parsedBaseURL.Host,
-		Path:     "/loki/api/v1/tail",
-		RawQuery: request.Params().Encode(),
+
+	port := parsedBaseURL.Port()
+	var websocketURL string
+	switch parsedBaseURL.Scheme {
+	case "http":
+		if port == "" {
+			port = "80"
+		}
+		websocketURL = "ws://loki.invalid/loki/api/v1/tail?" + request.Params().Encode()
+	case "https":
+		if port == "" {
+			port = "443"
+		}
+		websocketURL = "wss://loki.invalid/loki/api/v1/tail?" + request.Params().Encode()
+	default:
+		return nil, fmt.Errorf("loki URL requires http or https scheme")
 	}
+	target := net.JoinHostPort(host, port)
 
 	dialer := *websocket.DefaultDialer
-	if !t.conn.TLS.IsEmpty() {
-		if dialer.TLSClientConfig, err = t.conn.TLS.TLSClientConfig(); err != nil {
-			return nil, err
-		}
+	dialer.Proxy = nil
+	dialer.NetDialContext = func(ctx stdcontext.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, target)
 	}
+	if dialer.TLSClientConfig, err = t.conn.TLS.TLSClientConfig(); err != nil {
+		return nil, err
+	}
+	dialer.TLSClientConfig.ServerName = host
 
 	headers := netHTTP.Header{}
+	// The fixed request URL keeps configured endpoints out of the HTTP request
+	// parser; these values preserve the validated destination, Host header and SNI.
+	headers.Set("Host", parsedBaseURL.Host)
 	switch {
 	case !t.conn.HTTPBasicAuth.IsEmpty():
 		auth := t.conn.GetUsername() + ":" + t.conn.GetPassword()
@@ -130,7 +150,7 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 		return nil, fmt.Errorf("loki tail does not support OAuth connections; use basic auth, a bearer token or mTLS")
 	}
 
-	conn, _, err := dialer.DialContext(ctx, wsURL.String(), headers)
+	conn, _, err := dialer.DialContext(ctx, websocketURL, headers)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to websocket: %w", err)
 	}
