@@ -1,0 +1,190 @@
+package recordstore
+
+import (
+	"context"
+	"fmt"
+	"time"
+)
+
+// indexBatch is how many rows one import into the index carries.
+const indexBatch = 500
+
+// Index is a backend that takes rows under the seqs another backend gave them:
+// what an Indexer mirrors a source into. The sqlite backend is one.
+type Index interface {
+	Backend
+
+	// Prepare reconciles the storage for source's kind and returns the indexed
+	// incarnation of its stream. A derived index removes an older generation
+	// under the same stream id and reports it absent.
+	Prepare(ctx context.Context, source Meta) (indexed Meta, found bool, err error)
+
+	// Import stores request.Rows under their source seqs. First must be the seq
+	// after the indexed stream's high seq; a gap or different generation fails.
+	Import(ctx context.Context, request ImportRequest) (Window, error)
+
+	// Derived reports whether the index can discard rows and rebuild them from
+	// a separate source.
+	Derived() bool
+
+	// SetExpiry mirrors the source's absolute expiry. Nil keeps the indexed
+	// stream while its source exists.
+	SetExpiry(ctx context.Context, stream string, expiresAt *time.Time) error
+}
+
+// ImportRequest is one source window copied into an index.
+type ImportRequest struct {
+	Source Meta
+	First  int64
+	Rows   []Row
+}
+
+// Indexer keeps an Index caught up with a source backend, one stream at a
+// time and incrementally by seq: each Ensure copies only what the source
+// gained since the last one.
+type Indexer struct {
+	source Backend
+	index  Index
+	// same reports that the source is the index, which leaves nothing to copy.
+	same  bool
+	locks StreamLocks
+	now   func() time.Time
+}
+
+// NewIndexer mirrors source into index.
+func NewIndexer(source Backend, index Index) (*Indexer, error) {
+	if source == nil || index == nil {
+		return nil, fmt.Errorf("an indexer needs both a source and an index")
+	}
+	same := Backend(index) == source
+	if same && index.Derived() {
+		return nil, fmt.Errorf("an index that is its own source cannot be derived: rebuilding it would discard the authoritative rows")
+	}
+	if !same && !index.Derived() {
+		return nil, fmt.Errorf("an index separate from its source must be derived so it can be rebuilt")
+	}
+	return &Indexer{source: source, index: index, same: same, now: time.Now}, nil
+}
+
+// Ensure brings stream's index up to the source's high seq. A stream the
+// source does not have is ErrNotFound. When the source is the index there is
+// nothing to copy, and Ensure only confirms the stream exists.
+func (i *Indexer) Ensure(ctx context.Context, stream string) error {
+	unlock := i.locks.Lock(stream)
+	defer unlock()
+	source, err := i.source.Meta(ctx, stream)
+	if err != nil {
+		return fmt.Errorf("index stream %q: %w", stream, err)
+	}
+	if err := source.Validate(); err != nil {
+		return fmt.Errorf("index stream %q: source metadata: %w", stream, err)
+	}
+	indexed, found, err := i.index.Prepare(ctx, source)
+	if err != nil {
+		return fmt.Errorf("index stream %q: prepare: %w", stream, err)
+	}
+	if found {
+		if err := indexed.Validate(); err != nil {
+			return fmt.Errorf("index stream %q: prepared metadata: %w", stream, err)
+		}
+		if indexed.Stream != source.Stream || indexed.Kind != source.Kind {
+			return fmt.Errorf("index stream %q: prepare returned stream %q kind %q for source kind %q",
+				stream, indexed.Stream, indexed.Kind, source.Kind)
+		}
+	}
+	if i.same {
+		if !found {
+			return fmt.Errorf("index stream %q: its source index lost the stream while preparing it: %w", stream, ErrNotFound)
+		}
+		return nil
+	}
+	if found && indexed.Generation != source.Generation {
+		return fmt.Errorf("index stream %q: prepare returned generation %q for source generation %q", stream, indexed.Generation, source.Generation)
+	}
+	if indexed.HighSeq > source.HighSeq {
+		return fmt.Errorf("index of stream %q generation %q is ahead of its source (seq %d, source %d)",
+			stream, source.Generation, indexed.HighSeq, source.HighSeq)
+	}
+	if !found || indexed.HighSeq < source.HighSeq {
+		if err := i.copyAfter(ctx, source, indexed.HighSeq); err != nil {
+			return err
+		}
+	}
+	latest, err := i.source.Meta(ctx, stream)
+	if err != nil {
+		return fmt.Errorf("index stream %q: re-read source metadata: %w", stream, err)
+	}
+	if latest.Generation != source.Generation {
+		return fmt.Errorf("index stream %q changed generation from %q to %q while it was being indexed", stream, source.Generation, latest.Generation)
+	}
+	return i.mirrorExpiry(ctx, latest, indexed)
+}
+
+// copyAfter imports every source row after high, checking the seqs arrive
+// without a gap and reach the high seq the source reported. An empty source
+// stream is imported as an empty stream.
+//
+// A scan that ends early is refused rather than taken as the stream: an index
+// that stopped short would page the stream as complete, and every later Ensure
+// would find it already caught up.
+func (i *Indexer) copyAfter(ctx context.Context, source Meta, high int64) error {
+	stream := source.Stream
+	next := high + 1
+	var batch []Row
+	flush := func() error {
+		expected := Window{From: next, To: next + int64(len(batch)) - 1}
+		window, err := i.index.Import(ctx, ImportRequest{Source: source, First: next, Rows: batch})
+		if err != nil {
+			return fmt.Errorf("index stream %q: %w", stream, err)
+		}
+		if window != expected {
+			return fmt.Errorf("index stream %q: import returned window %+v, expected %+v", stream, window, expected)
+		}
+		next, batch = window.To+1, nil
+		return nil
+	}
+	err := i.source.Scan(ctx, stream, high, func(seq int64, row Row) error {
+		if expected := next + int64(len(batch)); seq != expected {
+			return fmt.Errorf("source stream %q skips from seq %d to %d", stream, expected-1, seq)
+		}
+		batch = append(batch, row)
+		if len(batch) < indexBatch {
+			return nil
+		}
+		return flush()
+	})
+	if err != nil {
+		return fmt.Errorf("index stream %q: %w", stream, err)
+	}
+	if reached := next + int64(len(batch)) - 1; reached < source.HighSeq {
+		return fmt.Errorf("index stream %q: the source holds rows through seq %d but its scan reached seq %d", stream, source.HighSeq, reached)
+	}
+	if len(batch) > 0 || high == 0 {
+		if err := flush(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// expiryTolerance avoids rewriting an expiry for harmless timestamp precision
+// differences in an index implementation.
+const expiryTolerance = time.Second
+
+// mirrorExpiry gives the index the source's expiry, so an index entry never
+// outlives the stream it describes.
+func (i *Indexer) mirrorExpiry(ctx context.Context, source, indexed Meta) error {
+	if source.ExpiresAt == nil && indexed.ExpiresAt == nil {
+		return nil
+	}
+	if source.ExpiresAt != nil && indexed.ExpiresAt != nil && indexed.ExpiresAt.Sub(*source.ExpiresAt).Abs() < expiryTolerance {
+		return nil
+	}
+	if source.ExpiresAt != nil && !source.ExpiresAt.After(i.now()) {
+		return fmt.Errorf("index stream %q: source expired at %s: %w", source.Stream, source.ExpiresAt, ErrNotFound)
+	}
+	if err := i.index.SetExpiry(ctx, source.Stream, source.ExpiresAt); err != nil {
+		return fmt.Errorf("index stream %q: %w", source.Stream, err)
+	}
+	return nil
+}
