@@ -13,8 +13,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +22,7 @@ import (
 	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
+	sqlitedb "github.com/flanksource/commons-db/sqlite"
 )
 
 // Options configure a sqlite backend.
@@ -58,19 +57,12 @@ type Options struct {
 
 // Backend is a recordstore.Backend over a SQLite file.
 type Backend struct {
-	writeDB *sql.DB
-	readDB  *sql.DB
-	path    string
-	schema  func(string) ([]query.ColumnDef, error)
-	ttl     time.Duration
-	derived bool
-	now     func() time.Time
-	locks   recordstore.StreamLocks
-
-	// mutations is held for reading by every external lease and for writing by
-	// every row or schema mutation, so separate paging statements see one
-	// stable index state for the lease's lifetime.
-	mutations sync.RWMutex
+	database *sqlitedb.DB
+	schema   func(string) ([]query.ColumnDef, error)
+	ttl      time.Duration
+	derived  bool
+	now      func() time.Time
+	locks    recordstore.StreamLocks
 
 	// stopSweeper cancels the sweeper goroutine and swept reports it gone.
 	stopSweeper context.CancelFunc
@@ -98,39 +90,21 @@ func Open(options Options) (*Backend, error) {
 	if options.SweepInterval <= 0 {
 		return nil, fmt.Errorf("sqlite record store: a positive sweep interval is required, or expired streams are never removed")
 	}
-	path, err := filepath.Abs(options.Path)
+	database, err := sqlitedb.Open(sqlitedb.Options{Path: options.Path})
 	if err != nil {
-		return nil, fmt.Errorf("sqlite record store: resolve %s: %w", options.Path, err)
+		return nil, fmt.Errorf("sqlite record store: %w", err)
 	}
-	writeDB, err := sql.Open("sqlite", sqliteFileURI(path)+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
-	if err != nil {
-		return nil, fmt.Errorf("sqlite record store: open %s: %w", path, err)
-	}
-	// One connection serializes every write the file takes, which is the only
-	// order SQLite accepts them in anyway, without busy-retrying.
-	writeDB.SetMaxOpenConns(1)
-	writeDB.SetMaxIdleConns(1)
 	now := options.Now
 	if now == nil {
 		now = time.Now
 	}
 	backend := &Backend{
-		writeDB: writeDB, path: path, schema: options.Schema, ttl: options.TTL, derived: options.Derived,
+		database: database, schema: options.Schema, ttl: options.TTL, derived: options.Derived,
 		now: now, tables: map[string]sqlitetable.Table{},
 	}
 	if err := backend.createCatalog(context.Background()); err != nil {
-		return nil, errors.Join(err, writeDB.Close())
+		return nil, errors.Join(err, database.Close())
 	}
-	readDB, err := sql.Open("sqlite", backend.ReadDSN())
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("sqlite record store: open read pool %s: %w", path, err), writeDB.Close())
-	}
-	readDB.SetMaxOpenConns(10)
-	readDB.SetMaxIdleConns(5)
-	if err := readDB.PingContext(context.Background()); err != nil {
-		return nil, errors.Join(fmt.Errorf("sqlite record store: open read pool %s: %w", path, err), readDB.Close(), writeDB.Close())
-	}
-	backend.readDB = readDB
 	backend.startSweeper(options.SweepInterval)
 	return backend, nil
 }
@@ -151,7 +125,7 @@ func (b *Backend) startSweeper(interval time.Duration) {
 				return
 			case <-ticker.C:
 				if _, err := b.Sweep(ctx); err != nil && ctx.Err() == nil {
-					logger.Errorf("sqlite record store %s: sweep: %v", b.path, err)
+					logger.Errorf("sqlite record store %s: sweep: %v", b.Path(), err)
 				}
 			}
 		}
@@ -160,22 +134,16 @@ func (b *Backend) startSweeper(interval time.Duration) {
 
 // ReadDSN is the read-only DSN a profile connection reads the file through.
 func (b *Backend) ReadDSN() string {
-	return sqliteFileURI(b.path) + "?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)"
-}
-
-func sqliteFileURI(path string) string {
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+	return b.database.ReadDSN()
 }
 
 // Path is the database file.
-func (b *Backend) Path() string { return b.path }
+func (b *Backend) Path() string { return b.database.Path() }
 
 // Lease holds off every row and schema mutation until the returned function is
 // called, so an external reader can issue multiple stable paging statements.
 func (b *Backend) Lease() func() {
-	b.mutations.RLock()
-	var once sync.Once
-	return func() { once.Do(b.mutations.RUnlock) }
+	return b.database.Lease()
 }
 
 // Append numbers rows after the stream's high seq.
@@ -224,9 +192,13 @@ func (b *Backend) Prepare(ctx context.Context, source recordstore.Meta) (records
 }
 
 func (b *Backend) removeGeneration(ctx context.Context, source recordstore.Meta) error {
-	b.mutations.Lock()
-	defer b.mutations.Unlock()
-	tx, err := b.writeDB.BeginTx(ctx, nil)
+	return b.database.Write(func(writer *sql.DB) error {
+		return b.removeGenerationLocked(ctx, writer, source)
+	})
+}
+
+func (b *Backend) removeGenerationLocked(ctx context.Context, writer *sql.DB, source recordstore.Meta) error {
+	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("stream %q: replace generation: %w", source.Stream, err)
 	}
@@ -283,10 +255,18 @@ func (b *Backend) Import(ctx context.Context, request recordstore.ImportRequest)
 }
 
 func (b *Backend) commitImport(ctx context.Context, table sqlitetable.Table, request recordstore.ImportRequest, stored []query.Row) (recordstore.Window, error) {
+	var window recordstore.Window
+	err := b.database.Write(func(writer *sql.DB) error {
+		var err error
+		window, err = b.commitImportLocked(ctx, writer, table, request, stored)
+		return err
+	})
+	return window, err
+}
+
+func (b *Backend) commitImportLocked(ctx context.Context, writer *sql.DB, table sqlitetable.Table, request recordstore.ImportRequest, stored []query.Row) (recordstore.Window, error) {
 	stream := request.Source.Stream
-	b.mutations.Lock()
-	defer b.mutations.Unlock()
-	tx, err := b.writeDB.BeginTx(ctx, nil)
+	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
 		return recordstore.Window{}, fmt.Errorf("stream %q: begin: %w", stream, err)
 	}
@@ -374,9 +354,17 @@ func (b *Backend) write(ctx context.Context, stream, kind string, first int64, r
 // commitRows numbers stored rows after the stream's high seq, or checks they
 // start at first when it is set, and commits them with the stream's metadata.
 func (b *Backend) commitRows(ctx context.Context, table sqlitetable.Table, stream, kind string, first int64, stored []query.Row) (recordstore.Window, error) {
-	b.mutations.Lock()
-	defer b.mutations.Unlock()
-	tx, err := b.writeDB.BeginTx(ctx, nil)
+	var window recordstore.Window
+	err := b.database.Write(func(writer *sql.DB) error {
+		var err error
+		window, err = b.commitRowsLocked(ctx, writer, table, stream, kind, first, stored)
+		return err
+	})
+	return window, err
+}
+
+func (b *Backend) commitRowsLocked(ctx context.Context, writer *sql.DB, table sqlitetable.Table, stream, kind string, first int64, stored []query.Row) (recordstore.Window, error) {
+	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
 		return recordstore.Window{}, fmt.Errorf("stream %q: begin: %w", stream, err)
 	}
@@ -409,21 +397,21 @@ func (b *Backend) commitRows(ctx context.Context, table sqlitetable.Table, strea
 
 // purgeExpired removes an expired stream nothing has swept yet, so a write
 // starts it again at seq 1 rather than colliding with rows that still hold
-// those seqs. It takes the mutation lock, as Sweep does, so no leased read
-// loses its rows part way.
+// those seqs. It holds the write lock throughout, so no leased read loses its
+// rows part way.
 func (b *Backend) purgeExpired(ctx context.Context, stream string) error {
-	var table string
-	err := b.writeDB.QueryRowContext(ctx, `SELECT k.table_name FROM record_streams s JOIN record_kinds k ON k.kind = s.kind
-		WHERE s.stream_id = ? AND s.expires_at IS NOT NULL AND s.expires_at <= ?`, stream, sqlitetable.FormatTime(b.now())).Scan(&table)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("stream %q: read expiry: %w", stream, err)
-	}
-	b.mutations.Lock()
-	defer b.mutations.Unlock()
-	return b.removeStream(ctx, stream, table)
+	return b.database.Write(func(writer *sql.DB) error {
+		var table string
+		err := writer.QueryRowContext(ctx, `SELECT k.table_name FROM record_streams s JOIN record_kinds k ON k.kind = s.kind
+			WHERE s.stream_id = ? AND s.expires_at IS NOT NULL AND s.expires_at <= ?`, stream, sqlitetable.FormatTime(b.now())).Scan(&table)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("stream %q: read expiry: %w", stream, err)
+		}
+		return b.removeStream(ctx, writer, stream, table)
+	})
 }
 
 // openStream reads stream for a write, or starts it under kind.
@@ -468,7 +456,7 @@ func (b *Backend) Meta(ctx context.Context, stream string) (recordstore.Meta, er
 	if err := recordstore.ValidateStream(stream); err != nil {
 		return recordstore.Meta{}, err
 	}
-	return readMeta(ctx, b.readDB, stream, b.now())
+	return readMeta(ctx, b.database.Reader(), stream, b.now())
 }
 
 // Expire moves stream's expiry to ttl from now.
@@ -480,18 +468,18 @@ func (b *Backend) Expire(ctx context.Context, stream string, ttl time.Duration) 
 		return err
 	}
 	now := b.now()
-	b.mutations.Lock()
-	defer b.mutations.Unlock()
-	result, err := b.writeDB.ExecContext(ctx,
-		`UPDATE record_streams SET expires_at = ? WHERE stream_id = ? AND (expires_at IS NULL OR expires_at > ?)`,
-		sqlitetable.FormatTime(now.Add(ttl)), stream, sqlitetable.FormatTime(now))
-	if err != nil {
-		return fmt.Errorf("stream %q: expire: %w", stream, err)
-	}
-	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
-		return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
-	}
-	return nil
+	return b.database.Write(func(writer *sql.DB) error {
+		result, err := writer.ExecContext(ctx,
+			`UPDATE record_streams SET expires_at = ? WHERE stream_id = ? AND (expires_at IS NULL OR expires_at > ?)`,
+			sqlitetable.FormatTime(now.Add(ttl)), stream, sqlitetable.FormatTime(now))
+		if err != nil {
+			return fmt.Errorf("stream %q: expire: %w", stream, err)
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+			return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
+		}
+		return nil
+	})
 }
 
 // SetExpiry makes an index expire at the source's exact deadline. A nil
@@ -504,16 +492,16 @@ func (b *Backend) SetExpiry(ctx context.Context, stream string, expiresAt *time.
 	if expiresAt != nil {
 		value = sqlitetable.FormatTime(*expiresAt)
 	}
-	b.mutations.Lock()
-	defer b.mutations.Unlock()
-	result, err := b.writeDB.ExecContext(ctx, `UPDATE record_streams SET expires_at = ? WHERE stream_id = ?`, value, stream)
-	if err != nil {
-		return fmt.Errorf("stream %q: set index expiry: %w", stream, err)
-	}
-	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
-		return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
-	}
-	return nil
+	return b.database.Write(func(writer *sql.DB) error {
+		result, err := writer.ExecContext(ctx, `UPDATE record_streams SET expires_at = ? WHERE stream_id = ?`, value, stream)
+		if err != nil {
+			return fmt.Errorf("stream %q: set index expiry: %w", stream, err)
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+			return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
+		}
+		return nil
+	})
 }
 
 // Close stops the sweeper, waiting out a sweep in progress, and closes the
@@ -522,7 +510,7 @@ func (b *Backend) Close() error {
 	b.closeOnce.Do(func() {
 		b.stopSweeper()
 		<-b.swept
-		b.closeErr = errors.Join(b.readDB.Close(), b.writeDB.Close())
+		b.closeErr = b.database.Close()
 	})
 	return b.closeErr
 }

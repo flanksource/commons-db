@@ -83,7 +83,7 @@ func (b *Backend) Scan(ctx context.Context, stream string, afterSeq int64, fn fu
 	if err != nil {
 		return err
 	}
-	tx, err := b.readDB.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := b.database.Reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return fmt.Errorf("stream %q: begin scan: %w", stream, err)
 	}
@@ -144,42 +144,45 @@ func (b *Backend) scanPage(ctx context.Context, tx *sql.Tx, table sqlitetable.Ta
 // Sweep removes every stream whose expiry has passed, rows included, and
 // reports how many it removed.
 func (b *Backend) Sweep(ctx context.Context) (int, error) {
-	b.mutations.Lock()
-	defer b.mutations.Unlock()
-	expired, err := b.expiredStreams(ctx)
-	if err != nil {
-		return 0, err
-	}
-	for _, stream := range expired {
-		if err := b.removeStream(ctx, stream.id, stream.table); err != nil {
-			return 0, err
+	var count int
+	err := b.database.Write(func(writer *sql.DB) error {
+		expired, err := b.expiredStreams(ctx, writer)
+		if err != nil {
+			return err
 		}
-	}
-	return len(expired), nil
+		for _, stream := range expired {
+			if err := b.removeStream(ctx, writer, stream.id, stream.table); err != nil {
+				return err
+			}
+		}
+		count = len(expired)
+		return nil
+	})
+	return count, err
 }
 
 type expiredStream struct{ id, table string }
 
-func (b *Backend) expiredStreams(ctx context.Context) ([]expiredStream, error) {
-	rows, err := b.writeDB.QueryContext(ctx, `SELECT s.stream_id, k.table_name FROM record_streams s
+func (b *Backend) expiredStreams(ctx context.Context, writer *sql.DB) ([]expiredStream, error) {
+	rows, err := writer.QueryContext(ctx, `SELECT s.stream_id, k.table_name FROM record_streams s
 		JOIN record_kinds k ON k.kind = s.kind WHERE s.expires_at IS NOT NULL AND s.expires_at <= ?`, sqlitetable.FormatTime(b.now()))
 	if err != nil {
-		return nil, fmt.Errorf("sweep %s: %w", b.path, err)
+		return nil, fmt.Errorf("sweep %s: %w", b.Path(), err)
 	}
 	defer func() { _ = rows.Close() }()
 	var expired []expiredStream
 	for rows.Next() {
 		var stream expiredStream
 		if err := rows.Scan(&stream.id, &stream.table); err != nil {
-			return nil, fmt.Errorf("sweep %s: %w", b.path, err)
+			return nil, fmt.Errorf("sweep %s: %w", b.Path(), err)
 		}
 		expired = append(expired, stream)
 	}
 	return expired, rows.Err()
 }
 
-func (b *Backend) removeStream(ctx context.Context, stream, table string) error {
-	tx, err := b.writeDB.BeginTx(ctx, nil)
+func (b *Backend) removeStream(ctx context.Context, writer *sql.DB, stream, table string) error {
+	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("stream %q: begin removal: %w", stream, err)
 	}

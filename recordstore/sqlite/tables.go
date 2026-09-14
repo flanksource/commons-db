@@ -20,27 +20,33 @@ const (
 )
 
 func (b *Backend) createCatalog(ctx context.Context) error {
-	tx, err := b.writeDB.BeginTx(ctx, nil)
+	return b.database.Write(func(writer *sql.DB) error {
+		return b.createCatalogLocked(ctx, writer)
+	})
+}
+
+func (b *Backend) createCatalogLocked(ctx context.Context, writer *sql.DB) error {
+	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("sqlite record store %s: begin catalog: %w", b.path, err)
+		return fmt.Errorf("sqlite record store %s: begin catalog: %w", b.Path(), err)
 	}
 	defer func() { _ = tx.Rollback() }()
 	var versioned bool
 	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'record_store_format')`).Scan(&versioned); err != nil {
-		return fmt.Errorf("sqlite record store %s: inspect catalog: %w", b.path, err)
+		return fmt.Errorf("sqlite record store %s: inspect catalog: %w", b.Path(), err)
 	}
 	if versioned {
-		if err := validateCatalog(ctx, tx, b.path); err != nil {
+		if err := validateCatalog(ctx, tx, b.Path()); err != nil {
 			return err
 		}
 		return tx.Commit()
 	}
 	var existing int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`).Scan(&existing); err != nil {
-		return fmt.Errorf("sqlite record store %s: inspect unversioned tables: %w", b.path, err)
+		return fmt.Errorf("sqlite record store %s: inspect unversioned tables: %w", b.Path(), err)
 	}
 	if existing != 0 {
-		return fmt.Errorf("sqlite record store %s: unsupported unversioned catalog; remove the file and rebuild it", b.path)
+		return fmt.Errorf("sqlite record store %s: unsupported unversioned catalog; remove the file and rebuild it", b.Path())
 	}
 	for _, statement := range []string{
 		`CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL)`,
@@ -52,11 +58,11 @@ func (b *Backend) createCatalog(ctx context.Context) error {
 		`CREATE TABLE record_kinds (kind TEXT PRIMARY KEY, table_name TEXT NOT NULL, columns TEXT NOT NULL)`,
 	} {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("sqlite record store %s: create catalog: %w", b.path, err)
+			return fmt.Errorf("sqlite record store %s: create catalog: %w", b.Path(), err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("sqlite record store %s: commit catalog: %w", b.path, err)
+		return fmt.Errorf("sqlite record store %s: commit catalog: %w", b.Path(), err)
 	}
 	return nil
 }
@@ -130,9 +136,13 @@ func (b *Backend) reconcileTable(ctx context.Context, kind string, table sqlitet
 	if err != nil {
 		return err
 	}
-	b.mutations.Lock()
-	defer b.mutations.Unlock()
-	tx, err := b.writeDB.BeginTx(ctx, nil)
+	return b.database.Write(func(writer *sql.DB) error {
+		return b.reconcileTableLocked(ctx, writer, kind, table, signature)
+	})
+}
+
+func (b *Backend) reconcileTableLocked(ctx context.Context, writer *sql.DB, kind string, table sqlitetable.Table, signature string) error {
+	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("kind %q: begin: %w", kind, err)
 	}
@@ -150,7 +160,7 @@ func (b *Backend) reconcileTable(ctx context.Context, kind string, table sqlitet
 		return nil
 	case !b.derived:
 		return fmt.Errorf("kind %q was stored in %s with different columns (%s, now %s); its rows exist nowhere else, so migrate or remove the file",
-			kind, b.path, stored, signature)
+			kind, b.Path(), stored, signature)
 	default:
 		if err := dropKindTable(ctx, tx, kind, table); err != nil {
 			return err
