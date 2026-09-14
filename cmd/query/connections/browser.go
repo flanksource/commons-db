@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"net/http"
@@ -29,6 +30,7 @@ type connectionBrowserHandler struct {
 	ctx              dbcontext.Context
 	next             http.Handler
 	kubernetesClient func(context.Context, *models.Connection) (kubernetes.Interface, error)
+	openSQLClient    func(context.Context, dbconnection.SQLConnection) (*sql.DB, error)
 }
 
 func newConnectionBrowserHandler(prefix string, ctx dbcontext.Context, next http.Handler) *connectionBrowserHandler {
@@ -42,6 +44,9 @@ func newConnectionBrowserHandler(prefix string, ctx dbcontext.Context, next http
 				return nil, fmt.Errorf("connect to Kubernetes connection %q: %w", connection.Name, err)
 			}
 			return client, nil
+		},
+		openSQLClient: func(requestContext context.Context, connection dbconnection.SQLConnection) (*sql.DB, error) {
+			return connection.Client(ctx.Wrap(requestContext))
 		},
 	}
 }

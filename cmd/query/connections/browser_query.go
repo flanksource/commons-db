@@ -144,7 +144,7 @@ func (h *connectionBrowserHandler) executeSQL(
 	if err != nil {
 		return browserQueryResult{}, err
 	}
-	client, err := h.sqlClient(r.Context(), conn, database)
+	client, err := h.sqlClient(r.Context(), conn, sqlClientOptions{Database: database})
 	if err != nil {
 		return browserQueryResult{}, err
 	}

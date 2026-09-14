@@ -6,6 +6,7 @@ package connections
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -20,6 +21,17 @@ import (
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
 )
+
+const sqlServerUsingDefaultDatabase = 4063
+
+type sqlClientOptions struct {
+	Database                        string
+	UseDefaultDatabaseOnUnavailable bool
+}
+
+type sqlErrorNumber interface {
+	SQLErrorNumber() int32
+}
 
 func (h *connectionBrowserHandler) serveInspection(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
 	refresh, err := inspectionRefresh(r)
@@ -154,7 +166,7 @@ func (h *connectionBrowserHandler) inspectSQL(ctx context.Context, conn *models.
 		CacheKey: key,
 		Refresh:  refresh,
 		Open: func(loadContext context.Context) (*sql.DB, error) {
-			return h.sqlClient(loadContext, conn, database)
+			return h.sqlClient(loadContext, conn, sqlClientOptions{Database: database, UseDefaultDatabaseOnUnavailable: true})
 		},
 	})
 	if err != nil && (catalog.Cache == nil || !catalog.Cache.Cached) {
@@ -163,16 +175,36 @@ func (h *connectionBrowserHandler) inspectSQL(ctx context.Context, conn *models.
 	return catalog, nil
 }
 
-func (h *connectionBrowserHandler) sqlClient(ctx context.Context, conn *models.Connection, database string) (*sql.DB, error) {
+func (h *connectionBrowserHandler) sqlClient(ctx context.Context, conn *models.Connection, options sqlClientOptions) (*sql.DB, error) {
 	var sqlConn dbconnection.SQLConnection
 	if err := sqlConn.FromModel(*conn); err != nil {
 		return nil, err
 	}
-	client, err := sqlConn.Client(h.ctx.Wrap(ctx))
+	database := strings.TrimSpace(options.Database)
+	client, err := h.openSQLClient(ctx, sqlConn)
 	if err != nil {
 		return nil, err
 	}
-	database = strings.TrimSpace(database)
+	if conn.Type == models.ConnectionTypeSQLServer && (options.UseDefaultDatabaseOnUnavailable || database != "") {
+		if err := client.PingContext(ctx); err != nil {
+			client.Close()
+			if !isSQLServerDatabaseUnavailable(err) {
+				return nil, err
+			}
+			sqlConn, err = sqlConn.UseDefaultDatabase()
+			if err != nil {
+				return nil, err
+			}
+			client, err = h.openSQLClient(ctx, sqlConn)
+			if err != nil {
+				return nil, err
+			}
+			if err := client.PingContext(ctx); err != nil {
+				client.Close()
+				return nil, err
+			}
+		}
+	}
 	if database == "" {
 		return client, nil
 	}
@@ -190,7 +222,12 @@ func (h *connectionBrowserHandler) sqlClient(ctx context.Context, conn *models.C
 	if err != nil {
 		return nil, err
 	}
-	return sqlConn.Client(h.ctx.Wrap(ctx))
+	return h.openSQLClient(ctx, sqlConn)
+}
+
+func isSQLServerDatabaseUnavailable(err error) bool {
+	var sqlError sqlErrorNumber
+	return errors.As(err, &sqlError) && sqlError.SQLErrorNumber() == sqlServerUsingDefaultDatabase
 }
 
 func sqlDialect(connType string) string {
