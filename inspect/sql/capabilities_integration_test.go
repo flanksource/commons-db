@@ -15,7 +15,7 @@ var _ = Describe("SQL catalog capability integration", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(func() { _ = db.Close() })
 
-		catalog, err := Inspect(context.Background(), db, "sqlite", Limits{})
+		catalog, err := Inspect(context.Background(), db, "sqlite", Limits{}, Options{CacheKey: "sqlite-capabilities-integration"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(catalog.Capabilities.Require(connection.BackendCapabilityArrayFilters)).To(Succeed())
 	})

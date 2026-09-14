@@ -236,6 +236,21 @@ func (s SQLConnection) UseDatabase(database string) (SQLConnection, error) {
 	return s, nil
 }
 
+// UseDefaultDatabase returns a copy of a SQL Server connection without an
+// initial database, allowing SQL Server to select the login's default database.
+func (s SQLConnection) UseDefaultDatabase() (SQLConnection, error) {
+	if s.Type != models.ConnectionTypeSQLServer {
+		return SQLConnection{}, fmt.Errorf("default database selection is only supported for sqlserver connections")
+	}
+	cfg, err := msdsn.Parse(s.URL.ValueStatic)
+	if err != nil {
+		return SQLConnection{}, fmt.Errorf("invalid sqlserver connection string: %w", err)
+	}
+	cfg.Database = ""
+	s.URL.ValueStatic = cfg.URL().String()
+	return s, nil
+}
+
 func setURLDatabase(raw, database string) (string, error) {
 	parsed, err := url.Parse(raw)
 	if err != nil {
