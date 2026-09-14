@@ -3,11 +3,31 @@ package query_test
 import (
 	"strings"
 
+	"github.com/flanksource/clicky/api"
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+type durationPresenter struct{}
+
+func (durationPresenter) Columns() []api.ColumnDef {
+	return []api.ColumnDef{
+		api.Column("duration").FilterKey("filter.duration").Build(),
+		api.Column("detail").Hidden().Build(),
+	}
+}
+
+func (durationPresenter) Present(row query.Row) (map[string]any, error) {
+	return map[string]any{
+		"duration": api.TableCell{
+			Value:       api.Text{Content: "125ms", Style: "text-red-500"},
+			FilterValue: row["duration"],
+		},
+		"detail": row["detail"],
+	}, nil
+}
 
 var _ = Describe("CEL columns", func() {
 	It("renames a provider field and removes its original key", func() {
@@ -304,6 +324,28 @@ var _ = Describe("Result.Render", func() {
 		Expect(out).To(ContainSubstring(`"type": "key_value"`))
 		Expect(out).To(ContainSubstring(`"kind": "map"`))
 		Expect(out).To(ContainSubstring(`"language": "json"`))
+	})
+
+	It("uses a typed row presenter only for interactive clicky JSON", func() {
+		presented := &query.Result{
+			Rows:             []query.Row{{"duration": 125.0, "detail": map[string]any{"id": "span-1"}}},
+			ColumnFilterKeys: map[string]string{"duration": "filter.duration"},
+			Presenter:        durationPresenter{},
+		}
+
+		clickyJSON, err := presented.Render([]query.ColumnDef{{Name: "duration"}, {Name: "detail"}}, "clicky-json")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(clickyJSON).To(And(
+			ContainSubstring(`"text": "125ms"`),
+			ContainSubstring(`"color": "#ef4444"`),
+			ContainSubstring(`"filterValue": 125`),
+			ContainSubstring(`"detail"`),
+			ContainSubstring("span-1"),
+		))
+
+		rawJSON, err := presented.Render([]query.ColumnDef{{Name: "duration"}, {Name: "detail"}}, "json")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rawJSON).To(And(ContainSubstring(`125`), Not(ContainSubstring("125ms"))))
 	})
 
 	It("rejects a cyclic row before handing it to Clicky", func() {

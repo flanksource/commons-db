@@ -87,6 +87,9 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 	if len(overlay.Columns) > 0 {
 		merged.Columns = slices.Clone(overlay.Columns)
 	}
+	if overlay.Presenter != nil {
+		merged.Presenter = overlay.Presenter
+	}
 	if len(overlay.Aliases) > 0 {
 		merged.Aliases = slices.Clone(overlay.Aliases)
 	}

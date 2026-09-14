@@ -10,6 +10,7 @@
 package recordresults
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"reflect"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
@@ -160,9 +162,70 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 			return fmt.Errorf("result type %q declares %q, which every stream table reserves", resultType.Kind, column.Name)
 		}
 	}
+	presenter, err := newTypedRowPresenter[T]()
+	if err != nil {
+		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
 	return registry.register(RegisteredResultType{
 		Kind: resultType.Kind, Title: resultType.Title, Profile: registry.prefix + "/" + resultType.Kind,
-	}, columns, resultType.TimeColumn)
+	}, columns, resultType.TimeColumn, presenter)
+}
+
+type typedRowPresenter[T any] struct {
+	columns []api.ColumnDef
+}
+
+func newTypedRowPresenter[T any]() (query.RowPresenter, error) {
+	typeOfT := reflect.TypeFor[T]()
+	tableProviderType := reflect.TypeFor[api.TableProvider]()
+	if typeOfT.Kind() == reflect.Interface {
+		return nil, nil
+	}
+	var value reflect.Value
+	switch {
+	case typeOfT.Implements(tableProviderType):
+		if typeOfT.Kind() == reflect.Pointer {
+			value = reflect.New(typeOfT.Elem())
+		} else {
+			value = reflect.New(typeOfT).Elem()
+		}
+	case reflect.PointerTo(typeOfT).Implements(tableProviderType):
+		value = reflect.New(typeOfT)
+	default:
+		return nil, nil
+	}
+	provider, ok := value.Interface().(api.TableProvider)
+	if !ok {
+		return nil, fmt.Errorf("%s declares TableProvider but cannot be instantiated", typeOfT)
+	}
+	columns := append([]api.ColumnDef{api.Column(seqColumn).Label("Seq").Build()}, provider.Columns()...)
+	return typedRowPresenter[T]{columns: columns}, nil
+}
+
+func (p typedRowPresenter[T]) Columns() []api.ColumnDef { return slices.Clone(p.columns) }
+
+func (typedRowPresenter[T]) Present(row query.Row) (map[string]any, error) {
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		return nil, fmt.Errorf("encode indexed row: %w", err)
+	}
+	var value T
+	if err := json.Unmarshal(encoded, &value); err != nil {
+		return nil, fmt.Errorf("decode indexed row as %s: %w", reflect.TypeFor[T](), err)
+	}
+	provider, ok := any(value).(api.TableProvider)
+	if !ok {
+		provider, ok = any(&value).(api.TableProvider)
+	}
+	if !ok {
+		return nil, fmt.Errorf("decoded %s does not implement TableProvider", reflect.TypeFor[T]())
+	}
+	presented := provider.Row()
+	if presented == nil {
+		return nil, fmt.Errorf("%s TableProvider returned a nil row", reflect.TypeFor[T]())
+	}
+	presented[seqColumn] = row[seqColumn]
+	return presented, nil
 }
 
 func markTimeColumn(columns []query.ColumnDef, name string) error {
@@ -180,7 +243,7 @@ func markTimeColumn(columns []query.ColumnDef, name string) error {
 	return nil
 }
 
-func (r *Registry) register(result RegisteredResultType, columns []query.ColumnDef, timeColumn string) error {
+func (r *Registry) register(result RegisteredResultType, columns []query.ColumnDef, timeColumn string, presenter query.RowPresenter) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.results[result.Profile]; exists {
@@ -197,6 +260,7 @@ func (r *Registry) register(result RegisteredResultType, columns []query.ColumnD
 	if err != nil {
 		return fmt.Errorf("result type %q: %w", result.Kind, err)
 	}
+	profile.Presenter = presenter
 	r.results[result.Profile] = registeredResult{RegisteredResultType: result, profile: profile}
 	return nil
 }

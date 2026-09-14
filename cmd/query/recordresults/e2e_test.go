@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/cache"
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/rpc"
@@ -39,6 +40,30 @@ type sampleEvent struct {
 	Slow    bool           `json:"slow"`
 	Tables  []string       `json:"tables"`
 	Detail  map[string]any `json:"detail"`
+}
+
+func (sampleEvent) Columns() []api.ColumnDef {
+	return []api.ColumnDef{
+		api.Column("at").Label("Captured").Kind("timestamp").Build(),
+		api.Column("db").Label("Database").Build(),
+		api.Column("user").Label("User").Build(),
+		api.Column("elapsed_ms").Label("Elapsed").Build(),
+		api.Column("slow").Label("Slow").Build(),
+		api.Column("tables").Label("Tables").Kind("tags").Build(),
+		api.Column("detail").Hidden().Build(),
+	}
+}
+
+func (e sampleEvent) Row() map[string]any {
+	return map[string]any{
+		"at": e.At,
+		"db": api.TableCell{
+			Value:       api.Text{Content: e.DB, Style: "text-blue-500"},
+			FilterValue: e.DB,
+		},
+		"user": e.User, "elapsed_ms": e.Elapsed, "slow": e.Slow,
+		"tables": e.Tables, "detail": e.Detail,
+	}
 }
 
 var (
@@ -192,6 +217,22 @@ var _ = Describe("a record result type served through the profile engine", Order
 		Expect(rows[99]["seq"]).To(BeEquivalentTo(151))
 		Expect(rows[0]).ToNot(HaveKey("stream_id"))
 		Expect(rows[0]["detail"]).To(Equal(map[string]any{"n": float64(250)}))
+	})
+
+	It("restores a typed row's rich cells only in the interactive response", func() {
+		response := server.get(profilePath+"?stream=run-1&limit=1", "application/json+clicky")
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		Expect(response.Body.String()).To(And(
+			ContainSubstring(`"className": "text-blue-500"`),
+			ContainSubstring(`"filterValue": 250`),
+			ContainSubstring(`"kind": "tags"`),
+			ContainSubstring(`"detail"`),
+			ContainSubstring(`{\"n\":250}`),
+		))
+
+		raw := server.get(profilePath+"?stream=run-1&limit=1", "application/json")
+		Expect(raw.Code).To(Equal(http.StatusOK), raw.Body.String())
+		Expect(raw.Body.String()).To(And(ContainSubstring(`"db":"audit"`), Not(ContainSubstring("text-blue-500"))))
 	})
 
 	It("reads a boolean column back as a JSON boolean", func() {

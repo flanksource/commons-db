@@ -69,7 +69,73 @@ func (r *Result) Render(columns []ColumnDef, format string) (string, error) {
 			return "", fmt.Errorf("row %d cannot be rendered: %w", index, err)
 		}
 	}
+	if format == "clicky-json" && r.Presenter != nil {
+		table, err := r.presentedTable(columns)
+		if err != nil {
+			return "", err
+		}
+		return clicky.Format(table, clicky.FormatOptions{Format: format})
+	}
 	return clicky.Format(r.Table(columns), clicky.FormatOptions{Format: format})
+}
+
+func (r *Result) presentedTable(columns []ColumnDef) (api.TextTable, error) {
+	cols := mergePresentedColumns(
+		r.Presenter.Columns(),
+		clickyColumns(columns, r.Rows, r.ColumnFilterKeys, r.ColumnSortKeys),
+	)
+	if len(r.Rows) == 0 {
+		return emptyTable(cols), nil
+	}
+	providers := make([]rowProvider, len(r.Rows))
+	for index, raw := range r.Rows {
+		row, err := r.Presenter.Present(raw)
+		if err != nil {
+			return api.TextTable{}, fmt.Errorf("present row %d: %w", index, err)
+		}
+		for name, value := range raw {
+			if _, exists := row[name]; !exists {
+				row[name] = value
+			}
+		}
+		if err := validateAcyclicValue(row); err != nil {
+			return api.TextTable{}, fmt.Errorf("presented row %d cannot be rendered: %w", index, err)
+		}
+		providers[index] = rowProvider{cols: cols, row: row}
+	}
+	return api.NewTableFrom(providers), nil
+}
+
+func mergePresentedColumns(presented, declared []api.ColumnDef) []api.ColumnDef {
+	byName := make(map[string]api.ColumnDef, len(declared))
+	for _, column := range declared {
+		byName[column.Name] = column
+	}
+	out := make([]api.ColumnDef, len(presented))
+	for index, column := range presented {
+		declaredColumn, exists := byName[column.Name]
+		if exists {
+			if column.Label == "" {
+				column.Label = declaredColumn.Label
+			}
+			if column.Kind == "" {
+				column.Kind = declaredColumn.Kind
+			}
+			if column.Type == "" {
+				column.Type = declaredColumn.Type
+			}
+			if column.Format == "" {
+				column.Format = declaredColumn.Format
+			}
+			if column.Unit == "" {
+				column.Unit = declaredColumn.Unit
+			}
+			column.FilterKey = declaredColumn.FilterKey
+			column.SortKey = declaredColumn.SortKey
+		}
+		out[index] = column
+	}
+	return out
 }
 
 // ClickyColumns maps a profile's declared columns to the shared Clicky contract.
@@ -136,6 +202,9 @@ func emptyTable(cols []api.ColumnDef) api.TextTable {
 			Unit:          col.Unit,
 			FormatOptions: col.FormatOptions,
 			FilterKey:     col.FilterKey,
+			SortKey:       col.SortKey,
+			MinWidth:      col.MinWidthPixels,
+			MaxWidth:      col.MaxWidthPixels,
 		})
 	}
 	return t

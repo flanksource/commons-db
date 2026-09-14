@@ -52,6 +52,10 @@ type Profile struct {
 	// provider's raw row keys are used.
 	Columns []ColumnDef `json:"columns,omitempty" yaml:"columns,omitempty"`
 
+	// Presenter restores rich typed cells for runtime-generated profiles. It is
+	// deliberately not serializable: authored profiles remain data-only.
+	Presenter RowPresenter `json:"-" yaml:"-"`
+
 	// Aliases are ordered CEL projections applied after processors. Later aliases
 	// can reference values produced by earlier aliases.
 	Aliases []AliasDef `json:"aliases,omitempty" yaml:"aliases,omitempty"`

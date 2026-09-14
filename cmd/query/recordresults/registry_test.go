@@ -62,8 +62,9 @@ var _ = Describe("Registry", func() {
 
 		profile, err := registry.Get(ctx, "trace-results/sample_event")
 		Expect(err).ToNot(HaveOccurred())
+		Expect(profile.Presenter).ToNot(BeNil())
 		Expect(profile.Query).To(ContainSubstring(`WHERE "c0" = {{.params.stream}} AND "c1" > {{.params.from}} AND "c1" <= {{.params.to}}`))
-		profile.Query, profile.Columns = "", nil
+		profile.Query, profile.Columns, profile.Presenter = "", nil, nil
 		Expect(profile).To(Equal(query.Profile{
 			Name: "trace-results/sample_event", Virtual: true, ReadOnly: true,
 			Provider: query.ProviderConfig{Type: "sqlite", Connection: "connection://trace-results/index"},
