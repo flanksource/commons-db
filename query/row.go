@@ -1,9 +1,19 @@
 package query
 
+import "github.com/flanksource/clicky/api"
+
 // Row is a single result record keyed by column name. It is a type alias for
 // the generic map so provider code (ported from duty/dataquery) and CEL
 // evaluation can treat rows uniformly.
 type Row = map[string]any
+
+// RowPresenter restores a typed record's table presentation after a provider
+// has returned it as a generic Row. It is used only for the interactive Clicky
+// document; raw exports keep the provider values unchanged.
+type RowPresenter interface {
+	Columns() []api.ColumnDef
+	Present(Row) (map[string]any, error)
+}
 
 // Result is the output of executing a Profile: the tabular rows plus any named
 // context objects (Policy/Plan/Integrations side panels, each
@@ -14,6 +24,10 @@ type Result struct {
 
 	// Rows are the primary tabular records.
 	Rows []Row `json:"rows" yaml:"rows"`
+
+	// Presenter supplies rich cells for the interactive table without changing
+	// the raw values serialized by JSON, CSV, Excel, and other exports.
+	Presenter RowPresenter `json:"-" yaml:"-"`
 
 	// Context holds named side objects keyed by SubQuery name.
 	Context map[string]any `json:"context,omitempty" yaml:"context,omitempty"`

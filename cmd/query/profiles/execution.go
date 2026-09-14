@@ -275,7 +275,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		}
 		output, err := (&query.Result{
 			Profile: p.Name, Rows: page,
-			ColumnFilterKeys: filterKeys, ColumnSortKeys: sortKeys,
+			ColumnFilterKeys: filterKeys, ColumnSortKeys: sortKeys, Presenter: p.Presenter,
 		}).Render(p.Columns, "clicky-json")
 		if err != nil {
 			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
