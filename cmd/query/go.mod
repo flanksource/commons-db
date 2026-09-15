@@ -5,9 +5,9 @@ go 1.26.1
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/flanksource/captain v0.0.60
-	github.com/flanksource/clicky v1.21.61
-	github.com/flanksource/clicky/aichat v1.21.61
-	github.com/flanksource/clicky/valkey v1.21.61
+	github.com/flanksource/clicky v1.21.63
+	github.com/flanksource/clicky/aichat v1.21.63
+	github.com/flanksource/clicky/valkey v1.21.63
 	github.com/flanksource/commons v1.59.0
 	github.com/flanksource/commons-db v0.1.31
 	github.com/glebarez/sqlite v1.11.0
