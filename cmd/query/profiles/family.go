@@ -61,9 +61,9 @@ func (s *Service) resolveSurface(ctx context.Context, name string) (entity.Dynam
 	// key nothing claims is an unknown profile: a store that could not be
 	// listed is the server's failure, and a key two profiles claim is refused
 	// rather than resolved to whichever listed first.
-	stored, err := storedProfileName(ctx, store, name)
+	stored, err := StoredProfileName(ctx, store, name)
 	switch {
-	case errors.Is(err, errProfileSurfaceNotFound):
+	case errors.Is(err, ErrProfileSurfaceNotFound):
 		return entity.DynamicEntitySpec{}, entity.UnknownDynamicEntity(profileFamilyName, name)
 	case errors.Is(err, ErrProfileSurfaceConflict):
 		return entity.DynamicEntitySpec{}, entity.NewStatusError(http.StatusInternalServerError, "profile_surface_conflict", err.Error())

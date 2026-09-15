@@ -181,13 +181,7 @@ func (d ColumnFilterDef) validateArray(column string) error {
 // or JSON representation; document providers apply terms and aggregation
 // semantics directly to multi-valued fields.
 func SupportsArrayFilters(providerType string) bool {
-	switch providerType {
-	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite",
-		"opensearch", "opentelemetry":
-		return true
-	default:
-		return false
-	}
+	return supportsSQLIdentifiers(providerType) || providerType == "opensearch" || providerType == "opentelemetry"
 }
 
 // underNested reports whether field is addressed through container. A document
@@ -322,11 +316,10 @@ func (v ColumnFilterValue) IsZero() bool {
 // to prevent.
 func SupportsNativeFilters(providerType string) bool {
 	switch providerType {
-	case "opensearch", "opentelemetry",
-		"sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite", "k8s":
+	case "opensearch", "opentelemetry", "k8s":
 		return true
 	default:
-		return false
+		return supportsSQLIdentifiers(providerType)
 	}
 }
 
@@ -368,12 +361,7 @@ var sqlIdentifierField = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_$]{0,127}$`)
 // no error, exactly as a computed-CEL column does today, because failing there
 // would break profiles that are valid and working right now.
 func validateSQLFilterField(providerType, owner, field string) error {
-	switch providerType {
-	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
-	default:
-		return nil
-	}
-	if sqlIdentifierField.MatchString(field) {
+	if !supportsSQLIdentifiers(providerType) || sqlIdentifierField.MatchString(field) {
 		return nil
 	}
 	return fmt.Errorf(

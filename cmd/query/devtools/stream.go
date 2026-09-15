@@ -42,7 +42,11 @@ func (s stream) run(w http.ResponseWriter, r *http.Request) {
 	logReplay, logs, cancelLogs := s.records.SubscribeLogs(0)
 	defer cancelLogs()
 
-	flusher := sse.Begin(w)
+	flusher, err := sse.Begin(w)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	for _, record := range recordReplay {
 		if sse.WriteFrame(w, sse.Frame{Event: "record", ID: record.Sequence, Data: record}) != nil {
 			return
@@ -93,7 +97,11 @@ func (s stream) runLogs(w http.ResponseWriter, r *http.Request) {
 	replay, live, cancel := s.records.SubscribeLogs(s.after)
 	defer cancel()
 
-	flusher := sse.Begin(w)
+	flusher, err := sse.Begin(w)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	for _, line := range replay {
 		if sse.WriteFrame(w, logFrame(line)) != nil {
 			return

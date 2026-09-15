@@ -6,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/clicky/formatters"
+
 	"github.com/flanksource/commons-db/context"
 )
 
@@ -28,13 +30,21 @@ func (s SessionState) Terminal() bool {
 
 // Event is one emission from a session: a single streamed row (trace) or a
 // full snapshot for one tick (top).
+//
+// A trace event carries its row twice. Row is the row as the profile's
+// pipeline produced it — what an ndjson export and a session's materialized
+// result read. ClickyRow is the same row as an interactive table page of the
+// profile presents it (RenderClickyPage: the RowPresenter's rich cells, the
+// application/json+clicky row shape), so a live table can insert it beside the
+// rows of a page it fetched and render them alike.
 type Event struct {
-	SessionID string    `json:"sessionId"`
-	Sequence  int64     `json:"sequence"`
-	Time      time.Time `json:"time"`
-	Row       Row       `json:"row,omitempty"`
-	Rows      []Row     `json:"rows,omitempty"`
-	Error     string    `json:"error,omitempty"`
+	SessionID string                `json:"sessionId"`
+	Sequence  int64                 `json:"sequence"`
+	Time      time.Time             `json:"time"`
+	Row       Row                   `json:"row,omitempty"`
+	ClickyRow *formatters.ClickyRow `json:"clickyRow,omitempty"`
+	Rows      []Row                 `json:"rows,omitempty"`
+	Error     string                `json:"error,omitempty"`
 }
 
 // SessionInfo is a JSON-safe snapshot of a session's state.

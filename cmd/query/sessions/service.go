@@ -121,7 +121,18 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name string) {
-	resolved, err := profiles.Resolve(r.Context(), h.store, name)
+	// A surface key is the path the OpenAPI document hands out for a profile's
+	// session start, and the only one a name holding a "/" can take.
+	stored, err := profiles.StoredProfileName(r.Context(), h.store, name)
+	switch {
+	case errors.Is(err, profiles.ErrProfileSurfaceNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case err != nil:
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	resolved, err := profiles.Resolve(r.Context(), h.store, stored)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -149,7 +160,7 @@ func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name stri
 		params[k] = vs[0]
 	}
 
-	session, err := query.ExecuteStream(h.ctx, h.registry, p, params)
+	session, err := query.ExecuteStream(h.sessionContext(r), h.registry, p, params)
 	if err != nil {
 		status := http.StatusBadRequest
 		switch {
@@ -164,6 +175,17 @@ func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name stri
 		return
 	}
 	writeSessionJSON(w, http.StatusCreated, session.Snapshot())
+}
+
+// sessionContext is the context a session r starts runs under, and the one its
+// registry's BeforeRead prepares the read with. It carries r's values — the
+// tenant or environment a routed record store reads from the context — but not
+// r's cancellation, because a session outlives the request that started it; its
+// own duration bound and Stop end it. The server context's capabilities
+// (connection resolver, logger, tracer, namespace, DB) are laid over them by
+// Wrap, as every profile read does.
+func (h *sessionHandler) sessionContext(r *http.Request) dbcontext.Context {
+	return h.ctx.Wrap(context.WithoutCancel(r.Context()))
 }
 
 // sessionSpec is the transport's side of a session request: the HTTP query

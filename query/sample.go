@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -182,13 +183,13 @@ func samplePage(ctx context.Context, profile Profile, params map[string]any, req
 }
 
 func validateSampleReadOnly(providerType, query string, options map[string]any) error {
-	switch providerType {
-	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
+	switch {
+	case supportsSQLIdentifiers(providerType):
 		if err := ValidateReadOnlySQL(query); err != nil {
 			return fmt.Errorf("sampling refused this query: %w", err)
 		}
 		return nil
-	case "http":
+	case providerType == "http":
 		method := "GET"
 		if raw, ok := options["method"]; ok && strings.TrimSpace(fmt.Sprint(raw)) != "" {
 			method = strings.ToUpper(strings.TrimSpace(fmt.Sprint(raw)))
@@ -197,8 +198,8 @@ func validateSampleReadOnly(providerType, query string, options map[string]any) 
 			return fmt.Errorf("sampling requires a read-only HTTP GET request; method %s is not allowed", method)
 		}
 		return nil
-	case "prometheus", "postgrest", "loki", "opensearch", "opentelemetry", "jaeger", "k8s",
-		"cloudwatch", "gcpcloudlogging", "azureloganalytics":
+	case slices.Contains([]string{"prometheus", "postgrest", "loki", "opensearch", "opentelemetry", "jaeger", "k8s",
+		"cloudwatch", "gcpcloudlogging", "azureloganalytics"}, providerType):
 		return nil
 	default:
 		return fmt.Errorf("sampling provider %q is disabled because read-only execution cannot be established", providerType)

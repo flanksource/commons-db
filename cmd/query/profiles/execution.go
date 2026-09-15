@@ -145,7 +145,7 @@ type executionRequest struct {
 func (h *execHandler) resolveExecution(w http.ResponseWriter, r *http.Request, name string) (executionRequest, bool) {
 	name, err := h.storedProfileName(r.Context(), name)
 	switch {
-	case errors.Is(err, errProfileSurfaceNotFound):
+	case errors.Is(err, ErrProfileSurfaceNotFound):
 		writeExecError(w, http.StatusNotFound, "profile_not_found", err)
 		return executionRequest{}, false
 	case errors.Is(err, ErrProfileSurfaceConflict):
@@ -257,26 +257,14 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 		return
 	}
 
-	if export.format == "clicky-json" {
+	if export.format == query.ClickyPageFormat {
 		page, err := query.CollectRows(response.rows)
 		if err != nil {
 			writeExecError(w, http.StatusInternalServerError, "query_failed", err)
 			return
 		}
-		filterKeys, err := p.ColumnFilterKeys()
-		if err != nil {
-			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
-			return
-		}
-		sortKeys, err := p.ColumnSortKeys()
-		if err != nil {
-			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
-			return
-		}
-		output, err := (&query.Result{
-			Profile: p.Name, Rows: page,
-			ColumnFilterKeys: filterKeys, ColumnSortKeys: sortKeys, Presenter: p.Presenter,
-		}).Render(p.Columns, "clicky-json")
+		// The rendering a session presents its streamed rows through too.
+		output, err := query.RenderClickyPage(p, page)
 		if err != nil {
 			writeExecError(w, http.StatusInternalServerError, "render_failed", err)
 			return
@@ -331,11 +319,12 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 }
 
 func (h *execHandler) storedProfileName(ctx stdcontext.Context, name string) (string, error) {
-	return storedProfileName(ctx, h.store, name)
+	return StoredProfileName(ctx, h.store, name)
 }
 
 var (
-	errProfileSurfaceNotFound = errors.New("profile surface not found")
+	// ErrProfileSurfaceNotFound reports a surface key no profile claims.
+	ErrProfileSurfaceNotFound = errors.New("profile surface not found")
 
 	// ErrProfileSurfaceConflict reports two profiles whose names slug to one
 	// surface key. Serving either would be a choice made by listing order, so
@@ -343,12 +332,12 @@ var (
 	ErrProfileSurfaceConflict = errors.New("profile surface claimed by more than one profile")
 )
 
-// storedProfileName maps a surface key (profile-<slug>) to the name the store
+// StoredProfileName maps a surface key (profile-<slug>) to the name the store
 // holds the profile under, and passes any other name through. It lists the
 // store rather than asking it, because only the whole list — virtual profiles
 // included — knows every name a slug can belong to, and whether it belongs to
-// more than one.
-func storedProfileName(ctx stdcontext.Context, store Store, name string) (string, error) {
+// more than one. Every transport addressing a profile by URL maps through it.
+func StoredProfileName(ctx stdcontext.Context, store Store, name string) (string, error) {
 	if !strings.HasPrefix(name, "profile-") {
 		return name, nil
 	}
@@ -364,7 +353,7 @@ func storedProfileName(ctx stdcontext.Context, store Store, name string) (string
 	}
 	switch len(claimed) {
 	case 0:
-		return "", fmt.Errorf("%w: %q", errProfileSurfaceNotFound, name)
+		return "", fmt.Errorf("%w: %q", ErrProfileSurfaceNotFound, name)
 	case 1:
 		return claimed[0], nil
 	default:

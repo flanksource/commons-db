@@ -38,9 +38,13 @@ func (p Profile) validateParams() error {
 	return nil
 }
 
+// supportsSQLIdentifiers reports whether a provider type runs SQL over a result
+// whose columns a filter, a keyset and a time window name: the registry keys
+// the sql provider registers under, and "recordstore", the record result
+// provider (cmd/query/recordresults) that reads a sqlite index through it.
 func supportsSQLIdentifiers(providerType string) bool {
 	switch providerType {
-	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
+	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite", "recordstore":
 		return true
 	default:
 		return false
