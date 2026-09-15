@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	mssql "github.com/microsoft/go-mssqldb"
 )
 
 var postgresTypes = pgtype.NewMap()
@@ -108,6 +109,13 @@ func normalizeSQLValue(databaseType string, value any) (any, error) {
 	typeName := strings.ToLower(databaseType)
 	if typeName == "boolean" {
 		return sqlBoolean(value)
+	}
+	if typeName == "uniqueidentifier" {
+		var identifier mssql.UniqueIdentifier
+		if err := identifier.Scan(value); err != nil {
+			return nil, err
+		}
+		return identifier.String(), nil
 	}
 	if typeName != "json" && typeName != "jsonb" && !strings.HasPrefix(typeName, "_") {
 		return value, nil
