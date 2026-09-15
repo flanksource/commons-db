@@ -110,10 +110,10 @@ type resultServer struct {
 
 func newResultServer() resultServer {
 	ctx := context.Background()
-	source, err := kv.New(kv.Options{Store: cache.NewMemory(), Prefix: "records", TTL: time.Hour, MaxChunkBytes: 1 << 20})
-	Expect(err).ToNot(HaveOccurred())
-	registry := newSampleRegistry(source)
-	_, err = recordstore.AppendTyped(ctx, source, "run-1", "sample_event", sampleEvents(1, 250))
+	schemas := recordstore.NewSchemas()
+	source := newKV(schemas)
+	registry := newSampleRegistry(source, schemas)
+	_, err := recordstore.AppendTyped(ctx, source, "run-1", "sample_event", sampleEvents(1, 250))
 	Expect(err).ToNot(HaveOccurred())
 	_, err = recordstore.AppendTyped(ctx, source, "run-2", "sample_event", sampleEvents(1000, 1004))
 	Expect(err).ToNot(HaveOccurred())
@@ -121,11 +121,11 @@ func newResultServer() resultServer {
 }
 
 // newSampleRegistry wires the way a server does: a sqlite index resolving
-// kinds through the registry's schemas, kept caught up with source.
-func newSampleRegistry(source recordstore.Backend) *recordresults.Registry {
-	schemas := recordstore.NewSchemas()
+// kinds through the schemas source resolves them through, kept caught up with
+// source.
+func newSampleRegistry(source recordstore.Backend, schemas *recordstore.Schemas) *recordresults.Registry {
 	index, err := sqlite.Open(sqlite.Options{
-		Path: filepath.Join(GinkgoT().TempDir(), "index.sqlite"), Schema: schemas.Columns, Derived: true,
+		Path: filepath.Join(GinkgoT().TempDir(), "index.sqlite"), Schema: schemas.Kind, Derived: true,
 		SweepInterval: time.Minute,
 	})
 	Expect(err).ToNot(HaveOccurred())
@@ -144,6 +144,12 @@ func newSampleRegistry(source recordstore.Backend) *recordresults.Registry {
 // snapshots: the registry overlaid on the profile store, its connection and
 // resolver on the query context, and its hook around every read.
 func serveResults(registry *recordresults.Registry) http.Handler {
+	return serveService(newResultService(registry))
+}
+
+// newResultService is the profile service over registry, the one both the CLI
+// actions and the HTTP surface read through.
+func newResultService(registry *recordresults.Registry) *profiles.Service {
 	base, err := profiles.NewFileStore(GinkgoT().TempDir())
 	Expect(err).ToNot(HaveOccurred())
 	overlay, err := profiles.NewOverlayStore(base, registry)
@@ -156,6 +162,10 @@ func serveResults(registry *recordresults.Registry) http.Handler {
 		BeforeExecute: registry.BeforeExecute,
 	})
 	Expect(err).ToNot(HaveOccurred())
+	return service
+}
+
+func serveService(service *profiles.Service) http.Handler {
 	service.RegisterFamily()
 	DeferCleanup(func() { entity.UnregisterDynamicEntityFamily("profile") })
 
@@ -296,19 +306,25 @@ var _ = Describe("a record result type served through the profile engine", Order
 	// Event n is captured n milliseconds after 06:00:00Z. Each bound is written
 	// to a different width or zone than the index stores, which is exactly what a
 	// text comparison of instants gets wrong.
-	DescribeTable("filters by a time range over the index, whatever zone the bound is written in",
-		func(selection string, firstSeq, lastSeq int) {
-			rows, header := server.rows("stream=run-1&limit=500&sort=seq&order=asc&filter.at=" + url.QueryEscape(selection))
+	DescribeTable("reads a time window over the index, whatever zone its edges are written in",
+		func(window string, firstSeq, lastSeq int) {
+			rows, header := server.rows("stream=run-1&limit=500&sort=seq&order=asc&" + window)
 			expected := lastSeq - firstSeq + 1
 			Expect(header.Get("X-Total-Count")).To(Equal(fmt.Sprint(expected)))
 			Expect(rows).To(HaveLen(expected))
 			Expect(rows[0]["seq"]).To(BeEquivalentTo(firstSeq))
 			Expect(rows[expected-1]["seq"]).To(BeEquivalentTo(lastSeq))
 		},
-		Entry("after an instant", ">2026-09-10T06:00:00.1Z", 101, 250),
-		Entry("up to an instant written at +02:00", "<=2026-09-10T08:00:00.010+02:00", 1, 10),
-		Entry("a half-open window", ">=2026-09-10T06:00:00.020Z,<2026-09-10T06:00:00.030Z", 20, 29),
+		Entry("from an instant, inclusive", "from="+url.QueryEscape("2026-09-10T06:00:00.1Z"), 100, 250),
+		Entry("to an instant written at +02:00, exclusive", "to="+url.QueryEscape("2026-09-10T08:00:00.011+02:00"), 1, 10),
+		Entry("a half-open window", "from="+url.QueryEscape("2026-09-10T06:00:00.020Z")+"&to="+url.QueryEscape("2026-09-10T06:00:00.030Z"), 20, 29),
 	)
+
+	It("offers no column filter on the time column its window already bounds", func() {
+		response := server.get(profilePath+"?stream=run-1&filter.at="+url.QueryEscape(">2026-09-10T06:00:00Z"), "application/json")
+		Expect(response.Code).To(Equal(http.StatusBadRequest), response.Body.String())
+		Expect(response.Body.String()).To(ContainSubstring(`column filter \"filter.at\" is not supported`))
+	})
 
 	It("sorts by a requested column ahead of the declared order", func() {
 		rows, _ := server.rows("stream=run-1&sort=db&order=asc&limit=500")
@@ -325,7 +341,7 @@ var _ = Describe("a record result type served through the profile engine", Order
 	})
 
 	It("reads only the seq window it is given", func() {
-		rows, header := server.rows("stream=run-1&from=10&to=20&sort=seq&order=asc")
+		rows, header := server.rows("stream=run-1&afterSeq=10&toSeq=20&sort=seq&order=asc")
 		Expect(header.Get("X-Total-Count")).To(Equal("10"))
 		Expect(column(rows, "seq")).To(Equal([]any{
 			float64(11), float64(12), float64(13), float64(14), float64(15),
@@ -368,11 +384,13 @@ func (unreachableStore) Get(context.Context, string) ([]byte, error) {
 
 var _ = Describe("a record result type whose source is unreachable", func() {
 	It("answers with a 500, since nothing in the request is wrong", func() {
+		schemas := recordstore.NewSchemas()
 		source, err := kv.New(kv.Options{
-			Store: unreachableStore{Store: cache.NewMemory()}, Prefix: "records", TTL: time.Hour, MaxChunkBytes: 1 << 20,
+			Store: unreachableStore{Store: cache.NewMemory()}, Prefix: "records", Schema: schemas.Kind, TTL: time.Hour,
+			MaxChunkBytes: 1 << 20,
 		})
 		Expect(err).ToNot(HaveOccurred())
-		server := resultServer{handler: serveResults(newSampleRegistry(source))}
+		server := resultServer{handler: serveResults(newSampleRegistry(source, schemas))}
 
 		response := server.get(profilePath+"?stream=run-1", "application/json")
 		Expect(response.Code).To(Equal(http.StatusInternalServerError), response.Body.String())

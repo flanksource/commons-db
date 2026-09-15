@@ -128,6 +128,21 @@ var _ = Describe("buildFilteredSQL", func() {
 			Expect(args).To(Equal([]any{float64(100), float64(500)}))
 		})
 
+		// The caller's filters are what a cursor is fingerprinted from, so merging
+		// two edges of one field must not write either into the other.
+		It("merges two range edges on one field without changing the filters it was given", func() {
+			lower := query.ColumnFilterValue{Key: "from", Field: "latency_ms", Kind: query.ColumnFilterKindRange,
+				Range: &query.FilterRange{Min: &query.FilterBound{Value: float64(100), Inclusive: true}}}
+			upper := query.ColumnFilterValue{Key: "to", Field: "latency_ms", Kind: query.ColumnFilterKindRange,
+				Range: &query.FilterRange{Max: &query.FilterBound{Value: float64(500)}}}
+
+			statement, args, err := buildFilteredSQL(dialectPostgres, ordersQuery, []query.ColumnFilterValue{lower, upper})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(statement).To(ContainSubstring(`("latency_ms" >= $1 AND "latency_ms" < $2)`))
+			Expect(args).To(Equal([]any{float64(100), float64(500)}))
+			Expect(lower.Range).To(Equal(&query.FilterRange{Min: &query.FilterBound{Value: float64(100), Inclusive: true}}))
+		})
+
 		// OpenSearch resolves date math itself; SQL has no such thing, so the
 		// operand becomes a real instant here.
 		It("resolves date math to a bound time", func() {
@@ -158,6 +173,18 @@ var _ = Describe("buildFilteredSQL", func() {
 			Expect(err).ToNot(HaveOccurred())
 			Expect(args).To(Equal([]any{"2026-09-10T06:00:00.250000000Z", "2026-09-10T07:00:00.000000000Z"}))
 			Expect(args[0]).To(Equal(sqlitetable.FormatTime(time.Date(2026, 9, 10, 6, 0, 0, 250_000_000, time.UTC))))
+		})
+
+		// A resolved datetime param renders RFC3339Nano, which date math cannot
+		// read past three fractional digits.
+		It("binds an RFC3339 bound of any fractional precision", func() {
+			_, args, err := buildFilteredSQL(dialectSQLite, ordersQuery,
+				[]query.ColumnFilterValue{{
+					Field: "created_at", Kind: query.ColumnFilterKindTime,
+					Range: &query.FilterRange{Min: &query.FilterBound{Value: "2026-09-10T06:00:00.866744123Z", Inclusive: true}},
+				}})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(args).To(Equal([]any{"2026-09-10T06:00:00.866744123Z"}))
 		})
 
 		It("binds a yes/no toggle as a real boolean", func() {

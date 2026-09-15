@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/datetime"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
 )
@@ -36,11 +37,13 @@ import (
 const MaxExportRows = 1_000_000
 
 const (
-	streamParam = "stream"
-	fromParam   = "from"
-	toParam     = "to"
-	seqColumn   = "seq"
-	streamIDKey = "stream_id"
+	streamParam   = "stream"
+	afterSeqParam = "afterSeq"
+	toSeqParam    = "toSeq"
+	fromParam     = "from"
+	toParam       = "to"
+	seqColumn     = "seq"
+	streamIDKey   = "stream_id"
 )
 
 var segmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
@@ -56,7 +59,7 @@ type RegistryOptions struct {
 	Schemas *recordstore.Schemas
 
 	// Index is the sqlite file result profiles read. It must have been opened
-	// with Schemas.Columns as its schema.
+	// with Schemas.Kind as its schema.
 	Index *sqlite.Backend
 
 	// Source is the authoritative backend result streams are written to. The
@@ -79,9 +82,25 @@ type ResultType[T any] struct {
 	Title string
 
 	// TimeColumn, when set, names T's datetime column: it becomes the table's
-	// timestamp and the rows are ordered newest first. Without it rows are in
-	// seq order.
+	// timestamp, the rows are ordered newest first, and the profile takes a
+	// from/to time window over it in place of the column's own filter. Without
+	// it rows are in seq order and there is no time window.
 	TimeColumn string
+
+	// DefaultFrom is where the time window starts when a request names no
+	// from — date math such as now-12h, or RFC3339. Empty leaves the window
+	// open, so a request with no from reads the whole stream. It needs a
+	// TimeColumn.
+	DefaultFrom string
+
+	// KeyColumn, when set, names T's string column identifying a row within a
+	// stream: a stream holds each key once, and appending a row whose key it
+	// already holds skips the row (recordstore.KindOptions.Key).
+	KeyColumn string
+
+	// Retention says how long a stream of the type keeps its rows
+	// (recordstore.KindOptions.Retention).
+	Retention recordstore.Retention
 }
 
 // RegisteredResultType is one registered result type as a caller finds it.
@@ -157,6 +176,9 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 	if err := markTimeColumn(columns, resultType.TimeColumn); err != nil {
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
+	if err := validateDefaultFrom(resultType.TimeColumn, resultType.DefaultFrom); err != nil {
+		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
 	for _, column := range columns {
 		if column.Name == seqColumn || column.Name == streamIDKey {
 			return fmt.Errorf("result type %q declares %q, which every stream table reserves", resultType.Kind, column.Name)
@@ -166,9 +188,31 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 	if err != nil {
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
-	return registry.register(RegisteredResultType{
-		Kind: resultType.Kind, Title: resultType.Title, Profile: registry.prefix + "/" + resultType.Kind,
-	}, columns, resultType.TimeColumn, presenter)
+	return registry.register(registration{
+		result: RegisteredResultType{
+			Kind: resultType.Kind, Title: resultType.Title, Profile: registry.prefix + "/" + resultType.Kind,
+		},
+		columns:     columns,
+		options:     recordstore.KindOptions{Key: resultType.KeyColumn, Retention: resultType.Retention},
+		timeColumn:  resultType.TimeColumn,
+		defaultFrom: resultType.DefaultFrom,
+		presenter:   presenter,
+	})
+}
+
+// validateDefaultFrom refuses a default window start the profile could never
+// resolve, at registration rather than on the first read.
+func validateDefaultFrom(timeColumn, defaultFrom string) error {
+	if defaultFrom == "" {
+		return nil
+	}
+	if timeColumn == "" {
+		return fmt.Errorf("DefaultFrom %q needs a TimeColumn to bound", defaultFrom)
+	}
+	if _, err := datetime.Parse(defaultFrom, time.Now()); err != nil {
+		return fmt.Errorf("DefaultFrom %q is neither date math nor RFC3339: %w", defaultFrom, err)
+	}
+	return nil
 }
 
 type typedRowPresenter[T any] struct {
@@ -243,32 +287,44 @@ func markTimeColumn(columns []query.ColumnDef, name string) error {
 	return nil
 }
 
-func (r *Registry) register(result RegisteredResultType, columns []query.ColumnDef, timeColumn string, presenter query.RowPresenter) error {
+// registration is one result type as RegisterResultType resolved it.
+type registration struct {
+	result      RegisteredResultType
+	columns     []query.ColumnDef
+	options     recordstore.KindOptions
+	timeColumn  string
+	defaultFrom string
+	presenter   query.RowPresenter
+}
+
+func (r *Registry) register(registration registration) error {
+	result := registration.result
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if _, exists := r.results[result.Profile]; exists {
 		return fmt.Errorf("result type %q is already registered", result.Kind)
 	}
-	if err := r.schemas.Register(result.Kind, columns); err != nil {
+	if err := r.schemas.Register(result.Kind, registration.columns, registration.options); err != nil {
 		return err
 	}
 	table, err := r.index.Table(result.Kind)
 	if err != nil {
 		return err
 	}
-	profile, err := r.resultProfile(result.Profile, table, columns, timeColumn)
+	profile, err := r.resultProfile(table, registration)
 	if err != nil {
 		return fmt.Errorf("result type %q: %w", result.Kind, err)
 	}
-	profile.Presenter = presenter
+	profile.Presenter = registration.presenter
 	r.results[result.Profile] = registeredResult{RegisteredResultType: result, profile: profile}
 	return nil
 }
 
 // resultProfile is the profile over one kind's index table. Every edge of the
-// window binds as a placeholder, and seq breaks every tie, which is what lets
-// the engine page it past the first page.
-func (r *Registry) resultProfile(name string, table sqlitetable.Table, columns []query.ColumnDef, timeColumn string) (query.Profile, error) {
+// seq window binds as a placeholder, the time window binds as a filter on the
+// time column so an absent edge leaves it open, and seq breaks every tie, which
+// is what lets the engine page it past the first page.
+func (r *Registry) resultProfile(table sqlitetable.Table, registration registration) (query.Profile, error) {
 	stream, err := table.Physical(streamIDKey)
 	if err != nil {
 		return query.Profile{}, err
@@ -277,22 +333,26 @@ func (r *Registry) resultProfile(name string, table sqlitetable.Table, columns [
 	if err != nil {
 		return query.Profile{}, err
 	}
+	timeColumn := registration.timeColumn
 	order := query.Order{{Column: seqColumn, Unique: true}}
 	if timeColumn != "" {
 		order = append(query.Order{{Column: timeColumn, Desc: true}}, order...)
 	}
-	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber}}, columns...)
+	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber}}, registration.columns...)
 	profileColumns = append(profileColumns, query.ColumnDef{Name: streamIDKey, Type: query.ColumnTypeString, Hidden: true})
 	profile := query.Profile{
-		Name: name, Virtual: true, ReadOnly: true,
+		Name: registration.result.Profile, Virtual: true, ReadOnly: true,
 		Provider: query.ProviderConfig{Type: "sqlite", Connection: r.connectionReference()},
 		Query: table.Select() + fmt.Sprintf(` WHERE %s = {{.params.%s}} AND %s > {{.params.%s}} AND %s <= {{.params.%s}}`,
-			stream, streamParam, seq, fromParam, seq, toParam),
-		Params:  resultParams(),
+			stream, streamParam, seq, afterSeqParam, seq, toSeqParam),
+		Params:  resultParams(timeColumn, registration.defaultFrom),
 		Columns: sqlitetable.ProfileColumns(profileColumns),
 		Order:   order,
 		Limits:  &query.RowLimits{PageSize: 100, MaxPageSize: 500, MaxExportRows: MaxExportRows},
 		Output:  []string{"table", "json", "ndjson", "yaml", "csv", "markdown", "html", "excel", "pdf"},
+	}
+	if err := profile.Validate(); err != nil {
+		return query.Profile{}, err
 	}
 	if _, err := profile.FilterBindings(); err != nil {
 		return query.Profile{}, err
@@ -303,15 +363,30 @@ func (r *Registry) resultProfile(name string, table sqlitetable.Table, columns [
 	return profile, nil
 }
 
-// resultParams address a stream and, optionally, a seq window of it. The
-// window defaults to the whole stream: after seq 0, through the largest seq
-// there can be.
-func resultParams() []query.ParamDef {
-	return []query.ParamDef{
+// resultParams address a stream and, optionally, a seq window of it: after seq
+// 0 through the largest seq there can be, the whole stream, by default. A type
+// with a time column also takes a from/to time window over it, from starting
+// at defaultFrom and both open when nothing names them.
+func resultParams(timeColumn, defaultFrom string) []query.ParamDef {
+	params := []query.ParamDef{
 		{Name: streamParam, Label: "Stream", Required: true, Description: "The record stream to read"},
-		{Name: fromParam, Label: "After seq", Type: query.ParamTypeNumber, Default: int64(0), Description: "Read the rows after this seq"},
-		{Name: toParam, Label: "Through seq", Type: query.ParamTypeNumber, Default: int64(math.MaxInt64), Description: "Read the rows up to and including this seq"},
+		{Name: afterSeqParam, Label: "After seq", Type: query.ParamTypeNumber, Default: int64(0), Description: "Read the rows after this seq"},
+		{Name: toSeqParam, Label: "Through seq", Type: query.ParamTypeNumber, Default: int64(math.MaxInt64), Description: "Read the rows up to and including this seq"},
 	}
+	if timeColumn == "" {
+		return params
+	}
+	from := query.ParamDef{
+		Name: fromParam, Label: "From", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom, Field: timeColumn,
+		Description: "Read the rows at or after this time: date math such as now-12h, or RFC3339",
+	}
+	if defaultFrom != "" {
+		from.Default = defaultFrom
+	}
+	return append(params, from, query.ParamDef{
+		Name: toParam, Label: "To", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo, Field: timeColumn,
+		Description: "Read the rows before this time: date math such as now, or RFC3339",
+	})
 }
 
 func (r *Registry) connectionReference() string {

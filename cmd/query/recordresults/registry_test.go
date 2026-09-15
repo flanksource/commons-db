@@ -34,16 +34,24 @@ func newRegistry() (*recordresults.Registry, *sqlite.Backend) {
 	return registry, index
 }
 
+// newKV is an in-process kv source resolving kinds through schemas.
+func newKV(schemas *recordstore.Schemas) *kv.Backend {
+	source, err := kv.New(kv.Options{
+		Store: cache.NewMemory(), Prefix: "records", Schema: schemas.Kind, TTL: time.Hour, MaxChunkBytes: 1 << 20,
+	})
+	Expect(err).ToNot(HaveOccurred())
+	return source
+}
+
 func newRegistryBackends() (*recordresults.Registry, recordstore.Backend, *sqlite.Backend) {
 	schemas := recordstore.NewSchemas()
 	index, err := sqlite.Open(sqlite.Options{
-		Path: filepath.Join(GinkgoT().TempDir(), "index.sqlite"), Schema: schemas.Columns, Derived: true,
+		Path: filepath.Join(GinkgoT().TempDir(), "index.sqlite"), Schema: schemas.Kind, Derived: true,
 		SweepInterval: time.Minute,
 	})
 	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(index.Close)
-	source, err := kv.New(kv.Options{Store: cache.NewMemory(), Prefix: "records", TTL: time.Hour, MaxChunkBytes: 1 << 20})
-	Expect(err).ToNot(HaveOccurred())
+	source := newKV(schemas)
 	registry, err := recordresults.NewRegistry(recordresults.RegistryOptions{
 		Prefix: "trace-results", Schemas: schemas, Index: index, Source: source, ConnectionName: "index",
 	})
@@ -63,15 +71,23 @@ var _ = Describe("Registry", func() {
 		profile, err := registry.Get(ctx, "trace-results/sample_event")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(profile.Presenter).ToNot(BeNil())
-		Expect(profile.Query).To(ContainSubstring(`WHERE "c0" = {{.params.stream}} AND "c1" > {{.params.from}} AND "c1" <= {{.params.to}}`))
+		Expect(profile.Query).To(HaveSuffix(`WHERE "c0" = {{.params.stream}} AND "c1" > {{.params.afterSeq}} AND "c1" <= {{.params.toSeq}}`))
 		profile.Query, profile.Columns, profile.Presenter = "", nil, nil
 		Expect(profile).To(Equal(query.Profile{
 			Name: "trace-results/sample_event", Virtual: true, ReadOnly: true,
 			Provider: query.ProviderConfig{Type: "sqlite", Connection: "connection://trace-results/index"},
 			Params: []query.ParamDef{
 				{Name: "stream", Label: "Stream", Required: true, Description: "The record stream to read"},
-				{Name: "from", Label: "After seq", Type: query.ParamTypeNumber, Default: int64(0), Description: "Read the rows after this seq"},
-				{Name: "to", Label: "Through seq", Type: query.ParamTypeNumber, Default: int64(math.MaxInt64), Description: "Read the rows up to and including this seq"},
+				{Name: "afterSeq", Label: "After seq", Type: query.ParamTypeNumber, Default: int64(0), Description: "Read the rows after this seq"},
+				{Name: "toSeq", Label: "Through seq", Type: query.ParamTypeNumber, Default: int64(math.MaxInt64), Description: "Read the rows up to and including this seq"},
+				{
+					Name: "from", Label: "From", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeFrom, Field: "at",
+					Description: "Read the rows at or after this time: date math such as now-12h, or RFC3339",
+				},
+				{
+					Name: "to", Label: "To", Type: query.ParamTypeDateTime, Role: query.ParamRoleTimeTo, Field: "at",
+					Description: "Read the rows before this time: date math such as now, or RFC3339",
+				},
 			},
 			Order:  query.Order{{Column: "at", Desc: true}, {Column: "seq", Unique: true}},
 			Limits: &query.RowLimits{PageSize: 100, MaxPageSize: 500, MaxExportRows: recordresults.MaxExportRows},
@@ -80,6 +96,55 @@ var _ = Describe("Registry", func() {
 		Expect(registry.ResultTypes()).To(Equal([]recordresults.RegisteredResultType{
 			{Kind: "sample_event", Title: "Sample events", Profile: "trace-results/sample_event"},
 		}))
+	})
+
+	It("declares only the stream and its seq window for a type without a time column", func() {
+		registry, _ := newRegistry()
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{Kind: "sample_event", Title: "Sample events"})).To(Succeed())
+
+		profile, err := registry.Get(ctx, "trace-results/sample_event")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(profile.Params).To(Equal([]query.ParamDef{
+			{Name: "stream", Label: "Stream", Required: true, Description: "The record stream to read"},
+			{Name: "afterSeq", Label: "After seq", Type: query.ParamTypeNumber, Default: int64(0), Description: "Read the rows after this seq"},
+			{Name: "toSeq", Label: "Through seq", Type: query.ParamTypeNumber, Default: int64(math.MaxInt64), Description: "Read the rows up to and including this seq"},
+		}))
+		Expect(profile.HasTimeRangeParams()).To(BeFalse())
+	})
+
+	It("starts a timed type's window at its default from, and takes the timestamp column's own filter away", func() {
+		registry, _ := newRegistry()
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+			Kind: "sample_event", Title: "Sample events", TimeColumn: "at", DefaultFrom: "now-12h",
+		})).To(Succeed())
+
+		profile, err := registry.Get(ctx, "trace-results/sample_event")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(profile.TimeRangeParams()[query.ParamRoleTimeFrom]).To(HaveField("Default", "now-12h"))
+		keys, err := profile.ColumnFilterKeys()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(keys).ToNot(HaveKey("at"))
+		Expect(keys).To(HaveKeyWithValue("db", "filter.db"))
+	})
+
+	It("declares a keyed, row-retaining kind into the schemas its backends resolve", func() {
+		schemas := recordstore.NewSchemas()
+		index, err := sqlite.Open(sqlite.Options{
+			Path: filepath.Join(GinkgoT().TempDir(), "index.sqlite"), Schema: schemas.Kind, Derived: true, SweepInterval: time.Minute,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(index.Close)
+		registry, err := recordresults.NewRegistry(recordresults.RegistryOptions{
+			Prefix: "trace-results", Schemas: schemas, Index: index, Source: newKV(schemas), ConnectionName: "index",
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+			Kind: "sample_event", Title: "Sample events", KeyColumn: "user", Retention: recordstore.RetainRows,
+		})).To(Succeed())
+
+		schema, err := schemas.Kind("sample_event")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(schema.Options).To(Equal(recordstore.KindOptions{Key: "user", Retention: recordstore.RetainRows}))
 	})
 
 	It("marks the time column as the table's timestamp", func() {
@@ -106,6 +171,18 @@ var _ = Describe("Registry", func() {
 		Entry("a time column that is not a datetime", func(r *recordresults.Registry) error {
 			return recordresults.RegisterResultType(r, recordresults.ResultType[untimedEvent]{Kind: "k", Title: "K", TimeColumn: "at"})
 		}, "datetime"),
+		Entry("a key column the type does not have", func(r *recordresults.Registry) error {
+			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", KeyColumn: "id"})
+		}, `key "id" is not one of its columns`),
+		Entry("a key column that is not a string", func(r *recordresults.Registry) error {
+			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", KeyColumn: "elapsed_ms"})
+		}, "not a string"),
+		Entry("a default from without a time column", func(r *recordresults.Registry) error {
+			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", DefaultFrom: "now-12h"})
+		}, "DefaultFrom"),
+		Entry("a default from that is not a time", func(r *recordresults.Registry) error {
+			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", TimeColumn: "at", DefaultFrom: "yesterday-ish"})
+		}, `"yesterday-ish"`),
 		Entry("a field named after a column every stream table reserves", func(r *recordresults.Registry) error {
 			return recordresults.RegisterResultType(r, recordresults.ResultType[seqEvent]{Kind: "k", Title: "K"})
 		}, `"seq"`),
@@ -194,7 +271,7 @@ var _ = Describe("Registry", func() {
 		func(mutate func(*recordresults.RegistryOptions), message string) {
 			schemas := recordstore.NewSchemas()
 			index, err := sqlite.Open(sqlite.Options{
-				Path: filepath.Join(GinkgoT().TempDir(), "i.sqlite"), Schema: schemas.Columns, SweepInterval: time.Minute,
+				Path: filepath.Join(GinkgoT().TempDir(), "i.sqlite"), Schema: schemas.Kind, SweepInterval: time.Minute,
 			})
 			Expect(err).ToNot(HaveOccurred())
 			DeferCleanup(index.Close)

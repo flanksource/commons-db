@@ -2,6 +2,7 @@ package providers
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -319,7 +320,15 @@ func sqlPredicates(dialect sqlDialect, filters []query.ColumnFilterValue) (squir
 	for _, filter := range filters {
 		merged, seen := byField[filter.Field]
 		if !seen {
+			// The merge below writes into the copy, so it must own everything it
+			// writes: the caller's filters are what a cursor is fingerprinted
+			// from, and a range edge merged into them would stale it.
 			copied := filter
+			copied.Include, copied.Exclude = slices.Clone(filter.Include), slices.Clone(filter.Exclude)
+			if filter.Range != nil {
+				span := *filter.Range
+				copied.Range = &span
+			}
 			byField[filter.Field] = &copied
 			order = append(order, filter.Field)
 			continue
@@ -538,11 +547,17 @@ func sqlBoundValue(dialect sqlDialect, kind query.ColumnFilterKind, value any) (
 	if !ok {
 		return nil, fmt.Errorf("time bound %v is not a string", value)
 	}
-	expression, err := datemath.Parse(text)
+	// An RFC3339 instant is read as one before date math is tried: date math
+	// reads no more than three fractional digits, and a resolved datetime param
+	// renders nine.
+	resolved, err := time.Parse(time.RFC3339Nano, text)
 	if err != nil {
-		return nil, fmt.Errorf("%q is not an RFC3339 time or date math: %w", text, err)
+		expression, mathErr := datemath.Parse(text)
+		if mathErr != nil {
+			return nil, fmt.Errorf("%q is not an RFC3339 time or date math: %w", text, mathErr)
+		}
+		resolved = expression.Time(datemath.WithNow(time.Now().UTC()))
 	}
-	resolved := expression.Time(datemath.WithNow(time.Now().UTC()))
 	if dialect == dialectSQLite {
 		return sqlitetable.FormatTime(resolved), nil
 	}
