@@ -90,6 +90,42 @@ func TestScheduleStoreEnabledIsAColumnNotPartOfTheSpec(t *testing.T) {
 	require.True(t, resumed.Enabled)
 }
 
+func TestScheduleStoreTimingSurvivesRoundTrip(t *testing.T) {
+	store := scheduleStoreForT(t)
+	ctx := t.Context()
+	lastRun := time.Date(2026, time.September, 14, 6, 0, 0, 0, time.UTC)
+	nextRun := lastRun.Add(24 * time.Hour)
+
+	require.NoError(t, store.Save(ctx, nightly()))
+	require.NoError(t, store.SaveSchedule(ctx, task.Schedule{
+		Name: "nightly", Enabled: true, LastRun: &lastRun, NextRun: &nextRun,
+	}))
+
+	stored, err := store.Get(ctx, "nightly")
+	require.NoError(t, err)
+	require.NotNil(t, stored.LastRun)
+	require.NotNil(t, stored.NextRun)
+	require.True(t, stored.LastRun.Equal(lastRun))
+	require.True(t, stored.NextRun.Equal(nextRun))
+	require.True(t, stored.Timing().LastRun.Equal(lastRun))
+	require.True(t, stored.Timing().NextRun.Equal(nextRun))
+}
+
+func TestScheduleStoreProviderResolvesLazily(t *testing.T) {
+	store := scheduleStoreForT(t)
+	resolved := 0
+	provider := schedules.StoreProvider(func() (*schedules.Store, error) {
+		resolved++
+		return store, nil
+	})
+	taskStore := provider.TaskScheduleStore()
+	require.Zero(t, resolved)
+
+	_, err := taskStore.ListSchedules(t.Context())
+	require.NoError(t, err)
+	require.Equal(t, 1, resolved)
+}
+
 func TestScheduleStoreDeleteIsNotFoundTheSecondTime(t *testing.T) {
 	store := scheduleStoreForT(t)
 	ctx := t.Context()

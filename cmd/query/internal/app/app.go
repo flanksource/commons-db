@@ -28,19 +28,19 @@ type Options struct {
 }
 
 type App struct {
-	Runtime       *Runtime
-	Connections   *connections.Service
-	Profiles      *profiles.Service
-	Schedules     *schedules.Service
-	Sessions      *sessions.Runner
-	fileStore     *profiles.FileStore
-	snapshots     *snapshots.Manager
+	Runtime        *Runtime
+	Connections    *connections.Service
+	Profiles       *profiles.Service
+	Schedules      *schedules.Service
+	Sessions       *sessions.Runner
+	fileStore      *profiles.FileStore
+	snapshots      *snapshots.Manager
 	profileStore   profiles.StoreProvider
 	scheduleStore  schedules.StoreProvider
 	scheduleRunner *schedules.Runner
 	scheduler      *task.Scheduler
-	stdout        io.Writer
-	stderr        io.Writer
+	stdout         io.Writer
+	stderr         io.Writer
 }
 
 func New(options Options) (*App, error) {
@@ -105,14 +105,14 @@ func New(options Options) (*App, error) {
 
 	// The schedule store resolves lazily for the same reason the profile one
 	// does: building the command tree must not start a database.
-	scheduleStore := func() (*schedules.Store, error) {
+	scheduleStore := schedules.StoreProvider(func() (*schedules.Store, error) {
 		db, err := runtime.Database()
 		if err != nil {
 			return nil, err
 		}
 		return schedules.NewStore(db)
-	}
-	scheduler := task.NewScheduler(task.SchedulerOptions{})
+	})
+	scheduler := task.NewScheduler(task.SchedulerOptions{Store: scheduleStore.TaskScheduleStore()})
 	scheduleRunner, err := schedules.NewRunner(schedules.RunnerOptions{
 		Store: scheduleStore, Profiles: profileStore, Context: runtime.Context,
 		Reconcile: profileService, Reporter: schedules.NewReporter(),
