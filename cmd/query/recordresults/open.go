@@ -58,8 +58,9 @@ type OpenOptions struct {
 // Results is an open result store: the backend captures append to, and the
 // registry that serves what they appended through the profile engine.
 type Results struct {
-	// Backend is what a capture appends its rows to.
-	Backend recordstore.Backend
+	// Backend is what a capture appends its rows to. Appending through it wakes
+	// every session following the stream.
+	Backend *recordstore.Notifier
 
 	// Registry serves the result types over the index.
 	Registry *Registry
@@ -121,16 +122,21 @@ func (r *Results) open(options OpenOptions) error {
 	if err != nil {
 		return err
 	}
+	notifier, err := recordstore.NewNotifier(source, recordstore.NotifierOptions{RecheckInterval: FollowRecheckInterval})
+	if err != nil {
+		return fmt.Errorf("result store: %w", err)
+	}
 	registry, err := NewRegistry(RegistryOptions{
-		Prefix: options.Prefix, Schemas: schemas, Index: index, Source: source, ConnectionName: options.ConnectionName,
+		Prefix: options.Prefix, Schemas: schemas, Index: index, Source: notifier, ConnectionName: options.ConnectionName,
 	})
 	if err != nil {
 		return err
 	}
+	r.closers = append(r.closers, registry)
 	if err := options.Register(registry); err != nil {
 		return fmt.Errorf("result store: register result types: %w", err)
 	}
-	r.Backend, r.Registry = source, registry
+	r.Backend, r.Registry = notifier, registry
 	return nil
 }
 

@@ -56,6 +56,10 @@ var _ sessionLibrary = (*sessions.Runner)(nil)
 
 var _ func(recordresults.OpenOptions) (*recordresults.Results, error) = recordresults.Open
 
+// A host mounting the sessions API over result profiles prepares every
+// session's read with the registry.
+var _ = query.RegistryOptions{BeforeRead: (&recordresults.Registry{}).BeforeRead}
+
 var _ = Describe("public constructors", func() {
 	It("rejects incomplete dependencies", func() {
 		_, err := connections.New(connections.Options{})

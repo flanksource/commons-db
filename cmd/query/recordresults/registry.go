@@ -64,7 +64,9 @@ type RegistryOptions struct {
 
 	// Source is the authoritative backend result streams are written to. The
 	// registry constructs the Indexer that mirrors it into Index, so preparation
-	// and profile reads cannot accidentally name different indexes.
+	// and profile reads cannot accidentally name different indexes. A result
+	// type that follows its streams (ResultType.Follow) needs a
+	// *recordstore.Notifier here, which captures must append through.
 	Source recordstore.Backend
 
 	// ConnectionName names the index's virtual connection,
@@ -101,6 +103,12 @@ type ResultType[T any] struct {
 	// Retention says how long a stream of the type keeps its rows
 	// (recordstore.KindOptions.Retention).
 	Retention recordstore.Retention
+
+	// Follow lets a session tail the type's streams: its profile reads through
+	// the ProviderType provider, which streams each appended row, rather than
+	// plain sqlite. Only a type whose rows each stand alone should follow — one
+	// listed as the latest row per id would stream superseded rows.
+	Follow bool
 }
 
 // RegisteredResultType is one registered result type as a caller finds it.
@@ -118,6 +126,7 @@ type Registry struct {
 	schemas    *recordstore.Schemas
 	index      *sqlite.Backend
 	indexer    *recordstore.Indexer
+	notifier   *recordstore.Notifier
 	connection models.Connection
 
 	mu      sync.RWMutex
@@ -143,20 +152,29 @@ func NewRegistry(options RegistryOptions) (*Registry, error) {
 	case !segmentPattern.MatchString(options.ConnectionName):
 		return nil, fmt.Errorf("result registry connection name %q must be one segment of letters, digits, . _ -", options.ConnectionName)
 	}
-	indexer, err := recordstore.NewIndexer(options.Source, options.Index)
+	source := options.Source
+	notifier, notifies := source.(*recordstore.Notifier)
+	if notifies {
+		source = notifier.Unwrap()
+	}
+	indexer, err := recordstore.NewIndexer(source, options.Index)
 	if err != nil {
 		return nil, fmt.Errorf("result registry: %w", err)
 	}
 	now := time.Now()
-	return &Registry{
-		prefix: options.Prefix, schemas: options.Schemas, index: options.Index, indexer: indexer,
+	registry := &Registry{
+		prefix: options.Prefix, schemas: options.Schemas, index: options.Index, indexer: indexer, notifier: notifier,
 		connection: models.Connection{
 			ID: uuid.New(), Name: options.ConnectionName, Namespace: options.Prefix, Source: "recordstore",
 			Type: models.ConnectionTypeSQLite, URL: options.Index.ReadDSN(), Virtual: true, ReadOnly: true,
 			CreatedAt: now, UpdatedAt: now,
 		},
 		results: map[string]registeredResult{},
-	}, nil
+	}
+	if notifies {
+		followRegistries.add(registry)
+	}
+	return registry, nil
 }
 
 // RegisterResultType declares T's kind: its columns (reflected through
@@ -197,6 +215,7 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		timeColumn:  resultType.TimeColumn,
 		defaultFrom: resultType.DefaultFrom,
 		presenter:   presenter,
+		follow:      resultType.Follow,
 	})
 }
 
@@ -295,6 +314,7 @@ type registration struct {
 	timeColumn  string
 	defaultFrom string
 	presenter   query.RowPresenter
+	follow      bool
 }
 
 func (r *Registry) register(registration registration) error {
@@ -303,6 +323,9 @@ func (r *Registry) register(registration registration) error {
 	defer r.mu.Unlock()
 	if _, exists := r.results[result.Profile]; exists {
 		return fmt.Errorf("result type %q is already registered", result.Kind)
+	}
+	if registration.follow && r.notifier == nil {
+		return fmt.Errorf("result type %q follows its streams, which needs the registry's Source to be a *recordstore.Notifier", result.Kind)
 	}
 	if err := r.schemas.Register(result.Kind, registration.columns, registration.options); err != nil {
 		return err
@@ -340,9 +363,13 @@ func (r *Registry) resultProfile(table sqlitetable.Table, registration registrat
 	}
 	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber}}, registration.columns...)
 	profileColumns = append(profileColumns, query.ColumnDef{Name: streamIDKey, Type: query.ColumnTypeString, Hidden: true})
+	providerType := indexProviderType
+	if registration.follow {
+		providerType = ProviderType
+	}
 	profile := query.Profile{
 		Name: registration.result.Profile, Virtual: true, ReadOnly: true,
-		Provider: query.ProviderConfig{Type: "sqlite", Connection: r.connectionReference()},
+		Provider: query.ProviderConfig{Type: providerType, Connection: r.connectionReference()},
 		Query: table.Select() + fmt.Sprintf(` WHERE %s = {{.params.%s}} AND %s > {{.params.%s}} AND %s <= {{.params.%s}}`,
 			stream, streamParam, seq, afterSeqParam, seq, toSeqParam),
 		Params:  resultParams(timeColumn, registration.defaultFrom),
