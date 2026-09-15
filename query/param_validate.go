@@ -17,10 +17,10 @@ func (p Profile) validateParams() error {
 		}
 		seen[param.Name] = true
 
-		if strings.HasPrefix(param.Name, columnFilterPrefix) {
+		if strings.HasPrefix(param.Name, ColumnFilterPrefix) {
 			return fmt.Errorf(
 				"profile %q param %q must not use the %q prefix reserved for column filters",
-				p.Name, param.Name, columnFilterPrefix)
+				p.Name, param.Name, ColumnFilterPrefix)
 		}
 		if param.Type == ParamTypeIdentifier && !supportsSQLIdentifiers(p.Provider.Type) {
 			return fmt.Errorf(
@@ -63,6 +63,9 @@ func (p Profile) validateParamField(param ParamDef) error {
 	if param.Field == "" {
 		return nil
 	}
+	if param.IsTimeRange() {
+		return p.validateTimeParamField(param)
+	}
 	if param.Type != ParamTypeList && param.Type != ParamTypeLabels {
 		return fmt.Errorf(
 			"profile %q param %q sets field but is type %q; only a list parameter binds to a backend field",
@@ -79,6 +82,23 @@ func (p Profile) validateParamField(param ParamDef) error {
 		return err
 	}
 	return nil
+}
+
+// validateTimeParamField accepts a field on a time-from/time-to param only where
+// it compiles to a range over one result column: a SQL provider. Every other
+// provider that honours the time roles folds the pair into its own native
+// construct, where a field would bound the window twice.
+func (p Profile) validateTimeParamField(param ParamDef) error {
+	owner := fmt.Sprintf("profile %q param %q", p.Name, param.Name)
+	if !supportsSQLIdentifiers(p.Provider.Type) {
+		return fmt.Errorf("%s binds its %s role to field %q, which only a SQL provider applies, not %q",
+			owner, param.Role, param.Field, p.Provider.Type)
+	}
+	if param.Type != ParamTypeDateTime && param.Type != ParamTypeDate {
+		return fmt.Errorf("%s binds its %s role to field %q, so it must be a datetime or date, not %q",
+			owner, param.Role, param.Field, param.Type)
+	}
+	return validateSQLFilterField(p.Provider.Type, owner, param.Field)
 }
 
 // validateParamOptions rejects static options that cannot survive the

@@ -94,6 +94,11 @@ type ParamDef struct {
 	// template and an esdsl multi-operand condition see a plain list either way.
 	// Only a provider that applies native filters may declare it — Validate
 	// rejects the rest, so an exclusion can never be silently dropped.
+	//
+	// On a SQL profile's time-from or time-to param, Field is the result column
+	// the edge bounds: time-from as >= and time-to as <, compiled the way a time
+	// column filter is, so the query needs no template for an edge that may be
+	// absent and an absent edge leaves the window open.
 	Field string `json:"field,omitempty" yaml:"field,omitempty"`
 
 	// Required fails execution when no value (and no Default) is supplied.
@@ -176,8 +181,30 @@ func resolveParams(defs []ParamDef, supplied map[string]any, now time.Time) (map
 			val = strings.ReplaceAll(def.Template, "{value}", fmt.Sprintf("%v", val))
 		}
 		resolved[def.Name] = val
+		if def.IsTimeRange() && def.Field != "" {
+			filters = append(filters, def.timeRangeFilter(val))
+		}
 	}
 	return resolved, filters, nil
+}
+
+// IsTimeRange reports whether the param is one edge of the profile's time
+// window.
+func (d ParamDef) IsTimeRange() bool {
+	return d.Role == ParamRoleTimeFrom || d.Role == ParamRoleTimeTo
+}
+
+// timeRangeFilter is the resolved edge as a time range on the param's field:
+// the window includes its start and excludes its end, so two adjacent windows
+// never both hold the row on their shared edge.
+func (d ParamDef) timeRangeFilter(value any) ColumnFilterValue {
+	bound := &FilterBound{Value: value}
+	span := &FilterRange{Max: bound}
+	if d.Role == ParamRoleTimeFrom {
+		bound.Inclusive = true
+		span = &FilterRange{Min: bound}
+	}
+	return ColumnFilterValue{Key: d.Name, Field: d.Field, Kind: ColumnFilterKindTime, Range: span}
 }
 
 // coerceList decodes a multi-value selection. The wire form is the one column

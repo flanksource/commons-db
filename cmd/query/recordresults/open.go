@@ -144,7 +144,7 @@ func (r *Results) openFiles(options OpenOptions, schemas *recordstore.Schemas) (
 	source := options.Source
 	if source == nil {
 		local, err := ndjson.New(ndjson.Options{
-			Dir: filepath.Join(settings.Dir, ndjsonDir), MaxBytes: settings.NDJSONMaxBytes,
+			Dir: filepath.Join(settings.Dir, ndjsonDir), Schema: schemas.Kind, MaxBytes: settings.NDJSONMaxBytes,
 			KeepStreams: settings.NDJSONKeepStreams, TTL: settings.TTL,
 		})
 		if err != nil {
@@ -165,7 +165,7 @@ func (r *Results) openSQLite(settings recordstore.Settings, name string, schemas
 		ttl = 0
 	}
 	file, err := sqlite.Open(sqlite.Options{
-		Path: filepath.Join(settings.Dir, name), Schema: schemas.Columns, TTL: ttl, Derived: derived,
+		Path: filepath.Join(settings.Dir, name), Schema: schemas.Kind, TTL: ttl, Derived: derived,
 		SweepInterval: sweepInterval,
 	})
 	if err != nil {

@@ -9,13 +9,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/flanksource/clicky/cache"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
 	"github.com/flanksource/commons-db/recordstore"
-	"github.com/flanksource/commons-db/recordstore/kv"
 )
 
 // tenantKey carries the tenant a request runs for, the way a server's
@@ -38,6 +36,19 @@ func registerSampleEvents(registry *recordresults.Registry) error {
 	return recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
 		Kind: "sample_event", Title: "Sample events", TimeColumn: "at",
 	})
+}
+
+// kvRouter routes each tenant to an in-process kv store of its own, resolving
+// kinds through schemas.
+func kvRouter(schemas *recordstore.Schemas) *recordstore.Router {
+	router, err := recordstore.NewRouter(recordstore.RouterOptions{
+		Route: tenantOf,
+		Open: func(context.Context, string) (recordstore.Backend, error) {
+			return newKV(schemas), nil
+		},
+	})
+	Expect(err).ToNot(HaveOccurred())
+	return router
 }
 
 func localSettings(backend recordstore.BackendKind) recordstore.Settings {
@@ -96,19 +107,14 @@ var _ = Describe("Open", func() {
 	})
 
 	It("keeps a routed source's streams to the tenant that wrote them", func() {
-		router, err := recordstore.NewRouter(recordstore.RouterOptions{
-			Route: tenantOf,
-			Open: func(context.Context, string) (recordstore.Backend, error) {
-				return kv.New(kv.Options{Store: cache.NewMemory(), Prefix: "records", TTL: time.Hour, MaxChunkBytes: 1 << 20})
-			},
-		})
-		Expect(err).ToNot(HaveOccurred())
+		schemas := recordstore.NewSchemas()
+		router := kvRouter(schemas)
 		settings := localSettings("")
 		results := openResults(recordresults.OpenOptions{
 			Prefix: "trace-results", ConnectionName: "index", Settings: settings, Source: router,
-			Register: registerSampleEvents,
+			Schemas: schemas, Register: registerSampleEvents,
 		})
-		_, err = recordstore.AppendTyped(forTenant("a"), results.Backend, "run-1", "sample_event", sampleEvents(1, 7))
+		_, err := recordstore.AppendTyped(forTenant("a"), results.Backend, "run-1", "sample_event", sampleEvents(1, 7))
 		Expect(err).ToNot(HaveOccurred())
 		handler := serveResults(results.Registry)
 
@@ -127,13 +133,7 @@ var _ = Describe("Open", func() {
 	})
 
 	It("closes what it opened, the caller's source included", func() {
-		router, err := recordstore.NewRouter(recordstore.RouterOptions{
-			Route: tenantOf,
-			Open: func(context.Context, string) (recordstore.Backend, error) {
-				return kv.New(kv.Options{Store: cache.NewMemory(), Prefix: "records", TTL: time.Hour, MaxChunkBytes: 1 << 20})
-			},
-		})
-		Expect(err).ToNot(HaveOccurred())
+		router := kvRouter(recordstore.NewSchemas())
 		results, err := recordresults.Open(recordresults.OpenOptions{
 			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(""), Source: router,
 			Register: registerSampleEvents,
@@ -169,14 +169,8 @@ var _ = Describe("Open", func() {
 	)
 
 	It("closes the caller's source when it fails to open", func() {
-		router, err := recordstore.NewRouter(recordstore.RouterOptions{
-			Route: tenantOf,
-			Open: func(context.Context, string) (recordstore.Backend, error) {
-				return kv.New(kv.Options{Store: cache.NewMemory(), Prefix: "records", TTL: time.Hour, MaxChunkBytes: 1 << 20})
-			},
-		})
-		Expect(err).ToNot(HaveOccurred())
-		_, err = recordresults.Open(recordresults.OpenOptions{
+		router := kvRouter(recordstore.NewSchemas())
+		_, err := recordresults.Open(recordresults.OpenOptions{
 			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(""), Source: router,
 			Register: func(*recordresults.Registry) error { return errors.New("bad result type") },
 		})
@@ -191,9 +185,9 @@ var _ = Describe("Open", func() {
 			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(recordstore.BackendSQLite),
 			Schemas: schemas, Register: registerSampleEvents,
 		})
-		columns, err := schemas.Columns("sample_event")
+		schema, err := schemas.Kind("sample_event")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(columns).To(ContainElement(HaveField("Name", "db")))
+		Expect(schema.Columns).To(ContainElement(HaveField("Name", "db")))
 	})
 
 	It("creates the directory the files go in", func() {
