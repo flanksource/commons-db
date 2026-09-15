@@ -82,10 +82,15 @@ jobs:
           echo "COMMONS_DB_URL=$url" >> "$GITHUB_ENV"
 
       # ./e2e is owned by e2e.yml, which also provisions opensearch and valkey.
+      # gavel auto-runs -bench=. for packages whose plain go test files hold only
+      # Benchmark* funcs; cmd/query/recordresults is one, and its matrix (datasets
+      # up to 1 GiB per backend) cannot fit --test-timeout. --bench=^$ still
+      # compiles the benchmarks but runs none; --bench=false would instead re-run
+      # that package's ginkgo suite under plain go test.
       - name: Test with gavel
         uses: flanksource/gavel@43a9189b99e71ed928f418e01cd34aa797c2c0e0 # v0.0.54
         with:
-          args: test --ignore ./e2e --timeout 25m --test-timeout 10m
+          args: test --ignore ./e2e --bench=^$ --timeout 25m --test-timeout 10m
           artifact-name: gavel-test
           comment-header: gavel-test
           # GITHUB_TOKEN is read-only on fork PRs, so the sticky comment would fail.
