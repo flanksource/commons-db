@@ -18,14 +18,27 @@ import (
 	"github.com/flanksource/commons-db/recordstore"
 )
 
-// Kind is the kind every conformance stream is written under.
-const Kind = "sample"
+const (
+	// Kind is the kind most conformance streams are written under: unkeyed,
+	// kept whole until the stream expires.
+	Kind = "sample"
+
+	// KeyedKind holds each name once per stream.
+	KeyedKind = "keyed"
+
+	// RollingKind holds each name once and keeps each row TTL after its append.
+	RollingKind = "rolling"
+)
 
 // ExpiryTTL is the ttl the expiry spec sets. It is short because the
 // in-process kv store expires against the wall clock, so its Elapse sleeps.
 const ExpiryTTL = 200 * time.Millisecond
 
-// Columns is Kind's schema, for a backend that stores rows by column.
+// TTL is the stream ttl every conformance backend is opened with.
+const TTL = time.Hour
+
+// Columns is the columns of every conformance kind, for a backend that stores
+// rows by column.
 var Columns = []query.ColumnDef{
 	{Name: "name", Type: query.ColumnTypeString},
 	{Name: "count", Type: query.ColumnTypeNumber},
@@ -33,22 +46,44 @@ var Columns = []query.ColumnDef{
 	{Name: "detail", Type: query.ColumnTypeJSON},
 }
 
-// Schema resolves Kind to Columns and refuses every other kind.
-func Schema(kind string) ([]query.ColumnDef, error) {
-	if kind != Kind {
-		return nil, fmt.Errorf("kind %q has no schema", kind)
+var schemas = func() *recordstore.Schemas {
+	catalog := recordstore.NewSchemas()
+	for kind, options := range map[string]recordstore.KindOptions{
+		Kind:        {},
+		KeyedKind:   {Key: "name"},
+		RollingKind: {Key: "name", Retention: recordstore.RetainRows},
+	} {
+		if err := catalog.Register(kind, Columns, options); err != nil {
+			panic(err)
+		}
 	}
-	return Columns, nil
+	return catalog
+}()
+
+// Schema resolves the conformance kinds and refuses every other kind.
+func Schema(kind string) (recordstore.KindSchema, error) {
+	return schemas.Kind(kind)
 }
 
 // Harness opens the backend under test.
 type Harness struct {
-	// Backend is a fresh, empty backend.
+	// Backend is a fresh, empty backend, opened with Schema and TTL.
 	Backend recordstore.Backend
 
 	// Elapse moves the backend's clock forward by d and reaps whatever that
 	// expired, so a stream whose ttl is shorter than d is gone afterwards.
 	Elapse func(d time.Duration)
+
+	// Advance moves the backend's clock forward by d and reaps nothing, so
+	// what a spec sees after it is only what the backend itself decided.
+	Advance func(d time.Duration)
+
+	// Now reads the backend's clock.
+	Now func() time.Time
+
+	// Reopen opens another backend over the storage Backend wrote, sharing
+	// its clock, as a process restarting would.
+	Reopen func() recordstore.Backend
 }
 
 // SampleRow is the n-th conformance row.
@@ -104,6 +139,9 @@ func Conformance(open func() Harness) {
 	s.refusalSpecs()
 	s.concurrencySpecs()
 	s.expirySpecs()
+	s.keySpecs()
+	s.trimSpecs()
+	s.retentionSpecs()
 }
 
 // suite is the state every conformance spec reads, set before each one.
@@ -114,9 +152,25 @@ type suite struct {
 }
 
 func (s *suite) appendRows(stream string, rows []recordstore.Row) recordstore.Window {
-	window, err := s.backend.Append(s.ctx, stream, Kind, rows)
+	return s.appendKind(stream, Kind, rows).Window
+}
+
+func (s *suite) appendKind(stream, kind string, rows []recordstore.Row) recordstore.AppendResult {
+	result, err := s.backend.Append(s.ctx, stream, kind, rows)
 	gomega.Expect(err).ToNot(gomega.HaveOccurred())
-	return window
+	return result
+}
+
+func (s *suite) meta(stream string) recordstore.Meta {
+	meta, err := s.backend.Meta(s.ctx, stream)
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+	return meta
+}
+
+// reopen replaces the backend with another over the same storage.
+func (s *suite) reopen() {
+	gomega.Expect(s.backend.Close()).To(gomega.Succeed())
+	s.backend = s.harness.Reopen()
 }
 
 func (s *suite) appendSpecs() {
@@ -157,7 +211,7 @@ func (s *suite) appendSpecs() {
 		// below is what holds ExpiresAt to account.
 		updated.UpdatedAt, updated.ExpiresAt = time.Time{}, nil
 		gomega.Expect(updated).To(gomega.Equal(recordstore.Meta{
-			Stream: "run-1", Kind: Kind, Total: 4, HighSeq: 4, Generation: generation,
+			Stream: "run-1", Kind: Kind, Total: 4, LowSeq: 1, HighSeq: 4, Generation: generation,
 		}))
 	})
 
@@ -187,6 +241,8 @@ func (s *suite) refusalSpecs() {
 		gomega.Expect(errors.Is(err, recordstore.ErrNotFound)).To(gomega.BeTrue(), "Scan: %v", err)
 		err = s.backend.Expire(s.ctx, "missing", time.Hour)
 		gomega.Expect(errors.Is(err, recordstore.ErrNotFound)).To(gomega.BeTrue(), "Expire: %v", err)
+		_, err = s.backend.Trim(s.ctx, "missing", time.Now())
+		gomega.Expect(errors.Is(err, recordstore.ErrNotFound)).To(gomega.BeTrue(), "Trim: %v", err)
 	})
 
 	ginkgo.It("refuses an invalid stream id or kind before writing anything", func() {

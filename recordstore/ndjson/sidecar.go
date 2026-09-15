@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/flanksource/commons-db/recordstore"
@@ -28,7 +29,7 @@ func (b *Backend) find(stream string) (sidecar, error) {
 		if !kind.IsDir() {
 			continue
 		}
-		if _, metaPath := b.paths(kind.Name(), stream); fileExists(metaPath) {
+		if metaPath := b.metaPath(kind.Name(), stream); fileExists(metaPath) {
 			found = append(found, metaPath)
 		}
 	}
@@ -66,16 +67,35 @@ func readSidecar(path string) (sidecar, error) {
 	if err := json.Unmarshal(content, &state); err != nil {
 		return sidecar{}, fmt.Errorf("decode %s: %w", path, err)
 	}
-	if err := state.Meta.Validate(); err != nil {
+	if err := state.Validate(); err != nil {
 		return sidecar{}, fmt.Errorf("decode %s: %w", path, err)
 	}
+	if !ownsDataFile(state.Stream, state.File) {
+		return sidecar{}, fmt.Errorf("decode %s: data file %q is not one of stream %q's", path, state.File, state.Stream)
+	}
 	return state, nil
+}
+
+// ownsDataFile reports whether name is a data file of stream: <stream>.ndjson,
+// or <stream>@<low seq>.ndjson once it was trimmed. A stream id never holds an
+// @, so no other stream's file can match.
+func ownsDataFile(stream, name string) bool {
+	if name == stream+dataSuffix {
+		return true
+	}
+	seq, prefixed := strings.CutPrefix(name, stream+trimmedSeparator)
+	seq, suffixed := strings.CutSuffix(seq, dataSuffix)
+	if !prefixed || !suffixed || seq == "" {
+		return false
+	}
+	_, err := strconv.ParseUint(seq, 10, 63)
+	return err == nil
 }
 
 // writeSidecar replaces the sidecar through a rename, so a reader sees the old
 // metadata or the new, never half of either.
 func (b *Backend) writeSidecar(state sidecar) error {
-	_, path := b.paths(state.Kind, state.Stream)
+	path := b.metaPath(state.Kind, state.Stream)
 	content, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("stream %q: encode metadata: %w", state.Stream, err)
@@ -90,12 +110,31 @@ func (b *Backend) writeSidecar(state sidecar) error {
 	return nil
 }
 
+// remove deletes the stream's sidecar and every data file of it: the one the
+// sidecar names, and any a trim interrupted before or after its commit left.
 func (b *Backend) remove(state sidecar) error {
-	dataPath, metaPath := b.paths(state.Kind, state.Stream)
-	for _, path := range []string{metaPath, dataPath} {
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return fmt.Errorf("stream %q: remove %s: %w", state.Stream, path, err)
+	if err := os.Remove(b.metaPath(state.Kind, state.Stream)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("stream %q: remove its metadata: %w", state.Stream, err)
+	}
+	dir := filepath.Join(b.dir, state.Kind)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return fmt.Errorf("stream %q: list %s: %w", state.Stream, dir, err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !ownsDataFile(state.Stream, entry.Name()) {
+			continue
 		}
+		if err := removeFile(filepath.Join(dir, entry.Name())); err != nil {
+			return fmt.Errorf("stream %q: %w", state.Stream, err)
+		}
+	}
+	return nil
+}
+
+func removeFile(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("remove %s: %w", path, err)
 	}
 	return nil
 }

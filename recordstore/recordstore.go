@@ -5,7 +5,10 @@
 // A stream is named by a stream id and holds rows of one kind. Every row gets
 // a per-stream seq, contiguous from 1, which is the only position a reader
 // resumes from — never a timestamp or a key, which neither order nor identify a
-// row reliably.
+// row's position reliably. A kind may still declare a key, and then a stream
+// holds each key once, which is what makes re-ingesting an overlapping source
+// window idempotent. Rows leave a stream only from its low end: the whole
+// stream expires, or Trim removes the oldest appends.
 //
 // Backends live in subpackages: kv (a clicky cache.Store: in-process memory or
 // valkey/redis), sqlite (a file that is also the query index a profile reads),
@@ -54,16 +57,26 @@ type Window struct {
 // Len is the number of seqs the window spans.
 func (w Window) Len() int64 { return w.To - w.From + 1 }
 
+// AppendResult is what one append stored: the window its rows were numbered
+// into, and how many rows it skipped because their key was already stored.
+type AppendResult struct {
+	Window  Window `json:"window"`
+	Skipped int64  `json:"skipped"`
+}
+
 // Meta describes a stream.
 type Meta struct {
 	Stream     string `json:"stream"`
 	Kind       string `json:"kind"`
 	Generation string `json:"generation"`
 
-	// Total is how many rows the stream holds and HighSeq the seq of the last
-	// one. A stream only ever appends, so they are equal in a durable backend;
-	// they are both reported because an index mirroring it may lag.
+	// Total is how many rows the stream holds, LowSeq the seq of the first one
+	// and HighSeq the seq of the last. Rows only leave a stream from its low end
+	// (Trim), so Total is HighSeq-LowSeq+1 in a durable backend; all three are
+	// reported because an index mirroring it may lag. An empty stream has
+	// LowSeq HighSeq+1.
 	Total   int64 `json:"total"`
+	LowSeq  int64 `json:"lowSeq"`
 	HighSeq int64 `json:"highSeq"`
 
 	UpdatedAt time.Time `json:"updatedAt"`
@@ -80,7 +93,7 @@ type Meta struct {
 // NewStreamMeta starts one incarnation of stream. Generation distinguishes a
 // stream id reused after expiry from the rows an index previously held for it.
 func NewStreamMeta(stream, kind string, now time.Time) Meta {
-	return Meta{Stream: stream, Kind: kind, Generation: uuid.NewString(), UpdatedAt: now}
+	return Meta{Stream: stream, Kind: kind, Generation: uuid.NewString(), LowSeq: 1, UpdatedAt: now}
 }
 
 // Validate refuses metadata that cannot identify one stream incarnation.
@@ -93,6 +106,9 @@ func (m Meta) Validate() error {
 	}
 	if m.Generation == "" {
 		return fmt.Errorf("stream %q has no generation", m.Stream)
+	}
+	if m.LowSeq < 1 || m.LowSeq > m.HighSeq+1 {
+		return fmt.Errorf("stream %q has low seq %d, which must be between 1 and its high seq %d plus one", m.Stream, m.LowSeq, m.HighSeq)
 	}
 	return nil
 }
@@ -107,14 +123,28 @@ type Backend interface {
 	// Append adds rows to stream, creating it under kind when it does not
 	// exist, and returns the window the rows were numbered into. Appending to
 	// an existing stream under a different kind is an error.
-	Append(ctx context.Context, stream, kind string, rows []Row) (Window, error)
+	//
+	// A keyed kind (KindOptions.Key) skips every row whose key the stream
+	// already holds, atomically with the append, and numbers only the rows it
+	// keeps; a batch naming one key twice is refused whole. A kind retaining
+	// rows (RetainRows) slides the stream's expiry to the backend ttl from now
+	// and trims the rows appended longer than that ago, in the same write.
+	Append(ctx context.Context, stream, kind string, rows []Row) (AppendResult, error)
 
 	// Meta describes stream, or returns ErrNotFound.
 	Meta(ctx context.Context, stream string) (Meta, error)
 
 	// Scan calls fn with every row after afterSeq, in seq order, stopping at
-	// the first error fn returns. An unknown stream is ErrNotFound.
+	// the first error fn returns. A scan from below the stream's low seq starts
+	// at the low seq. An unknown stream is ErrNotFound.
 	Scan(ctx context.Context, stream string, afterSeq int64, fn func(seq int64, row Row) error) error
+
+	// Trim removes the rows appended before before — every append up to the
+	// last one made before it — and returns the stream's metadata after. The
+	// rows kept keep their seqs, the low seq moves to the first of them, and
+	// the keys of the rows removed may be appended again. An unknown stream is
+	// ErrNotFound.
+	Trim(ctx context.Context, stream string, before time.Time) (Meta, error)
 
 	// Expire removes stream ttl from now, rows appended later included. The
 	// ttl must be positive; an unknown stream is ErrNotFound.
@@ -167,12 +197,12 @@ func ValidateTTL(ttl time.Duration) error {
 
 // AppendTyped appends items as rows through their JSON encoding, which is the
 // shape every backend stores and every reader sees.
-func AppendTyped[T any](ctx context.Context, backend Backend, stream, kind string, items []T) (Window, error) {
+func AppendTyped[T any](ctx context.Context, backend Backend, stream, kind string, items []T) (AppendResult, error) {
 	rows := make([]Row, len(items))
 	for index, item := range items {
 		row, err := EncodeRow(item)
 		if err != nil {
-			return Window{}, fmt.Errorf("stream %q row %d: %w", stream, index, err)
+			return AppendResult{}, fmt.Errorf("stream %q row %d: %w", stream, index, err)
 		}
 		rows[index] = row
 	}

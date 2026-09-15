@@ -76,12 +76,20 @@ func (r *Router) backend(ctx context.Context) (Backend, error) {
 	return backend, nil
 }
 
-func (r *Router) Append(ctx context.Context, stream, kind string, rows []Row) (Window, error) {
+func (r *Router) Append(ctx context.Context, stream, kind string, rows []Row) (AppendResult, error) {
 	backend, err := r.backend(ctx)
 	if err != nil {
-		return Window{}, err
+		return AppendResult{}, err
 	}
 	return backend.Append(ctx, stream, kind, rows)
+}
+
+func (r *Router) Trim(ctx context.Context, stream string, before time.Time) (Meta, error) {
+	backend, err := r.backend(ctx)
+	if err != nil {
+		return Meta{}, err
+	}
+	return backend.Trim(ctx, stream, before)
 }
 
 func (r *Router) Meta(ctx context.Context, stream string) (Meta, error) {

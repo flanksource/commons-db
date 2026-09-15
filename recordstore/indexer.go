@@ -20,8 +20,13 @@ type Index interface {
 	Prepare(ctx context.Context, source Meta) (indexed Meta, found bool, err error)
 
 	// Import stores request.Rows under their source seqs. First must be the seq
-	// after the indexed stream's high seq; a gap or different generation fails.
+	// after the indexed stream's high seq, or for a stream the index does not
+	// hold yet the source's low seq; a gap or different generation fails.
 	Import(ctx context.Context, request ImportRequest) (Window, error)
+
+	// TrimBelow mirrors a source trim: it drops the indexed rows below lowSeq,
+	// and moves an indexed stream that had not reached lowSeq up to it empty.
+	TrimBelow(ctx context.Context, stream string, lowSeq int64) (Meta, error)
 
 	// Derived reports whether the index can discard rows and rebuild them from
 	// a separate source.
@@ -105,10 +110,19 @@ func (i *Indexer) Ensure(ctx context.Context, stream string) error {
 		return fmt.Errorf("index of stream %q generation %q is ahead of its source (seq %d, source %d)",
 			stream, source.Generation, indexed.HighSeq, source.HighSeq)
 	}
-	if !found || indexed.HighSeq < source.HighSeq {
-		if err := i.copyAfter(ctx, source, indexed.HighSeq); err != nil {
+	if found {
+		if indexed, err = i.mirrorTrim(ctx, source, indexed); err != nil {
 			return err
 		}
+	}
+	if !found || indexed.HighSeq < source.HighSeq {
+		// A stream the index does not hold yet starts at the source's low seq:
+		// the rows below it are trimmed and no scan returns them.
+		high := max(indexed.HighSeq, source.LowSeq-1)
+		if err := i.copyAfter(ctx, source, high, !found); err != nil {
+			return err
+		}
+		indexed.LowSeq = max(indexed.LowSeq, source.LowSeq)
 	}
 	latest, err := i.source.Meta(ctx, stream)
 	if err != nil {
@@ -117,17 +131,36 @@ func (i *Indexer) Ensure(ctx context.Context, stream string) error {
 	if latest.Generation != source.Generation {
 		return fmt.Errorf("index stream %q changed generation from %q to %q while it was being indexed", stream, source.Generation, latest.Generation)
 	}
+	if _, err := i.mirrorTrim(ctx, latest, indexed); err != nil {
+		return err
+	}
 	return i.mirrorExpiry(ctx, latest, indexed)
 }
 
+// mirrorTrim drops the indexed rows the source no longer holds.
+func (i *Indexer) mirrorTrim(ctx context.Context, source, indexed Meta) (Meta, error) {
+	if indexed.LowSeq >= source.LowSeq {
+		return indexed, nil
+	}
+	trimmed, err := i.index.TrimBelow(ctx, source.Stream, source.LowSeq)
+	if err != nil {
+		return Meta{}, fmt.Errorf("index stream %q: trim below seq %d: %w", source.Stream, source.LowSeq, err)
+	}
+	if trimmed.LowSeq != source.LowSeq {
+		return Meta{}, fmt.Errorf("index stream %q: trim below seq %d left low seq %d", source.Stream, source.LowSeq, trimmed.LowSeq)
+	}
+	return trimmed, nil
+}
+
 // copyAfter imports every source row after high, checking the seqs arrive
-// without a gap and reach the high seq the source reported. An empty source
-// stream is imported as an empty stream.
+// without a gap and reach the high seq the source reported. A source stream
+// with no rows past high is imported as an empty stream when the index does
+// not hold it yet (create).
 //
 // A scan that ends early is refused rather than taken as the stream: an index
 // that stopped short would page the stream as complete, and every later Ensure
 // would find it already caught up.
-func (i *Indexer) copyAfter(ctx context.Context, source Meta, high int64) error {
+func (i *Indexer) copyAfter(ctx context.Context, source Meta, high int64, create bool) error {
 	stream := source.Stream
 	next := high + 1
 	var batch []Row
@@ -159,7 +192,7 @@ func (i *Indexer) copyAfter(ctx context.Context, source Meta, high int64) error 
 	if reached := next + int64(len(batch)) - 1; reached < source.HighSeq {
 		return fmt.Errorf("index stream %q: the source holds rows through seq %d but its scan reached seq %d", stream, source.HighSeq, reached)
 	}
-	if len(batch) > 0 || high == 0 {
+	if len(batch) > 0 || create {
 		if err := flush(); err != nil {
 			return err
 		}

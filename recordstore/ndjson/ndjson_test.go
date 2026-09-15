@@ -26,8 +26,12 @@ type fakeClock struct{ now time.Time }
 
 func (c *fakeClock) Now() time.Time { return c.now }
 
+func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
+
 func openNDJSON(dir string, clock *fakeClock, maxBytes int64, keep int) *ndjson.Backend {
-	backend, err := ndjson.New(ndjson.Options{Dir: dir, MaxBytes: maxBytes, KeepStreams: keep, Now: clock.Now})
+	backend, err := ndjson.New(ndjson.Options{
+		Dir: dir, Schema: recordstoretest.Schema, MaxBytes: maxBytes, KeepStreams: keep, TTL: recordstoretest.TTL, Now: clock.Now,
+	})
 	Expect(err).ToNot(HaveOccurred())
 	return backend
 }
@@ -35,8 +39,11 @@ func openNDJSON(dir string, clock *fakeClock, maxBytes int64, keep int) *ndjson.
 var _ = Describe("ndjson backend", func() {
 	recordstoretest.Conformance(func() recordstoretest.Harness {
 		clock := &fakeClock{now: time.Now()}
-		backend := openNDJSON(GinkgoT().TempDir(), clock, 1<<20, 100)
-		return recordstoretest.Harness{Backend: backend, Elapse: func(d time.Duration) { clock.now = clock.now.Add(d) }}
+		dir := GinkgoT().TempDir()
+		open := func() recordstore.Backend { return openNDJSON(dir, clock, 1<<20, 100) }
+		return recordstoretest.Harness{
+			Backend: open(), Elapse: clock.Advance, Advance: clock.Advance, Now: clock.Now, Reopen: open,
+		}
 	})
 })
 
@@ -195,8 +202,51 @@ var _ = Describe("ndjson backend files", func() {
 			_, err := ndjson.New(options)
 			Expect(err).To(MatchError(ContainSubstring(message)))
 		},
-		Entry("no directory", ndjson.Options{MaxBytes: 1, KeepStreams: 1}, "directory"),
-		Entry("no cap", ndjson.Options{Dir: "x", KeepStreams: 1}, "cap"),
-		Entry("nothing kept", ndjson.Options{Dir: "x", MaxBytes: 1}, "keep"),
+		Entry("no directory", ndjson.Options{Schema: recordstoretest.Schema, MaxBytes: 1, KeepStreams: 1}, "directory"),
+		Entry("no schema", ndjson.Options{Dir: "x", MaxBytes: 1, KeepStreams: 1}, "schema"),
+		Entry("no cap", ndjson.Options{Dir: "x", Schema: recordstoretest.Schema, KeepStreams: 1}, "cap"),
+		Entry("nothing kept", ndjson.Options{Dir: "x", Schema: recordstoretest.Schema, MaxBytes: 1}, "keep"),
 	)
+
+	It("moves a trimmed stream's rows to a file named by its low seq and removes the old one", func() {
+		backend := openNDJSON(dir, clock, 1<<20, 10)
+		_, err := backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(1, 2))
+		Expect(err).ToNot(HaveOccurred())
+		clock.Advance(time.Minute)
+		_, err = backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(3, 3))
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = backend.Trim(ctx, "run-1", clock.Now())
+		Expect(err).ToNot(HaveOccurred())
+		content, err := os.ReadFile(filepath.Join(dir, recordstoretest.Kind, "run-1@3.ndjson"))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(strings.Count(string(content), "\n")).To(Equal(1))
+		Expect(string(content)).To(HavePrefix(`{"seq":3,`))
+		Expect(filepath.Join(dir, recordstoretest.Kind, "run-1.ndjson")).ToNot(BeAnExistingFile())
+	})
+
+	It("removes every data file of a stream it rotates out, and no other stream's", func() {
+		backend := openNDJSON(dir, clock, 1<<20, 1)
+		for _, stream := range []string{"run", "run.1"} {
+			_, err := backend.Append(ctx, stream, recordstoretest.Kind, recordstoretest.SampleRows(1, 1))
+			Expect(err).ToNot(HaveOccurred())
+			clock.Advance(time.Minute)
+		}
+		_, err := backend.Meta(ctx, "run")
+		Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), "%v", err)
+		orphan := filepath.Join(dir, recordstoretest.Kind, "run.1@7.ndjson")
+		Expect(os.WriteFile(orphan, nil, 0o600)).To(Succeed())
+
+		_, err = backend.Append(ctx, "run-2", recordstoretest.Kind, recordstoretest.SampleRows(1, 1))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(orphan).ToNot(BeAnExistingFile())
+		Expect(filepath.Join(dir, recordstoretest.Kind, "run-2.ndjson")).To(BeAnExistingFile())
+	})
+
+	It("refuses a kind retaining rows when it keeps streams without a ttl", func() {
+		backend, err := ndjson.New(ndjson.Options{Dir: dir, Schema: recordstoretest.Schema, MaxBytes: 1 << 20, KeepStreams: 1, Now: clock.Now})
+		Expect(err).ToNot(HaveOccurred())
+		_, err = backend.Append(ctx, "run-1", recordstoretest.RollingKind, recordstoretest.SampleRows(1, 1))
+		Expect(err).To(MatchError(ContainSubstring("retains rows")))
+	})
 })
