@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/flags"
+	"github.com/flanksource/commons-db/query"
 )
 
 // decodeActionFlags turns the flag map clicky hands an action back into the
@@ -57,6 +58,27 @@ func parseProfileInputValues(flag string, pairs []string) (map[string]string, er
 		}
 	}
 	return parsed, nil
+}
+
+// parseFilterValues reads the repeatable --filter flag of an action as the
+// filter.<column> input keys an HTTP read names column filters by. The
+// selection is left to the profile's own filter grammar, so the CLI accepts
+// exactly what the query string does. Naming a column twice is refused: the
+// query string cannot either, and silently keeping one would drop the other.
+func parseFilterValues(pairs []string) (map[string]any, error) {
+	filters := make(map[string]any, len(pairs))
+	for _, pair := range pairs {
+		column, selection, ok := strings.Cut(pair, "=")
+		if column = strings.TrimSpace(column); !ok || column == "" {
+			return nil, fmt.Errorf("invalid --filter %q: expected column=selection", pair)
+		}
+		key := query.ColumnFilterPrefix + column
+		if _, duplicate := filters[key]; duplicate {
+			return nil, fmt.Errorf("--filter names column %q twice; join the selections with a comma", column)
+		}
+		filters[key] = selection
+	}
+	return filters, nil
 }
 
 // parseParamValues reads the repeatable --param flag of an action.

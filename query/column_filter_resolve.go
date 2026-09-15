@@ -76,7 +76,7 @@ func partitionProfileInput(profile Profile, input map[string]any) (map[string]an
 			// Only a "filter."-prefixed key claims to be a column filter, so one
 			// that matches no binding is a mistake worth naming rather than a
 			// param the profile happens not to declare.
-			if strings.HasPrefix(key, columnFilterPrefix) {
+			if strings.HasPrefix(key, ColumnFilterPrefix) {
 				return nil, nil, fmt.Errorf("column filter %q is not supported by profile %q", key, profile.Name)
 			}
 			params[key] = value

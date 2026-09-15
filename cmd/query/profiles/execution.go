@@ -506,22 +506,8 @@ func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, 
 	}
 	sortParam := profile.ParamNameForRole(query.ParamRoleSort, "sort")
 	orderParam := profile.ParamNameForRole(query.ParamRoleOrder, "order")
-	if value := strings.TrimSpace(r.URL.Query().Get(sortParam)); value != "" {
-		// The column is validated by the profile rather than here: it owns the
-		// list of what is sortable, and a second opinion could only disagree.
-		request.sort = value
-	}
-	if value := strings.TrimSpace(r.URL.Query().Get(orderParam)); value != "" {
-		switch value {
-		case "asc":
-		case "desc":
-			request.desc = true
-		default:
-			return request, fmt.Errorf("order must be asc or desc, got %q", value)
-		}
-	}
-	if request.desc && request.sort == "" {
-		return request, fmt.Errorf("order names a direction but no %s column was given", sortParam)
+	if err := request.setSort(sortParam, r.URL.Query().Get(sortParam), r.URL.Query().Get(orderParam)); err != nil {
+		return request, err
 	}
 	if value := r.URL.Query().Get("cursor"); value != "" {
 		request.cursor = query.Cursor(value)
