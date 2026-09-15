@@ -476,6 +476,19 @@ func (s *Service) OpenAPIHandler(root *cobra.Command, config *rpc.Config) (http.
 	return newProfileOpenAPIHandler(root, config, store, s.openAPIExtensions), nil
 }
 
+// AddProfilesOpenAPI describes every profile as it exists now — declared
+// params, filters, pager, sort and export — in a document someone else serves.
+// It is an rpc.OpenAPIConfig request extension: the family alone can describe
+// an instance only by its filters, so a server that routes profiles through
+// RegisterFamily adds this to keep the whole contract in its document.
+func (s *Service) AddProfilesOpenAPI(ctx context.Context, spec *rpc.OpenAPISpec) error {
+	store, err := s.store()
+	if err != nil {
+		return err
+	}
+	return mergeStoredProfiles(ctx, spec, store)
+}
+
 // profileEntitySchema builds the dynamic-entity JSON schema for a profile: its
 // visible columns become the entity properties (the first is the id/name key),
 // grouped under the profiles surface and tagged with the provider icon. A

@@ -2,6 +2,7 @@ package profiles
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 
@@ -76,5 +77,57 @@ var _ = Describe("the profile family over a virtual profile", func() {
 		response := get(mux, "/api/v1/profile/profile-results-spans?__lookup=filters", "application/json+clicky")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 		Expect(response.Body.String()).To(ContainSubstring(`"payments"`))
+	})
+
+	// The family only knows a profile's filters, so a document built from it
+	// alone omits every declared param and the pager — and a catalog locked to a
+	// declared param (the stream a result profile reads) then never sends it.
+	It("describes the virtual profile's declared params and pager in a document served beside the family", func() {
+		query.RegisterProvider(familyLookupMock{values: []string{"api"}})
+		profile := lookupProfile("results/spans")
+		profile.Params = []query.ParamDef{{Name: "stream", Type: query.ParamTypeString, Required: true}}
+		base, err := NewFileStore(GinkgoT().TempDir())
+		Expect(err).ToNot(HaveOccurred())
+		overlay, err := NewOverlayStore(base, nameOnlyVirtualStore{profile: profile})
+		Expect(err).ToNot(HaveOccurred())
+		service, err := New(Options{
+			Store:      func() (Store, error) { return overlay, nil },
+			Context:    func() dbcontext.Context { return dbcontext.New() },
+			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
+		})
+		Expect(err).ToNot(HaveOccurred())
+		service.RegisterFamily()
+		DeferCleanup(func() { entity.UnregisterDynamicEntityFamily(profileFamilyName) })
+		root := &cobra.Command{Use: "query"}
+		root.AddCommand(&cobra.Command{Use: "version", Run: func(*cobra.Command, []string) {}})
+		server := rpc.NewSwaggerServer(
+			&rpc.ServeConfig{
+				Title: "Query", Version: "0.1.0", SkipHealth: true,
+				Executor: &rpc.ExecutorConfig{Enabled: true, SkipPreRun: true, PathPrefix: "/api/v1"},
+			},
+			root, &rpc.OpenAPIConfig{
+				Title: "Query", Version: "0.1.0",
+				RequestExtensions: []func(context.Context, *rpc.OpenAPISpec) error{service.AddProfilesOpenAPI},
+			},
+		)
+		mux := http.NewServeMux()
+		server.RegisterRoutes(mux)
+
+		response := get(mux, "/api/openapi.json", "application/json")
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		var spec rpc.OpenAPISpec
+		Expect(json.Unmarshal(response.Body.Bytes(), &spec)).To(Succeed())
+		roles := map[string]string{}
+		for _, parameter := range spec.Paths["/api/v1/profile/profile-results-spans"]["get"].Parameters {
+			roles[parameter.Name] = parameter.Clicky.Role
+		}
+		surfaces := 0
+		for _, surface := range spec.Clicky.Surfaces {
+			if surface.Key == "profile-results-spans" {
+				surfaces++
+			}
+		}
+		Expect(map[string]any{"stream": roles["stream"], "limit": roles["limit"], "surfaces": surfaces}).
+			To(Equal(map[string]any{"stream": "filter", "limit": "limit", "surfaces": 1}))
 	})
 })

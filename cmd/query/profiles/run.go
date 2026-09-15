@@ -16,11 +16,14 @@ import (
 // and are validated against the same profile RowLimits — a page a caller may
 // not request over HTTP is not one it may request from a terminal either.
 type RunFlags struct {
-	Limit  int      `flag:"limit" help:"Rows per page; defaults to the profile's page size"`
-	Offset int      `flag:"offset" help:"Skip this many rows before the page (requires a declared order)"`
-	Cursor string   `flag:"cursor" help:"Resume after the position a previous page reported (requires a declared order)"`
-	All    bool     `flag:"all" help:"Read forward through every page, stopping at the profile's export ceiling"`
-	Params []string `flag:"param" help:"Profile filter param as key=value (repeatable)"`
+	Limit   int      `flag:"limit" help:"Rows per page; defaults to the profile's page size"`
+	Offset  int      `flag:"offset" help:"Skip this many rows before the page (requires a declared order)"`
+	Cursor  string   `flag:"cursor" help:"Resume after the position a previous page reported (requires a declared order)"`
+	All     bool     `flag:"all" help:"Read forward through every page, stopping at the profile's export ceiling"`
+	Params  []string `flag:"param" help:"Profile filter param as key=value (repeatable)"`
+	Filters []string `flag:"filter" help:"Column filter as column=selection, the filter.<column> grammar: a,!b or >=now-1h (repeatable)"`
+	Sort    string   `flag:"sort" help:"Column to order by ahead of the profile's own order"`
+	Order   string   `flag:"order" help:"Direction of --sort: asc or desc"`
 }
 
 func (RunFlags) ClickyActionFlags() {}
@@ -57,7 +60,7 @@ func (s *Service) Run(ctx context.Context, name string, options RunFlags) (*RunR
 	if err != nil {
 		return nil, err
 	}
-	params, err := parseParamValues(options.Params)
+	params, err := parseRunInput(options)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +129,28 @@ func runExportRequest(p query.Profile, options RunFlags) (exportRequest, error) 
 	if !request.cursor.IsZero() && request.offset != 0 {
 		return request, fmt.Errorf("a cursor already says where to resume, so it cannot be combined with --offset")
 	}
-	return request, nil
+	return request, request.setSort("sort", options.Sort, options.Order)
+}
+
+// parseRunInput is the request input the run flags name: every --param, and
+// every --filter under the filter.<column> key an HTTP read names it by, so
+// both surfaces resolve one input map through one engine path.
+func parseRunInput(options RunFlags) (map[string]any, error) {
+	params, err := parseParamValues(options.Params)
+	if err != nil {
+		return nil, err
+	}
+	filters, err := parseFilterValues(options.Filters)
+	if err != nil {
+		return nil, err
+	}
+	for key, value := range filters {
+		if _, clash := params[key]; clash {
+			return nil, fmt.Errorf("--filter and --param both name %q", key)
+		}
+		params[key] = value
+	}
+	return params, nil
 }
 
 // Table renders the page through the profile's declared columns.

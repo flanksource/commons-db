@@ -6,7 +6,9 @@ import (
 	"strings"
 )
 
-const columnFilterPrefix = "filter."
+// ColumnFilterPrefix starts every column filter's input key, filter.<column>,
+// on every surface that names one: a query string, a request body, a CLI flag.
+const ColumnFilterPrefix = "filter."
 
 const (
 	// DefaultFilterLookupLimit is how many distinct values a profile's filter

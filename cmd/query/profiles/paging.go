@@ -42,6 +42,26 @@ type exportRequest struct {
 	diagnostics *query.ProviderDiagnostics
 }
 
+// setSort takes the column a caller asked to order by and its direction, the
+// same for an HTTP read and a CLI run. The column is validated by the profile
+// rather than here: it owns the list of what is sortable, and a second opinion
+// could only disagree. sortName is what the caller calls the sort column, for
+// the error that names it.
+func (r *exportRequest) setSort(sortName, sort, order string) error {
+	r.sort = strings.TrimSpace(sort)
+	switch order = strings.TrimSpace(order); order {
+	case "", "asc":
+	case "desc":
+		r.desc = true
+	default:
+		return fmt.Errorf("order must be asc or desc, got %q", order)
+	}
+	if r.desc && r.sort == "" {
+		return fmt.Errorf("order names a direction but no %s column was given", sortName)
+	}
+	return nil
+}
+
 // pageRequest renders the transport request as the engine's page.
 func (r exportRequest) pageRequest() query.PageRequest {
 	page := query.PageRequest{

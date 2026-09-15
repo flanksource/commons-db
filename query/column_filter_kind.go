@@ -266,7 +266,7 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 	}
 	binding := ColumnFilterBinding{
 		Column: column.Name,
-		Key:    columnFilterPrefix + column.Name,
+		Key:    ColumnFilterPrefix + column.Name,
 		Field:  field,
 		Nested: nested,
 		Where:  where,
