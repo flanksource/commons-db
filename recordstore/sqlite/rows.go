@@ -200,6 +200,9 @@ func removeStreamTx(ctx context.Context, tx *sql.Tx, stream, table string) error
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE "c0" = ?`, sqlitetable.QuoteIdentifier(table)), stream); err != nil {
 		return fmt.Errorf("stream %q: remove rows: %w", stream, err)
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM record_appends WHERE stream_id = ?`, stream); err != nil {
+		return fmt.Errorf("stream %q: remove append times: %w", stream, err)
+	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM record_streams WHERE stream_id = ?`, stream); err != nil {
 		return fmt.Errorf("stream %q: remove metadata: %w", stream, err)
 	}
@@ -226,8 +229,8 @@ func loadMeta(ctx context.Context, database queryer, stream string) (recordstore
 	var updated string
 	var expires sql.NullString
 	err := database.QueryRowContext(ctx,
-		`SELECT generation, kind, total, high_seq, updated_at, expires_at, capped FROM record_streams WHERE stream_id = ?`, stream).
-		Scan(&meta.Generation, &meta.Kind, &meta.Total, &meta.HighSeq, &updated, &expires, &meta.Capped)
+		`SELECT generation, kind, total, low_seq, high_seq, updated_at, expires_at, capped FROM record_streams WHERE stream_id = ?`, stream).
+		Scan(&meta.Generation, &meta.Kind, &meta.Total, &meta.LowSeq, &meta.HighSeq, &updated, &expires, &meta.Capped)
 	if errors.Is(err, sql.ErrNoRows) {
 		return recordstore.Meta{}, fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound)
 	}
@@ -255,11 +258,14 @@ func upsertMeta(ctx context.Context, tx *sql.Tx, meta recordstore.Meta) error {
 	if meta.ExpiresAt != nil {
 		expires = sqlitetable.FormatTime(*meta.ExpiresAt)
 	}
-	_, err := tx.ExecContext(ctx, `INSERT INTO record_streams (stream_id, generation, kind, total, high_seq, updated_at, expires_at, capped)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT (stream_id) DO UPDATE SET generation = excluded.generation, total = excluded.total, high_seq = excluded.high_seq,
-			updated_at = excluded.updated_at, expires_at = excluded.expires_at, capped = excluded.capped`,
-		meta.Stream, meta.Generation, meta.Kind, meta.Total, meta.HighSeq, sqlitetable.FormatTime(meta.UpdatedAt), expires, meta.Capped)
+	if err := meta.Validate(); err != nil {
+		return fmt.Errorf("stream %q: refuse to write invalid metadata: %w", meta.Stream, err)
+	}
+	_, err := tx.ExecContext(ctx, `INSERT INTO record_streams (stream_id, generation, kind, total, low_seq, high_seq, updated_at, expires_at, capped)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT (stream_id) DO UPDATE SET generation = excluded.generation, total = excluded.total, low_seq = excluded.low_seq,
+			high_seq = excluded.high_seq, updated_at = excluded.updated_at, expires_at = excluded.expires_at, capped = excluded.capped`,
+		meta.Stream, meta.Generation, meta.Kind, meta.Total, meta.LowSeq, meta.HighSeq, sqlitetable.FormatTime(meta.UpdatedAt), expires, meta.Capped)
 	if err != nil {
 		return fmt.Errorf("stream %q: write meta: %w", meta.Stream, err)
 	}

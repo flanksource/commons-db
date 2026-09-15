@@ -86,9 +86,29 @@ func (s shortSource) Scan(ctx context.Context, stream string, afterSeq int64, fn
 	return err
 }
 
+// fakeClock is the source's clock, started at the wall clock so the expiries
+// it stamps agree with the in-process store's.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
+
 var _ = Describe("Indexer", func() {
 	var (
 		ctx     context.Context
+		clock   *fakeClock
 		source  *kv.Backend
 		index   *recordingIndex
 		indexer *recordstore.Indexer
@@ -97,7 +117,11 @@ var _ = Describe("Indexer", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		var err error
-		source, err = kv.New(kv.Options{Store: cache.NewMemory(), Prefix: "records", TTL: time.Hour, MaxChunkBytes: 1 << 20})
+		clock = &fakeClock{now: time.Now()}
+		source, err = kv.New(kv.Options{
+			Store: cache.NewMemory(), Prefix: "records", Schema: recordstoretest.Schema, TTL: time.Hour,
+			MaxChunkBytes: 1 << 20, Now: clock.Now,
+		})
 		Expect(err).ToNot(HaveOccurred())
 		backend, err := sqlite.Open(sqlite.Options{
 			Path: filepath.Join(GinkgoT().TempDir(), "index.sqlite"), Schema: recordstoretest.Schema, Derived: true,
@@ -153,7 +177,7 @@ var _ = Describe("Indexer", func() {
 
 	It("does not expire an index whose source has no expiry", func() {
 		immortal, err := ndjson.New(ndjson.Options{
-			Dir: filepath.Join(GinkgoT().TempDir(), "source"), MaxBytes: 1 << 20, KeepStreams: 10,
+			Dir: filepath.Join(GinkgoT().TempDir(), "source"), Schema: recordstoretest.Schema, MaxBytes: 1 << 20, KeepStreams: 10,
 		})
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(immortal.Close)
@@ -255,6 +279,75 @@ var _ = Describe("Indexer", func() {
 		Entry("with a lower high seq", 4, 10, 11),
 		Entry("with a higher high seq", 2, 10, 13),
 	)
+
+	Context("when the source trims its stream", func() {
+		// trimSource trims the source's rows appended before the clock now,
+		// and advances it so later appends are not trimmed with them.
+		trimSource := func() {
+			_, err := source.Trim(ctx, "run-1", clock.Now())
+			Expect(err).ToNot(HaveOccurred())
+			clock.Advance(time.Minute)
+		}
+
+		expectIndexed := func(first, last int, low int64) {
+			seqs, rows := recordstoretest.Scanned(index, "run-1", 0)
+			expected := make([]int64, 0, last-first+1)
+			for seq := first; seq <= last; seq++ {
+				expected = append(expected, int64(seq))
+			}
+			Expect(seqs).To(Equal(expected))
+			Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(first, last))))
+			meta, err := index.Meta(ctx, "run-1")
+			Expect(err).ToNot(HaveOccurred())
+			Expect([]int64{meta.LowSeq, meta.HighSeq, meta.Total}).To(Equal([]int64{low, int64(last), int64(last) - low + 1}))
+		}
+
+		It("drops the indexed rows below the source's new low seq", func() {
+			appendSource(1, 2)
+			clock.Advance(time.Minute)
+			appendSource(3, 4)
+			Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+			clock.Advance(-time.Minute / 2)
+			trimSource()
+
+			Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+			expectIndexed(3, 4, 3)
+		})
+
+		It("starts an index of an already trimmed stream at the source's low seq", func() {
+			appendSource(1, 2)
+			clock.Advance(time.Minute)
+			trimSource()
+			appendSource(3, 4)
+
+			Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+			Expect(index.Imports()).To(Equal([]recordstore.Window{{From: 3, To: 4}}))
+			expectIndexed(3, 4, 3)
+		})
+
+		It("catches up an index the source trimmed past, importing from the new low seq", func() {
+			appendSource(1, 2)
+			Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+			clock.Advance(time.Minute)
+			appendSource(3, 4)
+			clock.Advance(time.Minute)
+			trimSource()
+			appendSource(5, 6)
+
+			Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+			Expect(index.Imports()).To(Equal([]recordstore.Window{{From: 1, To: 2}, {From: 5, To: 6}}))
+			expectIndexed(5, 6, 5)
+		})
+	})
+
+	It("refuses a keyed row an import would store under a key the indexed stream holds", func() {
+		source := recordstore.NewStreamMeta("run-1", recordstoretest.KeyedKind, clock.Now())
+		source.Total, source.HighSeq = 2, 2
+		_, err := index.Import(ctx, recordstore.ImportRequest{Source: source, First: 1, Rows: recordstoretest.SampleRows(1, 1)})
+		Expect(err).ToNot(HaveOccurred())
+		_, err = index.Import(ctx, recordstore.ImportRequest{Source: source, First: 2, Rows: recordstoretest.SampleRows(1, 1)})
+		Expect(err).To(MatchError(ContainSubstring("UNIQUE")))
+	})
 
 	It("refuses a source whose scan ends below the high seq it reports, naming both", func() {
 		appendSource(1, 5)

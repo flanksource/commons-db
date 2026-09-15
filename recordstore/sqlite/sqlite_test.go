@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -68,21 +69,39 @@ func (c *fakeClock) Reads() int {
 // about the sweeper sweeps by hand.
 const idleSweep = time.Hour
 
-func openSQLite(path string, clock *fakeClock, schema func(string) ([]query.ColumnDef, error), derived bool) *sqlite.Backend {
+func openSQLite(path string, clock *fakeClock, schema recordstore.SchemaResolver, derived bool) *sqlite.Backend {
 	backend, err := sqlite.Open(sqlite.Options{Path: path, Schema: schema, Now: clock.Now, Derived: derived, SweepInterval: idleSweep})
 	Expect(err).ToNot(HaveOccurred())
 	return backend
 }
 
+// columnsSchema resolves every kind to columns, unkeyed.
+func columnsSchema(columns ...query.ColumnDef) recordstore.SchemaResolver {
+	return func(kind string) (recordstore.KindSchema, error) {
+		return recordstore.KindSchema{Kind: kind, Columns: columns}, nil
+	}
+}
+
 var _ = Describe("sqlite backend", func() {
 	recordstoretest.Conformance(func() recordstoretest.Harness {
 		clock := &fakeClock{now: time.Now()}
-		backend := openSQLite(filepath.Join(GinkgoT().TempDir(), "records.sqlite"), clock, recordstoretest.Schema, false)
-		return recordstoretest.Harness{Backend: backend, Elapse: func(d time.Duration) {
-			clock.Advance(d)
-			_, err := backend.Sweep(context.Background())
+		path := filepath.Join(GinkgoT().TempDir(), "records.sqlite")
+		open := func() recordstore.Backend {
+			backend, err := sqlite.Open(sqlite.Options{
+				Path: path, Schema: recordstoretest.Schema, TTL: recordstoretest.TTL, Now: clock.Now, SweepInterval: idleSweep,
+			})
 			Expect(err).ToNot(HaveOccurred())
-		}}
+			return backend
+		}
+		backend := open().(*sqlite.Backend)
+		return recordstoretest.Harness{
+			Backend: backend, Advance: clock.Advance, Now: clock.Now, Reopen: open,
+			Elapse: func(d time.Duration) {
+				clock.Advance(d)
+				_, err := backend.Sweep(context.Background())
+				Expect(err).ToNot(HaveOccurred())
+			},
+		}
 	})
 })
 
@@ -146,9 +165,9 @@ var _ = Describe("sqlite backend storage", func() {
 		Expect(backend.Expire(ctx, "run-1", time.Minute)).To(Succeed())
 		clock.Advance(2 * time.Minute)
 
-		window, err := backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(10, 11))
+		result, err := backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(10, 11))
 		Expect(err).ToNot(HaveOccurred())
-		Expect(window).To(Equal(recordstore.Window{From: 1, To: 2}))
+		Expect(result).To(Equal(recordstore.AppendResult{Window: recordstore.Window{From: 1, To: 2}}))
 		seqs, rows := recordstoretest.Scanned(backend, "run-1", 0)
 		Expect(seqs).To(Equal([]int64{1, 2}))
 		Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(10, 11))))
@@ -463,15 +482,75 @@ var _ = Describe("sqlite backend storage", func() {
 		Expect(err).To(MatchError(ContainSubstring(`"colour"`)))
 	})
 
+	It("refuses a kind retaining rows when it keeps streams without a ttl", func() {
+		_, err := backend.Append(ctx, "run-1", recordstoretest.RollingKind, recordstoretest.SampleRows(1, 1))
+		Expect(err).To(MatchError(ContainSubstring("retains rows")))
+		_, err = backend.Meta(ctx, "run-1")
+		Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), fmt.Sprint(err))
+	})
+
+	It("refuses a file written in an older catalog version", func() {
+		oldPath := filepath.Join(GinkgoT().TempDir(), "old.sqlite")
+		old, err := sql.Open("sqlite", oldPath)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = old.ExecContext(ctx, `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
+			INSERT INTO record_store_format (key, version) VALUES (1, 1)`)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(old.Close()).To(Succeed())
+
+		_, err = sqlite.Open(sqlite.Options{Path: oldPath, Schema: recordstoretest.Schema, SweepInterval: idleSweep})
+		Expect(err).To(MatchError(And(ContainSubstring("unsupported catalog version 1, expected 2"), ContainSubstring("remove the file"))))
+	})
+
+	// A derived index lives in a file a pod restart may keep while the build
+	// that wrote it is replaced; everything it held can be read again from its
+	// source, so its catalog is recreated rather than refused.
+	DescribeTable("rebuilds a derived index an older build wrote, dropping everything it held",
+		func(legacy string) {
+			path := filepath.Join(GinkgoT().TempDir(), "index.sqlite")
+			old, err := sql.Open("sqlite", path)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = old.ExecContext(ctx, legacy)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(old.Close()).To(Succeed())
+
+			index, err := sqlite.Open(sqlite.Options{Path: path, Schema: recordstoretest.Schema, Derived: true, SweepInterval: idleSweep})
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(index.Close)
+			source := recordstore.NewStreamMeta("run-1", recordstoretest.Kind, clock.Now())
+			source.Total, source.HighSeq = 1, 1
+			_, found, err := index.Prepare(ctx, source)
+			Expect(err).ToNot(HaveOccurred())
+			_, err = index.Import(ctx, recordstore.ImportRequest{Source: source, First: 1, Rows: recordstoretest.SampleRows(1, 1)})
+			Expect(err).ToNot(HaveOccurred())
+			seqs, _ := recordstoretest.Scanned(index, "run-1", 0)
+
+			reader, err := sql.Open("sqlite", path)
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(reader.Close)
+			var version, legacyTables int
+			Expect(reader.QueryRowContext(ctx, `SELECT version FROM record_store_format WHERE key = 1`).Scan(&version)).To(Succeed())
+			Expect(reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE name = 'legacy_rows'`).Scan(&legacyTables)).To(Succeed())
+			Expect(map[string]any{"version": version, "legacyTables": legacyTables, "found": found, "seqs": seqs}).To(Equal(
+				map[string]any{"version": 2, "legacyTables": 0, "found": false, "seqs": []int64{1}}))
+		},
+		Entry("an unversioned catalog", `CREATE TABLE record_streams (stream_id TEXT PRIMARY KEY, kind TEXT NOT NULL);
+			CREATE TABLE legacy_rows (c0 TEXT)`),
+		Entry("an older catalog version", `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
+			INSERT INTO record_store_format (key, version) VALUES (1, 1);
+			CREATE TABLE legacy_rows (c0 TEXT)`),
+		Entry("an incomplete catalog of this version", `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
+			INSERT INTO record_store_format (key, version) VALUES (1, 2);
+			CREATE TABLE legacy_rows (c0 TEXT)`),
+	)
+
 	It("refuses a kind its schema resolver does not know", func() {
 		_, err := backend.Append(ctx, "run-1", "unknown", recordstoretest.SampleRows(1, 1))
 		Expect(err).To(MatchError(ContainSubstring(`kind "unknown"`)))
 	})
 
 	It("stores datetimes in one fixed-width UTC form, so they sort as instants", func() {
-		schema := func(string) ([]query.ColumnDef, error) {
-			return []query.ColumnDef{{Name: "at", Type: query.ColumnTypeDateTime}}, nil
-		}
+		schema := columnsSchema(query.ColumnDef{Name: "at", Type: query.ColumnTypeDateTime})
 		timed := openSQLite(filepath.Join(GinkgoT().TempDir(), "timed.sqlite"), clock, schema, false)
 		DeferCleanup(timed.Close)
 		zone := time.FixedZone("SAST", 2*3600)
@@ -493,9 +572,7 @@ var _ = Describe("sqlite backend storage", func() {
 	})
 
 	Context("when a kind's columns change between processes", func() {
-		changed := func(string) ([]query.ColumnDef, error) {
-			return append(recordstoretest.Columns, query.ColumnDef{Name: "extra", Type: query.ColumnTypeString}), nil
-		}
+		changed := columnsSchema(append(slices.Clone(recordstoretest.Columns), query.ColumnDef{Name: "extra", Type: query.ColumnTypeString})...)
 
 		BeforeEach(func() {
 			_, err := backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(1, 2))

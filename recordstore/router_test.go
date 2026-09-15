@@ -32,7 +32,9 @@ func routeOf(ctx context.Context) (string, error) {
 }
 
 func openMemoryKV() recordstore.Backend {
-	backend, err := kv.New(kv.Options{Store: cache.NewMemory(), Prefix: "records", TTL: time.Hour, MaxChunkBytes: 1 << 20})
+	backend, err := kv.New(kv.Options{
+		Store: cache.NewMemory(), Prefix: "records", Schema: recordstoretest.Schema, TTL: time.Hour, MaxChunkBytes: 1 << 20,
+	})
 	Expect(err).ToNot(HaveOccurred())
 	return backend
 }
@@ -71,13 +73,28 @@ func newRouter(options recordstore.RouterOptions) *recordstore.Router {
 
 var _ = Describe("Router over one route", func() {
 	recordstoretest.Conformance(func() recordstoretest.Harness {
-		router, err := recordstore.NewRouter(recordstore.RouterOptions{
-			Route: func(context.Context) (string, error) { return "only", nil },
-			Open:  func(context.Context, string) (recordstore.Backend, error) { return openMemoryKV(), nil },
-		})
-		Expect(err).ToNot(HaveOccurred())
-		// The in-process store expires against the wall clock.
-		return recordstoretest.Harness{Backend: router, Elapse: time.Sleep}
+		store, clock := cache.NewMemory(), &fakeClock{now: time.Now()}
+		open := func() recordstore.Backend {
+			router, err := recordstore.NewRouter(recordstore.RouterOptions{
+				Route: func(context.Context) (string, error) { return "only", nil },
+				Open: func(context.Context, string) (recordstore.Backend, error) {
+					return kv.New(kv.Options{
+						Store: store, Prefix: "records", Schema: recordstoretest.Schema, TTL: recordstoretest.TTL,
+						MaxChunkBytes: 1 << 20, Now: clock.Now,
+					})
+				},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			return router
+		}
+		return recordstoretest.Harness{
+			Backend: open(), Advance: clock.Advance, Now: clock.Now, Reopen: open,
+			// The in-process store expires against the wall clock.
+			Elapse: func(d time.Duration) {
+				clock.Advance(d)
+				time.Sleep(d)
+			},
+		}
 	})
 })
 
