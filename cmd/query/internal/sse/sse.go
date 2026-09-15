@@ -8,6 +8,7 @@ package sse
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -44,18 +45,27 @@ type Frame struct {
 // Begin writes the event-stream headers and returns the flusher the stream
 // must call after every frame.
 //
+// It lifts the server's write deadline for this response. A stream is open for
+// as long as it has something to follow, and a server WriteTimeout sized for
+// ordinary requests would otherwise cut every stream at that age. A writer that
+// cannot set deadlines has none to lift; any other failure is returned, and the
+// caller should end the response.
+//
 // It panics rather than degrading when the writer cannot flush: an unflushed
 // event stream looks like a hung request, which is far harder to diagnose than
 // a stack trace naming the middleware that swallowed the Flusher.
-func Begin(w http.ResponseWriter) http.Flusher {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+func Begin(w http.ResponseWriter) (http.Flusher, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		panic("server-sent events require a flushable ResponseWriter")
 	}
-	return flusher
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+		return nil, fmt.Errorf("lift the event stream's write deadline: %w", err)
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	return flusher, nil
 }
 
 // WriteFrame writes one frame; an error means the client disconnected and the

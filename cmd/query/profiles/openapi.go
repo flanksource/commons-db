@@ -330,16 +330,8 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		},
 	}}
 
-	if profile.Kind() != query.KindQuery {
-		spec.Paths[path+"/sessions"] = rpc.OpenAPIPath{"post": {
-			Summary:     "Start a " + string(profile.Kind()) + " session for " + profile.Name,
-			Description: "Start a live session; follow it via GET /api/v1/sessions/{id}/events (SSE) and stop it via DELETE /api/v1/sessions/{id}",
-			OperationID: "start-" + entityName + "-session",
-			Parameters:  parameters,
-			Responses: map[string]rpc.OpenAPIResponse{
-				"201": {Description: "Session started"},
-			},
-		}}
+	if start, ok := profileSessionStart(profile, entityName, parameters); ok {
+		spec.Paths[path+"/sessions"] = rpc.OpenAPIPath{"post": start}
 	}
 	return nil
 }

@@ -61,7 +61,7 @@ func (h *sessionHandler) startConnectionTrace(w http.ResponseWriter, r *http.Req
 		}},
 		Trace: &query.TraceSpec{MaxDuration: types.Duration{Duration: duration}},
 	}
-	session, err := query.ExecuteStream(h.ctx, h.registry, profile)
+	session, err := query.ExecuteStream(h.sessionContext(r), h.registry, profile)
 	if err != nil {
 		status := http.StatusBadRequest
 		if errors.Is(err, query.ErrMaxSessions) {

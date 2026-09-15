@@ -28,7 +28,11 @@ func (s sseStream) run(w http.ResponseWriter, r *http.Request) {
 	replay, live, cancel := s.session.SubscribeFrom(s.after)
 	defer cancel()
 
-	flusher := sse.Begin(w)
+	flusher, err := sse.Begin(w)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	for _, e := range replay {
 		if sse.WriteFrame(w, sse.Frame{Event: "event", ID: e.Sequence, Data: e}) != nil {
 			return
@@ -71,7 +75,11 @@ type sseHistory struct {
 }
 
 func (h sseHistory) write(w http.ResponseWriter) {
-	flusher := sse.Begin(w)
+	flusher, err := sse.Begin(w)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	for _, e := range h.events {
 		if e.Sequence <= h.after {
 			continue

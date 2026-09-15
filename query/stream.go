@@ -355,8 +355,14 @@ func (r *traceRunner) emit(raw []Row) error {
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		r.session.Emit(Event{Row: row})
+	// Presented as one batch, as a page is: a profile that declares no columns
+	// derives them from the rows rendered together.
+	presented, err := PresentClickyRows(r.pipeline.profile, rows)
+	if err != nil {
+		return fmt.Errorf("profile %q: present rows: %w", r.pipeline.profile.Name, err)
+	}
+	for index, row := range rows {
+		r.session.Emit(Event{Row: row, ClickyRow: &presented[index]})
 	}
 	return nil
 }
