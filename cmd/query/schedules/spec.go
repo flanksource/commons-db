@@ -40,6 +40,9 @@ type Schedule struct {
 
 	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
 	Owner  string            `json:"owner,omitempty" yaml:"owner,omitempty"`
+
+	LastRun *time.Time `json:"lastRun,omitempty" yaml:"-"`
+	NextRun *time.Time `json:"nextRun,omitempty" yaml:"-"`
 }
 
 // QuerySpec runs one profile. Params are the profile's own filter params, the
@@ -203,5 +206,7 @@ func (s Schedule) Timing() task.Schedule {
 		Timeout:  time.Duration(s.Timeout),
 		Overlap:  task.OverlapPolicy(s.Overlap),
 		CatchUp:  task.CatchUpPolicy(s.CatchUp),
+		LastRun:  s.LastRun,
+		NextRun:  s.NextRun,
 	}
 }

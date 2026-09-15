@@ -279,7 +279,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	if s.scheduler != nil {
-		return s.scheduler.Remove(ctx, name)
+		s.scheduler.Unregister(name)
 	}
 	return nil
 }
@@ -300,9 +300,6 @@ func (s *Service) LoadScheduler(ctx context.Context) error {
 	}
 	var failures []string
 	for _, schedule := range schedules {
-		if !schedule.Enabled {
-			continue
-		}
 		if err := s.scheduler.Add(ctx, schedule.Timing()); err != nil {
 			// One unusable schedule must not stop the rest from being loaded,
 			// but it must be said out loud rather than dropped.
@@ -315,14 +312,12 @@ func (s *Service) LoadScheduler(ctx context.Context) error {
 	return nil
 }
 
-// sync registers the schedule's current timing with the scheduler, or stops
-// firing it when it is disabled.
+// sync registers the schedule's current timing with the scheduler. Disabled
+// definitions stay registered so they can be triggered manually and resumed
+// without reconstructing runtime state.
 func (s *Service) sync(ctx context.Context, schedule Schedule) error {
 	if s.scheduler == nil {
 		return nil
-	}
-	if !schedule.Enabled {
-		return s.scheduler.Remove(ctx, schedule.Name)
 	}
 	return s.scheduler.Add(ctx, schedule.Timing())
 }

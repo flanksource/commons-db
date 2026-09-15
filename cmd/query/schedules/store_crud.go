@@ -243,6 +243,8 @@ func (r scheduleRecord) decode() (Schedule, error) {
 	schedule.Name = r.Name
 	schedule.Namespace = r.Namespace
 	schedule.Enabled = r.Enabled
+	schedule.LastRun = r.LastRun
+	schedule.NextRun = r.NextRun
 	return schedule, nil
 }
 

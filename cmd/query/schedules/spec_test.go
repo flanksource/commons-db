@@ -122,6 +122,10 @@ var _ = Describe("Schedule timing", func() {
 		schedule.CatchUp = string(task.CatchUpOnce)
 		schedule.Timeout = schedules.Duration(90 * time.Second)
 		schedule.Labels = map[string]string{"team": "ops"}
+		lastRun := time.Date(2026, time.September, 14, 6, 0, 0, 0, time.UTC)
+		nextRun := lastRun.Add(24 * time.Hour)
+		schedule.LastRun = &lastRun
+		schedule.NextRun = &nextRun
 
 		timing := schedule.Timing()
 		Expect(timing.Name).To(Equal("nightly"))
@@ -133,6 +137,8 @@ var _ = Describe("Schedule timing", func() {
 		Expect(timing.Timeout).To(Equal(90 * time.Second))
 		Expect(timing.Labels).To(HaveKeyWithValue("team", "ops"))
 		Expect(timing.Enabled).To(BeTrue())
+		Expect(timing.LastRun).To(Equal(&lastRun))
+		Expect(timing.NextRun).To(Equal(&nextRun))
 	})
 })
 
