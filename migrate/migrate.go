@@ -182,6 +182,9 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if !cfg.allowDrops {
 		changes = withoutDrops(changes)
 	}
+	if changes, err = withCheckExpressionChanges(ctx, db, cfg.schema, current, desired, changes); err != nil {
+		return err
+	}
 	restoreViews := noRestore
 	if len(changes) == 0 {
 		logger.GetLogger("migrate").Debugf("No schema changes detected")
