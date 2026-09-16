@@ -170,7 +170,7 @@ func (b *Backend) importedStream(ctx context.Context, tx *sql.Tx, request record
 		if meta.Kind != request.Source.Kind {
 			return recordstore.Meta{}, fmt.Errorf("stream %q holds kind %q, not %q", stream, meta.Kind, request.Source.Kind)
 		}
-		return meta, nil
+		return meta, recordstore.RefuseSealed(meta)
 	}
 	if !errors.Is(err, recordstore.ErrNotFound) {
 		return recordstore.Meta{}, err

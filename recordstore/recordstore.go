@@ -45,6 +45,10 @@ var (
 	// it, would exceed what the backend was configured to hold. The rows of a
 	// refused append are not written — none of them.
 	ErrCapacity = errors.New("record stream capacity exceeded")
+
+	// ErrSealed reports an append refused because its stream was sealed: the
+	// writer declared it complete, and a reader has already taken it as such.
+	ErrSealed = errors.New("record stream sealed")
 )
 
 // Window is an inclusive seq range. An empty window has From == To+1: an
@@ -88,6 +92,11 @@ type Meta struct {
 	// Capped reports that an append was refused for capacity: the stream is
 	// complete up to HighSeq and missing whatever that append carried.
 	Capped bool `json:"capped,omitempty"`
+
+	// Sealed reports that the writer declared the stream complete: it holds
+	// every row it ever will, so a reader that has read through HighSeq is done
+	// rather than waiting for more.
+	Sealed bool `json:"sealed,omitempty"`
 }
 
 // NewStreamMeta starts one incarnation of stream. Generation distinguishes a
@@ -150,6 +159,12 @@ type Backend interface {
 	// ttl must be positive; an unknown stream is ErrNotFound.
 	Expire(ctx context.Context, stream string, ttl time.Duration) error
 
+	// Seal marks stream complete (Meta.Sealed): every later Append to it fails
+	// with ErrSealed, while Scan, Trim and Expire still apply. Sealing a sealed
+	// stream does nothing; an unknown stream is ErrNotFound. The seal ends with
+	// the stream, so an id reused after expiry starts unsealed.
+	Seal(ctx context.Context, stream string) error
+
 	Close() error
 }
 
@@ -185,6 +200,15 @@ func ValidateAppend(stream, kind string) error {
 		return err
 	}
 	return ValidateKind(kind)
+}
+
+// RefuseSealed is the error an append to meta's stream fails with once it is
+// sealed, or nil while it is not.
+func RefuseSealed(meta Meta) error {
+	if !meta.Sealed {
+		return nil
+	}
+	return fmt.Errorf("stream %q generation %q was sealed at seq %d: %w", meta.Stream, meta.Generation, meta.HighSeq, ErrSealed)
 }
 
 // ValidateTTL rejects an expiry that is not in the future.

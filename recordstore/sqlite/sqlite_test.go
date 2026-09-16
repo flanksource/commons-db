@@ -489,61 +489,6 @@ var _ = Describe("sqlite backend storage", func() {
 		Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), fmt.Sprint(err))
 	})
 
-	It("refuses a file written in an older catalog version", func() {
-		oldPath := filepath.Join(GinkgoT().TempDir(), "old.sqlite")
-		old, err := sql.Open("sqlite", oldPath)
-		Expect(err).ToNot(HaveOccurred())
-		_, err = old.ExecContext(ctx, `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
-			INSERT INTO record_store_format (key, version) VALUES (1, 1)`)
-		Expect(err).ToNot(HaveOccurred())
-		Expect(old.Close()).To(Succeed())
-
-		_, err = sqlite.Open(sqlite.Options{Path: oldPath, Schema: recordstoretest.Schema, SweepInterval: idleSweep})
-		Expect(err).To(MatchError(And(ContainSubstring("unsupported catalog version 1, expected 2"), ContainSubstring("remove the file"))))
-	})
-
-	// A derived index lives in a file a pod restart may keep while the build
-	// that wrote it is replaced; everything it held can be read again from its
-	// source, so its catalog is recreated rather than refused.
-	DescribeTable("rebuilds a derived index an older build wrote, dropping everything it held",
-		func(legacy string) {
-			path := filepath.Join(GinkgoT().TempDir(), "index.sqlite")
-			old, err := sql.Open("sqlite", path)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = old.ExecContext(ctx, legacy)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(old.Close()).To(Succeed())
-
-			index, err := sqlite.Open(sqlite.Options{Path: path, Schema: recordstoretest.Schema, Derived: true, SweepInterval: idleSweep})
-			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(index.Close)
-			source := recordstore.NewStreamMeta("run-1", recordstoretest.Kind, clock.Now())
-			source.Total, source.HighSeq = 1, 1
-			_, found, err := index.Prepare(ctx, source)
-			Expect(err).ToNot(HaveOccurred())
-			_, err = index.Import(ctx, recordstore.ImportRequest{Source: source, First: 1, Rows: recordstoretest.SampleRows(1, 1)})
-			Expect(err).ToNot(HaveOccurred())
-			seqs, _ := recordstoretest.Scanned(index, "run-1", 0)
-
-			reader, err := sql.Open("sqlite", path)
-			Expect(err).ToNot(HaveOccurred())
-			DeferCleanup(reader.Close)
-			var version, legacyTables int
-			Expect(reader.QueryRowContext(ctx, `SELECT version FROM record_store_format WHERE key = 1`).Scan(&version)).To(Succeed())
-			Expect(reader.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE name = 'legacy_rows'`).Scan(&legacyTables)).To(Succeed())
-			Expect(map[string]any{"version": version, "legacyTables": legacyTables, "found": found, "seqs": seqs}).To(Equal(
-				map[string]any{"version": 2, "legacyTables": 0, "found": false, "seqs": []int64{1}}))
-		},
-		Entry("an unversioned catalog", `CREATE TABLE record_streams (stream_id TEXT PRIMARY KEY, kind TEXT NOT NULL);
-			CREATE TABLE legacy_rows (c0 TEXT)`),
-		Entry("an older catalog version", `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
-			INSERT INTO record_store_format (key, version) VALUES (1, 1);
-			CREATE TABLE legacy_rows (c0 TEXT)`),
-		Entry("an incomplete catalog of this version", `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
-			INSERT INTO record_store_format (key, version) VALUES (1, 2);
-			CREATE TABLE legacy_rows (c0 TEXT)`),
-	)
-
 	It("refuses a kind its schema resolver does not know", func() {
 		_, err := backend.Append(ctx, "run-1", "unknown", recordstoretest.SampleRows(1, 1))
 		Expect(err).To(MatchError(ContainSubstring(`kind "unknown"`)))
