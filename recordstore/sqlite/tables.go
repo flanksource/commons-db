@@ -20,7 +20,7 @@ import (
 const (
 	streamColumn   = "stream_id"
 	seqColumn      = "seq"
-	catalogVersion = 2
+	catalogVersion = 3
 )
 
 // kindTable is one kind's table and the schema it was created from.
@@ -39,6 +39,24 @@ func (b *Backend) createCatalog(ctx context.Context) error {
 	})
 }
 
+// catalogStatements create an empty file's catalog at catalogVersion.
+var catalogStatements = []string{
+	`CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL)`,
+	fmt.Sprintf(`INSERT INTO record_store_format (key, version) VALUES (1, %d)`, catalogVersion),
+	`CREATE TABLE record_streams (
+		stream_id TEXT PRIMARY KEY, generation TEXT NOT NULL, kind TEXT NOT NULL, total INTEGER NOT NULL,
+		low_seq INTEGER NOT NULL, high_seq INTEGER NOT NULL,
+		updated_at TEXT NOT NULL, expires_at TEXT, capped INTEGER NOT NULL DEFAULT 0, sealed INTEGER NOT NULL DEFAULT 0)`,
+	`CREATE INDEX record_streams_expires_at ON record_streams (expires_at)`,
+	`CREATE TABLE record_kinds (kind TEXT PRIMARY KEY, table_name TEXT NOT NULL, columns TEXT NOT NULL)`,
+	// record_appends is when each write stored its rows, by the seq of the
+	// last row it stored: what Trim finds the rows appended before an
+	// instant through.
+	`CREATE TABLE record_appends (
+		stream_id TEXT NOT NULL, last_seq INTEGER NOT NULL, appended_at TEXT NOT NULL,
+		PRIMARY KEY (stream_id, last_seq))`,
+}
+
 func (b *Backend) createCatalogLocked(ctx context.Context, writer *sql.DB) error {
 	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
@@ -50,6 +68,8 @@ func (b *Backend) createCatalogLocked(ctx context.Context, writer *sql.DB) error
 	switch {
 	case err == nil:
 		return tx.Commit()
+	case errors.Is(err, errUnsealedCatalog):
+		return upgradeUnsealedCatalog(ctx, tx, b.Path())
 	case errors.Is(err, errNoCatalog):
 	case errors.As(err, &incompatible) && b.derived:
 		// Everything a derived index holds is read again from its source, so a
@@ -64,22 +84,7 @@ func (b *Backend) createCatalogLocked(ctx context.Context, writer *sql.DB) error
 	default:
 		return err
 	}
-	for _, statement := range []string{
-		`CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL)`,
-		fmt.Sprintf(`INSERT INTO record_store_format (key, version) VALUES (1, %d)`, catalogVersion),
-		`CREATE TABLE record_streams (
-			stream_id TEXT PRIMARY KEY, generation TEXT NOT NULL, kind TEXT NOT NULL, total INTEGER NOT NULL,
-			low_seq INTEGER NOT NULL, high_seq INTEGER NOT NULL,
-			updated_at TEXT NOT NULL, expires_at TEXT, capped INTEGER NOT NULL DEFAULT 0)`,
-		`CREATE INDEX record_streams_expires_at ON record_streams (expires_at)`,
-		`CREATE TABLE record_kinds (kind TEXT PRIMARY KEY, table_name TEXT NOT NULL, columns TEXT NOT NULL)`,
-		// record_appends is when each write stored its rows, by the seq of the
-		// last row it stored: what Trim finds the rows appended before an
-		// instant through.
-		`CREATE TABLE record_appends (
-			stream_id TEXT NOT NULL, last_seq INTEGER NOT NULL, appended_at TEXT NOT NULL,
-			PRIMARY KEY (stream_id, last_seq))`,
-	} {
+	for _, statement := range catalogStatements {
 		if _, err := tx.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("sqlite record store %s: create catalog: %w", b.Path(), err)
 		}
@@ -92,6 +97,31 @@ func (b *Backend) createCatalogLocked(ctx context.Context, writer *sql.DB) error
 
 // errNoCatalog reports a file holding no tables at all: a new one.
 var errNoCatalog = errors.New("no catalog")
+
+// unsealedCatalogVersion is the catalog before streams could be sealed. Its
+// rows mean what they mean in this version, so a file of it — durable or
+// derived — is upgraded in place rather than refused or rebuilt.
+const unsealedCatalogVersion = 2
+
+// errUnsealedCatalog reports a complete catalog of unsealedCatalogVersion.
+var errUnsealedCatalog = errors.New("catalog predates sealed streams")
+
+// upgradeUnsealedCatalog adds the sealed column, every existing stream
+// unsealed, and records the current version, all in tx.
+func upgradeUnsealedCatalog(ctx context.Context, tx *sql.Tx, path string) error {
+	for _, statement := range []string{
+		`ALTER TABLE record_streams ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0`,
+		fmt.Sprintf(`UPDATE record_store_format SET version = %d WHERE key = 1`, catalogVersion),
+	} {
+		if _, err := tx.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("sqlite record store %s: upgrade catalog version %d to %d: %w", path, unsealedCatalogVersion, catalogVersion, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite record store %s: commit catalog upgrade: %w", path, err)
+	}
+	return nil
+}
 
 // incompatibleCatalog reports tables this build cannot read — another catalog
 // version's, none versioned, or an incomplete set — by what the file holds.
@@ -125,7 +155,7 @@ func inspectCatalog(ctx context.Context, tx *sql.Tx, path string) error {
 	if err != nil {
 		return fmt.Errorf("sqlite record store %s: read catalog version: %w", path, err)
 	}
-	if version != catalogVersion {
+	if version != catalogVersion && version != unsealedCatalogVersion {
 		return incompatibleCatalog(fmt.Sprintf("an unsupported catalog version %d, expected %d", version, catalogVersion))
 	}
 	var objects int
@@ -136,6 +166,9 @@ func inspectCatalog(ctx context.Context, tx *sql.Tx, path string) error {
 	}
 	if objects != 4 {
 		return incompatibleCatalog(fmt.Sprintf("an incomplete catalog version %d", version))
+	}
+	if version == unsealedCatalogVersion {
+		return errUnsealedCatalog
 	}
 	return nil
 }

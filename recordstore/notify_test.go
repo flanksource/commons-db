@@ -51,6 +51,21 @@ var _ = Describe("Notifier", func() {
 		Eventually(woken, time.Second).Should(Receive(HaveField("HighSeq", int64(3))))
 	})
 
+	It("wakes a waiter as soon as a seal through it commits, returning the sealed metadata", func() {
+		woken := make(chan recordstore.Meta, 1)
+		read := generation()
+		go func() {
+			defer GinkgoRecover()
+			meta, err := notifier.Wait(ctx, "run-1", 2, read)
+			Expect(err).ToNot(HaveOccurred())
+			woken <- meta
+		}()
+		Consistently(woken, 100*time.Millisecond).ShouldNot(Receive())
+
+		Expect(notifier.Seal(ctx, "run-1")).To(Succeed())
+		Eventually(woken, time.Second).Should(Receive(And(HaveField("Sealed", true), HaveField("HighSeq", int64(2)))))
+	})
+
 	It("returns at once when the stream already holds a row after the seq", func() {
 		meta, err := notifier.Wait(ctx, "run-1", 1, generation())
 		Expect(err).ToNot(HaveOccurred())

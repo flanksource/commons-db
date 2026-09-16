@@ -175,6 +175,23 @@ var _ = Describe("Indexer", func() {
 		Expect(*indexMeta.ExpiresAt).To(BeTemporally("~", *sourceMeta.ExpiresAt, time.Second))
 	})
 
+	It("mirrors a seal made after the index caught up, and one made before the first index", func() {
+		appendSource(1, 2)
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		Expect(source.Seal(ctx, "run-1")).To(Succeed())
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		_, err := source.Append(ctx, "run-2", recordstoretest.Kind, recordstoretest.SampleRows(1, 3))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(source.Seal(ctx, "run-2")).To(Succeed())
+		Expect(indexer.Ensure(ctx, "run-2")).To(Succeed())
+
+		first, err := index.Meta(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		second, err := index.Meta(ctx, "run-2")
+		Expect(err).ToNot(HaveOccurred())
+		Expect([]any{first.Sealed, first.HighSeq, second.Sealed, second.HighSeq}).To(Equal([]any{true, int64(2), true, int64(3)}))
+	})
+
 	It("does not expire an index whose source has no expiry", func() {
 		immortal, err := ndjson.New(ndjson.Options{
 			Dir: filepath.Join(GinkgoT().TempDir(), "source"), Schema: recordstoretest.Schema, MaxBytes: 1 << 20, KeepStreams: 10,

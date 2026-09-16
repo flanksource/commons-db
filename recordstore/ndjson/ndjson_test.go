@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,11 +23,25 @@ func TestNDJSON(t *testing.T) {
 	RunSpecs(t, "Record Store NDJSON Suite")
 }
 
-type fakeClock struct{ now time.Time }
+// fakeClock is read by the backend's own goroutines while a spec advances it.
+type fakeClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
 
-func (c *fakeClock) Now() time.Time { return c.now }
+func newFakeClock() *fakeClock { return &fakeClock{now: time.Now()} }
 
-func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
+func (c *fakeClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *fakeClock) Advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
+}
 
 func openNDJSON(dir string, clock *fakeClock, maxBytes int64, keep int) *ndjson.Backend {
 	backend, err := ndjson.New(ndjson.Options{
@@ -38,7 +53,7 @@ func openNDJSON(dir string, clock *fakeClock, maxBytes int64, keep int) *ndjson.
 
 var _ = Describe("ndjson backend", func() {
 	recordstoretest.Conformance(func() recordstoretest.Harness {
-		clock := &fakeClock{now: time.Now()}
+		clock := newFakeClock()
 		dir := GinkgoT().TempDir()
 		open := func() recordstore.Backend { return openNDJSON(dir, clock, 1<<20, 100) }
 		return recordstoretest.Harness{
@@ -57,7 +72,7 @@ var _ = Describe("ndjson backend files", func() {
 	BeforeEach(func() {
 		ctx = context.Background()
 		dir = GinkgoT().TempDir()
-		clock = &fakeClock{now: time.Now()}
+		clock = newFakeClock()
 	})
 
 	It("writes one line per row, seq and row, to <dir>/<kind>/<stream>.ndjson", func() {
@@ -92,7 +107,7 @@ var _ = Describe("ndjson backend files", func() {
 	It("keeps only the newest streams of a kind when a new one opens", func() {
 		backend := openNDJSON(dir, clock, 1<<20, 2)
 		for _, stream := range []string{"run-1", "run-2", "run-3"} {
-			clock.now = clock.now.Add(time.Minute)
+			clock.Advance(time.Minute)
 			_, err := backend.Append(ctx, stream, recordstoretest.Kind, recordstoretest.SampleRows(1, 1))
 			Expect(err).ToNot(HaveOccurred())
 		}

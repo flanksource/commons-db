@@ -239,7 +239,24 @@ func (b *Backend) openStream(ctx context.Context, stream, kind string, now time.
 	if meta.Kind != kind {
 		return recordstore.Meta{}, false, fmt.Errorf("stream %q holds kind %q, not %q", stream, meta.Kind, kind)
 	}
-	return meta, false, nil
+	return meta, false, recordstore.RefuseSealed(meta)
+}
+
+// Seal marks stream complete in its metadata, the commit point every append
+// reads under the stream's lock.
+func (b *Backend) Seal(ctx context.Context, stream string) error {
+	if err := recordstore.ValidateStream(stream); err != nil {
+		return err
+	}
+	unlock := b.locks.Lock(stream)
+	defer unlock()
+	meta, err := b.readMeta(ctx, stream)
+	if err != nil || meta.Sealed {
+		return err
+	}
+	now := b.now()
+	meta.Sealed, meta.UpdatedAt = true, now
+	return b.writeMeta(ctx, meta, now)
 }
 
 // Meta describes stream.

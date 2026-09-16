@@ -281,7 +281,7 @@ func (b *Backend) openStream(ctx context.Context, tx *sql.Tx, stream, kind strin
 	if meta.Kind != kind {
 		return recordstore.Meta{}, fmt.Errorf("stream %q holds kind %q, not %q", stream, meta.Kind, kind)
 	}
-	return meta, nil
+	return meta, recordstore.RefuseSealed(meta)
 }
 
 // openStoredStream removes an expired incarnation in the caller's write
@@ -324,6 +324,30 @@ func (b *Backend) Expire(ctx context.Context, stream string, ttl time.Duration) 
 			sqlitetable.FormatTime(now.Add(ttl)), stream, sqlitetable.FormatTime(now))
 		if err != nil {
 			return fmt.Errorf("stream %q: expire: %w", stream, err)
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+			return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
+		}
+		return nil
+	})
+}
+
+// Seal marks stream complete on its record_streams row. An index mirrors a
+// sealed source through it once it holds every row the source does.
+func (b *Backend) Seal(ctx context.Context, stream string) error {
+	if err := recordstore.ValidateStream(stream); err != nil {
+		return err
+	}
+	unlock := b.locks.Lock(stream)
+	defer unlock()
+	now := b.now()
+	return b.database.Write(func(writer *sql.DB) error {
+		result, err := writer.ExecContext(ctx,
+			`UPDATE record_streams SET sealed = 1, updated_at = CASE WHEN sealed = 1 THEN updated_at ELSE ? END
+				WHERE stream_id = ? AND (expires_at IS NULL OR expires_at > ?)`,
+			sqlitetable.FormatTime(now), stream, sqlitetable.FormatTime(now))
+		if err != nil {
+			return fmt.Errorf("stream %q: seal: %w", stream, err)
 		}
 		if affected, err := result.RowsAffected(); err != nil || affected == 0 {
 			return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
