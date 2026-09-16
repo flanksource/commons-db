@@ -246,7 +246,7 @@ func (b *Backend) openStream(stream, kind string) (sidecar, error) {
 		if state.Kind != kind {
 			return sidecar{}, fmt.Errorf("stream %q holds kind %q, not %q", stream, state.Kind, kind)
 		}
-		return state, nil
+		return state, recordstore.RefuseSealed(state.Meta)
 	}
 	if !errors.Is(err, recordstore.ErrNotFound) {
 		return sidecar{}, err
@@ -383,6 +383,36 @@ func (b *Backend) Expire(_ context.Context, stream string, ttl time.Duration) er
 	}
 	expires := b.now().Add(ttl)
 	state.ExpiresAt = &expires
+	return b.writeSidecar(state)
+}
+
+// File is the data file stream's committed rows are in. A trim moves them to a
+// new one, so it names the file as of the call.
+func (b *Backend) File(_ context.Context, stream string) (string, error) {
+	if err := recordstore.ValidateStream(stream); err != nil {
+		return "", err
+	}
+	unlock := b.locks.Lock(stream)
+	defer unlock()
+	state, err := b.find(stream)
+	if err != nil {
+		return "", err
+	}
+	return b.dataPath(state), nil
+}
+
+// Seal marks stream complete in its sidecar.
+func (b *Backend) Seal(_ context.Context, stream string) error {
+	if err := recordstore.ValidateStream(stream); err != nil {
+		return err
+	}
+	unlock := b.locks.Lock(stream)
+	defer unlock()
+	state, err := b.find(stream)
+	if err != nil || state.Sealed {
+		return err
+	}
+	state.Sealed, state.UpdatedAt = true, b.now()
 	return b.writeSidecar(state)
 }
 

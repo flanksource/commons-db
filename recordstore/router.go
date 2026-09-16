@@ -49,7 +49,9 @@ func NewRouter(options RouterOptions) (*Router, error) {
 	return &Router{options: options, routes: map[string]Backend{}}, nil
 }
 
-func (r *Router) backend(ctx context.Context) (Backend, error) {
+// Resolve is the backend of the route ctx names, opened on first use: every
+// call delegates to it, and a caller asking where a stream lives asks it.
+func (r *Router) Resolve(ctx context.Context) (Backend, error) {
 	route, err := r.options.Route(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("route the record store call: %w", err)
@@ -77,7 +79,7 @@ func (r *Router) backend(ctx context.Context) (Backend, error) {
 }
 
 func (r *Router) Append(ctx context.Context, stream, kind string, rows []Row) (AppendResult, error) {
-	backend, err := r.backend(ctx)
+	backend, err := r.Resolve(ctx)
 	if err != nil {
 		return AppendResult{}, err
 	}
@@ -85,7 +87,7 @@ func (r *Router) Append(ctx context.Context, stream, kind string, rows []Row) (A
 }
 
 func (r *Router) Trim(ctx context.Context, stream string, before time.Time) (Meta, error) {
-	backend, err := r.backend(ctx)
+	backend, err := r.Resolve(ctx)
 	if err != nil {
 		return Meta{}, err
 	}
@@ -93,7 +95,7 @@ func (r *Router) Trim(ctx context.Context, stream string, before time.Time) (Met
 }
 
 func (r *Router) Meta(ctx context.Context, stream string) (Meta, error) {
-	backend, err := r.backend(ctx)
+	backend, err := r.Resolve(ctx)
 	if err != nil {
 		return Meta{}, err
 	}
@@ -101,7 +103,7 @@ func (r *Router) Meta(ctx context.Context, stream string) (Meta, error) {
 }
 
 func (r *Router) Scan(ctx context.Context, stream string, afterSeq int64, fn func(int64, Row) error) error {
-	backend, err := r.backend(ctx)
+	backend, err := r.Resolve(ctx)
 	if err != nil {
 		return err
 	}
@@ -109,11 +111,19 @@ func (r *Router) Scan(ctx context.Context, stream string, afterSeq int64, fn fun
 }
 
 func (r *Router) Expire(ctx context.Context, stream string, ttl time.Duration) error {
-	backend, err := r.backend(ctx)
+	backend, err := r.Resolve(ctx)
 	if err != nil {
 		return err
 	}
 	return backend.Expire(ctx, stream, ttl)
+}
+
+func (r *Router) Seal(ctx context.Context, stream string) error {
+	backend, err := r.Resolve(ctx)
+	if err != nil {
+		return err
+	}
+	return backend.Seal(ctx, stream)
 }
 
 // Forget drops and closes route's backend, so the next call on the route
