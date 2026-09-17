@@ -21,7 +21,7 @@ func (b *Backend) Trim(ctx context.Context, stream string, before time.Time) (re
 	var meta recordstore.Meta
 	err := b.database.Write(func(writer *sql.DB) error {
 		var err error
-		meta, err = b.trimStreamLocked(ctx, writer, stream, func(tx *sql.Tx, table string, meta recordstore.Meta) (recordstore.Meta, error) {
+		meta, err = b.trimStreamLocked(ctx, writer, stream, func(tx *sql.Tx, table sqlitetable.Table, meta recordstore.Meta) (recordstore.Meta, error) {
 			return trimTx(ctx, tx, table, meta, before)
 		})
 		return err
@@ -32,7 +32,7 @@ func (b *Backend) Trim(ctx context.Context, stream string, before time.Time) (re
 // trimStreamLocked runs trim over stream's live metadata and table in one
 // transaction and commits the metadata it returns.
 func (b *Backend) trimStreamLocked(ctx context.Context, writer *sql.DB, stream string,
-	trim func(tx *sql.Tx, table string, meta recordstore.Meta) (recordstore.Meta, error),
+	trim func(tx *sql.Tx, table sqlitetable.Table, meta recordstore.Meta) (recordstore.Meta, error),
 ) (recordstore.Meta, error) {
 	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
@@ -43,9 +43,9 @@ func (b *Backend) trimStreamLocked(ctx context.Context, writer *sql.DB, stream s
 	if err != nil {
 		return recordstore.Meta{}, err
 	}
-	var table string
-	if err := tx.QueryRowContext(ctx, `SELECT table_name FROM record_kinds WHERE kind = ?`, meta.Kind).Scan(&table); err != nil {
-		return recordstore.Meta{}, fmt.Errorf("stream %q: read table: %w", stream, err)
+	table, err := storeTable(ctx, tx, meta.Kind)
+	if err != nil {
+		return recordstore.Meta{}, fmt.Errorf("stream %q: %w", stream, err)
 	}
 	if meta, err = trim(tx, table, meta); err != nil {
 		return recordstore.Meta{}, err
@@ -61,7 +61,7 @@ func (b *Backend) trimStreamLocked(ctx context.Context, writer *sql.DB, stream s
 
 // trimTx removes, in tx, every append of meta's stream up to the last one made
 // before before.
-func trimTx(ctx context.Context, tx *sql.Tx, table string, meta recordstore.Meta, before time.Time) (recordstore.Meta, error) {
+func trimTx(ctx context.Context, tx *sql.Tx, table sqlitetable.Table, meta recordstore.Meta, before time.Time) (recordstore.Meta, error) {
 	var last sql.NullInt64
 	if err := tx.QueryRowContext(ctx, `SELECT MAX(last_seq) FROM record_appends WHERE stream_id = ? AND appended_at < ?`,
 		meta.Stream, sqlitetable.FormatTime(before)).Scan(&last); err != nil {
@@ -75,11 +75,20 @@ func trimTx(ctx context.Context, tx *sql.Tx, table string, meta recordstore.Meta
 
 // trimBelowTx removes, in tx, meta's rows below lowSeq and the append times
 // that only described them.
-func trimBelowTx(ctx context.Context, tx *sql.Tx, table string, meta recordstore.Meta, lowSeq int64) (recordstore.Meta, error) {
+func trimBelowTx(ctx context.Context, tx *sql.Tx, table sqlitetable.Table, meta recordstore.Meta, lowSeq int64) (recordstore.Meta, error) {
 	if lowSeq <= meta.LowSeq {
 		return meta, nil
 	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE "c0" = ? AND "c1" < ?`, sqlitetable.QuoteIdentifier(table)), meta.Stream, lowSeq); err != nil {
+	streamID, err := table.Physical(streamColumn)
+	if err != nil {
+		return recordstore.Meta{}, err
+	}
+	seq, err := table.Physical(seqColumn)
+	if err != nil {
+		return recordstore.Meta{}, err
+	}
+	statement := fmt.Sprintf(`DELETE FROM %s WHERE %s = ? AND %s < ?`, sqlitetable.QuoteIdentifier(table.Name), streamID, seq)
+	if _, err := tx.ExecContext(ctx, statement, meta.Stream, lowSeq); err != nil {
 		return recordstore.Meta{}, fmt.Errorf("stream %q: trim rows below seq %d: %w", meta.Stream, lowSeq, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM record_appends WHERE stream_id = ? AND last_seq < ?`, meta.Stream, lowSeq); err != nil {
@@ -96,8 +105,12 @@ func unstoredRows(ctx context.Context, tx *sql.Tx, table kindTable, stream strin
 	if write.keys == nil {
 		return write.stored, 0, nil
 	}
-	statement, err := tx.PrepareContext(ctx, fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE "c0" = ? AND %s = ?)`,
-		sqlitetable.QuoteIdentifier(table.Name), table.key))
+	streamID, err := table.Physical(streamColumn)
+	if err != nil {
+		return nil, 0, err
+	}
+	statement, err := tx.PrepareContext(ctx, fmt.Sprintf(`SELECT EXISTS(SELECT 1 FROM %s WHERE %s = ? AND %s = ?)`,
+		sqlitetable.QuoteIdentifier(table.Name), streamID, table.key))
 	if err != nil {
 		return nil, 0, fmt.Errorf("stream %q: prepare key lookup: %w", stream, err)
 	}

@@ -206,7 +206,8 @@ var _ = Describe("sqlite backend storage", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, rows := recordstoretest.Scanned(escaped, "run-1", 0)
 		Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(1, 1))))
-		Expect(os.Stat(escapedPath)).Error().ToNot(HaveOccurred())
+		Expect(escaped.Path()).To(Equal(filepath.Join(filepath.Dir(escapedPath), "v4", "records?#.sqlite")))
+		Expect(os.Stat(escaped.Path())).Error().ToNot(HaveOccurred())
 	})
 
 	It("sweeps expired streams on its own every sweep interval, until it is closed", func() {
@@ -278,7 +279,7 @@ var _ = Describe("sqlite backend storage", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(reader.Close)
 		readPage := func(offset int) []int64 {
-			rows, err := reader.QueryContext(ctx, `SELECT "c1" FROM "records_sample" WHERE "c0" = ? ORDER BY "c1" LIMIT ? OFFSET ?`, "run-1", pageSize, offset)
+			rows, err := reader.QueryContext(ctx, `SELECT seq FROM records_sample WHERE stream_id = ? ORDER BY seq LIMIT ? OFFSET ?`, "run-1", pageSize, offset)
 			Expect(err).ToNot(HaveOccurred())
 			defer func() { Expect(rows.Close()).To(Succeed()) }()
 			var seqs []int64

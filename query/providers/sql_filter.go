@@ -156,45 +156,57 @@ func whereTail(where string) string {
 	return "\nWHERE " + where
 }
 
+// keysetClause resumes strictly after position under orderClause's ordering,
+// where nulls sort last in both directions. Alternative i holds the columns
+// before i equal to their keys (a null key as IS NULL) and column i strictly
+// after its key: past a value, a later value or a null; past a null, nothing,
+// so that alternative is dropped.
 func keysetClause(dialect sqlDialect, order query.Order, position query.CursorPosition) (string, []any, error) {
 	if position.IsZero() {
 		return "", nil, nil
 	}
-	if len(position.Keys) != len(order) {
-		return "", nil, fmt.Errorf("cursor has %d keys for a %d-column order", len(position.Keys), len(order))
+	if err := order.ValidatePosition(position.Keys); err != nil {
+		return "", nil, err
 	}
-	alternatives := squirrel.Or{}
+	columns := make([]string, len(order))
 	for index, by := range order {
-		conditions := squirrel.And{}
-		for prefix := 0; prefix < index; prefix++ {
-			if position.Keys[prefix] == nil {
-				return "", nil, fmt.Errorf("cursor key %d for column %q is null; cursor columns must be non-null", prefix, order[prefix].Column)
-			}
-			column, err := dialect.quote(order[prefix].Column)
-			if err != nil {
-				return "", nil, err
-			}
-			conditions = append(conditions, squirrel.Eq{column: position.Keys[prefix]})
-		}
-		if position.Keys[index] == nil {
-			return "", nil, fmt.Errorf("cursor key %d for column %q is null; cursor columns must be non-null", index, by.Column)
-		}
 		column, err := dialect.quote(by.Column)
 		if err != nil {
 			return "", nil, err
 		}
-		if by.Desc {
-			conditions = append(conditions, squirrel.Lt{column: position.Keys[index]})
-		} else {
-			conditions = append(conditions, squirrel.Gt{column: position.Keys[index]})
+		columns[index] = column
+	}
+	alternatives := squirrel.Or{}
+	for index, by := range order {
+		key := position.Keys[index]
+		if key == nil {
+			continue
 		}
+		conditions := squirrel.And{}
+		for prefix := 0; prefix < index; prefix++ {
+			conditions = append(conditions, squirrel.Eq{columns[prefix]: position.Keys[prefix]})
+		}
+		var after squirrel.Sqlizer = squirrel.Gt{columns[index]: key}
+		if by.Desc {
+			after = squirrel.Lt{columns[index]: key}
+		}
+		conditions = append(conditions, squirrel.Or{after, squirrel.Eq{columns[index]: nil}})
 		alternatives = append(alternatives, unwrapSingle(conditions))
+	}
+	if len(alternatives) == 1 {
+		return renderClause(dialect, alternatives[0])
 	}
 	return renderClause(dialect, alternatives)
 }
 
-// orderClause renders a declared order for the wrapper. An undeclared order
-// renders nothing, leaving whatever the author's statement does.
+// orderClause renders a declared order for the wrapper, nulls last in both
+// directions. An undeclared order renders nothing, leaving whatever the
+// author's statement does.
+//
+// SQL Server and MySQL have no NULLS LAST, so a leading IS NULL term puts the
+// nulls after every value there; the other dialects spell it out, because
+// their defaults disagree (SQLite and SQL Server put nulls first ascending,
+// Postgres last).
 func orderClause(dialect sqlDialect, order query.Order) (string, error) {
 	terms := make([]string, 0, len(order))
 	for _, by := range order {
@@ -202,10 +214,16 @@ func orderClause(dialect sqlDialect, order query.Order) (string, error) {
 		if err != nil {
 			return "", err
 		}
+		direction := "ASC"
 		if by.Desc {
-			column += " DESC"
+			direction = "DESC"
 		}
-		terms = append(terms, column)
+		switch dialect {
+		case dialectSQLServer, dialectMySQL:
+			terms = append(terms, fmt.Sprintf("CASE WHEN %s IS NULL THEN 1 ELSE 0 END, %s %s", column, column, direction))
+		default:
+			terms = append(terms, fmt.Sprintf("%s %s NULLS LAST", column, direction))
+		}
 	}
 	return strings.Join(terms, ", "), nil
 }
