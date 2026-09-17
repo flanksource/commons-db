@@ -53,7 +53,7 @@ func (r *Runner) RunTop(ctx context.Context, name string, options TopOptions) er
 	defer cancelSig()
 	go func() {
 		<-sigCtx.Done()
-		session.Stop()
+		session.Stop("interrupted by signal")
 	}()
 
 	// The clicky task keeps the render loop alive for the session's lifetime;

@@ -92,7 +92,7 @@ func (r *Runner) RunTrace(ctx context.Context, name string, options TraceOptions
 	defer cancelSig()
 	go func() {
 		<-sigCtx.Done()
-		session.Stop()
+		session.Stop("interrupted by signal")
 	}()
 
 	for _, e := range replay {

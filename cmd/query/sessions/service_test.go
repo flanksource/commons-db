@@ -60,15 +60,15 @@ func (m *sessionStreamMock) Stream(ctx dbcontext.Context, _ query.ProviderReques
 	return nil
 }
 
-func newSessionAPITest(t *testing.T, maxSessions int, profiles ...query.Profile) (*sessionHandler, *query.SessionRegistry) {
+func newSessionAPITest(t *testing.T, opts query.RegistryOptions, profiles ...query.Profile) (*sessionHandler, *query.SessionRegistry) {
 	t.Helper()
 	store, err := profilepkg.NewFileStore(t.TempDir())
 	require.NoError(t, err)
 	for _, p := range profiles {
 		require.NoError(t, store.Save(context.Background(), p))
 	}
-	registry := query.NewSessionRegistry(query.RegistryOptions{MaxSessions: maxSessions})
-	t.Cleanup(registry.StopAll)
+	registry := query.NewSessionRegistry(opts)
+	t.Cleanup(func() { require.NoError(t, registry.StopAll(context.Background())) })
 	h := newSessionHandler(sessionHandlerOptions{
 		Prefix:   "/api/v1",
 		Ctx:      dbcontext.New(),
@@ -118,7 +118,7 @@ func waitSessionState(t *testing.T, reg *query.SessionRegistry, id string, state
 
 func TestSessionAPIStartsTraceSession(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-trace", rows: []query.Row{{"n": 1.0}}})
-	h, reg := newSessionAPITest(t, 5, traceTestProfile("exec trace", "sess-api-trace"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, traceTestProfile("exec trace", "sess-api-trace"))
 
 	info := startSession(t, h, "/api/v1/profile/exec-trace/sessions")
 	require.Equal(t, query.KindTrace, info.Kind)
@@ -126,14 +126,14 @@ func TestSessionAPIStartsTraceSession(t *testing.T) {
 }
 
 func TestSessionAPIRejectsPlainProfileWithoutInterval(t *testing.T) {
-	h, _ := newSessionAPITest(t, 5, execProfile("plain"))
+	h, _ := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, execProfile("plain"))
 	rec := doReq(h, http.MethodPost, "/api/v1/profile/plain/sessions?region=EU")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestSessionAPISynthesizesTopForPlainProfile(t *testing.T) {
 	query.RegisterProvider(&execMock{rows: []query.Row{{"id": 1}}})
-	h, reg := newSessionAPITest(t, 5, execProfile("plain-top"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, execProfile("plain-top"))
 
 	info := startSession(t, h, "/api/v1/profile/plain-top/sessions?interval=1s&region=EU")
 	require.Equal(t, query.KindTop, info.Kind)
@@ -142,7 +142,7 @@ func TestSessionAPISynthesizesTopForPlainProfile(t *testing.T) {
 
 	s, ok := reg.Get(info.ID)
 	require.True(t, ok)
-	s.Stop()
+	s.Stop("test over")
 	waitSessionState(t, reg, info.ID, query.SessionStopped)
 }
 
@@ -160,7 +160,7 @@ func followProfile(name, providerType string) query.Profile {
 
 func TestSessionAPIFollowsPlainProfileAsTrace(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-follow", rows: []query.Row{{"n": 1.0}}, block: true})
-	h, reg := newSessionAPITest(t, 5, followProfile("plain-follow", "sess-api-follow"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, followProfile("plain-follow", "sess-api-follow"))
 
 	info := startSession(t, h, "/api/v1/profile/plain-follow/sessions?follow=true&region=EU")
 	require.Equal(t, query.KindTrace, info.Kind)
@@ -171,7 +171,7 @@ func TestSessionAPIFollowsPlainProfileAsTrace(t *testing.T) {
 
 	s, ok := reg.Get(info.ID)
 	require.True(t, ok)
-	s.Stop()
+	s.Stop("test over")
 	// Awaited, not just requested: a session still running past its own test
 	// reads the provider registry while the next test writes to it.
 	waitSessionState(t, reg, info.ID, query.SessionStopped)
@@ -179,7 +179,7 @@ func TestSessionAPIFollowsPlainProfileAsTrace(t *testing.T) {
 
 func TestSessionAPIRejectsFollowForNonStreamingProvider(t *testing.T) {
 	query.RegisterProvider(&execMock{rows: []query.Row{{"id": 1}}})
-	h, _ := newSessionAPITest(t, 5, execProfile("plain-nofollow"))
+	h, _ := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, execProfile("plain-nofollow"))
 
 	rec := doReq(h, http.MethodPost, "/api/v1/profile/plain-nofollow/sessions?follow=true")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -189,7 +189,7 @@ func TestSessionAPIRejectsFollowForNonStreamingProvider(t *testing.T) {
 
 func TestSessionAPIRejectsFollowCombinedWithInterval(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-follow-interval", block: true})
-	h, _ := newSessionAPITest(t, 5, followProfile("both", "sess-api-follow-interval"))
+	h, _ := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, followProfile("both", "sess-api-follow-interval"))
 
 	rec := doReq(h, http.MethodPost, "/api/v1/profile/both/sessions?follow=true&interval=1s")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -197,7 +197,7 @@ func TestSessionAPIRejectsFollowCombinedWithInterval(t *testing.T) {
 
 func TestSessionAPIRejectsAnUnreadableFollowFlag(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-follow-garbage", block: true})
-	h, _ := newSessionAPITest(t, 5, followProfile("garbage", "sess-api-follow-garbage"))
+	h, _ := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, followProfile("garbage", "sess-api-follow-garbage"))
 
 	rec := doReq(h, http.MethodPost, "/api/v1/profile/garbage/sessions?follow=perhaps")
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -206,7 +206,7 @@ func TestSessionAPIRejectsAnUnreadableFollowFlag(t *testing.T) {
 
 func TestSessionAPIReturnsConflictAtCapacity(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-block", block: true})
-	h, reg := newSessionAPITest(t, 1, traceTestProfile("blocker", "sess-api-block"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 1}, traceTestProfile("blocker", "sess-api-block"))
 
 	info := startSession(t, h, "/api/v1/profile/blocker/sessions")
 	waitSessionState(t, reg, info.ID, query.SessionRunning)
@@ -217,18 +217,18 @@ func TestSessionAPIReturnsConflictAtCapacity(t *testing.T) {
 
 func TestSessionAPIStopAndList(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-stop", rows: []query.Row{{"n": 1.0}}, block: true})
-	h, reg := newSessionAPITest(t, 5, traceTestProfile("stoppable", "sess-api-stop"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, traceTestProfile("stoppable", "sess-api-stop"))
 
 	info := startSession(t, h, "/api/v1/profile/stoppable/sessions")
 	waitSessionState(t, reg, info.ID, query.SessionRunning)
 
 	rec := doReq(h, http.MethodGet, "/api/v1/sessions")
 	require.Equal(t, http.StatusOK, rec.Code)
-	var list []query.SessionInfo
+	var list sessionListResponse
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &list))
-	require.Len(t, list, 1)
+	require.Len(t, list.Items, 1)
 
-	rec = doReq(h, http.MethodDelete, "/api/v1/sessions/"+info.ID)
+	rec = doReq(h, http.MethodPost, "/api/v1/sessions/"+info.ID+"/stop")
 	require.Equal(t, http.StatusOK, rec.Code)
 	waitSessionState(t, reg, info.ID, query.SessionStopped)
 
@@ -244,7 +244,7 @@ func TestSessionAPIStopAndList(t *testing.T) {
 
 func TestSessionAPIStreamsEventsAsSSE(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-sse", rows: []query.Row{{"n": 1.0}, {"n": 2.0}}})
-	h, reg := newSessionAPITest(t, 5, traceTestProfile("sse trace", "sess-api-sse"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, traceTestProfile("sse trace", "sess-api-sse"))
 	srv := httptest.NewServer(h)
 	t.Cleanup(srv.Close)
 
@@ -273,7 +273,7 @@ func TestSessionAPIStreamsEventsAsSSE(t *testing.T) {
 
 func TestSessionAPIExportsNDJSON(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-ndjson", rows: []query.Row{{"n": 1.0}, {"n": 2.0}}})
-	h, reg := newSessionAPITest(t, 5, traceTestProfile("ndjson trace", "sess-api-ndjson"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, traceTestProfile("ndjson trace", "sess-api-ndjson"))
 
 	info := startSession(t, h, "/api/v1/profile/ndjson-trace/sessions")
 	waitSessionState(t, reg, info.ID, query.SessionCompleted)
@@ -291,7 +291,7 @@ func TestSessionAPIExportsNDJSON(t *testing.T) {
 
 func TestSessionAPIServesResult(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-result", rows: []query.Row{{"n": 1.0}, {"n": 2.0}}})
-	h, reg := newSessionAPITest(t, 5, traceTestProfile("result trace", "sess-api-result"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, traceTestProfile("result trace", "sess-api-result"))
 
 	info := startSession(t, h, "/api/v1/profile/result-trace/sessions")
 	waitSessionState(t, reg, info.ID, query.SessionCompleted)
@@ -304,7 +304,7 @@ func TestSessionAPIServesResult(t *testing.T) {
 }
 
 func TestSessionAPIDelegatesUnrelatedPaths(t *testing.T) {
-	h, _ := newSessionAPITest(t, 5)
+	h, _ := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5})
 	next := h.next.(*nextMarker)
 	_ = doReq(h, http.MethodGet, "/api/v1/profile/anything")
 	require.True(t, next.hit, "non-session paths fall through")

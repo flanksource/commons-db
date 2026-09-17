@@ -3,6 +3,7 @@ package sessions
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"time"
 
@@ -13,18 +14,27 @@ import (
 	"github.com/google/uuid"
 )
 
+// connectionTraceProfile is the virtual profile a connection's trace sessions
+// are authorized and recorded under.
+func connectionTraceProfile(id uuid.UUID) string {
+	return "connection-" + id.String() + "-sql-xevent"
+}
+
+// connectionTraceInput is the body a connection trace is started with.
+type connectionTraceInput struct {
+	Database    string   `json:"database"`
+	Users       []string `json:"users"`
+	Apps        []string `json:"apps"`
+	Hosts       []string `json:"hosts"`
+	Events      []string `json:"events"`
+	MinDuration string   `json:"minDuration"`
+	Duration    string   `json:"duration"`
+}
+
 // startConnectionTrace creates an ephemeral profile in the shared session
 // registry. Only POST starts capture; connection discovery remains read-only.
 func (h *sessionHandler) startConnectionTrace(w http.ResponseWriter, r *http.Request, id string) {
-	var input struct {
-		Database    string   `json:"database"`
-		Users       []string `json:"users"`
-		Apps        []string `json:"apps"`
-		Hosts       []string `json:"hosts"`
-		Events      []string `json:"events"`
-		MinDuration string   `json:"minDuration"`
-		Duration    string   `json:"duration"`
-	}
+	var input connectionTraceInput
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil {
@@ -40,13 +50,8 @@ func (h *sessionHandler) startConnectionTrace(w http.ResponseWriter, r *http.Req
 			return
 		}
 	}
-	reference := id
-	if _, err := uuid.Parse(id); err != nil {
-		reference = "connection://" + id
-	}
-	conn, err := dbcontext.HydrateConnectionByURL(h.ctx.Wrap(r.Context()), reference)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+	reference, conn, ok := h.traceableConnection(w, r, id)
+	if !ok {
 		return
 	}
 	if conn.Type != models.ConnectionTypeSQLServer {
@@ -54,7 +59,7 @@ func (h *sessionHandler) startConnectionTrace(w http.ResponseWriter, r *http.Req
 		return
 	}
 	profile := query.Profile{
-		Name: "connection-" + conn.ID.String() + "-sql-xevent", Virtual: true,
+		Name: connectionTraceProfile(conn.ID), Virtual: true,
 		Provider: query.ProviderConfig{Type: (sqlXEventProvider{}).Type(), Connection: reference, Options: map[string]any{
 			"database": input.Database, "users": input.Users, "apps": input.Apps,
 			"hosts": input.Hosts, "events": input.Events, "minDuration": input.MinDuration,
@@ -70,5 +75,31 @@ func (h *sessionHandler) startConnectionTrace(w http.ResponseWriter, r *http.Req
 		http.Error(w, err.Error(), status)
 		return
 	}
-	writeSessionJSON(w, http.StatusCreated, session.Snapshot())
+	h.writeLive(w, r, http.StatusCreated, session)
+}
+
+// traceableConnection resolves the connection id names, with the reference it
+// was looked up by, once r may start a trace of it. A connection a caller may
+// not trace is answered exactly as one that does not exist: a uuid names the
+// virtual profile before anything is looked up, so it is authorized first; a
+// name is authorized once it resolves to one.
+func (h *sessionHandler) traceableConnection(w http.ResponseWriter, r *http.Request, id string) (string, *models.Connection, bool) {
+	reference, notFound := id, fmt.Sprintf("connection %q not found", id)
+	if parsed, err := uuid.Parse(id); err != nil {
+		reference = "connection://" + id
+		notFound = fmt.Sprintf("connection %q not found", reference)
+	} else if h.refusal(r, connectionTraceProfile(parsed), ActionControl) != nil {
+		http.Error(w, notFound, http.StatusNotFound)
+		return "", nil, false
+	}
+	conn, err := dbcontext.HydrateConnectionByURL(h.ctx.Wrap(r.Context()), reference)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return "", nil, false
+	}
+	if h.refusal(r, connectionTraceProfile(conn.ID), ActionControl) != nil {
+		http.Error(w, notFound, http.StatusNotFound)
+		return "", nil, false
+	}
+	return reference, conn, true
 }
