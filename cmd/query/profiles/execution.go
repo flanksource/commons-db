@@ -461,7 +461,7 @@ func (h *execHandler) writeConnectionRequired(w http.ResponseWriter, profile, ma
 func parseExportRequest(r *http.Request, profile query.Profile) (exportRequest, error) {
 	limits := profile.RowLimits()
 	request := exportRequest{
-		format:   requestedFormat(r),
+		format:   RequestedFormat(r),
 		scope:    r.URL.Query().Get("scope"),
 		limit:    limits.PageSize,
 		maxRows:  limits.MaxExportRows,

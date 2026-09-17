@@ -753,7 +753,7 @@ func TestRequestedFormatHonoursQualityWeights(t *testing.T) {
 			if tc.accept != "" {
 				req.Header.Set("Accept", tc.accept)
 			}
-			if got := requestedFormat(req); got != tc.want {
+			if got := RequestedFormat(req); got != tc.want {
 				t.Fatalf("requestedFormat(%q) = %q, want %q", tc.accept, got, tc.want)
 			}
 		})
@@ -765,7 +765,7 @@ func TestRequestedFormatHonoursQualityWeights(t *testing.T) {
 func TestRequestedFormatPrefersTheExplicitParameter(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/profile/any?format=csv", nil)
 	req.Header.Set("Accept", "application/json+clicky;q=1.0")
-	if got := requestedFormat(req); got != "csv" {
+	if got := RequestedFormat(req); got != "csv" {
 		t.Fatalf("requestedFormat = %q, want the named format", got)
 	}
 }

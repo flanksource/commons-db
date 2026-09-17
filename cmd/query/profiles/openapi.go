@@ -205,7 +205,7 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 		filterName := profileFilterName(profile.Name, filterOwner)
 		ensureProfileFilterComponent(spec, entity.FilterSpec{
 			Name: filterName, Label: binding.Label,
-			Type: binding.ControlType(), Multi: binding.Multi,
+			Type: binding.ControlType(), Unit: binding.ControlUnit(), Multi: binding.Multi,
 			Source: entity.FilterSourceSpec{Kind: entity.SourceCustom},
 		})
 		schema := &rpc.OpenAPISchema{Type: "string", Title: binding.Label}
