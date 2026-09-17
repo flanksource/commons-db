@@ -145,6 +145,7 @@ func Conformance(open func() Harness) {
 	s.tailSpecs()
 	s.sealSpecs()
 	s.sealTailSpecs()
+	s.deleteSpecs()
 }
 
 // suite is the state every conformance spec reads, set before each one.
