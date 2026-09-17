@@ -1,9 +1,13 @@
 // Package sqlitetable writes rows described by query.ColumnDef into SQLite
 // tables that a `sql` profile can read back under the declared column names.
 //
-// Columns are stored positionally ("c0", "c1", …) and aliased on the way out,
-// so a declared name is never an identifier the table itself has to carry —
-// any string a profile can name a column is a name this package can store.
+// Each column is stored under a safe physical name derived from its declared
+// one when the table is created (see PhysicalNames), and aliased back on the
+// way out, so any string a profile can name a column is a name this package
+// can store, while the table stays readable by name in hand-written SQL. The
+// derived names are the table's own: its owner persists Table.StoredAs and
+// hands it back, because a later build deriving differently must never
+// reinterpret an existing table.
 package sqlitetable
 
 import (
@@ -35,6 +39,16 @@ type Table struct {
 	Name    string
 	Columns []query.ColumnDef
 
+	// StoredAs is the physical column each of Columns is stored in, index-aligned
+	// with Columns. Create derives it for a table created without it; a table
+	// read back from storage carries the names it was created with.
+	StoredAs []string
+
+	// Reserved names the declared columns the table's owner addresses by their
+	// own names. Each keeps its name, which must already be a safe bare name, and
+	// every other column deriving an equal name is numbered instead.
+	Reserved []string
+
 	// PrimaryKey names the declared columns that together identify a row.
 	PrimaryKey []string
 
@@ -42,41 +56,98 @@ type Table struct {
 	Unique []string
 }
 
-// Write creates the table and inserts rows into it.
-func Write(ctx context.Context, database Execer, table Table, rows []query.Row) error {
-	if err := table.Create(ctx, database); err != nil {
-		return err
+// Write creates the table, inserts rows into it, and returns it with the
+// physical names it was created with.
+func Write(ctx context.Context, database Execer, table Table, rows []query.Row) (Table, error) {
+	created, err := table.Create(ctx, database)
+	if err != nil {
+		return Table{}, err
 	}
-	return table.Insert(ctx, database, rows)
+	return created, created.Insert(ctx, database, rows)
 }
 
-// Create creates the table and its unique indexes. The table must not exist.
-func (t Table) Create(ctx context.Context, database Execer) error {
+// Create creates the table and its unique indexes, and returns it with the
+// physical names it was created with: StoredAs as given, or derived on
+// database when empty. The table must not exist.
+func (t Table) Create(ctx context.Context, database Execer) (Table, error) {
+	if len(t.StoredAs) == 0 {
+		derived, err := t.Derive(ctx, database)
+		if err != nil {
+			return Table{}, err
+		}
+		t = derived
+	}
+	if err := t.checkStoredAs(); err != nil {
+		return Table{}, err
+	}
 	definitions := make([]string, len(t.Columns), len(t.Columns)+1)
 	for index, column := range t.Columns {
-		definitions[index] = fmt.Sprintf(`"c%d" %s`, index, Type(column.Type))
+		definitions[index] = QuoteIdentifier(t.StoredAs[index]) + " " + Type(column.Type)
 	}
 	if len(t.PrimaryKey) > 0 {
 		keys, err := t.physicalList(t.PrimaryKey)
 		if err != nil {
-			return err
+			return Table{}, err
 		}
 		definitions = append(definitions, "PRIMARY KEY ("+keys+")")
 	}
 	statement := fmt.Sprintf(`CREATE TABLE %s (%s)`, QuoteIdentifier(t.Name), strings.Join(definitions, ", "))
 	if _, err := database.ExecContext(ctx, statement); err != nil {
-		return fmt.Errorf("create table %q: %w", t.Name, err)
+		return Table{}, fmt.Errorf("create table %q: %w", t.Name, err)
 	}
 	for _, name := range t.Unique {
 		physical, err := t.Physical(name)
 		if err != nil {
-			return err
+			return Table{}, err
 		}
 		statement := fmt.Sprintf(`CREATE UNIQUE INDEX %s ON %s (%s)`,
 			QuoteIdentifier(t.Name+"_"+name), QuoteIdentifier(t.Name), physical)
 		if _, err := database.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("index table %q: %w", t.Name, err)
+			return Table{}, fmt.Errorf("index table %q: %w", t.Name, err)
 		}
+	}
+	return t, nil
+}
+
+// Derive returns the table with StoredAs derived on database by PhysicalNames:
+// reserved columns keep their names and every other column is derived against
+// them. It is for a table being created, or migrated from positional storage;
+// an existing table's names are its stored ones.
+func (t Table) Derive(ctx context.Context, database Execer) (Table, error) {
+	bare := Bare(ctx, database)
+	reserved, err := PhysicalNames(t.Reserved, nil, bare)
+	if err != nil {
+		return Table{}, fmt.Errorf("table %q: %w", t.Name, err)
+	}
+	for index, name := range t.Reserved {
+		if reserved[index] != name {
+			return Table{}, fmt.Errorf("table %q: reserved column %q is not a safe bare name", t.Name, name)
+		}
+	}
+	var declared []string
+	for _, column := range t.Columns {
+		if !slices.Contains(t.Reserved, column.Name) {
+			declared = append(declared, column.Name)
+		}
+	}
+	physical, err := PhysicalNames(declared, t.Reserved, bare)
+	if err != nil {
+		return Table{}, fmt.Errorf("table %q: %w", t.Name, err)
+	}
+	t.StoredAs = make([]string, len(t.Columns))
+	for index, column := range t.Columns {
+		if slices.Contains(t.Reserved, column.Name) {
+			t.StoredAs[index] = column.Name
+			continue
+		}
+		t.StoredAs[index], physical = physical[0], physical[1:]
+	}
+	return t, nil
+}
+
+func (t Table) checkStoredAs() error {
+	if len(t.StoredAs) != len(t.Columns) {
+		return fmt.Errorf("table %q has %d stored names for %d columns", t.Name, len(t.StoredAs), len(t.Columns))
 	}
 	return nil
 }
@@ -108,11 +179,19 @@ func (t Table) Insert(ctx context.Context, database Execer, rows []query.Row) er
 	return nil
 }
 
-// Select reads every declared column under its declared name.
+// Select reads every declared column under its declared name, aliasing only
+// the columns stored under another name. It panics on a table that carries no
+// stored names: that table was neither created nor read back from storage.
 func (t Table) Select() string {
+	if err := t.checkStoredAs(); err != nil {
+		panic(err)
+	}
 	selects := make([]string, len(t.Columns))
 	for index, column := range t.Columns {
-		selects[index] = fmt.Sprintf(`"c%d" AS %s`, index, QuoteIdentifier(column.Name))
+		selects[index] = QuoteIdentifier(t.StoredAs[index])
+		if t.StoredAs[index] != column.Name {
+			selects[index] += " AS " + QuoteIdentifier(column.Name)
+		}
 	}
 	return fmt.Sprintf(`SELECT %s FROM %s`, strings.Join(selects, ", "), QuoteIdentifier(t.Name))
 }
@@ -120,11 +199,14 @@ func (t Table) Select() string {
 // Physical is the quoted column a declared column is stored in, for a clause
 // that has to address the table itself rather than the aliased result.
 func (t Table) Physical(name string) (string, error) {
+	if err := t.checkStoredAs(); err != nil {
+		return "", err
+	}
 	index := slices.IndexFunc(t.Columns, func(column query.ColumnDef) bool { return column.Name == name })
 	if index < 0 {
 		return "", fmt.Errorf("table %q has no column %q", t.Name, name)
 	}
-	return fmt.Sprintf(`"c%d"`, index), nil
+	return QuoteIdentifier(t.StoredAs[index]), nil
 }
 
 func (t Table) physicalList(names []string) (string, error) {

@@ -27,8 +27,10 @@ import (
 
 // Options configure a sqlite backend.
 type Options struct {
-	// Path is the database file. It must be a file rather than memory: a
-	// profile reads it through a connection of its own.
+	// Path is the database file as configured, <dir>/<file>. The backend opens
+	// <dir>/v<catalog version>/<file>, so a build reading another catalog
+	// version keeps its own file; see versionedFile. It must be a file rather
+	// than memory: a profile reads it through a connection of its own.
 	Path string
 
 	// Schema resolves a kind to its columns, key and retention. A kind it
@@ -92,7 +94,11 @@ func Open(options Options) (*Backend, error) {
 	if options.SweepInterval <= 0 {
 		return nil, fmt.Errorf("sqlite record store: a positive sweep interval is required, or expired streams are never removed")
 	}
-	database, err := sqlitedb.Open(sqlitedb.Options{Path: options.Path})
+	path, err := versionedFile(context.Background(), options.Path, options.Derived)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite record store: %w", err)
+	}
+	database, err := sqlitedb.Open(sqlitedb.Options{Path: path})
 	if err != nil {
 		return nil, fmt.Errorf("sqlite record store: %w", err)
 	}
@@ -220,7 +226,7 @@ func (b *Backend) commitAppendLocked(ctx context.Context, writer *sql.DB, table 
 		return recordstore.AppendResult{}, err
 	}
 	if write.retention > 0 {
-		if meta, err = trimTx(ctx, tx, table.Name, meta, now.Add(-write.retention)); err != nil {
+		if meta, err = trimTx(ctx, tx, table.Table, meta, now.Add(-write.retention)); err != nil {
 			return recordstore.AppendResult{}, err
 		}
 		expires := now.Add(write.retention)
@@ -251,16 +257,16 @@ func (b *Backend) commitAppendLocked(ctx context.Context, writer *sql.DB, table 
 // rows part way.
 func (b *Backend) purgeExpired(ctx context.Context, stream string) error {
 	return b.database.Write(func(writer *sql.DB) error {
-		var table string
-		err := writer.QueryRowContext(ctx, `SELECT k.table_name FROM record_streams s JOIN record_kinds k ON k.kind = s.kind
-			WHERE s.stream_id = ? AND s.expires_at IS NOT NULL AND s.expires_at <= ?`, stream, sqlitetable.FormatTime(b.now())).Scan(&table)
+		var kind string
+		err := writer.QueryRowContext(ctx, `SELECT kind FROM record_streams
+			WHERE stream_id = ? AND expires_at IS NOT NULL AND expires_at <= ?`, stream, sqlitetable.FormatTime(b.now())).Scan(&kind)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return fmt.Errorf("stream %q: read expiry: %w", stream, err)
 		}
-		return b.removeStream(ctx, writer, stream, table)
+		return b.removeStream(ctx, writer, stream, kind)
 	})
 }
 
@@ -291,11 +297,7 @@ func (b *Backend) openStoredStream(ctx context.Context, tx *sql.Tx, stream strin
 	if err != nil || !meta.Expired(now) {
 		return meta, err
 	}
-	var table string
-	if err := tx.QueryRowContext(ctx, `SELECT table_name FROM record_kinds WHERE kind = ?`, meta.Kind).Scan(&table); err != nil {
-		return recordstore.Meta{}, fmt.Errorf("stream %q: read expired kind: %w", stream, err)
-	}
-	if err := removeStreamTx(ctx, tx, stream, table); err != nil {
+	if err := removeStreamTx(ctx, tx, stream, meta.Kind); err != nil {
 		return recordstore.Meta{}, err
 	}
 	return recordstore.Meta{}, fmt.Errorf("stream %q expired at %s: %w", stream, meta.ExpiresAt, recordstore.ErrNotFound)

@@ -109,7 +109,11 @@ var _ = Describe("SQLite database", func() {
 				{Name: "state", Type: query.ColumnTypeString},
 			},
 		}
-		Expect(database.Write(func(writer *sql.DB) error { return typed.Create(ctx, writer) })).To(Succeed())
+		Expect(database.Write(func(writer *sql.DB) error {
+			created, err := typed.Create(ctx, writer)
+			typed = created
+			return err
+		})).To(Succeed())
 
 		started := make(chan struct{})
 		values := map[string]any{"event id": "raw-1", "state": "new"}
@@ -134,7 +138,7 @@ var _ = Describe("SQLite database", func() {
 
 		var rawState, typedID string
 		Expect(database.Reader().QueryRow(`SELECT state FROM "raw events" WHERE "event id" = ?`, "raw-1").Scan(&rawState)).To(Succeed())
-		Expect(database.Reader().QueryRow(`SELECT "c0" FROM typed_events`).Scan(&typedID)).To(Succeed())
+		Expect(database.Reader().QueryRow(`SELECT id FROM typed_events`).Scan(&typedID)).To(Succeed())
 		Expect(rawState).To(Equal("updated"))
 		Expect(typedID).To(Equal("typed-1"))
 	})

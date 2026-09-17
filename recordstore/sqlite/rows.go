@@ -95,7 +95,15 @@ func (b *Backend) Scan(ctx context.Context, stream string, afterSeq int64, fn fu
 	if snapshot.Kind != meta.Kind || snapshot.Generation != meta.Generation {
 		return fmt.Errorf("stream %q changed while its scan began", stream)
 	}
-	statement := table.Select() + ` WHERE "c0" = ? AND "c1" > ? ORDER BY "c1" LIMIT ?`
+	streamID, err := table.Physical(streamColumn)
+	if err != nil {
+		return err
+	}
+	seq, err := table.Physical(seqColumn)
+	if err != nil {
+		return err
+	}
+	statement := table.Select() + fmt.Sprintf(` WHERE %s = ? AND %s > ? ORDER BY %s LIMIT ?`, streamID, seq, seq)
 	for {
 		rows, err := b.scanPage(ctx, tx, table, statement, stream, afterSeq)
 		if err != nil {
@@ -151,7 +159,7 @@ func (b *Backend) Sweep(ctx context.Context) (int, error) {
 			return err
 		}
 		for _, stream := range expired {
-			if err := b.removeStream(ctx, writer, stream.id, stream.table); err != nil {
+			if err := b.removeStream(ctx, writer, stream.id, stream.kind); err != nil {
 				return err
 			}
 		}
@@ -161,11 +169,11 @@ func (b *Backend) Sweep(ctx context.Context) (int, error) {
 	return count, err
 }
 
-type expiredStream struct{ id, table string }
+type expiredStream struct{ id, kind string }
 
 func (b *Backend) expiredStreams(ctx context.Context, writer *sql.DB) ([]expiredStream, error) {
-	rows, err := writer.QueryContext(ctx, `SELECT s.stream_id, k.table_name FROM record_streams s
-		JOIN record_kinds k ON k.kind = s.kind WHERE s.expires_at IS NOT NULL AND s.expires_at <= ?`, sqlitetable.FormatTime(b.now()))
+	rows, err := writer.QueryContext(ctx, `SELECT stream_id, kind FROM record_streams
+		WHERE expires_at IS NOT NULL AND expires_at <= ?`, sqlitetable.FormatTime(b.now()))
 	if err != nil {
 		return nil, fmt.Errorf("sweep %s: %w", b.Path(), err)
 	}
@@ -173,7 +181,7 @@ func (b *Backend) expiredStreams(ctx context.Context, writer *sql.DB) ([]expired
 	var expired []expiredStream
 	for rows.Next() {
 		var stream expiredStream
-		if err := rows.Scan(&stream.id, &stream.table); err != nil {
+		if err := rows.Scan(&stream.id, &stream.kind); err != nil {
 			return nil, fmt.Errorf("sweep %s: %w", b.Path(), err)
 		}
 		expired = append(expired, stream)
@@ -181,13 +189,13 @@ func (b *Backend) expiredStreams(ctx context.Context, writer *sql.DB) ([]expired
 	return expired, rows.Err()
 }
 
-func (b *Backend) removeStream(ctx context.Context, writer *sql.DB, stream, table string) error {
+func (b *Backend) removeStream(ctx context.Context, writer *sql.DB, stream, kind string) error {
 	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("stream %q: begin removal: %w", stream, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	if err := removeStreamTx(ctx, tx, stream, table); err != nil {
+	if err := removeStreamTx(ctx, tx, stream, kind); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -196,8 +204,18 @@ func (b *Backend) removeStream(ctx context.Context, writer *sql.DB, stream, tabl
 	return nil
 }
 
-func removeStreamTx(ctx context.Context, tx *sql.Tx, stream, table string) error {
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE "c0" = ?`, sqlitetable.QuoteIdentifier(table)), stream); err != nil {
+// removeStreamTx removes, in tx, stream's rows from its kind's table and every
+// record of the stream.
+func removeStreamTx(ctx context.Context, tx *sql.Tx, stream, kind string) error {
+	table, err := storeTable(ctx, tx, kind)
+	if err != nil {
+		return fmt.Errorf("stream %q: %w", stream, err)
+	}
+	streamID, err := table.Physical(streamColumn)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`DELETE FROM %s WHERE %s = ?`, sqlitetable.QuoteIdentifier(table.Name), streamID), stream); err != nil {
 		return fmt.Errorf("stream %q: remove rows: %w", stream, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM record_appends WHERE stream_id = ?`, stream); err != nil {

@@ -41,33 +41,125 @@ var _ = Describe("sqlitetable.Table", func() {
 		}
 	})
 
-	selectAll := func() []query.Row {
-		rows, err := database.QueryContext(ctx, table.Select()+` ORDER BY "seq"`)
+	selectAll := func(created sqlitetable.Table) []query.Row {
+		rows, err := database.QueryContext(ctx, created.Select()+` ORDER BY "seq"`)
 		Expect(err).ToNot(HaveOccurred())
 		defer func() { Expect(rows.Close()).To(Succeed()) }()
 		result, err := db.ScanRows[query.Row](rows)
 		Expect(err).ToNot(HaveOccurred())
 		for _, row := range result {
-			Expect(sqlitetable.DecodeStructured(table.Columns, row)).To(Succeed())
+			Expect(sqlitetable.DecodeStructured(created.Columns, row)).To(Succeed())
 		}
 		return result
 	}
 
-	It("stores columns positionally and reads them back under their declared names", func() {
+	physicalColumns := func(name string) []string {
+		rows, err := database.QueryContext(ctx, `SELECT name FROM pragma_table_info(?) ORDER BY cid`, name)
+		Expect(err).ToNot(HaveOccurred())
+		defer func() { Expect(rows.Close()).To(Succeed()) }()
+		var names []string
+		for rows.Next() {
+			var column string
+			Expect(rows.Scan(&column)).To(Succeed())
+			names = append(names, column)
+		}
+		Expect(rows.Err()).ToNot(HaveOccurred())
+		return names
+	}
+
+	It("stores columns under derived safe names and reads them back under their declared names", func() {
 		at := time.Date(2026, 9, 10, 6, 47, 7, 708159000, time.FixedZone("SAST", 2*3600))
-		Expect(table.Create(ctx, database)).To(Succeed())
-		Expect(table.Insert(ctx, database, []query.Row{
+		created, err := table.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(created.StoredAs).To(Equal([]string{"stream_id", "seq", "ok", "detail", "at"}))
+		Expect(physicalColumns("events")).To(Equal([]string{"stream_id", "seq", "ok", "detail", "at"}))
+		Expect(created.Insert(ctx, database, []query.Row{
 			{"stream id": "run-1", "seq": 1, "ok": true, "detail": map[string]any{"db": "oipa"}, "at": at},
 		})).To(Succeed())
 		// A second insert into the existing table is an append, not a rewrite.
-		Expect(table.Insert(ctx, database, []query.Row{
+		Expect(created.Insert(ctx, database, []query.Row{
 			{"stream id": "run-1", "seq": 2, "ok": false, "detail": nil, "at": nil},
 		})).To(Succeed())
 
-		Expect(selectAll()).To(Equal([]query.Row{
+		Expect(selectAll(created)).To(Equal([]query.Row{
 			{"stream id": "run-1", "seq": int64(1), "ok": true, "detail": map[string]any{"db": "oipa"}, "at": "2026-09-10T04:47:07.708159000Z"},
 			{"stream id": "run-1", "seq": int64(2), "ok": false, "detail": nil, "at": nil},
 		}))
+	})
+
+	It("aliases only the columns whose physical name differs", func() {
+		created, err := table.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(created.Select()).To(Equal(`SELECT "stream_id" AS "stream id", "seq", "ok", "detail", "at" FROM "events"`))
+	})
+
+	It("keeps a reserved column's own name and renumbers the declared column clashing with it", func() {
+		reserved := sqlitetable.Table{
+			Name: "records",
+			Columns: []query.ColumnDef{
+				{Name: "stream_id", Type: query.ColumnTypeString},
+				{Name: "Stream ID", Type: query.ColumnTypeString},
+				{Name: "transaction", Type: query.ColumnTypeString},
+			},
+			Reserved: []string{"stream_id"},
+		}
+		created, err := reserved.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(created.StoredAs).To(Equal([]string{"stream_id", "Stream_ID_2", "transaction_"}))
+	})
+
+	It("refuses a reserved name that is not itself a safe bare name", func() {
+		table.Reserved = []string{"stream id"}
+		_, err := table.Create(ctx, database)
+		Expect(err).To(MatchError(ContainSubstring(`reserved column "stream id"`)))
+	})
+
+	// The names a table was created with are persisted by its owner and handed
+	// back; a later build deriving differently must still read the table.
+	It("reads a table through the physical names it was created with, not a fresh derivation", func() {
+		table.StoredAs = []string{"sid", "n", "flag", "body", "when_at"}
+		created, err := table.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(physicalColumns("events")).To(Equal([]string{"sid", "n", "flag", "body", "when_at"}))
+		Expect(created.Insert(ctx, database, []query.Row{{"stream id": "run-1", "seq": 1, "ok": true}})).To(Succeed())
+
+		reopened := sqlitetable.Table{Name: "events", Columns: table.Columns, StoredAs: []string{"sid", "n", "flag", "body", "when_at"}}
+		Expect(selectAll(reopened)).To(Equal([]query.Row{
+			{"stream id": "run-1", "seq": int64(1), "ok": true, "detail": nil, "at": nil},
+		}))
+	})
+
+	// A column declared "c2" derives the name another column is positionally
+	// stored in, so renaming one column at a time would collide.
+	It("renames a positional table's columns to its derived names, keeping its rows and keys", func() {
+		_, err := database.ExecContext(ctx, `CREATE TABLE "positional" ("c0" TEXT, "c1" TEXT, "c2" NUMERIC, PRIMARY KEY ("c0", "c2"));
+			INSERT INTO "positional" VALUES ('run-1', 'a', 1)`)
+		Expect(err).ToNot(HaveOccurred())
+		positional, err := sqlitetable.Table{Name: "positional", Columns: []query.ColumnDef{
+			{Name: "stream id", Type: query.ColumnTypeString},
+			{Name: "c2", Type: query.ColumnTypeString},
+			{Name: "seq", Type: query.ColumnTypeNumber},
+		}}.Derive(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(positional.RenamePositional(ctx, database)).To(Succeed())
+		Expect(sqlitetable.PhysicalColumns(ctx, database, "positional")).To(Equal([]string{"stream_id", "c2", "seq"}))
+		Expect(selectAll(positional)).To(Equal([]query.Row{{"stream id": "run-1", "c2": "a", "seq": int64(1)}}))
+		Expect(positional.Insert(ctx, database, []query.Row{{"stream id": "run-1", "c2": "b", "seq": 1}})).To(MatchError(ContainSubstring("UNIQUE constraint failed")))
+	})
+
+	It("refuses to rename a table that is not positional", func() {
+		created, err := table.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(created.RenamePositional(ctx, database)).To(MatchError(ContainSubstring(`not positional`)))
+	})
+
+	It("refuses stored names that do not line up with the columns", func() {
+		table.StoredAs = []string{"sid"}
+		_, err := table.Create(ctx, database)
+		Expect(err).To(MatchError(ContainSubstring("1 stored names for 5 columns")))
+		_, err = table.Physical("seq")
+		Expect(err).To(MatchError(ContainSubstring("1 stored names for 5 columns")))
 	})
 
 	DescribeTable("formats every instant to one width in UTC, so text order is time order",
@@ -81,24 +173,26 @@ var _ = Describe("sqlitetable.Table", func() {
 	)
 
 	It("round-trips every JSON scalar without changing its type or integer precision", func() {
-		Expect(table.Create(ctx, database)).To(Succeed())
-		Expect(table.Insert(ctx, database, []query.Row{
+		created, err := table.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(created.Insert(ctx, database, []query.Row{
 			{"stream id": "run-1", "seq": 1, "detail": "hello"},
 			{"stream id": "run-1", "seq": 2, "detail": true},
 			{"stream id": "run-1", "seq": 3, "detail": json.Number("9007199254740993")},
 		})).To(Succeed())
 
-		rows := selectAll()
+		rows := selectAll(created)
 		Expect(rows[0]["detail"]).To(Equal("hello"))
 		Expect(rows[1]["detail"]).To(Equal(true))
 		Expect(rows[2]["detail"]).To(Equal(json.Number("9007199254740993")))
 	})
 
 	It("enforces the declared primary key", func() {
-		Expect(table.Create(ctx, database)).To(Succeed())
+		created, err := table.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
 		row := query.Row{"stream id": "run-1", "seq": 1}
-		Expect(table.Insert(ctx, database, []query.Row{row})).To(Succeed())
-		Expect(table.Insert(ctx, database, []query.Row{row})).To(MatchError(ContainSubstring("UNIQUE constraint failed")))
+		Expect(created.Insert(ctx, database, []query.Row{row})).To(Succeed())
+		Expect(created.Insert(ctx, database, []query.Row{row})).To(MatchError(ContainSubstring("UNIQUE constraint failed")))
 	})
 
 	It("indexes a unique column", func() {
@@ -107,21 +201,25 @@ var _ = Describe("sqlitetable.Table", func() {
 			Columns: []query.ColumnDef{{Name: "row_id", Type: query.ColumnTypeNumber}},
 			Unique:  []string{"row_id"},
 		}
-		Expect(sqlitetable.Write(ctx, database, unique, []query.Row{{"row_id": 1}})).To(Succeed())
-		Expect(unique.Insert(ctx, database, []query.Row{{"row_id": 1}})).To(MatchError(ContainSubstring("UNIQUE constraint failed")))
+		written, err := sqlitetable.Write(ctx, database, unique, []query.Row{{"row_id": 1}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(written.Insert(ctx, database, []query.Row{{"row_id": 1}})).To(MatchError(ContainSubstring("UNIQUE constraint failed")))
 	})
 
-	It("names the physical column a declared column is stored in", func() {
-		physical, err := table.Physical("seq")
+	It("names the quoted physical column a declared column is stored in", func() {
+		created, err := table.Create(ctx, database)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(physical).To(Equal(`"c1"`))
-		_, err = table.Physical("missing")
+		physical, err := created.Physical("stream id")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(physical).To(Equal(`"stream_id"`))
+		_, err = created.Physical("missing")
 		Expect(err).To(MatchError(ContainSubstring(`column "missing"`)))
 	})
 
 	It("refuses a key naming a column the table does not declare", func() {
 		table.PrimaryKey = []string{"missing"}
-		Expect(table.Create(ctx, database)).To(MatchError(ContainSubstring(`column "missing"`)))
+		_, err := table.Create(ctx, database)
+		Expect(err).To(MatchError(ContainSubstring(`column "missing"`)))
 	})
 
 	It("reads structured columns through their JSON text in a profile", func() {
