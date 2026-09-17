@@ -57,6 +57,14 @@ func (b *fakeBackend) Trim(ctx context.Context, stream string, _ time.Time) (rec
 
 func (b *fakeBackend) Expire(context.Context, string, time.Duration) error { return nil }
 
+func (b *fakeBackend) Delete(context.Context, string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.rows = nil
+	b.sealed = false
+	return nil
+}
+
 func (b *fakeBackend) Seal(context.Context, string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()

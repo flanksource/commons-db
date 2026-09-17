@@ -165,6 +165,9 @@ type Backend interface {
 	// the stream, so an id reused after expiry starts unsealed.
 	Seal(ctx context.Context, stream string) error
 
+	// Delete removes one stream and its rows immediately. An unknown stream is ErrNotFound.
+	Delete(ctx context.Context, stream string) error
+
 	Close() error
 }
 

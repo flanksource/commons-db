@@ -102,6 +102,12 @@ func (n *Notifier) Seal(ctx context.Context, stream string) error {
 	return err
 }
 
+func (n *Notifier) Delete(ctx context.Context, stream string) error {
+	err := n.backend.Delete(ctx, stream)
+	n.wake(stream)
+	return err
+}
+
 func (n *Notifier) Close() error { return n.backend.Close() }
 
 func (n *Notifier) wake(stream string) {

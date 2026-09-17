@@ -126,6 +126,14 @@ func (r *Router) Seal(ctx context.Context, stream string) error {
 	return backend.Seal(ctx, stream)
 }
 
+func (r *Router) Delete(ctx context.Context, stream string) error {
+	backend, err := r.Resolve(ctx)
+	if err != nil {
+		return err
+	}
+	return backend.Delete(ctx, stream)
+}
+
 // Forget drops and closes route's backend, so the next call on the route
 // opens it afresh — for an owner whose store behind the route went away. It
 // does nothing unless the route still holds backend (compared by identity), so
