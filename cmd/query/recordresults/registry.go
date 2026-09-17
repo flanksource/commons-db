@@ -37,13 +37,14 @@ import (
 const MaxExportRows = 1_000_000
 
 const (
-	streamParam   = "stream"
-	afterSeqParam = "afterSeq"
-	toSeqParam    = "toSeq"
-	fromParam     = "from"
-	toParam       = "to"
-	seqColumn     = "seq"
-	streamIDKey   = "stream_id"
+	streamParam    = "stream"
+	afterSeqParam  = "afterSeq"
+	toSeqParam     = "toSeq"
+	fromParam      = "from"
+	toParam        = "to"
+	rootsOnlyParam = "rootsOnly"
+	seqColumn      = "seq"
+	streamIDKey    = "stream_id"
 )
 
 var segmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
@@ -109,6 +110,20 @@ type ResultType[T any] struct {
 	// plain sqlite. Only a type whose rows each stand alone should follow — one
 	// listed as the latest row per id would stream superseded rows.
 	Follow bool
+
+	// SearchColumns, when set, names T's text columns (string or JSON) a
+	// search matches: the profile takes a search-role param q, and keeps the
+	// rows where any of them contains its text, ignoring case.
+	SearchColumns []string
+
+	// Hierarchy identifies an invocation and its caller for root-only reads.
+	Hierarchy *HierarchyColumns
+}
+
+// HierarchyColumns names the stored relationship used by a root-only read.
+type HierarchyColumns struct {
+	ID     string
+	Parent string
 }
 
 // RegisteredResultType is one registered result type as a caller finds it.
@@ -197,6 +212,12 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 	if err := validateDefaultFrom(resultType.TimeColumn, resultType.DefaultFrom); err != nil {
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
+	if err := validateSearchColumns(columns, resultType.SearchColumns); err != nil {
+		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
+	if err := validateHierarchy(columns, resultType.KeyColumn, resultType.Hierarchy); err != nil {
+		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
 	for _, column := range columns {
 		if column.Name == seqColumn || column.Name == streamIDKey {
 			return fmt.Errorf("result type %q declares %q, which every stream table reserves", resultType.Kind, column.Name)
@@ -210,12 +231,14 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		result: RegisteredResultType{
 			Kind: resultType.Kind, Title: resultType.Title, Profile: registry.prefix + "/" + resultType.Kind,
 		},
-		columns:     columns,
-		options:     recordstore.KindOptions{Key: resultType.KeyColumn, Retention: resultType.Retention},
-		timeColumn:  resultType.TimeColumn,
-		defaultFrom: resultType.DefaultFrom,
-		presenter:   presenter,
-		follow:      resultType.Follow,
+		columns:       columns,
+		options:       recordstore.KindOptions{Key: resultType.KeyColumn, Retention: resultType.Retention},
+		timeColumn:    resultType.TimeColumn,
+		defaultFrom:   resultType.DefaultFrom,
+		presenter:     presenter,
+		follow:        resultType.Follow,
+		searchColumns: resultType.SearchColumns,
+		hierarchy:     resultType.Hierarchy,
 	})
 }
 
@@ -315,6 +338,9 @@ type registration struct {
 	defaultFrom string
 	presenter   query.RowPresenter
 	follow      bool
+
+	searchColumns []string
+	hierarchy     *HierarchyColumns
 }
 
 func (r *Registry) register(registration registration) error {
@@ -361,18 +387,26 @@ func (r *Registry) resultProfile(table sqlitetable.Table, registration registrat
 	if timeColumn != "" {
 		order = append(query.Order{{Column: timeColumn, Desc: true}}, order...)
 	}
-	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber}}, registration.columns...)
+	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber, Format: api.FormatInteger}}, registration.columns...)
 	profileColumns = append(profileColumns, query.ColumnDef{Name: streamIDKey, Type: query.ColumnTypeString, Hidden: true})
 	providerType := indexProviderType
 	if registration.follow {
 		providerType = ProviderType
 	}
+	search, err := searchClause(table, registration.searchColumns)
+	if err != nil {
+		return query.Profile{}, err
+	}
+	hierarchy, err := hierarchyClause(table, registration.hierarchy)
+	if err != nil {
+		return query.Profile{}, err
+	}
 	profile := query.Profile{
 		Name: registration.result.Profile, Virtual: true, ReadOnly: true,
 		Provider: query.ProviderConfig{Type: providerType, Connection: r.connectionReference()},
 		Query: table.Select() + fmt.Sprintf(` WHERE %s = {{.params.%s}} AND %s > {{.params.%s}} AND %s <= {{.params.%s}}`,
-			stream, streamParam, seq, afterSeqParam, seq, toSeqParam),
-		Params:  resultParams(timeColumn, registration.defaultFrom),
+			stream, streamParam, seq, afterSeqParam, seq, toSeqParam) + search + hierarchy,
+		Params:  append(append(resultParams(timeColumn, registration.defaultFrom), searchParams(registration.searchColumns)...), hierarchyParams(registration.hierarchy)...),
 		Columns: sqlitetable.ProfileColumns(profileColumns),
 		Order:   order,
 		Limits:  &query.RowLimits{PageSize: 100, MaxPageSize: 500, MaxExportRows: MaxExportRows},

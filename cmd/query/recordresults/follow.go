@@ -27,8 +27,8 @@ const FollowRecheckInterval = 5 * time.Second
 // it holds, then each row appended after — in seq order, through the query req
 // carries: the followed profile's own statement and column filters, so a
 // followed row is the row a page of the same seqs serves. It returns nil once
-// ctx ends or it has read through an explicit toSeq, and ErrNotFound when the
-// stream stops existing.
+// ctx ends or it has read through an explicit toSeq or a sealed stream's high
+// seq, and ErrNotFound when the stream stops existing.
 func (r *Registry) follow(ctx dbcontext.Context, req query.ProviderRequest, emit func(query.Row)) error {
 	stream, err := requestedStream(ProviderType, req.Params)
 	if err != nil {
@@ -62,8 +62,12 @@ func (r *Registry) follow(ctx dbcontext.Context, req query.ProviderRequest, emit
 		if read.more || position >= through {
 			continue
 		}
-		if _, err := r.notifier.Wait(ctx, stream, position, source.Generation); err != nil {
+		latest, err := r.notifier.Wait(ctx, stream, position, source.Generation)
+		if err != nil {
 			return notFound(err)
+		}
+		if latest.Sealed && latest.HighSeq <= position {
+			return nil
 		}
 	}
 	return nil

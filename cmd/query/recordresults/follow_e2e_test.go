@@ -325,6 +325,30 @@ var _ = Describe("following a record result type through the sessions API", func
 		Expect(seqs(rows)).To(Equal([]string{"1", "2", "3"}))
 	})
 
+	DescribeTable("completes a follow once it has read through a stream sealed after it started",
+		func(backend recordstore.BackendKind) {
+			server := newFollowServer(backend)
+			server.appendEvents(1, 2)
+			status, body := server.startFollow("follow=true&stream=run-1")
+			Expect(status).To(Equal(http.StatusCreated), body)
+			var info query.SessionInfo
+			Expect(json.Unmarshal([]byte(body), &info)).To(Succeed())
+
+			server.appendEvents(3, 4)
+			Expect(server.results.Backend.Seal(context.Background(), "run-1")).To(Succeed())
+			Eventually(func() string {
+				response := server.do(http.MethodGet, "/api/v1/sessions/"+info.ID, nil)
+				var current query.SessionInfo
+				Expect(json.NewDecoder(response.Body).Decode(&current)).To(Succeed())
+				return strings.TrimSpace(string(current.State) + " " + current.Error)
+			}, 10*time.Second, 50*time.Millisecond).Should(Equal(string(query.SessionCompleted)))
+			rows, _ := rowsFrom(server.mustSubscribe(info.ID), 4)
+			Expect(seqs(rows)).To(Equal([]string{"1", "2", "3", "4"}))
+		},
+		Entry("over a local sqlite file that is its own index", recordstore.BackendSQLite),
+		Entry("over ndjson streams mirrored into a derived index", recordstore.BackendNDJSON),
+	)
+
 	It("answers a follow of a stream nobody wrote with a 404", func() {
 		status, body := newFollowServer(recordstore.BackendSQLite).startFollow("follow=true&stream=run-404")
 		Expect(status).To(Equal(http.StatusNotFound), body)

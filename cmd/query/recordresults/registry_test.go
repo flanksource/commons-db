@@ -154,7 +154,7 @@ var _ = Describe("Registry", func() {
 		})).To(Succeed())
 		profile, err := registry.Get(ctx, "trace-results/sample_event")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(profile.Columns[0]).To(Equal(query.ColumnDef{Name: "seq", Label: "Seq", Type: query.ColumnTypeNumber}))
+		Expect(profile.Columns[0]).To(Equal(query.ColumnDef{Name: "seq", Label: "Seq", Type: query.ColumnTypeNumber, Format: "integer"}))
 		Expect(profile.Columns[1]).To(Equal(query.ColumnDef{
 			Name: "at", Label: "Captured", Type: query.ColumnTypeDateTime, Kind: query.ColumnKindTimestamp,
 		}))

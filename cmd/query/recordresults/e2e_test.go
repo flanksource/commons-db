@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/cache"
 	"github.com/flanksource/clicky/entity"
+	"github.com/flanksource/clicky/formatters"
 	"github.com/flanksource/clicky/rpc"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -243,6 +244,18 @@ var _ = Describe("a record result type served through the profile engine", Order
 		raw := server.get(profilePath+"?stream=run-1&limit=1", "application/json")
 		Expect(raw.Code).To(Equal(http.StatusOK), raw.Body.String())
 		Expect(raw.Body.String()).To(And(ContainSubstring(`"db":"audit"`), Not(ContainSubstring("text-blue-500"))))
+	})
+
+	It("presents the seq read back from the index as an integer and the capture time as its zoned instant", func() {
+		response := server.get(profilePath+"?stream=run-1&limit=1", "application/json+clicky")
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		var document formatters.ClickyDocument
+		Expect(json.Unmarshal(response.Body.Bytes(), &document)).To(Succeed())
+		Expect(document.Node.Rows).To(HaveLen(1))
+		cells := document.Node.Rows[0].Cells
+
+		Expect(cells["seq"].Plain).To(Equal("250"))
+		Expect(cells["at"].FilterValue).To(Equal("2026-09-10T06:00:00.25Z"))
 	})
 
 	It("reads a boolean column back as a JSON boolean", func() {
