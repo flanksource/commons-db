@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/klauspost/compress/zstd"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -179,6 +180,23 @@ var _ = Describe("Cursor", func() {
 		Expect(err).To(MatchError(ContainSubstring("one key per order column")))
 	})
 
+	// A nullable order column puts its nulls last, so a page can end inside
+	// them; the cursor has to name that position rather than refuse it.
+	It("round-trips a null key of a nullable order column", func() {
+		nullKeys := []any{nil, "row-9"}
+		cursor, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: nullKeys})
+		Expect(err).ToNot(HaveOccurred())
+
+		position, err := query.DecodeCursor(cursor, scope)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(position.Keys).To(Equal(nullKeys))
+	})
+
+	It("refuses to issue a cursor whose unique tiebreaker key is null", func() {
+		_, err := query.EncodeCursor(query.CursorEncoding{Scope: scope, Keys: []any{"2026-01-01T00:00:00Z", nil}})
+		Expect(err).To(MatchError(ContainSubstring(`unique column "id" is null`)))
+	})
+
 	It("refuses to issue a cursor for an order that cannot be paged", func() {
 		unordered := scope
 		unordered.Order = query.Order{{Column: "created_at"}}
@@ -201,6 +219,31 @@ var _ = Describe("Cursor", func() {
 			_, err = query.DecodeCursor(stale, scope)
 			Expect(err).To(MatchError(query.ErrCursorStale))
 			Expect(err).To(MatchError(ContainSubstring("not a cursor this server issued")))
+		})
+
+		// A version 5 cursor was cut under the old null placement, so the row it
+		// names may sit somewhere else in today's order.
+		It("rejects a cursor issued before nulls sorted last", func() {
+			encoded, err := base64.RawURLEncoding.DecodeString(string(cursor))
+			Expect(err).ToNot(HaveOccurred())
+			decoder, err := zstd.NewReader(nil)
+			Expect(err).ToNot(HaveOccurred())
+			defer decoder.Close()
+			decoded, err := decoder.DecodeAll(encoded, nil)
+			Expect(err).ToNot(HaveOccurred())
+			var payload map[string]any
+			Expect(json.Unmarshal(decoded, &payload)).To(Succeed())
+			payload["v"] = 5
+			rewritten, err := json.Marshal(payload)
+			Expect(err).ToNot(HaveOccurred())
+			encoder, err := zstd.NewWriter(nil)
+			Expect(err).ToNot(HaveOccurred())
+			defer func() { _ = encoder.Close() }()
+			old := query.Cursor(base64.RawURLEncoding.EncodeToString(encoder.EncodeAll(rewritten, nil)))
+
+			_, err = query.DecodeCursor(old, scope)
+			Expect(err).To(MatchError(query.ErrCursorStale))
+			Expect(err).To(MatchError(ContainSubstring("older version of this server")))
 		})
 
 		It("rejects a cursor replayed after a filter changed", func() {

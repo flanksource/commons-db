@@ -85,16 +85,14 @@ func (r *Registry) followSource(ctx dbcontext.Context, stream string) (recordsto
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, result := range r.results {
-		if result.Kind != source.Kind {
-			continue
-		}
-		if result.profile.Provider.Type != ProviderType {
-			return recordstore.Meta{}, fmt.Errorf("follow stream %q: %q results do not follow their streams", stream, source.Kind)
-		}
-		return source, nil
+	result, ok := r.results[r.prefix+"/"+source.Kind]
+	if !ok {
+		return recordstore.Meta{}, fmt.Errorf("follow stream %q: it holds %q results, which no result type serves", stream, source.Kind)
 	}
-	return recordstore.Meta{}, fmt.Errorf("follow stream %q: it holds %q results, which no result type serves", stream, source.Kind)
+	if result.profile.Provider.Type != ProviderType {
+		return recordstore.Meta{}, fmt.Errorf("follow stream %q: %q results do not follow their streams", stream, source.Kind)
+	}
+	return source, nil
 }
 
 // followRead is one read of the index: its rows, the seq every row at or
