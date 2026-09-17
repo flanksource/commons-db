@@ -207,6 +207,9 @@ type ColumnFilterBinding struct {
 	// a duration bound is resolved into. Empty means milliseconds, the unit an
 	// unannotated duration column is read under. No other kind consults it.
 	Unit string
+	// DefaultOperator interprets a bare numeric or duration operand when set.
+	// Explicit comparison operators always take precedence.
+	DefaultOperator string
 	// Nested and Where carry the container the selection is compiled inside and
 	// the constants that address one entry of it. See ColumnFilterDef.
 	Nested string

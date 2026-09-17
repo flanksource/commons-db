@@ -8,6 +8,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/flanksource/clicky/api"
 )
 
 var (
@@ -114,6 +116,9 @@ func reflectColumn(field reflect.StructField, name string, asString bool) (Colum
 	if err := applyPrettyTag(&column, field.Tag.Get("pretty")); err != nil {
 		return ColumnDef{}, err
 	}
+	if column.Type == ColumnTypeNumber && column.Format == "" && isIntegerKind(field.Type) {
+		column.Format = api.FormatInteger
+	}
 	if err := applySortTag(column, field.Tag); err != nil {
 		return ColumnDef{}, err
 	}
@@ -166,6 +171,18 @@ func reflectColumnType(goType reflect.Type) (ColumnType, error) {
 	default:
 		return "", fmt.Errorf("a %s cannot be encoded as JSON, so it has no column", goType.Kind())
 	}
+}
+
+// isIntegerKind reports a field holding a whole number. Its column is typed
+// number like a float's, and an index or JSON reads it back as a float64, so
+// only the column's format keeps it rendering without decimals.
+func isIntegerKind(goType reflect.Type) bool {
+	switch dereferenceReflectType(goType).Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return true
+	}
+	return false
 }
 
 // isStringList reports a field whose JSON encoding is an array of strings: a

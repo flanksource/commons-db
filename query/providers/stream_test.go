@@ -645,7 +645,7 @@ var _ = Describe("opensearch provider streaming", func() {
 		registry := query.NewSessionRegistry(query.RegistryOptions{})
 		session, err := query.ExecuteStream(dbcontext.New(), registry, query.Follow(profile))
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(session.Stop)
+		DeferCleanup(session.Stop, "spec cleanup")
 
 		_, live, cancel := session.Subscribe()
 		DeferCleanup(cancel)

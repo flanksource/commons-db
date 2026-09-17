@@ -170,6 +170,16 @@ var _ = Describe("column filter kind", func() {
 		Entry("a duration", ColumnFilterBinding{Kind: ColumnFilterKindDuration}, "duration"),
 	)
 
+	DescribeTable("publishes the control unit",
+		func(binding ColumnFilterBinding, unit string) {
+			Expect(binding.ControlUnit()).To(Equal(unit))
+		},
+		Entry("an explicit numeric unit", ColumnFilterBinding{Kind: ColumnFilterKindRange, Unit: "percentunit"}, "percentunit"),
+		Entry("an explicit duration unit", ColumnFilterBinding{Kind: ColumnFilterKindDuration, Unit: "s"}, "s"),
+		Entry("an implicit duration storage unit", ColumnFilterBinding{Kind: ColumnFilterKindDuration}, "ms"),
+		Entry("a unitless number", ColumnFilterBinding{Kind: ColumnFilterKindRange}, ""),
+	)
+
 	DescribeTable("rejects an enumerated value the wire form cannot carry",
 		func(option, message string) {
 			Expect(validateFilterOptions([]string{option})).To(MatchError(ContainSubstring(message)))

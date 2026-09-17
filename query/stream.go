@@ -7,8 +7,6 @@ import (
 	"maps"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/types"
 )
@@ -81,6 +79,10 @@ func Follow(p Profile) Profile {
 // ExecuteStream starts a trace or top session and returns immediately with the
 // session in the starting state. ctx must be a long-lived application context;
 // the run is bounded only by the session's clamped MaxDuration or Stop().
+//
+// A followed trace (p.Trace.Follow) is a view over data that already exists: it
+// is never persisted. Every other session is a capture, begun and updated
+// through the registry's SessionStore when one is configured.
 func ExecuteStream(ctx context.Context, reg *SessionRegistry, p Profile, params ...map[string]any) (*Session, error) {
 	if err := p.Validate(); err != nil {
 		return nil, err
@@ -152,16 +154,14 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 
-	session := newRegisteredSession(reg, p, resolved, reg.ClampEvents(p.Trace.EventLimit()))
-	if err := reg.Add(session); err != nil {
+	run, err := reg.startStream(ctx, p, resolved, reg.ClampEvents(p.Trace.EventLimit()), p.Trace.DurationLimit())
+	if err != nil {
 		return nil, err
 	}
-	runCtx, cancel := ctx.WithTimeout(reg.ClampDuration(p.Trace.DurationLimit()))
-	session.setCancel(cancel)
 
-	go runTrace(runCtx, cancel, sp, session, req, pipeline, p.Trace.Buffer, release)
+	go runTrace(run, sp, req, pipeline, p.Trace.Buffer, release)
 	started = true
-	return session, nil
+	return run.session, nil
 }
 
 // openTailWindow drops the closing edge of a followed trace's time selections.
@@ -201,18 +201,17 @@ func openTailWindow(filters []ColumnFilterValue) []ColumnFilterValue {
 }
 
 func runTrace(
-	ctx context.Context,
-	cancel stdcontext.CancelFunc,
+	run streamRun,
 	sp StreamProvider,
-	session *Session,
 	req ProviderRequest,
 	pipeline *tracePipeline,
 	buffer *TraceBufferSpec,
 	release func(),
 ) {
 	defer release()
-	defer cancel()
-	session.markRunning()
+	defer run.cancel()
+	ctx, session := run.ctx, run.session
+	markStreamRunning(session)
 	deliveryCtx, stopDelivery := stdcontext.WithCancel(stdcontext.Background())
 	defer stopDelivery()
 	rows, done := streamTraceRows(ctx, sp, req, deliveryCtx)
@@ -220,15 +219,24 @@ func runTrace(
 		session: session, pipeline: pipeline, buffer: buffer,
 		rows: rows, done: done,
 	}
-	err := normalizeStreamErr(runner.run())
-	cancel()
+	err := normalizeStreamErr(ctx, runner.run())
+	run.cancel()
 	stopDelivery()
 	if !runner.providerFinished {
 		// A processor failure must also wait for provider cleanup. Stop accepting
 		// rows first so a provider's final drain cannot block on the failed reader.
-		err = errors.Join(err, normalizeStreamErr(<-done))
+		err = errors.Join(err, normalizeStreamErr(ctx, <-done))
 	}
-	session.markDone(err)
+	session.Finish(FinishUpdate{Err: err})
+}
+
+// markStreamRunning moves a stream session to running. A session already
+// stopped (a stop racing the start) has nothing to run, which its run context
+// being cancelled already tells the runner.
+func markStreamRunning(session *Session) {
+	if err := session.Running(RunningUpdate{}); err != nil && !errors.Is(err, ErrSessionEnded) {
+		panic(fmt.Sprintf("query: mark stream session running: %v", err))
+	}
 }
 
 type tracePipeline struct {
@@ -400,36 +408,33 @@ func startTop(ctx context.Context, reg *SessionRegistry, sampler topSampler) (*S
 	if _, err := GetProvider(p.Provider.Type); err != nil {
 		return nil, err
 	}
-	session := newRegisteredSession(reg, p, maps.Clone(sampler.resolved), reg.ClampEvents(0))
-	if err := reg.Add(session); err != nil {
+	run, err := reg.startStream(ctx, p, maps.Clone(sampler.resolved), reg.ClampEvents(0), p.Top.DurationLimit())
+	if err != nil {
 		return nil, err
 	}
-	runCtx, cancel := ctx.WithTimeout(reg.ClampDuration(p.Top.DurationLimit()))
-	session.setCancel(cancel)
 
-	sampler.registry, sampler.session = reg, session
-	go sampler.run(runCtx, cancel)
+	sampler.registry, sampler.session = reg, run.session
+	go sampler.run(run.ctx, run.cancel)
 	started = true
-	return session, nil
+	return run.session, nil
 }
 
 // run samples until the session ends. The first sample reads data
 // ExecuteStream already prepared; every later one prepares it again first.
 func (t topSampler) run(ctx context.Context, cancel stdcontext.CancelFunc) {
 	defer cancel()
-	t.session.markRunning()
+	markStreamRunning(t.session)
 
 	ticker := time.NewTicker(t.profile.Top.TickInterval())
 	defer ticker.Stop()
 	for first := true; ; first = false {
 		result, err := t.sample(ctx, first)
 		if err != nil {
-			if norm := normalizeStreamErr(err); norm != nil {
+			norm := normalizeStreamErr(ctx, err)
+			if norm != nil {
 				t.session.Emit(Event{Error: norm.Error()})
-				t.session.markDone(norm)
-			} else {
-				t.session.markDone(nil)
 			}
+			t.session.Finish(FinishUpdate{Err: norm})
 			return
 		}
 		t.session.setLatest(result)
@@ -437,7 +442,7 @@ func (t topSampler) run(ctx context.Context, cancel stdcontext.CancelFunc) {
 
 		select {
 		case <-ctx.Done():
-			t.session.markDone(nil)
+			t.session.Finish(FinishUpdate{})
 			return
 		case <-ticker.C:
 		}
@@ -457,21 +462,16 @@ func (t topSampler) sample(ctx context.Context, prepared bool) (*Result, error) 
 	return executeResolved(ctx, t.profile, t.resolved, t.filters)
 }
 
-func newRegisteredSession(reg *SessionRegistry, p Profile, resolved map[string]any, maxEvents int) *Session {
-	return NewSession(SessionOptions{
-		ID:           uuid.NewString(),
-		Profile:      p,
-		Params:       resolved,
-		MaxEvents:    maxEvents,
-		OnEvent:      reg.opts.OnEvent,
-		OnTransition: reg.opts.OnTransition,
-	})
-}
-
 // normalizeStreamErr treats cancellation and the session's own deadline as a
-// normal end of stream, not a failure.
-func normalizeStreamErr(err error) error {
-	if err == nil || errors.Is(err, stdcontext.Canceled) || errors.Is(err, stdcontext.DeadlineExceeded) {
+// normal end of stream, not a failure. Only ctx — the session's run context —
+// ending makes a context error normal: a provider's store call that carries its
+// own deadline wraps DeadlineExceeded too, and that one timing out while the
+// session is live is the store failing.
+func normalizeStreamErr(ctx stdcontext.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil && (errors.Is(err, stdcontext.Canceled) || errors.Is(err, stdcontext.DeadlineExceeded)) {
 		return nil
 	}
 	return err
