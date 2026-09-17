@@ -1,6 +1,7 @@
 package recordresults
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -64,6 +65,8 @@ type Results struct {
 
 	// Registry serves the result types over the index.
 	Registry *Registry
+	index    *sqlite.Backend
+	same     bool
 
 	closers []io.Closer
 }
@@ -137,6 +140,42 @@ func (r *Results) open(options OpenOptions) error {
 		return fmt.Errorf("result store: register result types: %w", err)
 	}
 	r.Backend, r.Registry = notifier, registry
+	r.index, r.same = index, recordstore.Backend(source) == recordstore.Backend(index)
+	return nil
+}
+
+// DeleteStream removes a stream of the expected kind from its source and index.
+func (r *Results) DeleteStream(ctx context.Context, stream, kind string) error {
+	if err := recordstore.ValidateKind(kind); err != nil {
+		return err
+	}
+	meta, err := r.Backend.Meta(ctx, stream)
+	if err != nil && !errors.Is(err, recordstore.ErrNotFound) {
+		return err
+	}
+	if err == nil && meta.Kind != kind {
+		return fmt.Errorf("stream %q holds kind %q, not %q", stream, meta.Kind, kind)
+	}
+	if !r.same {
+		indexed, indexErr := r.index.Meta(ctx, stream)
+		if indexErr != nil && !errors.Is(indexErr, recordstore.ErrNotFound) {
+			return fmt.Errorf("read stream %q from index: %w", stream, indexErr)
+		}
+		if indexErr == nil && indexed.Kind != kind {
+			return fmt.Errorf("indexed stream %q holds kind %q, not %q", stream, indexed.Kind, kind)
+		}
+		if indexErr == nil {
+			if err := r.index.Delete(ctx, stream); err != nil {
+				return fmt.Errorf("delete stream %q from index: %w", stream, err)
+			}
+		}
+	}
+	if errors.Is(err, recordstore.ErrNotFound) {
+		return nil
+	}
+	if err := r.Backend.Delete(ctx, stream); err != nil {
+		return fmt.Errorf("delete stream %q from source: %w", stream, err)
+	}
 	return nil
 }
 
