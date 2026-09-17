@@ -48,7 +48,7 @@ var _ = Describe("ColumnsFor", func() {
 			{Name: "db", Type: query.ColumnTypeString, Filter: &query.ColumnFilterDef{Kind: query.ColumnFilterKindTerms, Limit: lo.ToPtr(20)}},
 			{Name: "captured_at", Label: "Captured", Type: query.ColumnTypeDateTime, Format: "date"},
 			{Name: "duration_ms", Type: query.ColumnTypeDuration, Unit: "ms"},
-			{Name: "reads", Type: query.ColumnTypeNumber, Filter: &query.ColumnFilterDef{Kind: query.ColumnFilterKindRange}},
+			{Name: "reads", Type: query.ColumnTypeNumber, Format: "integer", Filter: &query.ColumnFilterDef{Kind: query.ColumnFilterKindRange}},
 			{Name: "failed", Type: query.ColumnTypeBoolean},
 			{Name: "status", Type: query.ColumnTypeString, Filter: &query.ColumnFilterDef{Options: []string{"ok", "failed"}, Lookup: lo.ToPtr(false)}},
 			{Name: "level", Type: query.ColumnTypeString, Filter: &query.ColumnFilterDef{Disabled: true}},

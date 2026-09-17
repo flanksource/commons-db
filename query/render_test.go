@@ -1,7 +1,9 @@
 package query_test
 
 import (
+	"reflect"
 	"strings"
+	"time"
 
 	"github.com/flanksource/clicky/api"
 	context "github.com/flanksource/commons-db/context"
@@ -346,6 +348,26 @@ var _ = Describe("Result.Render", func() {
 		rawJSON, err := presented.Render([]query.ColumnDef{{Name: "duration"}, {Name: "detail"}}, "json")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rawJSON).To(And(ContainSubstring(`125`), Not(ContainSubstring("125ms"))))
+	})
+
+	It("presents a reflected integer read back as a float64 without decimals, and a time cell as its zoned instant", func() {
+		type capturedEvent struct {
+			At        time.Time `json:"at" pretty:"kind=timestamp"`
+			SessionID int       `json:"sessionId"`
+			Duration  float64   `json:"durationMs" pretty:"type=duration,unit=ms"`
+		}
+		columns, err := query.ColumnsFor(reflect.TypeFor[capturedEvent]())
+		Expect(err).ToNot(HaveOccurred())
+		const capturedAt = "2026-09-15T15:55:01.132Z"
+
+		rows, err := query.PresentClickyRows(query.Profile{Name: "events", Columns: columns}, []query.Row{
+			{"at": capturedAt, "sessionId": float64(73), "durationMs": 2.012},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0].Cells["sessionId"].Plain).To(Equal("73"))
+		Expect(rows[0].Cells["at"].FilterValue).To(Equal(capturedAt))
+		Expect(rows[0].Cells["durationMs"].Plain).To(Equal("2 ms"))
 	})
 
 	It("rejects a cyclic row before handing it to Clicky", func() {

@@ -3,6 +3,8 @@ package query
 import (
 	"fmt"
 	"strings"
+
+	"github.com/flanksource/clicky/api"
 )
 
 // ColumnFilterKind is the control a column filter offers and the grammar its
@@ -159,6 +161,20 @@ func (k ColumnFilterKind) ControlType() string {
 	default:
 		return ""
 	}
+}
+
+// ControlUnit is the unit published with the generated Clicky control. A
+// duration column without an annotation is stored in milliseconds, matching
+// the parser's bare-number contract; other controls only publish an explicitly
+// declared unit.
+func (b ColumnFilterBinding) ControlUnit() string {
+	if b.Unit != "" {
+		return b.Unit
+	}
+	if b.Kind.Normalized() == ColumnFilterKindDuration {
+		return api.ColumnUnitMilliseconds
+	}
+	return ""
 }
 
 // ColumnFilterKindValues returns every kind an author may declare, for the
