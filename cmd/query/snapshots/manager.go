@@ -68,8 +68,7 @@ type snapshot struct {
 
 type materialization struct {
 	profile query.Profile
-	table   string
-	columns []query.ColumnDef
+	table   sqlitetable.Table
 	rows    int
 }
 
@@ -145,10 +144,10 @@ func (m *Manager) Create(ctx context.Context, result *query.ReconcileResult, age
 		return profiles.ReconcileSnapshotDescriptor{}, err
 	}
 	dir := filepath.Join(m.dir, id)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	path := snapshotFile(dir)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return profiles.ReconcileSnapshotDescriptor{}, fmt.Errorf("create snapshot %q: %w", id, err)
 	}
-	path := filepath.Join(dir, "snapshot.sqlite")
 	writer, err := sql.Open("sqlite", path)
 	if err != nil {
 		return profiles.ReconcileSnapshotDescriptor{}, fmt.Errorf("open snapshot %q: %w", id, err)
@@ -157,9 +156,9 @@ func (m *Manager) Create(ctx context.Context, result *query.ReconcileResult, age
 		_ = writer.Close()
 		_ = os.RemoveAll(dir)
 	}
-	columns := result.SnapshotColumns()
 	rows := result.SnapshotRows()
-	if err := sqlitetable.Write(ctx, writer, snapshotTable("reconcile_rows", columns), rows); err != nil {
+	table, err := sqlitetable.Write(ctx, writer, snapshotTable("reconcile_rows", result.SnapshotColumns()), rows)
+	if err != nil {
 		cleanup()
 		return profiles.ReconcileSnapshotDescriptor{}, fmt.Errorf("materialize reconciliation: %w", err)
 	}
@@ -170,7 +169,7 @@ func (m *Manager) Create(ctx context.Context, result *query.ReconcileResult, age
 
 	profileName := "reconciliations/" + short + "/results"
 	connectionName := "reconciliation-" + short
-	profile := snapshotProfile(profileName, "reconcile_rows", columns, connectionName, len(rows))
+	profile := snapshotProfile(profileName, table, connectionName, len(rows))
 	now := m.now()
 	item := &snapshot{
 		id: id, path: path, db: writer, createdAt: now, lastAccessed: now, age: age,
@@ -183,7 +182,7 @@ func (m *Manager) Create(ctx context.Context, result *query.ReconcileResult, age
 			Execution: result.Provenance,
 		},
 		profiles: map[string]materialization{
-			profileName: {profile: profile, table: "reconcile_rows", columns: columns, rows: len(rows)},
+			profileName: {profile: profile, table: table, rows: len(rows)},
 		},
 	}
 	item.connection.ExpiresAt = ptrTime(now.Add(age))
@@ -372,7 +371,10 @@ func (m *Manager) prune() {
 func (m *Manager) removeLocked(item *snapshot) {
 	m.tombstoneLocked(item)
 	_ = item.db.Close()
-	_ = os.RemoveAll(filepath.Dir(item.path))
+	// The whole snapshot directory goes, a v1 file copied into it included:
+	// left behind, the next reload would copy it again and revive a snapshot
+	// this process expired.
+	_ = os.RemoveAll(snapshotDir(item.path))
 	delete(m.items, item.id)
 	for name := range item.profiles {
 		delete(m.profiles, name)
@@ -428,7 +430,7 @@ func (m *Manager) descriptorLocked(item *snapshot, materialized materialization)
 		ConnectionID: item.connection.ID.String(), Profile: materialized.profile.Name,
 		Surface: "profile-" + profileSlug(materialized.profile.Name),
 		URL:     "/api/v1/profile/" + url.PathEscape(materialized.profile.Name),
-		Columns: slices.Clone(materialized.columns), RowCount: materialized.rows, Stats: item.stats,
+		Columns: slices.Clone(materialized.table.Columns), RowCount: materialized.rows, Stats: item.stats,
 		Source: item.source, Dest: item.dest, SourceLimited: item.sourceCut, DestLimited: item.destCut,
 		Reconcile: item.reconcile, CreatedAt: item.createdAt,
 		IdleAge: item.age, ExpiresAt: expires,

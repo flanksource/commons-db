@@ -3,14 +3,19 @@ package snapshots
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
 
 	"github.com/flanksource/commons/logger"
+
+	"github.com/flanksource/commons-db/db/sqlitetable"
 )
 
 // reloadLocked rebuilds the snapshots a previous process left on disk.
@@ -78,9 +83,13 @@ type reloadedSnapshot struct {
 // be trusted. Every inconsistency is fatal to that snapshot rather than
 // repaired: half a reconciliation is not a reconciliation.
 func openSnapshotDir(dir, id string) (reloadedSnapshot, error) {
-	path := filepath.Join(dir, "snapshot.sqlite")
-	if _, err := os.Stat(path); err != nil {
-		return reloadedSnapshot{}, fmt.Errorf("no snapshot database: %w", err)
+	path := snapshotFile(dir)
+	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
+		if err := copyV1Snapshot(context.Background(), dir, path); err != nil {
+			return reloadedSnapshot{}, err
+		}
+	} else if err != nil {
+		return reloadedSnapshot{}, fmt.Errorf("inspect snapshot database: %w", err)
 	}
 	database, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -88,7 +97,7 @@ func openSnapshotDir(dir, id string) (reloadedSnapshot, error) {
 	}
 	// sql.Open is lazy, so this read is also the corruption check — a truncated
 	// file left by a killed process fails here rather than on first use.
-	meta, err := readSnapshotMetadata(context.Background(), database)
+	meta, err := readSnapshotMetadata(context.Background(), database, snapshotMetadataVersion)
 	if err != nil {
 		_ = database.Close()
 		return reloadedSnapshot{}, err
@@ -127,16 +136,17 @@ func openSnapshotDir(dir, id string) (reloadedSnapshot, error) {
 		item.connection.Namespace = meta.ConnectionNamespace
 	}
 	for _, stored := range meta.Profiles {
-		if err := tableExists(database, stored.Table); err != nil {
+		table := snapshotTable(stored.Table, stored.Columns)
+		table.StoredAs = stored.StoredAs
+		if err := checkStoredTable(database, table); err != nil {
 			_ = database.Close()
 			return reloadedSnapshot{}, fmt.Errorf("snapshot profile %q: %w", stored.Name, err)
 		}
 		// The generated profile is recomputed rather than restored, so the
 		// running binary stays the single authority on how a snapshot is queried.
 		item.profiles[stored.Name] = materialization{
-			profile: snapshotProfile(stored.Name, stored.Table, stored.Columns, meta.ConnectionName, stored.Rows),
-			table:   stored.Table,
-			columns: stored.Columns,
+			profile: snapshotProfile(stored.Name, table, meta.ConnectionName, stored.Rows),
+			table:   table,
 			rows:    stored.Rows,
 		}
 	}
@@ -147,12 +157,19 @@ func openSnapshotDir(dir, id string) (reloadedSnapshot, error) {
 	return reloadedSnapshot{snapshot: item, expiresAt: meta.ExpiresAt}, nil
 }
 
-func tableExists(database *sql.DB, table string) error {
-	var name string
-	err := database.QueryRow(
-		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, table).Scan(&name)
+// checkStoredTable checks the snapshot holds table with exactly the physical
+// columns its metadata recorded.
+func checkStoredTable(database *sql.DB, table sqlitetable.Table) error {
+	physical, err := sqlitetable.PhysicalColumns(context.Background(), database, table.Name)
 	if err != nil {
-		return fmt.Errorf("table %q is missing from the snapshot: %w", table, err)
+		return err
+	}
+	if len(physical) == 0 {
+		return fmt.Errorf("table %q is missing from the snapshot", table.Name)
+	}
+	if len(table.StoredAs) != len(table.Columns) || !slices.Equal(physical, table.StoredAs) {
+		return fmt.Errorf("table %q has columns %q, but its metadata records %q for %d columns",
+			table.Name, physical, table.StoredAs, len(table.Columns))
 	}
 	return nil
 }

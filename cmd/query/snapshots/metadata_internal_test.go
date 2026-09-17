@@ -56,6 +56,7 @@ var _ = Describe("snapshot metadata", func() {
 				{Name: "payload", Type: query.ColumnTypeJSON, JSONPath: "$"},
 				{Name: "row_id", Type: query.ColumnTypeNumber, Hidden: true},
 			},
+			StoredAs: []string{"key", "outcome", "payload", "row_id"},
 		}},
 	}
 
@@ -63,7 +64,17 @@ var _ = Describe("snapshot metadata", func() {
 		database := open()
 		Expect(writeSnapshotMetadata(context.Background(), database, record)).To(Succeed())
 
-		Expect(readSnapshotMetadata(context.Background(), database)).To(Equal(record))
+		Expect(readSnapshotMetadata(context.Background(), database, snapshotMetadataVersion)).To(Equal(record))
+	})
+
+	It("refuses a document of a version other than the one the file is expected to hold", func() {
+		database := open()
+		Expect(writeSnapshotMetadata(context.Background(), database, record)).To(Succeed())
+		_, err := database.Exec(`UPDATE "_metadata" SET version = 1`)
+		Expect(err).NotTo(HaveOccurred())
+
+		_, err = readSnapshotMetadata(context.Background(), database, snapshotMetadataVersion)
+		Expect(err).To(MatchError(ContainSubstring("snapshot metadata version 1, expected 2")))
 	})
 
 	// The whole record is rewritten on every materialization, so a second write
@@ -80,7 +91,7 @@ var _ = Describe("snapshot metadata", func() {
 		var rows int
 		Expect(database.QueryRow(`SELECT count(*) FROM "_metadata"`).Scan(&rows)).To(Succeed())
 		Expect(rows).To(Equal(1))
-		stored, err := readSnapshotMetadata(context.Background(), database)
+		stored, err := readSnapshotMetadata(context.Background(), database, snapshotMetadataVersion)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(stored.Profiles).To(HaveLen(2))
 	})
@@ -91,12 +102,12 @@ var _ = Describe("snapshot metadata", func() {
 		_, err := database.Exec(`UPDATE "_metadata" SET version = ?`, snapshotMetadataVersion+1)
 		Expect(err).NotTo(HaveOccurred())
 
-		_, err = readSnapshotMetadata(context.Background(), database)
+		_, err = readSnapshotMetadata(context.Background(), database, snapshotMetadataVersion)
 		Expect(err).To(MatchError(ContainSubstring("newer than this build understands")))
 	})
 
 	It("reports a file that carries no metadata at all", func() {
-		_, err := readSnapshotMetadata(context.Background(), open())
+		_, err := readSnapshotMetadata(context.Background(), open(), snapshotMetadataVersion)
 		Expect(err).To(HaveOccurred())
 	})
 })

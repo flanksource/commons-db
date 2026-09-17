@@ -128,6 +128,12 @@ func (r *Registry) readTargets(reads []profiles.ReadRequest) ([]readTarget, erro
 		if err != nil {
 			return nil, err
 		}
+		for _, name := range result.baseOnly {
+			if _, named := read.Params[name]; named {
+				return nil, fmt.Errorf("%w: profile %q is a view of %q results and takes no %s param; read %q for it",
+					profiles.ErrProfileRequestInvalid, read.Profile.Name, result.Kind, name, result.Profile)
+			}
+		}
 		target := readTarget{stream: stream, kind: result.Kind}
 		if previous, ok := seen[stream]; ok {
 			if previous.kind != target.kind {

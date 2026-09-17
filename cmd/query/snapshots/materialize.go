@@ -43,11 +43,11 @@ func (m *Manager) Materialize(ctx context.Context, options profiles.ReconcileMat
 	}
 	m.mu.RUnlock()
 
-	rows, err := readRows(ctx, item.db, base.table, base.columns)
+	rows, err := readRows(ctx, item.db, base.table)
 	if err != nil {
 		return profiles.ReconcileSnapshotDescriptor{}, err
 	}
-	columns := slices.Clone(base.columns)
+	columns := slices.Clone(base.table.Columns)
 	if strings.TrimSpace(options.CEL) != "" {
 		expression, err := query.CompileRowExpr(dbcontext.NewContext(ctx), options.CEL)
 		if err != nil {
@@ -74,12 +74,12 @@ func (m *Manager) Materialize(ctx context.Context, options profiles.ReconcileMat
 		rows[index]["row_id"] = index + 1
 	}
 	columns = append(columns, query.ColumnDef{Name: "row_id", Type: query.ColumnTypeNumber, Hidden: true})
-	table := "materialized_" + fingerprint
-	if err := sqlitetable.Write(ctx, item.db, snapshotTable(table, columns), rows); err != nil {
+	table, err := sqlitetable.Write(ctx, item.db, snapshotTable("materialized_"+fingerprint, columns), rows)
+	if err != nil {
 		return profiles.ReconcileSnapshotDescriptor{}, err
 	}
-	profile := snapshotProfile(profileName, table, columns, item.connection.Name, len(rows))
-	created := materialization{profile: profile, table: table, columns: columns, rows: len(rows)}
+	profile := snapshotProfile(profileName, table, item.connection.Name, len(rows))
+	created := materialization{profile: profile, table: table, rows: len(rows)}
 
 	// Persist before registering. A crash between the two leaves a durable
 	// record for a table that exists, and the reload picks it up; the reverse
@@ -92,11 +92,9 @@ func (m *Manager) Materialize(ctx context.Context, options profiles.ReconcileMat
 	m.mu.RLock()
 	meta := metadataOf(item)
 	m.mu.RUnlock()
-	meta.Profiles = append(meta.Profiles, snapshotProfileMetadata{
-		Name: profileName, Table: table, Columns: columns, Rows: len(rows),
-	})
+	meta.Profiles = append(meta.Profiles, profileMetadata(profileName, created))
 	if err := writeSnapshotMetadata(ctx, item.db, meta); err != nil {
-		_, _ = item.db.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, sqlitetable.QuoteIdentifier(table)))
+		_, _ = item.db.ExecContext(ctx, fmt.Sprintf(`DROP TABLE IF EXISTS %s`, sqlitetable.QuoteIdentifier(table.Name)))
 		return profiles.ReconcileSnapshotDescriptor{}, err
 	}
 
@@ -108,29 +106,29 @@ func (m *Manager) Materialize(ctx context.Context, options profiles.ReconcileMat
 	return descriptor, nil
 }
 
-func snapshotProfile(name, table string, columns []query.ColumnDef, connectionName string, rows int) query.Profile {
+func snapshotProfile(name string, table sqlitetable.Table, connectionName string, rows int) query.Profile {
 	limits := &query.RowLimits{MaxExportRows: max(rows, query.DefaultMaxExportRows)}
 	return query.Profile{
 		Name: name, Virtual: true, ReadOnly: true,
 		Provider: query.ProviderConfig{Type: "sql", Connection: "connection://reconciliations/" + connectionName},
-		Query:    snapshotTable(table, columns).Select(), Columns: sqlitetable.ProfileColumns(columns),
+		Query:    table.Select(), Columns: sqlitetable.ProfileColumns(table.Columns),
 		Order: query.Order{{Column: "row_id", Unique: true}}, Limits: limits,
 		Output: []string{"table", "json", "ndjson", "yaml", "csv", "markdown", "html", "excel", "pdf"},
 	}
 }
 
 // snapshotTable is a snapshot's table: its row_id, when it has one, is the
-// unique order every snapshot profile pages by.
+// unique order every snapshot profile pages by, so it keeps its own name.
 func snapshotTable(name string, columns []query.ColumnDef) sqlitetable.Table {
-	table := sqlitetable.Table{Name: name, Columns: columns}
+	table := sqlitetable.Table{Name: name, Columns: columns, Reserved: []string{"row_id"}}
 	if slices.ContainsFunc(columns, func(column query.ColumnDef) bool { return column.Name == "row_id" }) {
 		table.Unique = []string{"row_id"}
 	}
 	return table
 }
 
-func readRows(ctx context.Context, database *sql.DB, table string, columns []query.ColumnDef) ([]query.Row, error) {
-	rows, err := database.QueryContext(ctx, snapshotTable(table, columns).Select()+` ORDER BY "row_id"`)
+func readRows(ctx context.Context, database *sql.DB, table sqlitetable.Table) ([]query.Row, error) {
+	rows, err := database.QueryContext(ctx, table.Select()+` ORDER BY "row_id"`)
 	if err != nil {
 		return nil, fmt.Errorf("read snapshot profile: %w", err)
 	}
@@ -140,7 +138,7 @@ func readRows(ctx context.Context, database *sql.DB, table string, columns []que
 		return nil, err
 	}
 	for _, row := range result {
-		if err := sqlitetable.DecodeStructured(columns, row); err != nil {
+		if err := sqlitetable.DecodeStructured(table.Columns, row); err != nil {
 			return nil, err
 		}
 	}
