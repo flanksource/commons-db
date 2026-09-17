@@ -392,7 +392,7 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 			}
 			entity.RegisterFilter(entity.NamedFilter{
 				Name:  profileFilterName(resolved.Profile.Name, binding.Column),
-				Label: binding.Label, Type: binding.ControlType(), Multi: binding.Multi,
+				Label: binding.Label, Type: binding.ControlType(), Unit: binding.ControlUnit(), Multi: binding.Multi,
 				Limit:  filterLookupLimit(binding),
 				Source: source,
 			})
@@ -410,7 +410,7 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 				return fmt.Errorf("profile filter %q is already registered", filterName)
 			}
 			entity.RegisterFilter(entity.NamedFilter{
-				Name: filterName, Label: binding.Label, Type: binding.ControlType(), Multi: binding.Multi,
+				Name: filterName, Label: binding.Label, Type: binding.ControlType(), Unit: binding.ControlUnit(), Multi: binding.Multi,
 				Limit:  filterLookupLimit(binding),
 				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
 			})

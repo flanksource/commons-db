@@ -100,12 +100,18 @@ func LastEventSequence(r *http.Request) (int64, error) {
 	return sequence, nil
 }
 
+// BeginNDJSON sets the headers of a downloadable NDJSON file and returns the
+// encoder its lines are written with, one Encode per line, as they are read.
+func BeginNDJSON(w http.ResponseWriter, filename string) *json.Encoder {
+	w.Header().Set("Content-Type", "application/x-ndjson")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
+	return json.NewEncoder(w)
+}
+
 // WriteNDJSON serves the same events as a downloadable file, for a caller that
 // wants the stream's contents without following it.
 func WriteNDJSON[T any](w http.ResponseWriter, filename string, items []T) {
-	w.Header().Set("Content-Type", "application/x-ndjson")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-	encoder := json.NewEncoder(w)
+	encoder := BeginNDJSON(w, filename)
 	for _, item := range items {
 		if err := encoder.Encode(item); err != nil {
 			return

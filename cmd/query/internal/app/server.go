@@ -12,7 +12,6 @@ import (
 	"github.com/flanksource/clicky/rpc"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/clicky/task"
-	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/schedules"
@@ -22,6 +21,8 @@ import (
 	"github.com/flanksource/commons-db/fs"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/query"
+	flanksourceContext "github.com/flanksource/commons/context"
+	"github.com/flanksource/commons/logger"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/kubernetes"
 )
@@ -144,18 +145,19 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		return err
 	}
 	defer func() { _ = sessionStore.Close() }()
-	if err := sessionStore.MarkInterrupted(ctx); err != nil {
-		return err
-	}
 	if err := sessionStore.Prune(ctx); err != nil {
 		return err
 	}
 	sessionRegistry := query.NewSessionRegistry(query.RegistryOptions{
 		MaxSessions: options.MaxSessions, MaxDuration: options.MaxSessionDuration,
-		OnEvent: sessionStore.OnEvent, OnTransition: sessionStore.OnTransition,
+		Store: sessionStore, Events: sessionStore,
 	})
 	sessionStore.BindResolver(sessionRegistry.Get)
-	defer sessionRegistry.StopAll()
+	// Sessions a previous run of this server left active have no owner now.
+	if err := sessionRegistry.Sweep(ctx); err != nil {
+		return err
+	}
+	defer stopSessions(sessionRegistry)
 
 	// The devtools record store is memory-only by design: a record holds request
 	// and response bodies, which must not outlive the process that was asked to
@@ -227,7 +229,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	}
 	sessionService, err := sessions.New(sessions.Options{
 		Profiles: func() (profiles.Store, error) { return a.profileStore() },
-		Context:  a.Runtime.Context, Registry: sessionRegistry, Store: sessionStore,
+		Context:  a.Runtime.Context, Registry: sessionRegistry, Store: sessionStore, EventLog: sessionStore,
 	})
 	if err != nil {
 		return err
@@ -268,4 +270,17 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		return fmt.Errorf("server: %w", err)
 	}
 	return nil
+}
+
+// sessionStopTimeout bounds how long shutdown waits for sessions to flush.
+const sessionStopTimeout = 30 * time.Second
+
+// stopSessions stops every live session and waits for each to write its final
+// status before the session store closes.
+func stopSessions(registry *query.SessionRegistry) {
+	ctx, cancel := context.WithTimeout(context.Background(), sessionStopTimeout)
+	defer cancel()
+	if err := registry.StopAll(ctx); err != nil {
+		logger.Errorf("shutdown: %v", err)
+	}
 }

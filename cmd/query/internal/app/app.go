@@ -91,7 +91,7 @@ func New(options Options) (*App, error) {
 	}
 	profileService, err := profiles.New(profiles.Options{
 		Store: profileStore, Context: runtime.Context, DecodeBody: DecodeBody, Snapshots: snapshotManager,
-		OpenAPIExtensions: []profiles.OpenAPIExtension{connections.AddConnectionsOpenAPI},
+		OpenAPIExtensions: []profiles.OpenAPIExtension{connections.AddConnectionsOpenAPI, profiles.AddSessionsOpenAPI},
 	})
 	if err != nil {
 		return nil, err

@@ -281,7 +281,9 @@ func TestProfileOpenAPIAdvertisesEachFilterKindsOwnControl(t *testing.T) {
 		Provider: query.ProviderConfig{Type: "postgres"},
 		Columns: []query.ColumnDef{
 			{Name: "region", Type: query.ColumnTypeString},
-			{Name: "latency_ms", Type: query.ColumnTypeNumber},
+			{Name: "ratio", Type: query.ColumnTypeNumber, Unit: "percentunit"},
+			{Name: "latency_s", Type: query.ColumnTypeDuration, Unit: "s"},
+			{Name: "wait_ms", Type: query.ColumnTypeDuration},
 			{Name: "created_at", Type: query.ColumnTypeDateTime},
 			{Name: "deleted", Type: query.ColumnTypeBoolean},
 			{Name: "env", Filter: &query.ColumnFilterDef{Options: []string{"prod", "dev"}}},
@@ -300,7 +302,9 @@ func TestProfileOpenAPIAdvertisesEachFilterKindsOwnControl(t *testing.T) {
 	// enumerate names an endpoint to fetch them from.
 	for key, wantURL := range map[string]bool{
 		"filter.region":     true,
-		"filter.latency_ms": false,
+		"filter.ratio":      false,
+		"filter.latency_s":  false,
+		"filter.wait_ms":    false,
 		"filter.created_at": false,
 		"filter.deleted":    false,
 		// Enumerated values are already the answer, so there is nothing to fetch.
@@ -322,15 +326,20 @@ func TestProfileOpenAPIAdvertisesEachFilterKindsOwnControl(t *testing.T) {
 	}
 
 	filters := spec.Components.ClickyFilters
-	for name, want := range map[string]string{
-		"region": "multi-filter", "latency_ms": "number", "created_at": "date-range", "deleted": "bool",
+	for name, want := range map[string]struct{ control, unit string }{
+		"region":     {control: "multi-filter"},
+		"ratio":      {control: "number", unit: "percentunit"},
+		"latency_s":  {control: "duration", unit: "s"},
+		"wait_ms":    {control: "duration", unit: "ms"},
+		"created_at": {control: "date-range"},
+		"deleted":    {control: "bool"},
 	} {
 		filter, ok := filters[profileFilterName("orders", name)]
 		if !ok {
 			t.Fatalf("filter component for %q is missing", name)
 		}
-		if filter.Type != want {
-			t.Fatalf("filter %q type = %q, want %q", name, filter.Type, want)
+		if filter.Type != want.control || filter.Unit != want.unit {
+			t.Fatalf("filter %q metadata = type %q unit %q, want type %q unit %q", name, filter.Type, filter.Unit, want.control, want.unit)
 		}
 		if ref := byName["filter."+name].Lookup.Ref; ref != "#/components/x-clicky-filters/"+profileFilterName("orders", name) {
 			t.Fatalf("filter %q ref = %q, does not name its own component", name, ref)
