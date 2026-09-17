@@ -12,18 +12,21 @@ import {
   type DropdownMenuItem,
 } from "@flanksource/clicky-ui";
 import {
-  UiCog,
   UiCopy,
-  UiDatabase,
   UiEllipsis,
   UiEye,
-  UiFunctionSquare,
-  UiKey,
-  UiLink,
   UiPlay,
   UiRestart,
-  UiTable,
-  UiZap,
+  UiSqlColumn,
+  UiSqlForeignKey,
+  UiSqlFunction,
+  UiSqlIndex,
+  UiSqlPrimaryKey,
+  UiSqlSchema,
+  UiSqlStoredProc,
+  UiSqlTable,
+  UiSqlTrigger,
+  UiSqlView,
 } from "@flanksource/clicky-ui/icons";
 
 export type SQLCatalog = {
@@ -195,7 +198,7 @@ export function SQLCatalogNavigator({
       aria-label="SQL catalog"
     >
       <div className="flex items-center gap-2">
-        <Icon icon={UiDatabase} className="shrink-0 text-blue-500" />
+        <Icon icon={UiSqlSchema} className="shrink-0 text-blue-500" />
         <label className="min-w-0 flex-1">
           <span className="sr-only">Database</span>
           <select
@@ -373,12 +376,12 @@ function catalogItems(catalog: SQLCatalog): CatalogItem[] {
         );
     section(
       "Tables",
-      <UiTable className="h-3 w-3 shrink-0" />,
+      <UiSqlTable className="h-3 w-3 shrink-0" />,
       relationItems(false),
     );
     section(
       "Views",
-      <UiEye className="h-3 w-3 shrink-0" />,
+      <UiSqlView className="h-3 w-3 shrink-0" />,
       relationItems(true),
     );
     for (const procedure of [true, false]) {
@@ -388,9 +391,9 @@ function catalogItems(catalog: SQLCatalog): CatalogItem[] {
       section(
         procedure ? "Procedures" : "Functions",
         procedure ? (
-          <UiCog className="h-3 w-3" />
+          <UiSqlStoredProc className="h-3 w-3" />
         ) : (
-          <UiFunctionSquare className="h-3 w-3" />
+          <UiSqlFunction className="h-3 w-3" />
         ),
         routines.map((routine) => ({
           key: JSON.stringify([
@@ -407,9 +410,9 @@ function catalogItems(catalog: SQLCatalog): CatalogItem[] {
           ),
           source: routine.sql,
           icon: procedure ? (
-            <UiCog className="h-3 w-3 shrink-0 text-purple-500" />
+            <UiSqlStoredProc className="h-3 w-3 shrink-0 text-purple-500" />
           ) : (
-            <UiFunctionSquare className="h-3 w-3 shrink-0 text-teal-500" />
+            <UiSqlFunction className="h-3 w-3 shrink-0 text-teal-500" />
           ),
           detail: `(${routine.parameters?.length ?? 0})`,
           description: `${routine.name}(${(routine.parameters ?? []).map((p) => `${p.name} ${p.dataType ?? ""}`).join(", ")})${routine.returnType ? ` → ${routine.returnType}` : ""}`,
@@ -421,7 +424,7 @@ function catalogItems(catalog: SQLCatalog): CatalogItem[] {
       kind: "schema",
       name: schema.name,
       identifier: schema.name,
-      icon: <UiDatabase className="h-3.5 w-3.5 shrink-0 text-blue-500" />,
+      icon: <UiSqlSchema className="h-3.5 w-3.5 shrink-0 text-blue-500" />,
       detail: `${schema.relations.length} objects, ${schema.routines?.length ?? 0} routines`,
       children: sections,
     };
@@ -445,6 +448,11 @@ function relationItem(
     const type = columnType(column);
     return {
       ...child("column", column.name),
+      icon: column.primaryKey ? (
+        <UiSqlPrimaryKey className="h-3 w-3 shrink-0" />
+      ) : (
+        <UiSqlColumn className="h-3 w-3 shrink-0" />
+      ),
       description: [
         column.name,
         type,
@@ -460,7 +468,7 @@ function relationItem(
         <>
           <span className="truncate">{type}</span>
           {column.primaryKey && (
-            <UiKey
+            <UiSqlPrimaryKey
               className="h-3 w-3 shrink-0 text-amber-500"
               aria-label="primary key"
             />
@@ -486,7 +494,7 @@ function relationItem(
         dialect === "postgresql"
           ? qualifiedIdentifier(dialect, schema, index.name)
           : quoteIdentifier(dialect, index.name),
-      icon: <UiKey className="h-3 w-3 shrink-0 text-purple-400" />,
+      icon: <UiSqlIndex className="h-3 w-3 shrink-0 text-purple-400" />,
       description: `${index.name} ON ${identifier} (${index.columns.join(", ")}) ${index.type ?? ""}${index.filter ? ` WHERE ${index.filter}` : ""}`,
       detail: (
         <>
@@ -511,7 +519,7 @@ function relationItem(
     children.push({
       ...child("foreignKey", fk.name),
       identifier: quoteIdentifier(dialect, fk.name),
-      icon: <UiLink className="h-3 w-3 shrink-0 text-teal-400" />,
+      icon: <UiSqlForeignKey className="h-3 w-3 shrink-0 text-teal-400" />,
       detail: (
         <span className="truncate">
           → {referencedRelation} ({fk.referencedColumns.join(", ")})
@@ -529,7 +537,7 @@ function relationItem(
           : quoteIdentifier(dialect, trigger.name),
       description: `${trigger.name} ON ${identifier}`,
       source: trigger.sql,
-      icon: <UiZap className="h-3 w-3 shrink-0 text-amber-500" />,
+      icon: <UiSqlTrigger className="h-3 w-3 shrink-0 text-amber-500" />,
       detail: (
         <span className="rounded bg-amber-500/10 px-1 text-amber-600 dark:text-amber-400">
           {[trigger.timing, trigger.event, trigger.disabled && "disabled"]
@@ -548,9 +556,9 @@ function relationItem(
     children,
     icon:
       relation.type === "view" ? (
-        <UiEye className="h-3 w-3 shrink-0 text-slate-500" />
+        <UiSqlView className="h-3 w-3 shrink-0 text-slate-500" />
       ) : (
-        <UiTable className="h-3 w-3 shrink-0 text-emerald-500" />
+        <UiSqlTable className="h-3 w-3 shrink-0 text-emerald-500" />
       ),
     detail: (
       <>
