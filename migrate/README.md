@@ -80,3 +80,21 @@ files as tables. The OSS migration layer supports roles and memberships plus
 schema, table, column, and sequence permissions. Managed grants are reconciled
 exactly within the bundle's metadata scope; unrelated roles and grants are left
 untouched. Different scopes must not manage the same role or grantee/object pair.
+
+## SQLite tables
+
+`migrate/sqlite.Apply` is the SQLite counterpart. It works over the caller's own `*sql.DB` or `*sql.Tx`, so it serves the pure-Go modernc driver and joins the caller's transaction. The declaration is Go `*schema.Table` values rather than HCL. A column may give only its raw SQLite type (`ColumnType.Raw`), which `Apply` parses the way Atlas's inspection does, so a table and its declaration compare equal.
+
+`Apply` inspects only the declared tables, diffs them against the declaration, and applies only additions: a missing table, column or index. Any other difference would rewrite or discard stored rows: a dropped, retyped or NOT NULL column, or a changed key or index. `Apply` refuses those before it applies anything, and names each one.
+
+```go
+declared, err := sqlitetable.Table{Name: "events", Columns: columns, StoredAs: stored, PrimaryKey: []string{"id"}}.Declare()
+if err != nil {
+	return err
+}
+if err := sqlitemigrate.Apply(ctx, tx, declared); err != nil {
+	return err
+}
+```
+
+The record store (`recordstore/sqlite`) uses it to add the columns a kind gains to tables already holding rows.
