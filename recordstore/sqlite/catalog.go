@@ -12,8 +12,12 @@ import (
 )
 
 // catalogVersion is the catalog this build reads and writes: kind tables whose
-// columns carry derived safe names, recorded in record_kinds.
-const catalogVersion = 4
+// columns carry derived safe names, recorded in record_kinds. A kind table only
+// ever gains columns, so its record_kinds entry lists every column it has —
+// possibly more than any one build declares — where version 4 listed exactly
+// the columns one build declared, and so refused a table another build had
+// added a column to.
+const catalogVersion = 5
 
 func (b *Backend) createCatalog(ctx context.Context) error {
 	return b.database.Write(func(writer *sql.DB) error {

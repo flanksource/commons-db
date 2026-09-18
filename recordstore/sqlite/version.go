@@ -18,15 +18,35 @@ import (
 	"github.com/flanksource/commons-db/query"
 )
 
-// copiedCatalogVersions are the unversioned catalogs a durable store copies
-// into its versioned file on first open: both store columns positionally.
-var copiedCatalogVersions = []int{3, 2}
+// predecessor is a file an older build wrote for the configured path, and the
+// catalog versions it may hold.
+type predecessor struct {
+	path     string
+	versions []int
+}
+
+// predecessors are the files a durable store copies into its versioned file
+// on first open, newest first: the previous catalog version's directory, whose
+// tables have named columns, then the unversioned file older builds wrote, whose
+// tables store columns positionally. Only the newest that exists is copied.
+func predecessors(configured string) []predecessor {
+	return []predecessor{
+		{path: versionedPath(configured, 4), versions: []int{4}},
+		{path: configured, versions: []int{3, 2}},
+	}
+}
+
+// versionedPath is where catalog version keeps the configured path <dir>/<file>:
+// <dir>/v<version>/<file>.
+func versionedPath(configured string, version int) string {
+	return filepath.Join(filepath.Dir(configured), fmt.Sprintf("v%d", version), filepath.Base(configured))
+}
 
 // versionedFile resolves a configured path <dir>/<file> to <dir>/v<catalogVersion>/<file>,
 // the file this build opens, creating its directory. A durable store whose
-// versioned file does not exist yet copies an older build's unversioned file
-// into it, which leaves that file as it was for the builds still reading it; a
-// derived index is always built fresh.
+// versioned file does not exist yet copies an older build's file into it,
+// which leaves that file as it was for the builds still reading it; a derived
+// index is always built fresh.
 func versionedFile(ctx context.Context, path string, derived bool) (string, error) {
 	configured, err := filepath.Abs(path)
 	if err != nil {
@@ -36,7 +56,7 @@ func versionedFile(ctx context.Context, path string, derived bool) (string, erro
 	if err != nil {
 		return "", fmt.Errorf("directory of %s: %w", configured, err)
 	}
-	versioned := filepath.Join(filepath.Dir(configured), fmt.Sprintf("v%d", catalogVersion), filepath.Base(configured))
+	versioned := versionedPath(configured, catalogVersion)
 	if _, err := os.Stat(versioned); err == nil {
 		return versioned, nil
 	} else if !errors.Is(err, fs.ErrNotExist) {
@@ -48,25 +68,30 @@ func versionedFile(ctx context.Context, path string, derived bool) (string, erro
 	if derived {
 		return versioned, nil
 	}
-	if _, err := os.Stat(configured); errors.Is(err, fs.ErrNotExist) {
-		return versioned, nil
-	} else if err != nil {
-		return "", fmt.Errorf("inspect %s: %w", configured, err)
+	for _, source := range predecessors(configured) {
+		if _, err := os.Stat(source.path); errors.Is(err, fs.ErrNotExist) {
+			continue
+		} else if err != nil {
+			return "", fmt.Errorf("inspect %s: %w", source.path, err)
+		}
+		return versioned, copyPredecessor(ctx, source, versioned)
 	}
-	return versioned, copyUnversioned(ctx, configured, versioned)
+	return versioned, nil
 }
 
-// copyUnversioned copies the unversioned durable file source into target and
-// names the copy's columns. The copy is made and migrated under a temporary
-// name and linked into place, so a crash leaves no half-migrated target and
-// two processes starting together cannot overwrite each other's copy.
-func copyUnversioned(ctx context.Context, source, target string) error {
+// copyPredecessor copies an older build's durable file into target and
+// migrates the copy to catalogVersion. The copy is made and migrated under a
+// temporary name and linked into place, so a crash leaves no half-migrated
+// target and two processes starting together cannot overwrite each other's
+// copy.
+func copyPredecessor(ctx context.Context, from predecessor, target string) error {
+	source := from.path
 	database, err := sql.Open("sqlite", fileURI(source)+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return fmt.Errorf("open %s: %w", source, err)
 	}
 	defer func() { _ = database.Close() }()
-	version, err := inspectCatalog(ctx, database, source, copiedCatalogVersions...)
+	version, err := inspectCatalog(ctx, database, source, from.versions...)
 	var incompatible incompatibleCatalog
 	switch {
 	case errors.Is(err, errNoCatalog):
@@ -108,8 +133,10 @@ func copyUnversioned(ctx context.Context, source, target string) error {
 }
 
 // migrateCopy brings the copy at path from version to catalogVersion in one
-// transaction: a version 2 catalog gains sealed streams, and every kind table
-// renames its positional columns to derived names recorded in record_kinds.
+// transaction: a version 2 catalog gains sealed streams, and a version 2 or 3
+// kind table renames its positional columns to derived names recorded in
+// record_kinds. A version 4 catalog already describes its tables as version 5
+// reads them, so it only takes the new version.
 func migrateCopy(ctx context.Context, path string, version int) (err error) {
 	database, err := sql.Open("sqlite", fileURI(path))
 	if err != nil {
@@ -126,13 +153,15 @@ func migrateCopy(ctx context.Context, path string, version int) (err error) {
 			return fmt.Errorf("add sealed streams: %w", err)
 		}
 	}
-	kinds, err := storedKinds(ctx, tx)
-	if err != nil {
-		return err
-	}
-	for _, kind := range kinds {
-		if err := nameKindColumns(ctx, tx, kind); err != nil {
-			return fmt.Errorf("kind %q: %w", kind.kind, err)
+	if version <= 3 {
+		kinds, err := storedKinds(ctx, tx)
+		if err != nil {
+			return err
+		}
+		for _, kind := range kinds {
+			if err := nameKindColumns(ctx, tx, kind); err != nil {
+				return fmt.Errorf("kind %q: %w", kind.kind, err)
+			}
 		}
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`UPDATE record_store_format SET version = %d WHERE key = 1`, catalogVersion)); err != nil {

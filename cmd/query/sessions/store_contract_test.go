@@ -98,6 +98,7 @@ func describeSessionStoreContract(newStore func() query.SessionStore) {
 		rec.State, rec.StoppedAt, rec.StopReason, rec.EventCount = query.SessionStopped, &stopped, "stopped by admin", 99
 		rec.Events = &query.EventsRef{Stream: "stream-a", Kind: "jvm_trace", From: 1, To: 99, Total: 99}
 		rec.Summary = json.RawMessage(`{"calls":99}`)
+		rec.Metadata = []query.SessionMetadata{{Name: "xe.statements", Label: "Started with", Language: "sql", Value: "CREATE EVENT SESSION [t] ON SERVER;"}}
 		Expect(store.Update(ctx, rec.ID, rec.SessionStatus)).To(Succeed())
 
 		got, _, err := store.Get(ctx, rec.ID)

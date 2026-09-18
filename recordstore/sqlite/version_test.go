@@ -49,8 +49,30 @@ const v3Events = v3Catalog + `PRAGMA journal_mode = WAL;
 		VALUES ('run-1', 'g-1', 'events', 2, 1, 2, '2026-09-15T10:00:00.000000000Z');
 	INSERT INTO record_appends (stream_id, last_seq, appended_at) VALUES ('run-1', 2, '2026-09-15T10:00:00.000000000Z');`
 
-// v4EventsColumns is the events kind's catalog entry once its columns are named.
-const v4EventsColumns = `["stream_id=stream_id:TEXT:string","seq=seq:NUMERIC:number","id=id:TEXT:string","Pod Name=Pod_Name:TEXT:string","transaction=transaction_:TEXT:string","PolicyGuid=PolicyGuid:TEXT:string","policyGuid=policyGuid_2:TEXT:string","count=count:NUMERIC:number","key:id"]`
+// namedEventsColumns is the events kind's catalog entry once its columns are
+// named.
+const namedEventsColumns = `["stream_id=stream_id:TEXT:string","seq=seq:NUMERIC:number","id=id:TEXT:string","Pod Name=Pod_Name:TEXT:string","transaction=transaction_:TEXT:string","PolicyGuid=PolicyGuid:TEXT:string","policyGuid=policyGuid_2:TEXT:string","count=count:NUMERIC:number","key:id"]`
+
+// v4Events is a durable version 4 file holding stream run-1 of kind events,
+// rows e-1 and e-2 at seqs 1 and 2, under named columns.
+const v4Events = `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
+	INSERT INTO record_store_format (key, version) VALUES (1, 4);
+	CREATE TABLE record_streams (
+		stream_id TEXT PRIMARY KEY, generation TEXT NOT NULL, kind TEXT NOT NULL, total INTEGER NOT NULL,
+		low_seq INTEGER NOT NULL, high_seq INTEGER NOT NULL,
+		updated_at TEXT NOT NULL, expires_at TEXT, capped INTEGER NOT NULL DEFAULT 0, sealed INTEGER NOT NULL DEFAULT 0);
+	CREATE INDEX record_streams_expires_at ON record_streams (expires_at);
+	CREATE TABLE record_kinds (kind TEXT PRIMARY KEY, table_name TEXT NOT NULL, columns TEXT NOT NULL);
+	CREATE TABLE record_appends (stream_id TEXT NOT NULL, last_seq INTEGER NOT NULL, appended_at TEXT NOT NULL,
+		PRIMARY KEY (stream_id, last_seq));
+	PRAGMA journal_mode = WAL;
+	INSERT INTO record_kinds (kind, table_name, columns) VALUES ('events', 'records_events', '` + namedEventsColumns + `');
+	CREATE TABLE "records_events" ("stream_id" TEXT, "seq" NUMERIC, "id" TEXT, "Pod_Name" TEXT, "transaction_" TEXT, "PolicyGuid" TEXT, "policyGuid_2" TEXT, "count" NUMERIC, PRIMARY KEY ("stream_id", "seq"));
+	CREATE UNIQUE INDEX "records_events_key" ON "records_events" ("stream_id", "id");
+	INSERT INTO "records_events" VALUES ('run-1', 1, 'e-1', 'pod-1', 'tx-1', 'P-1', 'p-1', 1), ('run-1', 2, 'e-2', 'pod-2', 'tx-2', 'P-2', 'p-2', 2);
+	INSERT INTO record_streams (stream_id, generation, kind, total, low_seq, high_seq, updated_at)
+		VALUES ('run-1', 'g-1', 'events', 2, 1, 2, '2026-09-15T10:00:00.000000000Z');
+	INSERT INTO record_appends (stream_id, last_seq, appended_at) VALUES ('run-1', 2, '2026-09-15T10:00:00.000000000Z');`
 
 func fileBytes(path string) []byte {
 	content, err := os.ReadFile(path)
@@ -99,15 +121,51 @@ var _ = Describe("sqlite backend versioned files", func() {
 		_, err := backend.Append(ctx, "run-1", "events", []recordstore.Row{eventRow(1)})
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(backend.Path()).To(Equal(filepath.Join(dir, "v4", "records.sqlite")))
+		Expect(backend.Path()).To(Equal(filepath.Join(dir, "v5", "records.sqlite")))
 		Expect(unversioned).ToNot(BeAnExistingFile())
 		Expect(map[string]any{
 			"version": catalogVersion(ctx, backend.Path()), "columns": kindColumns(ctx, backend.Path(), "events"),
 			"physical": tableColumns(ctx, backend.Path(), "records_events"),
 		}).To(Equal(map[string]any{
-			"version": 4, "columns": v4EventsColumns,
+			"version": 5, "columns": namedEventsColumns,
 			"physical": []string{"stream_id", "seq", "id", "Pod_Name", "transaction_", "PolicyGuid", "policyGuid_2", "count"},
 		}))
+	})
+
+	Context("when a durable version 4 file holds rows", func() {
+		var v4Path string
+		var original []byte
+
+		BeforeEach(func() {
+			v4Path = filepath.Join(dir, "v4", "records.sqlite")
+			writeLegacy(ctx, v4Path, v4Events)
+			// An older unversioned file is superseded by the v4 copy made of it.
+			writeLegacy(ctx, unversioned, v3Catalog)
+			original = fileBytes(v4Path)
+		})
+
+		It("copies it into v5 as it is, leaving the v4 file for the builds still reading it", func() {
+			backend := openSQLite(unversioned, clock, eventsSchema, false)
+			DeferCleanup(backend.Close)
+
+			seqs, rows := scannedEvents(backend)
+			Expect(map[string]any{
+				"path": backend.Path(), "seqs": seqs, "rows": rows,
+				"version": catalogVersion(ctx, backend.Path()), "columns": kindColumns(ctx, backend.Path(), "events"),
+			}).To(Equal(map[string]any{
+				"path": filepath.Join(dir, "v5", "records.sqlite"), "seqs": []int64{1, 2},
+				"rows":    []recordstore.Row{eventRow(1), eventRow(2)},
+				"version": 5, "columns": namedEventsColumns,
+			}))
+			Expect(backend.Close()).To(Succeed())
+			Expect(fileBytes(v4Path)).To(Equal(original), "the v4 file changed")
+		})
+
+		It("refuses a v4 file whose catalog is incomplete rather than copying it", func() {
+			writeLegacy(ctx, v4Path, `DROP TABLE record_appends`)
+			_, err := sqlite.Open(sqlite.Options{Path: unversioned, Schema: eventsSchema, SweepInterval: idleSweep})
+			Expect(err).To(MatchError(And(ContainSubstring("an incomplete catalog version 4"), ContainSubstring("cannot be copied"))))
+		})
 	})
 
 	Context("when a durable version 3 file holds rows", func() {
@@ -118,7 +176,7 @@ var _ = Describe("sqlite backend versioned files", func() {
 			original = fileBytes(unversioned)
 		})
 
-		It("copies it into v4 with named columns, the same rows and working key skips, leaving the original untouched", func() {
+		It("copies it into v5 with named columns, the same rows and working key skips, leaving the original untouched", func() {
 			backend := openSQLite(unversioned, clock, eventsSchema, false)
 			DeferCleanup(backend.Close)
 
@@ -134,14 +192,14 @@ var _ = Describe("sqlite backend versioned files", func() {
 				"seqs": []int64{1, 2}, "rows": []recordstore.Row{eventRow(1), eventRow(2)},
 				"append":  recordstore.AppendResult{Window: recordstore.Window{From: 3, To: 3}, Skipped: 1},
 				"after":   []int64{1, 2, 3},
-				"version": 4, "columns": v4EventsColumns,
+				"version": 5, "columns": namedEventsColumns,
 				"physical": []string{"stream_id", "seq", "id", "Pod_Name", "transaction_", "PolicyGuid", "policyGuid_2", "count"},
 			}))
 			Expect(backend.Close()).To(Succeed())
 			Expect(fileBytes(unversioned)).To(Equal(original), "the unversioned file changed")
 		})
 
-		It("reuses the v4 copy on a second open rather than copying again", func() {
+		It("reuses the v5 copy on a second open rather than copying again", func() {
 			first := openSQLite(unversioned, clock, eventsSchema, false)
 			_, err := first.Append(ctx, "run-1", "events", []recordstore.Row{eventRow(3)})
 			Expect(err).ToNot(HaveOccurred())
@@ -158,14 +216,14 @@ var _ = Describe("sqlite backend versioned files", func() {
 				map[string]any{"seqs": []int64{1, 2, 3}, "oldBuildStreamFound": false}))
 		})
 
-		It("builds a derived index fresh in v4, copying nothing", func() {
+		It("builds a derived index fresh in v5, copying nothing", func() {
 			index := openSQLite(unversioned, clock, eventsSchema, true)
 			DeferCleanup(index.Close)
 
 			_, err := index.Meta(ctx, "run-1")
 			Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), fmt.Sprint(err))
-			Expect(index.Path()).To(Equal(filepath.Join(dir, "v4", "records.sqlite")))
-			Expect(catalogVersion(ctx, index.Path())).To(Equal(4))
+			Expect(index.Path()).To(Equal(filepath.Join(dir, "v5", "records.sqlite")))
+			Expect(catalogVersion(ctx, index.Path())).To(Equal(5))
 			Expect(index.Close()).To(Succeed())
 			Expect(fileBytes(unversioned)).To(Equal(original), "the unversioned file changed")
 		})

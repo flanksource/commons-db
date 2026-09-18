@@ -74,10 +74,10 @@ var _ = Describe("sqlite backend catalog versions", func() {
 
 		_, err := sqlite.Open(sqlite.Options{Path: oldPath, Schema: recordstoretest.Schema, SweepInterval: idleSweep})
 		Expect(err).To(MatchError(ContainSubstring("unsupported catalog version 1")))
-		Expect(filepath.Join(dir, "v4", "old.sqlite")).ToNot(BeAnExistingFile())
+		Expect(filepath.Join(dir, "v5", "old.sqlite")).ToNot(BeAnExistingFile())
 	})
 
-	It("copies a durable version 2 file into v4, keeping its streams unsealed and sealable", func() {
+	It("copies a durable version 2 file into v5, keeping its streams unsealed and sealable", func() {
 		v2Path := filepath.Join(dir, "v2.sqlite")
 		writeLegacy(ctx, v2Path, `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
 			INSERT INTO record_store_format (key, version) VALUES (1, 2);
@@ -103,25 +103,25 @@ var _ = Describe("sqlite backend catalog versions", func() {
 			"path": upgraded.Path(), "version": catalogVersion(ctx, upgraded.Path()), "unversioned": catalogVersion(ctx, v2Path),
 			"before": before.Sealed, "after": after.Sealed, "generation": after.Generation,
 		}).To(Equal(map[string]any{
-			"path": filepath.Join(dir, "v4", "v2.sqlite"), "version": 4, "unversioned": 2,
+			"path": filepath.Join(dir, "v5", "v2.sqlite"), "version": 5, "unversioned": 2,
 			"before": false, "after": true, "generation": "g-1",
 		}))
 	})
 
-	It("refuses a durable v4 file whose catalog this build cannot read", func() {
-		writeLegacy(ctx, filepath.Join(dir, "v4", "records.sqlite"), `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
-			INSERT INTO record_store_format (key, version) VALUES (1, 4)`)
+	It("refuses a durable v5 file whose catalog this build cannot read", func() {
+		writeLegacy(ctx, filepath.Join(dir, "v5", "records.sqlite"), `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
+			INSERT INTO record_store_format (key, version) VALUES (1, 5)`)
 
 		_, err := sqlite.Open(sqlite.Options{Path: filepath.Join(dir, "records.sqlite"), Schema: recordstoretest.Schema, SweepInterval: idleSweep})
-		Expect(err).To(MatchError(And(ContainSubstring("an incomplete catalog version 4"), ContainSubstring("remove the file"))))
+		Expect(err).To(MatchError(And(ContainSubstring("an incomplete catalog version 5"), ContainSubstring("remove the file"))))
 	})
 
 	// A derived index lives in a file a pod restart may keep while the build
 	// that wrote it is replaced; everything it held can be read again from its
 	// source, so its catalog is recreated rather than refused.
-	DescribeTable("rebuilds a derived v4 index it cannot read, dropping everything it held",
+	DescribeTable("rebuilds a derived v5 index it cannot read, dropping everything it held",
 		func(legacy string) {
-			path := filepath.Join(dir, "v4", "index.sqlite")
+			path := filepath.Join(dir, "v5", "index.sqlite")
 			writeLegacy(ctx, path, legacy)
 
 			index, err := sqlite.Open(sqlite.Options{Path: filepath.Join(dir, "index.sqlite"), Schema: recordstoretest.Schema, Derived: true, SweepInterval: idleSweep})
@@ -138,13 +138,13 @@ var _ = Describe("sqlite backend catalog versions", func() {
 			var legacyTables int
 			Expect(readOnly(path).QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE name = 'legacy_rows'`).Scan(&legacyTables)).To(Succeed())
 			Expect(map[string]any{"version": catalogVersion(ctx, path), "legacyTables": legacyTables, "found": found, "seqs": seqs}).To(Equal(
-				map[string]any{"version": 4, "legacyTables": 0, "found": false, "seqs": []int64{1}}))
+				map[string]any{"version": 5, "legacyTables": 0, "found": false, "seqs": []int64{1}}))
 		},
 		Entry("an unversioned catalog", `CREATE TABLE record_streams (stream_id TEXT PRIMARY KEY, kind TEXT NOT NULL);
 			CREATE TABLE legacy_rows (c0 TEXT)`),
 		Entry("an older catalog version", v3Catalog+`CREATE TABLE legacy_rows (c0 TEXT)`),
 		Entry("an incomplete catalog of this version", `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHECK (key = 1), version INTEGER NOT NULL);
-			INSERT INTO record_store_format (key, version) VALUES (1, 4);
+			INSERT INTO record_store_format (key, version) VALUES (1, 5);
 			CREATE TABLE legacy_rows (c0 TEXT)`),
 	)
 })

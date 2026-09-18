@@ -7,7 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
+
+	"github.com/flanksource/commons/logger"
 
 	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
@@ -77,44 +78,11 @@ func (b *Backend) kindTable(kind string) (kindTable, error) {
 	return table, nil
 }
 
-// catalogEntries is how record_kinds describes a table: each column's
-// declared name, physical name, stored type and declared type, then the key the
-// table holds once per stream. A label or a filter can change freely; these
+// columnStorage is the part of a column's catalog entry after its names: its
+// stored type and declared type. A label or a filter can change freely; these
 // cannot without the rows already written meaning something else.
-func catalogEntries(table kindTable) (string, error) {
-	parts := make([]string, len(table.Columns), len(table.Columns)+1)
-	for index, column := range table.Columns {
-		parts[index] = column.Name + "=" + table.StoredAs[index] + columnStorage(column)
-	}
-	if key := table.schema.Options.Key; key != "" {
-		parts = append(parts, "key:"+key)
-	}
-	encoded, err := json.Marshal(parts)
-	return string(encoded), err
-}
-
-// columnStorage is the part of a column's catalog entry after its names.
 func columnStorage(column query.ColumnDef) string {
 	return ":" + sqlitetable.Type(column.Type) + ":" + string(column.Type)
-}
-
-// storedNames reads, from a table's catalog entries, the physical name of each
-// of columns in order. It reports false when the entries describe other
-// columns or other types.
-func storedNames(columns []query.ColumnDef, parts []string) ([]string, bool) {
-	if len(parts) != len(columns) {
-		return nil, false
-	}
-	names := make([]string, len(columns))
-	for index, column := range columns {
-		prefix, suffix := column.Name+"=", columnStorage(column)
-		part := parts[index]
-		if len(part) <= len(prefix)+len(suffix) || !strings.HasPrefix(part, prefix) || !strings.HasSuffix(part, suffix) {
-			return nil, false
-		}
-		names[index] = part[len(prefix) : len(part)-len(suffix)]
-	}
-	return names, true
 }
 
 // storeTable is kind's table as the catalog records it, holding only the
@@ -129,9 +97,17 @@ func storeTable(ctx context.Context, database queryer, kind string) (sqlitetable
 	if err := json.Unmarshal([]byte(stored), &parts); err != nil {
 		return sqlitetable.Table{}, fmt.Errorf("kind %q: decode catalog columns: %w", kind, err)
 	}
-	names, ok := storedNames(storeColumns, parts[:min(len(parts), len(storeColumns))])
-	if !ok {
-		return sqlitetable.Table{}, fmt.Errorf("kind %q: catalog columns %s do not begin with the store's own columns", kind, stored)
+	names := make([]string, len(storeColumns))
+	for index, column := range storeColumns {
+		var entry storedColumn
+		ok := index < len(parts)
+		if ok {
+			entry, ok = parseStoredColumn(parts[index])
+		}
+		if !ok || entry.declared != column.Name || entry.storage != columnStorage(column) {
+			return sqlitetable.Table{}, fmt.Errorf("kind %q: catalog columns %s do not begin with the store's own columns", kind, stored)
+		}
+		names[index] = entry.physical
 	}
 	return sqlitetable.Table{Name: name, Columns: storeColumns, StoredAs: names}, nil
 }
@@ -171,58 +147,43 @@ func (b *Backend) reconcileTableLocked(ctx context.Context, writer *sql.DB, kind
 }
 
 // adoptStoredTable gives table the physical names its catalog entry recorded,
-// once the entry describes the same columns and key and names the columns the
-// table actually has. A derived index rebuilds a table that differs; a durable
-// file refuses it, because its rows exist nowhere else.
+// once the entry names the columns the table actually has. A column the kind
+// now declares that the table lacks is added in place, in a durable file and a
+// derived index alike; a column it no longer declares stays, with its rows.
+// Any other difference — a column's storage, the key, a table that has drifted
+// from its catalog — would make the rows already written mean something else:
+// a derived index rebuilds the table, and a durable file refuses it, because
+// its rows exist nowhere else.
 func (b *Backend) adoptStoredTable(ctx context.Context, tx *sql.Tx, kind string, table kindTable, stored string) (kindTable, error) {
-	mismatch, err := storedMismatch(ctx, tx, &table, stored)
+	catalog, mismatch, err := readCatalog(ctx, tx, table.Name, stored)
 	if err != nil {
 		return kindTable{}, fmt.Errorf("kind %q: %w", kind, err)
 	}
+	var added []query.ColumnDef
 	if mismatch == "" {
-		return withKey(table)
+		added, mismatch = table.adopt(catalog)
 	}
-	if !b.derived {
-		return kindTable{}, fmt.Errorf("kind %q was stored in %s with %s; its rows exist nowhere else, so migrate or remove the file", kind, b.Path(), mismatch)
+	switch {
+	case mismatch == "" && len(added) == 0:
+		return withKey(table)
+	case mismatch == "":
+		if err := addColumns(ctx, tx, kind, &table, catalog, added); err != nil {
+			return kindTable{}, err
+		}
+		names := make([]string, len(added))
+		for index, column := range added {
+			names[index] = column.Name
+		}
+		logger.Infof("sqlite record store %s: kind %q gained columns %q", b.Path(), kind, names)
+		return withKey(table)
+	case !b.derived:
+		return kindTable{}, fmt.Errorf("kind %q was stored in %s with %s; only added columns migrate, and its rows exist nowhere else, so remove the file or open it with the build that wrote it", kind, b.Path(), mismatch)
 	}
 	if err := dropKindTable(ctx, tx, kind, table); err != nil {
 		return kindTable{}, err
 	}
 	table.StoredAs = nil
 	return createKindTable(ctx, tx, kind, table)
-}
-
-// storedMismatch sets table's physical names from its catalog entry and
-// describes how the entry or the table differs from table, or is empty.
-func storedMismatch(ctx context.Context, tx *sql.Tx, table *kindTable, stored string) (string, error) {
-	var parts []string
-	if err := json.Unmarshal([]byte(stored), &parts); err != nil {
-		return "", fmt.Errorf("decode catalog columns: %w", err)
-	}
-	declared := make([]string, len(table.Columns))
-	for index, column := range table.Columns {
-		declared[index] = column.Name + columnStorage(column)
-	}
-	if key := table.schema.Options.Key; key != "" {
-		declared = append(declared, "key:"+key)
-		if len(parts) == 0 || parts[len(parts)-1] != "key:"+key {
-			return fmt.Sprintf("different columns (%s, now %q)", stored, declared), nil
-		}
-		parts = parts[:len(parts)-1]
-	}
-	names, ok := storedNames(table.Columns, parts)
-	if !ok {
-		return fmt.Sprintf("different columns (%s, now %q)", stored, declared), nil
-	}
-	physical, err := sqlitetable.PhysicalColumns(ctx, tx, table.Name)
-	if err != nil {
-		return "", err
-	}
-	if !slices.Equal(physical, names) {
-		return fmt.Sprintf("catalog columns %q naming a table whose columns are %q", names, physical), nil
-	}
-	table.StoredAs = names
-	return "", nil
 }
 
 func withKey(table kindTable) (kindTable, error) {
@@ -258,7 +219,7 @@ func createKindTable(ctx context.Context, tx *sql.Tx, kind string, table kindTab
 			return kindTable{}, fmt.Errorf("kind %q: index key: %w", kind, err)
 		}
 	}
-	entries, err := catalogEntries(table)
+	entries, err := catalogOf(table).encode()
 	if err != nil {
 		return kindTable{}, err
 	}
