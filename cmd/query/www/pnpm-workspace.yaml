@@ -14,7 +14,7 @@ catalog:
   '@codemirror/lang-sql': ^6.10.0
   '@codemirror/state': ^6.7.0
   '@codemirror/view': ^6.43.4
-  '@flanksource/clicky-ui': 0.3.26
+  '@flanksource/clicky-ui': 0.3.36
   '@flanksource/icons': 1.0.65
   '@floating-ui/react': ^0.27.19
   '@mdxeditor/editor': ^4.0.4
