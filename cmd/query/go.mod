@@ -5,11 +5,11 @@ go 1.26.1
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/flanksource/captain v0.0.60
-	github.com/flanksource/clicky v1.21.64
-	github.com/flanksource/clicky/aichat v1.21.63
-	github.com/flanksource/clicky/valkey v1.21.64
-	github.com/flanksource/commons v1.59.0
-	github.com/flanksource/commons-db v0.1.31
+	github.com/flanksource/clicky v1.21.67
+	github.com/flanksource/clicky/aichat v1.21.67
+	github.com/flanksource/clicky/valkey v1.21.67
+	github.com/flanksource/commons v1.59.1
+	github.com/flanksource/commons-db v0.1.37
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -147,7 +147,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.11.0 // indirect
-	github.com/flanksource/gomplate/v3 v3.24.89 // indirect
+	github.com/flanksource/gomplate/v3 v3.24.90 // indirect
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
