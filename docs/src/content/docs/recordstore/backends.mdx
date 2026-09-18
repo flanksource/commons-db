@@ -1,0 +1,154 @@
+---
+title: Backends
+description: The kv, sqlite and ndjson backends, what each stores where, and how to pick one.
+---
+
+import { Aside } from "@astrojs/starlight/components";
+import { KVAppendFlow, KVChunkLayout, KVRowLayout } from "../../../diagrams/recordstore/kv.tsx";
+import { NDJSONAppendFlow, NDJSONStorageLayout } from "../../../diagrams/recordstore/ndjson.tsx";
+import { SQLiteAppendFlow, SQLiteStorageLayout } from "../../../diagrams/recordstore/sqlite.tsx";
+
+All three backends implement `recordstore.Backend` and pass the same [conformance suite](../custom-backend/), so they agree on what appending, scanning, trimming, expiring and sealing mean. They differ in where rows live and who can read them.
+
+| | `kv` | `sqlite` | `ndjson` |
+| --- | --- | --- | --- |
+| Package | `recordstore/kv` | `recordstore/sqlite` | `recordstore/ndjson` |
+| Storage | a clicky `cache.Store`: in-process memory or valkey/redis | one SQLite file, a table per kind | a directory per kind, a file per stream |
+| Shared across processes | yes, with valkey/redis | no, local file | no, local files |
+| Queryable directly | no, needs a derived index | **yes**: the file is its own index | no, needs a derived index |
+| TTL | required | optional (0 keeps streams until expired) | optional (0 keeps streams until expired or rotated out) |
+| Expired streams removed by | the store's own key expiry | a background sweeper, plus a purge before each write | lookup and rotation |
+| Bounds | `MaxChunkBytes` per chunk or keyed row | none beyond the disk | `MaxBytes` per stream, `KeepStreams` per kind |
+
+## kv
+
+```go
+import (
+	"github.com/flanksource/clicky/cache"
+	"github.com/flanksource/clicky/valkey"
+	"github.com/flanksource/commons-db/recordstore/kv"
+)
+
+backend, err := kv.New(kv.Options{
+	Store:         valkey.NewStore(client), // or cache.NewMemory()
+	Prefix:        "acme/records",
+	Schema:        schemas.Kind,
+	TTL:           30 * 24 * time.Hour,
+	MaxChunkBytes: 1 << 20,
+})
+```
+
+The caller owns `Store`, and the backend never closes it. Every option is required: the store is memory, and a stream nobody expires is a leak.
+
+A stream is the set of keys under `<prefix>/<stream>/`. `meta` holds the stream's `Meta` as JSON and is the **commit point**. Its low and high seq bound everything a reader or key lookup believes, so anything an interrupted write left outside them is invisible, and the next write removes it. The layout depends on whether the kind is keyed:
+
+- **Unkeyed kinds are stored in chunks.** `chunk/<first seq>` holds one append's rows as a JSON array, split so that no chunk exceeds `MaxChunkBytes`. An `index` sorted set scores chunks by first seq, and an `appended` set scores them by append time. Chunks are never rewritten, so a stream of 10,000 rows costs 10,000 row encodings, not a growing blob. A single row larger than the cap is refused with `ErrCapacity`.
+- **Keyed kinds are stored one row per key.** `row/<key>` holds the row with the generation and seq it was committed under, and the `seqs` and `appended` sets order it. Checking whether a key is stored is one read, so an append costs its own batch however large the stream is.
+
+### Append and scan
+
+<div class="facet-diagram not-content" role="img" aria-label="kv backend: the path of an append and a scan through the stream lock, schema resolver and cache store">
+  <KVAppendFlow client:load />
+</div>
+
+Entries are written before the meta that commits them. A crash leaves keys past `highSeq` that no reader sees, and the next append prunes them.
+
+### Chunk layout (unkeyed kind)
+
+<div class="facet-diagram not-content" role="img" aria-label="kv chunk layout: meta, the index sorted set, chunk strings and the appended sorted set">
+  <KVChunkLayout client:load />
+</div>
+
+Every key under `<prefix>/<stream>/` carries the stream's expiry, so the stream leaves the store in one piece.
+
+### Row layout (keyed kind)
+
+<div class="facet-diagram not-content" role="img" aria-label="kv row layout: meta, the seqs sorted set, one row string per key and the appended sorted set">
+  <KVRowLayout client:load />
+</div>
+
+Checking whether a key is stored is one read of `row/<key>`, so an append costs its own batch whatever the stream holds.
+
+## sqlite
+
+```go
+import "github.com/flanksource/commons-db/recordstore/sqlite"
+
+backend, err := sqlite.Open(sqlite.Options{
+	Path:          filepath.Join(dir, "records.sqlite"),
+	Schema:        schemas.Kind,
+	TTL:           30 * 24 * time.Hour,
+	SweepInterval: 10 * time.Minute,
+})
+```
+
+Each kind is a table `records_<kind>` keyed `(stream_id, seq)`, with the kind's columns typed from its schema. A `record_streams` table describes every stream. An append trims, deduplicates, numbers and inserts in **one write transaction**.
+
+The same file is the query index a `sql` profile reads through `backend.ReadDSN()`, which makes a stream pageable, filterable and exportable by the profile engine without copying it. See [The sqlite record file](../../sqlite/record-file/) for the catalog, versioned file path, derived mode and read leases.
+
+<Aside type="caution">
+`SweepInterval` is required. A file that never swept would keep every row it was ever given. Call `Close` to stop the sweeper.
+</Aside>
+
+### Append, import and scan
+
+<div class="facet-diagram not-content" role="img" aria-label="sqlite backend: append, import and scan through one write transaction on the single writer connection">
+  <SQLiteAppendFlow client:load />
+</div>
+
+A write holds the stream lock and runs in one transaction on the single writer connection, so a reader never sees rows without their `record_streams` row.
+
+### Storage layout
+
+<div class="facet-diagram not-content" role="img" aria-label="sqlite storage layout: record_streams, record_kinds, record_appends and a records_kind table">
+  <SQLiteStorageLayout client:load />
+</div>
+
+## ndjson
+
+```go
+import "github.com/flanksource/commons-db/recordstore/ndjson"
+
+backend, err := ndjson.New(ndjson.Options{
+	Dir:         filepath.Join(dir, "ndjson"),
+	Schema:      schemas.Kind,
+	MaxBytes:    256 << 20,
+	KeepStreams: 20,
+	TTL:         7 * 24 * time.Hour,
+})
+```
+
+This is the durable backend a CLI run writes when no shared store is configured. Each stream is `<dir>/<kind>/<stream>.ndjson`, one line per row written as `{"seq":N,"row":{…}}`, next to a `<stream>.meta.json` sidecar:
+
+- **The sidecar is the commit point.** It records the stream's `Meta`, the data file and the byte length the last committed write left. Anything past that length is a torn append, and it's cut before the next one.
+- **Trimming** moves the kept rows to `<stream>@<low seq>.ndjson`, which the sidecar then names. `@` is outside the stream-id alphabet, so it can't collide with another stream. `backend.File(ctx, stream)` returns the current file.
+- **Resuming a scan** bisects the file by byte offset to find the first line after `afterSeq`, so an incremental read costs O(log size) reads, not a parse of every line before it.
+
+Two bounds keep it from filling a disk nobody watches:
+
+- `MaxBytes`: an append that would take the stream past it is refused whole with `ErrCapacity`, and the stream is marked `Capped`. It's never silently dropped.
+- `KeepStreams`: opening a new stream removes every expired stream of that kind, then the least recently written ones beyond the budget. A stream being written at that moment is skipped.
+
+### Append and scan
+
+<div class="facet-diagram not-content" role="img" aria-label="ndjson backend: the path of an append and a scan through the sidecar commit point">
+  <NDJSONAppendFlow client:load />
+</div>
+
+The sidecar is the commit point: data past its byte count is invisible to a reader and truncated before the next append.
+
+### Storage layout
+
+<div class="facet-diagram not-content" role="img" aria-label="ndjson storage layout: a directory per kind holding each stream's data file, trimmed @low files and sidecar">
+  <NDJSONStorageLayout client:load />
+</div>
+
+The file is its own index. No offsets are recorded, so a scan finds its start by bisecting on the seq each line opens with.
+
+## Choosing a backend
+
+- A **server** that other processes write to, or a fleet sharing streams: `kv` over valkey, mirrored into a derived `index.sqlite` for reads. Usually per tenant, through a [`Router`](../settings/#routing-per-tenant).
+- A **CLI or single process** that also serves what it captured: `sqlite`. One file, no index to keep in sync.
+- A **CLI** whose output is shipped or read elsewhere, or that must never fill the disk: `ndjson`.
+
+You rarely construct these by hand. `recordstore.Settings.Resolve` picks the backend and `recordresults.Open` opens it, as described in [Settings and routing](../settings/) and [Opening a result store](../../recordresults/open/).
