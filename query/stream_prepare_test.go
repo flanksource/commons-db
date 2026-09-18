@@ -76,7 +76,7 @@ var _ = Describe("ExecuteStream with a registry that prepares reads", func() {
 		}
 		session, err := query.ExecuteStream(context.New(), registry, profile, map[string]any{"stream": "run-1"})
 		if session != nil {
-			DeferCleanup(session.Stop)
+			DeferCleanup(session.Stop, "spec cleanup")
 		}
 		return log, session, err
 	}
@@ -163,17 +163,19 @@ var _ = Describe("ExecuteStream with a registry that prepares reads", func() {
 		log := &preparedLog{}
 		query.RegisterProvider(preparedStreamProvider{typ: "prepared-capacity", log: log})
 		registry := query.NewSessionRegistry(query.RegistryOptions{MaxSessions: 1, BeforeRead: log.prepare})
-		active := query.NewSession(query.SessionOptions{
-			ID: "active", Profile: query.Profile{Name: "active", Trace: &query.TraceSpec{}}, MaxEvents: 1,
+		active, err := query.NewSession(query.SessionOptions{
+			ID: "active", Profile: query.Profile{Name: "active", Trace: &query.TraceSpec{}},
+			Kind: query.KindTrace, Role: query.SessionRoleCapture, MaxEvents: 1,
 		})
+		Expect(err).ToNot(HaveOccurred())
 		Expect(registry.Add(active)).To(Succeed())
-		DeferCleanup(active.Stop)
+		DeferCleanup(active.Stop, "spec cleanup")
 		profile := query.Profile{
 			Name: "prepared-capacity", Provider: query.ProviderConfig{Type: "prepared-capacity"},
 			Params: []query.ParamDef{{Name: "stream"}}, Trace: &query.TraceSpec{},
 		}
 
-		_, err := query.ExecuteStream(context.New(), registry, profile, map[string]any{"stream": "run-1"})
+		_, err = query.ExecuteStream(context.New(), registry, profile, map[string]any{"stream": "run-1"})
 		Expect(errors.Is(err, query.ErrMaxSessions)).To(BeTrue(), "%v", err)
 		Expect(log.snapshot()).To(Equal([]string{
 			"prepare prepared-capacity stream=run-1", "release 1",
@@ -194,7 +196,7 @@ var _ = Describe("ExecuteStream with a registry that prepares reads", func() {
 		Eventually(log.snapshot, "5s", "20ms").Should(Equal([]string{
 			"prepare prepared-stop stream=run-1", "stream",
 		}))
-		session.Stop()
+		session.Stop("stopped by spec")
 		waitState(session, query.SessionStopped)
 		Eventually(log.snapshot, "5s", "20ms").Should(Equal([]string{
 			"prepare prepared-stop stream=run-1", "stream", "stream stopped", "release 1",
@@ -211,7 +213,7 @@ var _ = Describe("ExecuteStream with a registry that prepares reads", func() {
 
 		session, err := query.ExecuteStream(context.New(), query.NewSessionRegistry(query.RegistryOptions{}), profile, map[string]any{"stream": "run-1"})
 		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(session.Stop)
+		DeferCleanup(session.Stop, "spec cleanup")
 		Eventually(provider.sampled, "5s").Should(BeClosed())
 		Expect(session.Snapshot().Params).To(HaveKeyWithValue("stream", "run-1"))
 	})

@@ -27,8 +27,8 @@ const FollowRecheckInterval = 5 * time.Second
 // it holds, then each row appended after — in seq order, through the query req
 // carries: the followed profile's own statement and column filters, so a
 // followed row is the row a page of the same seqs serves. It returns nil once
-// ctx ends or it has read through an explicit toSeq, and ErrNotFound when the
-// stream stops existing.
+// ctx ends or it has read through an explicit toSeq or a sealed stream's high
+// seq, and ErrNotFound when the stream stops existing.
 func (r *Registry) follow(ctx dbcontext.Context, req query.ProviderRequest, emit func(query.Row)) error {
 	stream, err := requestedStream(ProviderType, req.Params)
 	if err != nil {
@@ -62,8 +62,12 @@ func (r *Registry) follow(ctx dbcontext.Context, req query.ProviderRequest, emit
 		if read.more || position >= through {
 			continue
 		}
-		if _, err := r.notifier.Wait(ctx, stream, position, source.Generation); err != nil {
+		latest, err := r.notifier.Wait(ctx, stream, position, source.Generation)
+		if err != nil {
 			return notFound(err)
+		}
+		if latest.Sealed && latest.HighSeq <= position {
+			return nil
 		}
 	}
 	return nil
@@ -81,16 +85,14 @@ func (r *Registry) followSource(ctx dbcontext.Context, stream string) (recordsto
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	for _, result := range r.results {
-		if result.Kind != source.Kind {
-			continue
-		}
-		if result.profile.Provider.Type != ProviderType {
-			return recordstore.Meta{}, fmt.Errorf("follow stream %q: %q results do not follow their streams", stream, source.Kind)
-		}
-		return source, nil
+	result, ok := r.results[r.prefix+"/"+source.Kind]
+	if !ok {
+		return recordstore.Meta{}, fmt.Errorf("follow stream %q: it holds %q results, which no result type serves", stream, source.Kind)
 	}
-	return recordstore.Meta{}, fmt.Errorf("follow stream %q: it holds %q results, which no result type serves", stream, source.Kind)
+	if result.profile.Provider.Type != ProviderType {
+		return recordstore.Meta{}, fmt.Errorf("follow stream %q: %q results do not follow their streams", stream, source.Kind)
+	}
+	return source, nil
 }
 
 // followRead is one read of the index: its rows, the seq every row at or

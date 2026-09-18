@@ -3,6 +3,7 @@ package query
 import (
 	"cmp"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,13 @@ var rangeOperators = []struct {
 	{prefix: "<=", lower: false, inclusive: true},
 	{prefix: ">", lower: true, inclusive: false},
 	{prefix: "<", lower: false, inclusive: false},
+}
+
+// ParseSelection decodes a selection using the binding's kind, unit and
+// optional default operator. It is also used by consumers with their own query
+// builders that need the same wire grammar as query profiles.
+func (b ColumnFilterBinding) ParseSelection(value any) (ColumnFilterValue, error) {
+	return b.parseSelection(value)
 }
 
 // parseSelection decodes one request value under the grammar this binding's
@@ -45,6 +53,24 @@ func (b ColumnFilterBinding) parseSelection(value any) (ColumnFilterValue, error
 		return ColumnFilterValue{}, err
 	}
 	resolved := ColumnFilterValue{Kind: b.Kind.Normalized()}
+	if b.DefaultOperator != "" {
+		if resolved.Kind != ColumnFilterKindRange && resolved.Kind != ColumnFilterKindDuration {
+			return ColumnFilterValue{}, fmt.Errorf("default operator is only supported by numeric and duration filters")
+		}
+		valid := false
+		for _, operator := range rangeOperators {
+			valid = valid || b.DefaultOperator == operator.prefix
+		}
+		if !valid {
+			return ColumnFilterValue{}, fmt.Errorf("invalid default operator %q", b.DefaultOperator)
+		}
+		for i, token := range tokens {
+			if strings.HasPrefix(token, "!") || strings.HasPrefix(token, ">") || strings.HasPrefix(token, "<") {
+				continue
+			}
+			tokens[i] = b.DefaultOperator + token
+		}
+	}
 	switch resolved.Kind {
 	case ColumnFilterKindTerms, ColumnFilterKindExact, ColumnFilterKindText:
 		resolved.Include, resolved.Exclude, err = parseTermTokens(tokens)
@@ -201,7 +227,7 @@ func assertOrderedBounds(bounded *FilterRange) error {
 	switch low := bounded.Min.Value.(type) {
 	case float64:
 		high, ok := bounded.Max.Value.(float64)
-		if ok && low > high {
+		if ok && (low > high || low == high && (!bounded.Min.Inclusive || !bounded.Max.Inclusive)) {
 			return fmt.Errorf("lower bound %v is above upper bound %v", low, high)
 		}
 	}
@@ -212,7 +238,7 @@ func assertOrderedBounds(bounded *FilterRange) error {
 // ">=10.0" are one request and fingerprint to one cursor.
 func parseNumericBound(operand string) (any, error) {
 	number, err := strconv.ParseFloat(operand, 64)
-	if err != nil {
+	if err != nil || math.IsNaN(number) || math.IsInf(number, 0) {
 		return nil, fmt.Errorf("%q is not a number", operand)
 	}
 	return number, nil
@@ -245,7 +271,7 @@ func durationUnitScale(unit string) (float64, error) {
 // sub-unit precision: "500us" on a millisecond column is 0.5, not 0.
 func durationBound(unit string) func(string) (any, error) {
 	return func(operand string) (any, error) {
-		if number, err := strconv.ParseFloat(operand, 64); err == nil {
+		if number, err := strconv.ParseFloat(operand, 64); err == nil && !math.IsNaN(number) && !math.IsInf(number, 0) {
 			return number, nil
 		}
 		scale, err := durationUnitScale(unit)

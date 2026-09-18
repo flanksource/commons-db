@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -75,11 +76,7 @@ func (b *Backend) removeGenerationLocked(ctx context.Context, writer *sql.DB, so
 		}
 		return nil
 	}
-	var table string
-	if err := tx.QueryRowContext(ctx, `SELECT k.table_name FROM record_streams s JOIN record_kinds k ON k.kind = s.kind WHERE s.stream_id = ?`, source.Stream).Scan(&table); err != nil {
-		return fmt.Errorf("stream %q: read table while replacing generation: %w", source.Stream, err)
-	}
-	if err := removeStreamTx(ctx, tx, source.Stream, table); err != nil {
+	if err := removeStreamTx(ctx, tx, source.Stream, indexed.Kind); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -170,7 +167,7 @@ func (b *Backend) importedStream(ctx context.Context, tx *sql.Tx, request record
 		if meta.Kind != request.Source.Kind {
 			return recordstore.Meta{}, fmt.Errorf("stream %q holds kind %q, not %q", stream, meta.Kind, request.Source.Kind)
 		}
-		return meta, nil
+		return meta, recordstore.RefuseSealed(meta)
 	}
 	if !errors.Is(err, recordstore.ErrNotFound) {
 		return recordstore.Meta{}, err
@@ -200,7 +197,7 @@ func (b *Backend) TrimBelow(ctx context.Context, stream string, lowSeq int64) (r
 	var meta recordstore.Meta
 	err := b.database.Write(func(writer *sql.DB) error {
 		var err error
-		meta, err = b.trimStreamLocked(ctx, writer, stream, func(tx *sql.Tx, table string, meta recordstore.Meta) (recordstore.Meta, error) {
+		meta, err = b.trimStreamLocked(ctx, writer, stream, func(tx *sql.Tx, table sqlitetable.Table, meta recordstore.Meta) (recordstore.Meta, error) {
 			return trimBelowTx(ctx, tx, table, meta, lowSeq)
 		})
 		return err

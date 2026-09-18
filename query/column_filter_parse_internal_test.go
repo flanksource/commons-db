@@ -50,6 +50,28 @@ var _ = Describe("column filter selection", func() {
 	})
 
 	Describe("numeric ranges", func() {
+		It("uses a declared default operator only for bare operands", func() {
+			binding := ColumnFilterBinding{Kind: ColumnFilterKindRange, DefaultOperator: ">"}
+			bare, err := binding.ParseSelection("5")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(bare.Range).To(Equal(&FilterRange{Min: &FilterBound{Value: float64(5)}}))
+			explicit, err := binding.ParseSelection("<=5")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(explicit.Range).To(Equal(&FilterRange{Max: &FilterBound{Value: float64(5), Inclusive: true}}))
+		})
+
+		It("rejects a default operator on a non-range filter", func() {
+			_, err := (ColumnFilterBinding{Kind: ColumnFilterKindTerms, DefaultOperator: ">"}).ParseSelection("5")
+			Expect(err).To(MatchError(ContainSubstring("default operator")))
+		})
+
+		It("rejects an invalid default operator and an empty strict range", func() {
+			_, err := (ColumnFilterBinding{Kind: ColumnFilterKindRange, DefaultOperator: "="}).ParseSelection("5")
+			Expect(err).To(MatchError(ContainSubstring("invalid default operator")))
+			_, err = (ColumnFilterBinding{Kind: ColumnFilterKindRange}).ParseSelection(">5,<=5")
+			Expect(err).To(MatchError(ContainSubstring("is above upper bound")))
+		})
+
 		DescribeTable("reads bounded tokens into one range",
 			func(value string, min, max *FilterBound) {
 				selection, err := ColumnFilterBinding{Kind: ColumnFilterKindRange}.parseSelection(value)
@@ -116,6 +138,15 @@ var _ = Describe("column filter selection", func() {
 	})
 
 	Describe("duration ranges", func() {
+		It("rejects non-finite bare duration values", func() {
+			_, err := (ColumnFilterBinding{Kind: ColumnFilterKindDuration, Unit: "ms", DefaultOperator: ">"}).ParseSelection("NaN")
+			Expect(err).To(MatchError(ContainSubstring("not a duration")))
+		})
+		It("applies a declared default to a bare duration in the storage unit", func() {
+			selection, err := (ColumnFilterBinding{Kind: ColumnFilterKindDuration, Unit: "ms", DefaultOperator: ">"}).ParseSelection("1.5s")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(selection.Range).To(Equal(&FilterRange{Min: &FilterBound{Value: float64(1500)}}))
+		})
 		DescribeTable("resolves a duration into the unit the column stores",
 			func(unit, value string, expected float64) {
 				selection, err := ColumnFilterBinding{

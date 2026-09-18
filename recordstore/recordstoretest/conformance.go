@@ -143,6 +143,9 @@ func Conformance(open func() Harness) {
 	s.trimSpecs()
 	s.retentionSpecs()
 	s.tailSpecs()
+	s.sealSpecs()
+	s.sealTailSpecs()
+	s.deleteSpecs()
 }
 
 // suite is the state every conformance spec reads, set before each one.
@@ -244,6 +247,8 @@ func (s *suite) refusalSpecs() {
 		gomega.Expect(errors.Is(err, recordstore.ErrNotFound)).To(gomega.BeTrue(), "Expire: %v", err)
 		_, err = s.backend.Trim(s.ctx, "missing", time.Now())
 		gomega.Expect(errors.Is(err, recordstore.ErrNotFound)).To(gomega.BeTrue(), "Trim: %v", err)
+		err = s.backend.Seal(s.ctx, "missing")
+		gomega.Expect(errors.Is(err, recordstore.ErrNotFound)).To(gomega.BeTrue(), "Seal: %v", err)
 	})
 
 	ginkgo.It("refuses an invalid stream id or kind before writing anything", func() {

@@ -74,6 +74,22 @@ func (o Order) Pageable() error {
 	return nil
 }
 
+// ValidatePosition rejects keys that cannot name a row of this order: one key
+// per column, and a non-null key for the last column, which is the unique
+// tiebreaker. Every other column may be null, and its nulls sort last in both
+// directions.
+func (o Order) ValidatePosition(keys []any) error {
+	if len(keys) != len(o) {
+		return fmt.Errorf("cursor has %d keys for a %d-column order", len(keys), len(o))
+	}
+	if last := len(o) - 1; last >= 0 && keys[last] == nil {
+		return fmt.Errorf(
+			"cursor key %d for unique column %q is null; the tiebreaking column must be non-null, so a null there names no single row",
+			last, o[last].Column)
+	}
+	return nil
+}
+
 // Columns returns the ordered column names.
 func (o Order) Columns() []string {
 	columns := make([]string, 0, len(o))

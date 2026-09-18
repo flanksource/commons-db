@@ -154,7 +154,7 @@ func (r *ReconcileResult) copySideCells(out Row, side Row, isSource bool) {
 func (r *ReconcileResult) Table() api.TextTable {
 	columns := r.Columns()
 	if len(r.Rows) == 0 {
-		return emptyTable(columns)
+		return api.NewEmptyTable(columns)
 	}
 	providers := make([]rowProvider, 0, len(r.Rows))
 	for _, row := range r.Flatten() {

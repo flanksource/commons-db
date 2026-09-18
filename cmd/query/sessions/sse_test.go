@@ -24,7 +24,7 @@ func doSSEReq(h http.Handler, path string, header map[string]string) *httptest.R
 
 func TestSessionAPIFramesCarryTheirSequenceAsID(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-sse-id", rows: []query.Row{{"n": 1.0}, {"n": 2.0}}})
-	h, reg := newSessionAPITest(t, 5, traceTestProfile("sse ids", "sess-api-sse-id"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, traceTestProfile("sse ids", "sess-api-sse-id"))
 
 	info := startSession(t, h, "/api/v1/profile/sse-ids/sessions")
 	waitSessionState(t, reg, info.ID, query.SessionCompleted)
@@ -37,7 +37,7 @@ func TestSessionAPIFramesCarryTheirSequenceAsID(t *testing.T) {
 
 func TestSessionAPIResumesFromLastEventID(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-sse-resume", rows: []query.Row{{"n": 1.0}, {"n": 2.0}, {"n": 3.0}}})
-	h, reg := newSessionAPITest(t, 5, traceTestProfile("sse resume", "sess-api-sse-resume"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, traceTestProfile("sse resume", "sess-api-sse-resume"))
 
 	info := startSession(t, h, "/api/v1/profile/sse-resume/sessions")
 	waitSessionState(t, reg, info.ID, query.SessionCompleted)
@@ -52,7 +52,7 @@ func TestSessionAPIResumesFromLastEventID(t *testing.T) {
 
 func TestSessionAPIRejectsAnUnreadableLastEventID(t *testing.T) {
 	query.RegisterProvider(&sessionStreamMock{typ: "sess-api-sse-badid", rows: []query.Row{{"n": 1.0}}})
-	h, reg := newSessionAPITest(t, 5, traceTestProfile("sse bad id", "sess-api-sse-badid"))
+	h, reg := newSessionAPITest(t, query.RegistryOptions{MaxSessions: 5}, traceTestProfile("sse bad id", "sess-api-sse-badid"))
 
 	info := startSession(t, h, "/api/v1/profile/sse-bad-id/sessions")
 	waitSessionState(t, reg, info.ID, query.SessionCompleted)
@@ -65,10 +65,11 @@ func TestSessionAPIRejectsAnUnreadableLastEventID(t *testing.T) {
 // A tail can sit silent for minutes; the comment frames are what keeps the
 // proxies in between from calling the connection dead.
 func TestSSEKeepalivePingsAnIdleStream(t *testing.T) {
-	session := query.NewSession(query.SessionOptions{
-		ID:      "keepalive",
-		Profile: traceTestProfile("idle", "sess-api-idle"),
+	session, err := query.NewSession(query.SessionOptions{
+		ID: "keepalive", Profile: traceTestProfile("idle", "sess-api-idle"),
+		Kind: query.KindTrace, Role: query.SessionRoleView,
 	})
+	require.NoError(t, err)
 
 	ctx, cancel := stdcontext.WithTimeout(stdcontext.Background(), 80*time.Millisecond)
 	defer cancel()
@@ -81,10 +82,11 @@ func TestSSEKeepalivePingsAnIdleStream(t *testing.T) {
 // The keepalive shares the stream's one goroutine, so a ping can never land in
 // the middle of an event frame.
 func TestSSEKeepaliveNeverSplitsAnEventFrame(t *testing.T) {
-	session := query.NewSession(query.SessionOptions{
-		ID:      "interleave",
-		Profile: traceTestProfile("busy", "sess-api-busy"),
+	session, err := query.NewSession(query.SessionOptions{
+		ID: "interleave", Profile: traceTestProfile("busy", "sess-api-busy"),
+		Kind: query.KindTrace, Role: query.SessionRoleView,
 	})
+	require.NoError(t, err)
 	go func() {
 		for i := 0; i < 50; i++ {
 			session.Emit(query.Event{Row: query.Row{"n": i}})

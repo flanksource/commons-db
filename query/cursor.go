@@ -31,7 +31,12 @@ func (c Cursor) IsZero() bool { return c == "" }
 
 // cursorVersion is stamped into every cursor so a format change invalidates
 // outstanding cursors loudly rather than decoding them into wrong positions.
-const cursorVersion = 5
+// Version 6 carries null keys and was cut under nulls-last ordering.
+const cursorVersion = 6
+
+// cursorNullType is the encoded type of a null key: a nullable order column
+// sorts its nulls last, so a page can end on one.
+const cursorNullType = "null"
 
 // MaxCursorBytes bounds an issued cursor. A cursor travels as a query parameter
 // and is echoed in a response header, so this leaves room for the request path,
@@ -173,6 +178,9 @@ func EncodeCursor(encoding CursorEncoding) (Cursor, error) {
 	}
 	if len(encoding.Keys) != len(encoding.Scope.Order) {
 		return "", fmt.Errorf("cursor needs one key per order column: order has %d, got %d", len(encoding.Scope.Order), len(encoding.Keys))
+	}
+	if err := encoding.Scope.Order.ValidatePosition(encoding.Keys); err != nil {
+		return "", err
 	}
 	filters, err := encoding.Scope.fingerprint()
 	if err != nil {
@@ -325,6 +333,9 @@ func DecodeCursor(c Cursor, scope CursorScope) (CursorPosition, error) {
 	if err != nil {
 		return CursorPosition{}, fmt.Errorf("%w: %v", ErrCursorStale, err)
 	}
+	if err := scope.Order.ValidatePosition(keys); err != nil {
+		return CursorPosition{}, fmt.Errorf("%w: %v", ErrCursorStale, err)
+	}
 	if payload.PIT != "" && payload.Scroll != "" {
 		return CursorPosition{}, fmt.Errorf("%w: it carries two backend cursor mechanisms", ErrCursorStale)
 	}
@@ -346,7 +357,7 @@ func encodeCursorKeys(values []any) ([]cursorKey, error) {
 func encodeCursorKey(value any) (cursorKey, error) {
 	switch typed := value.(type) {
 	case nil:
-		return cursorKey{}, fmt.Errorf("null values are not pageable; order by non-null columns")
+		return cursorKey{Type: cursorNullType}, nil
 	case string:
 		return cursorKey{Type: "string", Value: typed}, nil
 	case []byte:
@@ -417,6 +428,11 @@ func decodeCursorKeys(encoded []cursorKey) ([]any, error) {
 
 func decodeCursorKey(key cursorKey) (any, error) {
 	switch key.Type {
+	case cursorNullType:
+		if key.Value != "" {
+			return nil, fmt.Errorf("a null key carries the value %q", key.Value)
+		}
+		return nil, nil
 	case "string":
 		return key.Value, nil
 	case "bytes":

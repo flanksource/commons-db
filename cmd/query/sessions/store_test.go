@@ -1,142 +1,142 @@
 package sessions
 
 import (
-	"testing"
+	"context"
+	"errors"
+	"sync/atomic"
 	"time"
+
+	"github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+	"gorm.io/gorm"
 
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
-	"github.com/stretchr/testify/require"
-	"gorm.io/gorm"
 )
 
-func startSessionStoreDB(t *testing.T) *gorm.DB {
-	t.Helper()
-	gdb := dbtest.ForT(t, dbtest.Options{Name: "query_sessions", LogName: "query-sessions-test"}).Gorm()
-	require.NoError(t, gdb.WithContext(t.Context()).AutoMigrate(&sessionRecord{}, &sessionEventRecord{}))
+func sessionStoreDB() *gorm.DB {
+	gdb := dbtest.ForGinkgo(dbtest.Options{Name: "query_sessions", LogName: "query-sessions-test"}).Gorm()
+	Expect(gdb.AutoMigrate(&sessionRecord{}, &sessionEventRecord{})).To(Succeed())
 	return gdb
 }
 
-func runningSession(id string) query.SessionInfo {
-	return query.SessionInfo{
-		ID:        id,
-		Profile:   "cpu-top",
-		Kind:      query.KindTop,
-		State:     query.SessionRunning,
-		Params:    map[string]any{"namespace": "prod"},
-		StartedAt: time.Now(),
-	}
+func newGormStore(gdb *gorm.DB, retention time.Duration) *Store {
+	store, err := NewStore(gdb, retention)
+	Expect(err).ToNot(HaveOccurred())
+	ginkgo.DeferCleanup(store.Close)
+	return store
 }
 
-func TestSessionStorePersistsTransitionsAndEvents(t *testing.T) {
-	store, err := NewStore(startSessionStoreDB(t), 7*24*time.Hour)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-
-	info := runningSession("sess-1")
-	store.OnTransition(info)
-
-	for i := 1; i <= 3; i++ {
-		store.OnEvent(query.Event{
-			SessionID: "sess-1",
-			Sequence:  int64(i),
-			Time:      time.Now(),
-			Row:       query.Row{"n": float64(i)},
+var _ = ginkgo.Describe("Store (gorm)", func() {
+	ginkgo.Describe("as a session store", func() {
+		describeSessionStoreContract(func() query.SessionStore {
+			return newGormStore(sessionStoreDB(), 7*24*time.Hour)
 		})
-	}
-	require.NoError(t, store.Flush())
+	})
 
-	events, err := store.Events(t.Context(), "sess-1")
-	require.NoError(t, err)
-	require.Len(t, events, 3)
-	require.Equal(t, int64(1), events[0].Sequence)
-	require.Equal(t, float64(2), events[1].Row["n"])
+	var (
+		ctx   context.Context
+		store *Store
+		epoch time.Time
+	)
 
-	stopped := time.Now()
-	info.State = query.SessionCompleted
-	info.EventCount = 3
-	info.StoppedAt = &stopped
-	store.OnTransition(info)
+	ginkgo.BeforeEach(func() {
+		ctx, epoch = context.Background(), contractEpoch()
+		store = newGormStore(sessionStoreDB(), time.Hour)
+	})
 
-	got, ok, err := store.Get(t.Context(), "sess-1")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, query.SessionCompleted, got.State)
-	require.Equal(t, int64(3), got.EventCount)
-	require.NotNil(t, got.StoppedAt)
-	require.Equal(t, "prod", got.Params["namespace"])
-
-	list, err := store.List(t.Context())
-	require.NoError(t, err)
-	require.Len(t, list, 1)
-}
-
-func TestSessionStoreFlushesFullBatchesWithoutFlush(t *testing.T) {
-	store, err := NewStore(startSessionStoreDB(t), 7*24*time.Hour)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
-
-	store.OnTransition(runningSession("sess-batch"))
-	for i := 1; i <= sessionEventBatchSize; i++ {
-		store.OnEvent(query.Event{SessionID: "sess-batch", Sequence: int64(i), Time: time.Now(), Row: query.Row{"n": i}})
+	appendEvents := func(id string, count int) {
+		for i := 1; i <= count; i++ {
+			Expect(store.Append(ctx, query.Event{SessionID: id, Sequence: int64(i), Time: epoch, Row: query.Row{"n": float64(i)}})).To(Succeed())
+		}
 	}
 
-	events, err := store.Events(t.Context(), "sess-batch")
-	require.NoError(t, err)
-	require.Len(t, events, sessionEventBatchSize, "a full batch flushes synchronously")
-}
+	ginkgo.It("flushes a session's buffered events before writing its terminal status", func() {
+		rec := contractFixture(epoch)[1]
+		Expect(store.Begin(ctx, rec)).To(Succeed())
+		appendEvents(rec.ID, 3)
 
-func TestSessionStoreMarksInterruptedOnStartup(t *testing.T) {
-	db := startSessionStoreDB(t)
-	store, err := NewStore(db, 7*24*time.Hour)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+		rec.State = query.SessionCompleted
+		Expect(store.Update(ctx, rec.ID, rec.SessionStatus)).To(Succeed())
+		events, err := store.Events(ctx, rec.ID)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(events).To(HaveLen(3))
+		Expect(events[1].Row).To(Equal(query.Row{"n": 2.0}))
+	})
 
-	store.OnTransition(runningSession("sess-orphan"))
-	done := runningSession("sess-done")
-	done.State = query.SessionCompleted
-	store.OnTransition(done)
+	ginkgo.It("flushes a full batch as it is appended", func() {
+		rec := contractFixture(epoch)[1]
+		Expect(store.Begin(ctx, rec)).To(Succeed())
+		appendEvents(rec.ID, sessionEventBatchSize)
+		events, err := store.Events(ctx, rec.ID)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(events).To(HaveLen(sessionEventBatchSize))
+	})
 
-	require.NoError(t, store.MarkInterrupted(t.Context()))
+	ginkgo.It("prunes sessions stopped before the retention window, with their events", func() {
+		old := contractFixture(epoch)[0]
+		longAgo := time.Now().Add(-2 * time.Hour)
+		old.StoppedAt = &longAgo
+		fresh := contractFixture(epoch)[1]
+		Expect(store.Begin(ctx, old)).To(Succeed())
+		Expect(store.Begin(ctx, fresh)).To(Succeed())
+		appendEvents(old.ID, 1)
+		Expect(store.Flush()).To(Succeed())
 
-	orphan, ok, err := store.Get(t.Context(), "sess-orphan")
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, query.SessionInterrupted, orphan.State)
+		Expect(store.Prune(ctx)).To(Succeed())
+		_, found, err := store.Get(ctx, old.ID)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(found).To(BeFalse())
+		events, err := store.Events(ctx, old.ID)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(events).To(BeEmpty())
+		_, found, err = store.Get(ctx, fresh.ID)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(found).To(BeTrue())
+	})
 
-	finished, _, err := store.Get(t.Context(), "sess-done")
-	require.NoError(t, err)
-	require.Equal(t, query.SessionCompleted, finished.State, "terminal sessions are untouched")
-}
+	ginkgo.It("keeps a batch whose write failed, so the retried terminal status lands with its events", func() {
+		gdb := sessionStoreDB()
+		store := newGormStore(gdb, time.Hour)
+		var refusals atomic.Int32
+		refusals.Store(1)
+		const callback = "sessions-spec:refuse-events"
+		Expect(gdb.Callback().Create().Before("gorm:create").Register(callback, func(db *gorm.DB) {
+			if db.Statement.Table == "session_events" && refusals.Add(-1) >= 0 {
+				_ = db.AddError(errors.New("disk full"))
+			}
+		})).To(Succeed())
+		ginkgo.DeferCleanup(func() { Expect(gdb.Callback().Create().Remove(callback)).To(Succeed()) })
 
-func TestSessionStorePrunesExpiredSessionsAndEvents(t *testing.T) {
-	db := startSessionStoreDB(t)
-	store, err := NewStore(db, time.Hour)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, store.Close()) })
+		rec := contractFixture(epoch)[1]
+		Expect(store.Begin(ctx, rec)).To(Succeed())
+		for i := int64(1); i <= 3; i++ {
+			Expect(store.Append(ctx, query.Event{SessionID: rec.ID, Sequence: i, Time: epoch, Row: query.Row{"n": float64(i)}})).To(Succeed())
+		}
+		rec.State = query.SessionCompleted
+		Expect(store.Update(ctx, rec.ID, rec.SessionStatus)).To(MatchError(ContainSubstring("disk full")))
+		held, err := store.HasEvents(ctx, rec.ID)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(held).To(BeTrue(), "the refused batch is still buffered")
 
-	old := runningSession("sess-old")
-	old.State = query.SessionCompleted
-	longAgo := time.Now().Add(-2 * time.Hour)
-	old.StoppedAt = &longAgo
-	store.OnTransition(old)
-	store.OnEvent(query.Event{SessionID: "sess-old", Sequence: 1, Time: longAgo, Row: query.Row{"n": 1}})
-	require.NoError(t, store.Flush())
+		Expect(store.Update(ctx, rec.ID, rec.SessionStatus)).To(Succeed())
+		events, err := store.Events(ctx, rec.ID)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(events).To(HaveLen(3))
+		stored, _, err := store.Get(ctx, rec.ID)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stored.State).To(Equal(query.SessionCompleted))
+		held, err = store.HasEvents(ctx, "never-emitted")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(held).To(BeFalse())
+	})
 
-	fresh := runningSession("sess-fresh")
-	store.OnTransition(fresh)
-
-	require.NoError(t, store.Prune(t.Context()))
-
-	_, ok, err := store.Get(t.Context(), "sess-old")
-	require.NoError(t, err)
-	require.False(t, ok, "expired session is pruned")
-
-	events, err := store.Events(t.Context(), "sess-old")
-	require.NoError(t, err)
-	require.Empty(t, events, "events cascade-delete with the session")
-
-	_, ok, err = store.Get(t.Context(), "sess-fresh")
-	require.NoError(t, err)
-	require.True(t, ok)
-}
+	ginkgo.It("lists nothing when Allow refuses every profile", func() {
+		for _, rec := range contractFixture(epoch) {
+			Expect(store.Begin(ctx, rec)).To(Succeed())
+		}
+		page, err := store.List(ctx, query.SessionFilter{Allow: func(string) bool { return false }})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(page).To(Equal(query.SessionPage{Items: []query.SessionRecord{}, Total: 0, Shared: true}))
+	})
+})

@@ -94,6 +94,20 @@ func (n *Notifier) Expire(ctx context.Context, stream string, ttl time.Duration)
 	return err
 }
 
+// Seal seals through the wrapped backend and wakes the stream's waiters, which
+// finish once they have read what the stream holds.
+func (n *Notifier) Seal(ctx context.Context, stream string) error {
+	err := n.backend.Seal(ctx, stream)
+	n.wake(stream)
+	return err
+}
+
+func (n *Notifier) Delete(ctx context.Context, stream string) error {
+	err := n.backend.Delete(ctx, stream)
+	n.wake(stream)
+	return err
+}
+
 func (n *Notifier) Close() error { return n.backend.Close() }
 
 func (n *Notifier) wake(stream string) {
@@ -126,8 +140,9 @@ func (n *Notifier) subscribe(stream string) (<-chan struct{}, func()) {
 	}
 }
 
-// Wait blocks until stream holds a row after afterSeq and returns its
-// metadata. generation is the incarnation of the stream the caller has read:
+// Wait blocks until stream holds a row after afterSeq, or is sealed, and
+// returns its metadata: a sealed stream whose HighSeq is at or below afterSeq
+// has nothing more to wait for. generation is the incarnation of the stream the caller has read:
 // a stream that is gone, or that was recreated under another generation since,
 // is ErrNotFound, because the seqs the caller holds no longer name its rows. A
 // cancelled ctx returns ctx.Err().
@@ -149,7 +164,7 @@ func (n *Notifier) Wait(ctx context.Context, stream string, afterSeq int64, gene
 			unsubscribe()
 			return Meta{}, fmt.Errorf("stream %q was recreated as generation %q after generation %q was read: %w",
 				stream, meta.Generation, generation, ErrNotFound)
-		case meta.HighSeq > afterSeq:
+		case meta.HighSeq > afterSeq || meta.Sealed:
 			unsubscribe()
 			return meta, nil
 		}
@@ -185,8 +200,9 @@ func (n *Notifier) waitErr(ctx context.Context, stream string, err error) error 
 
 // Tail calls fn with every row of stream after afterSeq, in seq order, and then
 // with every row appended after that as it is appended. It returns nil once
-// ctx ends, fn's first error, and an ErrNotFound error when the stream does not
-// exist or stops existing — expired, removed, or recreated as a new generation.
+// ctx ends or it has read through a sealed stream's high seq, fn's first error,
+// and an ErrNotFound error when the stream does not exist or stops existing —
+// expired, removed, or recreated as a new generation.
 func (n *Notifier) Tail(ctx context.Context, stream string, afterSeq int64, fn func(seq int64, row Row) error) error {
 	meta, err := n.backend.Meta(ctx, stream)
 	if err != nil {
@@ -204,8 +220,12 @@ func (n *Notifier) Tail(ctx context.Context, stream string, afterSeq int64, fn f
 		if err != nil {
 			return tailEnd(ctx, fmt.Errorf("tail stream %q: %w", stream, err))
 		}
-		if _, err := n.Wait(ctx, stream, last, meta.Generation); err != nil {
+		latest, err := n.Wait(ctx, stream, last, meta.Generation)
+		if err != nil {
 			return tailEnd(ctx, fmt.Errorf("tail stream %q: %w", stream, err))
+		}
+		if latest.Sealed && latest.HighSeq <= last {
+			return nil
 		}
 	}
 }

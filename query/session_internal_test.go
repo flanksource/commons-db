@@ -4,6 +4,7 @@ import (
 	stdcontext "context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -11,11 +12,21 @@ import (
 )
 
 func newTestSession(id string, maxEvents int) *Session {
-	return NewSession(SessionOptions{
+	GinkgoHelper()
+	s, err := NewSession(SessionOptions{
 		ID:        id,
 		Profile:   Profile{Name: "sess-test", Trace: &TraceSpec{MaxEvents: maxEvents}},
+		Kind:      KindTrace,
+		Role:      SessionRoleCapture,
 		MaxEvents: maxEvents,
 	})
+	Expect(err).ToNot(HaveOccurred())
+	return s
+}
+
+func markRunning(s *Session) {
+	GinkgoHelper()
+	Expect(s.Running(RunningUpdate{})).To(Succeed())
 }
 
 var _ = Describe("Session", func() {
@@ -94,20 +105,21 @@ var _ = Describe("Session", func() {
 		_, live, cancel := s.Subscribe()
 		defer cancel()
 
-		s.markRunning()
+		markRunning(s)
 		Expect(s.Snapshot().State).To(Equal(SessionRunning))
 
-		s.markDone(nil)
+		s.Finish(FinishUpdate{})
 		snap := s.Snapshot()
 		Expect(snap.State).To(Equal(SessionCompleted))
 		Expect(snap.StoppedAt).ToNot(BeNil())
 		Eventually(live).Should(BeClosed())
+		Expect(s.Done()).To(BeClosed())
 	})
 
 	It("records the error on failure", func() {
 		s := newTestSession("fail", 10)
-		s.markRunning()
-		s.markDone(errors.New("stream broke"))
+		markRunning(s)
+		s.Finish(FinishUpdate{Err: errors.New("stream broke")})
 
 		snap := s.Snapshot()
 		Expect(snap.State).To(Equal(SessionFailed))
@@ -116,7 +128,7 @@ var _ = Describe("Session", func() {
 
 	It("Abort fails an active session and closes subscribers", func() {
 		s := newTestSession("abort", 10)
-		s.markRunning()
+		markRunning(s)
 		_, live, cancel := s.Subscribe()
 		defer cancel()
 
@@ -126,45 +138,47 @@ var _ = Describe("Session", func() {
 		Expect(snap.Error).To(ContainSubstring("event log unwritable"))
 		Eventually(live).Should(BeClosed())
 
-		s.markDone(nil)
-		Expect(s.Snapshot().State).To(Equal(SessionFailed), "a later markDone never resurrects an aborted session")
+		s.Finish(FinishUpdate{})
+		Expect(s.Snapshot().State).To(Equal(SessionFailed), "a later Finish never resurrects an aborted session")
 	})
 
-	It("Stop wins over a later markDone", func() {
+	It("Stop wins over a later Finish", func() {
 		s := newTestSession("stop", 10)
-		s.markRunning()
-		s.Stop()
-		s.markDone(stdcontext.Canceled)
+		markRunning(s)
+		s.Stop("stopped by admin")
+		s.Finish(FinishUpdate{Err: stdcontext.Canceled})
 
 		Expect(s.Snapshot().State).To(Equal(SessionStopped))
+		Expect(s.Snapshot().StopReason).To(Equal("stopped by admin"))
 	})
 
-	It("notifies OnTransition for every state change", func() {
-		var states []SessionState
-		s := NewSession(SessionOptions{
-			ID:           "hook",
-			Profile:      Profile{Name: "sess-test"},
-			MaxEvents:    10,
-			OnTransition: func(info SessionInfo) { states = append(states, info.State) },
-		})
-		s.markRunning()
-		s.markDone(nil)
-		Expect(states).To(Equal([]SessionState{SessionRunning, SessionCompleted}))
+	It("refuses Running once the session has ended", func() {
+		s := newTestSession("ended", 10)
+		s.Finish(FinishUpdate{})
+		Expect(errors.Is(s.Running(RunningUpdate{Handle: "late"}), ErrSessionEnded)).To(BeTrue())
 	})
 
-	It("delivers every event to the OnEvent hook regardless of ring eviction", func() {
-		var got []int64
-		s := NewSession(SessionOptions{
-			ID:        "onevent",
-			Profile:   Profile{Name: "sess-test"},
-			MaxEvents: 2,
-			OnEvent:   func(e Event) { got = append(got, e.Sequence) },
-		})
-		for i := 0; i < 4; i++ {
-			s.Emit(Event{Row: Row{"i": i}})
-		}
-		Expect(got).To(Equal([]int64{1, 2, 3, 4}))
-	})
+	DescribeTable("rejects incomplete session options",
+		func(opts SessionOptions, message string) {
+			_, err := NewSession(opts)
+			Expect(err).To(MatchError(ContainSubstring(message)))
+		},
+		Entry("no id", SessionOptions{Profile: Profile{Name: "p"}, Kind: KindTrace, Role: SessionRoleView}, "id is required"),
+		Entry("no profile", SessionOptions{ID: "x", Kind: KindTrace, Role: SessionRoleView}, "profile name is required"),
+		Entry("no kind", SessionOptions{ID: "x", Profile: Profile{Name: "p"}, Role: SessionRoleView}, "kind is required"),
+		Entry("unknown role", SessionOptions{ID: "x", Profile: Profile{Name: "p"}, Kind: KindTrace, Role: "watch"}, `role "watch"`),
+	)
+
+	DescribeTable("caps a status payload",
+		func(value any, wantJSON string, wantWarning string) {
+			data, warning := encodeStatusPayload("summary", value)
+			Expect(string(data)).To(Equal(wantJSON))
+			Expect(warning).To(ContainSubstring(wantWarning))
+		},
+		Entry("under the cap as JSON", map[string]int{"calls": 3}, `{"calls":3}`, ""),
+		Entry("over the cap as an omitted marker", strings.Repeat("x", maxStatusPayloadBytes), `{"omitted":16386}`, "summary omitted: 16386 bytes"),
+		Entry("unmarshalable as a warning", map[string]any{"bad": func() {}}, "", "summary not recorded"),
+	)
 })
 
 var _ = Describe("sortAndLimit", func() {
@@ -196,7 +210,7 @@ var _ = Describe("sortAndLimit", func() {
 var _ = Describe("SessionRegistry", func() {
 	newRunning := func(id string) *Session {
 		s := newTestSession(id, 10)
-		s.markRunning()
+		markRunning(s)
 		return s
 	}
 
@@ -208,7 +222,7 @@ var _ = Describe("SessionRegistry", func() {
 
 		got, ok := r.Get("a")
 		Expect(ok).To(BeTrue())
-		got.markDone(nil)
+		got.Finish(FinishUpdate{})
 		Expect(r.Add(newRunning("c"))).To(Succeed())
 	})
 
@@ -216,8 +230,8 @@ var _ = Describe("SessionRegistry", func() {
 		r := NewSessionRegistry(RegistryOptions{MaxSessions: 100, RetainDone: 2})
 		for i := 0; i < 4; i++ {
 			s := newTestSession(fmt.Sprintf("t-%d", i), 10)
-			s.markRunning()
-			s.markDone(nil)
+			markRunning(s)
+			s.Finish(FinishUpdate{})
 			Expect(r.Add(s)).To(Succeed())
 		}
 
@@ -234,7 +248,7 @@ var _ = Describe("SessionRegistry", func() {
 		Expect(r.Add(a)).To(Succeed())
 		Expect(r.Add(b)).To(Succeed())
 
-		r.StopAll()
+		Expect(r.StopAll(stdcontext.Background())).To(Succeed())
 		Expect(a.Snapshot().State).To(Equal(SessionStopped))
 		Expect(b.Snapshot().State).To(Equal(SessionStopped))
 	})

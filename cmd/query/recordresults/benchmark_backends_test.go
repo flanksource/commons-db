@@ -125,7 +125,7 @@ func openBenchmarkSource(tb benchmarkTB, backend benchmarkBackend, schemas *reco
 			tb.Fatalf("open SQLite benchmark source: %v", err)
 		}
 		return benchmarkSource{
-			backend: store, sqlite: store, storage: func(context.Context) (int64, error) { return benchmarkSQLiteBytes(path) },
+			backend: store, sqlite: store, storage: func(context.Context) (int64, error) { return benchmarkSQLiteBytes(store.Path()) },
 			storageBasis: "SQLite database, WAL, and shared-memory file bytes", close: store.Close,
 		}
 	default:

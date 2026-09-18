@@ -170,6 +170,32 @@ var _ = Describe("ReconcileProfiles", func() {
 			Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 2}))
 		})
 
+		// A nullable key column is paged with its nulls last on every backend, so
+		// the join has to read a null key as the largest one rather than as the
+		// empty string that sorts first.
+		It("joins null keys that arrive last, as every backend orders them", func() {
+			customers := query.Order{{Column: "customer"}, {Column: "id", Unique: true}}
+			query.RegisterProvider(&mockProvider{typ: "merge-null-source", rows: []query.Row{
+				{"customer": "acme", "id": 1}, {"customer": "beta", "id": 2},
+				{"customer": nil, "id": 3}, {"customer": nil, "id": 4},
+			}})
+			query.RegisterProvider(&mockProvider{typ: "merge-null-dest", rows: []query.Row{
+				{"customer": "acme", "id": 1}, {"customer": nil, "id": 5},
+			}})
+			source := orderedProfile("customers-emitted", "merge-null-source", "id")
+			source.Order = customers
+			dest := orderedProfile("customers-ingested", "merge-null-dest", "id")
+			dest.Order = customers
+
+			result, err := query.ReconcileProfiles(reconcileCtx(), query.ReconcileRun{
+				Source: source, Dest: dest,
+				Config: query.ReconcileConfig{ReconcileSpec: query.ReconcileSpec{Key: query.KeySpec{Columns: []string{"customer"}}}},
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.Mode).To(Equal(query.ReconcileMerged))
+			Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 2, OnlySource: 1, DupKeys: 1}))
+		})
+
 		It("refuses a range that covers no keys", func() {
 			Expect((&query.KeyRange{From: "b", To: "a"}).Validate()).To(
 				MatchError(ContainSubstring("covers no keys")))

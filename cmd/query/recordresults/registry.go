@@ -37,13 +37,14 @@ import (
 const MaxExportRows = 1_000_000
 
 const (
-	streamParam   = "stream"
-	afterSeqParam = "afterSeq"
-	toSeqParam    = "toSeq"
-	fromParam     = "from"
-	toParam       = "to"
-	seqColumn     = "seq"
-	streamIDKey   = "stream_id"
+	streamParam    = "stream"
+	afterSeqParam  = "afterSeq"
+	toSeqParam     = "toSeq"
+	fromParam      = "from"
+	toParam        = "to"
+	rootsOnlyParam = "rootsOnly"
+	seqColumn      = "seq"
+	streamIDKey    = "stream_id"
 )
 
 var segmentPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`)
@@ -109,6 +110,25 @@ type ResultType[T any] struct {
 	// plain sqlite. Only a type whose rows each stand alone should follow — one
 	// listed as the latest row per id would stream superseded rows.
 	Follow bool
+
+	// SearchColumns, when set, names T's text columns (string or JSON) a
+	// search matches: the profile takes a search-role param q, and keeps the
+	// rows where any of them contains its text, ignoring case.
+	SearchColumns []string
+
+	// Hierarchy identifies an invocation and its caller for root-only reads.
+	Hierarchy *HierarchyColumns
+
+	// Views are SQL profiles over the type's streams, each served as
+	// <prefix>/<kind>/<view>. They read the index exactly as the type's own
+	// profile does, but never follow, search or read roots only.
+	Views []ResultView
+}
+
+// HierarchyColumns names the stored relationship used by a root-only read.
+type HierarchyColumns struct {
+	ID     string
+	Parent string
 }
 
 // RegisteredResultType is one registered result type as a caller finds it.
@@ -116,6 +136,8 @@ type RegisteredResultType struct {
 	Kind    string `json:"kind"`
 	Title   string `json:"title"`
 	Profile string `json:"profile"`
+
+	Views []RegisteredResultView `json:"views,omitempty"`
 }
 
 // Registry is the result types a server serves: a profiles.VirtualStore of
@@ -136,6 +158,11 @@ type Registry struct {
 type registeredResult struct {
 	RegisteredResultType
 	profile query.Profile
+
+	// view marks one of the type's views, which refuses baseOnly: the params
+	// of the type's own profile it does not share.
+	view     bool
+	baseOnly []string
 }
 
 // NewRegistry validates options and returns an empty registry.
@@ -197,6 +224,12 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 	if err := validateDefaultFrom(resultType.TimeColumn, resultType.DefaultFrom); err != nil {
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
+	if err := validateSearchColumns(columns, resultType.SearchColumns); err != nil {
+		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
+	if err := validateHierarchy(columns, resultType.KeyColumn, resultType.Hierarchy); err != nil {
+		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
 	for _, column := range columns {
 		if column.Name == seqColumn || column.Name == streamIDKey {
 			return fmt.Errorf("result type %q declares %q, which every stream table reserves", resultType.Kind, column.Name)
@@ -210,12 +243,15 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		result: RegisteredResultType{
 			Kind: resultType.Kind, Title: resultType.Title, Profile: registry.prefix + "/" + resultType.Kind,
 		},
-		columns:     columns,
-		options:     recordstore.KindOptions{Key: resultType.KeyColumn, Retention: resultType.Retention},
-		timeColumn:  resultType.TimeColumn,
-		defaultFrom: resultType.DefaultFrom,
-		presenter:   presenter,
-		follow:      resultType.Follow,
+		columns:       columns,
+		options:       recordstore.KindOptions{Key: resultType.KeyColumn, Retention: resultType.Retention},
+		timeColumn:    resultType.TimeColumn,
+		defaultFrom:   resultType.DefaultFrom,
+		presenter:     presenter,
+		follow:        resultType.Follow,
+		searchColumns: resultType.SearchColumns,
+		hierarchy:     resultType.Hierarchy,
+		views:         resultType.Views,
 	})
 }
 
@@ -315,6 +351,10 @@ type registration struct {
 	defaultFrom string
 	presenter   query.RowPresenter
 	follow      bool
+
+	searchColumns []string
+	hierarchy     *HierarchyColumns
+	views         []ResultView
 }
 
 func (r *Registry) register(registration registration) error {
@@ -339,7 +379,18 @@ func (r *Registry) register(registration registration) error {
 		return fmt.Errorf("result type %q: %w", result.Kind, err)
 	}
 	profile.Presenter = registration.presenter
+	views, err := r.viewProfiles(table, profile, registration.views)
+	if err != nil {
+		return fmt.Errorf("result type %q: %w", result.Kind, err)
+	}
+	for _, view := range views {
+		result.Views = append(result.Views, view.registered)
+	}
 	r.results[result.Profile] = registeredResult{RegisteredResultType: result, profile: profile}
+	baseOnly := baseOnlyParams(profile)
+	for _, view := range views {
+		r.results[view.profile.Name] = registeredResult{RegisteredResultType: result, profile: view.profile, view: true, baseOnly: baseOnly}
+	}
 	return nil
 }
 
@@ -348,11 +399,7 @@ func (r *Registry) register(registration registration) error {
 // time column so an absent edge leaves it open, and seq breaks every tie, which
 // is what lets the engine page it past the first page.
 func (r *Registry) resultProfile(table sqlitetable.Table, registration registration) (query.Profile, error) {
-	stream, err := table.Physical(streamIDKey)
-	if err != nil {
-		return query.Profile{}, err
-	}
-	seq, err := table.Physical(seqColumn)
+	window, err := streamWindow(table)
 	if err != nil {
 		return query.Profile{}, err
 	}
@@ -361,33 +408,42 @@ func (r *Registry) resultProfile(table sqlitetable.Table, registration registrat
 	if timeColumn != "" {
 		order = append(query.Order{{Column: timeColumn, Desc: true}}, order...)
 	}
-	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber}}, registration.columns...)
+	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber, Format: api.FormatInteger}}, registration.columns...)
 	profileColumns = append(profileColumns, query.ColumnDef{Name: streamIDKey, Type: query.ColumnTypeString, Hidden: true})
 	providerType := indexProviderType
 	if registration.follow {
 		providerType = ProviderType
 	}
+	search, err := searchClause(table, registration.searchColumns)
+	if err != nil {
+		return query.Profile{}, err
+	}
+	hierarchy, err := hierarchyClause(table, registration.hierarchy)
+	if err != nil {
+		return query.Profile{}, err
+	}
 	profile := query.Profile{
 		Name: registration.result.Profile, Virtual: true, ReadOnly: true,
 		Provider: query.ProviderConfig{Type: providerType, Connection: r.connectionReference()},
-		Query: table.Select() + fmt.Sprintf(` WHERE %s = {{.params.%s}} AND %s > {{.params.%s}} AND %s <= {{.params.%s}}`,
-			stream, streamParam, seq, afterSeqParam, seq, toSeqParam),
-		Params:  resultParams(timeColumn, registration.defaultFrom),
-		Columns: sqlitetable.ProfileColumns(profileColumns),
-		Order:   order,
-		Limits:  &query.RowLimits{PageSize: 100, MaxPageSize: 500, MaxExportRows: MaxExportRows},
-		Output:  []string{"table", "json", "ndjson", "yaml", "csv", "markdown", "html", "excel", "pdf"},
+		Query:    window + search + hierarchy,
+		Params:   append(append(resultParams(timeColumn, registration.defaultFrom), searchParams(registration.searchColumns)...), hierarchyParams(registration.hierarchy)...),
+		Columns:  sqlitetable.ProfileColumns(profileColumns),
+		Order:    order,
+		Limits:   resultLimits(),
+		Output:   resultOutputs(),
 	}
-	if err := profile.Validate(); err != nil {
-		return query.Profile{}, err
-	}
-	if _, err := profile.FilterBindings(); err != nil {
-		return query.Profile{}, err
-	}
-	if err := profile.Pageable(); err != nil {
+	if err := validateProfile(profile); err != nil {
 		return query.Profile{}, err
 	}
 	return profile, nil
+}
+
+func resultLimits() *query.RowLimits {
+	return &query.RowLimits{PageSize: 100, MaxPageSize: 500, MaxExportRows: MaxExportRows}
+}
+
+func resultOutputs() []string {
+	return []string{"table", "json", "ndjson", "yaml", "csv", "markdown", "html", "excel", "pdf"}
 }
 
 // resultParams address a stream and, optionally, a seq window of it: after seq
@@ -426,7 +482,9 @@ func (r *Registry) ResultTypes() []RegisteredResultType {
 	defer r.mu.RUnlock()
 	types := make([]RegisteredResultType, 0, len(r.results))
 	for _, result := range r.results {
-		types = append(types, result.RegisteredResultType)
+		if !result.view {
+			types = append(types, result.RegisteredResultType)
+		}
 	}
 	sort.Slice(types, func(i, j int) bool { return types[i].Kind < types[j].Kind })
 	return types

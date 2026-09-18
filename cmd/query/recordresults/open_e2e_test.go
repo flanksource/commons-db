@@ -2,6 +2,7 @@ package recordresults_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -88,8 +89,8 @@ var _ = Describe("Open", func() {
 		response := getFor(serveResults(results.Registry), ctx, "stream=run-1")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 		Expect(response.Header().Get("X-Total-Count")).To(Equal("30"))
-		Expect(filepath.Join(settings.Dir, "records.sqlite")).To(BeAnExistingFile())
-		Expect(filepath.Join(settings.Dir, "index.sqlite")).ToNot(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v5", "records.sqlite")).To(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v5", "index.sqlite")).ToNot(BeAnExistingFile())
 	})
 
 	It("opens local ndjson streams mirrored into a derived index", func() {
@@ -103,7 +104,33 @@ var _ = Describe("Open", func() {
 		response := getFor(serveResults(results.Registry), ctx, "stream=run-1")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 		Expect(response.Header().Get("X-Total-Count")).To(Equal("12"))
-		Expect(filepath.Join(settings.Dir, "index.sqlite")).To(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v5", "index.sqlite")).To(BeAnExistingFile())
+	})
+
+	It("deletes one stream from its source and derived index only when its kind matches", func() {
+		settings := localSettings(recordstore.BackendNDJSON)
+		results := openResults(recordresults.OpenOptions{
+			Prefix: "trace-results", ConnectionName: "index", Settings: settings, Register: registerSampleEvents,
+		})
+		for _, stream := range []string{"old-run", "keep-run"} {
+			_, err := recordstore.AppendTyped(ctx, results.Backend, stream, "sample_event", sampleEvents(1, 2))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(getFor(serveResults(results.Registry), ctx, "stream="+stream).Code).To(Equal(http.StatusOK))
+		}
+		Expect(results.DeleteStream(ctx, "old-run", "other_kind")).To(MatchError(ContainSubstring("holds kind")))
+		Expect(results.DeleteStream(ctx, "old-run", "sample_event")).To(Succeed())
+
+		_, err := results.Backend.Meta(ctx, "old-run")
+		Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), "%v", err)
+		kept, err := results.Backend.Meta(ctx, "keep-run")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(kept.Total).To(Equal(int64(2)))
+		index, err := sql.Open("sqlite", filepath.Join(settings.Dir, "v5", "index.sqlite"))
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(index.Close)
+		var remaining int
+		Expect(index.QueryRow(`SELECT COUNT(*) FROM record_streams WHERE stream_id = 'old-run'`).Scan(&remaining)).To(Succeed())
+		Expect(remaining).To(BeZero())
 	})
 
 	It("keeps a routed source's streams to the tenant that wrote them", func() {
@@ -128,8 +155,8 @@ var _ = Describe("Open", func() {
 		Expect(response.Code).To(Equal(http.StatusNotFound), response.Body.String())
 
 		By("never keeping a durable file a route could share: only the derived index")
-		Expect(filepath.Join(settings.Dir, "index.sqlite")).To(BeAnExistingFile())
-		Expect(filepath.Join(settings.Dir, "records.sqlite")).ToNot(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v5", "index.sqlite")).To(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v5", "records.sqlite")).ToNot(BeAnExistingFile())
 	})
 
 	It("closes what it opened, the caller's source included", func() {

@@ -54,7 +54,7 @@ var _ = Describe("Manager", func() {
 		Expect(connection.ReadOnly).To(BeTrue())
 		Expect(connection.URL).To(ContainSubstring("mode=ro"))
 
-		info, err := os.Stat(filepath.Join(root, descriptor.ID, "snapshot.sqlite"))
+		info, err := os.Stat(filepath.Join(root, descriptor.ID, "v2", "snapshot.sqlite"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(info.Mode().Perm()).To(Equal(os.FileMode(0o600)))
 	})

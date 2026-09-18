@@ -641,7 +641,8 @@ var _ = Describe("Profile column editor schema", func() {
 		}
 		Expect(props["kind"].(schema.Schema)["title"]).To(Equal("Role"))
 		Expect(props["kind"].(schema.Schema)["description"]).To(ContainSubstring("independent of Type"))
-		Expect(props["format"].(schema.Schema)["enum"]).To(Equal([]string{"date", "float", "duration", "bytes", "currency"}))
+		Expect(props["format"].(schema.Schema)["enum"]).To(Equal([]string{"date", "float", "integer", "duration", "bytes", "currency"}))
+		Expect(props["format"].(schema.Schema)["x-enum-labels"]).To(HaveKey("integer"))
 		Expect(props["unit"].(schema.Schema)["enum"]).To(Equal([]string{
 			"none", "short", "percent", "percentunit", "bytes", "decbytes", "Bps", "binBps", "ms", "s",
 		}))

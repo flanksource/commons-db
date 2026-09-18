@@ -179,7 +179,7 @@ func ProfileSource() Schema {
 				"type": "string", "title": "Format", "enum": api.ColumnFormatValues(),
 				"description":    "Optional display formatter; blank derives from Type and Unit takes precedence",
 				"x-clicky-order": 5,
-				"x-enum-labels":  map[string]string{"date": "Date/time", "float": "Number", "duration": "Duration", "bytes": "Bytes", "currency": "Currency"},
+				"x-enum-labels":  map[string]string{"date": "Date/time", "float": "Number", "integer": "Integer", "duration": "Duration", "bytes": "Bytes", "currency": "Currency"},
 			},
 			"unit": Schema{
 				"type": "string", "title": "Unit", "enum": api.ColumnUnitValues(),

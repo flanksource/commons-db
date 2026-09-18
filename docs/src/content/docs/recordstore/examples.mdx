@@ -1,0 +1,79 @@
+---
+title: Worked examples
+description: Three captures and why each declares its kind the way it does.
+---
+
+import { SQLXEventsCapture, SQLXEventsComparison } from "../../../diagrams/recordstore/sql-xevents.tsx";
+import { SQLDeadlocksCapture, SQLDeadlocksComparison } from "../../../diagrams/recordstore/sql-deadlocks.tsx";
+import { JVMProbesCapture, JVMProbesComparison } from "../../../diagrams/recordstore/jvm-probes.tsx";
+
+These examples come from a CLI that writes three captures through one trace store (`trace.store.*`), routed per environment. `Settings.Resolve` gives an environment whose cache has a valkey L2 the kv backend, and one without it `records.sqlite`. Each capture's kind is declared to match how its source behaves:
+
+| Capture | Kind | Declared as | Why |
+| --- | --- | --- | --- |
+| SQL Server extended events | `sql_xevent` | unkeyed, `RetainStream` | One bounded stream per trace span. Every polled event is appended, so a re-sent buffer is stored twice. |
+| SQL Server deadlocks | `sql_deadlock` | key `id`, `RetainRows` | One stream per environment accumulates across syncs that deliberately re-read an overlapping window. |
+| JVM probe watches and traces | `jvm_trace` | key `id`, `RetainStream` | One stream per probe generation. A restarted follower replays the agent ring it already stored. |
+
+To pick a declaration, ask two questions about the source:
+
+1. **Can the same row arrive twice?** If so, give it a stable id and declare `KeyColumn`. Re-reads then become idempotent.
+2. **Does the stream end?** A bounded capture keeps its stream whole (`RetainStream`) and seals it when done. A stream that accumulates forever ages out row by row (`RetainRows`).
+
+## SQL Server extended events
+
+### Capture → recordstore
+
+<div class="facet-diagram not-content" role="img" aria-label="sql_xevent span: extended events polled from a ring buffer, appended to an unkeyed stream per trace span in records.sqlite or kv">
+  <SQLXEventsCapture client:load />
+</div>
+
+`Settings.Resolve` runs per environment. With `trace.store.backend` unset, it takes kv when the environment cache has a valkey L2 (`serve`, or a CLI run with `redis.url`), and `records.sqlite` otherwise.
+
+### sqlite vs valkey
+
+<div class="facet-diagram not-content" role="img" aria-label="sql_xevent in each backend: sqlite compared with valkey">
+  <SQLXEventsComparison client:load />
+</div>
+
+A caveat: `EventStore.Since` returns the whole buffer when its cursor key is not found, and an unkeyed stream stores that re-append twice in either backend. Carrying `xetrace.Event.Sequence` on the row as `KeyColumn` would let both backends skip it.
+
+## SQL Server deadlocks
+
+### Capture → recordstore
+
+A sync scans the newest stored rows for the latest timestamp, loads deadlock reports from a little before it, and appends them with `AppendTyped`. The overlap is harmless because `id` is the key. In `records.sqlite`, a re-read report is skipped inside the append transaction. In kv, one read of the batch's `row/<id>` keys happens before anything is written.
+
+<div class="facet-diagram not-content" role="img" aria-label="deadlocks.Sync: keyed, row-retained sql_deadlock stream per environment in records.sqlite or kv">
+  <SQLDeadlocksCapture client:load />
+</div>
+
+One stream per environment accumulates for as long as anything syncs it, so the kind is keyed (the overlap is harmless) and ages out row by row.
+
+### sqlite vs valkey
+
+<div class="facet-diagram not-content" role="img" aria-label="sql_deadlock in each backend: sqlite compared with valkey">
+  <SQLDeadlocksComparison client:load />
+</div>
+
+Retention is declared per kind, so a trace span's uuid stream of `sql_deadlock` rows also ages out row by row rather than expiring whole.
+
+## JVM probe watches and traces
+
+### Capture → recordstore
+
+The follower is a [probe](../probes/): one exclusive writer per probe identity, draining the agent's ring by cursor and sealing the stream when stopped.
+
+<div class="facet-diagram not-content" role="img" aria-label="ProbeFollower: keyed jvm_trace stream per probe generation in records.sqlite or kv">
+  <JVMProbesCapture client:load />
+</div>
+
+A call's id is unique only within one opening of a probe, so every stream holds one generation: a span mints a uuid stream, and serve's follower names it by the generation.
+
+### sqlite vs valkey
+
+<div class="facet-diagram not-content" role="img" aria-label="jvm_trace in each backend: sqlite compared with valkey">
+  <JVMProbesComparison client:load />
+</div>
+
+Arthas watch and trace streams are not shown: they fold into one tracestore record in the cache, not a recordstore stream.

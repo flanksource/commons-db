@@ -20,7 +20,10 @@ func supportedExportFormat(format string) bool {
 	}
 }
 
-func requestedFormat(r *http.Request) string {
+// RequestedFormat is the representation r asks for: its ?format (with the
+// xlsx, md and yml aliases), or else the format its Accept header ranks
+// highest, or json. Every list the query server serves negotiates through it.
+func RequestedFormat(r *http.Request) string {
 	format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format")))
 	switch format {
 	case "xlsx":

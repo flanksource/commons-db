@@ -71,7 +71,8 @@ var _ = Describe("Registry", func() {
 		profile, err := registry.Get(ctx, "trace-results/sample_event")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(profile.Presenter).ToNot(BeNil())
-		Expect(profile.Query).To(HaveSuffix(`WHERE "c0" = {{.params.stream}} AND "c1" > {{.params.afterSeq}} AND "c1" <= {{.params.toSeq}}`))
+		Expect(profile.Query).To(Equal(`SELECT "stream_id", "seq", "at", "db", "user", "elapsed_ms", "slow", "tables", "detail" FROM "records_sample_event"` +
+			` WHERE "stream_id" = {{.params.stream}} AND "seq" > {{.params.afterSeq}} AND "seq" <= {{.params.toSeq}}`))
 		profile.Query, profile.Columns, profile.Presenter = "", nil, nil
 		Expect(profile).To(Equal(query.Profile{
 			Name: "trace-results/sample_event", Virtual: true, ReadOnly: true,
@@ -154,7 +155,7 @@ var _ = Describe("Registry", func() {
 		})).To(Succeed())
 		profile, err := registry.Get(ctx, "trace-results/sample_event")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(profile.Columns[0]).To(Equal(query.ColumnDef{Name: "seq", Label: "Seq", Type: query.ColumnTypeNumber}))
+		Expect(profile.Columns[0]).To(Equal(query.ColumnDef{Name: "seq", Label: "Seq", Type: query.ColumnTypeNumber, Format: "integer"}))
 		Expect(profile.Columns[1]).To(Equal(query.ColumnDef{
 			Name: "at", Label: "Captured", Type: query.ColumnTypeDateTime, Kind: query.ColumnKindTimestamp,
 		}))

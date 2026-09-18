@@ -5,6 +5,7 @@ import (
 	"iter"
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/flanksource/commons-db/context"
 )
@@ -109,10 +110,10 @@ func mergeJoin(ctx context.Context, run ReconcileRun) (*ReconcileResult, error) 
 				RanAt:  source.recorder.started,
 			}
 			return result, nil
-		case right == nil || (left != nil && left.key < right.key):
+		case right == nil || (left != nil && left.key != right.key && left.rank < right.rank):
 			result.appendGroup(left.key, left.rows, nil)
 			source.take()
-		case left == nil || right.key < left.key:
+		case left == nil || (left.key != right.key && right.rank < left.rank):
 			result.appendGroup(right.key, nil, right.rows)
 			dest.take()
 		default:
@@ -126,7 +127,24 @@ func mergeJoin(ctx context.Context, run ReconcileRun) (*ReconcileResult, error) 
 // keyGroup is every consecutive row sharing one key on one side.
 type keyGroup struct {
 	key  string
+	rank string
 	rows []keyedRow
+}
+
+// mergeRank is where a row's key sorts in a paged order: component by
+// component, a null after every value, as every provider orders nulls. The key
+// itself cannot say so, because NormalizeKeyValue renders a null as the empty
+// string, which sorts first.
+func mergeRank(row Row, columns []string) string {
+	parts := make([]string, len(columns))
+	for i, column := range columns {
+		if row[column] == nil {
+			parts[i] = "\x02"
+			continue
+		}
+		parts[i] = "\x01" + NormalizeKeyValue(row[column])
+	}
+	return strings.Join(parts, keySeparator)
 }
 
 // reconcileSide is one side of a merge join: a row sequence read in key order,
@@ -137,12 +155,15 @@ type reconcileSide struct {
 	next       func() (Row, error, bool)
 	stop       func()
 	keyOf      KeyFunc
+	keyColumns []string
 	timeColumn string
 
 	pending   *keyedRow
 	pendKey   string
+	pendRank  string
 	group     *keyGroup
 	lastKey   string
+	lastRank  string
 	hasLast   bool
 	exhausted bool
 	truncated bool
@@ -165,10 +186,16 @@ func openReconcileSide(
 	if err != nil {
 		return nil, fmt.Errorf("reconcile: %s: %w", name, err)
 	}
+	// Merging compares where each key sorts, and only column keys say that;
+	// Mergeable refuses a CEL key for exactly this reason.
+	if len(spec.Key.Columns) == 0 {
+		return nil, fmt.Errorf("reconcile: %s: a merge join needs a column key, not a cel expression", name)
+	}
 	side := &reconcileSide{
 		name:       name,
 		profile:    profile.Name,
 		keyOf:      keyOf,
+		keyColumns: spec.Key.Columns,
 		timeColumn: timeColumn,
 		recorder:   newReconcileSideRecorder(name, profile, params),
 	}
@@ -259,7 +286,7 @@ func (s *reconcileSide) fill() error {
 			return nil
 		}
 	}
-	group := &keyGroup{key: s.pendKey}
+	group := &keyGroup{key: s.pendKey, rank: s.pendRank}
 	for {
 		group.rows = append(group.rows, *s.pending)
 		s.pending = nil
@@ -276,12 +303,13 @@ func (s *reconcileSide) fill() error {
 	// If a side hands back a key that sorts before one it already gave, the
 	// backend's collation is not the one being compared here — and the join
 	// would silently report matched keys as one-sided. It stops instead.
-	if s.hasLast && group.key < s.lastKey {
+	if s.hasLast && group.rank < s.lastRank {
 		return fmt.Errorf(
 			"reconcile: %s profile %q returned key %q after %q; its backend orders keys differently than this join compares them, so declare an order whose collation matches or the join would report matched keys as missing",
 			s.name, s.profile, group.key, s.lastKey)
 	}
 	s.lastKey = group.key
+	s.lastRank = group.rank
 	s.hasLast = true
 
 	sortKeyedRowsByTime(group.rows)
@@ -308,6 +336,7 @@ func (s *reconcileSide) read() (*keyedRow, error) {
 	}
 	s.pending = &keyedRow{row: row, at: at}
 	s.pendKey = key
+	s.pendRank = mergeRank(row, s.keyColumns)
 	return s.pending, nil
 }
 

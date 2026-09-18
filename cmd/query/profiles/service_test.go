@@ -330,7 +330,9 @@ func TestRegisterProfileEntitiesRegistersEveryFilterKind(t *testing.T) {
 	profile := sampleProfile(profileName)
 	profile.Columns = []query.ColumnDef{
 		{Name: "region", Type: query.ColumnTypeString},
-		{Name: "latency_ms", Type: query.ColumnTypeNumber},
+		{Name: "ratio", Type: query.ColumnTypeNumber, Unit: "percentunit"},
+		{Name: "latency_s", Type: query.ColumnTypeDuration, Unit: "s"},
+		{Name: "wait_ms", Type: query.ColumnTypeDuration},
 		{Name: "created_at", Type: query.ColumnTypeDateTime},
 		{Name: "deleted", Type: query.ColumnTypeBoolean},
 	}
@@ -349,17 +351,22 @@ func TestRegisterProfileEntitiesRegistersEveryFilterKind(t *testing.T) {
 		t.Fatalf("RegisterDynamic: %v", err)
 	}
 
-	for column, want := range map[string]string{
-		"region": "multi-filter", "latency_ms": "number", "created_at": "date-range", "deleted": "bool",
+	for column, want := range map[string]struct{ control, unit string }{
+		"region":     {control: "multi-filter"},
+		"ratio":      {control: "number", unit: "percentunit"},
+		"latency_s":  {control: "duration", unit: "s"},
+		"wait_ms":    {control: "duration", unit: "ms"},
+		"created_at": {control: "date-range"},
+		"deleted":    {control: "bool"},
 	} {
 		registered, ok := entity.GetFilter(profileFilterName(profileName, column))
 		if !ok {
 			t.Fatalf("column %q registered no filter", column)
 		}
-		if registered.Type != want {
-			t.Errorf("column %q filter type = %q, want %q", column, registered.Type, want)
+		if registered.Type != want.control || registered.Unit != want.unit {
+			t.Errorf("column %q filter metadata = type %q unit %q, want type %q unit %q", column, registered.Type, registered.Unit, want.control, want.unit)
 		}
-		if want == "multi-filter" {
+		if want.control == "multi-filter" {
 			continue
 		}
 		// A typed control is filled in rather than chosen from, so its option set

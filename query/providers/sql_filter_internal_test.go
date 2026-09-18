@@ -381,12 +381,15 @@ var _ = Describe("buildPagedSQL", func() {
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).To(ContainSubstring(`COUNT(*) OVER () AS "__cdb_total"`))
-		Expect(statement).To(ContainSubstring(`WHERE ("region" > $2 OR ("region" = $3 AND "id" < $4))`))
+		Expect(statement).To(ContainSubstring(
+			`WHERE (("region" > $2 OR "region" IS NULL) OR ("region" = $3 AND ("id" < $4 OR "id" IS NULL)))`))
+		Expect(statement).To(ContainSubstring(`ORDER BY "region" ASC NULLS LAST, "id" DESC NULLS LAST`))
 		Expect(statement).To(HaveSuffix("LIMIT 26"))
 		Expect(args).To(Equal([]any{"prod", "eu", "eu", int64(42)}))
 	})
 
-	It("rejects a null cursor key instead of changing its ordering semantics", func() {
+	// The tiebreaker is what makes a position unique; a null one names no row.
+	It("rejects a null key for the unique tiebreaker column", func() {
 		_, _, err := buildPagedSQL(
 			dialectClickHouse,
 			ordersQuery,
@@ -395,7 +398,7 @@ var _ = Describe("buildPagedSQL", func() {
 			query.CursorPosition{Keys: []any{nil}},
 			query.PageRequest{Limit: 25, Strategy: query.PagingCursor},
 		)
-		Expect(err).To(MatchError(ContainSubstring("null")))
+		Expect(err).To(MatchError(ContainSubstring(`cursor key 0 for unique column "id" is null`)))
 	})
 
 	// COUNT(*) OVER () with no PARTITION BY is a whole-partition window aggregate:

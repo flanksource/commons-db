@@ -1,7 +1,9 @@
 package query_test
 
 import (
+	stdcontext "context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +21,10 @@ type fakeStreamProvider struct {
 	rows  []query.Row
 	err   error
 	block bool
+
+	// emitted, when set, is closed once every row has been handed to the
+	// session's runner, which has then received it.
+	emitted chan struct{}
 }
 
 func (f *fakeStreamProvider) Type() string { return f.typ }
@@ -36,6 +42,9 @@ func (f *fakeStreamProvider) Stream(ctx context.Context, req query.ProviderReque
 		}
 		emit(row)
 	}
+	if f.emitted != nil {
+		close(f.emitted)
+	}
 	if f.block {
 		<-ctx.Done()
 		return ctx.Err()
@@ -50,6 +59,10 @@ func traceProfile(providerType string) query.Profile {
 		Trace:    &query.TraceSpec{},
 	}
 }
+
+// backendTimeout is a provider's own store call running out of time while the
+// session that made it is still live.
+var backendTimeout = fmt.Errorf("wait on stream %q: %w", "jvm-probe:cycle", stdcontext.DeadlineExceeded)
 
 func waitState(s *query.Session, state query.SessionState) {
 	GinkgoHelper()
@@ -141,22 +154,24 @@ var _ = Describe("ExecuteStream trace", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Eventually(session.Events, "5s", "10ms").Should(HaveLen(1))
 		Expect(session.Snapshot().State).To(Equal(query.SessionRunning))
-		session.Stop()
+		session.Stop("stopped by spec")
 		waitState(session, query.SessionStopped)
 	})
 
 	It("flushes a partial buffer before an explicit stop becomes terminal", func() {
 		query.RegisterProcessor(wholeRawFirstProcessor{})
+		emitted := make(chan struct{})
 		query.RegisterProvider(&fakeStreamProvider{
-			typ: "stream-stop-buffer", rows: []query.Row{{"raw": "alpha"}}, block: true,
+			typ: "stream-stop-buffer", rows: []query.Row{{"raw": "alpha"}}, block: true, emitted: emitted,
 		})
 		profile := rawFirstProfile("stream-stop-buffer", "stream-stop-buffer", "test.whole-raw-first")
 		profile.Trace = &query.TraceSpec{Buffer: &query.TraceBufferSpec{MaxRows: 100}}
 
 		session, err := query.ExecuteStream(context.New(), newRegistry(), profile)
 		Expect(err).ToNot(HaveOccurred())
-		waitState(session, query.SessionRunning)
-		session.Stop()
+		Eventually(emitted, "5s").Should(BeClosed(), "the row is buffered, not yet emitted, before the stop")
+		Expect(session.Events()).To(BeEmpty())
+		session.Stop("stopped by spec")
 		waitState(session, query.SessionStopped)
 
 		Expect(session.Events()).To(HaveLen(1))
@@ -182,14 +197,20 @@ var _ = Describe("ExecuteStream trace", func() {
 		Expect(session.Events()[0].Row).To(HaveKeyWithValue("mapped", "alpha-processed-aliased-mapped"))
 	})
 
-	It("fails the session when the provider errors", func() {
-		query.RegisterProvider(&fakeStreamProvider{typ: "stream-err", err: errors.New("socket closed")})
+	DescribeTable("fails the session when the provider errors",
+		func(providerType string, failure error) {
+			query.RegisterProvider(&fakeStreamProvider{typ: providerType, err: failure})
 
-		s, err := query.ExecuteStream(context.New(), newRegistry(), traceProfile("stream-err"))
-		Expect(err).ToNot(HaveOccurred())
-		waitState(s, query.SessionFailed)
-		Expect(s.Snapshot().Error).To(ContainSubstring("socket closed"))
-	})
+			s, err := query.ExecuteStream(context.New(), newRegistry(), traceProfile(providerType))
+			Expect(err).ToNot(HaveOccurred())
+			waitState(s, query.SessionFailed)
+			Expect(s.Snapshot().Error).To(ContainSubstring(failure.Error()))
+		},
+		Entry("with its own error", "stream-err", errors.New("socket closed")),
+		// A follow's store read carries its own deadline; that one expiring is
+		// the store failing, not the session's bound ending the stream.
+		Entry("with a timeout of its own backend call while the session is live", "stream-backend-timeout", backendTimeout),
+	)
 
 	It("tears down a blocked provider on Stop", func() {
 		query.RegisterProvider(&fakeStreamProvider{typ: "stream-block", rows: []query.Row{{"n": 1}}, block: true})
@@ -198,7 +219,7 @@ var _ = Describe("ExecuteStream trace", func() {
 		Expect(err).ToNot(HaveOccurred())
 		waitState(s, query.SessionRunning)
 
-		s.Stop()
+		s.Stop("stopped by spec")
 		waitState(s, query.SessionStopped)
 	})
 
@@ -354,11 +375,13 @@ var _ = Describe("Follow", func() {
 	})
 })
 
-// countingProvider returns a scripted result per call, erroring at failAt.
+// countingProvider returns a scripted result per call, failing with failure
+// from failAt.
 type countingProvider struct {
-	typ    string
-	calls  atomic.Int64
-	failAt int64
+	typ     string
+	calls   atomic.Int64
+	failAt  int64
+	failure error
 }
 
 func (c *countingProvider) Type() string { return c.typ }
@@ -366,7 +389,7 @@ func (c *countingProvider) Type() string { return c.typ }
 func (c *countingProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
 	n := c.calls.Add(1)
 	if c.failAt > 0 && n >= c.failAt {
-		return nil, errors.New("backend gone")
+		return nil, c.failure
 	}
 	return []query.Row{{"tick": float64(n), "n": 1.0}, {"tick": float64(n), "n": 3.0}, {"tick": float64(n), "n": 2.0}}, nil
 }
@@ -395,7 +418,7 @@ var _ = Describe("ExecuteStream top", func() {
 		s, err := query.ExecuteStream(context.New(), newRegistry(), topProfile("top-ticks"))
 		Expect(err).ToNot(HaveOccurred())
 		Eventually(func() int64 { return provider.calls.Load() }, "5s", "20ms").Should(BeNumerically(">=", 2))
-		defer s.Stop()
+		defer s.Stop("stopped by spec")
 
 		Eventually(func() any {
 			latest := s.Latest()
@@ -410,17 +433,21 @@ var _ = Describe("ExecuteStream top", func() {
 		Expect(latest.Rows[0]["n"]).To(Equal(3.0), "sorted descending by n")
 	})
 
-	It("fails the session when a tick errors", func() {
-		query.RegisterProvider(&countingProvider{typ: "top-fail", failAt: 1})
+	DescribeTable("fails the session when a tick errors",
+		func(providerType string, failure error) {
+			query.RegisterProvider(&countingProvider{typ: providerType, failAt: 1, failure: failure})
 
-		s, err := query.ExecuteStream(context.New(), newRegistry(), topProfile("top-fail"))
-		Expect(err).ToNot(HaveOccurred())
-		waitState(s, query.SessionFailed)
-		Expect(s.Snapshot().Error).To(ContainSubstring("backend gone"))
+			s, err := query.ExecuteStream(context.New(), newRegistry(), topProfile(providerType))
+			Expect(err).ToNot(HaveOccurred())
+			waitState(s, query.SessionFailed)
+			Expect(s.Snapshot().Error).To(ContainSubstring(failure.Error()))
 
-		events := s.Events()
-		Expect(events[len(events)-1].Error).To(ContainSubstring("backend gone"))
-	})
+			events := s.Events()
+			Expect(events[len(events)-1].Error).To(ContainSubstring(failure.Error()))
+		},
+		Entry("with its own error", "top-fail", errors.New("backend gone")),
+		Entry("with a timeout of its own backend call while the session is live", "top-backend-timeout", backendTimeout),
+	)
 
 	It("executes a single tick synchronously via Execute", func() {
 		query.RegisterProvider(&countingProvider{typ: "top-sync"})

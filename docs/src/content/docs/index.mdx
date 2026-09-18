@@ -1,0 +1,63 @@
+---
+title: commons-db
+description: Durable record streams, typed result profiles and SQLite storage for Flanksource Go applications.
+---
+
+import { Card, CardGrid, LinkCard } from "@astrojs/starlight/components";
+import { StreamFlow, OpenMatrix } from "../../diagrams/recordstore/overview.tsx";
+
+`commons-db` is the database layer shared by Flanksource Go applications. This site covers the parts an application uses to **capture long-running output, keep it durably, and serve it back** through the query profile engine:
+
+<CardGrid>
+  <Card title="recordstore" icon="list-format">
+    Append-only record streams. Rows get a per-stream `seq`, readers resume by seq, and one API runs over a kv store (memory or valkey/redis), a SQLite file or NDJSON files.
+  </Card>
+  <Card title="recordresults" icon="seti:db">
+    Serves record streams as read-only `sql` profiles, one per result type, with paging, column filters, search, export, views and live follow.
+  </Card>
+  <Card title="sqlite" icon="document">
+    A file-backed SQLite handle with one serialized writer, a query-only read pool, read leases and buffered async writes. The record store and the result index are built on it.
+  </Card>
+  <Card title="Consuming it" icon="puzzle">
+    Which module to import, the `replace` directive every consumer must carry, and how to work against a local checkout.
+  </Card>
+</CardGrid>
+
+## How the pieces fit
+
+### Where a stream goes
+
+A capture appends rows to a backend through a `Notifier`. `recordresults.Open` picks the backend from settings, and a `Registry` serves each result type as a profile. When the rows live anywhere other than a local `records.sqlite`, an `Indexer` mirrors the stream into a derived `index.sqlite` before each read.
+
+<div class="facet-diagram not-content" role="img" aria-label="Capture → Notifier → backend (kv via Router, ndjson, or records.sqlite) → Indexer → index.sqlite → Registry">
+  <StreamFlow client:load />
+</div>
+
+`Settings.Resolve` uses an explicit `<prefix>.backend` as asked. Otherwise it picks kv wherever the caller has a kv store, and the caller's local fallback (sqlite or ndjson) where it has none.
+
+### What recordresults.Open wires
+
+<div class="facet-diagram not-content" role="img" aria-label="recordresults.Open: which Source and Settings.Backend write streams where, and which file profiles read">
+  <OpenMatrix client:load />
+</div>
+
+A separate index is always derived, and it's never a file a route could also write, so one route's streams can never be read through another.
+
+## Where each package lives
+
+| Package | Module | Import path |
+| --- | --- | --- |
+| recordstore core, `Schemas`, `Settings`, `Router`, `Notifier`, `Indexer` | `github.com/flanksource/commons-db` | `github.com/flanksource/commons-db/recordstore` |
+| Backends | `github.com/flanksource/commons-db` | `…/recordstore/kv`, `…/recordstore/sqlite`, `…/recordstore/ndjson` |
+| Probes (cursor sources → streams) | `github.com/flanksource/commons-db` | `…/recordstore/probe` |
+| Conformance suite | `github.com/flanksource/commons-db` | `…/recordstore/recordstoretest` |
+| SQLite handle | `github.com/flanksource/commons-db` | `github.com/flanksource/commons-db/sqlite` |
+| Typed SQLite tables | `github.com/flanksource/commons-db` | `github.com/flanksource/commons-db/db/sqlitetable` |
+| Result profiles | `github.com/flanksource/commons-db/cmd/query` | `github.com/flanksource/commons-db/cmd/query/recordresults` |
+
+<CardGrid>
+  <LinkCard title="Consuming commons-db" href="start/consuming/" description="Add the modules, carry the sqlite replace, develop against a local checkout." />
+  <LinkCard title="Tutorial" href="start/tutorial/" description="Declare a result type, append a stream and page it over HTTP." />
+  <LinkCard title="recordstore concepts" href="recordstore/concepts/" description="Streams, kinds, seqs, generations, keys, retention and sealing." />
+  <LinkCard title="Opening a result store" href="recordresults/open/" description="What recordresults.Open wires for each backend." />
+</CardGrid>

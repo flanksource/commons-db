@@ -3,36 +3,78 @@ package sessions
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
-	"github.com/flanksource/commons-db/cmd/query/internal/sse"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
-	"github.com/flanksource/commons-db/types"
+	"github.com/flanksource/commons-db/recordstore"
 )
 
 type ProfileStoreProvider func() (profiles.Store, error)
 type ContextProvider func() dbcontext.Context
 
+// SessionEventLog holds the events a capture stream session emitted through
+// the registry's EventSink, for replay after the session left the registry.
+type SessionEventLog interface {
+	Events(ctx context.Context, id string) ([]query.Event, error)
+
+	// HasEvents reports whether the log holds any event of session id, which
+	// is what a session's eventsAvailable says without reading them all.
+	HasEvents(ctx context.Context, id string) (bool, error)
+}
+
+// EventRecords reads the record streams a session's status.events names:
+// recordstore.Notifier is one.
+type EventRecords interface {
+	Meta(ctx context.Context, stream string) (recordstore.Meta, error)
+	Scan(ctx context.Context, stream string, afterSeq int64, fn func(seq int64, row recordstore.Row) error) error
+	Tail(ctx context.Context, stream string, afterSeq int64, fn func(seq int64, row recordstore.Row) error) error
+}
+
 type Options struct {
 	Profiles ProfileStoreProvider
 	Context  ContextProvider
 	Registry *query.SessionRegistry
-	Store    *Store
+
+	// Store answers for sessions that are not live in the registry: the list,
+	// info, lineage, and the records restart and replay start from. Nil lists
+	// only the registry's sessions.
+	Store query.SessionStore
+
+	// EventLog replays the events of a stream session that recorded no
+	// status.events, after it left the registry.
+	EventLog SessionEventLog
+
+	// Records replays a session's status.events after its owner process is
+	// gone, and follows it while this process still writes it.
+	Records EventRecords
+
+	// Authorize decides whether r may read or control a session of the named
+	// profile. It is asked before a session starts, stops, extends or restarts
+	// (ActionControl) and before a session's info, events or result is served
+	// (ActionRead): routes that name no profile, so a gate on profile paths
+	// alone cannot cover them. A session the caller may not read is answered
+	// 404, as a missing one is, so its id never confirms it exists; any other
+	// refusal is answered 403 with its error. The list, its totals, its
+	// lookups and restartedAs leave out refused profiles. Nil allows
+	// every caller everything, which is right only when every profile served
+	// has the same permission. A connection trace session is named by its
+	// virtual profile, connection-<id>-sql-xevent.
+	Authorize AuthorizeFunc
+
+	// Principal names the caller of r, for a stop reason and the principal of
+	// a restarted session. Nil stops "via API" and restarts as the previous
+	// principal.
+	Principal func(r *http.Request) string
 }
 
 type Service struct {
-	profiles ProfileStoreProvider
-	context  ContextProvider
-	registry *query.SessionRegistry
-	store    *Store
+	options Options
 }
 
 func New(options Options) (*Service, error) {
@@ -45,339 +87,94 @@ func New(options Options) (*Service, error) {
 	if options.Registry == nil {
 		return nil, fmt.Errorf("session registry is required")
 	}
-	return &Service{profiles: options.Profiles, context: options.Context, registry: options.Registry, store: options.Store}, nil
+	return &Service{options: options}, nil
 }
 
 func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error) {
-	store, err := s.profiles()
+	store, err := s.options.Profiles()
 	if err != nil {
 		return nil, err
 	}
+	o := s.options
 	return newSessionHandler(sessionHandlerOptions{
-		Prefix: prefix, Ctx: s.context(), Store: store, Registry: s.registry, Sessions: s.store, Next: next,
+		Prefix: prefix, Ctx: o.Context(), Store: store, Registry: o.Registry, Sessions: o.Store,
+		EventLog: o.EventLog, Records: o.Records, Authorize: o.Authorize, Principal: o.Principal, Next: next,
 	}), nil
 }
 
-// sessionHandler serves the trace/top session lifecycle:
+// sessionHandler serves the session API:
 //
-//	POST   {prefix}/profile/{name}/sessions   start (?interval samples, ?follow tails)
-//	GET    {prefix}/sessions                  list (live ∪ persisted)
-//	GET    {prefix}/sessions/{id}             info
-//	DELETE {prefix}/sessions/{id}             stop
-//	GET    {prefix}/sessions/{id}/events      SSE stream, resumable via Last-Event-ID
-//	                                          (?format=ndjson exports)
-//	GET    {prefix}/sessions/{id}/result      materialized rows
-//
-// Live sessions are served from the in-memory registry; the optional
-// SessionStore answers for sessions that outlived the process.
+//	POST {prefix}/profile/{name}/sessions        start (?interval samples, ?follow tails)
+//	POST {prefix}/connection/{id}/trace/sessions start a connection trace
+//	GET  {prefix}/sessions                       list (filters, window, sort, paging, ?__lookup=filters)
+//	GET  {prefix}/sessions/{id}                  info
+//	POST {prefix}/sessions/{id}/stop             stop a live session
+//	POST {prefix}/sessions/{id}/extend           move a live session's deadline (?duration)
+//	POST {prefix}/sessions/{id}/restart          start a new session from an ended one (?duration)
+//	GET  {prefix}/sessions/{id}/events           SSE, resumable via Last-Event-ID (?format=ndjson exports)
+//	GET  {prefix}/sessions/{id}/result           materialized rows, or the recorded result
 type sessionHandler struct {
-	prefix   string
-	ctx      dbcontext.Context
-	store    profiles.Store
-	registry *query.SessionRegistry
-	sessions *Store
-	next     http.Handler
+	prefix    string
+	ctx       dbcontext.Context
+	store     profiles.Store
+	registry  *query.SessionRegistry
+	sessions  query.SessionStore
+	eventLog  SessionEventLog
+	records   EventRecords
+	authorize AuthorizeFunc
+	principal func(r *http.Request) string
+	next      http.Handler
 }
 
 type sessionHandlerOptions struct {
-	Prefix   string
-	Ctx      dbcontext.Context
-	Store    profiles.Store
-	Registry *query.SessionRegistry
-	Sessions *Store
-	Next     http.Handler
+	Prefix    string
+	Ctx       dbcontext.Context
+	Store     profiles.Store
+	Registry  *query.SessionRegistry
+	Sessions  query.SessionStore
+	EventLog  SessionEventLog
+	Records   EventRecords
+	Authorize AuthorizeFunc
+	Principal func(r *http.Request) string
+	Next      http.Handler
 }
 
 func newSessionHandler(opts sessionHandlerOptions) *sessionHandler {
 	return &sessionHandler{
-		prefix:   strings.TrimRight(opts.Prefix, "/"),
-		ctx:      opts.Ctx,
-		store:    opts.Store,
-		registry: opts.Registry,
-		sessions: opts.Sessions,
-		next:     opts.Next,
+		prefix: strings.TrimRight(opts.Prefix, "/"), ctx: opts.Ctx, store: opts.Store, registry: opts.Registry,
+		sessions: opts.Sessions, eventLog: opts.EventLog, records: opts.Records, authorize: opts.Authorize,
+		principal: opts.Principal, next: opts.Next,
 	}
 }
 
 func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), h.prefix), "/")
 	parts := strings.Split(rel, "/")
+	get, post := r.Method == http.MethodGet, r.Method == http.MethodPost
 	switch {
-	case r.Method == http.MethodPost && len(parts) == 4 && parts[0] == "connection" && parts[2] == "trace" && parts[3] == "sessions":
+	case post && len(parts) == 4 && parts[0] == "connection" && parts[2] == "trace" && parts[3] == "sessions":
 		h.startConnectionTrace(w, r, parts[1])
-	case r.Method == http.MethodPost && len(parts) == 3 && parts[0] == "profile" && parts[2] == "sessions":
+	case post && len(parts) == 3 && parts[0] == "profile" && parts[2] == "sessions":
 		h.start(w, r, parts[1])
-	case parts[0] == "sessions" && len(parts) == 1 && r.Method == http.MethodGet:
+	case parts[0] != "sessions":
+		h.next.ServeHTTP(w, r)
+	case get && len(parts) == 1:
 		h.list(w, r)
-	case parts[0] == "sessions" && len(parts) == 2:
-		h.session(w, r, parts[1])
-	case parts[0] == "sessions" && len(parts) == 3 && parts[2] == "events" && r.Method == http.MethodGet:
+	case get && len(parts) == 2:
+		h.info(w, r, parts[1])
+	case post && len(parts) == 3 && parts[2] == "stop":
+		h.stop(w, r, parts[1])
+	case post && len(parts) == 3 && parts[2] == "extend":
+		h.extend(w, r, parts[1])
+	case post && len(parts) == 3 && parts[2] == "restart":
+		h.restart(w, r, parts[1])
+	case get && len(parts) == 3 && parts[2] == "events":
 		h.events(w, r, parts[1])
-	case parts[0] == "sessions" && len(parts) == 3 && parts[2] == "result" && r.Method == http.MethodGet:
+	case get && len(parts) == 3 && parts[2] == "result":
 		h.result(w, r, parts[1])
 	default:
 		h.next.ServeHTTP(w, r)
 	}
-}
-
-func (h *sessionHandler) start(w http.ResponseWriter, r *http.Request, name string) {
-	// A surface key is the path the OpenAPI document hands out for a profile's
-	// session start, and the only one a name holding a "/" can take.
-	stored, err := profiles.StoredProfileName(r.Context(), h.store, name)
-	switch {
-	case errors.Is(err, profiles.ErrProfileSurfaceNotFound):
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	case err != nil:
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	resolved, err := profiles.Resolve(r.Context(), h.store, stored)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
-		return
-	}
-	follow, err := queryFlag(r.URL.Query(), "follow")
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	p := resolved.Profile
-	if p, err = applySessionSpecOverrides(p, sessionSpec{
-		Interval: r.URL.Query().Get("interval"),
-		Duration: r.URL.Query().Get("duration"),
-		Follow:   follow,
-	}); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	params := map[string]any{}
-	for k, vs := range r.URL.Query() {
-		if sessionReservedParam(k) || len(vs) == 0 {
-			continue
-		}
-		params[k] = vs[0]
-	}
-
-	session, err := query.ExecuteStream(h.sessionContext(r), h.registry, p, params)
-	if err != nil {
-		status := http.StatusBadRequest
-		switch {
-		case errors.Is(err, query.ErrMaxSessions):
-			status = http.StatusConflict
-		case errors.Is(err, query.ErrPrepareRead):
-			// The registry's BeforeRead failed: answered by its cause, exactly
-			// as the profile service answers its own hook.
-			status, _ = profiles.PrepareErrorStatus(err)
-		}
-		http.Error(w, err.Error(), status)
-		return
-	}
-	writeSessionJSON(w, http.StatusCreated, session.Snapshot())
-}
-
-// sessionContext is the context a session r starts runs under, and the one its
-// registry's BeforeRead prepares the read with. It carries r's values — the
-// tenant or environment a routed record store reads from the context — but not
-// r's cancellation, because a session outlives the request that started it; its
-// own duration bound and Stop end it. The server context's capabilities
-// (connection resolver, logger, tracer, namespace, DB) are laid over them by
-// Wrap, as every profile read does.
-func (h *sessionHandler) sessionContext(r *http.Request) dbcontext.Context {
-	return h.ctx.Wrap(context.WithoutCancel(r.Context()))
-}
-
-// sessionSpec is the transport's side of a session request: the HTTP query
-// params, or the equivalent CLI flags.
-type sessionSpec struct {
-	Interval string
-	Duration string
-	Follow   bool
-}
-
-// applySessionSpecOverrides maps the transport inputs onto the profile: follow
-// tails any plain profile as a trace, interval samples one as top (or overrides
-// a declared interval), and duration lowers the session bound (the registry
-// still clamps it).
-//
-// Follow is applied first so that asking for both it and an interval is caught
-// by the trace/interval guard below rather than needing a rule of its own —
-// they are two answers to one question, and a profile cannot be sampled on a
-// clock and tailed continuously at the same time.
-func applySessionSpecOverrides(p query.Profile, spec sessionSpec) (query.Profile, error) {
-	if spec.Follow {
-		// Asked here rather than left to ExecuteStream so the refusal names the
-		// capability the caller asked for. Falling back to polling would answer a
-		// question nobody asked: an interval is a different session with a
-		// different cost, and choosing it silently hides that the provider cannot
-		// do what the Follow control offered.
-		if !query.SupportsStreaming(p.Provider.Type) {
-			return p, fmt.Errorf("profile %q cannot be followed: provider %q does not stream; pass ?interval to sample it instead",
-				p.Name, p.Provider.Type)
-		}
-		p = query.Follow(p)
-	}
-	if spec.Interval != "" {
-		d, err := time.ParseDuration(spec.Interval)
-		if err != nil {
-			return p, fmt.Errorf("invalid interval %q: %w", spec.Interval, err)
-		}
-		if p.Kind() == query.KindTrace {
-			return p, fmt.Errorf("profile %q is a trace; interval does not apply", p.Name)
-		}
-		if p.Top == nil {
-			p.Top = &query.TopSpec{}
-		}
-		p.Top.Interval = types.Duration{Duration: d}
-	}
-	if p.Kind() == query.KindQuery {
-		return p, fmt.Errorf("profile %q declares neither trace nor top; pass ?follow to tail it or ?interval to sample it", p.Name)
-	}
-	if spec.Duration != "" {
-		d, err := time.ParseDuration(spec.Duration)
-		if err != nil {
-			return p, fmt.Errorf("invalid duration %q: %w", spec.Duration, err)
-		}
-		if p.Trace != nil {
-			p.Trace.MaxDuration = types.Duration{Duration: d}
-		} else {
-			p.Top.MaxDuration = types.Duration{Duration: d}
-		}
-	}
-	return p, nil
-}
-
-func (h *sessionHandler) list(w http.ResponseWriter, r *http.Request) {
-	infos := h.registry.List()
-	if h.sessions != nil {
-		live := map[string]struct{}{}
-		for _, info := range infos {
-			live[info.ID] = struct{}{}
-		}
-		persisted, err := h.sessions.List(r.Context())
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		for _, info := range persisted {
-			if _, ok := live[info.ID]; !ok {
-				infos = append(infos, info)
-			}
-		}
-	}
-	writeSessionJSON(w, http.StatusOK, infos)
-}
-
-func (h *sessionHandler) session(w http.ResponseWriter, r *http.Request, id string) {
-	switch r.Method {
-	case http.MethodGet:
-		info, ok := h.lookup(w, id)
-		if ok {
-			writeSessionJSON(w, http.StatusOK, info)
-		}
-	case http.MethodDelete:
-		if session, ok := h.registry.Get(id); ok {
-			session.Stop()
-			writeSessionJSON(w, http.StatusOK, session.Snapshot())
-			return
-		}
-		// A persisted-only session is already terminal; stopping is a no-op.
-		if info, ok := h.lookup(w, id); ok {
-			writeSessionJSON(w, http.StatusOK, info)
-		}
-	default:
-		h.next.ServeHTTP(w, r)
-	}
-}
-
-// lookup resolves a session from the registry or the durable store, writing
-// the HTTP error itself when the session is unknown.
-func (h *sessionHandler) lookup(w http.ResponseWriter, id string) (query.SessionInfo, bool) {
-	if session, ok := h.registry.Get(id); ok {
-		return session.Snapshot(), true
-	}
-	if h.sessions != nil {
-		info, ok, err := h.sessions.Get(context.Background(), id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return query.SessionInfo{}, false
-		}
-		if ok {
-			return info, true
-		}
-	}
-	http.Error(w, fmt.Sprintf("session %q not found", id), http.StatusNotFound)
-	return query.SessionInfo{}, false
-}
-
-func (h *sessionHandler) events(w http.ResponseWriter, r *http.Request, id string) {
-	after, err := sse.LastEventSequence(r)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if session, ok := h.registry.Get(id); ok {
-		if r.URL.Query().Get("format") == "ndjson" {
-			sse.WriteNDJSON(w, sessionEventsFilename(id), session.Events())
-			return
-		}
-		sseStream{session: session, after: after, keepalive: sse.DefaultKeepalive}.run(w, r)
-		return
-	}
-
-	info, ok := h.lookup(w, id)
-	if !ok {
-		return
-	}
-	events, err := h.sessions.Events(r.Context(), id)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if r.URL.Query().Get("format") == "ndjson" {
-		sse.WriteNDJSON(w, sessionEventsFilename(id), events)
-		return
-	}
-	sseHistory{events: events, info: info, after: after}.write(w)
-}
-
-func sessionEventsFilename(id string) string { return "session-" + id + ".ndjson" }
-
-func (h *sessionHandler) result(w http.ResponseWriter, r *http.Request, id string) {
-	var result *query.Result
-	if session, ok := h.registry.Get(id); ok {
-		var err error
-		if result, err = session.Result(h.ctx); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	} else {
-		info, ok := h.lookup(w, id)
-		if !ok {
-			return
-		}
-		resolved, err := profiles.Resolve(r.Context(), h.store, info.Profile)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("session %q: %v", id, err), http.StatusNotFound)
-			return
-		}
-		events, err := h.sessions.Events(r.Context(), id)
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
-			return
-		}
-		if result, err = query.MaterializeEvents(h.ctx, resolved.Profile, events); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	}
-
-	rows := result.Rows
-	if rows == nil {
-		rows = []query.Row{}
-	}
-	writeSessionJSON(w, http.StatusOK, rows)
 }
 
 // queryFlag reads a boolean query parameter in both the forms a caller writes
@@ -405,10 +202,13 @@ func sessionReservedParam(key string) bool {
 }
 
 func writeSessionJSON(w http.ResponseWriter, status int, v any) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(v); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+	_, _ = w.Write(append(data, '\n'))
 }

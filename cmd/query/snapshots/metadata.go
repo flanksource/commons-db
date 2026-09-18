@@ -23,18 +23,19 @@ const (
 	// through the virtual profile.
 	metadataTable = "_metadata"
 
-	snapshotMetadataVersion = 1
+	// snapshotMetadataVersion 2 names each table's columns and records the
+	// names (StoredAs); version 1 stored them positionally, "c0"…"c<n>".
+	snapshotMetadataVersion = 2
 )
 
 // snapshotMetadata is everything Prepare needs to rebuild a *snapshot with no
 // other source of truth.
 //
-// It stores what cannot be recomputed and omits what can. The generated
-// query.Profile is the notable omission: its query embeds the physical
-// "c0" AS name alias scheme, so persisting it would let a later build serve a
-// stale — possibly wrong — SELECT after a restart. Recomputing keeps the
-// running binary the single authority on the generated profile, exactly as it
-// is before a restart.
+// It stores what cannot be recomputed and omits what can. The physical column
+// names are stored, never re-derived, because a later build deriving them
+// differently must still read the table. The generated query.Profile is
+// omitted: it is rebuilt from those names, which keeps the running binary the
+// single authority on how a snapshot is queried, exactly as before a restart.
 type snapshotMetadata struct {
 	ID        string        `json:"id"`
 	CreatedAt time.Time     `json:"created_at"`
@@ -65,23 +66,36 @@ type snapshotProfileMetadata struct {
 	Name    string            `json:"name"`
 	Table   string            `json:"table"`
 	Columns []query.ColumnDef `json:"columns"`
-	Rows    int               `json:"rows"`
+	// StoredAs is the physical column each of Columns is stored in.
+	StoredAs []string `json:"stored_as"`
+	Rows     int      `json:"rows"`
 }
 
 // writeSnapshotMetadata replaces the stored record. The delete and the insert
 // share one transaction so a crash mid-write leaves the previous document
 // intact rather than no document at all.
 func writeSnapshotMetadata(ctx context.Context, database *sql.DB, meta snapshotMetadata) error {
-	document, err := json.Marshal(meta)
-	if err != nil {
-		return fmt.Errorf("encode snapshot metadata: %w", err)
-	}
 	transaction, err := database.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("write snapshot metadata: %w", err)
 	}
 	defer func() { _ = transaction.Rollback() }()
+	if err := writeSnapshotMetadataTx(ctx, transaction, meta); err != nil {
+		return err
+	}
+	if err := transaction.Commit(); err != nil {
+		return fmt.Errorf("write snapshot metadata: %w", err)
+	}
+	return nil
+}
 
+// writeSnapshotMetadataTx replaces the stored record, at the current version,
+// in transaction.
+func writeSnapshotMetadataTx(ctx context.Context, transaction *sql.Tx, meta snapshotMetadata) error {
+	document, err := json.Marshal(meta)
+	if err != nil {
+		return fmt.Errorf("encode snapshot metadata: %w", err)
+	}
 	statements := []string{
 		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (version INTEGER NOT NULL, document TEXT NOT NULL)`,
 			sqlitetable.QuoteIdentifier(metadataTable)),
@@ -96,16 +110,14 @@ func writeSnapshotMetadata(ctx context.Context, database *sql.DB, meta snapshotM
 	if _, err := transaction.ExecContext(ctx, insert, snapshotMetadataVersion, string(document)); err != nil {
 		return fmt.Errorf("write snapshot metadata: %w", err)
 	}
-	if err := transaction.Commit(); err != nil {
-		return fmt.Errorf("write snapshot metadata: %w", err)
-	}
 	return nil
 }
 
-// readSnapshotMetadata reads the stored record. Because sql.Open is lazy, this
-// query is also the first thing to touch the file — so it doubles as the
-// corruption check for a directory left behind by a killed process.
-func readSnapshotMetadata(ctx context.Context, database *sql.DB) (snapshotMetadata, error) {
+// readSnapshotMetadata reads the stored record, which must be of expected
+// version. Because sql.Open is lazy, this query is also the first thing to
+// touch the file — so it doubles as the corruption check for a directory left
+// behind by a killed process.
+func readSnapshotMetadata(ctx context.Context, database *sql.DB, expected int) (snapshotMetadata, error) {
 	var version int
 	var document string
 	statement := fmt.Sprintf(`SELECT version, document FROM %s LIMIT 1`, sqlitetable.QuoteIdentifier(metadataTable))
@@ -115,6 +127,9 @@ func readSnapshotMetadata(ctx context.Context, database *sql.DB) (snapshotMetada
 	if version > snapshotMetadataVersion {
 		return snapshotMetadata{}, fmt.Errorf(
 			"snapshot metadata version %d is newer than this build understands (%d)", version, snapshotMetadataVersion)
+	}
+	if version != expected {
+		return snapshotMetadata{}, fmt.Errorf("snapshot metadata version %d, expected %d", version, expected)
 	}
 	var meta snapshotMetadata
 	if err := json.Unmarshal([]byte(document), &meta); err != nil {
@@ -146,12 +161,14 @@ func metadataOf(item *snapshot) snapshotMetadata {
 		meta.ExpiresAt = *item.connection.ExpiresAt
 	}
 	for name, materialized := range item.profiles {
-		meta.Profiles = append(meta.Profiles, snapshotProfileMetadata{
-			Name:    name,
-			Table:   materialized.table,
-			Columns: materialized.columns,
-			Rows:    materialized.rows,
-		})
+		meta.Profiles = append(meta.Profiles, profileMetadata(name, materialized))
 	}
 	return meta
+}
+
+func profileMetadata(name string, materialized materialization) snapshotProfileMetadata {
+	return snapshotProfileMetadata{
+		Name: name, Table: materialized.table.Name, Columns: materialized.table.Columns,
+		StoredAs: materialized.table.StoredAs, Rows: materialized.rows,
+	}
 }
