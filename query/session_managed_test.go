@@ -16,6 +16,7 @@ type managedRunFake struct {
 	stops    atomic.Int64
 	detaches atomic.Int64
 	finished chan struct{}
+	metadata []query.SessionMetadata
 }
 
 func newManagedRunFake() *managedRunFake {
@@ -27,7 +28,9 @@ func (f *managedRunFake) Sample(context.Context) (any, error) {
 }
 
 func (f *managedRunFake) Status() query.ManagedStatus {
-	return query.ManagedStatus{Handle: "probe-1", EventCount: f.samples.Load(), Summary: map[string]any{"samples": f.samples.Load()}}
+	return query.ManagedStatus{
+		Handle: "probe-1", EventCount: f.samples.Load(), Summary: map[string]any{"samples": f.samples.Load()}, Metadata: f.metadata,
+	}
 }
 
 func (f *managedRunFake) Stop(context.Context) (query.ManagedFinish, error) {
@@ -66,6 +69,33 @@ var _ = Describe("SessionRegistry managed captures", func() {
 		Expect(result).To(Equal("stopped"))
 		Expect(run.stops.Load()).To(Equal(int64(1)))
 		Expect(managed.Session().Snapshot().State).To(Equal(query.SessionCompleted))
+	})
+
+	It("records the metadata the armed run reports", func() {
+		registry := query.NewSessionRegistry(query.RegistryOptions{})
+		run := newManagedRunFake()
+		run.metadata = []query.SessionMetadata{{Name: "xe.statements", Label: "Started with", Language: "sql", Value: "CREATE EVENT SESSION [t] ON SERVER;"}}
+
+		managed, err := registry.Manage(context.Background(), query.ManageOptions{Track: managedTrackOptions()}, func(context.Context) (query.ManagedRun, error) {
+			return run, nil
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _, _ = managed.Stop(context.Background()) })
+		Expect(managed.Session().Snapshot().Metadata).To(Equal(run.metadata))
+	})
+
+	It("stops the run and fails the session when the armed run reports metadata it cannot record", func() {
+		registry := query.NewSessionRegistry(query.RegistryOptions{})
+		run := newManagedRunFake()
+		run.metadata = []query.SessionMetadata{{Name: "xe.statements", Label: "Started with"}}
+
+		_, err := registry.Manage(context.Background(), query.ManageOptions{Track: managedTrackOptions()}, func(context.Context) (query.ManagedRun, error) {
+			return run, nil
+		})
+
+		Expect(err).To(MatchError(ContainSubstring(`"xe.statements" has no value`)))
+		Expect(run.stops.Load()).To(Equal(int64(1)))
 	})
 
 	It("serializes polling and explicit sampling and stops the run once", func() {

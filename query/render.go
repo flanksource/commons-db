@@ -24,7 +24,7 @@ func (r rowProvider) Row() map[string]any      { return r.row }
 func (r *Result) Table(columns []ColumnDef) api.TextTable {
 	cols := clickyColumns(columns, r.Rows, r.ColumnFilterKeys, r.ColumnSortKeys)
 	if len(r.Rows) == 0 {
-		return emptyTable(cols)
+		return api.NewEmptyTable(cols)
 	}
 
 	providers := make([]rowProvider, len(r.Rows))
@@ -85,7 +85,7 @@ func (r *Result) presentedTable(columns []ColumnDef) (api.TextTable, error) {
 		clickyColumns(columns, r.Rows, r.ColumnFilterKeys, r.ColumnSortKeys),
 	)
 	if len(r.Rows) == 0 {
-		return emptyTable(cols), nil
+		return api.NewEmptyTable(cols), nil
 	}
 	providers := make([]rowProvider, len(r.Rows))
 	for index, raw := range r.Rows {
@@ -174,40 +174,6 @@ func clickyColumns(columns []ColumnDef, rows []Row, filterKeys, sortKeys map[str
 		})
 	}
 	return out
-}
-
-// emptyTable builds a header-only TextTable so empty result sets still render
-// their column chrome (clicky's NewTableFrom drops headers when there are no
-// rows).
-func emptyTable(cols []api.ColumnDef) api.TextTable {
-	t := api.TextTable{}
-	for _, col := range cols {
-		if col.Hidden {
-			continue
-		}
-		style := col.Style
-		if col.MaxWidth > 0 {
-			style = fmt.Sprintf("%s max-w-[%dch] truncate", style, col.MaxWidth)
-		}
-		t.Headers = append(t.Headers, api.Text{Content: col.DisplayLabel(), Style: col.HeaderStyle})
-		t.FieldNames = append(t.FieldNames, col.Name)
-		t.Columns = append(t.Columns, api.PrettyField{
-			Name:          col.Name,
-			Label:         col.DisplayLabel(),
-			Kind:          col.Kind,
-			Style:         style,
-			LabelStyle:    col.HeaderStyle,
-			Type:          col.Type,
-			Format:        col.Format,
-			Unit:          col.Unit,
-			FormatOptions: col.FormatOptions,
-			FilterKey:     col.FilterKey,
-			SortKey:       col.SortKey,
-			MinWidth:      col.MinWidthPixels,
-			MaxWidth:      col.MaxWidthPixels,
-		})
-	}
-	return t
 }
 
 // deriveColumns builds a stable, sorted column list from the union of row keys.

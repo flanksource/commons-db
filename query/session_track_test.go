@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
 )
 
 const jvmTraceProfile = "trace-capture/jvm_trace"
@@ -83,6 +84,39 @@ var _ = Describe("SessionRegistry.Track", func() {
 			query.SessionRunning, query.SessionStopping, query.SessionStopped,
 		}), "progress right after running waits for ProgressEvery; the stop carries it")
 	})
+
+	It("records the metadata the host reports once armed, through to the stopped record", func() {
+		session := track(reg, stdcontext.Background(), jvmTrackOptions())
+		metadata := []query.SessionMetadata{
+			{Name: "xe.statements", Label: "Started with", Language: "sql", Value: "CREATE EVENT SESSION [t] ON SERVER;"},
+		}
+		Expect(session.Running(query.RunningUpdate{Handle: "t", Metadata: metadata})).To(Succeed())
+		finishOnStop(session)
+		session.Stop("stopped by admin")
+		waitDone(session)
+
+		encoded, err := json.Marshal(store.status(session.ID()))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(map[string]any{"snapshot": session.Snapshot().Metadata, "stored": store.status(session.ID()).Metadata, "json": string(encoded)}).To(
+			MatchAllKeys(Keys{
+				"snapshot": Equal(metadata), "stored": Equal(metadata),
+				"json": ContainSubstring(`"metadata":[{"name":"xe.statements","label":"Started with","language":"sql","value":"CREATE EVENT SESSION [t] ON SERVER;"}]`),
+			}))
+	})
+
+	DescribeTable("refuses metadata that names or shows nothing, or names an entry twice",
+		func(metadata []query.SessionMetadata, refused string) {
+			session := track(reg, stdcontext.Background(), jvmTrackOptions())
+			Expect(session.Running(query.RunningUpdate{Metadata: metadata})).To(MatchError(ContainSubstring(refused)))
+			Expect(session.Snapshot()).To(And(HaveField("State", query.SessionStarting), HaveField("Metadata", BeEmpty())))
+		},
+		Entry("an entry with no name", []query.SessionMetadata{{Label: "Started with", Value: "SELECT 1"}}, "no name"),
+		Entry("an entry with no label", []query.SessionMetadata{{Name: "sql", Value: "SELECT 1"}}, `"sql" has no label`),
+		Entry("an entry with no value", []query.SessionMetadata{{Name: "sql", Label: "Started with"}}, `"sql" has no value`),
+		Entry("a name used twice", []query.SessionMetadata{
+			{Name: "sql", Label: "Started with", Value: "SELECT 1"}, {Name: "sql", Label: "Then", Value: "SELECT 2"},
+		}, `"sql" twice`),
+	)
 
 	It("completes when the deadline elapses", func() {
 		stopAt := time.Now().Add(50 * time.Millisecond)

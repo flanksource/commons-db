@@ -79,6 +79,38 @@ type EventsRef struct {
 	Store      EventsStoreLocation `json:"store"`
 }
 
+// SessionMetadata is one thing a capture reports about how it runs once armed,
+// beyond the params it was asked for: the statements that opened an Extended
+// Events session, say. Name keys the entry within its session; Label is what a
+// viewer shows; Language names Value's language when it is code ("sql"), for a
+// viewer to highlight it.
+type SessionMetadata struct {
+	Name     string `json:"name"`
+	Label    string `json:"label"`
+	Language string `json:"language,omitempty"`
+	Value    string `json:"value"`
+}
+
+// validateSessionMetadata refuses an entry a viewer could not show — no name,
+// label or value — and a name used twice.
+func validateSessionMetadata(metadata []SessionMetadata) error {
+	seen := make(map[string]bool, len(metadata))
+	for index, entry := range metadata {
+		switch {
+		case entry.Name == "":
+			return fmt.Errorf("session metadata entry %d has no name", index)
+		case entry.Label == "":
+			return fmt.Errorf("session metadata %q has no label", entry.Name)
+		case entry.Value == "":
+			return fmt.Errorf("session metadata %q has no value", entry.Name)
+		case seen[entry.Name]:
+			return fmt.Errorf("session metadata names %q twice", entry.Name)
+		}
+		seen[entry.Name] = true
+	}
+	return nil
+}
+
 // SessionStatus is overwritten on every change by the owner, or by Sweep when
 // the owner is gone.
 type SessionStatus struct {
@@ -95,6 +127,9 @@ type SessionStatus struct {
 	Events      *EventsRef      `json:"events,omitempty"`
 	Summary     json.RawMessage `json:"summary,omitempty"`
 	Result      json.RawMessage `json:"result,omitempty"`
+	// Metadata is what the capture reported about itself once armed; it is
+	// written by Running and kept for the rest of the session.
+	Metadata []SessionMetadata `json:"metadata,omitempty"`
 }
 
 // SessionRecord is what a SessionStore persists and returns.

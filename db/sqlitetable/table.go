@@ -19,6 +19,8 @@ import (
 	"strings"
 	"time"
 
+	"ariga.io/atlas/sql/schema"
+
 	// Pure-Go sqlite driver. Must be modernc, never github.com/glebarez/go-sqlite
 	// — both register the "sqlite" driver name and linking both panics at init.
 	// See connection/sql.go for the full rationale.
@@ -145,6 +147,46 @@ func (t Table) Derive(ctx context.Context, database Execer) (Table, error) {
 	return t, nil
 }
 
+// Declare is the table as Create creates it, declared for Atlas: every column
+// under its stored name by its raw SQLite type, the primary key and the unique
+// indexes. migrate/sqlite.Apply reconciles an existing table against it. The
+// table must carry its stored names.
+func (t Table) Declare() (*schema.Table, error) {
+	if err := t.checkStoredAs(); err != nil {
+		return nil, err
+	}
+	declared := schema.NewTable(t.Name)
+	for index, column := range t.Columns {
+		declared.AddColumns(&schema.Column{Name: t.StoredAs[index], Type: &schema.ColumnType{Raw: Type(column.Type), Null: true}})
+	}
+	stored := func(name string) (*schema.Column, error) {
+		index := slices.IndexFunc(t.Columns, func(column query.ColumnDef) bool { return column.Name == name })
+		if index < 0 {
+			return nil, fmt.Errorf("table %q has no column %q", t.Name, name)
+		}
+		return declared.Columns[index], nil
+	}
+	if len(t.PrimaryKey) > 0 {
+		keys := make([]*schema.Column, len(t.PrimaryKey))
+		for index, name := range t.PrimaryKey {
+			column, err := stored(name)
+			if err != nil {
+				return nil, err
+			}
+			keys[index] = column
+		}
+		declared.SetPrimaryKey(schema.NewPrimaryKey(keys...))
+	}
+	for _, name := range t.Unique {
+		column, err := stored(name)
+		if err != nil {
+			return nil, err
+		}
+		declared.AddIndexes(schema.NewUniqueIndex(t.Name + "_" + name).AddColumns(column))
+	}
+	return declared, nil
+}
+
 func (t Table) checkStoredAs() error {
 	if len(t.StoredAs) != len(t.Columns) {
 		return fmt.Errorf("table %q has %d stored names for %d columns", t.Name, len(t.StoredAs), len(t.Columns))
@@ -153,13 +195,23 @@ func (t Table) checkStoredAs() error {
 }
 
 // Insert appends rows to the existing table. A row key the table does not
-// declare is not stored; a declared column the row lacks is stored as NULL.
+// declare is not stored; a declared column the row lacks is stored as NULL, as
+// is any column the table has but does not declare — one another build sharing
+// the file added.
 func (t Table) Insert(ctx context.Context, database Execer, rows []query.Row) error {
 	if len(rows) == 0 {
 		return nil
 	}
+	if err := t.checkStoredAs(); err != nil {
+		return err
+	}
+	columns := make([]string, len(t.StoredAs))
+	for index, name := range t.StoredAs {
+		columns[index] = QuoteIdentifier(name)
+	}
 	markers := strings.TrimRight(strings.Repeat("?,", len(t.Columns)), ",")
-	statement, err := database.PrepareContext(ctx, fmt.Sprintf(`INSERT INTO %s VALUES (%s)`, QuoteIdentifier(t.Name), markers))
+	statement, err := database.PrepareContext(ctx, fmt.Sprintf(`INSERT INTO %s (%s) VALUES (%s)`,
+		QuoteIdentifier(t.Name), strings.Join(columns, ", "), markers))
 	if err != nil {
 		return fmt.Errorf("prepare table %q: %w", t.Name, err)
 	}

@@ -1,6 +1,7 @@
 package query_test
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"time"
@@ -247,6 +248,39 @@ var _ = Describe("JSONPath columns", func() {
 	})
 })
 
+type hostPresenter struct{}
+
+func (hostPresenter) Columns() []api.ColumnDef {
+	return []api.ColumnDef{
+		api.Column("sessionId").Build(),
+		api.Column("clientHost").Label("Host").DefaultHidden().Build(),
+	}
+}
+
+func (hostPresenter) Present(row query.Row) (map[string]any, error) {
+	return map[string]any{"sessionId": row["sessionId"], "clientHost": row["clientHost"]}, nil
+}
+
+// clickyColumnFlags decodes a clicky-json table's columns into name → the
+// value of their "defaultHidden" key, or "absent" when the key is omitted.
+func clickyColumnFlags(document string) map[string]any {
+	var doc struct {
+		Node struct {
+			Columns []map[string]any `json:"columns"`
+		} `json:"node"`
+	}
+	Expect(json.Unmarshal([]byte(document), &doc)).To(Succeed(), document)
+	flags := map[string]any{}
+	for _, column := range doc.Node.Columns {
+		value, present := column["defaultHidden"]
+		if !present {
+			value = "absent"
+		}
+		flags[column["name"].(string)] = value
+	}
+	return flags
+}
+
 var _ = Describe("Result.Render", func() {
 	result := &query.Result{Rows: []query.Row{
 		{"id": 1, "name": "alpha"},
@@ -349,6 +383,18 @@ var _ = Describe("Result.Render", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rawJSON).To(And(ContainSubstring(`125`), Not(ContainSubstring("125ms"))))
 	})
+
+	DescribeTable("keeps a presenter's DefaultHidden column listed and flagged in clicky JSON",
+		func(rows []query.Row) {
+			presented := &query.Result{Rows: rows, Presenter: hostPresenter{}}
+
+			out, err := presented.Render([]query.ColumnDef{{Name: "sessionId"}, {Name: "clientHost"}}, "clicky-json")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(clickyColumnFlags(out)).To(Equal(map[string]any{"sessionId": "absent", "clientHost": true}))
+		},
+		Entry("with rows", []query.Row{{"sessionId": 53, "clientHost": "azure-app-1"}}),
+		Entry("with zero rows", []query.Row{}),
+	)
 
 	It("presents a reflected integer read back as a float64 without decimals, and a time cell as its zoned instant", func() {
 		type capturedEvent struct {

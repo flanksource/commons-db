@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -206,7 +207,7 @@ var _ = Describe("sqlite backend storage", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, rows := recordstoretest.Scanned(escaped, "run-1", 0)
 		Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(1, 1))))
-		Expect(escaped.Path()).To(Equal(filepath.Join(filepath.Dir(escapedPath), "v4", "records?#.sqlite")))
+		Expect(escaped.Path()).To(Equal(filepath.Join(filepath.Dir(escapedPath), "v5", "records?#.sqlite")))
 		Expect(os.Stat(escaped.Path())).Error().ToNot(HaveOccurred())
 	})
 
@@ -518,34 +519,97 @@ var _ = Describe("sqlite backend storage", func() {
 	})
 
 	Context("when a kind's columns change between processes", func() {
-		changed := columnsSchema(append(slices.Clone(recordstoretest.Columns), query.ColumnDef{Name: "extra", Type: query.ColumnTypeString})...)
+		gainedColumn := query.ColumnDef{Name: "object type", Type: query.ColumnTypeString}
+		wider := columnsSchema(append(slices.Clone(recordstoretest.Columns), gainedColumn)...)
+		var catalogBefore string
 
 		BeforeEach(func() {
 			_, err := backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(1, 2))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(backend.Close()).To(Succeed())
+			catalogBefore = kindColumns(ctx, backend.Path(), recordstoretest.Kind)
 		})
 
-		It("refuses to reinterpret a durable table's rows under the new columns", func() {
-			reopened := openSQLite(path, clock, changed, false)
-			backend = reopened
-			_, err := reopened.Append(ctx, "run-2", recordstoretest.Kind, recordstoretest.SampleRows(1, 1))
-			Expect(err).To(MatchError(ContainSubstring("different columns")))
+		// rowsWith is SampleRows first..last, each carrying the gained column.
+		rowsWith := func(first, last int, objectType any) []recordstore.Row {
+			rows := recordstoretest.SampleRows(first, last)
+			for _, row := range rows {
+				row["object type"] = objectType
+			}
+			return rows
+		}
+
+		DescribeTable("adds the column the kind gained to its table in place, keeping every stream it held",
+			func(derived bool) {
+				reopened := openSQLite(path, clock, wider, derived)
+				backend = reopened
+				_, rows := recordstoretest.Scanned(reopened, "run-1", 0)
+				Expect(map[string]any{
+					"rows":     recordstoretest.Normalize(rows),
+					"catalog":  kindColumns(ctx, reopened.Path(), recordstoretest.Kind),
+					"physical": tableColumns(ctx, reopened.Path(), "records_sample"),
+				}).To(Equal(map[string]any{
+					"rows":     recordstoretest.Normalize(rowsWith(1, 2, nil)),
+					"catalog":  strings.TrimSuffix(catalogBefore, "]") + `,"object type=object_type:TEXT:string"]`,
+					"physical": []string{"stream_id", "seq", "name", "count", "ok", "detail", "object_type"},
+				}))
+			},
+			Entry("in a durable file", false),
+			Entry("in a derived index", true),
+		)
+
+		// Two builds share one file: each reads and writes the columns it
+		// declares, and neither loses the other's.
+		It("reads and writes a table wider than a narrower declaration of its kind, keeping the columns it does not declare", func() {
+			wide := openSQLite(path, clock, wider, false)
+			_, err := wide.Append(ctx, "run-1", recordstoretest.Kind, rowsWith(3, 3, "USRTAB"))
+			Expect(err).ToNot(HaveOccurred())
+			Expect(wide.Close()).To(Succeed())
+
+			narrow := openSQLite(path, clock, recordstoretest.Schema, false)
+			_, err = narrow.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(4, 4))
+			Expect(err).ToNot(HaveOccurred())
+			_, narrowRows := recordstoretest.Scanned(narrow, "run-1", 0)
+			Expect(narrow.Close()).To(Succeed())
+
+			backend = openSQLite(path, clock, wider, false)
+			_, wideRows := recordstoretest.Scanned(backend, "run-1", 0)
+			Expect(map[string]any{
+				"narrow": recordstoretest.Normalize(narrowRows), "wide": recordstoretest.Normalize(wideRows),
+				"catalog": kindColumns(ctx, backend.Path(), recordstoretest.Kind),
+			}).To(Equal(map[string]any{
+				"narrow":  recordstoretest.Normalize(recordstoretest.SampleRows(1, 4)),
+				"wide":    recordstoretest.Normalize(slices.Concat(rowsWith(1, 2, nil), rowsWith(3, 3, "USRTAB"), rowsWith(4, 4, nil))),
+				"catalog": strings.TrimSuffix(catalogBefore, "]") + `,"object type=object_type:TEXT:string"]`,
+			}))
 		})
 
-		It("rebuilds a derived index's table, dropping the streams it held", func() {
-			reopened := openSQLite(path, clock, changed, true)
-			backend = reopened
-			source := recordstore.NewStreamMeta("run-2", recordstoretest.Kind, clock.Now())
-			source.Total, source.HighSeq = 1, 1
-			_, found, err := reopened.Prepare(ctx, source)
-			Expect(err).ToNot(HaveOccurred())
-			Expect(found).To(BeFalse())
+		Context("and one of them changes type", func() {
+			retyped := columnsSchema(query.ColumnDef{Name: "name", Type: query.ColumnTypeString}, query.ColumnDef{Name: "count", Type: query.ColumnTypeString},
+				query.ColumnDef{Name: "ok", Type: query.ColumnTypeBoolean}, query.ColumnDef{Name: "detail", Type: query.ColumnTypeJSON})
 
-			_, err = reopened.Meta(ctx, "run-1")
-			Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), fmt.Sprint(err))
-			_, err = reopened.Import(ctx, recordstore.ImportRequest{Source: source, First: 1, Rows: recordstoretest.SampleRows(1, 1)})
-			Expect(err).ToNot(HaveOccurred())
+			It("refuses to reinterpret a durable table's rows under the new type", func() {
+				reopened := openSQLite(path, clock, retyped, false)
+				backend = reopened
+				_, err := reopened.Append(ctx, "run-2", recordstoretest.Kind, []recordstore.Row{{"name": "x", "count": "one"}})
+				Expect(err).To(MatchError(And(ContainSubstring(`column "count"`), ContainSubstring("only added columns"))))
+				Expect(kindColumns(ctx, reopened.Path(), recordstoretest.Kind)).To(Equal(catalogBefore))
+			})
+
+			It("rebuilds a derived index's table, dropping the streams it held", func() {
+				reopened := openSQLite(path, clock, retyped, true)
+				backend = reopened
+				source := recordstore.NewStreamMeta("run-2", recordstoretest.Kind, clock.Now())
+				source.Total, source.HighSeq = 1, 1
+				_, found, err := reopened.Prepare(ctx, source)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(found).To(BeFalse())
+
+				_, err = reopened.Meta(ctx, "run-1")
+				Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), fmt.Sprint(err))
+				_, err = reopened.Import(ctx, recordstore.ImportRequest{Source: source, First: 1, Rows: []recordstore.Row{{"name": "x", "count": "one"}}})
+				Expect(err).ToNot(HaveOccurred())
+			})
 		})
 	})
 })

@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"time"
 
+	"ariga.io/atlas/sql/schema"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/db/sqlitetable"
+	sqlitemigrate "github.com/flanksource/commons-db/migrate/sqlite"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -65,6 +67,20 @@ var _ = Describe("sqlitetable.Table", func() {
 		}
 		Expect(rows.Err()).ToNot(HaveOccurred())
 		return names
+	}
+
+	schemaObjects := func() []string {
+		rows, err := database.QueryContext(ctx, `SELECT type || ' ' || name || ': ' || coalesce(sql, '') FROM sqlite_schema ORDER BY type, name`)
+		Expect(err).ToNot(HaveOccurred())
+		defer func() { Expect(rows.Close()).To(Succeed()) }()
+		var objects []string
+		for rows.Next() {
+			var object string
+			Expect(rows.Scan(&object)).To(Succeed())
+			objects = append(objects, object)
+		}
+		Expect(rows.Err()).ToNot(HaveOccurred())
+		return objects
 	}
 
 	It("stores columns under derived safe names and reads them back under their declared names", func() {
@@ -204,6 +220,45 @@ var _ = Describe("sqlitetable.Table", func() {
 		written, err := sqlitetable.Write(ctx, database, unique, []query.Row{{"row_id": 1}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(written.Insert(ctx, database, []query.Row{{"row_id": 1}})).To(MatchError(ContainSubstring("UNIQUE constraint failed")))
+	})
+
+	// Another build sharing the file may declare a column this one does not.
+	It("inserts into a table carrying a column it does not declare, leaving that column NULL", func() {
+		created, err := table.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = database.ExecContext(ctx, `ALTER TABLE "events" ADD COLUMN "declared_elsewhere" TEXT`)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(created.Insert(ctx, database, []query.Row{{"stream id": "run-1", "seq": 1, "ok": true}})).To(Succeed())
+
+		var elsewhere sql.NullString
+		Expect(database.QueryRowContext(ctx, `SELECT "declared_elsewhere" FROM "events"`).Scan(&elsewhere)).To(Succeed())
+		Expect(map[string]any{"rows": selectAll(created), "elsewhere": elsewhere.Valid}).To(Equal(map[string]any{
+			"rows":      []query.Row{{"stream id": "run-1", "seq": int64(1), "ok": true, "detail": nil, "at": nil}},
+			"elsewhere": false,
+		}))
+	})
+
+	It("declares for Atlas exactly the table Create creates", func() {
+		table.Unique = []string{"at"}
+		created, err := table.Create(ctx, database)
+		Expect(err).ToNot(HaveOccurred())
+		declared, err := created.Declare()
+		Expect(err).ToNot(HaveOccurred())
+		before := schemaObjects()
+		Expect(sqlitemigrate.Apply(ctx, database, declared)).To(Succeed())
+		Expect(schemaObjects()).To(Equal(before))
+
+		declared, err = created.Declare()
+		Expect(err).ToNot(HaveOccurred())
+		declared.AddColumns(&schema.Column{Name: "added", Type: &schema.ColumnType{Raw: sqlitetable.Type(query.ColumnTypeNumber), Null: true}})
+		Expect(sqlitemigrate.Apply(ctx, database, declared)).To(Succeed())
+		Expect(physicalColumns("events")).To(Equal([]string{"stream_id", "seq", "ok", "detail", "at", "added"}))
+	})
+
+	It("refuses to declare a table whose stored names do not line up with its columns", func() {
+		table.StoredAs = []string{"sid"}
+		_, err := table.Declare()
+		Expect(err).To(MatchError(ContainSubstring("1 stored names for 5 columns")))
 	})
 
 	It("names the quoted physical column a declared column is stored in", func() {

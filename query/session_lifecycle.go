@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"time"
 )
@@ -31,6 +32,9 @@ type RunningUpdate struct {
 	Handle string
 	Events *EventsRef
 	StopAt *time.Time
+	// Metadata is what the armed capture reports about itself; see
+	// SessionMetadata. Empty leaves the session's metadata as it was.
+	Metadata []SessionMetadata
 }
 
 // ProgressUpdate is a capture's running totals.
@@ -55,6 +59,9 @@ type FinishUpdate struct {
 // A session stopped while arming stays stopping: it records the handle so the
 // status shows what OnStop tears down.
 func (s *Session) Running(u RunningUpdate) error {
+	if err := validateSessionMetadata(u.Metadata); err != nil {
+		return fmt.Errorf("session %s: %w", s.ID(), err)
+	}
 	var err error
 	s.mutate(func() bool {
 		if s.rec.State.Terminal() {
@@ -63,6 +70,9 @@ func (s *Session) Running(u RunningUpdate) error {
 		}
 		if u.Handle != "" {
 			s.rec.Handle = u.Handle
+		}
+		if len(u.Metadata) > 0 {
+			s.rec.Metadata = slices.Clone(u.Metadata)
 		}
 		s.recordEventsLocked(u.Events)
 		if u.StopAt != nil {

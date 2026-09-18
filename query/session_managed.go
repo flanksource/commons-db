@@ -16,6 +16,8 @@ type ManagedStatus struct {
 	Events     *EventsRef
 	EventCount int64
 	Summary    any
+	// Metadata is recorded once, when the run is armed (see RunningUpdate).
+	Metadata []SessionMetadata
 }
 
 // ManagedFinish is the terminal state returned by ManagedRun.Stop or Detach.
@@ -124,7 +126,7 @@ func (r *SessionRegistry) Manage(ctx context.Context, options ManageOptions, arm
 	r.registerManaged(managed)
 	session.OnStop(managed.stopForSession)
 	status := run.Status()
-	if err := session.Running(RunningUpdate{Handle: status.Handle, Events: status.Events}); err != nil {
+	if err := session.Running(RunningUpdate{Handle: status.Handle, Events: status.Events, Metadata: status.Metadata}); err != nil {
 		_, stopErr := managed.Stop(context.Background())
 		r.forgetManaged(managed)
 		return nil, errors.Join(err, stopErr)
