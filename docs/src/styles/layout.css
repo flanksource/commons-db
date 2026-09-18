@@ -1,0 +1,14 @@
+/* Let the content column grow with the viewport instead of Starlight's fixed
+ * 45rem: it fills whatever the left sidebar (and, from 72rem, the table of
+ * contents) leave, up to a 1920px-wide window. Past that the column stays at
+ * its 1920px width. Starlight's two-column math then gives the TOC exactly
+ * --sl-sidebar-width. */
+:root {
+  --sl-content-width: calc(100vw - var(--sl-sidebar-width) - 2 * var(--sl-content-pad-x));
+}
+
+@media (min-width: 72rem) {
+  :root {
+    --sl-content-width: calc(min(100vw, 1920px) - 2 * var(--sl-sidebar-width) - 2 * var(--sl-content-pad-x));
+  }
+}

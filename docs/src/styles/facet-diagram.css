@@ -1,0 +1,53 @@
+@import "https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&family=Fira+Code:wght@400;500;600&display=swap";
+
+@tailwind utilities;
+
+/* The part of Tailwind's preflight the diagrams depend on, scoped to them:
+ * border utilities need a solid zero-width default, and the diagrams lay out
+ * with border-box sizing and unspaced block elements. */
+.facet-diagram,
+.facet-diagram *,
+.facet-diagram ::before,
+.facet-diagram ::after {
+  box-sizing: border-box;
+  border-width: 0;
+  border-style: solid;
+  border-color: #e5e7eb;
+}
+
+.facet-diagram :is(h1, h2, h3, h4, h5, h6, p, table) {
+  margin: 0;
+  font-size: inherit;
+  font-weight: inherit;
+}
+
+.facet-diagram svg {
+  display: inline-block;
+  vertical-align: middle;
+}
+
+/* Only the diagram: no card around it. A narrow content column scrolls the
+ * diagram rather than squeezing its grid. */
+.facet-diagram {
+  margin-block: 1.5rem;
+  overflow-x: auto;
+  color: #1e293b;
+  font-family: "Open Sans", system-ui, sans-serif;
+  font-size: 10pt;
+  line-height: 1.4;
+}
+
+/* The diagram palette (white node bodies, slate text and arrows) is designed
+ * for a light page, so the dark theme gives it a light backing. */
+:root[data-theme="dark"] .facet-diagram {
+  padding: 0.5rem;
+  border-radius: 0.5rem;
+  background: #f8fafc;
+}
+
+/* A diagram centres a grid that can be wider than the column. Sized to its
+ * content, it scrolls instead of both edges being cut off. */
+.facet-diagram astro-island > * {
+  width: max-content;
+  min-width: 100%;
+}
