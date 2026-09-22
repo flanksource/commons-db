@@ -38,8 +38,11 @@ require (
 	github.com/emersion/go-smtp v0.25.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.67
-	github.com/flanksource/clicky/valkey v1.21.67
+	// Pinned to the commit adding api.ColumnBuilder.DefaultHidden, which
+	// query/render_test.go exercises; no clicky release carries it yet. Bump
+	// this (and aichat/valkey back to the matching release) once it ships.
+	github.com/flanksource/clicky v1.21.67-0.20260919170348-0696dc4c805f
+	github.com/flanksource/clicky/valkey v1.21.66
 	github.com/flanksource/commons v1.59.1
 	github.com/flanksource/deps v1.0.42
 	github.com/flanksource/gomplate/v3 v3.24.90

@@ -5,9 +5,11 @@ go 1.26.1
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/flanksource/captain v0.0.60
-	github.com/flanksource/clicky v1.21.67
-	github.com/flanksource/clicky/aichat v1.21.67
-	github.com/flanksource/clicky/valkey v1.21.67
+	// Kept in lockstep with the root module's clicky pin (see ../../go.mod):
+	// a workspace build resolves one clicky for both modules.
+	github.com/flanksource/clicky v1.21.67-0.20260919170348-0696dc4c805f
+	github.com/flanksource/clicky/aichat v1.21.66
+	github.com/flanksource/clicky/valkey v1.21.66
 	github.com/flanksource/commons v1.59.1
 	github.com/flanksource/commons-db v0.1.31
 	github.com/glebarez/sqlite v1.11.0
