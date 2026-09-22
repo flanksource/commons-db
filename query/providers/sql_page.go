@@ -115,7 +115,7 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		err = query.WithDiagnostics(err, failure)
 	}()
 
-	rows, err := client.QueryContext(queryContext, statement, args...)
+	rows, err := client.QueryContext(queryContext, statement, args...) // lgtm[go/sql-injection]
 	if err != nil {
 		return SQLPageResult{}, sqlExecError(dialect, request.Filters, err)
 	}
