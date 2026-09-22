@@ -115,6 +115,13 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		err = query.WithDiagnostics(err, failure)
 	}()
 
+	// Nothing request-supplied reaches this statement as raw text: filter and
+	// order values travel as bound args, and every identifier is rebuilt byte by
+	// byte out of a constant alphabet by sqlDialect.quote / quoteIdentifierPath
+	// before it is quoted. The statement itself is the operator's own SQL — the
+	// connection browser gates it on readOnlyStatementError.
+	// CodeQL still reports go/sql-injection here (alert 76); GitHub code scanning
+	// honours no in-source suppression, so it has to be dismissed in the UI.
 	rows, err := client.QueryContext(queryContext, statement, args...) // lgtm[go/sql-injection]
 	if err != nil {
 		return SQLPageResult{}, sqlExecError(dialect, request.Filters, err)
