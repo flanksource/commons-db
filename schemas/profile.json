@@ -4221,6 +4221,7 @@
             "enum": [
               "date",
               "float",
+              "integer",
               "duration",
               "bytes",
               "currency"
@@ -4233,7 +4234,8 @@
               "currency": "Currency",
               "date": "Date/time",
               "duration": "Duration",
-              "float": "Number"
+              "float": "Number",
+              "integer": "Integer"
             }
           },
           "hidden": {
