@@ -76,7 +76,10 @@ jobs:
       - name: Start services
         run: |
           set -euo pipefail
-          pg=$(deps-start postgres@16 --runtime binary -o json --wait-timeout 5m \
+          # Docker rather than binary: the binary runtime resolves its version
+          # against Maven Central (zonky embedded-postgres-binaries), which
+          # rate-limits CI with HTTP 429.
+          pg=$(deps-start postgres@16 --runtime docker -o json --wait-timeout 5m \
             | jq -er '.connection.url')
           opensearch=$(deps-start opensearch@2 --runtime docker --volume-mode persistent \
             -o json --wait-timeout 5m \
