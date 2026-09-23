@@ -36,7 +36,7 @@ func declaredEvents() *schema.Table {
 	return table
 }
 
-var _ = Describe("sqlite migrate.Apply", func() {
+var _ = Describe("sqlite migrate.ReconcileTables", func() {
 	var (
 		ctx      context.Context
 		database *sql.DB
@@ -82,7 +82,7 @@ var _ = Describe("sqlite migrate.Apply", func() {
 
 	It("leaves a table that matches its declaration exactly as it is", func() {
 		before := schemaSQL()
-		Expect(sqlitemigrate.Apply(ctx, database, declaredEvents())).To(Succeed())
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{}, declaredEvents())).To(Succeed())
 		Expect(schemaSQL()).To(Equal(before))
 	})
 
@@ -90,7 +90,7 @@ var _ = Describe("sqlite migrate.Apply", func() {
 		declared := declaredEvents().AddColumns(column("object_type", "TEXT"), column("count", "NUMERIC"))
 		tx, err := database.BeginTx(ctx, nil)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(sqlitemigrate.Apply(ctx, tx, declared)).To(Succeed())
+		Expect(sqlitemigrate.ReconcileTables(ctx, tx, sqlitemigrate.ReconcileOptions{}, declared)).To(Succeed())
 		Expect(tx.Commit()).To(Succeed())
 
 		var name, note string
@@ -113,7 +113,7 @@ var _ = Describe("sqlite migrate.Apply", func() {
 		note, _ := declared.Column("note")
 		declared.AddIndexes(schema.NewIndex("events_note").AddColumns(note))
 
-		Expect(sqlitemigrate.Apply(ctx, database, declared, audit)).To(Succeed())
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{}, declared, audit)).To(Succeed())
 		var indexes []string
 		rows, err := database.QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type = 'index' AND name IN ('audit_who', 'events_note') ORDER BY name`)
 		Expect(err).ToNot(HaveOccurred())
@@ -131,7 +131,7 @@ var _ = Describe("sqlite migrate.Apply", func() {
 	It("leaves alone the tables and views nothing declares", func() {
 		_, err := database.ExecContext(ctx, `CREATE TABLE "other" ("x" TEXT); CREATE VIEW "named" AS SELECT "name" FROM "events"`)
 		Expect(err).ToNot(HaveOccurred())
-		Expect(sqlitemigrate.Apply(ctx, database, declaredEvents().AddColumns(column("added", "TEXT")))).To(Succeed())
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{}, declaredEvents().AddColumns(column("added", "TEXT")))).To(Succeed())
 		Expect(schemaSQL()).To(ContainElements(
 			`table other: CREATE TABLE "other" ("x" TEXT)`,
 			`view named: CREATE VIEW "named" AS SELECT "name" FROM "events"`,
@@ -145,7 +145,7 @@ var _ = Describe("sqlite migrate.Apply", func() {
 			declared := declaredEvents().AddColumns(column("added", "TEXT"))
 			change(declared)
 			before := schemaSQL()
-			err := sqlitemigrate.Apply(ctx, database, declared)
+			err := sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{}, declared)
 			Expect(err).To(MatchError(And(ContainSubstring(`table "events"`), ContainSubstring(refused))))
 			Expect(schemaSQL()).To(Equal(before))
 		},
@@ -176,7 +176,16 @@ var _ = Describe("sqlite migrate.Apply", func() {
 		}, `change index "events_key"`),
 	)
 
+	It("refuses to drop a unique index even with table rebuilds enabled", func() {
+		declared := declaredEvents().AddColumns(column("added", "TEXT"))
+		declared.Indexes = nil
+		before := schemaSQL()
+		err := sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{AllowRebuilds: true}, declared)
+		Expect(err).To(MatchError(ContainSubstring(`drop index "events_key"`)))
+		Expect(schemaSQL()).To(Equal(before))
+	})
+
 	It("refuses a declaration naming no table", func() {
-		Expect(sqlitemigrate.Apply(ctx, database)).To(MatchError(ContainSubstring("no table")))
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{})).To(MatchError(ContainSubstring("no table")))
 	})
 })

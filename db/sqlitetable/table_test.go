@@ -245,13 +245,13 @@ var _ = Describe("sqlitetable.Table", func() {
 		declared, err := created.Declare()
 		Expect(err).ToNot(HaveOccurred())
 		before := schemaObjects()
-		Expect(sqlitemigrate.Apply(ctx, database, declared)).To(Succeed())
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{}, declared)).To(Succeed())
 		Expect(schemaObjects()).To(Equal(before))
 
 		declared, err = created.Declare()
 		Expect(err).ToNot(HaveOccurred())
 		declared.AddColumns(&schema.Column{Name: "added", Type: &schema.ColumnType{Raw: sqlitetable.Type(query.ColumnTypeNumber), Null: true}})
-		Expect(sqlitemigrate.Apply(ctx, database, declared)).To(Succeed())
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{}, declared)).To(Succeed())
 		Expect(physicalColumns("events")).To(Equal([]string{"stream_id", "seq", "ok", "detail", "at", "added"}))
 	})
 
