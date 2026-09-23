@@ -53,7 +53,7 @@ func parseSQLite(raw string) (Target, error) {
 	if err != nil {
 		return Target{}, fmt.Errorf("parse SQLite DSN query: %w", err)
 	}
-	if path == ":memory:" || strings.EqualFold(query.Get("mode"), "memory") {
+	if path == ":memory:" || strings.EqualFold(path, "file::memory:") || strings.EqualFold(query.Get("mode"), "memory") {
 		return Target{}, fmt.Errorf("SQLite migrations require a file-backed database")
 	}
 

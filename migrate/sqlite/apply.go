@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	atlasmigrate "ariga.io/atlas/sql/migrate"
 	"ariga.io/atlas/sql/schema"
 	atlas "ariga.io/atlas/sql/sqlite"
 	"github.com/flanksource/commons/logger"
@@ -53,17 +54,15 @@ func ReconcileTables(ctx context.Context, database schema.ExecQuerier, options R
 	if err := refuseRewrites(changes, options); err != nil {
 		return err
 	}
-	if options.AllowRebuilds {
-		if err := refuseUnmanagedTriggers(ctx, database, changes); err != nil {
-			return err
-		}
-	}
 	if len(changes) == 0 {
 		return nil
 	}
 	plan, err := driver.PlanChanges(ctx, "", changes)
 	if err != nil {
 		return fmt.Errorf("sqlite migrate: plan %d changes: %w", len(changes), err)
+	}
+	if err := refuseUnmanagedTriggers(ctx, database, plan.Changes); err != nil {
+		return err
 	}
 	log := logger.GetLogger("migrate")
 	for _, change := range plan.Changes {
@@ -135,10 +134,10 @@ func refuseRewrites(changes []schema.Change, options ReconcileOptions) error {
 	return fmt.Errorf("sqlite migrate: refusing %s; only added tables, columns and indexes are applied, since any other change rewrites or discards stored rows", strings.Join(refused, "; "))
 }
 
-func refuseUnmanagedTriggers(ctx context.Context, database schema.ExecQuerier, changes []schema.Change) error {
+func refuseUnmanagedTriggers(ctx context.Context, database schema.ExecQuerier, changes []*atlasmigrate.Change) error {
 	for _, change := range changes {
-		modified, ok := change.(*schema.ModifyTable)
-		if !ok {
+		modified, ok := change.Source.(*schema.ModifyTable)
+		if !ok || !strings.HasPrefix(change.Cmd, "DROP TABLE ") {
 			continue
 		}
 		rows, err := database.QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ? LIMIT 1`, modified.T.Name)
