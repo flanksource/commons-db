@@ -59,6 +59,7 @@ var _ = Describe("database target DSNs", func() {
 		Entry("empty", " ", "DSN is required"),
 		Entry("unknown URL scheme", "mysql://localhost/app", `unsupported database scheme "mysql"`),
 		Entry("explicit memory database", "sqlite://:memory:", "file-backed"),
+		Entry("file URI memory database", "sqlite://file::memory:?cache=shared", "file-backed"),
 		Entry("bare memory database", ":memory:", "sqlite://"),
 	)
 })
