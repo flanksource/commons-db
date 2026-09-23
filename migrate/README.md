@@ -247,7 +247,7 @@ declared, err := sqlitetable.Table{Name: "events", Columns: columns, StoredAs: s
 if err != nil {
     return err
 }
-if err := sqlitemigrate.ReconcileTables(ctx, tx, declared); err != nil {
+if err := sqlitemigrate.ReconcileTables(ctx, tx, sqlitemigrate.ReconcileOptions{}, declared); err != nil {
     return err
 }
 ```

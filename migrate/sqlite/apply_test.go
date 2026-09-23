@@ -185,6 +185,35 @@ var _ = Describe("sqlite migrate.ReconcileTables", func() {
 		Expect(schemaSQL()).To(Equal(before))
 	})
 
+	It("preserves an unmanaged trigger when adding a column and index with rebuilds enabled", func() {
+		_, err := database.ExecContext(ctx, `CREATE TRIGGER events_audit AFTER INSERT ON events BEGIN SELECT 1; END`)
+		Expect(err).ToNot(HaveOccurred())
+		declared := declaredEvents().AddColumns(column("added", "TEXT"))
+		note, _ := declared.Column("note")
+		declared.AddIndexes(schema.NewIndex("events_note").AddColumns(note))
+
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{AllowRebuilds: true}, declared)).To(Succeed())
+		Expect(columnsOf("events")).To(ContainElement("added"))
+		Expect(schemaSQL()).To(ContainElements(
+			`trigger events_audit: CREATE TRIGGER events_audit AFTER INSERT ON events BEGIN SELECT 1; END`,
+			"index events_note: CREATE INDEX `events_note` ON `events` (`note`)",
+		))
+	})
+
+	It("refuses an additive plan when Atlas would rebuild and discard an unmanaged trigger", func() {
+		_, err := database.ExecContext(ctx, `CREATE TRIGGER events_audit AFTER INSERT ON events BEGIN SELECT 1; END`)
+		Expect(err).ToNot(HaveOccurred())
+		declared := declaredEvents().AddColumns(column("added", "TEXT"))
+		added, _ := declared.Column("added")
+		declared.AddIndexes(schema.NewIndex("events_added").AddColumns(added))
+		before := schemaSQL()
+
+		for _, options := range []sqlitemigrate.ReconcileOptions{{}, {AllowRebuilds: true}} {
+			Expect(sqlitemigrate.ReconcileTables(ctx, database, options, declared)).To(MatchError(ContainSubstring("unmanaged trigger")))
+			Expect(schemaSQL()).To(Equal(before))
+		}
+	})
+
 	It("refuses a declaration naming no table", func() {
 		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{})).To(MatchError(ContainSubstring("no table")))
 	})
