@@ -1,7 +1,5 @@
-// Package sqlite reconciles SQLite tables with a declaration through Atlas,
-// as the parent migrate package reconciles PostgreSQL schemas with HCL. It
-// works over a caller's own connection or transaction, so it serves the pure-Go
-// modernc driver without Atlas opening one of its own.
+// Package sqlite reconciles SQLite tables with programmatic Atlas declarations.
+// Filesystem-backed HCL migrations use the target-aware parent migrate package.
 package sqlite
 
 import (
@@ -15,18 +13,20 @@ import (
 	"github.com/flanksource/commons/logger"
 )
 
-// Apply brings database's tables up to the tables declared: Atlas inspects
+type ReconcileOptions struct {
+	AllowRebuilds bool
+}
+
+// ReconcileTables brings database's tables up to the tables declared: Atlas inspects
 // each declared table, diffs it against its declaration, and applies the plan.
-// It only adds — a missing table, column or index. Every other difference (a
-// column dropped, retyped or made NOT NULL, a key or an index changed) would
-// rewrite or discard rows the declaration no longer describes, so Apply refuses
-// it before applying anything, naming each change. Tables and views nothing
-// declares are neither inspected nor touched.
+// It adds missing tables, columns, and indexes by default. AllowRebuilds permits
+// compatible table reshapes while still refusing drops and type changes. Tables
+// and views nothing declares are neither inspected nor touched.
 //
-// A column may be declared by its raw SQLite type alone (ColumnType.Raw); Apply
+// A column may be declared by its raw SQLite type alone (ColumnType.Raw); ReconcileTables
 // parses it as inspection does, so a declaration and the table it created
 // compare equal.
-func Apply(ctx context.Context, database schema.ExecQuerier, tables ...*schema.Table) error {
+func ReconcileTables(ctx context.Context, database schema.ExecQuerier, options ReconcileOptions, tables ...*schema.Table) error {
 	if len(tables) == 0 {
 		return errors.New("sqlite migrate: no table declared")
 	}
@@ -50,8 +50,13 @@ func Apply(ctx context.Context, database schema.ExecQuerier, tables ...*schema.T
 	if err != nil {
 		return fmt.Errorf("sqlite migrate: diff %s: %w", strings.Join(names, ", "), err)
 	}
-	if err := refuseRewrites(changes); err != nil {
+	if err := refuseRewrites(changes, options); err != nil {
 		return err
+	}
+	if options.AllowRebuilds {
+		if err := refuseUnmanagedTriggers(ctx, database, changes); err != nil {
+			return err
+		}
 	}
 	if len(changes) == 0 {
 		return nil
@@ -90,9 +95,9 @@ func parseRawTypes(table *schema.Table) error {
 	return nil
 }
 
-// refuseRewrites fails on any change other than an added table, column or
-// index, listing every such change by table.
-func refuseRewrites(changes []schema.Change) error {
+// refuseRewrites lists changes that cannot be applied without losing schema
+// constraints or changing stored column types.
+func refuseRewrites(changes []schema.Change, options ReconcileOptions) error {
 	var refused []string
 	for _, change := range changes {
 		switch change := change.(type) {
@@ -100,8 +105,16 @@ func refuseRewrites(changes []schema.Change) error {
 		case *schema.ModifyTable:
 			var described []string
 			for _, inner := range change.Changes {
-				switch inner.(type) {
+				switch item := inner.(type) {
 				case *schema.AddColumn, *schema.AddIndex:
+				case *schema.AddPrimaryKey, *schema.AddForeignKey, *schema.AddCheck:
+					if !options.AllowRebuilds {
+						described = append(described, describe(inner))
+					}
+				case *schema.ModifyColumn:
+					if !options.AllowRebuilds || item.Change&^(schema.ChangeNull|schema.ChangeDefault) != 0 {
+						described = append(described, describe(inner))
+					}
 				default:
 					described = append(described, describe(inner))
 				}
@@ -116,8 +129,41 @@ func refuseRewrites(changes []schema.Change) error {
 	if len(refused) == 0 {
 		return nil
 	}
-	return fmt.Errorf("sqlite migrate: refusing %s; only added tables, columns and indexes are applied, since any other change rewrites or discards stored rows",
-		strings.Join(refused, "; "))
+	if options.AllowRebuilds {
+		return fmt.Errorf("sqlite migrate: refusing %s; rebuilds allow added constraints and column nullability or default changes, but not drops, renames, or type changes", strings.Join(refused, "; "))
+	}
+	return fmt.Errorf("sqlite migrate: refusing %s; only added tables, columns and indexes are applied, since any other change rewrites or discards stored rows", strings.Join(refused, "; "))
+}
+
+func refuseUnmanagedTriggers(ctx context.Context, database schema.ExecQuerier, changes []schema.Change) error {
+	for _, change := range changes {
+		modified, ok := change.(*schema.ModifyTable)
+		if !ok {
+			continue
+		}
+		rows, err := database.QueryContext(ctx, `SELECT name FROM sqlite_schema WHERE type = 'trigger' AND tbl_name = ? LIMIT 1`, modified.T.Name)
+		if err != nil {
+			return fmt.Errorf("inspect triggers for table %q: %w", modified.T.Name, err)
+		}
+		var trigger string
+		if rows.Next() {
+			err = rows.Scan(&trigger)
+		}
+		if err == nil {
+			err = rows.Err()
+		}
+		closeErr := rows.Close()
+		if err != nil {
+			return fmt.Errorf("inspect triggers for table %q: %w", modified.T.Name, err)
+		}
+		if closeErr != nil {
+			return fmt.Errorf("close trigger inspection for table %q: %w", modified.T.Name, closeErr)
+		}
+		if trigger != "" {
+			return fmt.Errorf("sqlite migrate: table %q has unmanaged trigger %q; refusing a rebuild that would discard it", modified.T.Name, trigger)
+		}
+	}
+	return nil
 }
 
 func describe(change schema.Change) string {

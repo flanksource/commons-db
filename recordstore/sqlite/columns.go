@@ -139,10 +139,10 @@ func (table *kindTable) adopt(catalog storedCatalog) ([]query.ColumnDef, string)
 }
 
 // addColumns adds to table the declared columns it lacks, under physical names
-// derived around every column the table already has. migrate/sqlite applies
-// them to the table the whole catalog declares, so a table that has drifted
-// from its catalog in any other way is refused, not patched. The entries are
-// appended to the kind's catalog.
+// derived around every column the table already has. migrate/sqlite reconciles
+// them against the table the whole catalog declares, so a table that has
+// drifted from its catalog in any other way is refused, not patched. The
+// entries are appended to the kind's catalog.
 func addColumns(ctx context.Context, tx *sql.Tx, kind string, table *kindTable, catalog storedCatalog, added []query.ColumnDef) error {
 	taken := make([]string, len(catalog.columns))
 	for index, column := range catalog.columns {
@@ -164,7 +164,7 @@ func addColumns(ctx context.Context, tx *sql.Tx, kind string, table *kindTable, 
 	if err != nil {
 		return fmt.Errorf("kind %q: %w", kind, err)
 	}
-	if err := sqlitemigrate.Apply(ctx, tx, declared); err != nil {
+	if err := sqlitemigrate.ReconcileTables(ctx, tx, sqlitemigrate.ReconcileOptions{}, declared); err != nil {
 		return fmt.Errorf("kind %q: %w", kind, err)
 	}
 	entries, err := catalog.encode()

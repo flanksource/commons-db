@@ -1,4 +1,4 @@
-// Package migrate applies declarative Atlas HCL schemas to PostgreSQL databases.
+// Package migrate applies declarative Atlas HCL schemas to PostgreSQL and SQLite databases.
 package migrate
 
 import (
@@ -15,18 +15,20 @@ import (
 	_ "ariga.io/atlas/sql/postgres"
 	"ariga.io/atlas/sql/schema"
 	"ariga.io/atlas/sql/sqlclient"
+	"github.com/flanksource/commons-db/internal/dbtarget"
 	"github.com/flanksource/commons/logger"
 	_ "github.com/lib/pq"
 	"github.com/zclconf/go-cty/cty"
 )
 
 type options struct {
-	dir        string
-	name       string
-	schema     string
-	exclude    []string
-	allowDrops bool
-	input      map[string]cty.Value
+	dir           string
+	name          string
+	schema        string
+	exclude       []string
+	allowDrops    bool
+	allowRebuilds bool
+	input         map[string]cty.Value
 }
 
 // Option configures an HCL migration.
@@ -44,6 +46,7 @@ func WithName(name string) Option {
 }
 
 // WithSchema selects the PostgreSQL schema used for the complete migration lifecycle.
+// SQLite accepts only the default public schema declared by portable HCL bundles.
 func WithSchema(name string) Option {
 	return func(o *options) { o.schema = name }
 }
@@ -69,13 +72,30 @@ func WithDrops() Option {
 	return func(o *options) { o.allowDrops = true }
 }
 
-// Apply loads colocated HCL and SQL migrations from schemaFS. SQL scripts marked
-// phase pre run before the Atlas realm diff; all other SQL defaults to the post
-// phase. Declared PostgreSQL roles and permissions are reconciled last. Tables
-// and types absent from a partial schema bundle are never dropped unless
-// WithDrops is supplied.
+// WithRebuilds permits SQLite to rebuild populated tables for compatible
+// constraint, default, nullability, and index changes. It never permits drops
+// or type changes. PostgreSQL already applies these changes directly.
+func WithRebuilds() Option {
+	return func(o *options) { o.allowRebuilds = true }
+}
+
+// Apply resolves the database target from connection and reconciles HCL schemas.
+// PostgreSQL supports the complete HCL, SQL, security, and destructive-change
+// lifecycle. SQLite projects portable PostgreSQL-shaped HCL to tables,
+// columns, and indexes, with compatible rebuilds available by opt-in.
 func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Option) error {
-	return apply(ctx, connection, schemaFS, resolveOptions(opts))
+	if strings.TrimSpace(connection) == "" {
+		return errors.New("connection string is empty")
+	}
+	target, err := dbtarget.Parse(connection)
+	if err != nil {
+		return err
+	}
+	config := resolveOptions(opts)
+	if target.Dialect == dbtarget.SQLite {
+		return applySQLite(ctx, target.DSN, schemaFS, config)
+	}
+	return applyPostgres(ctx, target.DSN, schemaFS, config)
 }
 
 func resolveOptions(opts []Option) options {
@@ -108,7 +128,7 @@ func cloneVariables(input map[string]cty.Value) map[string]cty.Value {
 	return cloned
 }
 
-func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) error {
+func applyPostgres(ctx context.Context, connection string, schemaFS fs.FS, cfg options) (returnErr error) {
 	if strings.TrimSpace(connection) == "" {
 		return errors.New("connection string is empty")
 	}
@@ -137,7 +157,7 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if err != nil {
 		return fmt.Errorf("open SQL migration database: %w", err)
 	}
-	defer db.Close()
+	defer func() { returnErr = errors.Join(returnErr, db.Close()) }()
 	if err := db.PingContext(ctx); err != nil {
 		return fmt.Errorf("connect SQL migration database: %w", err)
 	}
@@ -161,7 +181,7 @@ func apply(ctx context.Context, connection string, schemaFS fs.FS, cfg options) 
 	if err != nil {
 		return fmt.Errorf("open database: %w", err)
 	}
-	defer client.Close()
+	defer func() { returnErr = errors.Join(returnErr, client.Close()) }()
 
 	current, err := atlasmigrate.SchemaConn(client.Driver, cfg.schema, &schema.InspectOptions{Exclude: cfg.exclude}).ReadState(ctx)
 	if err != nil {

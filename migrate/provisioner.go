@@ -141,7 +141,7 @@ func (p *SchemaProvisioner) prepare(ctx context.Context, connection string) erro
 	if p == nil {
 		return errors.New("migration provisioner is nil")
 	}
-	return apply(ctx, connection, p.schemaFS, p.config)
+	return applyPostgres(ctx, connection, p.schemaFS, p.config)
 }
 
 func (p *SchemaProvisioner) writeMigrationFiles(ctx context.Context, digest hash.Hash) error {

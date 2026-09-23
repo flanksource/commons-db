@@ -149,7 +149,7 @@ func (t Table) Derive(ctx context.Context, database Execer) (Table, error) {
 
 // Declare is the table as Create creates it, declared for Atlas: every column
 // under its stored name by its raw SQLite type, the primary key and the unique
-// indexes. migrate/sqlite.Apply reconciles an existing table against it. The
+// indexes. migrate/sqlite.ReconcileTables reconciles an existing table against it. The
 // table must carry its stored names.
 func (t Table) Declare() (*schema.Table, error) {
 	if err := t.checkStoredAs(); err != nil {
