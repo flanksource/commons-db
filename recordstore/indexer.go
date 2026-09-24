@@ -145,6 +145,16 @@ func (i *Indexer) catchUp(ctx context.Context, source, indexed Meta, found bool)
 		return Meta{}, fmt.Errorf("index of stream %q generation %q is ahead of its source (seq %d, source %d)",
 			stream, source.Generation, indexed.HighSeq, source.HighSeq)
 	}
+	if found && indexed.Sealed && !source.Sealed {
+		reopener, ok := i.index.(Reopener)
+		if !ok {
+			return Meta{}, fmt.Errorf("index of stream %q cannot reopen after its source resumed", stream)
+		}
+		if err := reopener.Reopen(ctx, stream, source.Generation); err != nil {
+			return Meta{}, fmt.Errorf("index stream %q: reopen: %w", stream, err)
+		}
+		indexed.Sealed = false
+	}
 	var err error
 	if found {
 		if indexed, err = i.mirrorTrim(ctx, source, indexed); err != nil {

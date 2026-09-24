@@ -259,6 +259,24 @@ func (b *Backend) Seal(ctx context.Context, stream string) error {
 	return b.writeMeta(ctx, meta, now)
 }
 
+func (b *Backend) Reopen(ctx context.Context, stream, generation string) error {
+	if err := recordstore.ValidateStream(stream); err != nil {
+		return err
+	}
+	unlock := b.locks.Lock(stream)
+	defer unlock()
+	meta, err := b.readMeta(ctx, stream)
+	if err != nil {
+		return err
+	}
+	if !meta.Sealed || meta.Generation != generation || generation == "" {
+		return fmt.Errorf("stream %q: sealed generation %q was not found", stream, generation)
+	}
+	now := b.now()
+	meta.Sealed, meta.UpdatedAt = false, now
+	return b.writeMeta(ctx, meta, now)
+}
+
 // Meta describes stream.
 func (b *Backend) Meta(ctx context.Context, stream string) (recordstore.Meta, error) {
 	if err := recordstore.ValidateStream(stream); err != nil {
