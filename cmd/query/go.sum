@@ -309,8 +309,8 @@ github.com/firebase/genkit/go v1.11.0 h1:dmf219fDGP6IcKwPkJoTnXpcTEya7o5Bi+z5iP+
 github.com/firebase/genkit/go v1.11.0/go.mod h1:x9h3TsbMLiuK1hgbwnkUmKQ9bmTNPORHaqG9XQhI0K8=
 github.com/flanksource/captain v0.0.60 h1:PV0Ga72i9T06XueIR+8ftHfha27N2zYYyDhecU832R0=
 github.com/flanksource/captain v0.0.60/go.mod h1:9Cf5JkO8wP2I8NBUaXKE3acWUu7Q2ZSYOkk8YdnLXt8=
-github.com/flanksource/clicky v1.21.67-0.20260919170348-0696dc4c805f h1:+a49VnrK6KCgs4S9MzaaTNsTsgtO+fMFSx+HwpzGSms=
-github.com/flanksource/clicky v1.21.67-0.20260919170348-0696dc4c805f/go.mod h1:L+RlBYG6Ngay9pWs6iuRanfIArxEOttcQPXRL73qXrA=
+github.com/flanksource/clicky v1.21.70 h1:7JmdMxaaqkh8WL5CQWI8HIVqD6I7AnQcoQFcww6c9hM=
+github.com/flanksource/clicky v1.21.70/go.mod h1:9jtiUmcbMD10+CXFD/kpqu+854L/YBSORm99KQ51Pu0=
 github.com/flanksource/clicky/aichat v1.21.66 h1:GOJqIjll3xAJfBbKo0UZ0PVMawFqPjhMcMiCM3vU2ak=
 github.com/flanksource/clicky/aichat v1.21.66/go.mod h1:AwF0xjGo1yykqHGrzwOlYBeinxD6oJUR7LKjoZMtArg=
 github.com/flanksource/clicky/valkey v1.21.66 h1:0aXdZll+cf5UT9sC5KoPQfDp8IGv5GtUSzRb1yu1YwA=

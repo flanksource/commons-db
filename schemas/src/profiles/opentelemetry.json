@@ -62,7 +62,11 @@
               "postgres",
               "mysql",
               "sql_server",
-              "clickhouse"
+              "clickhouse",
+              "sqlite"
+            ],
+            "sqlite": [
+              "sqlite"
             ],
             "sqlserver": [
               "sql_server"

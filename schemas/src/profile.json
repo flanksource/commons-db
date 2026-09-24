@@ -755,6 +755,21 @@
           "if": {
             "properties": {
               "type": {
+                "const": "sqlite"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/sqlite.json"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "http"
               }
             },
@@ -993,7 +1008,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -1016,6 +1035,7 @@
             "mysql",
             "sqlserver",
             "clickhouse",
+            "sqlite",
             "http",
             "prometheus",
             "postgrest",
@@ -1049,6 +1069,7 @@
             "postgrest": "globe",
             "prometheus": "prometheus",
             "sql": "database",
+            "sqlite": "database",
             "sqlserver": "sqlserver"
           }
         }
@@ -1252,7 +1273,11 @@
                       "postgres",
                       "mysql",
                       "sql_server",
-                      "clickhouse"
+                      "clickhouse",
+                      "sqlite"
+                    ],
+                    "sqlite": [
+                      "sqlite"
                     ],
                     "sqlserver": [
                       "sql_server"
