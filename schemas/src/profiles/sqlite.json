@@ -1,5 +1,5 @@
 {
-  "$id": "jaeger.json",
+  "$id": "sqlite.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
     "connection": {
@@ -80,45 +80,9 @@
     },
     "options": {
       "properties": {
-        "end": {
-          "title": "End",
-          "type": "string"
-        },
-        "limit": {
-          "title": "Limit",
-          "type": "string"
-        },
-        "lookback": {
-          "title": "Lookback",
-          "type": "string"
-        },
-        "maxDuration": {
-          "title": "max Duration",
-          "type": "string"
-        },
-        "minDuration": {
-          "title": "min Duration",
-          "type": "string"
-        },
-        "operation": {
-          "title": "Operation",
-          "type": "string"
-        },
-        "service": {
-          "title": "Service",
-          "type": "string"
-        },
-        "start": {
-          "title": "Start",
-          "type": "string"
-        },
-        "tags": {
-          "title": "Tags",
-          "type": "string"
-        },
         "url": {
-          "description": "Inline Jaeger query URL used instead of a saved connection",
-          "title": "URL",
+          "description": "Inline SQLite file path used instead of a saved connection",
+          "title": "Database path",
           "type": "string",
           "x-clicky-component": "k8s-url-selector",
           "x-clicky-default-source": "value"
@@ -128,7 +92,7 @@
       "type": "object"
     },
     "type": {
-      "const": "jaeger",
+      "const": "sqlite",
       "title": "Type",
       "type": "string"
     }
@@ -136,6 +100,6 @@
   "required": [
     "type"
   ],
-  "title": "Query provider: jaeger",
+  "title": "Query provider: sqlite",
   "type": "object"
 }

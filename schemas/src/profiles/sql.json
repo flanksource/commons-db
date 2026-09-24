@@ -62,7 +62,11 @@
               "postgres",
               "mysql",
               "sql_server",
-              "clickhouse"
+              "clickhouse",
+              "sqlite"
+            ],
+            "sqlite": [
+              "sqlite"
             ],
             "sqlserver": [
               "sql_server"
@@ -86,7 +90,8 @@
             "postgres",
             "mysql",
             "sql_server",
-            "clickhouse"
+            "clickhouse",
+            "sqlite"
           ],
           "title": "Driver",
           "type": "string",
@@ -95,7 +100,8 @@
             "clickhouse": "clickhouse",
             "mysql": "mysql",
             "postgres": "postgres",
-            "sql_server": "sqlserver"
+            "sql_server": "sqlserver",
+            "sqlite": "database"
           }
         },
         "url": {
