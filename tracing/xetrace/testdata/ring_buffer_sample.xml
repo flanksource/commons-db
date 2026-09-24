@@ -7,17 +7,17 @@
     <data name="writes"><value>0</value></data>
     <data name="row_count"><value>1</value></data>
     <data name="statement"><value>SELECT COUNT(*) FROM AsActivity</value></data>
-    <action name="database_name" package="sqlserver"><value>OMA_DB</value></action>
-    <action name="client_app_name" package="sqlserver"><value>oipa-cli</value></action>
-    <action name="client_hostname" package="sqlserver"><value>oipa-app-0</value></action>
-    <action name="username" package="sqlserver"><value>oipa_user</value></action>
+    <action name="database_name" package="sqlserver"><value>warehouse</value></action>
+    <action name="client_app_name" package="sqlserver"><value>reporting</value></action>
+    <action name="client_hostname" package="sqlserver"><value>app-0</value></action>
+    <action name="username" package="sqlserver"><value>analytics</value></action>
     <action name="session_id" package="sqlserver"><value>73</value></action>
   </event>
   <event name="error_reported" package="sqlserver" timestamp="2026-04-15T10:23:46.500Z">
     <data name="error_number"><value>208</value></data>
     <data name="message"><value>Invalid object name 'NoSuchTable'.</value></data>
-    <action name="database_name" package="sqlserver"><value>OMA_DB</value></action>
+    <action name="database_name" package="sqlserver"><value>warehouse</value></action>
     <action name="session_id" package="sqlserver"><value>73</value></action>
-    <action name="username" package="sqlserver"><value>oipa_user</value></action>
+    <action name="username" package="sqlserver"><value>analytics</value></action>
   </event>
 </RingBufferTarget>

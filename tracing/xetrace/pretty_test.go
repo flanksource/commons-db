@@ -15,7 +15,7 @@ func fixtureEvent(overrides func(*Event)) Event {
 		CPUTime:      8 * time.Millisecond,
 		LogicalReads: 42,
 		RowCount:     1,
-		DatabaseName: "OMA_DB",
+		DatabaseName: "warehouse",
 		Username:     "sa",
 		SessionID:    73,
 		Statement:    "SELECT 1",
@@ -51,8 +51,8 @@ func TestStreamLine_InstanceWideShowsDatabase(t *testing.T) {
 	if !strings.Contains(got, "db=") {
 		t.Errorf("expected db= marker in instance-wide mode, got: %s", got)
 	}
-	if !strings.Contains(got, "OMA_DB") {
-		t.Errorf("expected OMA_DB in instance-wide mode, got: %s", got)
+	if !strings.Contains(got, "warehouse") {
+		t.Errorf("expected warehouse in instance-wide mode, got: %s", got)
 	}
 }
 

@@ -22,7 +22,7 @@ func TestClassifyStatement(t *testing.T) {
 		{"merge", "MERGE INTO AsActivity AS t USING src ON t.id = src.id", StmtMerge},
 		{"exec", "EXEC sp_who2", StmtExec},
 		{"execute spelled out", "EXECUTE sp_who2", StmtExec},
-		{"unwrapped oipa proc call", "EXEC asc_GetDepositValueList '9F1C', '2026-08-30', '2026-08-30', 100000", StmtExec},
+		{"unwrapped procedure call", "EXEC usp_GetOrderTotals '9F1C', '2026-08-30', '2026-08-30', 100000", StmtExec},
 		{"select wins over a later exec", "SELECT * FROM AsActivity WHERE x = 1 -- EXEC later\n", StmtSelect},
 		{"ddl create is other", "CREATE TABLE Foo (id int)", StmtOther},
 		{"set is other", "SET NOCOUNT ON", StmtOther},
@@ -63,8 +63,8 @@ func TestExtractTables(t *testing.T) {
 		// A stored-procedure call names the procedure, not the tables its body
 		// reads — the body is not in the trace text. Without this the whole
 		// event carries no tokens and any positive --table filter drops it.
-		{"exec names the procedure", "EXEC asc_GetDepositValueList '9F1C', '2026-08-30', 100000", []string{"asc_GetDepositValueList"}},
-		{"execute spelled out", "EXECUTE dbo.asc_GetFundValueList 1", []string{"asc_GetFundValueList"}},
+		{"exec names the procedure", "EXEC usp_GetOrderTotals '9F1C', '2026-08-30', 100000", []string{"usp_GetOrderTotals"}},
+		{"execute spelled out", "EXECUTE dbo.usp_GetFundValues 1", []string{"usp_GetFundValues"}},
 		{"exec args are not a table list", "EXEC p 1, 2", []string{"p"}},
 	}
 	for _, tc := range cases {
@@ -87,7 +87,7 @@ func TestEventFilterApply(t *testing.T) {
 	ins := ev("INSERT INTO AsCode (id) VALUES (1)")
 	join := ev("SELECT * FROM AsActivity a, AsClient c WHERE a.id = c.id")
 	noTable := ev("SET NOCOUNT ON")
-	proc := ev("EXEC asc_GetDepositValueList '9F1C', '2026-08-30', 100000")
+	proc := ev("EXEC usp_GetOrderTotals '9F1C', '2026-08-30', 100000")
 
 	cases := []struct {
 		name   string
@@ -112,9 +112,9 @@ func TestEventFilterApply(t *testing.T) {
 		// A stored-procedure call must be reachable by name and by type;
 		// before EXEC was classified it carried no tokens and every positive
 		// filter silently dropped it.
-		{"proc matched by name", EventFilter{Tables: []string{"asc_GetDepositValueList"}}, []Event{proc, sel}, []Event{proc}},
-		{"proc matched by wildcard", EventFilter{Tables: []string{"asc_*"}}, []Event{proc, sel}, []Event{proc}},
-		{"proc excluded by wildcard", EventFilter{Tables: []string{"!asc_*"}}, []Event{proc, sel}, []Event{sel}},
+		{"proc matched by name", EventFilter{Tables: []string{"usp_GetOrderTotals"}}, []Event{proc, sel}, []Event{proc}},
+		{"proc matched by wildcard", EventFilter{Tables: []string{"usp_*"}}, []Event{proc, sel}, []Event{proc}},
+		{"proc excluded by wildcard", EventFilter{Tables: []string{"!usp_*"}}, []Event{proc, sel}, []Event{sel}},
 		{"proc matched by type", EventFilter{Types: []string{"EXEC"}}, []Event{proc, sel, upd}, []Event{proc}},
 		{"exec is not DML", EventFilter{Types: []string{"DML"}}, []Event{proc, upd}, []Event{upd}},
 	}

@@ -27,7 +27,7 @@ func TestNest(t *testing.T) {
 		in := []Event{
 			act(EventSPStatementCompleted, "A", 1, "WITH T1 AS (SELECT TOP 1 …) SELECT …"),
 			act(EventSPStatementCompleted, "A", 2, "SELECT AsDepositValue.fundGuid …"),
-			act(EventRPCCompleted, "A", 3, "EXEC asc_GetDepositValueList '9F1C', 100000"),
+			act(EventRPCCompleted, "A", 3, "EXEC usp_GetOrderTotals '9F1C', 100000"),
 		}
 		got := Nest(in)
 

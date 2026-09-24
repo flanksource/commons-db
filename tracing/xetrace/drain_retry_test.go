@@ -168,7 +168,7 @@ func TestDrain_SuccessResetsFailureCounter(t *testing.T) {
 // error that retrying cannot fix must not be retried at all.
 func TestDrain_TerminalErrorAbortsImmediately(t *testing.T) {
 	setPollProps(t, "5")
-	sessionGone := fmt.Errorf("%w: %q", ErrSessionGone, "oipa_cli_trace_1_2")
+	sessionGone := fmt.Errorf("%w: %q", ErrSessionGone, "commons_db_trace_1_2")
 	p := &scriptedPoller{steps: []scriptedStep{{err: sessionGone}}}
 
 	var retried bool
@@ -198,7 +198,7 @@ func TestDrain_RetryPreservesCrossPollState(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	prepare := mkEvent(1, time.Millisecond, prepexecOf(
-		5089, "@P0 int", "EXEC ASC_GETINTAKERECORDITEMS @P0 ", "1000"), t0)
+		5089, "@P0 int", "EXEC USP_GETORDERITEMS @P0 ", "1000"), t0)
 	prepare.Name = EventRPCCompleted
 	deriveFromStatement(&prepare)
 
@@ -230,7 +230,7 @@ func TestDrain_RetryPreservesCrossPollState(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 events, got %v", sqls(got))
 	}
-	const want = "EXEC ASC_GETINTAKERECORDITEMS 2000"
+	const want = "EXEC USP_GETORDERITEMS 2000"
 	if got[1].SQL != want {
 		t.Errorf("handle cache did not survive the retry: got %q, want %q", got[1].SQL, want)
 	}

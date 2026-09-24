@@ -13,13 +13,14 @@ import (
 var _ = Describe("SQL XEvents provider options", func() {
 	It("projects every option onto the capture and drain settings", func() {
 		options := sqlXEventOptions{
-			Database:    "OIPA",
-			Users:       []string{"oipa_app", "!sa"},
-			Apps:        []string{"!go/mission-control-oipa"},
-			Hosts:       []string{"oipa-app-0"},
+			SessionName: "acme_capture",
+			Database:    "warehouse",
+			Users:       []string{"analytics", "!sa"},
+			Apps:        []string{"!go/reporting"},
+			Hosts:       []string{"app-0"},
 			Events:      []string{"sql_statement_completed", "sp_statement_completed"},
 			Types:       []string{"SELECT", "DML"},
-			Tables:      []string{"AsActivity"},
+			Tables:      []string{"orders"},
 			MinDuration: "10ms",
 			Poll:        "2s",
 			MaxEvents:   500,
@@ -28,16 +29,16 @@ var _ = Describe("SQL XEvents provider options", func() {
 
 		create, drain, err := options.captureOptions()
 		Expect(err).ToNot(HaveOccurred())
-		Expect(create.DatabaseName).To(Equal("OIPA"))
-		Expect(create.Users).To(Equal([]string{"oipa_app", "!sa"}))
-		Expect(create.Apps).To(Equal([]string{"!go/mission-control-oipa"}))
-		Expect(create.Hosts).To(Equal([]string{"oipa-app-0"}))
+		Expect(create.DatabaseName).To(Equal("warehouse"))
+		Expect(create.Users).To(Equal([]string{"analytics", "!sa"}))
+		Expect(create.Apps).To(Equal([]string{"!go/reporting"}))
+		Expect(create.Hosts).To(Equal([]string{"app-0"}))
 		Expect(create.Events).To(Equal([]string{"sql_statement_completed", "sp_statement_completed"}))
 		Expect(create.MinDurationMicros).To(Equal(int64(10000)))
 		Expect(create.MaxEvents).To(Equal(500))
 		Expect(create.MaxMemoryKB).To(Equal(8192))
 		Expect(create.Filter).To(Equal(xetrace.EventFilter{
-			Types: []string{"SELECT", "DML"}, Tables: []string{"AsActivity"},
+			Types: []string{"SELECT", "DML"}, Tables: []string{"orders"},
 		}))
 		Expect(drain.Interval).To(Equal(2 * time.Second))
 	})
@@ -45,7 +46,7 @@ var _ = Describe("SQL XEvents provider options", func() {
 	// Every unset knob must stay zero so xetrace applies its own documented
 	// default. A value restated here would be a second place to keep in step.
 	It("leaves unset options zero so xetrace defaults apply", func() {
-		create, drain, err := sqlXEventOptions{}.captureOptions()
+		create, drain, err := sqlXEventOptions{SessionName: "acme_capture"}.captureOptions()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(create.Events).To(BeEmpty())
 		Expect(create.MinDurationMicros).To(BeZero())
@@ -56,7 +57,8 @@ var _ = Describe("SQL XEvents provider options", func() {
 
 	It("flattens and de-duplicates a comma-joined event list", func() {
 		create, _, err := sqlXEventOptions{
-			Events: []string{"rpc_completed,sql_statement_completed", "rpc_completed"},
+			SessionName: "acme_capture",
+			Events:      []string{"rpc_completed,sql_statement_completed", "rpc_completed"},
 		}.captureOptions()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(create.Events).To(Equal([]string{"rpc_completed", "sql_statement_completed"}))
@@ -68,19 +70,33 @@ var _ = Describe("SQL XEvents provider options", func() {
 			Expect(err).To(HaveOccurred())
 			Expect(err.Error()).To(ContainSubstring(message))
 		},
-		Entry("unknown event", sqlXEventOptions{Events: []string{"lock_acquired"}}, `unsupported event "lock_acquired"`),
-		Entry("unparseable minimum duration", sqlXEventOptions{MinDuration: "soon"}, `minDuration "soon"`),
-		Entry("negative minimum duration", sqlXEventOptions{MinDuration: "-1s"}, `minDuration "-1s": must not be negative`),
-		Entry("unparseable poll", sqlXEventOptions{Poll: "often"}, `poll "often"`),
-		Entry("negative poll", sqlXEventOptions{Poll: "-1s"}, `poll "-1s": must not be negative`),
-		Entry("negative event cap", sqlXEventOptions{MaxEvents: -1}, "maxEvents -1: must not be negative"),
-		Entry("negative memory cap", sqlXEventOptions{MaxMemoryKB: -1}, "maxMemoryKb -1: must not be negative"),
+		Entry("unknown event", sqlXEventOptions{SessionName: "acme_capture", Events: []string{"lock_acquired"}}, `unsupported event "lock_acquired"`),
+		Entry("unparseable minimum duration", sqlXEventOptions{SessionName: "acme_capture", MinDuration: "soon"}, `minDuration "soon"`),
+		Entry("negative minimum duration", sqlXEventOptions{SessionName: "acme_capture", MinDuration: "-1s"}, `minDuration "-1s": must not be negative`),
+		Entry("unparseable poll", sqlXEventOptions{SessionName: "acme_capture", Poll: "often"}, `poll "often"`),
+		Entry("negative poll", sqlXEventOptions{SessionName: "acme_capture", Poll: "-1s"}, `poll "-1s": must not be negative`),
+		Entry("negative event cap", sqlXEventOptions{SessionName: "acme_capture", MaxEvents: -1}, "maxEvents -1: must not be negative"),
+		Entry("negative memory cap", sqlXEventOptions{SessionName: "acme_capture", MaxMemoryKB: -1}, "maxMemoryKb -1: must not be negative"),
 		Entry("a named database and the whole instance",
-			sqlXEventOptions{Database: "OIPA", AllDatabases: true}, "mutually exclusive"),
+			sqlXEventOptions{SessionName: "acme_capture", Database: "warehouse", AllDatabases: true}, "mutually exclusive"),
+		Entry("no session name", sqlXEventOptions{}, "sessionName is required"),
+		Entry("a blank session name", sqlXEventOptions{SessionName: "  "}, "sessionName is required"),
 	)
 
+	// The name reaches the server, where it must not collide with a capture the
+	// same profile already started — and must still say whose it is.
+	It("keeps the caller's name and makes it unique per session", func() {
+		first, _, err := sqlXEventOptions{SessionName: "acme_capture"}.captureOptions()
+		Expect(err).ToNot(HaveOccurred())
+		second, _, err := sqlXEventOptions{SessionName: "acme_capture"}.captureOptions()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(first.Name).To(HavePrefix("acme_capture_"))
+		Expect(second.Name).To(HavePrefix("acme_capture_"))
+		Expect(first.Name).ToNot(Equal(second.Name))
+	})
+
 	It("carries an instance-wide capture through as its own flag", func() {
-		create, _, err := sqlXEventOptions{AllDatabases: true}.captureOptions()
+		create, _, err := sqlXEventOptions{SessionName: "acme_capture", AllDatabases: true}.captureOptions()
 		Expect(err).ToNot(HaveOccurred())
 		Expect(create.AllDatabases).To(BeTrue())
 		Expect(create.DatabaseName).To(BeEmpty())

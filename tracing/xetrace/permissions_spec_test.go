@@ -15,7 +15,7 @@ func yes() *int {
 var _ = Describe("XEvent permission mapping", func() {
 	It("requires the compatible parent and state permissions before SQL Server 2022", func() {
 		report, err := buildPermissionReport(permissionProbeRow{
-			Login:               "oipa_app",
+			Login:               "analytics",
 			ProductMajorVersion: 15,
 		})
 
@@ -26,14 +26,14 @@ var _ = Describe("XEvent permission mapping", func() {
 			"VIEW SERVER STATE",
 		}))
 		Expect(report.GrantStatements).To(Equal([]string{
-			"GRANT ALTER ANY EVENT SESSION TO [oipa_app];",
-			"GRANT VIEW SERVER STATE TO [oipa_app];",
+			"GRANT ALTER ANY EVENT SESSION TO [analytics];",
+			"GRANT VIEW SERVER STATE TO [analytics];",
 		}))
 	})
 
 	It("requires granular lifecycle and performance-state permissions on SQL Server 2022", func() {
 		report, err := buildPermissionReport(permissionProbeRow{
-			Login:               "oipa_app",
+			Login:               "analytics",
 			ProductMajorVersion: 16,
 		})
 
@@ -83,7 +83,7 @@ var _ = Describe("XEvent permission mapping", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(report.Granted).To(BeTrue())
 
-		_, err = buildPermissionReport(permissionProbeRow{Login: "oipa_app"})
+		_, err = buildPermissionReport(permissionProbeRow{Login: "analytics"})
 		Expect(err).To(MatchError("detect SQL Server product major version: received 0"))
 	})
 
@@ -99,13 +99,13 @@ var _ = Describe("XEvent permission mapping", func() {
 
 	It("renders an actionable permission error", func() {
 		err := (&PermissionError{Report: PermissionReport{
-			Login:              "oipa_app",
+			Login:              "analytics",
 			MissingPermissions: []string{"ALTER ANY EVENT SESSION"},
-			GrantStatements:    []string{"GRANT ALTER ANY EVENT SESSION TO [oipa_app];"},
+			GrantStatements:    []string{"GRANT ALTER ANY EVENT SESSION TO [analytics];"},
 		}}).Error()
 
-		Expect(err).To(ContainSubstring("login [oipa_app]"))
+		Expect(err).To(ContainSubstring("login [analytics]"))
 		Expect(err).To(ContainSubstring("missing ALTER ANY EVENT SESSION"))
-		Expect(err).To(ContainSubstring("GRANT ALTER ANY EVENT SESSION TO [oipa_app];"))
+		Expect(err).To(ContainSubstring("GRANT ALTER ANY EVENT SESSION TO [analytics];"))
 	})
 })

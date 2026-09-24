@@ -50,7 +50,7 @@ func TestIsTransientPollError(t *testing.T) {
 		{"no rows", sql.ErrNoRows, false},
 		{"context canceled", context.Canceled, false},
 		{"unrecognised", errors.New("boom"), false},
-		{"permission denied", &PermissionError{Report: PermissionReport{Login: "oipa_app"}}, false},
+		{"permission denied", &PermissionError{Report: PermissionReport{Login: "analytics"}}, false},
 		{"parse failure", fmt.Errorf("decode ring_buffer xml: %w", errors.New("EOF token")), false},
 	}
 

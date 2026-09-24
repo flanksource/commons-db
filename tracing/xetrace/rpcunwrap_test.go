@@ -23,9 +23,9 @@ func TestUnwrapRPC(t *testing.T) {
 		{
 			name: "sp_prepexec single int param",
 			in: `declare @p1 int set @p1=5089 exec sp_prepexec @p1 output,` +
-				`N'@P0 int',N'EXEC ASC_GETINTAKERECORDITEMS @P0 ',1000 select @p1`,
+				`N'@P0 int',N'EXEC USP_GETORDERITEMS @P0 ',1000 select @p1`,
 			wantOK: true,
-			want:   "EXEC ASC_GETINTAKERECORDITEMS 1000",
+			want:   "EXEC USP_GETORDERITEMS 1000",
 		},
 		{
 			name: "sp_prepexec nvarchar param with nested parens",
@@ -92,9 +92,9 @@ func TestUnwrapRPC(t *testing.T) {
 		},
 		{
 			name:   "bare positional call is passed through untouched",
-			in:     `{call asc_GetDepositValueList(?, ?, ?, ?)}`,
+			in:     `{call usp_GetOrderTotals(?, ?, ?, ?)}`,
 			wantOK: false,
-			want:   `{call asc_GetDepositValueList(?, ?, ?, ?)}`,
+			want:   `{call usp_GetOrderTotals(?, ?, ?, ?)}`,
 		},
 		{
 			name:   "whole-word replacement does not touch @P10 when @P1 provided",
@@ -137,7 +137,7 @@ func itoa(n int) string {
 }
 
 func TestPrepexecHandle(t *testing.T) {
-	in := prepexecOf(5089, "@P0 int", "EXEC ASC_GETINTAKERECORDITEMS @P0 ", "1000")
+	in := prepexecOf(5089, "@P0 int", "EXEC USP_GETORDERITEMS @P0 ", "1000")
 	got, ok := prepexecHandle(in)
 	if !ok || got != 5089 {
 		t.Errorf("prepexecHandle() = %d, %v; want 5089, true", got, ok)
@@ -154,7 +154,7 @@ func TestHandleCacheResolvesSPExecute(t *testing.T) {
 	prepare := toEventFor(prepexecOf(
 		5089,
 		"@P0 nvarchar(4000),@P1 datetime,@P2 datetime,@P3 int",
-		"EXEC asc_GetDepositValueList @P0,@P1,@P2,@P3 ",
+		"EXEC usp_GetOrderTotals @P0,@P1,@P2,@P3 ",
 		"N'9F1C',N'2026-08-30 00:00:00',N'2026-08-30 00:00:00',100000",
 	))
 	cache.Observe(prepare)
@@ -164,7 +164,7 @@ func TestHandleCacheResolvesSPExecute(t *testing.T) {
 	reuse := toEventFor(`exec sp_execute 5089,N'A2B3',N'2026-08-31 00:00:00',N'2026-08-31 00:00:00',7`)
 	cache.Resolve(&reuse)
 
-	want := "EXEC asc_GetDepositValueList 'A2B3','2026-08-31 00:00:00','2026-08-31 00:00:00',7"
+	want := "EXEC usp_GetOrderTotals 'A2B3','2026-08-31 00:00:00','2026-08-31 00:00:00',7"
 	if reuse.SQL != want {
 		t.Errorf("resolved SQL\n got = %q\nwant = %q", reuse.SQL, want)
 	}
@@ -175,8 +175,8 @@ func TestHandleCacheResolvesSPExecute(t *testing.T) {
 	if reuse.StatementType != StmtExec {
 		t.Errorf("StatementType = %q, want %q", reuse.StatementType, StmtExec)
 	}
-	if len(reuse.Tables) != 1 || reuse.Tables[0] != "asc_GetDepositValueList" {
-		t.Errorf("Tables = %#v, want [asc_GetDepositValueList]", reuse.Tables)
+	if len(reuse.Tables) != 1 || reuse.Tables[0] != "usp_GetOrderTotals" {
+		t.Errorf("Tables = %#v, want [usp_GetOrderTotals]", reuse.Tables)
 	}
 }
 
@@ -204,7 +204,7 @@ func TestParamsUnavailableDetection(t *testing.T) {
 		sql  string
 		want bool
 	}{
-		{"positional call the driver did not expand", `{call asc_GetDepositValueList(?, ?, ?, ?)}`, true},
+		{"positional call the driver did not expand", `{call usp_GetOrderTotals(?, ?, ?, ?)}`, true},
 		{"call without braces", `call p(?, ?)`, true},
 		{"unsubstituted placeholder left after unwrap", "EXEC p @P0, @P1", true},
 		{"fully substituted call", "EXEC p 1, 'x'", false},
