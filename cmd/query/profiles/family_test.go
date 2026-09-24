@@ -319,3 +319,29 @@ func TestProfileFamilySurfaceKeepsTheProfilePrefixedKey(t *testing.T) {
 		t.Errorf("surface path = %q, want jms/incoming", surface.Path)
 	}
 }
+
+// Listing is the read a surface performs when a profile is opened. For a trace
+// it must refuse — a capture that starts because someone navigated to a page is
+// exactly what issue #102 is about — and the refusal must name the endpoint that
+// does start one, rather than an internal function.
+func TestExecuteRowsRefusesTraceProfile(t *testing.T) {
+	trace := query.Profile{
+		Name:     "sql-capture",
+		Provider: query.ProviderConfig{Type: "sqlserver-xevent"},
+		Trace:    &query.TraceSpec{},
+	}
+	service, _ := newProfileServiceTest(t, trace)
+
+	rows, err := service.executeRows(context.Background(), trace.Name, nil)
+	if rows != nil {
+		t.Fatalf("a refused list must return no rows, got %d", len(rows))
+	}
+	if err == nil {
+		t.Fatal("listing a trace profile must fail")
+	}
+	for _, want := range []string{`profile "sql-capture" is a trace`, "/sessions"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %q does not mention %q", err, want)
+		}
+	}
+}

@@ -73,10 +73,10 @@ var _ = Describe("filter value cache", func() {
 			},
 			Key: "filter.status", Limit: 20,
 		}
-		first := querycontext.New().WithConnectionResolver(func(string) (*models.Connection, error) {
+		first := querycontext.New().WithConnectionResolver(func(querycontext.Context, string) (*models.Connection, error) {
 			return nil, nil
 		})
-		second := querycontext.New().WithConnectionResolver(func(string) (*models.Connection, error) {
+		second := querycontext.New().WithConnectionResolver(func(querycontext.Context, string) (*models.Connection, error) {
 			return nil, nil
 		})
 

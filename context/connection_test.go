@@ -18,7 +18,7 @@ var _ = ginkgo.Describe("Connection Tests", func() {
 			updatedAt := time.Date(2026, time.August, 22, 10, 0, 0, 0, time.UTC)
 			connection := &models.Connection{ID: uuid.New(), Name: "analytics", UpdatedAt: updatedAt}
 			resolverFactory := func() ConnectionResolver {
-				return func(string) (*models.Connection, error) { return connection, nil }
+				return func(Context, string) (*models.Connection, error) { return connection, nil }
 			}
 			first := NewContext(context.Background()).WithConnectionResolver(resolverFactory())
 
@@ -52,7 +52,7 @@ var _ = ginkgo.Describe("Connection Tests", func() {
 
 	ginkgo.It("resolves a virtual connection before consulting the database", func() {
 		virtual := &models.Connection{Name: "snapshot", Namespace: "reconciliations", Type: models.ConnectionTypeSQLite}
-		ctx := NewContext(context.Background()).WithConnectionResolver(func(reference string) (*models.Connection, error) {
+		ctx := NewContext(context.Background()).WithConnectionResolver(func(_ Context, reference string) (*models.Connection, error) {
 			if reference == "connection://reconciliations/snapshot" {
 				return virtual, nil
 			}

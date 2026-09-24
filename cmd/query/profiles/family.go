@@ -283,6 +283,16 @@ func (s *Service) executeRows(ctx context.Context, name string, opts map[string]
 	if err != nil {
 		return nil, err
 	}
+	// A trace or top profile captures data while a session runs, so listing it
+	// has nothing to read until one has. Refusing here — rather than letting
+	// query.Execute answer with its own "use ExecuteStream" — is what stops a
+	// surface starting a capture merely because someone opened the profile, and
+	// it names the endpoint that does start one.
+	if kind := live.Profile.Kind(); kind != query.KindQuery {
+		return nil, fmt.Errorf(
+			"profile %q is a %s and is not read by listing it; start a session with POST .../profile/%s/sessions and read its events",
+			name, kind, name)
+	}
 	params := toParams(opts)
 	release, err := s.prepareRead(ctx, live.Profile, params)
 	if err != nil {

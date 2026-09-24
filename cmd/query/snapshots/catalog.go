@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 )
@@ -89,7 +90,7 @@ func (m *Manager) ListConnections() []*models.Connection {
 	return connections
 }
 
-func (m *Manager) ResolveConnection(reference string) (*models.Connection, error) {
+func (m *Manager) ResolveConnection(_ dbcontext.Context, reference string) (*models.Connection, error) {
 	m.mu.RLock()
 	_, expired := m.expired[reference]
 	var id string

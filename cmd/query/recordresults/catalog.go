@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
@@ -69,7 +70,7 @@ func (r *Registry) owns(reference string) bool {
 // ResolveConnection is the dbcontext.ConnectionResolver for the index
 // connection. Any other reference is not the registry's to answer, so it
 // reports none and resolution carries on.
-func (r *Registry) ResolveConnection(reference string) (*models.Connection, error) {
+func (r *Registry) ResolveConnection(_ dbcontext.Context, reference string) (*models.Connection, error) {
 	if !r.owns(reference) {
 		return nil, nil
 	}

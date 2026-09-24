@@ -36,6 +36,12 @@ func BuildCreateSQL(opts CreateOptions) (string, error) {
 	if opts.Name == "" {
 		return "", fmt.Errorf("session name is required")
 	}
+	// Naming a database and asking for every database are contradictory, and
+	// honouring either one silently would answer a question the caller did not
+	// ask. Neither is a safe guess, so the pair is refused.
+	if opts.AllDatabases && opts.DatabaseName != "" {
+		return "", fmt.Errorf("database %q and allDatabases are mutually exclusive: capture one database or the whole instance, not both", opts.DatabaseName)
+	}
 	events, err := NormalizeEvents(opts.Events)
 	if err != nil {
 		return "", err

@@ -25,7 +25,10 @@ type BodyDecoder func(context.Context, map[string]any) (map[string]any, error)
 
 type VirtualConnectionProvider interface {
 	ListConnections() []*models.Connection
-	ResolveConnection(string) (*models.Connection, error)
+	// ResolveConnection takes the context for the same reason
+	// dbcontext.ConnectionResolver does: a reference alone does not always
+	// identify a connection, and the same provider answers it here and there.
+	ResolveConnection(dbcontext.Context, string) (*models.Connection, error)
 }
 
 type Options struct {
@@ -236,7 +239,7 @@ func (s *Service) resolveVirtual(id string) (*models.Connection, error) {
 	if s.virtual == nil {
 		return nil, nil
 	}
-	return s.virtual.ResolveConnection(id)
+	return s.virtual.ResolveConnection(s.context(), id)
 }
 
 func (s *Service) findConnection(db *gorm.DB, id string) (*models.Connection, error) {

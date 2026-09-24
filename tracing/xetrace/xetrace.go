@@ -99,7 +99,16 @@ type CreateOptions struct {
 	// Name of the XE session. If empty, a unique name is generated.
 	Name string
 	// DatabaseName scopes the session to one database; empty uses DB_NAME().
+	// Set AllDatabases instead to capture across the whole instance.
 	DatabaseName string
+	// AllDatabases captures every database on the instance rather than one.
+	//
+	// It exists because an empty DatabaseName already means "the connection's
+	// database", and a second meaning for the same empty value is how one
+	// caller ends up narrowing an instance-wide capture to a single database
+	// without saying so. Instance-wide is the wider, more surprising scope, so
+	// it is the one that has to be asked for.
+	AllDatabases bool
 	// Users scopes the session by SQL login using collections.MatchItem
 	// patterns (exact, `*` wildcard, `!` exclusion; repeatable). Empty captures
 	// all users. Translated into the XE WHERE predicate so the filter runs in
@@ -154,7 +163,7 @@ func Create(ctx context.Context, pool *sql.DB, opts CreateOptions) (_ *Session, 
 	if err != nil {
 		return nil, err
 	}
-	if opts.DatabaseName == "" {
+	if !opts.AllDatabases && opts.DatabaseName == "" {
 		opts.DatabaseName, err = CurrentDatabase(ctx, db)
 		if err != nil {
 			return nil, err
@@ -205,6 +214,15 @@ func Create(ctx context.Context, pool *sql.DB, opts CreateOptions) (_ *Session, 
 
 	return &Session{Name: opts.Name, db: db, pool: pool, opts: opts}, nil
 }
+
+// Database is the database this session actually scoped to: the one the caller
+// named, or the connection's own when they named none. Empty means the capture
+// spans the whole instance.
+//
+// Create resolves that for itself, so without this a caller wanting to report
+// or render the scope would have to ask the server the same question a second
+// time and hope it got the same answer.
+func (s *Session) Database() string { return s.opts.DatabaseName }
 
 // dropTimeout bounds Session.Drop. Named (and exposed via DropTimeout) because
 // a caller waiting for a drain to finish has to budget for the final poll AND

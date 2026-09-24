@@ -137,7 +137,7 @@ func (ctx Context) ConnectionCacheIdentity(connectionString string) (string, err
 //   - the UUID of the connection.
 func FindConnectionByURL(ctx Context, connectionString string) (*models.Connection, error) {
 	if resolver := ctx.connectionResolver(); resolver != nil {
-		connection, err := resolver(connectionString)
+		connection, err := resolver(ctx, connectionString)
 		if err != nil {
 			return nil, err
 		}
