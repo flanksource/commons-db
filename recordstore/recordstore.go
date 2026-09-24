@@ -93,9 +93,9 @@ type Meta struct {
 	// complete up to HighSeq and missing whatever that append carried.
 	Capped bool `json:"capped,omitempty"`
 
-	// Sealed reports that the writer declared the stream complete: it holds
-	// every row it ever will, so a reader that has read through HighSeq is done
-	// rather than waiting for more.
+	// Sealed reports that the writer declared the stream complete for now.
+	// A reader that has read through HighSeq is done until an explicit Reopen;
+	// readers revisiting a stream must fetch Meta again.
 	Sealed bool `json:"sealed,omitempty"`
 }
 
@@ -169,6 +169,13 @@ type Backend interface {
 	Delete(ctx context.Context, stream string) error
 
 	Close() error
+}
+
+// Reopener permits a writer to resume a sealed stream after checking that its
+// generation is still the one the caller recorded. Readers must take a fresh
+// Meta after a resume; an earlier sealed snapshot remains final for its window.
+type Reopener interface {
+	Reopen(ctx context.Context, stream, generation string) error
 }
 
 var (

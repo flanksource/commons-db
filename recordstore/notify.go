@@ -102,6 +102,18 @@ func (n *Notifier) Seal(ctx context.Context, stream string) error {
 	return err
 }
 
+func (n *Notifier) Reopen(ctx context.Context, stream, generation string) error {
+	reopener, ok := n.backend.(Reopener)
+	if !ok {
+		return fmt.Errorf("record store for %q cannot reopen streams", stream)
+	}
+	if err := reopener.Reopen(ctx, stream, generation); err != nil {
+		return err
+	}
+	n.wake(stream)
+	return nil
+}
+
 func (n *Notifier) Delete(ctx context.Context, stream string) error {
 	err := n.backend.Delete(ctx, stream)
 	n.wake(stream)
