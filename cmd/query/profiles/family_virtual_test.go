@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/flanksource/clicky/entity"
+	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/rpc"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -72,7 +73,7 @@ var _ = Describe("the profile family over a virtual profile", func() {
 			root, &rpc.OpenAPIConfig{Title: "Query", Version: "0.1.0"},
 		)
 		mux := http.NewServeMux()
-		server.RegisterRoutes(mux)
+		server.RegisterRoutes(route.NewRouter(mux))
 
 		response := get(mux, "/api/v1/profile/profile-results-spans?__lookup=filters", "application/json+clicky")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
@@ -111,7 +112,7 @@ var _ = Describe("the profile family over a virtual profile", func() {
 			},
 		)
 		mux := http.NewServeMux()
-		server.RegisterRoutes(mux)
+		server.RegisterRoutes(route.NewRouter(mux))
 
 		response := get(mux, "/api/openapi.json", "application/json")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())

@@ -11,6 +11,7 @@ import (
 
 	"github.com/flanksource/clicky/rpc"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
@@ -181,7 +182,8 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		&rpc.OpenAPIConfig{Title: "Query", Description: "Connections, profiles and execution", Version: "0.1.0"},
 	)
 	serverMux := http.NewServeMux()
-	server.RegisterRoutes(serverMux)
+	router := route.NewRouter(serverMux)
+	server.RegisterRoutes(router)
 	mux := http.NewServeMux()
 	openAPI, err := a.Profiles.OpenAPIHandler(root, server.ConverterConfig())
 	if err != nil {
@@ -197,7 +199,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	// Live run progress and controls. The schedule store is passed as the run
 	// source so a finished run evicted from memory still answers, which is what
 	// makes a run's own page survive a restart.
-	task.RegisterHandlersWithSource(serverMux, "/api/v1", scheduleStore)
+	task.RegisterHandlersWithSource(router, "/api/v1", scheduleStore)
 	mux.Handle("/api/", serverMux)
 	mux.Handle("/health", serverMux)
 

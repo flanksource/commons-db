@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/clicky/entity"
+	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -101,7 +102,7 @@ func newFamilyMux() *http.ServeMux {
 		&rpc.OpenAPIConfig{Title: "Query", Version: "0.1.0"},
 	)
 	mux := http.NewServeMux()
-	server.RegisterRoutes(mux)
+	server.RegisterRoutes(route.NewRouter(mux))
 	return mux
 }
 

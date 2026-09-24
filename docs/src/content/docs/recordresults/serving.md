@@ -35,7 +35,7 @@ rpcServer := rpc.NewSwaggerServer(
 	root, &rpc.OpenAPIConfig{Title: "acme", Version: version},
 )
 mux := http.NewServeMux()
-rpcServer.RegisterRoutes(mux)
+rpcServer.RegisterRoutes(route.NewRouter(mux))
 
 handler, err := service.Handler("/api/v1", mux)
 ```

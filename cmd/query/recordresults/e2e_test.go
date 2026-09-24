@@ -17,6 +17,7 @@ import (
 	"github.com/flanksource/clicky/cache"
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/formatters"
+	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/rpc"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -180,7 +181,7 @@ func serveService(service *profiles.Service) http.Handler {
 		root, &rpc.OpenAPIConfig{Title: "Query", Version: "0.1.0"},
 	)
 	mux := http.NewServeMux()
-	server.RegisterRoutes(mux)
+	server.RegisterRoutes(route.NewRouter(mux))
 	handler, err := service.Handler("/api/v1", mux)
 	Expect(err).ToNot(HaveOccurred())
 	return handler
