@@ -3,6 +3,7 @@ package profiles
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 
@@ -518,4 +519,78 @@ func TestProfileParamAndColumnFilterNamesDoNotCollide(t *testing.T) {
 	if profileParamFilterName("logs", "service") == profileFilterName("logs", "service") {
 		t.Fatal("param and column filter names collide")
 	}
+}
+
+// A trace profile's only entry point is its session start. The run operation is
+// what a generic surface executes the moment a profile is opened, and executing
+// it would either start a capture nobody asked for or fail — so a trace must not
+// advertise one.
+func TestProfileOpenAPITraceOffersOnlySessionStart(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "sql-capture",
+		Provider: query.ProviderConfig{Type: "sqlserver-xevent"},
+		Trace:    &query.TraceSpec{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/api/v1/profile/profile-sql-capture"
+	if _, listed := spec.Paths[path]; listed {
+		t.Fatalf("a trace profile must advertise no run operation, got %+v", spec.Paths[path])
+	}
+	start, ok := spec.Paths[path+"/sessions"]["post"]
+	if !ok {
+		t.Fatalf("a trace profile must advertise its session start; paths = %v", specPathKeys(spec))
+	}
+	if start.OperationID != "start-profile-sql-capture-session" {
+		t.Fatalf("session start operation id = %q", start.OperationID)
+	}
+}
+
+// A top profile is sampled by the same session machinery and is refused by the
+// same single-shot read, so it must be treated the same way.
+func TestProfileOpenAPITopOffersOnlySessionStart(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "hot-queries",
+		Provider: query.ProviderConfig{Type: "postgres"},
+		Top:      &query.TopSpec{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/api/v1/profile/profile-hot-queries"
+	if _, listed := spec.Paths[path]; listed {
+		t.Fatalf("a top profile must advertise no run operation, got %+v", spec.Paths[path])
+	}
+	if _, ok := spec.Paths[path+"/sessions"]["post"]; !ok {
+		t.Fatalf("a top profile must advertise its session start; paths = %v", specPathKeys(spec))
+	}
+}
+
+// The gate is on the profile's kind, not on its provider: an ordinary query
+// profile keeps the run operation it has always had.
+func TestProfileOpenAPIQueryKeepsRunOperation(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, query.Profile{
+		Name:     "sales",
+		Provider: query.ProviderConfig{Type: "postgres"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	run, ok := spec.Paths["/api/v1/profile/profile-sales"]["get"]
+	if !ok {
+		t.Fatalf("a query profile must keep its run operation; paths = %v", specPathKeys(spec))
+	}
+	if run.Clicky == nil || run.Clicky.Verb != "list" {
+		t.Fatalf("run operation clicky meta = %+v", run.Clicky)
+	}
+}
+
+func specPathKeys(spec *rpc.OpenAPISpec) []string {
+	keys := make([]string, 0, len(spec.Paths))
+	for key := range spec.Paths {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

@@ -1,45 +1,59 @@
-# SQL Server trace as a logs profile: the column mapping lives in the SELECT
-# aliases, so the provider rows already carry the canonical LogsTable keys
-# (timestamp/level/pod/logger/thread/message + duration). This is the declarative
-# equivalent of the SQL Server plugin's hard-coded eventToLog(). Filtering is
-# server-side via the min_duration_us param templated into the WHERE clause.
+# SQL Server statements captured live through an Extended Events session.
+#
+# This is a trace, not a query: opening it reads nothing. A session is started
+# explicitly (POST .../profile/{name}/sessions), streams events while it runs,
+# and is stopped — the `trace:` block bounds how long it may run and how many
+# events it may hold.
+#
+# The provider emits one row per captured event, keyed by the event's own JSON
+# fields, and the CEL columns map those onto the canonical LogsTable keys
+# (timestamp/level/pod/logger/thread/message + duration).
 profile: SQL Server Trace
 render: logs
 provider:
-  type: sqlserver
+  type: sqlserver-xevent
   connection: connection://app-db
-query: |
-  SELECT TOP (500)
-    start_time    AS timestamp,
-    event_name    AS level,
-    database_name AS pod,
-    login_name    AS logger,
-    session_id    AS thread,
-    statement     AS message,
-    duration      AS duration
-  FROM xe_trace_events
-  WHERE duration >= {{.params.min_duration_us}}
-  ORDER BY start_time DESC
+  options:
+    # Statements inside stored procedures need sp_statement_completed, which is
+    # opt-in: it changes both the volume and the shape of every capture.
+    events:
+      - sql_statement_completed
+      - rpc_completed
+      - sql_batch_completed
+      - error_reported
+    # Filtering by duration happens in the SQL Server predicate, so a slow-query
+    # trace never pays to ship the fast statements it would drop anyway.
+    minDuration: "{{.params.min_duration}}"
+trace:
+  maxDuration: 5m
+  maxEvents: 10000
 params:
-  - name: min_duration_us
-    label: Min duration (µs)
-    type: number
-    default: 0
+  - name: min_duration
+    label: Min duration
+    type: string
+    default: 0s
 columns:
   - name: timestamp
     label: Time
     type: datetime
+    cel: row.timestamp
   - name: level
     label: Event
     type: status
+    cel: row.name
   - name: pod
     label: Database
+    cel: row.database_name
   - name: logger
     label: User
+    cel: row.username
   - name: thread
     label: SPID
+    cel: string(row.session_id)
   - name: message
     label: Statement
+    cel: row.statement
   - name: duration
     label: Duration
     type: duration
+    cel: row.duration

@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
@@ -208,13 +209,13 @@ var _ = Describe("Registry", func() {
 
 	It("resolves its own index connection by its namespaced reference and its id", func() {
 		registry, index := newRegistry()
-		connection, err := registry.ResolveConnection("connection://trace-results/index")
+		connection, err := registry.ResolveConnection(dbcontext.New(), "connection://trace-results/index")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(connection).ToNot(BeNil())
 		Expect(connection.Type).To(Equal(models.ConnectionTypeSQLite))
 		Expect(connection.URL).To(Equal(index.ReadDSN()))
 
-		byID, err := registry.ResolveConnection(connection.ID.String())
+		byID, err := registry.ResolveConnection(dbcontext.New(), connection.ID.String())
 		Expect(err).ToNot(HaveOccurred())
 		Expect(byID).To(Equal(connection))
 	})
@@ -225,7 +226,7 @@ var _ = Describe("Registry", func() {
 	DescribeTable("leaves every reference that is not namespaced to it alone",
 		func(reference string) {
 			registry, _ := newRegistry()
-			connection, err := registry.ResolveConnection(reference)
+			connection, err := registry.ResolveConnection(dbcontext.New(), reference)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(connection).To(BeNil())
 		},

@@ -37,7 +37,7 @@ var _ = Describe("Connection logging", func() {
 		query.RegisterProvider(provider)
 		buffer := logger.NewBufferedLogger(20)
 		buffer.SetLogLevel(logger.Trace4)
-		ctx := dbcontext.New(commons.WithLogger(buffer)).WithConnectionResolver(func(string) (*models.Connection, error) {
+		ctx := dbcontext.New(commons.WithLogger(buffer)).WithConnectionResolver(func(dbcontext.Context, string) (*models.Connection, error) {
 			return &models.Connection{
 				Name: "warehouse",
 				Type: models.ConnectionTypePostgres,
@@ -121,7 +121,7 @@ var _ = Describe("Connection logging", func() {
 		query.RegisterProvider(provider)
 		buffer := logger.NewBufferedLogger(20)
 		buffer.SetLogLevel(logger.Trace4)
-		ctx := dbcontext.New(commons.WithLogger(buffer)).WithConnectionResolver(func(string) (*models.Connection, error) {
+		ctx := dbcontext.New(commons.WithLogger(buffer)).WithConnectionResolver(func(dbcontext.Context, string) (*models.Connection, error) {
 			return &models.Connection{
 				Name: "warehouse",
 				Type: models.ConnectionTypePostgres,
