@@ -416,5 +416,22 @@ func (b *Backend) Seal(_ context.Context, stream string) error {
 	return b.writeSidecar(state)
 }
 
+func (b *Backend) Reopen(_ context.Context, stream, generation string) error {
+	if err := recordstore.ValidateStream(stream); err != nil {
+		return err
+	}
+	unlock := b.locks.Lock(stream)
+	defer unlock()
+	state, err := b.find(stream)
+	if err != nil {
+		return err
+	}
+	if !state.Sealed || state.Generation != generation || generation == "" {
+		return fmt.Errorf("stream %q: sealed generation %q was not found", stream, generation)
+	}
+	state.Sealed, state.UpdatedAt = false, b.now()
+	return b.writeSidecar(state)
+}
+
 // Close releases nothing: every call opens and closes its own files.
 func (b *Backend) Close() error { return nil }

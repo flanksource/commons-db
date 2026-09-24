@@ -11,6 +11,21 @@ import (
 )
 
 func (s *suite) sealSpecs() {
+	ginkgo.It("reopens a sealed generation and continues its sequence without changing existing rows", func() {
+		s.appendRows("run-1", SampleRows(1, 2))
+		generation := s.meta("run-1").Generation
+		gomega.Expect(s.backend.Seal(s.ctx, "run-1")).To(gomega.Succeed())
+		reopener, ok := s.backend.(recordstore.Reopener)
+		gomega.Expect(ok).To(gomega.BeTrue())
+		gomega.Expect(reopener.Reopen(s.ctx, "run-1", "wrong-generation")).To(gomega.HaveOccurred())
+		gomega.Expect(s.meta("run-1").Sealed).To(gomega.BeTrue())
+		gomega.Expect(reopener.Reopen(s.ctx, "run-1", generation)).To(gomega.Succeed())
+		gomega.Expect(s.appendRows("run-1", SampleRows(3, 3))).To(gomega.Equal(recordstore.Window{From: 3, To: 3}))
+		gomega.Expect(described(s.meta("run-1"))).To(gomega.Equal(recordstore.Meta{
+			Stream: "run-1", Kind: Kind, Total: 3, LowSeq: 1, HighSeq: 3,
+		}))
+	})
+
 	ginkgo.It("refuses an append to a sealed stream with recordstore.ErrSealed, keeping the rows it holds", func() {
 		s.appendRows("run-1", SampleRows(1, 3))
 		gomega.Expect(s.backend.Seal(s.ctx, "run-1")).To(gomega.Succeed())

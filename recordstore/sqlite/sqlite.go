@@ -358,6 +358,30 @@ func (b *Backend) Seal(ctx context.Context, stream string) error {
 	})
 }
 
+func (b *Backend) Reopen(ctx context.Context, stream, generation string) error {
+	if err := recordstore.ValidateStream(stream); err != nil {
+		return err
+	}
+	if generation == "" {
+		return fmt.Errorf("stream %q: reopen requires a generation", stream)
+	}
+	unlock := b.locks.Lock(stream)
+	defer unlock()
+	now := b.now()
+	return b.database.Write(func(writer *sql.DB) error {
+		result, err := writer.ExecContext(ctx,
+			`UPDATE record_streams SET sealed = 0, updated_at = ? WHERE stream_id = ? AND generation = ? AND sealed = 1 AND (expires_at IS NULL OR expires_at > ?)`,
+			sqlitetable.FormatTime(now), stream, generation, sqlitetable.FormatTime(now))
+		if err != nil {
+			return fmt.Errorf("stream %q: reopen: %w", stream, err)
+		}
+		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+			return errors.Join(fmt.Errorf("stream %q: sealed generation %q was not found", stream, generation), err)
+		}
+		return nil
+	})
+}
+
 // SetExpiry makes an index expire at the source's exact deadline. A nil
 // deadline keeps it for as long as its source exists.
 func (b *Backend) SetExpiry(ctx context.Context, stream string, expiresAt *time.Time) error {

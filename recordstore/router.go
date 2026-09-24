@@ -126,6 +126,18 @@ func (r *Router) Seal(ctx context.Context, stream string) error {
 	return backend.Seal(ctx, stream)
 }
 
+func (r *Router) Reopen(ctx context.Context, stream, generation string) error {
+	backend, err := r.Resolve(ctx)
+	if err != nil {
+		return err
+	}
+	reopener, ok := backend.(Reopener)
+	if !ok {
+		return fmt.Errorf("record store route for %q cannot reopen streams", stream)
+	}
+	return reopener.Reopen(ctx, stream, generation)
+}
+
 func (r *Router) Delete(ctx context.Context, stream string) error {
 	backend, err := r.Resolve(ctx)
 	if err != nil {

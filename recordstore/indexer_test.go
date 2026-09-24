@@ -192,6 +192,25 @@ var _ = Describe("Indexer", func() {
 		Expect([]any{first.Sealed, first.HighSeq, second.Sealed, second.HighSeq}).To(Equal([]any{true, int64(2), true, int64(3)}))
 	})
 
+	It("continues indexing the same generation after a sealed source resumes", func() {
+		appendSource(1, 2)
+		Expect(source.Seal(ctx, "run-1")).To(Succeed())
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		sealed, err := source.Meta(ctx, "run-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(source.Reopen(ctx, "run-1", sealed.Generation)).To(Succeed())
+		appendSource(3, 3)
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		continued, err := index.Meta(ctx, "run-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{continued.Generation, continued.Sealed, continued.HighSeq}).To(Equal([]any{sealed.Generation, false, int64(3)}))
+		Expect(source.Seal(ctx, "run-1")).To(Succeed())
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		finished, err := index.Meta(ctx, "run-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(finished.Sealed).To(BeTrue())
+	})
+
 	It("does not expire an index whose source has no expiry", func() {
 		immortal, err := ndjson.New(ndjson.Options{
 			Dir: filepath.Join(GinkgoT().TempDir(), "source"), Schema: recordstoretest.Schema, MaxBytes: 1 << 20, KeepStreams: 10,
