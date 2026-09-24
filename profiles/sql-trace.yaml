@@ -14,6 +14,9 @@ provider:
   type: sqlserver-xevent
   connection: connection://app-db
   options:
+    # The session is a server-scoped object: this is what a DBA reading
+    # sys.dm_xe_sessions sees, so name it after whoever is capturing.
+    sessionName: commons_db_trace
     # Statements inside stored procedures need sp_statement_completed, which is
     # opt-in: it changes both the volume and the shape of every capture.
     events:

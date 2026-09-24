@@ -1,6 +1,6 @@
 // Package xetrace manages short-lived SQL Server Extended Events sessions
-// backed by a ring_buffer target. Migrated from mission-control-oipa's
-// internal/database/xetrace; transport and session registries belong to callers.
+// backed by a ring_buffer target. Transport and session registries belong to
+// callers.
 package xetrace
 
 import (
@@ -11,8 +11,6 @@ import (
 	"slices"
 	"strings"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // ErrSessionGone reports that the XE session vanished from
@@ -96,7 +94,13 @@ func NormalizeEvents(names []string) ([]string, error) {
 
 // CreateOptions configures a new Extended Events session.
 type CreateOptions struct {
-	// Name of the XE session. If empty, a unique name is generated.
+	// Name of the XE session. Required: there is no default.
+	//
+	// An Extended Events session is a server-scoped object — it shows up in
+	// sys.dm_xe_sessions for every DBA on the instance, alongside sessions
+	// created by anything else. A name this package invented would tell them
+	// which library made it and nothing about which application, so the name
+	// belongs to the caller who can answer that.
 	Name string
 	// DatabaseName scopes the session to one database; empty uses DB_NAME().
 	// Set AllDatabases instead to capture across the whole instance.
@@ -177,9 +181,6 @@ func Create(ctx context.Context, pool *sql.DB, opts CreateOptions) (_ *Session, 
 		return nil, &PermissionError{Report: permissions}
 	}
 
-	if opts.Name == "" {
-		opts.Name = "commons_db_trace_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	}
 	if len(opts.Events) == 0 {
 		opts.Events = DefaultEvents
 	}

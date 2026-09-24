@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
@@ -49,6 +52,13 @@ func (sqlXEventProvider) Execute(context.Context, query.ProviderRequest) ([]quer
 // the documented default" rather than a number this struct has to keep in step
 // with xetrace.
 type sqlXEventOptions struct {
+	// SessionName names the Extended Events session on the server. Required:
+	// the session is visible in sys.dm_xe_sessions to everyone on the instance,
+	// so what it is called is the profile author's to say, not this package's.
+	// A unique suffix is appended so concurrent captures of one profile do not
+	// collide on the server.
+	SessionName string `json:"sessionName"`
+
 	// Database scopes the session to one database; empty uses the connection's.
 	Database string `json:"database,omitempty"`
 	// AllDatabases captures across the whole instance instead of one database.
@@ -114,6 +124,9 @@ func (o sqlXEventOptions) captureOptions() (xetrace.CreateOptions, xetrace.Drain
 	var create xetrace.CreateOptions
 	var drain xetrace.DrainOptions
 
+	if strings.TrimSpace(o.SessionName) == "" {
+		return create, drain, fmt.Errorf("sessionName is required: it names the Extended Events session on the server, where it is visible to everyone on the instance")
+	}
 	events, err := xetrace.NormalizeEvents(o.Events)
 	if err != nil {
 		return create, drain, err
@@ -138,6 +151,7 @@ func (o sqlXEventOptions) captureOptions() (xetrace.CreateOptions, xetrace.Drain
 	}
 
 	create = xetrace.CreateOptions{
+		Name:              uniqueSessionName(o.SessionName),
 		DatabaseName:      o.Database,
 		AllDatabases:      o.AllDatabases,
 		Users:             o.Users,
@@ -151,6 +165,13 @@ func (o sqlXEventOptions) captureOptions() (xetrace.CreateOptions, xetrace.Drain
 	}
 	drain = xetrace.DrainOptions{Interval: poll}
 	return create, drain, nil
+}
+
+// uniqueSessionName appends a short unique suffix to the caller's name, so two
+// captures started from one profile do not collide on a server-scoped object
+// while the name still says whose they are.
+func uniqueSessionName(base string) string {
+	return strings.TrimSpace(base) + "_" + strings.ReplaceAll(uuid.NewString(), "-", "")[:12]
 }
 
 // parsePositiveDuration reads an optional duration option. Empty returns zero,

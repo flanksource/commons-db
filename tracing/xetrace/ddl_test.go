@@ -8,8 +8,8 @@ import (
 
 func TestBuildCreateSQL_AllEventsScoped(t *testing.T) {
 	opts := CreateOptions{
-		Name:              "oipa_cli_trace_test",
-		DatabaseName:      "OMA_DB",
+		Name:              "commons_db_trace_test",
+		DatabaseName:      "warehouse",
 		Users:             []string{"sa"},
 		MinDurationMicros: 1000,
 		ExcludeSessionID:  55,
@@ -23,12 +23,12 @@ func TestBuildCreateSQL_AllEventsScoped(t *testing.T) {
 	}
 
 	mustContain := []string{
-		"CREATE EVENT SESSION [oipa_cli_trace_test] ON SERVER",
+		"CREATE EVENT SESSION [commons_db_trace_test] ON SERVER",
 		"ADD EVENT sqlserver.sql_statement_completed",
 		"ADD EVENT sqlserver.rpc_completed",
 		"ADD EVENT sqlserver.sql_batch_completed",
 		"ADD EVENT sqlserver.error_reported",
-		"sqlserver.database_name = N'OMA_DB'",
+		"sqlserver.database_name = N'warehouse'",
 		"sqlserver.username = N'sa'",
 		"sqlserver.session_id <> 55",
 		"duration >= 1000",
@@ -239,8 +239,8 @@ func TestBuildCreateSQL_AppAndHostPredicates(t *testing.T) {
 	}{
 		{
 			"excluded app",
-			CreateOptions{Apps: []string{"!go/mission-control-oipa"}},
-			"(sqlserver.client_app_name <> N'go/mission-control-oipa')",
+			CreateOptions{Apps: []string{"!go/reporting"}},
+			"(sqlserver.client_app_name <> N'go/reporting')",
 		},
 		{
 			"escaped app",
@@ -254,8 +254,8 @@ func TestBuildCreateSQL_AppAndHostPredicates(t *testing.T) {
 		},
 		{
 			"host list",
-			CreateOptions{Hosts: []string{"oipa-app-0", "!build-agent"}},
-			"(sqlserver.client_hostname = N'oipa-app-0') AND (sqlserver.client_hostname <> N'build-agent')",
+			CreateOptions{Hosts: []string{"app-0", "!build-agent"}},
+			"(sqlserver.client_hostname = N'app-0') AND (sqlserver.client_hostname <> N'build-agent')",
 		},
 	}
 	for _, tc := range cases {
@@ -331,7 +331,7 @@ func TestBuildCreateSQL_AllDatabasesEmitsNoDatabasePredicate(t *testing.T) {
 
 func TestBuildCreateSQL_RejectsDatabaseWithAllDatabases(t *testing.T) {
 	_, err := BuildCreateSQL(CreateOptions{
-		Name: "trace_all", Events: DefaultEvents, DatabaseName: "OIPA", AllDatabases: true,
+		Name: "trace_all", Events: DefaultEvents, DatabaseName: "warehouse", AllDatabases: true,
 	})
 	if err == nil {
 		t.Fatal("naming a database and asking for every database must be refused")

@@ -47,8 +47,8 @@ func TestRingBufferEventsIgnoresNonPositiveOverride(t *testing.T) {
 // defaults have to be read together: whichever is hit first stops the buffer.
 func TestDefaultRingBufferSizingIsCarriedIntoDDL(t *testing.T) {
 	opts := CreateOptions{
-		Name:         "oipa_cli_trace_test",
-		DatabaseName: "OMA_DB",
+		Name:         "commons_db_trace_test",
+		DatabaseName: "warehouse",
 		Events:       DefaultEvents,
 		MaxMemoryKB:  defaultRingBufferMemoryKB(),
 		MaxEvents:    defaultRingBufferEvents(),

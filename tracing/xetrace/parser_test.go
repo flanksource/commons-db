@@ -29,10 +29,10 @@ func TestParseRingBuffer_Fixture(t *testing.T) {
 			CPUTime:       8000 * time.Microsecond,
 			LogicalReads:  42,
 			RowCount:      1,
-			DatabaseName:  "OMA_DB",
-			ClientApp:     "oipa-cli",
-			ClientHost:    "oipa-app-0",
-			Username:      "oipa_user",
+			DatabaseName:  "warehouse",
+			ClientApp:     "reporting",
+			ClientHost:    "app-0",
+			Username:      "analytics",
 			SessionID:     73,
 			Statement:     "SELECT COUNT(*) FROM AsActivity",
 			SQL:           "SELECT COUNT(*) FROM AsActivity",
@@ -42,8 +42,8 @@ func TestParseRingBuffer_Fixture(t *testing.T) {
 		{
 			Name:          "error_reported",
 			Timestamp:     ts2,
-			DatabaseName:  "OMA_DB",
-			Username:      "oipa_user",
+			DatabaseName:  "warehouse",
+			Username:      "analytics",
 			SessionID:     73,
 			StatementType: StmtOther,
 			ErrorNumber:   208,
@@ -98,7 +98,7 @@ func TestParseRingBuffer_SPStatementCausality(t *testing.T) {
   <event name="sp_statement_completed" package="sqlserver" timestamp="2026-04-15T10:23:45.123Z">
     <data name="duration"><value>409000</value></data>
     <data name="logical_reads"><value>88320</value></data>
-    <data name="object_name"><value>asc_GetDepositValueList</value></data>
+    <data name="object_name"><value>usp_GetOrderTotals</value></data>
     <data name="object_id"><value>1445580188</value></data>
     <data name="statement"><value>SELECT AsDepositValue.fundGuid FROM AsDepositValue</value></data>
     <action name="attach_activity_id" package="package0"><value>7A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9-17</value></action>
@@ -114,8 +114,8 @@ func TestParseRingBuffer_SPStatementCausality(t *testing.T) {
 		t.Fatalf("expected 1 event, got %d", len(got.Events))
 	}
 	e := got.Events[0]
-	if e.ObjectName != "asc_GetDepositValueList" {
-		t.Errorf("ObjectName = %q, want asc_GetDepositValueList", e.ObjectName)
+	if e.ObjectName != "usp_GetOrderTotals" {
+		t.Errorf("ObjectName = %q, want usp_GetOrderTotals", e.ObjectName)
 	}
 	if e.ObjectID != 1445580188 {
 		t.Errorf("ObjectID = %d, want 1445580188", e.ObjectID)

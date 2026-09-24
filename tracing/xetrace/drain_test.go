@@ -102,7 +102,7 @@ func TestDrain_ResolvesPreparedHandleAcrossPolls(t *testing.T) {
 	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
 	prepare := mkEvent(1, time.Millisecond, prepexecOf(
-		5089, "@P0 int", "EXEC ASC_GETINTAKERECORDITEMS @P0 ", "1000"), t0)
+		5089, "@P0 int", "EXEC USP_GETORDERITEMS @P0 ", "1000"), t0)
 	prepare.Name = EventRPCCompleted
 	deriveFromStatement(&prepare)
 
@@ -115,7 +115,7 @@ func TestDrain_ResolvesPreparedHandleAcrossPolls(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("expected 2 events, got %d: %v", len(got), sqls(got))
 	}
-	const want = "EXEC ASC_GETINTAKERECORDITEMS 2000"
+	const want = "EXEC USP_GETORDERITEMS 2000"
 	if got[1].SQL != want {
 		t.Errorf("reused handle resolved to %q, want %q", got[1].SQL, want)
 	}
@@ -136,7 +136,7 @@ func TestDrain_NestsInnerStatementsAfterTheirParent(t *testing.T) {
 		deriveFromStatement(&e)
 		return e
 	}
-	parent := mkEvent(1, 5*time.Millisecond, "EXEC asc_GetDepositValueList 1", t0.Add(3*time.Second))
+	parent := mkEvent(1, 5*time.Millisecond, "EXEC usp_GetOrderTotals 1", t0.Add(3*time.Second))
 	parent.Name = EventRPCCompleted
 	parent.ActivityID, parent.ActivitySeq = "ACT-1", 3
 	deriveFromStatement(&parent)
@@ -147,7 +147,7 @@ func TestDrain_NestsInnerStatementsAfterTheirParent(t *testing.T) {
 		{parent},
 	})
 
-	want := []string{"EXEC asc_GetDepositValueList 1", "SELECT inner one", "SELECT inner two"}
+	want := []string{"EXEC usp_GetOrderTotals 1", "SELECT inner one", "SELECT inner two"}
 	if diff := sqls(got); !reflect.DeepEqual(diff, want) {
 		t.Fatalf("delivery order = %#v, want %#v", diff, want)
 	}

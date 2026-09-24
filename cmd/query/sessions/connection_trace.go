@@ -62,7 +62,11 @@ func (h *sessionHandler) startConnectionTrace(w http.ResponseWriter, r *http.Req
 	profile := query.Profile{
 		Name: connectionTraceProfile(conn.ID), Virtual: true,
 		Provider: query.ProviderConfig{Type: providers.SQLXEventProviderType, Connection: reference, Options: map[string]any{
-			"database": input.Database, "users": input.Users, "apps": input.Apps,
+			// The server-side session carries the same name this connection's
+			// trace profile does, so a DBA reading sys.dm_xe_sessions can tell
+			// which connection asked for it.
+			"sessionName": connectionTraceProfile(conn.ID),
+			"database":    input.Database, "users": input.Users, "apps": input.Apps,
 			"hosts": input.Hosts, "events": input.Events, "minDuration": input.MinDuration,
 		}},
 		Trace: &query.TraceSpec{MaxDuration: types.Duration{Duration: duration}},

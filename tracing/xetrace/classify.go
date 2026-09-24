@@ -51,8 +51,9 @@ var FilterableTypes = []string{
 }
 
 // classKeywords maps a leading SQL verb to its StatementType. EXEC/EXECUTE are
-// included so stored-procedure calls — which is how OIPA reaches every asc_*
-// procedure — carry a type token instead of falling through to StmtOther.
+// included so a stored-procedure call carries a type token instead of falling
+// through to StmtOther — which matters wherever an application reaches its data
+// through procedures rather than statements.
 var classKeywords = map[string]StatementType{
 	"SELECT":  StmtSelect,
 	"INSERT":  StmtInsert,
@@ -122,10 +123,10 @@ func classifyStatement(sql string) StatementType {
 // statement.
 //
 // For a stored-procedure call the extracted name is the PROCEDURE, not the
-// tables its body touches: the body never appears in the trace text. So
-// `--table asc_GetDepositValueList` matches the call while `--table
-// AsDepositValue` does not. Capturing sp_statement_completed surfaces the
-// inner statements, and those do carry their own table names.
+// tables its body touches: the body never appears in the trace text. So a table
+// filter of `usp_GetOrderTotals` matches the call while one naming a table the
+// body reads does not. Capturing sp_statement_completed surfaces the inner
+// statements, and those do carry their own table names.
 //
 // A FROM clause is a comma-separated list of `table [AS] [alias] [hints]` refs,
 // so once a FROM opens a list the parser keeps it open across alias/hint tokens
