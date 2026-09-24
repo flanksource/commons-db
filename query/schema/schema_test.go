@@ -65,7 +65,8 @@ var _ = Describe("Connection schema", func() {
 		))
 		// guards against drift from the models.ConnectionType* constant set
 		Expect(enum).To(ContainElement(models.ConnectionTypeOpenTelemetry))
-		Expect(enum).To(HaveLen(56))
+		Expect(enum).To(ContainElement(models.ConnectionTypeSQLite))
+		Expect(enum).To(HaveLen(57))
 	})
 
 	It("keeps the base form to name/namespace/type/properties", func() {
@@ -87,8 +88,9 @@ var _ = Describe("Connection schema", func() {
 		typeProp := s["properties"].(schema.Schema)["type"].(schema.Schema)
 		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
 		icons := typeProp["x-enum-icons"].(map[string]string)
-		Expect(icons).To(HaveLen(56))
+		Expect(icons).To(HaveLen(57))
 		Expect(icons[models.ConnectionTypePostgres]).To(Equal("postgres"))
+		Expect(icons[models.ConnectionTypeSQLite]).To(Equal("database"))
 	})
 
 	It("orders the base fields via per-property x-clicky-order", func() {
@@ -110,6 +112,17 @@ var _ = Describe("Connection schema", func() {
 		Expect(props).ToNot(HaveKey("insecure_tls"))
 		Expect(props["url"].(schema.Schema)["x-clicky-component"]).To(Equal("k8s-url-selector"))
 		Expect(props["url"].(schema.Schema)["x-clicky-order"]).To(BeNumerically("==", 2))
+	})
+
+	It("gives SQLite a required database path without network credentials", func() {
+		then := branchFor(s, models.ConnectionTypeSQLite)
+		Expect(then).ToNot(BeNil())
+		Expect(then["required"]).To(ContainElement("url"))
+		props := then["properties"].(schema.Schema)
+		Expect(props).To(HaveKey("url"))
+		Expect(props).ToNot(HaveKey("username"))
+		Expect(props).ToNot(HaveKey("password"))
+		Expect(props["url"].(schema.Schema)["description"]).To(ContainSubstring("file:"))
 	})
 
 	It("gives HTTP connections a segmented conditional authentication form", func() {
@@ -207,14 +220,14 @@ var _ = Describe("Connection schema", func() {
 		}
 	})
 
-	It("emits external source refs and a local-ref bundle for all 56 components", func() {
-		Expect(schema.ConnectionComponents()).To(HaveLen(56))
+	It("emits external source refs and a local-ref bundle for all 57 components", func() {
+		Expect(schema.ConnectionComponents()).To(HaveLen(57))
 		source := schema.ConnectionSource()
 		firstSourceBranch := source["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("connections/"))
 
 		bundled := schema.Connection()
-		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(56))
+		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(57))
 		firstBundledBranch := bundled["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstBundledBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("#/$defs/"))
 	})
@@ -356,7 +369,7 @@ var _ = Describe("Profile schema", func() {
 		Expect(provider["x-discriminator"]).To(Equal("type"))
 		typeProp := provider["properties"].(schema.Schema)["type"].(schema.Schema)
 		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
-		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(17))
+		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(18))
 	})
 
 	It("keeps Kubernetes targets out of provider options", func() {
@@ -404,14 +417,14 @@ var _ = Describe("Profile schema", func() {
 	})
 
 	It("bundles every provider component and enriches inline URLs", func() {
-		Expect(schema.ProfileComponents()).To(HaveLen(17))
+		Expect(schema.ProfileComponents()).To(HaveLen(18))
 		source := schema.ProfileSource()
 		provider := source["properties"].(schema.Schema)["provider"].(schema.Schema)
 		firstSourceBranch := provider["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("profiles/"))
 
 		bundled := schema.Profile()
-		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(17))
+		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(18))
 		http := bundled["$defs"].(schema.Schema)["http"].(schema.Schema)
 		options := http["properties"].(schema.Schema)["options"].(schema.Schema)
 		url := options["properties"].(schema.Schema)["url"].(schema.Schema)
@@ -436,7 +449,11 @@ var _ = Describe("Profile schema", func() {
 		// generic sql provider offers every SQL backend.
 		typeMap := scope["map"].(map[string][]string)
 		Expect(typeMap["sqlserver"]).To(Equal([]string{"sql_server"}))
-		Expect(typeMap["sql"]).To(ConsistOf("postgres", "mysql", "sql_server", "clickhouse"))
+		Expect(typeMap["sql"]).To(ConsistOf("postgres", "mysql", "sql_server", "clickhouse", "sqlite"))
+		Expect(typeMap["sqlite"]).To(Equal([]string{"sqlite"}))
+		sqliteOptions := schema.ProfileComponents()["sqlite"]["properties"].(schema.Schema)["options"].(schema.Schema)["properties"].(schema.Schema)
+		Expect(sqliteOptions).To(HaveKey("url"))
+		Expect(sqliteOptions).ToNot(HaveKey("database"))
 	})
 })
 

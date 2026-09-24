@@ -65,6 +65,10 @@ type MySQLProvider struct {
 	secretCreds
 }
 
+type SQLiteProvider struct {
+	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=Database path,source=value,required,order=2,desc=file:/data/example.db?mode=ro"`
+}
+
 // SQLServerProvider models a SQL Server DSN connection.
 type SQLServerProvider struct {
 	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=URL,source=value,required,order=2,desc=sqlserver://user:pass@host:1433?database=db"`
@@ -166,6 +170,7 @@ var tailoredProviders = map[string]any{
 	models.ConnectionTypeJaeger:        JaegerProvider{},
 	models.ConnectionTypePostgres:      PostgresProvider{},
 	models.ConnectionTypeMySQL:         MySQLProvider{},
+	models.ConnectionTypeSQLite:        SQLiteProvider{},
 	models.ConnectionTypeSQLServer:     SQLServerProvider{},
 	models.ConnectionTypeClickHouse:    ClickHouseProvider{},
 	models.ConnectionTypeRedis:         RedisProvider{},

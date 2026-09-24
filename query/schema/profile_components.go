@@ -16,6 +16,7 @@ var providerTypeIcons = map[string]string{
 	"mysql":         "mysql",
 	"sqlserver":     "sqlserver",
 	"clickhouse":    "clickhouse",
+	"sqlite":        "database",
 	"http":          "globe",
 	"prometheus":    "prometheus",
 	"postgrest":     "globe",
@@ -61,9 +62,9 @@ func providerOptions(typ string) Schema {
 		props["type"] = Schema{
 			"type":  "string",
 			"title": "Driver",
-			"enum":  []string{"postgres", "mysql", "sql_server", "clickhouse"},
+			"enum":  []string{"postgres", "mysql", "sql_server", "clickhouse", "sqlite"},
 			"x-enum-icons": map[string]string{
-				"postgres": "postgres", "mysql": "mysql", "sql_server": "sqlserver", "clickhouse": "clickhouse",
+				"postgres": "postgres", "mysql": "mysql", "sql_server": "sqlserver", "clickhouse": "clickhouse", "sqlite": "database",
 			},
 			"x-enum-display": "combobox",
 		}
@@ -72,6 +73,8 @@ func providerOptions(typ string) Schema {
 	case "postgres", "mysql", "sqlserver", "clickhouse":
 		props["url"] = inlineURLProp("URL / DSN", "Inline database URL used instead of a saved connection")
 		props["database"] = strProp("Database", "Database override for this query")
+	case "sqlite":
+		props["url"] = inlineURLProp("Database path", "Inline SQLite file path used instead of a saved connection")
 	case "http":
 		props["url"] = inlineURLProp("Base URL", "Inline HTTP base URL used instead of a saved connection")
 		props["method"] = Schema{"type": "string", "title": "Method", "enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE"}}

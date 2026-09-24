@@ -171,6 +171,27 @@ var _ = Describe("SessionRegistry.Restart", func() {
 	})
 })
 
+var _ = Describe("SessionRegistry.ResumeTrack", func() {
+	It("reuses a stopped session id and its immutable start while retaining its event reference", func() {
+		store := newFakeSessionStore()
+		reg := query.NewSessionRegistry(query.RegistryOptions{Store: store})
+		first := track(reg, stdcontext.Background(), jvmTrackOptions())
+		first.Running(query.RunningUpdate{Events: &query.EventsRef{Stream: "recording-1", Kind: "oipa_notification_v4", Generation: "generation-1", High: 5, Total: 5}})
+		first.Finish(query.FinishUpdate{})
+		prior := first.Snapshot()
+
+		resumed, err := reg.ResumeTrack(stdcontext.Background(), first.ID(), time.Now().Add(time.Minute))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(resumed.ID()).To(Equal(first.ID()))
+		Expect(resumed.Snapshot()).To(And(
+			HaveField("State", query.SessionStarting),
+			HaveField("StartedAt", prior.StartedAt),
+			HaveField("Events", prior.Events),
+		))
+		Expect(store.status(first.ID()).State).To(Equal(query.SessionStarting))
+	})
+})
+
 var _ = Describe("SessionRegistry.Sweep", func() {
 	It("interrupts only active records with a stale heartbeat, naming a restart of this host's owner", func() {
 		store := newFakeSessionStore()

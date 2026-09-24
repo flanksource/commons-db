@@ -93,6 +93,7 @@ type Session struct {
 	onStop        func(reason string)
 	onStopCalled  bool
 	deadline      *time.Timer
+	durationStart time.Time
 	stopTimer     *time.Timer
 	done          chan struct{}
 

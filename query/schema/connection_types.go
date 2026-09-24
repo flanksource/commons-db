@@ -23,7 +23,7 @@ var allConnectionTypes = []string{
 	models.ConnectionTypePostgres, models.ConnectionTypePrometheus, models.ConnectionTypePushbullet,
 	models.ConnectionTypePushover, models.ConnectionTypeRedis, models.ConnectionTypeRestic,
 	models.ConnectionTypeRocketchat, models.ConnectionTypeS3, models.ConnectionTypeSFTP,
-	models.ConnectionTypeSlack, models.ConnectionTypeSlackWebhook, models.ConnectionTypeSMB,
+	models.ConnectionTypeSlack, models.ConnectionTypeSlackWebhook, models.ConnectionTypeSMB, models.ConnectionTypeSQLite,
 	models.ConnectionTypeSQLServer, models.ConnectionTypeTeams, models.ConnectionTypeTelegram,
 	models.ConnectionTypeWebhook, models.ConnectionTypeWindows, models.ConnectionTypeZulipChat,
 }
@@ -85,6 +85,7 @@ var connectionTypeIcons = map[string]string{
 	models.ConnectionTypeSlack:          "slack",
 	models.ConnectionTypeSlackWebhook:   "slack",
 	models.ConnectionTypeSMB:            "smb",
+	models.ConnectionTypeSQLite:         "database",
 	models.ConnectionTypeSQLServer:      "sqlserver",
 	models.ConnectionTypeTeams:          "teams",
 	models.ConnectionTypeTelegram:       "telegram",

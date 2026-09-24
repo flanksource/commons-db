@@ -38,7 +38,7 @@ var (
 // providerTypes are the registered query provider keys, used as the enum for the
 // profile-setup form's provider.type field.
 var providerTypes = []string{
-	"sql", "postgres", "mysql", "sqlserver", "clickhouse",
+	"sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite",
 	"http", "prometheus", "postgrest", "loki", "opensearch", "jaeger",
 	"opentelemetry", "cloudwatch", "gcpcloudlogging", "bigquery", "k8s",
 	"azureloganalytics",
@@ -52,11 +52,12 @@ var providerTypes = []string{
 // the eligible types as a scope filter. Note ConnectionTypeSQLServer is
 // "sql_server" — the value the connection list filters on.
 var providerConnectionTypes = map[string][]string{
-	"sql":           {models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse},
+	"sql":           {models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse, models.ConnectionTypeSQLite},
 	"postgres":      {models.ConnectionTypePostgres},
 	"mysql":         {models.ConnectionTypeMySQL},
 	"sqlserver":     {models.ConnectionTypeSQLServer},
 	"clickhouse":    {models.ConnectionTypeClickHouse},
+	"sqlite":        {models.ConnectionTypeSQLite},
 	"http":          {models.ConnectionTypeHTTP},
 	"postgrest":     {models.ConnectionTypeHTTP},
 	"prometheus":    {models.ConnectionTypePrometheus},

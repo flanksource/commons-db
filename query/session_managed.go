@@ -108,6 +108,32 @@ func (r *SessionRegistry) Manage(ctx context.Context, options ManageOptions, arm
 	if err != nil {
 		return nil, err
 	}
+	return r.manageTracked(ctx, session, options, timeout, arm)
+}
+
+// ManageExisting arms an external capture on a session ResumeTrack reattached.
+func (r *SessionRegistry) ManageExisting(ctx context.Context, session *Session, options ManageOptions, arm ArmFunc) (*ManagedSession, error) {
+	if session == nil || arm == nil {
+		return nil, errors.New("manage existing session: session and arm function are required")
+	}
+	if current, ok := r.Get(session.ID()); !ok || current != session || session.Snapshot().State != SessionStarting {
+		return nil, fmt.Errorf("manage existing session %s: it is not starting in this registry", session.ID())
+	}
+	if options.PollEvery < 0 || options.SampleTimeout < 0 || options.StopTimeout < 0 {
+		return nil, fmt.Errorf("manage existing session %s: polling and stop durations must not be negative", session.ID())
+	}
+	timeout := options.StopTimeout
+	if timeout == 0 {
+		var err error
+		timeout, err = r.stopTimeout(session.rec.Profile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return r.manageTracked(ctx, session, options, timeout, arm)
+}
+
+func (r *SessionRegistry) manageTracked(ctx context.Context, session *Session, options ManageOptions, timeout time.Duration, arm ArmFunc) (*ManagedSession, error) {
 	run, err := arm(session.Context())
 	if err != nil {
 		session.Finish(FinishUpdate{Err: err})
