@@ -755,6 +755,21 @@
       "if": {
         "properties": {
           "type": {
+            "const": "sqlite"
+          }
+        },
+        "required": [
+          "type"
+        ]
+      },
+      "then": {
+        "$ref": "connections/sqlite.json"
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
             "const": "sql_server"
           }
         },
@@ -914,6 +929,7 @@
         "slack",
         "slackwebhook",
         "smb",
+        "sqlite",
         "sql_server",
         "teams",
         "telegram",
@@ -976,6 +992,7 @@
         "slackwebhook": "slack",
         "smb": "smb",
         "sql_server": "sqlserver",
+        "sqlite": "database",
         "teams": "teams",
         "telegram": "telegram",
         "webhook": "webhook",

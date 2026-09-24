@@ -62,7 +62,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -230,7 +234,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -383,7 +391,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -487,7 +499,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -667,7 +683,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -835,7 +855,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -955,7 +979,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -1090,7 +1118,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -1213,7 +1245,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -1340,7 +1376,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -1444,7 +1484,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -2493,7 +2537,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -3582,7 +3630,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -3686,7 +3738,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -3790,7 +3846,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -3917,7 +3977,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -3941,7 +4005,8 @@
                 "postgres",
                 "mysql",
                 "sql_server",
-                "clickhouse"
+                "clickhouse",
+                "sqlite"
               ],
               "title": "Driver",
               "type": "string",
@@ -3950,7 +4015,8 @@
                 "clickhouse": "clickhouse",
                 "mysql": "mysql",
                 "postgres": "postgres",
-                "sql_server": "sqlserver"
+                "sql_server": "sqlserver",
+                "sqlite": "database"
               }
             },
             "url": {
@@ -3974,6 +4040,109 @@
         "type"
       ],
       "title": "Query provider: sql",
+      "type": "object"
+    },
+    "sqlite": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch",
+                  "elasticsearch"
+                ],
+                "opentelemetry": [
+                  "opentelemetry"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "url": {
+              "description": "Inline SQLite file path used instead of a saved connection",
+              "title": "Database path",
+              "type": "string",
+              "x-clicky-component": "k8s-url-selector",
+              "x-clicky-default-source": "value"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "sqlite",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: sqlite",
       "type": "object"
     },
     "sqlserver": {
@@ -4038,7 +4207,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -4837,6 +5010,21 @@
           "if": {
             "properties": {
               "type": {
+                "const": "sqlite"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/sqlite"
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
                 "const": "http"
               }
             },
@@ -5075,7 +5263,11 @@
                   "postgres",
                   "mysql",
                   "sql_server",
-                  "clickhouse"
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
                 ],
                 "sqlserver": [
                   "sql_server"
@@ -5098,6 +5290,7 @@
             "mysql",
             "sqlserver",
             "clickhouse",
+            "sqlite",
             "http",
             "prometheus",
             "postgrest",
@@ -5131,6 +5324,7 @@
             "postgrest": "globe",
             "prometheus": "prometheus",
             "sql": "database",
+            "sqlite": "database",
             "sqlserver": "sqlserver"
           }
         }
@@ -5334,7 +5528,11 @@
                       "postgres",
                       "mysql",
                       "sql_server",
-                      "clickhouse"
+                      "clickhouse",
+                      "sqlite"
+                    ],
+                    "sqlite": [
+                      "sqlite"
                     ],
                     "sqlserver": [
                       "sql_server"
