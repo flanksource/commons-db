@@ -92,6 +92,75 @@ func (r *SessionRegistry) Track(ctx stdcontext.Context, opts TrackOptions) (*Ses
 	return session, nil
 }
 
+// ResumeTrack reattaches a capture under its original session ID. Its immutable
+// start record stays intact; only the status moves back to starting. The same
+// process must own the record because SessionStore.Update is not an owner CAS.
+func (r *SessionRegistry) ResumeTrack(ctx stdcontext.Context, id string, stopAt time.Time) (*Session, error) {
+	if r.opts.Store == nil {
+		return nil, fmt.Errorf("resume session %s: a session store is required", id)
+	}
+	previous, err := r.lookupRecord(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if previous.Owner != r.opts.Owner {
+		return nil, fmt.Errorf("resume session %s: its owner is another process", id)
+	}
+	if previous.State != SessionStopped && previous.State != SessionCompleted && previous.State != SessionInterrupted && previous.State != SessionFailed {
+		return nil, fmt.Errorf("resume session %s: state %s is not resumable", id, previous.State)
+	}
+	if previous.Events == nil {
+		return nil, fmt.Errorf("resume session %s: no record stream", id)
+	}
+	if !stopAt.After(time.Now()) {
+		return nil, fmt.Errorf("resume session %s: stopAt must be in the future", id)
+	}
+	session, err := NewSession(SessionOptions{ID: id, Profile: Profile{Name: previous.Profile}, Kind: previous.Kind,
+		Role: previous.Role, Params: previous.Params, Labels: previous.Labels, Principal: previous.Principal,
+		Owner: previous.Owner, RestartOf: previous.RestartOf, MaxEvents: r.opts.MaxEvents})
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	session.rec.SessionStart = previous.SessionStart
+	session.rec.SessionStatus = SessionStatus{State: SessionStarting, UpdatedAt: now, HeartbeatAt: now,
+		Events: previous.Events, EventCount: previous.EventCount, Summary: previous.Summary, Metadata: previous.Metadata}
+	session.seq = previous.EventCount
+	session.durationStart = now
+	run, cancel := stdcontext.WithCancel(stdcontext.WithoutCancel(ctx))
+	timeout, err := r.stopTimeout(previous.Profile)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	session.attach(sessionAttachment{run: run, cancel: cancel, store: r.opts.Store, events: r.opts.Events,
+		storeCtx: stdcontext.WithoutCancel(ctx), stopTimeout: timeout, progressEvery: r.opts.ProgressEvery,
+		maxDuration: r.opts.MaxDuration, persistFailed: r.persistFailed, stopAt: stopAt})
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if current, found := r.sessions[id]; found && !current.Snapshot().State.Terminal() {
+		cancel()
+		return nil, fmt.Errorf("resume session %s: already live", id)
+	}
+	if r.activeLocked(SessionRoleCapture) >= r.opts.MaxSessions {
+		cancel()
+		return nil, fmt.Errorf("resume session %s: %w", id, ErrMaxSessions)
+	}
+	if err := r.opts.Store.Update(ctx, id, session.rec.SessionStatus); err != nil {
+		cancel()
+		return nil, fmt.Errorf("resume session %s: write starting status: %w", id, err)
+	}
+	if _, found := r.sessions[id]; !found {
+		r.order = append(r.order, id)
+	}
+	r.sessions[id] = session
+	session.mu.Lock()
+	session.scheduleDeadlineLocked(stopAt)
+	session.mu.Unlock()
+	r.startHeartbeatLocked()
+	return session, nil
+}
+
 // streamRun is a stream session admitted with its run context.
 type streamRun struct {
 	session *Session

@@ -398,7 +398,11 @@ func (s *Session) extend(stopAt time.Time) (time.Time, error) {
 // scheduleDeadlineLocked clamps stopAt to maxDuration from the session's start,
 // records it, and (re)arms the timer that stops the session as completed.
 func (s *Session) scheduleDeadlineLocked(stopAt time.Time) time.Time {
-	if limit := s.rec.StartedAt.Add(s.maxDuration); s.maxDuration > 0 && stopAt.After(limit) {
+	start := s.rec.StartedAt
+	if !s.durationStart.IsZero() {
+		start = s.durationStart
+	}
+	if limit := start.Add(s.maxDuration); s.maxDuration > 0 && stopAt.After(limit) {
 		stopAt = limit
 	}
 	s.rec.StopAt = &stopAt
