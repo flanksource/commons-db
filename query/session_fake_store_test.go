@@ -164,10 +164,41 @@ func (f *fakeSessionStore) recordCount() int {
 	return len(f.records)
 }
 
-// fakeEventSink collects appended event sequences per session.
+// fakeEventSink collects appended event sequences per session and records the
+// sessions it was closed for.
 type fakeEventSink struct {
 	mu        sync.Mutex
 	sequences map[string][]int64
+	closed    []string
+
+	// closeErr is returned by every Close, and onClose runs inside it, so a
+	// test can observe what the store holds at the moment the sink is settled.
+	closeErr error
+	onClose  func(id string)
+}
+
+func (f *fakeEventSink) CloseSession(_ stdcontext.Context, id string) error {
+	f.mu.Lock()
+	f.closed = append(f.closed, id)
+	onClose, err := f.onClose, f.closeErr
+	f.mu.Unlock()
+	if onClose != nil {
+		onClose(id)
+	}
+	return err
+}
+
+// closedFor returns how many times the sink was closed for a session.
+func (f *fakeEventSink) closedFor(id string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, closed := range f.closed {
+		if closed == id {
+			n++
+		}
+	}
+	return n
 }
 
 func (f *fakeEventSink) Append(_ stdcontext.Context, e query.Event) error {

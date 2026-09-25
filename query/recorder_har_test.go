@@ -56,7 +56,7 @@ var _ = Describe("Recorder HAR capture", func() {
 		buffer := logger.NewBufferedLogger(50)
 		buffer.SetLogLevel(logger.Info)
 		ctx := dbcontext.New(commons.WithLogger(buffer)).
-			WithConnectionResolver(func(string) (*models.Connection, error) {
+			WithConnectionResolver(func(dbcontext.Context, string) (*models.Connection, error) {
 				return &models.Connection{Name: "search", Type: models.ConnectionTypeOpenSearch}, nil
 			})
 		return ctx, buffer
@@ -155,7 +155,7 @@ var _ = Describe("Recorder HAR capture", func() {
 		buffer := logger.NewBufferedLogger(50)
 		buffer.SetLogLevel(logger.Trace2)
 		ctx := dbcontext.New(commons.WithLogger(buffer)).
-			WithConnectionResolver(func(string) (*models.Connection, error) {
+			WithConnectionResolver(func(dbcontext.Context, string) (*models.Connection, error) {
 				return &models.Connection{Name: "search", Type: models.ConnectionTypeOpenSearch}, nil
 			})
 		run(ctx, provider)

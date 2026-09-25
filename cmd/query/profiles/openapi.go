@@ -301,34 +301,40 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 				Clicky:      &rpc.ClickyParameterMeta{Role: "cursor"},
 			})
 	}
-	spec.Paths[path] = rpc.OpenAPIPath{"get": {
-		Summary:     "Run " + profile.Name,
-		Description: "Execute the stored query profile",
-		OperationID: "run-" + entityName,
-		Parameters:  parameters,
-		Responses: map[string]rpc.OpenAPIResponse{
-			"200": {
-				Description: "Profile rows. Paging travels in the response headers, not the body.",
-				Headers:     exportResponseHeaders(),
-				Content: map[string]rpc.OpenAPIMediaType{
-					// The shape, not merely the encoding, is negotiated: the
-					// interactive table asks for the clicky envelope and every
-					// other format streams a bare sequence of rows. Declaring
-					// only one of the two leaves any generated client wrong
-					// against whichever it did not get.
-					"application/json":        {Schema: profileResponseSchema(profile, filterKeys)},
-					"application/json+clicky": {Schema: clickyDocumentSchema()},
+	// A trace or top profile has no single-shot read: ExecuteProfile refuses it
+	// and points the caller at ExecuteStream. Advertising a run operation anyway
+	// is how a generic surface ends up executing one the moment the profile is
+	// opened — so the session start below is the only entry point it gets.
+	if profile.Kind() == query.KindQuery {
+		spec.Paths[path] = rpc.OpenAPIPath{"get": {
+			Summary:     "Run " + profile.Name,
+			Description: "Execute the stored query profile",
+			OperationID: "run-" + entityName,
+			Parameters:  parameters,
+			Responses: map[string]rpc.OpenAPIResponse{
+				"200": {
+					Description: "Profile rows. Paging travels in the response headers, not the body.",
+					Headers:     exportResponseHeaders(),
+					Content: map[string]rpc.OpenAPIMediaType{
+						// The shape, not merely the encoding, is negotiated: the
+						// interactive table asks for the clicky envelope and every
+						// other format streams a bare sequence of rows. Declaring
+						// only one of the two leaves any generated client wrong
+						// against whichever it did not get.
+						"application/json":        {Schema: profileResponseSchema(profile, filterKeys)},
+						"application/json+clicky": {Schema: clickyDocumentSchema()},
+					},
 				},
 			},
-		},
-		Clicky: &rpc.ClickyOperationMeta{
-			Command: entityName,
-			Surface: entityName,
-			Verb:    "list",
-			Scope:   "collection",
-			Export:  profileExportMeta(profile),
-		},
-	}}
+			Clicky: &rpc.ClickyOperationMeta{
+				Command: entityName,
+				Surface: entityName,
+				Verb:    "list",
+				Scope:   "collection",
+				Export:  profileExportMeta(profile),
+			},
+		}}
+	}
 
 	if start, ok := profileSessionStart(profile, entityName, parameters); ok {
 		spec.Paths[path+"/sessions"] = rpc.OpenAPIPath{"post": start}

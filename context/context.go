@@ -39,7 +39,15 @@ type Context struct {
 	commons.Context
 }
 
-type ConnectionResolver func(string) (*models.Connection, error)
+// ConnectionResolver answers a connection reference from somewhere other than
+// the connections table — an in-memory catalog, or a host application whose
+// connections are its own configuration rather than rows.
+//
+// It takes the context so a resolver can answer per request. The reference
+// alone is not always enough to identify a connection: a server that serves
+// several environments resolves the same reference to a different database for
+// each, and that choice travels on the request, not in the name.
+type ConnectionResolver func(ctx Context, reference string) (*models.Connection, error)
 type ConnectionLeaseResolver func(string) (func(), error)
 
 type connectionResolverKey struct{}

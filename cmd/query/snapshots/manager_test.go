@@ -48,7 +48,7 @@ var _ = Describe("Manager", func() {
 		Expect(profile.Provider.Connection).To(Equal(descriptor.Connection))
 		Expect(profile.Order).To(Equal(query.Order{{Column: "row_id", Unique: true}}))
 
-		connection, err := manager.ResolveConnection(descriptor.Connection)
+		connection, err := manager.ResolveConnection(dbcontext.New(), descriptor.Connection)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(connection.Virtual).To(BeTrue())
 		Expect(connection.ReadOnly).To(BeTrue())
@@ -100,7 +100,7 @@ var _ = Describe("Manager", func() {
 		now = now.Add(2 * time.Minute)
 		_, err = manager.Get(context.Background(), descriptor.Profile)
 		Expect(err).To(MatchError(snapshots.ErrExpired))
-		_, err = manager.ResolveConnection(descriptor.Connection)
+		_, err = manager.ResolveConnection(dbcontext.New(), descriptor.Connection)
 		Expect(err).To(MatchError(snapshots.ErrExpired))
 	})
 
@@ -127,7 +127,7 @@ var _ = Describe("Manager", func() {
 		release()
 		now = now.Add(11 * time.Minute)
 		Expect(manager.ListConnections()).To(BeEmpty())
-		_, err = manager.ResolveConnection(descriptor.Connection)
+		_, err = manager.ResolveConnection(dbcontext.New(), descriptor.Connection)
 		Expect(err).To(MatchError(snapshots.ErrExpired))
 	})
 

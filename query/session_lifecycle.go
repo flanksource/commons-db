@@ -213,6 +213,29 @@ func (s *Session) finishWithReason(u FinishUpdate, forced SessionState, reason s
 		close(ch)
 	}
 	cancel := s.cancel
+	sink, storeCtx, id := s.events, s.storeCtx, s.rec.ID
+	s.mu.Unlock()
+
+	// Settle the event log before the status write publishes the session as
+	// finished, so a reader that finds the terminal record can read every
+	// event it counts. The sink is closed outside the session lock: it may go
+	// to a database or a cache, and holding the lock across that would stall
+	// every Emit sharing it.
+	var closeErr error
+	if sink != nil {
+		closeErr = sink.CloseSession(storeCtx, id)
+	}
+
+	s.mu.Lock()
+	if closeErr != nil {
+		// Events were lost, so the record must not read as a clean end: the
+		// count it carries no longer describes a log anyone can replay.
+		s.rec.State = SessionFailed
+		s.rec.Warning = joinWarning(s.rec.Warning, fmt.Sprintf("close event sink: %v", closeErr))
+		if s.rec.Error == "" {
+			s.rec.Error = closeErr.Error()
+		}
+	}
 	status := s.statusLocked()
 	s.mu.Unlock()
 	_ = s.writeStatus(status)
