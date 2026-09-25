@@ -209,4 +209,65 @@ var _ = Describe("SQLite database", func() {
 		Expect(reader.QueryRow(`SELECT COUNT(*) FROM events WHERE id = ?`, "accepted").Scan(&count)).To(Succeed())
 		Expect(count).To(Equal(1))
 	})
+
+	It("serializes read-then-write transactions from two handles on one file", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "shared.sqlite")
+		handles := make([]*DB, 2)
+		for index := range handles {
+			database, err := Open(Options{Path: path})
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(func() { Expect(database.Close()).To(Succeed()) })
+			handles[index] = database
+		}
+		Expect(handles[0].Write(func(writer *sql.DB) error {
+			_, err := writer.Exec(`CREATE TABLE counter (n INTEGER NOT NULL); INSERT INTO counter (n) VALUES (0)`)
+			return err
+		})).To(Succeed())
+
+		// Each handle stands in for another process: its read snapshot goes stale
+		// whenever the other commits between its read and its write.
+		increment := func(database *DB) error {
+			return database.Write(func(writer *sql.DB) error {
+				tx, err := writer.BeginTx(context.Background(), nil)
+				if err != nil {
+					return err
+				}
+				defer func() { _ = tx.Rollback() }()
+				var n int
+				if err := tx.QueryRow(`SELECT n FROM counter`).Scan(&n); err != nil {
+					return err
+				}
+				time.Sleep(time.Millisecond)
+				if _, err := tx.Exec(`UPDATE counter SET n = ?`, n+1); err != nil {
+					return err
+				}
+				return tx.Commit()
+			})
+		}
+		const increments = 40
+		failures := make(chan error, 2*increments)
+		done := make(chan struct{}, 2)
+		for _, database := range handles {
+			go func() {
+				defer GinkgoRecover()
+				for range increments {
+					if err := increment(database); err != nil {
+						failures <- err
+					}
+				}
+				done <- struct{}{}
+			}()
+		}
+		<-done
+		<-done
+		close(failures)
+		var errs []error
+		for err := range failures {
+			errs = append(errs, err)
+		}
+		Expect(errors.Join(errs...)).ToNot(HaveOccurred())
+		var n int
+		Expect(handles[1].Reader().QueryRow(`SELECT n FROM counter`).Scan(&n)).To(Succeed())
+		Expect(n).To(Equal(2 * increments))
+	})
 })

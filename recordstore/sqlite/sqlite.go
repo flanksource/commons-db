@@ -179,9 +179,11 @@ func (b *Backend) Append(ctx context.Context, stream, kind string, rows []record
 	}
 	var result recordstore.AppendResult
 	err = b.database.Write(func(writer *sql.DB) error {
-		var err error
-		result, err = b.commitAppendLocked(ctx, writer, table, stream, write)
-		return err
+		return inTx(ctx, writer, fmt.Sprintf("stream %q", stream), func(tx *sql.Tx) error {
+			var err error
+			result, err = b.appendTx(ctx, tx, table, stream, write, b.now())
+			return err
+		})
 	})
 	return result, err
 }
@@ -211,16 +213,27 @@ func (b *Backend) planAppend(table kindTable, stream string, rows []recordstore.
 	return appendWrite{stored: stored, keys: keys, retention: retention}, nil
 }
 
-// commitAppendLocked trims what the kind's retention has let go, skips the rows
-// whose keys the stream still holds, numbers the rest after the high seq and
-// commits them with the stream's metadata, all in one transaction.
-func (b *Backend) commitAppendLocked(ctx context.Context, writer *sql.DB, table kindTable, stream string, write appendWrite) (recordstore.AppendResult, error) {
+// inTx runs fn in one transaction on writer and commits it; what names the
+// work in the begin and commit errors.
+func inTx(ctx context.Context, writer *sql.DB, what string, fn func(*sql.Tx) error) error {
 	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
-		return recordstore.AppendResult{}, fmt.Errorf("stream %q: begin: %w", stream, err)
+		return fmt.Errorf("%s: begin: %w", what, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	now := b.now()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("%s: commit: %w", what, err)
+	}
+	return nil
+}
+
+// appendTx trims what the kind's retention has let go, skips the rows whose
+// keys the stream still holds, and numbers the rest after the high seq, writing
+// them with the stream's metadata in tx. The caller holds the stream's lock.
+func (b *Backend) appendTx(ctx context.Context, tx *sql.Tx, table kindTable, stream string, write appendWrite, now time.Time) (recordstore.AppendResult, error) {
 	meta, err := b.openStream(ctx, tx, stream, table.schema.Kind, now)
 	if err != nil {
 		return recordstore.AppendResult{}, err
@@ -244,9 +257,6 @@ func (b *Backend) commitAppendLocked(ctx context.Context, writer *sql.DB, table 
 	meta.HighSeq, meta.UpdatedAt = window.To, now
 	if err := upsertMeta(ctx, tx, meta); err != nil {
 		return recordstore.AppendResult{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return recordstore.AppendResult{}, fmt.Errorf("stream %q: commit: %w", stream, err)
 	}
 	return recordstore.AppendResult{Window: window, Skipped: skipped}, nil
 }
@@ -319,19 +329,25 @@ func (b *Backend) Expire(ctx context.Context, stream string, ttl time.Duration) 
 	if err := recordstore.ValidateStream(stream); err != nil {
 		return err
 	}
-	now := b.now()
 	return b.database.Write(func(writer *sql.DB) error {
-		result, err := writer.ExecContext(ctx,
-			`UPDATE record_streams SET expires_at = ? WHERE stream_id = ? AND (expires_at IS NULL OR expires_at > ?)`,
-			sqlitetable.FormatTime(now.Add(ttl)), stream, sqlitetable.FormatTime(now))
-		if err != nil {
-			return fmt.Errorf("stream %q: expire: %w", stream, err)
-		}
-		if affected, err := result.RowsAffected(); err != nil || affected == 0 {
-			return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
-		}
-		return nil
+		return inTx(ctx, writer, fmt.Sprintf("stream %q: expire", stream), func(tx *sql.Tx) error {
+			return expireTx(ctx, tx, stream, ttl, b.now())
+		})
 	})
+}
+
+// expireTx moves stream's expiry to ttl from now in tx.
+func expireTx(ctx context.Context, tx *sql.Tx, stream string, ttl time.Duration, now time.Time) error {
+	result, err := tx.ExecContext(ctx,
+		`UPDATE record_streams SET expires_at = ? WHERE stream_id = ? AND (expires_at IS NULL OR expires_at > ?)`,
+		sqlitetable.FormatTime(now.Add(ttl)), stream, sqlitetable.FormatTime(now))
+	if err != nil {
+		return fmt.Errorf("stream %q: expire: %w", stream, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+		return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
+	}
+	return nil
 }
 
 // Seal marks stream complete on its record_streams row. An index mirrors a
@@ -342,20 +358,26 @@ func (b *Backend) Seal(ctx context.Context, stream string) error {
 	}
 	unlock := b.locks.Lock(stream)
 	defer unlock()
-	now := b.now()
 	return b.database.Write(func(writer *sql.DB) error {
-		result, err := writer.ExecContext(ctx,
-			`UPDATE record_streams SET sealed = 1, updated_at = CASE WHEN sealed = 1 THEN updated_at ELSE ? END
-				WHERE stream_id = ? AND (expires_at IS NULL OR expires_at > ?)`,
-			sqlitetable.FormatTime(now), stream, sqlitetable.FormatTime(now))
-		if err != nil {
-			return fmt.Errorf("stream %q: seal: %w", stream, err)
-		}
-		if affected, err := result.RowsAffected(); err != nil || affected == 0 {
-			return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
-		}
-		return nil
+		return inTx(ctx, writer, fmt.Sprintf("stream %q: seal", stream), func(tx *sql.Tx) error {
+			return sealTx(ctx, tx, stream, b.now())
+		})
 	})
+}
+
+// sealTx marks stream complete in tx. The caller holds the stream's lock.
+func sealTx(ctx context.Context, tx *sql.Tx, stream string, now time.Time) error {
+	result, err := tx.ExecContext(ctx,
+		`UPDATE record_streams SET sealed = 1, updated_at = CASE WHEN sealed = 1 THEN updated_at ELSE ? END
+			WHERE stream_id = ? AND (expires_at IS NULL OR expires_at > ?)`,
+		sqlitetable.FormatTime(now), stream, sqlitetable.FormatTime(now))
+	if err != nil {
+		return fmt.Errorf("stream %q: seal: %w", stream, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected == 0 {
+		return errors.Join(fmt.Errorf("stream %q: %w", stream, recordstore.ErrNotFound), err)
+	}
+	return nil
 }
 
 func (b *Backend) Reopen(ctx context.Context, stream, generation string) error {

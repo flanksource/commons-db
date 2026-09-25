@@ -34,11 +34,20 @@ func (b *Backend) Trim(ctx context.Context, stream string, before time.Time) (re
 func (b *Backend) trimStreamLocked(ctx context.Context, writer *sql.DB, stream string,
 	trim func(tx *sql.Tx, table sqlitetable.Table, meta recordstore.Meta) (recordstore.Meta, error),
 ) (recordstore.Meta, error) {
-	tx, err := writer.BeginTx(ctx, nil)
-	if err != nil {
-		return recordstore.Meta{}, fmt.Errorf("stream %q: begin trim: %w", stream, err)
-	}
-	defer func() { _ = tx.Rollback() }()
+	var meta recordstore.Meta
+	err := inTx(ctx, writer, fmt.Sprintf("stream %q: trim", stream), func(tx *sql.Tx) error {
+		var err error
+		meta, err = b.trimStreamTx(ctx, tx, stream, trim)
+		return err
+	})
+	return meta, err
+}
+
+// trimStreamTx runs trim over stream's live metadata and table in tx and
+// writes the metadata it returns. The caller holds the stream's lock.
+func (b *Backend) trimStreamTx(ctx context.Context, tx *sql.Tx, stream string,
+	trim func(tx *sql.Tx, table sqlitetable.Table, meta recordstore.Meta) (recordstore.Meta, error),
+) (recordstore.Meta, error) {
 	meta, err := b.openStoredStream(ctx, tx, stream, b.now())
 	if err != nil {
 		return recordstore.Meta{}, err
@@ -52,9 +61,6 @@ func (b *Backend) trimStreamLocked(ctx context.Context, writer *sql.DB, stream s
 	}
 	if err := upsertMeta(ctx, tx, meta); err != nil {
 		return recordstore.Meta{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return recordstore.Meta{}, fmt.Errorf("stream %q: commit trim: %w", stream, err)
 	}
 	return meta, nil
 }
@@ -88,14 +94,19 @@ func trimBelowTx(ctx context.Context, tx *sql.Tx, table sqlitetable.Table, meta 
 		return recordstore.Meta{}, err
 	}
 	statement := fmt.Sprintf(`DELETE FROM %s WHERE %s = ? AND %s < ?`, sqlitetable.QuoteIdentifier(table.Name), streamID, seq)
-	if _, err := tx.ExecContext(ctx, statement, meta.Stream, lowSeq); err != nil {
+	result, err := tx.ExecContext(ctx, statement, meta.Stream, lowSeq)
+	if err != nil {
 		return recordstore.Meta{}, fmt.Errorf("stream %q: trim rows below seq %d: %w", meta.Stream, lowSeq, err)
+	}
+	removed, err := result.RowsAffected()
+	if err != nil {
+		return recordstore.Meta{}, fmt.Errorf("stream %q: count rows trimmed below seq %d: %w", meta.Stream, lowSeq, err)
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM record_appends WHERE stream_id = ? AND last_seq < ?`, meta.Stream, lowSeq); err != nil {
 		return recordstore.Meta{}, fmt.Errorf("stream %q: trim append times below seq %d: %w", meta.Stream, lowSeq, err)
 	}
 	meta.LowSeq, meta.HighSeq = lowSeq, max(meta.HighSeq, lowSeq-1)
-	meta.Total = meta.HighSeq - meta.LowSeq + 1
+	meta.Total -= removed
 	return meta, nil
 }
 
