@@ -12,10 +12,11 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
 )
 
-type ProfileStoreProvider func() (profiles.Store, error)
+type ProfileStoreProvider func() (profilestore.Store, error)
 type ContextProvider func() dbcontext.Context
 
 // SessionEventLog holds the events a capture stream session emitted through
@@ -116,7 +117,7 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 type sessionHandler struct {
 	prefix    string
 	ctx       dbcontext.Context
-	store     profiles.Store
+	store     profilestore.Store
 	registry  *query.SessionRegistry
 	sessions  query.SessionStore
 	eventLog  SessionEventLog
@@ -129,7 +130,7 @@ type sessionHandler struct {
 type sessionHandlerOptions struct {
 	Prefix    string
 	Ctx       dbcontext.Context
-	Store     profiles.Store
+	Store     profilestore.Store
 	Registry  *query.SessionRegistry
 	Sessions  query.SessionStore
 	EventLog  SessionEventLog

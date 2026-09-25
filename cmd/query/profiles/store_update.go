@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -17,10 +18,6 @@ import (
 )
 
 const ProfileNameConflictCode = "PROFILE_NAME_CONFLICT"
-
-type UpdateOptions struct {
-	ReplaceExisting bool
-}
 
 type ProfileNameConflictError struct {
 	Source string
@@ -31,7 +28,7 @@ func (e ProfileNameConflictError) Error() string {
 	return fmt.Sprintf("%s: profile %q conflicts with existing profile %q", ProfileNameConflictCode, e.Source, e.Target)
 }
 
-func (s *FileStore) Update(ctx context.Context, originalName string, profile query.Profile, options UpdateOptions) error {
+func (s *FileStore) Update(ctx context.Context, originalName string, profile query.Profile, options profilestore.UpdateOptions) error {
 	profiles, source, target, err := prepareProfileUpdate(ctx, s, originalName, profile, options)
 	if err != nil {
 		return err
@@ -60,7 +57,7 @@ func (s *FileStore) Update(ctx context.Context, originalName string, profile que
 	return commitProfileFiles(writes, deletes)
 }
 
-func (s *DBStore) Update(ctx context.Context, originalName string, profile query.Profile, options UpdateOptions) error {
+func (s *DBStore) Update(ctx context.Context, originalName string, profile query.Profile, options profilestore.UpdateOptions) error {
 	return s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		store := &DBStore{db: tx}
 		profiles, source, target, err := prepareProfileUpdate(ctx, store, originalName, profile, options)
@@ -101,10 +98,10 @@ func (s *DBStore) Update(ctx context.Context, originalName string, profile query
 
 func prepareProfileUpdate(
 	ctx context.Context,
-	store Store,
+	store profilestore.Store,
 	originalName string,
 	profile query.Profile,
-	options UpdateOptions,
+	options profilestore.UpdateOptions,
 ) ([]query.Profile, query.Profile, *query.Profile, error) {
 	name, _, err := validateProfile(profile)
 	if err != nil {

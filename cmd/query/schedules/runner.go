@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	flanksourceContext "github.com/flanksource/commons/context"
 )
 
@@ -47,7 +48,7 @@ type RunnerOptions struct {
 	// read — the same hook the profile service runs, so a scheduled read and a
 	// hand-run one see the same data. The reconcile mode runs it through
 	// Reconcile, the profile service's own.
-	BeforeExecute profiles.BeforeExecuteFunc
+	BeforeExecute profilestore.BeforeExecuteFunc
 }
 
 // Runner executes one schedule inside a clicky task group.
@@ -201,7 +202,7 @@ func (r *Runner) read(ctx dbcontext.Context, schedule Schedule) (*query.Result, 
 			params[key] = value
 		}
 		if r.options.BeforeExecute != nil {
-			release, err := profiles.PrepareReads(ctx, r.options.BeforeExecute, []profiles.ReadRequest{{
+			release, err := profilestore.PrepareReads(ctx, r.options.BeforeExecute, []profilestore.ReadRequest{{
 				Profile: resolved.Profile, Params: params,
 			}})
 			if err != nil {

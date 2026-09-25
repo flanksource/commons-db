@@ -13,6 +13,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // hookedLookupProvider records a filter value lookup in the log the hook writes
@@ -54,10 +55,10 @@ var _ = Describe("BeforeExecute ahead of a filter lookup over HTTP", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store.Save(context.Background(), profile)).To(Succeed())
 		service, err := New(Options{
-			Store:      func() (Store, error) { return store, nil },
+			Store:      func() (profilestore.Store, error) { return store, nil },
 			Context:    func() dbcontext.Context { return dbcontext.New() },
 			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
-			BeforeExecute: func(_ context.Context, reads []ReadRequest) (func(), error) {
+			BeforeExecute: func(_ context.Context, reads []profilestore.ReadRequest) (func(), error) {
 				events = append(events, "hook:"+reads[0].Profile.Name)
 				return func() { events = append(events, "release") }, hookErr
 			},
@@ -86,9 +87,9 @@ var _ = Describe("BeforeExecute ahead of a filter lookup over HTTP", func() {
 			Expect(body.Message).To(ContainSubstring("run-9"))
 			Expect(events).To(Equal([]string{"hook:stream-results", "release"}))
 		},
-		Entry("404 when the data the request names is missing", ErrProfileDataNotFound, http.StatusNotFound, "profile_data_not_found"),
+		Entry("404 when the data the request names is missing", profilestore.ErrProfileDataNotFound, http.StatusNotFound, "profile_data_not_found"),
 		Entry("410 when the data expired", dbcontext.ErrConnectionExpired, http.StatusGone, "profile_data_expired"),
-		Entry("400 when the request itself is invalid", ErrProfileRequestInvalid, http.StatusBadRequest, "invalid_params"),
+		Entry("400 when the request itself is invalid", profilestore.ErrProfileRequestInvalid, http.StatusBadRequest, "invalid_params"),
 		Entry("500 for anything else, which is the server's", errors.New("index unavailable"), http.StatusInternalServerError, "prepare_failed"),
 	)
 })

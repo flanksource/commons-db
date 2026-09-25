@@ -14,10 +14,11 @@ import (
 	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/spf13/cobra"
 )
 
-type StoreProvider func() (Store, error)
+type StoreProvider func() (profilestore.Store, error)
 type ContextProvider func() dbcontext.Context
 type BodyDecoder func(context.Context, map[string]any) (map[string]any, error)
 
@@ -47,7 +48,7 @@ type Options struct {
 	Snapshots         SnapshotService
 	OpenAPIExtensions []OpenAPIExtension
 	// BeforeExecute, when set, runs before every read of a profile's data.
-	BeforeExecute BeforeExecuteFunc
+	BeforeExecute profilestore.BeforeExecuteFunc
 }
 
 type Service struct {
@@ -56,7 +57,7 @@ type Service struct {
 	decodeBody        BodyDecoder
 	snapshots         SnapshotService
 	openAPIExtensions []OpenAPIExtension
-	beforeExecute     BeforeExecuteFunc
+	beforeExecute     profilestore.BeforeExecuteFunc
 	mu                sync.Mutex
 	registered        map[string]struct{}
 }
@@ -292,7 +293,7 @@ func (s *Service) Save(ctx context.Context, body map[string]any, id string) (que
 		return query.Profile{}, err
 	}
 	if id != "" {
-		err = store.Update(ctx, id, p, UpdateOptions{ReplaceExisting: replaceExisting})
+		err = store.Update(ctx, id, p, profilestore.UpdateOptions{ReplaceExisting: replaceExisting})
 	} else {
 		err = store.Save(ctx, p)
 	}

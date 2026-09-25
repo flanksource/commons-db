@@ -7,6 +7,7 @@ import (
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // ReconcileFlags are the flags of the profiles `reconcile` action. The entity id
@@ -96,7 +97,7 @@ func (s *Service) prepareReconcileSides(ctx context.Context, source, dest query.
 	if err := validateReconcileFilters(dest, config.DestFilters, "destination"); err != nil {
 		return nil, err
 	}
-	return s.prepareReads(ctx, []ReadRequest{
+	return s.prepareReads(ctx, []profilestore.ReadRequest{
 		{Profile: source, Params: reconcileFilterValues(config.SourceFilters)},
 		{Profile: dest, Params: reconcileFilterValues(config.DestFilters)},
 	})

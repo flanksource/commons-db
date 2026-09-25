@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 const (
@@ -94,7 +94,7 @@ func (r *Registry) Close() error {
 // long would hold every append off, and the follow provider takes its own lease
 // around each read.
 func (r *Registry) BeforeRead(ctx context.Context, p query.Profile, params map[string]any) (func(), error) {
-	release, err := r.BeforeExecute(ctx, []profiles.ReadRequest{{Profile: p, Params: params}})
+	release, err := r.BeforeExecute(ctx, []profilestore.ReadRequest{{Profile: p, Params: params}})
 	if err != nil {
 		return nil, err
 	}

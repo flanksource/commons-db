@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 func (m *Manager) List(context.Context) ([]query.Profile, error) {
@@ -60,7 +60,7 @@ func (m *Manager) Save(context.Context, query.Profile) error {
 	return fmt.Errorf("virtual profiles are read-only")
 }
 
-func (m *Manager) Update(context.Context, string, query.Profile, profiles.UpdateOptions) error {
+func (m *Manager) Update(context.Context, string, query.Profile, profilestore.UpdateOptions) error {
 	return fmt.Errorf("virtual profiles are read-only")
 }
 

@@ -6,19 +6,14 @@ import (
 	"sort"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
-
-type VirtualStore interface {
-	Store
-	Peek(context.Context, string) (query.Profile, error)
-	IsVirtual(string) bool
-}
 
 type peekStore interface {
 	Peek(context.Context, string) (query.Profile, error)
 }
 
-type nonTouchStore struct{ Store }
+type nonTouchStore struct{ profilestore.Store }
 
 func (s nonTouchStore) Get(ctx context.Context, name string) (query.Profile, error) {
 	if store, ok := s.Store.(peekStore); ok {
@@ -27,16 +22,16 @@ func (s nonTouchStore) Get(ctx context.Context, name string) (query.Profile, err
 	return s.Store.Get(ctx, name)
 }
 
-func ResolveWithoutTouch(ctx context.Context, store Store, name string) (ResolvedProfile, error) {
+func ResolveWithoutTouch(ctx context.Context, store profilestore.Store, name string) (ResolvedProfile, error) {
 	return Resolve(ctx, nonTouchStore{Store: store}, name)
 }
 
 type OverlayStore struct {
-	base    Store
-	virtual VirtualStore
+	base    profilestore.Store
+	virtual profilestore.VirtualStore
 }
 
-func NewOverlayStore(base Store, virtual VirtualStore) (*OverlayStore, error) {
+func NewOverlayStore(base profilestore.Store, virtual profilestore.VirtualStore) (*OverlayStore, error) {
 	if base == nil || virtual == nil {
 		return nil, fmt.Errorf("profile overlay requires base and virtual stores")
 	}
@@ -84,7 +79,7 @@ func (s *OverlayStore) Save(ctx context.Context, profile query.Profile) error {
 	return s.base.Save(ctx, profile)
 }
 
-func (s *OverlayStore) Update(ctx context.Context, name string, profile query.Profile, options UpdateOptions) error {
+func (s *OverlayStore) Update(ctx context.Context, name string, profile query.Profile, options profilestore.UpdateOptions) error {
 	if s.virtual.IsVirtual(name) || s.virtual.IsVirtual(profile.Name) {
 		return fmt.Errorf("virtual profile %q is read-only", name)
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // scheduledProvider records that it read rows in the log the hook writes to,
@@ -43,9 +44,9 @@ var _ = ginkgo.Describe("a scheduled query", func() {
 		})).To(Succeed())
 		runner, err = NewRunner(RunnerOptions{
 			Store:    func() (*Store, error) { return nil, errors.New("no schedule store in this spec") },
-			Profiles: func() (profiles.Store, error) { return store, nil },
+			Profiles: func() (profilestore.Store, error) { return store, nil },
 			Context:  func() dbcontext.Context { return dbcontext.New() },
-			BeforeExecute: func(_ context.Context, reads []profiles.ReadRequest) (func(), error) {
+			BeforeExecute: func(_ context.Context, reads []profilestore.ReadRequest) (func(), error) {
 				events = append(events, "hook:"+reads[0].Profile.Name)
 				params = append(params, reads[0].Params)
 				return func() { events = append(events, "release") }, hookErr

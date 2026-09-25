@@ -20,6 +20,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
 )
@@ -75,7 +76,7 @@ func newFollowServerWith(options recordresults.OpenOptions) followServer {
 	sessionRegistry := query.NewSessionRegistry(query.RegistryOptions{BeforeRead: results.Registry.BeforeRead})
 	DeferCleanup(sessionRegistry.StopAll)
 	sessionService, err := sessions.New(sessions.Options{
-		Profiles: func() (profiles.Store, error) { return store, nil },
+		Profiles: func() (profilestore.Store, error) { return store, nil },
 		Context:  func() dbcontext.Context { return queryCtx },
 		Registry: sessionRegistry,
 	})
@@ -92,7 +93,7 @@ func newFollowServerWith(options recordresults.OpenOptions) followServer {
 	return followServer{results: results, service: service, server: server}
 }
 
-func mustFileStore() profiles.Store {
+func mustFileStore() profilestore.Store {
 	store, err := profiles.NewFileStore(GinkgoT().TempDir())
 	Expect(err).ToNot(HaveOccurred())
 	return store

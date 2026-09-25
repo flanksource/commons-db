@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // httpCtx mirrors what the clicky executor does on the HTTP path: it stashes the
@@ -94,7 +95,7 @@ func TestSaveProfilePreservesNestedBody(t *testing.T) {
 	})
 
 	service, err := profiles.New(profiles.Options{
-		Store: func() (profiles.Store, error) { return store, nil },
+		Store: func() (profilestore.Store, error) { return store, nil },
 		Context: func() dbcontext.Context {
 			return dbcontext.NewContext(context.Background())
 		},
@@ -137,7 +138,7 @@ func TestSaveProfileUpdateUsesPathID(t *testing.T) {
 
 	ctx := httpCtx(t, map[string]any{"provider": map[string]any{"type": "sql"}, "query": "select 2"})
 	service, err := profiles.New(profiles.Options{
-		Store: func() (profiles.Store, error) { return store, nil },
+		Store: func() (profilestore.Store, error) { return store, nil },
 		Context: func() dbcontext.Context {
 			return dbcontext.NewContext(context.Background())
 		},

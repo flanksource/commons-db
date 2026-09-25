@@ -26,6 +26,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/profilestore"
 	_ "github.com/flanksource/commons-db/query/providers"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/kv"
@@ -158,7 +159,7 @@ func newResultService(registry *recordresults.Registry) *profiles.Service {
 	Expect(err).ToNot(HaveOccurred())
 	queryCtx := dbcontext.New().WithConnectionResolver(registry.ResolveConnection)
 	service, err := profiles.New(profiles.Options{
-		Store:         func() (profiles.Store, error) { return overlay, nil },
+		Store:         func() (profilestore.Store, error) { return overlay, nil },
 		Context:       func() dbcontext.Context { return queryCtx },
 		DecodeBody:    profiles.DecodeRequestBody,
 		BeforeExecute: registry.BeforeExecute,

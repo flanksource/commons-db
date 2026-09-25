@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/query/schema"
 )
 
@@ -24,11 +25,11 @@ const SchemaContentType = profiles.SchemaContentType
 //   - {prefix}/profile/{name}       -> the per-profile FilterBar+columns schema
 type schemaHandler struct {
 	prefix string
-	store  profiles.Store
+	store  profilestore.Store
 	next   http.Handler
 }
 
-func newSchemaHandler(prefix string, store profiles.Store, next http.Handler) *schemaHandler {
+func newSchemaHandler(prefix string, store profilestore.Store, next http.Handler) *schemaHandler {
 	return &schemaHandler{prefix: strings.TrimRight(prefix, "/"), store: store, next: next}
 }
 

@@ -13,16 +13,17 @@ import (
 	profilepkg "github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 var _ = ginkgo.Describe("a session over a profile whose data is prepared per read", func() {
 	var (
-		store   profilepkg.Store
+		store   profilestore.Store
 		hookErr error
 		hooked  chan string
 	)
 
-	hook := func(_ context.Context, reads []profilepkg.ReadRequest) (func(), error) {
+	hook := func(_ context.Context, reads []profilestore.ReadRequest) (func(), error) {
 		hooked <- fmt.Sprintf("%s region=%v", reads[0].Profile.Name, reads[0].Params["region"])
 		return func() { hooked <- "release" }, hookErr
 	}
@@ -40,7 +41,7 @@ var _ = ginkgo.Describe("a session over a profile whose data is prepared per rea
 		registry := query.NewSessionRegistry(query.RegistryOptions{BeforeRead: func(
 			ctx context.Context, p query.Profile, params map[string]any,
 		) (func(), error) {
-			return profilepkg.PrepareReads(ctx, hook, []profilepkg.ReadRequest{{Profile: p, Params: params}})
+			return profilestore.PrepareReads(ctx, hook, []profilestore.ReadRequest{{Profile: p, Params: params}})
 		}})
 		ginkgo.DeferCleanup(registry.StopAll)
 		handler := newSessionHandler(sessionHandlerOptions{
@@ -66,8 +67,8 @@ var _ = ginkgo.Describe("a session over a profile whose data is prepared per rea
 			Expect(hooked).To(Receive(Equal("plain-top region=EU")))
 			Expect(hooked).To(Receive(Equal("release")))
 		},
-		ginkgo.Entry("data that does not exist", fmt.Errorf("stream run-9: %w", profilepkg.ErrProfileDataNotFound), http.StatusNotFound),
-		ginkgo.Entry("a request the hook refused", fmt.Errorf("stream run-9: %w", profilepkg.ErrProfileRequestInvalid), http.StatusBadRequest),
+		ginkgo.Entry("data that does not exist", fmt.Errorf("stream run-9: %w", profilestore.ErrProfileDataNotFound), http.StatusNotFound),
+		ginkgo.Entry("a request the hook refused", fmt.Errorf("stream run-9: %w", profilestore.ErrProfileRequestInvalid), http.StatusBadRequest),
 		ginkgo.Entry("a store that is down", errors.New("stream run-9: connection refused"), http.StatusInternalServerError),
 	)
 
@@ -75,7 +76,7 @@ var _ = ginkgo.Describe("a session over a profile whose data is prepared per rea
 		hookErr = errors.New("index unavailable")
 		var stdout, stderr bytes.Buffer
 		runner, err := NewRunner(RunnerOptions{
-			Profiles: func() (profilepkg.Store, error) { return store, nil },
+			Profiles: func() (profilestore.Store, error) { return store, nil },
 			Context:  func() dbcontext.Context { return dbcontext.New() },
 			Stdout:   &stdout, Stderr: &stderr, BeforeExecute: hook,
 		})

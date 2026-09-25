@@ -12,9 +12,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // expectedEvents counts run-1's events that keep passes.
@@ -82,7 +82,7 @@ var _ = Describe("filtering a record result type by its columns", Ordered, func(
 		profile, err := server.registry.Get(ctx, "trace-results/sample_event")
 		Expect(err).ToNot(HaveOccurred())
 		input := map[string]any{"stream": "run-1"}
-		release, err := server.registry.BeforeExecute(ctx, []profiles.ReadRequest{{Profile: profile, Params: input}})
+		release, err := server.registry.BeforeExecute(ctx, []profilestore.ReadRequest{{Profile: profile, Params: input}})
 		Expect(err).ToNot(HaveOccurred())
 		defer release()
 		queryCtx := dbcontext.New().WithConnectionResolver(server.registry.ResolveConnection)

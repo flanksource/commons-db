@@ -15,6 +15,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // nameOnlyVirtualStore answers to a profile's exact name and nothing else,
@@ -42,7 +43,7 @@ func (nameOnlyVirtualStore) Save(context.Context, query.Profile) error {
 	return fmt.Errorf("read-only")
 }
 
-func (nameOnlyVirtualStore) Update(context.Context, string, query.Profile, UpdateOptions) error {
+func (nameOnlyVirtualStore) Update(context.Context, string, query.Profile, profilestore.UpdateOptions) error {
 	return fmt.Errorf("read-only")
 }
 
@@ -56,7 +57,7 @@ var _ = Describe("the profile family over a virtual profile", func() {
 		overlay, err := NewOverlayStore(base, nameOnlyVirtualStore{profile: lookupProfile("results/spans")})
 		Expect(err).ToNot(HaveOccurred())
 		service, err := New(Options{
-			Store:      func() (Store, error) { return overlay, nil },
+			Store:      func() (profilestore.Store, error) { return overlay, nil },
 			Context:    func() dbcontext.Context { return dbcontext.New() },
 			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 		})
@@ -92,7 +93,7 @@ var _ = Describe("the profile family over a virtual profile", func() {
 		overlay, err := NewOverlayStore(base, nameOnlyVirtualStore{profile: profile})
 		Expect(err).ToNot(HaveOccurred())
 		service, err := New(Options{
-			Store:      func() (Store, error) { return overlay, nil },
+			Store:      func() (profilestore.Store, error) { return overlay, nil },
 			Context:    func() dbcontext.Context { return dbcontext.New() },
 			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 		})

@@ -140,7 +140,7 @@ type RegisteredResultType struct {
 	Views []RegisteredResultView `json:"views,omitempty"`
 }
 
-// Registry is the result types a server serves: a profiles.VirtualStore of
+// Registry is the result types a server serves: a profilestore.VirtualStore of
 // their profiles, the resolver of the index connection those profiles read,
 // and the BeforeExecute hook that catches the index up first.
 type Registry struct {

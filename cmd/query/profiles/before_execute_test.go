@@ -12,6 +12,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // hookedProvider records that it read rows, in the same log the hook writes
@@ -45,7 +46,7 @@ func hookedProfile() query.Profile {
 var _ = Describe("BeforeExecute", func() {
 	var (
 		events   []string
-		requests [][]ReadRequest
+		requests [][]profilestore.ReadRequest
 		hookErr  error
 		queryErr error
 		service  *Service
@@ -59,10 +60,10 @@ var _ = Describe("BeforeExecute", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(store.Save(context.Background(), hookedProfile())).To(Succeed())
 		service, err = New(Options{
-			Store:      func() (Store, error) { return store, nil },
+			Store:      func() (profilestore.Store, error) { return store, nil },
 			Context:    func() dbcontext.Context { return dbcontext.New() },
 			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
-			BeforeExecute: func(_ context.Context, reads []ReadRequest) (func(), error) {
+			BeforeExecute: func(_ context.Context, reads []profilestore.ReadRequest) (func(), error) {
 				events = append(events, "hook")
 				requests = append(requests, reads)
 				return func() { events = append(events, "release") }, hookErr
@@ -85,11 +86,11 @@ var _ = Describe("BeforeExecute", func() {
 		response := get(handler, "/api/v1/profile/stream-results?stream=run-1", "application/json")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 		Expect(events).To(Equal([]string{"hook", "execute", "release"}))
-		Expect(requests).To(Equal([][]ReadRequest{{{Profile: hookedProfile(), Params: map[string]any{"stream": "run-1"}}}}))
+		Expect(requests).To(Equal([][]profilestore.ReadRequest{{{Profile: hookedProfile(), Params: map[string]any{"stream": "run-1"}}}}))
 	})
 
 	It("answers 404 and reads nothing when the hook reports the data the request names missing", func() {
-		hookErr = fmt.Errorf("stream %q: %w", "run-9", ErrProfileDataNotFound)
+		hookErr = fmt.Errorf("stream %q: %w", "run-9", profilestore.ErrProfileDataNotFound)
 		body := execError(http.StatusNotFound, "/api/v1/profile/stream-results?stream=run-9")
 		Expect(body.Code).To(Equal("profile_data_not_found"))
 		Expect(body.Message).To(ContainSubstring("run-9"))
@@ -102,7 +103,7 @@ var _ = Describe("BeforeExecute", func() {
 	})
 
 	It("answers 400 when the hook reports the request itself invalid, and reads nothing", func() {
-		hookErr = fmt.Errorf("stream %q: %w", "run/1", ErrProfileRequestInvalid)
+		hookErr = fmt.Errorf("stream %q: %w", "run/1", profilestore.ErrProfileRequestInvalid)
 		body := execError(http.StatusBadRequest, "/api/v1/profile/stream-results?stream=run/1")
 		Expect(body.Code).To(Equal("invalid_params"))
 		Expect(body.Message).To(ContainSubstring("run/1"))
@@ -126,9 +127,9 @@ var _ = Describe("BeforeExecute", func() {
 
 	It("normalises a successful hook's cleanup to exactly once", func() {
 		released := 0
-		release, err := PrepareReads(context.Background(), func(context.Context, []ReadRequest) (func(), error) {
+		release, err := profilestore.PrepareReads(context.Background(), func(context.Context, []profilestore.ReadRequest) (func(), error) {
 			return func() { released++ }, nil
-		}, []ReadRequest{{Profile: hookedProfile()}})
+		}, []profilestore.ReadRequest{{Profile: hookedProfile()}})
 		Expect(err).ToNot(HaveOccurred())
 		release()
 		release()

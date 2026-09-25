@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -19,8 +20,8 @@ func TestPublicPackages(t *testing.T) {
 	RunSpecs(t, "Query module public packages")
 }
 
-var _ profiles.Store = (*profiles.FileStore)(nil)
-var _ profiles.Store = (*profiles.DBStore)(nil)
+var _ profilestore.Store = (*profiles.FileStore)(nil)
+var _ profilestore.Store = (*profiles.DBStore)(nil)
 
 type profileReader interface {
 	Get(context.Context, string) (query.Profile, error)

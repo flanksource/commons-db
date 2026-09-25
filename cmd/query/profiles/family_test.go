@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/spf13/cobra"
 )
 
@@ -53,7 +54,7 @@ func lookupProfile(name string) query.Profile {
 }
 
 // newProfileServiceTest builds a service over a store holding profiles.
-func newProfileServiceTest(t *testing.T, profiles ...query.Profile) (*Service, Store) {
+func newProfileServiceTest(t *testing.T, profiles ...query.Profile) (*Service, profilestore.Store) {
 	t.Helper()
 	store, err := NewFileStore(t.TempDir())
 	if err != nil {
@@ -65,7 +66,7 @@ func newProfileServiceTest(t *testing.T, profiles ...query.Profile) (*Service, S
 		}
 	}
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})
@@ -78,7 +79,7 @@ func newProfileServiceTest(t *testing.T, profiles ...query.Profile) (*Service, S
 // newProfileFamilyTest builds the server the way `query serve` does: the
 // family's single route is registered once, up front, and every profile below is
 // resolved through it per request.
-func newProfileFamilyTest(t *testing.T, profiles ...query.Profile) (http.Handler, Store) {
+func newProfileFamilyTest(t *testing.T, profiles ...query.Profile) (http.Handler, profilestore.Store) {
 	t.Helper()
 	query.RegisterProvider(familyLookupMock{values: []string{"api", "payments", "payroll"}})
 

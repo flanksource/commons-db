@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/spf13/cobra"
 )
 
@@ -340,7 +341,7 @@ func TestRegisterProfileEntitiesRegistersEveryFilterKind(t *testing.T) {
 		t.Fatalf("Save: %v", err)
 	}
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})
@@ -397,7 +398,7 @@ func TestRegisterProfileEntitiesEmitsSurfaceWithIcon(t *testing.T) {
 	}
 
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})
@@ -460,7 +461,7 @@ func TestRegisterProfileEntitiesEmitsSurfacePath(t *testing.T) {
 	}
 
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})
@@ -507,7 +508,7 @@ func TestRegisterProfileEntityColumnFiltersIdempotently(t *testing.T) {
 	}
 
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})
@@ -544,7 +545,7 @@ func TestRegisterProfileEntityOffersBoundListParamsAsFilters(t *testing.T) {
 	}
 
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})
