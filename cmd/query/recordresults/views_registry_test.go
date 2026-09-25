@@ -5,6 +5,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -13,7 +14,7 @@ import (
 func countView(name, statement string, uses ...string) recordresults.ResultView {
 	return recordresults.ResultView{
 		Name: name, Title: name, Uses: uses, Query: statement,
-		Columns: []query.ColumnDef{{Name: "job"}, numberColumn("events")},
+		Columns: []query.ColumnDef{{Name: "job"}, recordresultstest.NumberColumn("events")},
 		Order:   query.Order{{Column: "job", Unique: true}},
 	}
 }
@@ -24,7 +25,7 @@ var _ = Describe("declaring views on a result type", func() {
 	DescribeTable("refuses a view it could not serve, registering nothing of the type",
 		func(views []recordresults.ResultView, message string) {
 			registry, _ := newRegistry()
-			err := recordresults.RegisterResultType(registry, recordresults.ResultType[jobEvent]{
+			err := recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.JobEvent]{
 				Kind: "job_event", Title: "Job events", Views: views,
 			})
 			Expect(err).To(MatchError(ContainSubstring(message)))
@@ -57,7 +58,7 @@ var _ = Describe("declaring views on a result type", func() {
 		Entry("an order column the view does not declare",
 			[]recordresults.ResultView{func() recordresults.ResultView {
 				view := countView("counts", `SELECT job AS name, count(*) AS events FROM stream_rows GROUP BY job`)
-				view.Columns = []query.ColumnDef{{Name: "name"}, numberColumn("events")}
+				view.Columns = []query.ColumnDef{{Name: "name"}, recordresultstest.NumberColumn("events")}
 				view.Order = query.Order{{Column: "name"}, {Column: "job", Unique: true}}
 				return view
 			}()}, `orders by "job", which is not one of its declared columns`),
@@ -91,7 +92,7 @@ var _ = Describe("declaring views on a result type", func() {
 		registry, _ := newRegistry()
 		view := countView("counts", countQuery)
 		view.Params = []query.ParamDef{{Name: "rootsOnly", Type: query.ParamTypeBoolean, Default: false}}
-		err := recordresults.RegisterResultType(registry, recordresults.ResultType[jobEvent]{
+		err := recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.JobEvent]{
 			Kind: "job_event", Title: "Job events", KeyColumn: "id",
 			Hierarchy: &recordresults.HierarchyColumns{ID: "id", Parent: "parent"},
 			Views:     []recordresults.ResultView{view},
@@ -101,8 +102,8 @@ var _ = Describe("declaring views on a result type", func() {
 
 	It("fails to open a result store whose view reads a column the kind does not have", func() {
 		_, err := recordresults.Open(recordresults.OpenOptions{
-			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(recordstore.BackendSQLite),
-			Register: registerJobTypes([]recordresults.ResultView{countView("counts", `SELECT job, count(duration) AS events FROM stream_rows GROUP BY job`)}),
+			Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(recordstore.BackendSQLite),
+			Register: recordresultstest.RegisterJobTypes([]recordresults.ResultView{countView("counts", `SELECT job, count(duration) AS events FROM stream_rows GROUP BY job`)}),
 		})
 		Expect(err).To(MatchError(ContainSubstring("no such column: duration")))
 	})

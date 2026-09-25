@@ -1,4 +1,4 @@
-package recordresults_test
+package recordresultse2e
 
 import (
 	"bytes"
@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -30,7 +31,7 @@ func registerWorkEvents(registry *recordresults.Registry) error {
 			Name: "work_items", Title: "Work items",
 			Query: `SELECT item, max(CASE WHEN phase = 'end' THEN millis END) AS durationMs
 FROM stream_rows GROUP BY item`,
-			Columns: []query.ColumnDef{{Name: "item"}, numberColumn("durationMs")},
+			Columns: []query.ColumnDef{{Name: "item"}, recordresultstest.NumberColumn("durationMs")},
 			Order:   query.Order{{Column: "durationMs", Desc: true}, {Column: "item", Unique: true}},
 		}},
 	})
@@ -56,10 +57,10 @@ var _ = Describe("a view paged by a nullable output column", Ordered, func() {
 	BeforeAll(func() {
 		schemas := recordstore.NewSchemas()
 		server = newFollowServerWith(recordresults.OpenOptions{
-			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(""), Source: kvRouter(schemas),
+			Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(""), Source: recordresultstest.KVRouter(schemas),
 			Schemas: schemas, Register: registerWorkEvents,
 		})
-		_, err := recordstore.AppendTyped(forTenant("a"), server.results.Backend, "run-1", "work_event", inFlightWorkEvents())
+		_, err := recordstore.AppendTyped(recordresultstest.ForTenant("a"), server.results.Backend, "run-1", "work_event", inFlightWorkEvents())
 		Expect(err).ToNot(HaveOccurred())
 	})
 
@@ -79,7 +80,7 @@ var _ = Describe("a view paged by a nullable output column", Ordered, func() {
 			Expect(response.StatusCode).To(Equal(http.StatusOK), body.String())
 			var rows []map[string]any
 			Expect(json.Unmarshal(body.Bytes(), &rows)).To(Succeed(), body.String())
-			pages = append(pages, column(rows, "item"))
+			pages = append(pages, recordresultstest.Column(rows, "item"))
 			Expect(len(pages)).To(BeNumerically("<=", 7), "the walk never ends")
 			if response.Header.Get("X-Has-More") != "true" {
 				return pages

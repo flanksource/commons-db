@@ -6,17 +6,16 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/flanksource/clicky/cache"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
-	"github.com/flanksource/commons-db/recordstore/kv"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
 )
 
@@ -33,15 +32,6 @@ func newRegistry() (*recordresults.Registry, *sqlite.Backend) {
 	return registry, index
 }
 
-// newKV is an in-process kv source resolving kinds through schemas.
-func newKV(schemas *recordstore.Schemas) *kv.Backend {
-	source, err := kv.New(kv.Options{
-		Store: cache.NewMemory(), Prefix: "records", Schema: schemas.Kind, TTL: time.Hour, MaxChunkBytes: 1 << 20,
-	})
-	Expect(err).ToNot(HaveOccurred())
-	return source
-}
-
 func newRegistryBackends() (*recordresults.Registry, recordstore.Backend, *sqlite.Backend) {
 	schemas := recordstore.NewSchemas()
 	index, err := sqlite.Open(sqlite.Options{
@@ -50,7 +40,7 @@ func newRegistryBackends() (*recordresults.Registry, recordstore.Backend, *sqlit
 	})
 	Expect(err).ToNot(HaveOccurred())
 	DeferCleanup(index.Close)
-	source := newKV(schemas)
+	source := recordresultstest.NewKV(schemas)
 	registry, err := recordresults.NewRegistry(recordresults.RegistryOptions{
 		Prefix: "trace-results", Schemas: schemas, Index: index, Source: source, ConnectionName: "index",
 	})
@@ -63,7 +53,7 @@ var _ = Describe("Registry", func() {
 
 	It("declares one read-only sql profile per result type, paged by seq over the index connection", func() {
 		registry, _ := newRegistry()
-		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 			Kind: "sample_event", Title: "Sample events", TimeColumn: "at",
 		})).To(Succeed())
 
@@ -100,7 +90,7 @@ var _ = Describe("Registry", func() {
 
 	It("declares only the stream and its seq window for a type without a time column", func() {
 		registry, _ := newRegistry()
-		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{Kind: "sample_event", Title: "Sample events"})).To(Succeed())
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "sample_event", Title: "Sample events"})).To(Succeed())
 
 		profile, err := registry.Get(ctx, "trace-results/sample_event")
 		Expect(err).ToNot(HaveOccurred())
@@ -114,7 +104,7 @@ var _ = Describe("Registry", func() {
 
 	It("starts a timed type's window at its default from, and takes the timestamp column's own filter away", func() {
 		registry, _ := newRegistry()
-		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 			Kind: "sample_event", Title: "Sample events", TimeColumn: "at", DefaultFrom: "now-12h",
 		})).To(Succeed())
 
@@ -135,10 +125,10 @@ var _ = Describe("Registry", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(index.Close)
 		registry, err := recordresults.NewRegistry(recordresults.RegistryOptions{
-			Prefix: "trace-results", Schemas: schemas, Index: index, Source: newKV(schemas), ConnectionName: "index",
+			Prefix: "trace-results", Schemas: schemas, Index: index, Source: recordresultstest.NewKV(schemas), ConnectionName: "index",
 		})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 			Kind: "sample_event", Title: "Sample events", KeyColumn: "user", Retention: recordstore.RetainRows,
 		})).To(Succeed())
 
@@ -149,7 +139,7 @@ var _ = Describe("Registry", func() {
 
 	It("marks the time column as the table's timestamp", func() {
 		registry, _ := newRegistry()
-		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 			Kind: "sample_event", Title: "Sample events", TimeColumn: "at",
 		})).To(Succeed())
 		profile, err := registry.Get(ctx, "trace-results/sample_event")
@@ -166,38 +156,38 @@ var _ = Describe("Registry", func() {
 			Expect(register(registry)).To(MatchError(ContainSubstring(message)))
 		},
 		Entry("a time column the type does not have", func(r *recordresults.Registry) error {
-			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", TimeColumn: "when"})
+			return recordresults.RegisterResultType(r, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K", TimeColumn: "when"})
 		}, `time column "when"`),
 		Entry("a time column that is not a datetime", func(r *recordresults.Registry) error {
 			return recordresults.RegisterResultType(r, recordresults.ResultType[untimedEvent]{Kind: "k", Title: "K", TimeColumn: "at"})
 		}, "datetime"),
 		Entry("a key column the type does not have", func(r *recordresults.Registry) error {
-			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", KeyColumn: "id"})
+			return recordresults.RegisterResultType(r, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K", KeyColumn: "id"})
 		}, `key "id" is not one of its columns`),
 		Entry("a key column that is not a string", func(r *recordresults.Registry) error {
-			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", KeyColumn: "elapsed_ms"})
+			return recordresults.RegisterResultType(r, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K", KeyColumn: "elapsed_ms"})
 		}, "not a string"),
 		Entry("a default from without a time column", func(r *recordresults.Registry) error {
-			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", DefaultFrom: "now-12h"})
+			return recordresults.RegisterResultType(r, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K", DefaultFrom: "now-12h"})
 		}, "DefaultFrom"),
 		Entry("a default from that is not a time", func(r *recordresults.Registry) error {
-			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K", TimeColumn: "at", DefaultFrom: "yesterday-ish"})
+			return recordresults.RegisterResultType(r, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K", TimeColumn: "at", DefaultFrom: "yesterday-ish"})
 		}, `"yesterday-ish"`),
 		Entry("a field named after a column every stream table reserves", func(r *recordresults.Registry) error {
 			return recordresults.RegisterResultType(r, recordresults.ResultType[seqEvent]{Kind: "k", Title: "K"})
 		}, `"seq"`),
 		Entry("no title", func(r *recordresults.Registry) error {
-			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k"})
+			return recordresults.RegisterResultType(r, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k"})
 		}, "title"),
 		Entry("a kind registered twice", func(r *recordresults.Registry) error {
-			Expect(recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K"})).To(Succeed())
-			return recordresults.RegisterResultType(r, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K"})
+			Expect(recordresults.RegisterResultType(r, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K"})).To(Succeed())
+			return recordresults.RegisterResultType(r, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K"})
 		}, "already registered"),
 	)
 
 	It("refuses every write to its profiles", func() {
 		registry, _ := newRegistry()
-		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K"})).To(Succeed())
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K"})).To(Succeed())
 		Expect(registry.Save(ctx, query.Profile{Name: "trace-results/k"})).To(MatchError(ContainSubstring("read-only")))
 		Expect(registry.Update(ctx, "trace-results/k", query.Profile{}, profilestore.UpdateOptions{})).To(MatchError(ContainSubstring("read-only")))
 		Expect(registry.Delete(ctx, "trace-results/k")).To(MatchError(ContainSubstring("read-only")))
@@ -244,11 +234,11 @@ var _ = Describe("Registry", func() {
 
 	It("prepares every owned stream as one batch and returns one release for the reads", func() {
 		registry, source, index := newRegistryBackends()
-		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 			Kind: "sample_event", Title: "Sample events", TimeColumn: "at",
 		})).To(Succeed())
 		for _, stream := range []string{"run-1", "run-2"} {
-			_, err := recordstore.AppendTyped(ctx, source, stream, "sample_event", sampleEvents(1, 2))
+			_, err := recordstore.AppendTyped(ctx, source, stream, "sample_event", recordresultstest.SampleEvents(1, 2))
 			Expect(err).ToNot(HaveOccurred())
 		}
 		profile, err := registry.Get(ctx, "trace-results/sample_event")

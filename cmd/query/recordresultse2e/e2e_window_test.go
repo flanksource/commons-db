@@ -1,4 +1,4 @@
-package recordresults_test
+package recordresultse2e
 
 import (
 	"context"
@@ -13,6 +13,7 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -41,7 +42,7 @@ func recentIncidents(now time.Time) []incident {
 	for n := 1; n <= incidents; n++ {
 		items = append(items, incident{
 			ID: fmt.Sprintf("incident-%02d", n), At: now.Add(-time.Duration(n)*time.Hour + 30*time.Minute).UTC(),
-			DB: sampleDBs[n%3],
+			DB: recordresultstest.SampleDBs[n%3],
 		})
 	}
 	return items
@@ -57,7 +58,7 @@ var _ = Describe("a keyed, timed record result type", Ordered, func() {
 
 	BeforeAll(func() {
 		schemas := recordstore.NewSchemas()
-		source = newKV(schemas)
+		source = recordresultstest.NewKV(schemas)
 		registry := newSampleRegistry(source, schemas)
 		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[incident]{
 			Kind: incidentKind, Title: "Incidents", TimeColumn: "at", KeyColumn: "id", DefaultFrom: "now-24h",
@@ -89,23 +90,23 @@ var _ = Describe("a keyed, timed record result type", Ordered, func() {
 	It("starts the window at the type's default from when the request names none", func() {
 		rows, header := incidentRows("stream=env-1&limit=500")
 		Expect(header.Get("X-Total-Count")).To(Equal("24"))
-		Expect(column(rows, "id")[0]).To(Equal("incident-01"))
+		Expect(recordresultstest.Column(rows, "id")[0]).To(Equal("incident-01"))
 	})
 
 	It("reads a date-math window newest first, a page at a time", func() {
 		window := "stream=env-1&limit=4&from=" + url.QueryEscape("now-12h") + "&to=" + url.QueryEscape("now-6h")
 		first, header := incidentRows(window)
 		Expect(header.Get("X-Total-Count")).To(Equal("6"))
-		Expect(column(first, "id")).To(Equal([]any{"incident-07", "incident-08", "incident-09", "incident-10"}))
+		Expect(recordresultstest.Column(first, "id")).To(Equal([]any{"incident-07", "incident-08", "incident-09", "incident-10"}))
 
 		second, _ := incidentRows(window + "&cursor=" + url.QueryEscape(header.Get("X-Next-Cursor")))
-		Expect(column(second, "id")).To(Equal([]any{"incident-11", "incident-12"}))
+		Expect(recordresultstest.Column(second, "id")).To(Equal([]any{"incident-11", "incident-12"}))
 	})
 
 	It("narrows a time window by the seq bounds", func() {
 		rows, header := incidentRows("stream=env-1&afterSeq=8&toSeq=11&from=" + url.QueryEscape("now-12h"))
 		Expect(header.Get("X-Total-Count")).To(Equal("3"))
-		Expect(column(rows, "seq")).To(Equal([]any{float64(9), float64(10), float64(11)}))
+		Expect(recordresultstest.Column(rows, "seq")).To(Equal([]any{float64(9), float64(10), float64(11)}))
 	})
 
 	It("reads the same rows through Run as over HTTP for the same filters and sort", func() {
@@ -120,9 +121,9 @@ var _ = Describe("a keyed, timed record result type", Ordered, func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(httpRows).ToNot(BeEmpty())
-		Expect(column(httpRows, "db")).To(HaveEach(Equal("oipa")))
-		Expect(runColumn(result.Rows, "id")).To(Equal(column(httpRows, "id")))
-		Expect(runColumn(result.Rows, "seq")).To(Equal(column(httpRows, "seq")))
+		Expect(recordresultstest.Column(httpRows, "db")).To(HaveEach(Equal("oipa")))
+		Expect(runColumn(result.Rows, "id")).To(Equal(recordresultstest.Column(httpRows, "id")))
+		Expect(runColumn(result.Rows, "seq")).To(Equal(recordresultstest.Column(httpRows, "seq")))
 	})
 
 	DescribeTable("refuses a Run filter or sort it could not apply",
@@ -149,5 +150,5 @@ func runColumn(rows []query.Row, name string) []any {
 	payload, err := json.Marshal(encoded)
 	Expect(err).ToNot(HaveOccurred())
 	Expect(json.Unmarshal(payload, &decoded)).To(Succeed())
-	return column(decoded, name)
+	return recordresultstest.Column(decoded, name)
 }

@@ -1,4 +1,4 @@
-package recordresults_test
+package recordresultse2e
 
 import (
 	"bufio"
@@ -17,6 +17,7 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -38,7 +39,7 @@ const (
 )
 
 func registerFollowTypes(registry *recordresults.Registry) error {
-	if err := recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+	if err := recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 		Kind: "sample_event", Title: "Sample events", TimeColumn: "at", Follow: true,
 	}); err != nil {
 		return err
@@ -63,12 +64,12 @@ const tenantHeader = "X-Tenant"
 
 func newFollowServer(backend recordstore.BackendKind) followServer {
 	return newFollowServerWith(recordresults.OpenOptions{
-		Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(backend), Register: registerFollowTypes,
+		Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(backend), Register: registerFollowTypes,
 	})
 }
 
 func newFollowServerWith(options recordresults.OpenOptions) followServer {
-	results := openResults(options)
+	results := recordresultstest.OpenResults(options)
 	service := newResultService(results.Registry)
 	store, err := profiles.NewOverlayStore(mustFileStore(), results.Registry)
 	Expect(err).ToNot(HaveOccurred())
@@ -85,7 +86,7 @@ func newFollowServerWith(options recordresults.OpenOptions) followServer {
 	Expect(err).ToNot(HaveOccurred())
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if tenant := r.Header.Get(tenantHeader); tenant != "" {
-			r = r.WithContext(context.WithValue(r.Context(), tenantKey{}, tenant))
+			r = r.WithContext(recordresultstest.WithTenant(r.Context(), tenant))
 		}
 		handler.ServeHTTP(w, r)
 	}))
@@ -100,7 +101,7 @@ func mustFileStore() profilestore.Store {
 }
 
 func (s followServer) appendEvents(first, last int) {
-	_, err := recordstore.AppendTyped(context.Background(), s.results.Backend, "run-1", "sample_event", sampleEvents(first, last))
+	_, err := recordstore.AppendTyped(context.Background(), s.results.Backend, "run-1", "sample_event", recordresultstest.SampleEvents(first, last))
 	Expect(err).ToNot(HaveOccurred())
 }
 
@@ -374,7 +375,7 @@ var _ = Describe("following a record result type through the sessions API", func
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(index.Close)
 		registry, err := recordresults.NewRegistry(recordresults.RegistryOptions{
-			Prefix: "trace-results", Schemas: schemas, Index: index, Source: newKV(schemas), ConnectionName: "index",
+			Prefix: "trace-results", Schemas: schemas, Index: index, Source: recordresultstest.NewKV(schemas), ConnectionName: "index",
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(registerFollowTypes(registry)).To(MatchError(ContainSubstring("*recordstore.Notifier")))

@@ -1,4 +1,4 @@
-package recordresults_test
+package recordresultse2e
 
 import (
 	"encoding/json"
@@ -8,6 +8,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -16,11 +17,11 @@ var _ = Describe("following a record result type whose source routes by request"
 	It("follows the stream of the tenant that started the follow, and no other tenant's", func() {
 		schemas := recordstore.NewSchemas()
 		server := newFollowServerWith(recordresults.OpenOptions{
-			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(""), Source: kvRouter(schemas),
+			Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(""), Source: recordresultstest.KVRouter(schemas),
 			Schemas: schemas, Register: registerFollowTypes,
 		})
 		appendAs := func(tenant string, first, last int) {
-			_, err := recordstore.AppendTyped(forTenant(tenant), server.results.Backend, "run-1", "sample_event", sampleEvents(first, last))
+			_, err := recordstore.AppendTyped(recordresultstest.ForTenant(tenant), server.results.Backend, "run-1", "sample_event", recordresultstest.SampleEvents(first, last))
 			Expect(err).ToNot(HaveOccurred())
 		}
 		appendAs("a", 1, 2)

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
@@ -36,8 +37,8 @@ func BenchmarkResultView(b *testing.B) {
 	if err != nil {
 		b.Fatalf("open benchmark registry: %v", err)
 	}
-	if err := recordresults.RegisterResultType(registry, recordresults.ResultType[jobEvent]{
-		Kind: "job_event", Title: "Job events", Views: jobViews(),
+	if err := recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.JobEvent]{
+		Kind: "job_event", Title: "Job events", Views: recordresultstest.JobViews(),
 	}); err != nil {
 		b.Fatalf("register benchmark views: %v", err)
 	}
@@ -77,12 +78,12 @@ func BenchmarkResultView(b *testing.B) {
 // n taking n%1000 milliseconds.
 func appendBenchmarkJobs(b *testing.B, store *sqlite.Backend) {
 	for first := 0; first < benchmarkViewJobs; first += benchmarkViewBatchJobs {
-		events := make([]jobEvent, 0, 2*benchmarkViewBatchJobs)
+		events := make([]recordresultstest.JobEvent, 0, 2*benchmarkViewBatchJobs)
 		for n := first; n < first+benchmarkViewBatchJobs; n++ {
 			job := fmt.Sprintf("job-%06d", n)
 			events = append(events,
-				jobEvent{ID: job + ":start", Job: job, Phase: "start"},
-				jobEvent{ID: job + ":end", Job: job, Phase: "end", Status: "ok", Millis: float64(n % 1000)},
+				recordresultstest.JobEvent{ID: job + ":start", Job: job, Phase: "start"},
+				recordresultstest.JobEvent{ID: job + ":end", Job: job, Phase: "end", Status: "ok", Millis: float64(n % 1000)},
 			)
 		}
 		if _, err := recordstore.AppendTyped(context.Background(), store, benchmarkStream, "job_event", events); err != nil {

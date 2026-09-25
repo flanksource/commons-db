@@ -8,7 +8,6 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
-	_ "github.com/flanksource/commons-db/query/providers"
 	"github.com/flanksource/commons-db/recordstore"
 )
 
