@@ -10,6 +10,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 type requestTenantKey struct{}
@@ -26,10 +27,10 @@ var _ = Describe("BeforeExecute over HTTP", func() {
 		Expect(store.Save(context.Background(), hookedProfile())).To(Succeed())
 		var tenants []any
 		service, err := New(Options{
-			Store:      func() (Store, error) { return store, nil },
+			Store:      func() (profilestore.Store, error) { return store, nil },
 			Context:    func() dbcontext.Context { return dbcontext.New() },
 			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
-			BeforeExecute: func(ctx context.Context, _ []ReadRequest) (func(), error) {
+			BeforeExecute: func(ctx context.Context, _ []profilestore.ReadRequest) (func(), error) {
 				tenants = append(tenants, ctx.Value(requestTenantKey{}))
 				return func() {}, nil
 			},

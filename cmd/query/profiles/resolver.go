@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 type ResolvedProfile struct {
@@ -14,11 +15,11 @@ type ResolvedProfile struct {
 	ConnectionProfile string
 }
 
-func Resolve(ctx context.Context, store Store, name string) (ResolvedProfile, error) {
+func Resolve(ctx context.Context, store profilestore.Store, name string) (ResolvedProfile, error) {
 	return resolve(ctx, store, name, nil)
 }
 
-func resolve(ctx context.Context, store Store, name string, path []string) (ResolvedProfile, error) {
+func resolve(ctx context.Context, store profilestore.Store, name string, path []string) (ResolvedProfile, error) {
 	if index := slices.Index(path, name); index >= 0 {
 		return ResolvedProfile{}, fmt.Errorf("profile import cycle: %s", strings.Join(append(path[index:], name), " -> "))
 	}

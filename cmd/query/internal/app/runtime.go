@@ -7,6 +7,7 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"gorm.io/gorm"
 )
@@ -15,7 +16,7 @@ type Runtime struct {
 	mu      sync.RWMutex
 	db      *gorm.DB
 	context dbcontext.Context
-	store   profiles.Store
+	store   profilestore.Store
 
 	dbOptions  DatabaseOptions
 	connect    sync.Once
@@ -25,7 +26,7 @@ type Runtime struct {
 	stop       func() error
 }
 
-func NewRuntime(ctx dbcontext.Context, fileStore profiles.Store, dbOptions DatabaseOptions) (*Runtime, error) {
+func NewRuntime(ctx dbcontext.Context, fileStore profilestore.Store, dbOptions DatabaseOptions) (*Runtime, error) {
 	if ctx.Context.Context == nil {
 		return nil, fmt.Errorf("query context is required")
 	}
@@ -152,7 +153,7 @@ func (r *Runtime) Context() dbcontext.Context {
 	return r.context
 }
 
-func (r *Runtime) SetProfileStore(store profiles.Store) error {
+func (r *Runtime) SetProfileStore(store profilestore.Store) error {
 	if store == nil {
 		return fmt.Errorf("profile store is required")
 	}
@@ -164,7 +165,7 @@ func (r *Runtime) SetProfileStore(store profiles.Store) error {
 
 // ProfileStore is the database-backed store whenever --db names one, and the
 // YAML file store otherwise.
-func (r *Runtime) ProfileStore() (profiles.Store, error) {
+func (r *Runtime) ProfileStore() (profilestore.Store, error) {
 	r.mu.RLock()
 	enabled, connected := r.dbOptions.Enabled(), r.db != nil
 	r.mu.RUnlock()

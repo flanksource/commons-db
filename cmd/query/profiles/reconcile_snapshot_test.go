@@ -13,6 +13,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // stubSnapshots stands in for the snapshot manager so the status mapping can be
@@ -51,7 +52,7 @@ var _ = Describe("reading a reconciliation snapshot", func() {
 		store, err := NewFileStore(GinkgoT().TempDir())
 		Expect(err).ToNot(HaveOccurred())
 		built, err := New(Options{
-			Store:      func() (Store, error) { return store, nil },
+			Store:      func() (profilestore.Store, error) { return store, nil },
 			Context:    func() dbcontext.Context { return dbcontext.New() },
 			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 			Snapshots:  snapshots,

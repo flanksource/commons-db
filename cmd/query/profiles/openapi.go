@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/spf13/cobra"
 )
 
@@ -19,7 +20,7 @@ type profileOpenAPIHandler struct {
 	root       *cobra.Command
 	config     *rpc.Config
 	generator  *rpc.OpenAPIGenerator
-	store      Store
+	store      profilestore.Store
 	extensions []OpenAPIExtension
 	mu         sync.Mutex
 	// Documents already encoded for the profiles named by fingerprint. Cleared
@@ -31,7 +32,7 @@ type profileOpenAPIHandler struct {
 
 type OpenAPIExtension func(*rpc.OpenAPISpec)
 
-func newProfileOpenAPIHandler(root *cobra.Command, config *rpc.Config, store Store, extensions []OpenAPIExtension) http.Handler {
+func newProfileOpenAPIHandler(root *cobra.Command, config *rpc.Config, store profilestore.Store, extensions []OpenAPIExtension) http.Handler {
 	return &profileOpenAPIHandler{
 		root:   root,
 		config: config,
@@ -125,7 +126,7 @@ func matchesETag(header, etag string) bool {
 // mergeStoredProfiles replaces startup-snapshotted profile surfaces with a
 // fresh view of the YAML store. The resulting operations execute through the
 // generic /profile/profile-<slug> handler, so no live Cobra mutation is needed.
-func mergeStoredProfiles(ctx context.Context, spec *rpc.OpenAPISpec, store Store) error {
+func mergeStoredProfiles(ctx context.Context, spec *rpc.OpenAPISpec, store profilestore.Store) error {
 	if spec.Clicky == nil {
 		spec.Clicky = &rpc.ClickySpecMeta{}
 	}

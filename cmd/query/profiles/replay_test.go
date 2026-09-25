@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // rowsProvider is a registered provider that returns a fixed set of rows, so
@@ -39,7 +40,7 @@ func serviceOver(t *testing.T, profiles ...query.Profile) *Service {
 		}
 	}
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})

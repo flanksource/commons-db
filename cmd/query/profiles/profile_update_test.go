@@ -8,6 +8,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -35,7 +36,7 @@ var _ = Describe("profile updates", func() {
 		renamed := source
 		renamed.Name = "Renamed Profile"
 		renamed.Query = "select renamed"
-		Expect(store.Update(ctx, source.Name, renamed, UpdateOptions{})).To(Succeed())
+		Expect(store.Update(ctx, source.Name, renamed, profilestore.UpdateOptions{})).To(Succeed())
 
 		_, err := store.Get(ctx, source.Name)
 		Expect(err).To(HaveOccurred())
@@ -55,7 +56,7 @@ var _ = Describe("profile updates", func() {
 		replacement := source
 		replacement.Name = target.Name
 		replacement.Query = "select replacement"
-		err := store.Update(ctx, source.Name, replacement, UpdateOptions{})
+		err := store.Update(ctx, source.Name, replacement, profilestore.UpdateOptions{})
 
 		Expect(err).To(MatchError(ContainSubstring(ProfileNameConflictCode)))
 		Expect(store.Get(ctx, source.Name)).To(Equal(source))
@@ -74,7 +75,7 @@ var _ = Describe("profile updates", func() {
 		replacement := source
 		replacement.Name = target.Name
 		replacement.Query = "select replacement"
-		Expect(store.Update(ctx, source.Name, replacement, UpdateOptions{ReplaceExisting: true})).To(Succeed())
+		Expect(store.Update(ctx, source.Name, replacement, profilestore.UpdateOptions{ReplaceExisting: true})).To(Succeed())
 
 		profiles, err := store.List(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -93,7 +94,7 @@ var _ = Describe("profile updates", func() {
 
 		renamed := source
 		renamed.Name = "existing.profile"
-		Expect(store.Update(ctx, source.Name, renamed, UpdateOptions{})).To(
+		Expect(store.Update(ctx, source.Name, renamed, profilestore.UpdateOptions{})).To(
 			MatchError(ContainSubstring(ProfileNameConflictCode)),
 		)
 	})
@@ -104,7 +105,7 @@ var _ = Describe("profile updates", func() {
 		Expect(store.Save(ctx, source)).To(Succeed())
 		Expect(store.Save(ctx, target)).To(Succeed())
 		service, err := New(Options{
-			Store:      func() (Store, error) { return store, nil },
+			Store:      func() (profilestore.Store, error) { return store, nil },
 			Context:    func() dbcontext.Context { return dbcontext.New() },
 			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 		})

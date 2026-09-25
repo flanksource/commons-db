@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -27,7 +28,7 @@ func (s resolverStore) Save(_ context.Context, profile query.Profile) error {
 	return nil
 }
 
-func (s resolverStore) Update(_ context.Context, original string, profile query.Profile, _ UpdateOptions) error {
+func (s resolverStore) Update(_ context.Context, original string, profile query.Profile, _ profilestore.UpdateOptions) error {
 	delete(s, original)
 	s[profile.Name] = profile
 	return nil

@@ -22,6 +22,7 @@ import (
 	"github.com/flanksource/commons-db/fs"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/spf13/cobra"
@@ -230,7 +231,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		return err
 	}
 	sessionService, err := sessions.New(sessions.Options{
-		Profiles: func() (profiles.Store, error) { return a.profileStore() },
+		Profiles: func() (profilestore.Store, error) { return a.profileStore() },
 		Context:  a.Runtime.Context, Registry: sessionRegistry, Store: sessionStore, EventLog: sessionStore,
 	})
 	if err != nil {

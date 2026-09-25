@@ -16,6 +16,7 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // maxPDFRows is a format ceiling, not a paging one: a PDF stops being readable
@@ -30,14 +31,14 @@ const maxPDFRows = 1000
 type execHandler struct {
 	prefix string
 	ctx    dbcontext.Context
-	store  Store
+	store  profilestore.Store
 	next   http.Handler
 	// prepare runs before the rows are read; nil when the service has no
 	// BeforeExecute hook.
-	prepare BeforeExecuteFunc
+	prepare profilestore.BeforeExecuteFunc
 }
 
-func newExecHandler(prefix string, ctx dbcontext.Context, store Store, next http.Handler) *execHandler {
+func newExecHandler(prefix string, ctx dbcontext.Context, store profilestore.Store, next http.Handler) *execHandler {
 	return &execHandler{prefix: strings.TrimRight(prefix, "/"), ctx: ctx, store: store, next: next}
 }
 
@@ -237,7 +238,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 	// to the request — whose tenant, whose store — is what it prepares for, and
 	// the execution context carries only the server's values.
 	if h.prepare != nil {
-		release, err := PrepareReads(r.Context(), h.prepare, []ReadRequest{{Profile: p, Params: params}})
+		release, err := profilestore.PrepareReads(r.Context(), h.prepare, []profilestore.ReadRequest{{Profile: p, Params: params}})
 		if err != nil {
 			writePrepareError(w, err)
 			return
@@ -337,7 +338,7 @@ var (
 // store rather than asking it, because only the whole list — virtual profiles
 // included — knows every name a slug can belong to, and whether it belongs to
 // more than one. Every transport addressing a profile by URL maps through it.
-func StoredProfileName(ctx stdcontext.Context, store Store, name string) (string, error) {
+func StoredProfileName(ctx stdcontext.Context, store profilestore.Store, name string) (string, error) {
 	if !strings.HasPrefix(name, "profile-") {
 		return name, nil
 	}

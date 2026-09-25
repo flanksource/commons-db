@@ -7,7 +7,7 @@ The `Registry` connects to the profile engine at three points. A host serving re
 
 | Point | Registry method | Purpose |
 | --- | --- | --- |
-| profile store | the `Registry` itself (a `profiles.VirtualStore`) | lists and gets the read-only result profiles. Layer it over your own store with `profiles.NewOverlayStore`. |
+| profile store | the `Registry` itself (a `profilestore.VirtualStore`) | lists and gets the read-only result profiles. Layer it over your own store with `profiles.NewOverlayStore`. |
 | connection resolver | `registry.ResolveConnection` | resolves `connection://<prefix>/<name>` (and the connection's id) to the index's read-only SQLite DSN. Any other reference returns "not mine", so resolution carries on. |
 | before-read hook | `registry.BeforeExecute` / `registry.BeforeRead` | catches the index up for each requested stream, checks it exists and holds the right kind, and holds an index lease across the read |
 
@@ -19,7 +19,7 @@ store, err := profiles.NewOverlayStore(base, results.Registry)
 queryCtx := dbcontext.New().WithConnectionResolver(results.Registry.ResolveConnection)
 
 service, err := profiles.New(profiles.Options{
-	Store:         func() (profiles.Store, error) { return store, nil },
+	Store:         func() (profilestore.Store, error) { return store, nil },
 	Context:       func() dbcontext.Context { return queryCtx },
 	DecodeBody:    profiles.DecodeRequestBody,
 	BeforeExecute: results.Registry.BeforeExecute,
@@ -46,10 +46,10 @@ handler, err := service.Handler("/api/v1", mux)
 
 For every result profile in a read batch (other profiles pass through untouched):
 
-1. The request must carry a valid `stream` param. Otherwise the error is `profiles.ErrProfileRequestInvalid`.
+1. The request must carry a valid `stream` param. Otherwise the error is `profilestore.ErrProfileRequestInvalid`.
 2. `Indexer.Ensure` catches the index up with the source for that stream.
 3. It takes one **index lease** across the whole batch, then re-validates under the lease. That closes the gap where the sweeper could remove a stream after `Ensure` but before the query starts.
-4. A stream that doesn't exist, or holds another kind, is `profiles.ErrProfileDataNotFound`, never an empty page. An empty page would claim "nothing matched" about a stream nobody wrote.
+4. A stream that doesn't exist, or holds another kind, is `profilestore.ErrProfileDataNotFound`, never an empty page. An empty page would claim "nothing matched" about a stream nobody wrote.
 
 The returned release function drops the lease. The profile service calls it when the read finishes.
 
@@ -64,7 +64,7 @@ sessionRegistry := query.NewSessionRegistry(query.RegistryOptions{
 defer sessionRegistry.StopAll()
 
 sessionService, err := sessions.New(sessions.Options{
-	Profiles: func() (profiles.Store, error) { return store, nil },
+	Profiles: func() (profilestore.Store, error) { return store, nil },
 	Context:  func() dbcontext.Context { return queryCtx },
 	Registry: sessionRegistry,
 	Records:  results.Backend, // replays and follows recorded events after the session leaves the registry

@@ -10,11 +10,11 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/kv"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
@@ -27,8 +27,6 @@ type seqEvent struct {
 type untimedEvent struct {
 	At string `json:"at"`
 }
-
-var _ profiles.VirtualStore = (*recordresults.Registry)(nil)
 
 func newRegistry() (*recordresults.Registry, *sqlite.Backend) {
 	registry, _, index := newRegistryBackends()
@@ -201,7 +199,7 @@ var _ = Describe("Registry", func() {
 		registry, _ := newRegistry()
 		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{Kind: "k", Title: "K"})).To(Succeed())
 		Expect(registry.Save(ctx, query.Profile{Name: "trace-results/k"})).To(MatchError(ContainSubstring("read-only")))
-		Expect(registry.Update(ctx, "trace-results/k", query.Profile{}, profiles.UpdateOptions{})).To(MatchError(ContainSubstring("read-only")))
+		Expect(registry.Update(ctx, "trace-results/k", query.Profile{}, profilestore.UpdateOptions{})).To(MatchError(ContainSubstring("read-only")))
 		Expect(registry.Delete(ctx, "trace-results/k")).To(MatchError(ContainSubstring("read-only")))
 		Expect(registry.IsVirtual("trace-results/k")).To(BeTrue())
 		Expect(registry.IsVirtual("other")).To(BeFalse())
@@ -238,7 +236,7 @@ var _ = Describe("Registry", func() {
 
 	It("prepares nothing for a profile it does not own", func() {
 		registry, _ := newRegistry()
-		release, err := registry.BeforeExecute(ctx, []profiles.ReadRequest{{Profile: query.Profile{Name: "logs"}}})
+		release, err := registry.BeforeExecute(ctx, []profilestore.ReadRequest{{Profile: query.Profile{Name: "logs"}}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(release).ToNot(BeNil())
 		release()
@@ -255,7 +253,7 @@ var _ = Describe("Registry", func() {
 		}
 		profile, err := registry.Get(ctx, "trace-results/sample_event")
 		Expect(err).ToNot(HaveOccurred())
-		release, err := registry.BeforeExecute(ctx, []profiles.ReadRequest{
+		release, err := registry.BeforeExecute(ctx, []profilestore.ReadRequest{
 			{Profile: profile, Params: map[string]any{"stream": "run-1"}},
 			{Profile: profile, Params: map[string]any{"stream": "run-2"}},
 		})

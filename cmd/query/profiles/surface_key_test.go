@@ -12,19 +12,20 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // failingListStore is a store whose listing fails the way a store behind an
 // unreachable database does.
-type failingListStore struct{ Store }
+type failingListStore struct{ profilestore.Store }
 
 func (failingListStore) List(context.Context) ([]query.Profile, error) {
 	return nil, errors.New("profile store unavailable")
 }
 
-func surfaceService(store Store) *Service {
+func surfaceService(store profilestore.Store) *Service {
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})
@@ -104,7 +105,7 @@ var _ = Describe("resolving a profile surface key", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(overlay.Save(context.Background(), lookupProfile("results-spans"))).
 			To(MatchError(ContainSubstring(`surface "profile-results-spans" of virtual profile "results/spans"`)))
-		Expect(overlay.Update(context.Background(), "other", lookupProfile("results-spans"), UpdateOptions{})).
+		Expect(overlay.Update(context.Background(), "other", lookupProfile("results-spans"), profilestore.UpdateOptions{})).
 			To(MatchError(ContainSubstring(`surface "profile-results-spans" of virtual profile "results/spans"`)))
 	})
 })

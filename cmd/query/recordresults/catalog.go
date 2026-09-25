@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
 )
 
 var errReadOnly = errors.New("record result profiles are read-only")
+
+var _ profilestore.VirtualStore = (*Registry)(nil)
 
 // List returns every result profile by name.
 func (r *Registry) List(context.Context) ([]query.Profile, error) {
@@ -53,7 +55,7 @@ func (r *Registry) IsVirtual(name string) bool {
 
 func (r *Registry) Save(context.Context, query.Profile) error { return errReadOnly }
 
-func (r *Registry) Update(context.Context, string, query.Profile, profiles.UpdateOptions) error {
+func (r *Registry) Update(context.Context, string, query.Profile, profilestore.UpdateOptions) error {
 	return errReadOnly
 }
 
@@ -78,14 +80,14 @@ func (r *Registry) ResolveConnection(_ dbcontext.Context, reference string) (*mo
 	return &connection, nil
 }
 
-// BeforeExecute is the profiles.BeforeExecuteFunc for result profiles: it
+// BeforeExecute is the profilestore.BeforeExecuteFunc for result profiles: it
 // catches every requested stream up, then holds one lease across the whole
 // read batch. Revalidation under that lease closes the gap in which a sweep can
 // remove an index stream after Ensure returns but before its query starts.
 // A stream that does not exist, or that holds another result type, is
-// profiles.ErrProfileDataNotFound — an empty page would say "nothing matched"
+// profilestore.ErrProfileDataNotFound — an empty page would say "nothing matched"
 // about a stream nobody wrote. Every other profile passes through untouched.
-func (r *Registry) BeforeExecute(ctx context.Context, reads []profiles.ReadRequest) (func(), error) {
+func (r *Registry) BeforeExecute(ctx context.Context, reads []profilestore.ReadRequest) (func(), error) {
 	targets, err := r.readTargets(reads)
 	if err != nil {
 		return nil, err
@@ -115,7 +117,7 @@ type readTarget struct {
 	kind   string
 }
 
-func (r *Registry) readTargets(reads []profiles.ReadRequest) ([]readTarget, error) {
+func (r *Registry) readTargets(reads []profilestore.ReadRequest) ([]readTarget, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	targets := make([]readTarget, 0, len(reads))
@@ -132,14 +134,14 @@ func (r *Registry) readTargets(reads []profiles.ReadRequest) ([]readTarget, erro
 		for _, name := range result.baseOnly {
 			if _, named := read.Params[name]; named {
 				return nil, fmt.Errorf("%w: profile %q is a view of %q results and takes no %s param; read %q for it",
-					profiles.ErrProfileRequestInvalid, read.Profile.Name, result.Kind, name, result.Profile)
+					profilestore.ErrProfileRequestInvalid, read.Profile.Name, result.Kind, name, result.Profile)
 			}
 		}
 		target := readTarget{stream: stream, kind: result.Kind}
 		if previous, ok := seen[stream]; ok {
 			if previous.kind != target.kind {
 				return nil, fmt.Errorf("%w: stream %q is requested as both %q and %q results",
-					profiles.ErrProfileDataNotFound, stream, previous.kind, target.kind)
+					profilestore.ErrProfileDataNotFound, stream, previous.kind, target.kind)
 			}
 			continue
 		}
@@ -166,30 +168,30 @@ func (r *Registry) validateTargets(ctx context.Context, targets []readTarget) er
 		}
 		if meta.Kind != target.kind {
 			return fmt.Errorf("%w: stream %q holds %q results, not %q",
-				profiles.ErrProfileDataNotFound, target.stream, meta.Kind, target.kind)
+				profilestore.ErrProfileDataNotFound, target.stream, meta.Kind, target.kind)
 		}
 	}
 	return nil
 }
 
 // requestedStream is the stream a request names. A missing or malformed id is
-// the caller's to fix, so it is profiles.ErrProfileRequestInvalid.
+// the caller's to fix, so it is profilestore.ErrProfileRequestInvalid.
 func requestedStream(profile string, params map[string]any) (string, error) {
 	value, ok := params[streamParam]
 	stream, isString := value.(string)
 	if !ok || !isString || stream == "" {
 		return "", fmt.Errorf("%w: profile %q reads one record stream; pass its id as the %s param",
-			profiles.ErrProfileRequestInvalid, profile, streamParam)
+			profilestore.ErrProfileRequestInvalid, profile, streamParam)
 	}
 	if err := recordstore.ValidateStream(stream); err != nil {
-		return "", fmt.Errorf("%w: %w", profiles.ErrProfileRequestInvalid, err)
+		return "", fmt.Errorf("%w: %w", profilestore.ErrProfileRequestInvalid, err)
 	}
 	return stream, nil
 }
 
 func notFound(err error) error {
 	if errors.Is(err, recordstore.ErrNotFound) {
-		return fmt.Errorf("%w: %w", profiles.ErrProfileDataNotFound, err)
+		return fmt.Errorf("%w: %w", profilestore.ErrProfileDataNotFound, err)
 	}
 	return err
 }

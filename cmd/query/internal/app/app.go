@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/snapshots"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 type Options struct {
@@ -63,7 +64,7 @@ func New(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	profileStore := func() (profiles.Store, error) {
+	profileStore := func() (profilestore.Store, error) {
 		base, err := runtime.ProfileStore()
 		if err != nil {
 			return nil, err

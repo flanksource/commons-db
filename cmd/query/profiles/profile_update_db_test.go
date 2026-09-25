@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -46,7 +47,7 @@ var _ = Describe("database profile updates", func() {
 
 		renamed := source
 		renamed.Name = "Database Renamed"
-		Expect(store.Update(ctx, source.Name, renamed, UpdateOptions{})).To(Succeed())
+		Expect(store.Update(ctx, source.Name, renamed, profilestore.UpdateOptions{})).To(Succeed())
 
 		profiles, err := store.List(ctx)
 		Expect(err).NotTo(HaveOccurred())
@@ -64,7 +65,7 @@ var _ = Describe("database profile updates", func() {
 		renamed := source
 		renamed.Name = target.Name
 
-		Expect(store.Update(ctx, source.Name, renamed, UpdateOptions{})).To(
+		Expect(store.Update(ctx, source.Name, renamed, profilestore.UpdateOptions{})).To(
 			MatchError(ContainSubstring(ProfileNameConflictCode)),
 		)
 		profiles, err := store.List(ctx)

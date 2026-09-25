@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	_ "github.com/flanksource/commons-db/query/providers"
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -224,7 +224,7 @@ func readBenchmarkPage(
 	params map[string]any,
 ) (query.Page, error) {
 	ctx := dbcontext.New().WithConnectionResolver(queryBenchmark.registry.ResolveConnection)
-	release, err := queryBenchmark.registry.BeforeExecute(ctx, []profiles.ReadRequest{{
+	release, err := queryBenchmark.registry.BeforeExecute(ctx, []profilestore.ReadRequest{{
 		Profile: queryBenchmark.profile,
 		Params:  params,
 	}})

@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons/logger"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -26,7 +27,7 @@ var _ = Describe("Reconcile debug capture", func() {
 			Expect(store.Save(context.Background(), source)).To(Succeed())
 			Expect(store.Save(context.Background(), dest)).To(Succeed())
 			service, err := New(Options{
-				Store:      func() (Store, error) { return store, nil },
+				Store:      func() (profilestore.Store, error) { return store, nil },
 				Context:    func() dbcontext.Context { return dbcontext.New() },
 				DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 			})

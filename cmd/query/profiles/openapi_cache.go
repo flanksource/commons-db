@@ -11,6 +11,7 @@ import (
 
 	"github.com/flanksource/clicky/rpc"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // The explorer builds itself out of this document — nav, filter controls,
@@ -135,7 +136,7 @@ func (s *snapshotStore) Save(context.Context, query.Profile) error {
 	return fmt.Errorf("profile snapshot is read-only")
 }
 
-func (s *snapshotStore) Update(context.Context, string, query.Profile, UpdateOptions) error {
+func (s *snapshotStore) Update(context.Context, string, query.Profile, profilestore.UpdateOptions) error {
 	return fmt.Errorf("profile snapshot is read-only")
 }
 

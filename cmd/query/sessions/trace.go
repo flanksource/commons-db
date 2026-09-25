@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/internal/paramfile"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 type RunnerOptions struct {
@@ -27,7 +28,7 @@ type RunnerOptions struct {
 	// BeforeExecute, when set, prepares a CLI session's data as it starts and
 	// before every later sample — the hook the profile service runs, so a
 	// session reads what a one-off run of the profile would.
-	BeforeExecute profiles.BeforeExecuteFunc
+	BeforeExecute profilestore.BeforeExecuteFunc
 }
 
 type Runner struct {
@@ -35,7 +36,7 @@ type Runner struct {
 	context       ContextProvider
 	stdout        io.Writer
 	stderr        io.Writer
-	beforeExecute profiles.BeforeExecuteFunc
+	beforeExecute profilestore.BeforeExecuteFunc
 }
 
 func NewRunner(options RunnerOptions) (*Runner, error) {
@@ -111,7 +112,7 @@ func (r *Runner) startCLISession(p query.Profile, params map[string]any) (*query
 		MaxSessions: 1,
 		MaxDuration: sessionSpecDuration(p),
 		BeforeRead: func(ctx context.Context, p query.Profile, params map[string]any) (func(), error) {
-			return profiles.PrepareReads(ctx, r.beforeExecute, []profiles.ReadRequest{{Profile: p, Params: params}})
+			return profilestore.PrepareReads(ctx, r.beforeExecute, []profilestore.ReadRequest{{Profile: p, Params: params}})
 		},
 	})
 	return query.ExecuteStream(r.context(), registry, p, params)

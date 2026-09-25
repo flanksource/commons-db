@@ -7,6 +7,7 @@ import (
 	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
@@ -69,7 +70,7 @@ var _ = Describe("reconcile snapshot actions", func() {
 		store, err := NewFileStore(GinkgoT().TempDir())
 		Expect(err).ToNot(HaveOccurred())
 		service, err := New(Options{
-			Store:      func() (Store, error) { return store, nil },
+			Store:      func() (profilestore.Store, error) { return store, nil },
 			Context:    func() dbcontext.Context { return dbcontext.New() },
 			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 		})

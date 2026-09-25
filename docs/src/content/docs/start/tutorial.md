@@ -123,6 +123,7 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 func Handler(results *recordresults.Results, profileDir string, next http.Handler) (http.Handler, error) {
@@ -136,7 +137,7 @@ func Handler(results *recordresults.Results, profileDir string, next http.Handle
 	}
 	queryCtx := dbcontext.New().WithConnectionResolver(results.Registry.ResolveConnection)
 	service, err := profiles.New(profiles.Options{
-		Store:         func() (profiles.Store, error) { return store, nil },
+		Store:         func() (profilestore.Store, error) { return store, nil },
 		Context:       func() dbcontext.Context { return queryCtx },
 		DecodeBody:    profiles.DecodeRequestBody,
 		BeforeExecute: results.Registry.BeforeExecute,

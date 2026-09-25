@@ -12,20 +12,13 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"sigs.k8s.io/yaml"
 )
-
-type Store interface {
-	List(context.Context) ([]query.Profile, error)
-	Get(context.Context, string) (query.Profile, error)
-	Save(context.Context, query.Profile) error
-	Update(context.Context, string, query.Profile, UpdateOptions) error
-	Delete(context.Context, string) error
-}
 
 type FileStore struct{ Dir string }
 
@@ -67,7 +60,7 @@ func NewDBStore(db *gorm.DB) (*DBStore, error) {
 	return &DBStore{db: db}, nil
 }
 
-func Import(ctx context.Context, source Store, target *DBStore) error {
+func Import(ctx context.Context, source profilestore.Store, target *DBStore) error {
 	if source == nil {
 		return fmt.Errorf("profile import source is required")
 	}

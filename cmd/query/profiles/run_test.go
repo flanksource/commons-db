@@ -9,6 +9,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // runKeyedMock pages by cursor over a stable id order, resuming from the key the
@@ -66,7 +67,7 @@ func newRunService(t *testing.T, profile query.Profile, rows []query.Row) *Servi
 		t.Fatal(err)
 	}
 	service, err := New(Options{
-		Store:      func() (Store, error) { return store, nil },
+		Store:      func() (profilestore.Store, error) { return store, nil },
 		Context:    func() dbcontext.Context { return dbcontext.New() },
 		DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
 	})
