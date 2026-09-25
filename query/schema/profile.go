@@ -316,7 +316,7 @@ func ProfileSource() Schema {
 				"x-enum-icons":   providerTypeIcons,
 				"x-enum-display": "combobox",
 			},
-			"connection": connectionProp(""),
+			"connection": connectionProp("", providerConnectionScope),
 			"options":    Schema{"type": "object", "title": "Options"},
 		},
 	}
@@ -475,7 +475,7 @@ var ambientConnectionHints = map[string]string{
 	"k8s":               "Leave empty to use the ambient cluster ($KUBECONFIG, ~/.kube/config, or the in-cluster service account)",
 }
 
-func connectionProp(providerType string) Schema {
+func connectionProp(providerType string, scope Schema) Schema {
 	description := "Pick a saved connection or type an inline DSN/URL"
 	if hint, ok := ambientConnectionHints[providerType]; ok {
 		description = "Pick a saved connection. " + hint
@@ -490,11 +490,19 @@ func connectionProp(providerType string) Schema {
 			"filter":      "connection",
 			"searchParam": "__lookup_q",
 			"multi":       false,
-			"scope": Schema{
-				"param": "types",
-				"from":  "provider.type",
-				"map":   providerConnectionTypes,
-			},
+			"scope":       scope,
 		},
 	}
+}
+
+// providerConnectionScope scopes a provider's connection picker to the
+// connection types valid for the selected provider.type.
+var providerConnectionScope = Schema{"param": "types", "from": "provider.type", "map": providerConnectionTypes}
+
+// replayConnectionScope scopes a replay target's connection picker by the
+// replay kind rather than the profile's provider: an HTTP replay needs an HTTP
+// base URL even when the profile queries a database.
+var replayConnectionScope = Schema{
+	"param": "types", "from": "replay.kind",
+	"map": map[string][]string{"http": {models.ConnectionTypeHTTP}},
 }

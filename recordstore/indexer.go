@@ -104,7 +104,10 @@ func (i *Indexer) Ensure(ctx context.Context, stream string) error {
 	if latest.Generation != source.Generation {
 		return fmt.Errorf("index stream %q changed generation from %q to %q while it was being indexed", stream, source.Generation, latest.Generation)
 	}
-	if _, err := i.mirrorTrim(ctx, latest, indexed); err != nil {
+	if indexed, err = i.mirrorTrim(ctx, latest, indexed); err != nil {
+		return err
+	}
+	if indexed, err = i.mirrorReopen(ctx, latest, indexed); err != nil {
 		return err
 	}
 	if err := i.mirrorExpiry(ctx, latest, indexed); err != nil {
@@ -145,18 +148,11 @@ func (i *Indexer) catchUp(ctx context.Context, source, indexed Meta, found bool)
 		return Meta{}, fmt.Errorf("index of stream %q generation %q is ahead of its source (seq %d, source %d)",
 			stream, source.Generation, indexed.HighSeq, source.HighSeq)
 	}
-	if found && indexed.Sealed && !source.Sealed {
-		reopener, ok := i.index.(Reopener)
-		if !ok {
-			return Meta{}, fmt.Errorf("index of stream %q cannot reopen after its source resumed", stream)
-		}
-		if err := reopener.Reopen(ctx, stream, source.Generation); err != nil {
-			return Meta{}, fmt.Errorf("index stream %q: reopen: %w", stream, err)
-		}
-		indexed.Sealed = false
-	}
 	var err error
 	if found {
+		if indexed, err = i.mirrorReopen(ctx, source, indexed); err != nil {
+			return Meta{}, err
+		}
 		if indexed, err = i.mirrorTrim(ctx, source, indexed); err != nil {
 			return Meta{}, err
 		}
@@ -170,6 +166,23 @@ func (i *Indexer) catchUp(ctx context.Context, source, indexed Meta, found bool)
 		}
 		indexed.LowSeq = max(indexed.LowSeq, source.LowSeq)
 	}
+	return indexed, nil
+}
+
+// mirrorReopen reopens a sealed index whose source has resumed, so readers do
+// not take the stale seal as the end of the stream.
+func (i *Indexer) mirrorReopen(ctx context.Context, source, indexed Meta) (Meta, error) {
+	if !indexed.Sealed || source.Sealed {
+		return indexed, nil
+	}
+	reopener, ok := i.index.(Reopener)
+	if !ok {
+		return Meta{}, fmt.Errorf("index of stream %q cannot reopen after its source resumed", source.Stream)
+	}
+	if err := reopener.Reopen(ctx, source.Stream, source.Generation); err != nil {
+		return Meta{}, fmt.Errorf("index stream %q: reopen: %w", source.Stream, err)
+	}
+	indexed.Sealed = false
 	return indexed, nil
 }
 

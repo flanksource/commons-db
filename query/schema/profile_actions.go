@@ -11,7 +11,7 @@ func replaySpec() Schema {
 			"target": Schema{
 				"type": "object", "title": "Target",
 				"description":    "Connection the request is sent to; required for a relative URL",
-				"properties":     Schema{"connection": connectionProp(""), "url": strProp("URL", "Base URL")},
+				"properties":     Schema{"connection": connectionProp("", replayConnectionScope), "url": strProp("URL", "Base URL")},
 				"x-clicky-order": 2, "x-clicky-component": "connection-http",
 			},
 			"method": strProp("Method", `CEL expression yielding the HTTP method, e.g. "POST" (defaults to POST)`),
