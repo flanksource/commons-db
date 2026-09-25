@@ -32,7 +32,20 @@ type SessionStore interface {
 
 // EventSink receives every event a capture session emits, in sequence.
 type EventSink interface {
+	// Append records one event. An error fails the session: a sink that
+	// dropped an event holds a log the record's count no longer describes.
 	Append(ctx stdcontext.Context, e Event) error
+
+	// CloseSession reports that no further events will be appended for the
+	// session,
+	// so a sink that buffers must make what it holds durable before returning.
+	//
+	// It is called once per persisted session, when the session becomes
+	// terminal and BEFORE its final status is written, so a reader that finds
+	// the record finished finds every event it claims. A session whose record
+	// was never begun is never closed — there is nothing to be consistent
+	// with. An error fails the session, for the same reason Append's does.
+	CloseSession(ctx stdcontext.Context, sessionID string) error
 }
 
 // ApplySessionFilter selects records with filter, authorizes them, sorts and

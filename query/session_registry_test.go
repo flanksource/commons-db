@@ -2,6 +2,7 @@ package query_test
 
 import (
 	stdcontext "context"
+	"fmt"
 	"time"
 
 	context "github.com/flanksource/commons-db/context"
@@ -281,6 +282,72 @@ var _ = Describe("SessionRegistry heartbeats and views", func() {
 		Expect(sink.appended(capture.ID())).To(Equal([]int64{1, 2}))
 	})
 
+})
+
+var _ = Describe("SessionRegistry event sink lifecycle", func() {
+	It("closes the sink before the terminal status is written", func() {
+		store, sink := newFakeSessionStore(), &fakeEventSink{}
+		var stateAtClose query.SessionState
+		sink.onClose = func(id string) { stateAtClose = store.status(id).State }
+		reg := query.NewSessionRegistry(query.RegistryOptions{Store: store, Events: sink})
+
+		session := track(reg, stdcontext.Background(), jvmTrackOptions())
+		session.Finish(query.FinishUpdate{})
+
+		Expect(sink.closedFor(session.ID())).To(Equal(1))
+		Expect(stateAtClose).ToNot(Equal(query.SessionCompleted),
+			"the sink must be settled while the record still reads as running")
+		Expect(store.status(session.ID()).State).To(Equal(query.SessionCompleted))
+	})
+
+	It("closes the sink once however many times a session is finished", func() {
+		store, sink := newFakeSessionStore(), &fakeEventSink{}
+		reg := query.NewSessionRegistry(query.RegistryOptions{Store: store, Events: sink})
+
+		session := track(reg, stdcontext.Background(), jvmTrackOptions())
+		session.Finish(query.FinishUpdate{})
+		session.Finish(query.FinishUpdate{})
+		session.Abort(fmt.Errorf("late"))
+
+		Expect(sink.closedFor(session.ID())).To(Equal(1))
+	})
+
+	It("fails a session whose sink cannot be settled", func() {
+		store, sink := newFakeSessionStore(), &fakeEventSink{closeErr: fmt.Errorf("valkey unreachable")}
+		reg := query.NewSessionRegistry(query.RegistryOptions{Store: store, Events: sink})
+
+		session := track(reg, stdcontext.Background(), jvmTrackOptions())
+		session.Finish(query.FinishUpdate{})
+
+		status := store.status(session.ID())
+		Expect(status.State).To(Equal(query.SessionFailed))
+		Expect(status.Error).To(ContainSubstring("valkey unreachable"))
+	})
+
+	It("keeps the original failure when the sink also cannot be settled", func() {
+		store, sink := newFakeSessionStore(), &fakeEventSink{closeErr: fmt.Errorf("valkey unreachable")}
+		reg := query.NewSessionRegistry(query.RegistryOptions{Store: store, Events: sink})
+
+		session := track(reg, stdcontext.Background(), jvmTrackOptions())
+		session.Finish(query.FinishUpdate{Err: fmt.Errorf("capture blew up")})
+
+		status := store.status(session.ID())
+		Expect(status.State).To(Equal(query.SessionFailed))
+		Expect(status.Error).To(Equal("capture blew up"))
+		Expect(status.Warning).To(ContainSubstring("valkey unreachable"))
+	})
+
+	It("does not close the sink for a session that was never persisted", func() {
+		store, sink := newFakeSessionStore(), &fakeEventSink{}
+		reg := query.NewSessionRegistry(query.RegistryOptions{Store: store, Events: sink})
+		query.RegisterProvider(&fakeStreamProvider{typ: "stream-close-view", rows: []query.Row{{"n": 1}}})
+
+		view, err := query.ExecuteStream(context.New(), reg, query.Follow(traceProfile("stream-close-view")))
+		Expect(err).ToNot(HaveOccurred())
+		waitDone(view)
+
+		Expect(sink.closedFor(view.ID())).To(BeZero())
+	})
 })
 
 var _ = Describe("SessionRegistry.StopAll", func() {

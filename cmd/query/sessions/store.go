@@ -147,14 +147,10 @@ func (s *Store) Begin(ctx context.Context, rec query.SessionRecord) error {
 	return nil
 }
 
-// Update writes the status. A terminal status is written only after the
-// session's buffered events are, so the record never ends ahead of its events.
+// Update writes the status. The registry settles the session's events through
+// Close before writing a terminal status, so the record never ends ahead of
+// its events.
 func (s *Store) Update(ctx context.Context, id string, status query.SessionStatus) error {
-	if status.State.Terminal() {
-		if err := s.flushSession(id); err != nil {
-			return fmt.Errorf("update session %s: %w", id, err)
-		}
-	}
 	var row sessionRecord
 	if err := row.setStatus(id, status); err != nil {
 		return err
@@ -240,6 +236,23 @@ func (s *Store) Append(_ context.Context, e query.Event) error {
 		return s.flushSession(e.SessionID)
 	}
 	return nil
+}
+
+// CloseSession writes whatever the session still has buffered, along with any
+// failure the background flusher recorded for it while it had no live handle.
+// The registry calls it as the session ends, before its terminal status is
+// written, so the record a reader finds is never ahead of the events table.
+func (s *Store) CloseSession(_ context.Context, id string) error {
+	s.mu.Lock()
+	recorded, failed := s.failed[id]
+	delete(s.failed, id)
+	s.mu.Unlock()
+
+	err := s.flushSession(id)
+	if err == nil && !failed {
+		return nil
+	}
+	return fmt.Errorf("close session %s: %w", id, errors.Join(recorded, err))
 }
 
 // flushSession writes the events buffered for one session. A batch that fails
@@ -377,14 +390,14 @@ func (s *Store) flushLoop() {
 			return
 		case <-ticker.C:
 			// A failed batch has already failed its session, or is held for
-			// the session's next Append and the next Flush or Close.
+			// the session's next Append, its CloseSession, or the next Flush.
 			_ = s.flushPending()
 		}
 	}
 }
 
 // failSession fails the live session loudly; without a live handle the error
-// is held for the session's next Append, or the next Flush/Close.
+// is held for the session's next Append, CloseSession, or the next Flush.
 func (s *Store) failSession(id string, err error) {
 	s.mu.Lock()
 	resolve := s.resolve
