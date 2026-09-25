@@ -1,4 +1,4 @@
-package recordresults_test
+package recordresultse2e
 
 import (
 	"bufio"
@@ -14,6 +14,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -24,9 +25,9 @@ var searchedPath = "/api/v1/profile/" + url.PathEscape("trace-results/"+searched
 
 // searchedSeqs are the seqs of run-1's events, newest first, that keep passes:
 // event n is appended as seq n and captured n milliseconds after the start.
-func searchedSeqs(first, last int, keep func(sampleEvent) bool) []any {
+func searchedSeqs(first, last int, keep func(recordresultstest.SampleEvent) bool) []any {
 	seqs := []any{}
-	events := sampleEvents(1, 250)
+	events := recordresultstest.SampleEvents(1, 250)
 	for index := len(events) - 1; index >= 0; index-- {
 		n := index + 1
 		if n >= first && n <= last && keep(events[index]) {
@@ -38,7 +39,7 @@ func searchedSeqs(first, last int, keep func(sampleEvent) bool) []any {
 
 // contains is the search's own semantics, written independently of SQL: a
 // case-insensitive substring of any search column.
-func contains(needle string, event sampleEvent) bool {
+func contains(needle string, event recordresultstest.SampleEvent) bool {
 	needle = strings.ToLower(needle)
 	haystacks := append([]string{event.DB, event.User}, event.Tables...)
 	for _, haystack := range haystacks {
@@ -55,12 +56,12 @@ var _ = Describe("searching a record result type", Ordered, func() {
 	BeforeAll(func() {
 		ctx := context.Background()
 		schemas := recordstore.NewSchemas()
-		source := newKV(schemas)
+		source := recordresultstest.NewKV(schemas)
 		registry := newSampleRegistry(source, schemas)
-		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 			Kind: searchedKind, Title: "Searched events", TimeColumn: "at", SearchColumns: []string{"db", "user", "tables"},
 		})).To(Succeed())
-		_, err := recordstore.AppendTyped(ctx, source, "run-1", searchedKind, sampleEvents(1, 250))
+		_, err := recordstore.AppendTyped(ctx, source, "run-1", searchedKind, recordresultstest.SampleEvents(1, 250))
 		Expect(err).ToNot(HaveOccurred())
 		server = resultServer{source: source, registry: registry, handler: serveResults(registry)}
 	})
@@ -70,7 +71,7 @@ var _ = Describe("searching a record result type", Ordered, func() {
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 		var rows []map[string]any
 		Expect(json.Unmarshal(response.Body.Bytes(), &rows)).To(Succeed(), response.Body.String())
-		return column(rows, "seq"), response.Header()
+		return recordresultstest.Column(rows, "seq"), response.Header()
 	}
 
 	It("declares its search as a search-role param over the type's search columns", func() {
@@ -84,7 +85,7 @@ var _ = Describe("searching a record result type", Ordered, func() {
 
 	DescribeTable("keeps the rows any search column contains the text in, ignoring case",
 		func(needle string) {
-			expected := searchedSeqs(1, 250, func(event sampleEvent) bool { return contains(needle, event) })
+			expected := searchedSeqs(1, 250, func(event recordresultstest.SampleEvent) bool { return contains(needle, event) })
 			seqs, header := get("stream=run-1&limit=500&q=" + url.QueryEscape(needle))
 			Expect(header.Get("X-Total-Count")).To(Equal(fmt.Sprint(len(expected))))
 			Expect(seqs).To(Equal(expected))
@@ -102,7 +103,7 @@ var _ = Describe("searching a record result type", Ordered, func() {
 
 	Context("combined with the seq window, the time window and a column filter", func() {
 		const window = "stream=run-1&afterSeq=12&toSeq=200&from=2026-09-10T06:00:00.020Z&q=ALI&filter.db=oipa"
-		keep := func(event sampleEvent) bool { return event.DB == "oipa" && contains("ali", event) }
+		keep := func(event recordresultstest.SampleEvent) bool { return event.DB == "oipa" && contains("ali", event) }
 		expected := func() []any { return searchedSeqs(20, 200, keep) }
 
 		It("applies all of them to a page and its total", func() {
@@ -117,7 +118,7 @@ var _ = Describe("searching a record result type", Ordered, func() {
 			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 			var rows []map[string]any
 			Expect(json.Unmarshal(response.Body.Bytes(), &rows)).To(Succeed(), response.Body.String())
-			Expect(column(rows, "seq")).To(Equal(expected()[10:20]))
+			Expect(recordresultstest.Column(rows, "seq")).To(Equal(expected()[10:20]))
 		})
 
 		It("keeps all of them in an all-row export", func() {
@@ -133,19 +134,4 @@ var _ = Describe("searching a record result type", Ordered, func() {
 			Expect(seqs).To(Equal(expected()))
 		})
 	})
-})
-
-var _ = Describe("declaring a result type's search columns", func() {
-	DescribeTable("refuses a search it could not run",
-		func(columns []string, message string) {
-			registry, _ := newRegistry()
-			err := recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
-				Kind: "sample_event", Title: "Sample events", SearchColumns: columns,
-			})
-			Expect(err).To(MatchError(ContainSubstring(message)))
-		},
-		Entry("a column the type does not have", []string{"db", "missing"}, `search column "missing" is not one of its columns`),
-		Entry("a column that holds no text", []string{"slow"}, `search column "slow" is boolean`),
-		Entry("a column named twice", []string{"db", "db"}, `search column "db" is named twice`),
-	)
 })

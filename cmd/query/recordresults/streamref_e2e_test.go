@@ -12,6 +12,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
@@ -20,7 +21,7 @@ import (
 // appendedRef appends events 1..count to run-1 through results, as a capture
 // does, and returns the metadata the ref must be built from.
 func appendedRef(ctx context.Context, results *recordresults.Results, count int) recordstore.Meta {
-	_, err := recordstore.AppendTyped(ctx, results.Backend, "run-1", "sample_event", sampleEvents(1, count))
+	_, err := recordstore.AppendTyped(ctx, results.Backend, "run-1", "sample_event", recordresultstest.SampleEvents(1, count))
 	Expect(err).ToNot(HaveOccurred())
 	meta, err := results.Backend.Meta(ctx, "run-1")
 	Expect(err).ToNot(HaveOccurred())
@@ -29,9 +30,9 @@ func appendedRef(ctx context.Context, results *recordresults.Results, count int)
 }
 
 func openLocal(backend recordstore.BackendKind) (*recordresults.Results, recordstore.Settings) {
-	settings := localSettings(backend)
-	return openResults(recordresults.OpenOptions{
-		Prefix: "trace-results", ConnectionName: "index", Settings: settings, Register: registerSampleEvents,
+	settings := recordresultstest.LocalSettings(backend)
+	return recordresultstest.OpenResults(recordresults.OpenOptions{
+		Prefix: "trace-results", ConnectionName: "index", Settings: settings, Register: recordresultstest.RegisterSampleEvents,
 	}), settings
 }
 
@@ -77,13 +78,13 @@ var _ = Describe("Results.Ref", func() {
 
 	It("reports a routed kv stream as kv, with no host or file it could be read from", func() {
 		schemas := recordstore.NewSchemas()
-		results := openResults(recordresults.OpenOptions{
-			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(""), Source: kvRouter(schemas),
-			Schemas: schemas, Register: registerSampleEvents,
+		results := recordresultstest.OpenResults(recordresults.OpenOptions{
+			Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(""), Source: recordresultstest.KVRouter(schemas),
+			Schemas: schemas, Register: recordresultstest.RegisterSampleEvents,
 		})
-		meta := appendedRef(forTenant("a"), results, 7)
+		meta := appendedRef(recordresultstest.ForTenant("a"), results, 7)
 
-		ref, err := results.Ref(forTenant("a"), "run-1", 0, 0)
+		ref, err := results.Ref(recordresultstest.ForTenant("a"), "run-1", 0, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ref).To(Equal(recordresults.StreamRef{
 			Stream: "run-1", Kind: "sample_event", Generation: meta.Generation, Low: 1, High: 7, From: 1, To: 7, Total: 7,
@@ -95,7 +96,7 @@ var _ = Describe("Results.Ref", func() {
 		schemas := recordstore.NewSchemas()
 		dir := GinkgoT().TempDir()
 		router, err := recordstore.NewRouter(recordstore.RouterOptions{
-			Route: tenantOf,
+			Route: recordresultstest.TenantOf,
 			Open: func(_ context.Context, route string) (recordstore.Backend, error) {
 				return sqlite.Open(sqlite.Options{
 					Path: filepath.Join(dir, route+".sqlite"), Schema: schemas.Kind, TTL: time.Hour, SweepInterval: time.Hour,
@@ -103,13 +104,13 @@ var _ = Describe("Results.Ref", func() {
 			},
 		})
 		Expect(err).ToNot(HaveOccurred())
-		results := openResults(recordresults.OpenOptions{
-			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(""), Source: router,
-			Schemas: schemas, Register: registerSampleEvents,
+		results := recordresultstest.OpenResults(recordresults.OpenOptions{
+			Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(""), Source: router,
+			Schemas: schemas, Register: recordresultstest.RegisterSampleEvents,
 		})
-		appendedRef(forTenant("b"), results, 2)
+		appendedRef(recordresultstest.ForTenant("b"), results, 2)
 
-		ref, err := results.Ref(forTenant("b"), "run-1", 0, 0)
+		ref, err := results.Ref(recordresultstest.ForTenant("b"), "run-1", 0, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ref.Store).To(Equal(recordresults.StoreLocation{
 			Backend: recordstore.BackendSQLite, Host: host, File: filepath.Join(dir, "v5", "b.sqlite"),

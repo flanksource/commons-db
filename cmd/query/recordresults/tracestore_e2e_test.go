@@ -7,6 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/tracing/sqltrace"
 )
@@ -21,7 +22,7 @@ var _ = Describe("TraceStore", func() {
 		Expect(err).ToNot(HaveOccurred())
 
 		var rows []recordstore.Row
-		for _, event := range sampleEvents(1, 3) {
+		for _, event := range recordresultstest.SampleEvents(1, 3) {
 			row, err := recordstore.EncodeRow(event)
 			Expect(err).ToNot(HaveOccurred())
 			rows = append(rows, row)

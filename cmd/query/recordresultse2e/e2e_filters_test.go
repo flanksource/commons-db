@@ -1,4 +1,4 @@
-package recordresults_test
+package recordresultse2e
 
 import (
 	"context"
@@ -12,15 +12,16 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 // expectedEvents counts run-1's events that keep passes.
-func expectedEvents(keep func(sampleEvent) bool) int {
+func expectedEvents(keep func(recordresultstest.SampleEvent) bool) int {
 	count := 0
-	for _, event := range sampleEvents(1, 250) {
+	for _, event := range recordresultstest.SampleEvents(1, 250) {
 		if keep(event) {
 			count++
 		}
@@ -30,9 +31,9 @@ func expectedEvents(keep func(sampleEvent) bool) int {
 
 // expectedFacets is each value's row count in run-1, ordered as a lookup
 // orders them: most rows first, then by value.
-func expectedFacets(values func(sampleEvent) []string) []query.FilterOption {
+func expectedFacets(values func(recordresultstest.SampleEvent) []string) []query.FilterOption {
 	counts := map[string]int64{}
-	for _, event := range sampleEvents(1, 250) {
+	for _, event := range recordresultstest.SampleEvents(1, 250) {
 		for _, value := range values(event) {
 			counts[value]++
 		}
@@ -95,19 +96,19 @@ var _ = Describe("filtering a record result type by its columns", Ordered, func(
 	}
 
 	DescribeTable("selects rows by the elements of a string list column",
-		func(selection string, keep func(sampleEvent) bool) {
+		func(selection string, keep func(recordresultstest.SampleEvent) bool) {
 			expected := expectedEvents(keep)
 			rows, header := server.rows("stream=run-1&limit=500&filter.tables=" + url.QueryEscape(selection))
 			Expect(header.Get("X-Total-Count")).To(Equal(fmt.Sprint(expected)))
 			Expect(rows).To(HaveLen(expected))
 		},
-		Entry("rows holding an element", "activity", func(event sampleEvent) bool {
+		Entry("rows holding an element", "activity", func(event recordresultstest.SampleEvent) bool {
 			return slices.Contains(event.Tables, "activity")
 		}),
-		Entry("rows holding none of an element, including rows holding nothing", "!client", func(event sampleEvent) bool {
+		Entry("rows holding none of an element, including rows holding nothing", "!client", func(event recordresultstest.SampleEvent) bool {
 			return !slices.Contains(event.Tables, "client")
 		}),
-		Entry("rows holding one element and not another", "activity,!client", func(event sampleEvent) bool {
+		Entry("rows holding one element and not another", "activity,!client", func(event recordresultstest.SampleEvent) bool {
 			return slices.Contains(event.Tables, "activity") && !slices.Contains(event.Tables, "client")
 		}),
 	)
@@ -122,7 +123,7 @@ var _ = Describe("filtering a record result type by its columns", Ordered, func(
 	// before the user picks it, so they have to survive the trip from the engine
 	// to the JSON the browser reads, keyed by the same values as the options.
 	DescribeTable("reports how many of the stream's rows hold each offered value",
-		func(filter string, values func(sampleEvent) []string) {
+		func(filter string, values func(recordresultstest.SampleEvent) []string) {
 			expected := map[string]int{}
 			for _, facet := range expectedFacets(values) {
 				expected[facet.Value] = int(facet.Count)
@@ -131,15 +132,15 @@ var _ = Describe("filtering a record result type by its columns", Ordered, func(
 			Expect(offered.Counts).To(Equal(expected))
 			Expect(offered.Options).To(HaveLen(len(expected)))
 		},
-		Entry("a scalar column", "filter.db", func(event sampleEvent) []string { return []string{event.DB} }),
-		Entry("a string list column, per element", "filter.tables", func(event sampleEvent) []string { return event.Tables }),
+		Entry("a scalar column", "filter.db", func(event recordresultstest.SampleEvent) []string { return []string{event.DB} }),
+		Entry("a string list column, per element", "filter.tables", func(event recordresultstest.SampleEvent) []string { return event.Tables }),
 	)
 
 	It("counts the rows of the stream holding each element", func() {
-		Expect(lookup("filter.tables")).To(Equal(expectedFacets(func(event sampleEvent) []string { return event.Tables })))
+		Expect(lookup("filter.tables")).To(Equal(expectedFacets(func(event recordresultstest.SampleEvent) []string { return event.Tables })))
 	})
 
 	It("counts the rows of the stream holding each value of a scalar column", func() {
-		Expect(lookup("filter.db")).To(Equal(expectedFacets(func(event sampleEvent) []string { return []string{event.DB} })))
+		Expect(lookup("filter.db")).To(Equal(expectedFacets(func(event recordresultstest.SampleEvent) []string { return []string{event.DB} })))
 	})
 })

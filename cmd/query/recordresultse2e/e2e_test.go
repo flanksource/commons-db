@@ -1,4 +1,4 @@
-package recordresults_test
+package recordresultse2e
 
 import (
 	"context"
@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/cache"
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/formatters"
@@ -25,85 +24,13 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query/profilestore"
-	_ "github.com/flanksource/commons-db/query/providers"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/kv"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
 )
-
-// sampleEvent is a small result type in the shape a trace capture produces: an
-// instant, two low-cardinality dimensions, a measure and a structured detail.
-type sampleEvent struct {
-	At      time.Time      `json:"at" pretty:"label=Captured"`
-	DB      string         `json:"db"`
-	User    string         `json:"user"`
-	Elapsed float64        `json:"elapsed_ms" pretty:"type=duration,unit=ms"`
-	Slow    bool           `json:"slow"`
-	Tables  []string       `json:"tables"`
-	Detail  map[string]any `json:"detail"`
-}
-
-func (sampleEvent) Columns() []api.ColumnDef {
-	return []api.ColumnDef{
-		api.Column("at").Label("Captured").Kind("timestamp").Build(),
-		api.Column("db").Label("Database").Build(),
-		api.Column("user").Label("User").Build(),
-		api.Column("elapsed_ms").Label("Elapsed").Build(),
-		api.Column("slow").Label("Slow").Build(),
-		api.Column("tables").Label("Tables").Kind("tags").Build(),
-		api.Column("detail").Hidden().Build(),
-	}
-}
-
-func (e sampleEvent) Row() map[string]any {
-	return map[string]any{
-		"at": e.At,
-		"db": api.TableCell{
-			Value:       api.Text{Content: e.DB, Style: "text-blue-500"},
-			FilterValue: e.DB,
-		},
-		"user": e.User, "elapsed_ms": e.Elapsed, "slow": e.Slow,
-		"tables": e.Tables, "detail": e.Detail,
-	}
-}
-
-var (
-	sampleDBs   = []string{"oipa", "audit", "report"}
-	sampleUsers = []string{"alice", "bob"}
-	sampleStart = time.Date(2026, 9, 10, 6, 0, 0, 0, time.UTC)
-)
-
-// sampleEvents are events first..last; event n is n milliseconds after start,
-// is slow when n is a multiple of 5, and reads the tables sampleTables(n).
-func sampleEvents(first, last int) []sampleEvent {
-	events := make([]sampleEvent, 0, last-first+1)
-	for n := first; n <= last; n++ {
-		events = append(events, sampleEvent{
-			At: sampleStart.Add(time.Duration(n) * time.Millisecond), DB: sampleDBs[n%3], User: sampleUsers[n%2],
-			Elapsed: float64(n), Slow: n%5 == 0, Tables: sampleTables(n), Detail: map[string]any{"n": n},
-		})
-	}
-	return events
-}
-
-// sampleTables is what event n reads: every event reads policy, an even one
-// also reads client, and a multiple of 3 also reads activity. Every tenth reads
-// nothing at all, which is the row an exclusion must still keep.
-func sampleTables(n int) []string {
-	if n%10 == 0 {
-		return nil
-	}
-	tables := []string{"policy"}
-	if n%2 == 0 {
-		tables = append(tables, "client")
-	}
-	if n%3 == 0 {
-		tables = append(tables, "activity")
-	}
-	return tables
-}
 
 type resultServer struct {
 	source   *kv.Backend
@@ -114,11 +41,11 @@ type resultServer struct {
 func newResultServer() resultServer {
 	ctx := context.Background()
 	schemas := recordstore.NewSchemas()
-	source := newKV(schemas)
+	source := recordresultstest.NewKV(schemas)
 	registry := newSampleRegistry(source, schemas)
-	_, err := recordstore.AppendTyped(ctx, source, "run-1", "sample_event", sampleEvents(1, 250))
+	_, err := recordstore.AppendTyped(ctx, source, "run-1", "sample_event", recordresultstest.SampleEvents(1, 250))
 	Expect(err).ToNot(HaveOccurred())
-	_, err = recordstore.AppendTyped(ctx, source, "run-2", "sample_event", sampleEvents(1000, 1004))
+	_, err = recordstore.AppendTyped(ctx, source, "run-2", "sample_event", recordresultstest.SampleEvents(1000, 1004))
 	Expect(err).ToNot(HaveOccurred())
 	return resultServer{source: source, registry: registry, handler: serveResults(registry)}
 }
@@ -137,7 +64,7 @@ func newSampleRegistry(source recordstore.Backend, schemas *recordstore.Schemas)
 		Prefix: "trace-results", Schemas: schemas, Index: index, Source: source, ConnectionName: "index",
 	})
 	Expect(err).ToNot(HaveOccurred())
-	Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[sampleEvent]{
+	Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 		Kind: "sample_event", Title: "Sample events", TimeColumn: "at",
 	})).To(Succeed())
 	return registry
@@ -208,14 +135,6 @@ func (s resultServer) rows(query string) ([]map[string]any, http.Header) {
 	return rows, response.Header()
 }
 
-func column(rows []map[string]any, name string) []any {
-	values := make([]any, len(rows))
-	for index, row := range rows {
-		values[index] = row[name]
-	}
-	return values
-}
-
 var _ = Describe("a record result type served through the profile engine", Ordered, func() {
 	var server resultServer
 
@@ -262,7 +181,7 @@ var _ = Describe("a record result type served through the profile engine", Order
 
 	It("reads a boolean column back as a JSON boolean", func() {
 		rows, _ := server.rows("stream=run-1&limit=2")
-		Expect(column(rows, "slow")).To(Equal([]any{true, false}))
+		Expect(recordresultstest.Column(rows, "slow")).To(Equal([]any{true, false}))
 	})
 
 	It("answers on the surface key as well as the escaped name", func() {
@@ -274,7 +193,7 @@ var _ = Describe("a record result type served through the profile engine", Order
 	It("includes and excludes by column filter", func() {
 		rows, header := server.rows("stream=run-1&filter.db=oipa,report&filter.user=!bob&limit=500")
 		expected := 0
-		for _, event := range sampleEvents(1, 250) {
+		for _, event := range recordresultstest.SampleEvents(1, 250) {
 			if event.DB != "audit" && event.User != "bob" {
 				expected++
 			}
@@ -343,7 +262,7 @@ var _ = Describe("a record result type served through the profile engine", Order
 
 	It("sorts by a requested column ahead of the declared order", func() {
 		rows, _ := server.rows("stream=run-1&sort=db&order=asc&limit=500")
-		dbs := column(rows, "db")
+		dbs := recordresultstest.Column(rows, "db")
 		Expect(slices.IsSortedFunc(dbs, func(a, b any) int { return strings.Compare(a.(string), b.(string)) })).To(BeTrue())
 		Expect(dbs[0]).To(Equal("audit"))
 	})
@@ -358,14 +277,14 @@ var _ = Describe("a record result type served through the profile engine", Order
 	It("reads only the seq window it is given", func() {
 		rows, header := server.rows("stream=run-1&afterSeq=10&toSeq=20&sort=seq&order=asc")
 		Expect(header.Get("X-Total-Count")).To(Equal("10"))
-		Expect(column(rows, "seq")).To(Equal([]any{
+		Expect(recordresultstest.Column(rows, "seq")).To(Equal([]any{
 			float64(11), float64(12), float64(13), float64(14), float64(15),
 			float64(16), float64(17), float64(18), float64(19), float64(20),
 		}))
 	})
 
 	It("catches the index up with rows appended since the last read", func() {
-		_, err := recordstore.AppendTyped(context.Background(), server.source, "run-2", "sample_event", sampleEvents(1005, 1006))
+		_, err := recordstore.AppendTyped(context.Background(), server.source, "run-2", "sample_event", recordresultstest.SampleEvents(1005, 1006))
 		Expect(err).ToNot(HaveOccurred())
 		_, header := server.rows("stream=run-2")
 		Expect(header.Get("X-Total-Count")).To(Equal("7"))

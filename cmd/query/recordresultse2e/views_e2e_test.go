@@ -1,4 +1,4 @@
-package recordresults_test
+package recordresultse2e
 
 import (
 	"bytes"
@@ -13,84 +13,15 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
 
-// jobEvent is a result type whose rows a view groups: each job starts and,
-// unless it is still running, ends with a status and a duration.
-type jobEvent struct {
-	ID     string  `json:"id"`
-	Parent string  `json:"parent"`
-	Job    string  `json:"job"`
-	Phase  string  `json:"phase"`
-	Status string  `json:"status"`
-	Millis float64 `json:"millis"`
-}
-
-// auditEvent is a second kind, with a view of the same name as one of
-// jobEvent's, so a view name is shown to be scoped to its kind.
-type auditEvent struct {
-	Job string `json:"job"`
-}
-
-func numberColumn(name string) query.ColumnDef {
-	return query.ColumnDef{Name: name, Type: query.ColumnTypeNumber}
-}
-
-// jobViews declares overview before the views it uses, so resolving uses
-// cannot lean on declaration order.
-func jobViews() []recordresults.ResultView {
-	return []recordresults.ResultView{
-		{
-			Name: "overview", Title: "Overview", Uses: []string{"busy_jobs"},
-			Params: []query.ParamDef{{Name: "minMs", Label: "Slow from", Type: query.ParamTypeNumber, Required: true}},
-			Query: `WITH slow AS (SELECT job FROM busy_jobs WHERE totalMs >= {{.params.minMs}})
-SELECT 'all' AS scope, (SELECT count(*) FROM jobs) AS jobs, (SELECT count(*) FROM busy_jobs) AS busy, (SELECT count(*) FROM slow) AS slow`,
-			Columns: []query.ColumnDef{{Name: "scope"}, numberColumn("jobs"), numberColumn("busy"), numberColumn("slow")},
-			Order:   query.Order{{Column: "scope", Unique: true}},
-		},
-		{
-			Name: "jobs", Title: "Jobs",
-			Query: `-- one row per job, whichever of its events the window holds
-WITH events AS (SELECT job, phase, millis, seq FROM stream_rows)
-SELECT job, count(*) AS events, sum(phase = 'end') AS ended, total(millis) AS totalMs, max(seq) AS lastSeq
-FROM events GROUP BY job`,
-			Columns: []query.ColumnDef{{Name: "job"}, numberColumn("events"), numberColumn("ended"), numberColumn("totalMs"), numberColumn("lastSeq")},
-			Order:   query.Order{{Column: "totalMs", Desc: true}, {Column: "job", Unique: true}},
-		},
-		{
-			Name: "busy_jobs", Title: "Busy jobs", Uses: []string{"jobs"},
-			Query:   `SELECT job, totalMs FROM jobs WHERE ended > 0`,
-			Columns: []query.ColumnDef{{Name: "job"}, numberColumn("totalMs")},
-			Order:   query.Order{{Column: "job", Unique: true}},
-		},
-	}
-}
-
-func registerJobTypes(views []recordresults.ResultView) func(*recordresults.Registry) error {
-	return func(registry *recordresults.Registry) error {
-		if err := recordresults.RegisterResultType(registry, recordresults.ResultType[jobEvent]{
-			Kind: "job_event", Title: "Job events", KeyColumn: "id", Follow: true, SearchColumns: []string{"job"},
-			Hierarchy: &recordresults.HierarchyColumns{ID: "id", Parent: "parent"}, Views: views,
-		}); err != nil {
-			return err
-		}
-		return recordresults.RegisterResultType(registry, recordresults.ResultType[auditEvent]{
-			Kind: "audit_event", Title: "Audit events",
-			Views: []recordresults.ResultView{{
-				Name: "jobs", Title: "Audited jobs", Query: `SELECT job, count(*) AS audits FROM stream_rows GROUP BY job`,
-				Columns: []query.ColumnDef{{Name: "job"}, numberColumn("audits")},
-				Order:   query.Order{{Column: "job", Unique: true}},
-			}},
-		})
-	}
-}
-
 // runOneEvents are seqs 1-7: jobs a, b and c start and end (a in 30ms, b
 // failing in 50ms, c in 20ms), interleaved, and d starts and is still running.
-func runOneEvents() []jobEvent {
-	return []jobEvent{
+func runOneEvents() []recordresultstest.JobEvent {
+	return []recordresultstest.JobEvent{
 		{ID: "1", Job: "a", Phase: "start"},
 		{ID: "2", Job: "b", Phase: "start"},
 		{ID: "3", Job: "a", Phase: "end", Status: "ok", Millis: 30},
@@ -115,17 +46,17 @@ var _ = Describe("views over a record result type", Ordered, func() {
 	BeforeAll(func() {
 		schemas := recordstore.NewSchemas()
 		server = newFollowServerWith(recordresults.OpenOptions{
-			Prefix: "trace-results", ConnectionName: "index", Settings: localSettings(""), Source: kvRouter(schemas),
-			Schemas: schemas, Register: registerJobTypes(jobViews()),
+			Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(""), Source: recordresultstest.KVRouter(schemas),
+			Schemas: schemas, Register: recordresultstest.RegisterJobTypes(recordresultstest.JobViews()),
 		})
-		ctx := forTenant("a")
+		ctx := recordresultstest.ForTenant("a")
 		_, err := recordstore.AppendTyped(ctx, server.results.Backend, "run-1", "job_event", runOneEvents())
 		Expect(err).ToNot(HaveOccurred())
-		_, err = recordstore.AppendTyped(ctx, server.results.Backend, "run-2", "job_event", []jobEvent{
+		_, err = recordstore.AppendTyped(ctx, server.results.Backend, "run-2", "job_event", []recordresultstest.JobEvent{
 			{ID: "1", Job: "z", Phase: "start"}, {ID: "2", Job: "z", Phase: "end", Status: "ok", Millis: 5},
 		})
 		Expect(err).ToNot(HaveOccurred())
-		_, err = recordstore.AppendTyped(ctx, server.results.Backend, "audit-1", "audit_event", []auditEvent{{Job: "a"}, {Job: "a"}})
+		_, err = recordstore.AppendTyped(ctx, server.results.Backend, "audit-1", "audit_event", []recordresultstest.AuditEvent{{Job: "a"}, {Job: "a"}})
 		Expect(err).ToNot(HaveOccurred())
 	})
 
@@ -176,7 +107,7 @@ var _ = Describe("views over a record result type", Ordered, func() {
 				{Name: "toSeq", Label: "Through seq", Type: query.ParamTypeNumber, Default: int64(9223372036854775807), Description: "Read the rows up to and including this seq"},
 				{Name: "minMs", Label: "Slow from", Type: query.ParamTypeNumber, Required: true},
 			},
-			Columns: []query.ColumnDef{{Name: "scope"}, numberColumn("jobs"), numberColumn("busy"), numberColumn("slow")},
+			Columns: []query.ColumnDef{{Name: "scope"}, recordresultstest.NumberColumn("jobs"), recordresultstest.NumberColumn("busy"), recordresultstest.NumberColumn("slow")},
 			Order:   query.Order{{Column: "scope", Unique: true}},
 			Limits:  &query.RowLimits{PageSize: 100, MaxPageSize: 500, MaxExportRows: recordresults.MaxExportRows},
 			Output:  []string{"table", "json", "ndjson", "yaml", "csv", "markdown", "html", "excel", "pdf"},
@@ -206,18 +137,18 @@ var _ = Describe("views over a record result type", Ordered, func() {
 
 	It("pages the grouped rows by cursor", func() {
 		first, header := rows("job_event", "jobs", "stream=run-1&limit=2")
-		Expect(column(first, "job")).To(Equal([]any{"b", "a"}))
+		Expect(recordresultstest.Column(first, "job")).To(Equal([]any{"b", "a"}))
 		Expect(header.Get("X-Has-More")).To(Equal("true"))
 		Expect(header.Get("X-Total-Count")).To(Equal("4"))
 
 		second, header := rows("job_event", "jobs", "stream=run-1&limit=2&cursor="+url.QueryEscape(header.Get("X-Next-Cursor")))
-		Expect(column(second, "job")).To(Equal([]any{"c", "d"}))
+		Expect(recordresultstest.Column(second, "job")).To(Equal([]any{"c", "d"}))
 		Expect(header.Get("X-Has-More")).To(Equal("false"))
 	})
 
 	It("sorts by a requested output column", func() {
 		result, _ := rows("job_event", "jobs", "stream=run-1&sort=lastSeq&order=asc")
-		Expect(column(result, "job")).To(Equal([]any{"a", "b", "c", "d"}))
+		Expect(recordresultstest.Column(result, "job")).To(Equal([]any{"a", "b", "c", "d"}))
 	})
 
 	It("filters on an output column, and totals the filtered groups", func() {
@@ -287,7 +218,7 @@ var _ = Describe("views over a record result type", Ordered, func() {
 		Expect(json.Unmarshal(body.Bytes(), &info)).To(Succeed())
 		events, _ := server.subscribe(info.ID, "")
 		followed, _ := rowsFrom(events, 2)
-		Expect(column(followed, "job")).To(Equal([]any{"c", "d"}))
+		Expect(recordresultstest.Column(followed, "job")).To(Equal([]any{"c", "d"}))
 
 		response = server.do(http.MethodPost, "/api/v1/profile/profile-trace-results-job-event-jobs/sessions?follow=true&stream=run-1", header)
 		body.Reset()
