@@ -12,7 +12,7 @@ You'll:
 3. append a stream and seal it
 4. mount the profile service and read the stream over HTTP
 
-It assumes both modules are in your `go.mod` together with the sqlite `replace` (see [Consuming commons-db](../consuming/)).
+It assumes the `recordstore` and `cmd/query` modules are in your `go.mod` together with the sqlite `replace` (see [Consuming commons-db](../consuming/)).
 
 ## 1. Declare the row type
 
@@ -44,7 +44,7 @@ package traces
 import (
 	"time"
 
-	"github.com/flanksource/commons-db/cmd/query/recordresults"
+	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/recordstore"
 )
 

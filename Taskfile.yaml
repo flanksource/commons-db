@@ -75,6 +75,21 @@ tasks:
     cmds:
       - pnpm build
 
+  recordstore:build:
+    desc: Build the recordstore Go module
+    cmds:
+      - make -C recordstore build
+
+  recordstore:lint:
+    desc: Lint the recordstore Go module
+    cmds:
+      - make -C recordstore lint
+
+  recordstore:test:
+    desc: Test the recordstore Go module
+    cmds:
+      - make -C recordstore test
+
   query:schema:
     desc: Generate per-type/provider source schemas and bundled Clicky UI schemas into schemas/
     dir: cmd/query

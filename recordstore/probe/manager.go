@@ -84,7 +84,7 @@ type OpenFunc func(context.Context) (Source, error)
 type DescribeFunc func(ctx context.Context, stream string) (*query.EventsRef, error)
 
 // Writer is the record-store surface a probe needs. recordstore.Backend and
-// cmd/query record result stores both satisfy it.
+// the record result stores recordresults opens both satisfy it.
 type Writer interface {
 	Append(ctx context.Context, stream, kind string, rows []recordstore.Row) (recordstore.AppendResult, error)
 	Seal(ctx context.Context, stream string) error

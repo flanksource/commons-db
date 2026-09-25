@@ -1,23 +1,27 @@
 ---
 title: Consuming commons-db
-description: Add commons-db to another Go application, carry the sqlite replace, and develop against a local checkout.
+description: Add commons-db's modules to another Go application, carry the sqlite replace, and develop against a local checkout.
 ---
 
-commons-db ships as **two Go modules** from one repository. Most applications need both: the root module for storage, and the `cmd/query` module for serving what was stored through the profile engine.
+commons-db ships as **three Go modules** from one repository: the root module for connections and the profile engine, the `recordstore` module for record streams and the result types served over them, and the `cmd/query` module for the profile HTTP service and the `query` CLI.
 
 | Module | Tag format | Brings |
 | --- | --- | --- |
-| `github.com/flanksource/commons-db` | `v0.1.31` | `recordstore` and its backends, `sqlite`, `db/sqlitetable`, `query` (the profile engine), connections, migrations |
-| `github.com/flanksource/commons-db/cmd/query` | `cmd/query/v0.1.31` | `recordresults`, `profiles` (the profile HTTP service), `sessions` (trace/top sessions), the `query` CLI and its UI |
+| `github.com/flanksource/commons-db` | `v0.1.40` | `sqlite`, `db/sqlitetable`, `query` (the profile engine), `query/profilestore`, connections, migrations |
+| `github.com/flanksource/commons-db/recordstore` | `recordstore/v0.1.40` | `recordstore` and its backends, probes, `recordresults` |
+| `github.com/flanksource/commons-db/cmd/query` | `cmd/query/v0.1.40` | `profiles` (the profile HTTP service), `sessions` (trace/top sessions), the `query` CLI and its UI |
 
-The two modules are released together, so pin them to the **same version**:
+The modules are released together, so pin every one you use to the **same version**:
 
 ```bash
-go get github.com/flanksource/commons-db@v0.1.31
-go get github.com/flanksource/commons-db/cmd/query@v0.1.31
+go get github.com/flanksource/commons-db@v0.1.40
+go get github.com/flanksource/commons-db/recordstore@v0.1.40
+go get github.com/flanksource/commons-db/cmd/query@v0.1.40
 ```
 
-A store-only consumer, such as a CLI that writes streams another process serves, needs only the root module.
+A store-only consumer, such as a CLI that writes streams another process serves, needs only the `recordstore` module, which brings the root module with it.
+
+Never mix the `recordstore` module with a root module at `v0.1.39` or older. Those root releases still contain `recordstore/` themselves, so every `recordstore` import becomes ambiguous.
 
 ## Required: the sqlite driver replace
 
@@ -40,7 +44,7 @@ Never import `github.com/glebarez/go-sqlite` directly. If the panic shows up any
 
 ## Linking the profile providers
 
-Result profiles read their index through the `sqlite` query provider, which registers itself in `init()` in `github.com/flanksource/commons-db/query/providers`. `recordresults` links it transitively through `cmd/query/profiles`. If you build a binary that reads profiles without importing `profiles`, add the blank import yourself:
+Result profiles read their index through the `sqlite` query provider, which registers itself in `init()` in `github.com/flanksource/commons-db/query/providers`. `cmd/query/profiles` links it, so a binary serving profiles through that package has it. `recordresults` deliberately does not, so a binary that only captures streams never links every provider's SDK. If you build a binary that reads profiles without importing `profiles`, add the blank import yourself:
 
 ```go
 import _ "github.com/flanksource/commons-db/query/providers"
@@ -69,10 +73,10 @@ Use a Go workspace next to your application to build against an unreleased commo
 ```bash
 # in your application's parent directory
 go work init ./acme-app
-go work use ../commons-db ../commons-db/cmd/query
+go work use ../commons-db ../commons-db/recordstore ../commons-db/cmd/query
 ```
 
-`go.work` and `go.work.sum` are ignored by commons-db's own `.gitignore`. Keep them out of your application's repository too. When the change is done, fix shared behaviour in commons-db, release it, and bump both modules in your application together.
+`go.work` and `go.work.sum` are ignored by commons-db's own `.gitignore`. Keep them out of your application's repository too. When the change is done, fix shared behaviour in commons-db, release it, and bump every commons-db module in your application together.
 
 ## Tests that need a database
 
@@ -80,7 +84,7 @@ commons-db's Postgres-backed packages resolve their test database through `dbtes
 
 ## Checklist
 
-- [ ] `github.com/flanksource/commons-db` and `…/cmd/query` pinned to the same version
+- [ ] `github.com/flanksource/commons-db`, `…/recordstore` and `…/cmd/query` pinned to the same version
 - [ ] `replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite …` in your `go.mod`
 - [ ] no committed `replace` pointing at a local path
 - [ ] one property prefix per record store, such as `trace.store`

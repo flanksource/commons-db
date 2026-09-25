@@ -47,13 +47,13 @@ A separate index is always derived, and it's never a file a route could also wri
 
 | Package | Module | Import path |
 | --- | --- | --- |
-| recordstore core, `Schemas`, `Settings`, `Router`, `Notifier`, `Indexer` | `github.com/flanksource/commons-db` | `github.com/flanksource/commons-db/recordstore` |
-| Backends | `github.com/flanksource/commons-db` | `…/recordstore/kv`, `…/recordstore/sqlite`, `…/recordstore/ndjson` |
-| Probes (cursor sources → streams) | `github.com/flanksource/commons-db` | `…/recordstore/probe` |
-| Conformance suite | `github.com/flanksource/commons-db` | `…/recordstore/recordstoretest` |
+| recordstore core, `Schemas`, `Settings`, `Router`, `Notifier`, `Indexer` | `github.com/flanksource/commons-db/recordstore` | `github.com/flanksource/commons-db/recordstore` |
+| Backends | `github.com/flanksource/commons-db/recordstore` | `…/recordstore/kv`, `…/recordstore/sqlite`, `…/recordstore/ndjson` |
+| Probes (cursor sources → streams) | `github.com/flanksource/commons-db/recordstore` | `…/recordstore/probe` |
+| Conformance suite | `github.com/flanksource/commons-db/recordstore` | `…/recordstore/recordstoretest` |
 | SQLite handle | `github.com/flanksource/commons-db` | `github.com/flanksource/commons-db/sqlite` |
 | Typed SQLite tables | `github.com/flanksource/commons-db` | `github.com/flanksource/commons-db/db/sqlitetable` |
-| Result profiles | `github.com/flanksource/commons-db/cmd/query` | `github.com/flanksource/commons-db/cmd/query/recordresults` |
+| Result profiles | `github.com/flanksource/commons-db/recordstore` | `github.com/flanksource/commons-db/recordstore/recordresults` |
 
 <CardGrid>
   <LinkCard title="Consuming commons-db" href="start/consuming/" description="Add the modules, carry the sqlite replace, develop against a local checkout." />

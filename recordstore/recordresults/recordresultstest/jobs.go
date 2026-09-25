@@ -3,8 +3,8 @@
 package recordresultstest
 
 import (
-	"github.com/flanksource/commons-db/cmd/query/recordresults"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/recordstore/recordresults"
 )
 
 // JobEvent is a result type whose rows a view groups: each job starts and,

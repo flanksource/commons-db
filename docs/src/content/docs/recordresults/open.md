@@ -3,7 +3,7 @@ title: Opening a result store
 description: recordresults.Open wires a backend, a Notifier, a sqlite index and a profile registry from settings.
 ---
 
-`github.com/flanksource/commons-db/cmd/query/recordresults` serves record streams through the profile engine: **one read-only `sql` profile per result type**, over a sqlite index, addressed by a `stream` param.
+`github.com/flanksource/commons-db/recordstore/recordresults` serves record streams through the profile engine: **one read-only `sql` profile per result type**, over a sqlite index, addressed by a `stream` param.
 
 That design is deliberate. Every profile is a catalog entry, an OpenAPI path and a sidebar item, so a profile per stream would grow all three with every capture. A stream param grows none of them. Paging, column filters, filter-value lookups, sorting and export all come from the profile engine and run as SQL against the index.
 
