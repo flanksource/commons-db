@@ -51,11 +51,14 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 		}
 	}
 
-	ginkgo.It("flushes a session's buffered events before writing its terminal status", func() {
+	ginkgo.It("flushes a session's buffered events when the session is closed", func() {
 		rec := contractFixture(epoch)[1]
 		Expect(store.Begin(ctx, rec)).To(Succeed())
 		appendEvents(rec.ID, 3)
 
+		// The registry closes the sink before writing the terminal status, so
+		// by the time the record reads as ended the events are already here.
+		Expect(store.CloseSession(ctx, rec.ID)).To(Succeed())
 		rec.State = query.SessionCompleted
 		Expect(store.Update(ctx, rec.ID, rec.SessionStatus)).To(Succeed())
 		events, err := store.Events(ctx, rec.ID)
@@ -95,7 +98,7 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 		Expect(found).To(BeTrue())
 	})
 
-	ginkgo.It("keeps a batch whose write failed, so the retried terminal status lands with its events", func() {
+	ginkgo.It("keeps a batch whose write failed, so a later close lands with its events", func() {
 		gdb := sessionStoreDB()
 		store := newGormStore(gdb, time.Hour)
 		var refusals atomic.Int32
@@ -113,12 +116,13 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 		for i := int64(1); i <= 3; i++ {
 			Expect(store.Append(ctx, query.Event{SessionID: rec.ID, Sequence: i, Time: epoch, Row: query.Row{"n": float64(i)}})).To(Succeed())
 		}
-		rec.State = query.SessionCompleted
-		Expect(store.Update(ctx, rec.ID, rec.SessionStatus)).To(MatchError(ContainSubstring("disk full")))
+		Expect(store.CloseSession(ctx, rec.ID)).To(MatchError(ContainSubstring("disk full")))
 		held, err := store.HasEvents(ctx, rec.ID)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(held).To(BeTrue(), "the refused batch is still buffered")
 
+		Expect(store.CloseSession(ctx, rec.ID)).To(Succeed())
+		rec.State = query.SessionCompleted
 		Expect(store.Update(ctx, rec.ID, rec.SessionStatus)).To(Succeed())
 		events, err := store.Events(ctx, rec.ID)
 		Expect(err).ToNot(HaveOccurred())
