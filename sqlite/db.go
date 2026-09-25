@@ -97,7 +97,7 @@ func Open(options Options) (*DB, error) {
 }
 
 func openWriter(path string) (*sql.DB, error) {
-	writer, err := sql.Open("sqlite", fileURI(path)+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	writer, err := sql.Open("sqlite", fileURI(path)+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: open writer %s: %w", path, err)
 	}
