@@ -86,6 +86,22 @@ func (s shortSource) Scan(ctx context.Context, stream string, afterSeq int64, fn
 	return err
 }
 
+// reopenAfterMeta reopens its sealed source right after the next metadata
+// read, so that read reports it sealed and every later one open.
+type reopenAfterMeta struct {
+	*kv.Backend
+	armed bool
+}
+
+func (r *reopenAfterMeta) Meta(ctx context.Context, stream string) (recordstore.Meta, error) {
+	meta, err := r.Backend.Meta(ctx, stream)
+	if err != nil || !r.armed {
+		return meta, err
+	}
+	r.armed = false
+	return meta, r.Reopen(ctx, stream, meta.Generation)
+}
+
 // fakeClock is the source's clock, started at the wall clock so the expiries
 // it stamps agree with the in-process store's.
 type fakeClock struct {
@@ -209,6 +225,22 @@ var _ = Describe("Indexer", func() {
 		finished, err := index.Meta(ctx, "run-1")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(finished.Sealed).To(BeTrue())
+	})
+
+	It("reopens a sealed index when its source resumes while being indexed", func() {
+		appendSource(1, 2)
+		Expect(source.Seal(ctx, "run-1")).To(Succeed())
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		resuming := &reopenAfterMeta{Backend: source, armed: true}
+		racing, err := recordstore.NewIndexer(resuming, index)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(racing.Ensure(ctx, "run-1")).To(Succeed())
+
+		sourceMeta, err := source.Meta(ctx, "run-1")
+		Expect(err).NotTo(HaveOccurred())
+		indexMeta, err := index.Meta(ctx, "run-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]bool{sourceMeta.Sealed, indexMeta.Sealed}).To(Equal([]bool{false, false}))
 	})
 
 	It("does not expire an index whose source has no expiry", func() {

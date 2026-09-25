@@ -455,6 +455,18 @@ var _ = Describe("Profile schema", func() {
 		Expect(sqliteOptions).To(HaveKey("url"))
 		Expect(sqliteOptions).ToNot(HaveKey("database"))
 	})
+
+	It("scopes the replay target's connection picker to HTTP connections, not the provider's", func() {
+		replay := schema.Profile()["properties"].(schema.Schema)["replay"].(schema.Schema)
+		target := replay["properties"].(schema.Schema)["target"].(schema.Schema)
+		conn := target["properties"].(schema.Schema)["connection"].(schema.Schema)
+		scope := conn["x-clicky-lookup"].(schema.Schema)["scope"].(schema.Schema)
+
+		Expect(scope).To(Equal(schema.Schema{
+			"param": "types", "from": "replay.kind",
+			"map": map[string][]string{"http": {"http"}},
+		}))
+	})
 })
 
 var _ = Describe("Search specification schema", func() {
