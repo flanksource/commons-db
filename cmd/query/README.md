@@ -145,10 +145,11 @@ database-scoped sessions.
 - `internal/app` composes those packages into the server runtime.
 - `internal/commands` translates Cobra inputs into one application/library call per command.
 
-Releases tag the parent module first and then publish the matching
-`cmd/query/vX.Y.Z` nested-module tag. The initial split targets parent version
-`v0.1.15`, so pre-release checkouts use the repository `go.work` to resolve the
-parent locally without committing a `replace` directive.
+Record streams and the result types served over them come from the
+`github.com/flanksource/commons-db/recordstore` module. Releases tag the parent
+module first and then publish the matching `recordstore/vX.Y.Z` and
+`cmd/query/vX.Y.Z` nested-module tags. `replace` directives in `go.mod` resolve
+the parent and `recordstore` modules from this checkout.
 
 The server request pipeline (outer → inner) is:
 

@@ -6,10 +6,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/cmd/query/recordresults"
-	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/recordstore"
-	"github.com/flanksource/commons-db/tracing/sqltrace"
+	"github.com/flanksource/commons-db/recordstore/recordresults"
+	"github.com/flanksource/commons-db/recordstore/recordresults/recordresultstest"
+	"github.com/flanksource/commons-db/recordstore/tracing/sqltrace"
 )
 
 var _ = Describe("TraceStore", func() {

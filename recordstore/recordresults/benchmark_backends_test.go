@@ -16,11 +16,11 @@ import (
 	"github.com/google/uuid"
 	valkeygo "github.com/valkey-io/valkey-go"
 
-	"github.com/flanksource/commons-db/cmd/query/recordresults"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/kv"
 	"github.com/flanksource/commons-db/recordstore/ndjson"
+	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
 )
 

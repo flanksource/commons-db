@@ -11,7 +11,8 @@ require (
 	github.com/flanksource/clicky/aichat v1.21.66
 	github.com/flanksource/clicky/valkey v1.21.66
 	github.com/flanksource/commons v1.59.1
-	github.com/flanksource/commons-db v0.1.31
+	github.com/flanksource/commons-db v0.1.40
+	github.com/flanksource/commons-db/recordstore v0.1.40
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -414,3 +415,5 @@ require (
 replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311
 
 replace github.com/flanksource/commons-db => ../..
+
+replace github.com/flanksource/commons-db/recordstore => ../../recordstore

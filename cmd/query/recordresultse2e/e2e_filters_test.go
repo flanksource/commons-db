@@ -12,10 +12,10 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
+	"github.com/flanksource/commons-db/recordstore/recordresults/recordresultstest"
 )
 
 // expectedEvents counts run-1's events that keep passes.

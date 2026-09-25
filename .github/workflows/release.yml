@@ -25,6 +25,14 @@ jobs:
           cmd: patch
           pushTag: true
 
+      - name: Tag the recordstore module
+        if: steps.version.outputs.changed == 'true'
+        run: git tag "recordstore/${{ steps.version.outputs.next }}"
+
+      - name: Publish the recordstore module tag
+        if: steps.version.outputs.changed == 'true'
+        run: git push origin "recordstore/${{ steps.version.outputs.next }}"
+
       - name: Tag the query module
         if: steps.version.outputs.changed == 'true'
         run: git tag "cmd/query/${{ steps.version.outputs.next }}"

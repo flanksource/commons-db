@@ -11,9 +11,9 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/cmd/query/recordresults"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/kv"
+	"github.com/flanksource/commons-db/recordstore/recordresults"
 )
 
 // NewKV is an in-process kv source resolving kinds through schemas.

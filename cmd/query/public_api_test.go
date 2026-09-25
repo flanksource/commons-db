@@ -6,11 +6,11 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/connections"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
-	"github.com/flanksource/commons-db/cmd/query/recordresults"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
+	"github.com/flanksource/commons-db/recordstore/recordresults"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )

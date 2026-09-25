@@ -23,12 +23,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
-	"github.com/flanksource/commons-db/cmd/query/recordresults"
-	"github.com/flanksource/commons-db/cmd/query/recordresults/recordresultstest"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/kv"
+	"github.com/flanksource/commons-db/recordstore/recordresults"
+	"github.com/flanksource/commons-db/recordstore/recordresults/recordresultstest"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
 )
 
