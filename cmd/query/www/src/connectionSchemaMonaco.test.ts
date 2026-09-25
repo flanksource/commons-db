@@ -10,10 +10,11 @@ describe("connection schema Monaco compatibility", () => {
     expect(result.schema).toBeDefined();
 
     const definitions = result.schema?.definitions as Record<string, unknown>;
-    expect(Object.keys(definitions)).toHaveLength(56);
+    expect(Object.keys(definitions)).toHaveLength(57);
+    expect(definitions).toHaveProperty("sqlite");
 
     const serialized = JSON.stringify(result.schema);
     expect(serialized).not.toContain("#/$defs/");
-    expect(serialized.match(/#\/definitions\//g)).toHaveLength(56);
+    expect(serialized.match(/#\/definitions\//g)).toHaveLength(57);
   });
 });
