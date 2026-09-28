@@ -11,9 +11,9 @@ import (
 	"golang.org/x/text/message"
 )
 
-// timeLayout prints a deadlock's time to the millisecond, which is what tells
+// TimeLayout prints a deadlock's time to the millisecond, which is what tells
 // a burst of deadlocks apart.
-const timeLayout = "2006-01-02 15:04:05.000"
+const TimeLayout = "2006-01-02 15:04:05.000"
 
 // Style is how a shape is shown: a named shape stands out, Other recedes.
 func (s Shape) Style() string {
@@ -27,7 +27,7 @@ func (s Shape) Style() string {
 // participant and lock tables, and the cycle as one line per edge.
 func (g Graph) Pretty() api.Text {
 	text := api.Text{}.
-		AddText(g.Timestamp.UTC().Format(timeLayout)+" UTC", "font-bold").
+		AddText(g.Timestamp.UTC().Format(TimeLayout)+" UTC", "font-bold").
 		AddText(" · ", "text-muted").
 		AddText(g.Shape.Label(), g.Shape.Style()).
 		AddText(" · ", "text-muted").
@@ -126,7 +126,7 @@ func (p participantRow) Row() map[string]any {
 	}
 	waitingSince := ""
 	if p.WaitingSince != nil {
-		waitingSince = p.WaitingSince.UTC().Format(timeLayout)
+		waitingSince = p.WaitingSince.UTC().Format(TimeLayout)
 	}
 	return map[string]any{
 		"role": role, "spid": p.SPID, "host": p.Host, "app": p.ClientApp, "login": p.Login,
