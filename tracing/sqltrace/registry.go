@@ -1,64 +1,28 @@
-// Package sqltrace owns the server-side state for live SQL Server Extended
-// Events traces that the web UI tails via polling. One Registry is created
-// per oipa-cli serve process and shared across browser tabs — matching the
-// shared-observability model used by internal/arthas.
+// Package sqltrace runs live SQL Server Extended Events captures: it creates the
+// XE session, drains its target, and commits every captured event as a row of
+// a sql_xevent record stream, which is where every reader — a result profile,
+// a follower, a step's checkpoint window — reads them back from.
 package sqltrace
 
 import (
 	"context"
 	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons/logger"
 
 	"github.com/flanksource/commons-db/tracing/xetrace"
 )
 
-// traceTTL is how long a stopped trace stays in the registry before being
-// evicted. Ten minutes gives operators time to re-open the browser tab and
-// still see the final summary without leaking indefinitely.
-const traceTTL = 10 * time.Minute
-
-// defaultPollInterval is used when CreateOptions.Poll is unset.
+// defaultPollInterval is used when StartOptions.Poll is unset.
 const defaultPollInterval = time.Second
-
-// ActiveTrace is the server-side record of one live or recently-stopped
-// XE session. The mu-guarded fields are read by HTTP handlers polling for
-// new events while the drain goroutine writes into them.
-type ActiveTrace struct {
-	ID          string                `json:"id"`
-	SessionName string                `json:"sessionName"`
-	Database    string                `json:"database"`
-	StartedAt   time.Time             `json:"startedAt"`
-	StopAt      time.Time             `json:"stopAt,omitzero"`
-	StoppedAt   time.Time             `json:"stoppedAt,omitzero"`
-	Options     xetrace.CreateOptions `json:"options"`
-	Error       string                `json:"error,omitempty"`
-
-	mu sync.Mutex
-	xe xeSession
-	// events is the Redis-backed log this trace's captured events live in.
-	// Nothing is buffered in the process: the drain writes one chunk per poll
-	// and every read goes back to the store, so a long capture costs bounded
-	// memory and survives the goroutine that produced it.
-	events   EventLog
-	chunkSeq int
-	running  bool
-	stopOnce sync.Once
-	cancel   context.CancelFunc
-	// done is closed by runDrain once it has performed its final drain and
-	// dropped the XE session. stop() waits on it so a synchronous
-	// Stop()+Result() observes the events captured right before cancellation —
-	// critical for spans shorter than the poll interval (e.g. a fast apply
-	// step), where no background poll ever fired.
-	done chan struct{}
-}
 
 // stopDrainSlack is the headroom stopDrainTimeout adds on top of the work it
 // actually waits for. Ten seconds covers the two 5s windows go-mssqldb spends
@@ -67,193 +31,103 @@ const stopDrainSlack = 10 * time.Second
 
 // stopDrainTimeout bounds how long stop() waits for runDrain to finish. It must
 // cover BOTH pieces of work runDrain does before closing trace.done — the final
-// drain and then the session Drop, which run back to back — or stop() reports a
-// spurious timeout while the XE session is still on the server and the DB lease
-// is still held.
-func stopDrainTimeout() time.Duration {
-	return xetrace.PollTimeout() + xetrace.DropTimeout() + stopDrainSlack
+// drain and then the session Drop — or stop() reports a spurious timeout while
+// the XE session is still on the server and the DB lease is still held.
+func stopDrainTimeout(finalDelay time.Duration) time.Duration {
+	return finalDelay + xetrace.PollTimeout() + xetrace.DropTimeout() + stopDrainSlack
 }
 
-// xeSession is the subset of *xetrace.Session that the registry depends
-// on. Narrowing the surface lets tests substitute an in-memory fake.
-type xeSession interface {
-	Poll(ctx context.Context) (xetrace.RingBufferSnapshot, error)
+// XESession is the slice of *xetrace.Session a capture drives.
+type XESession interface {
+	Poll(ctx context.Context) (xetrace.TargetSnapshot, error)
 	Drop(ctx context.Context) error
-	// Database is the scope the session actually resolved to, which is the
-	// caller's when they named one and the connection's own when they did not.
-	Database() string
 }
 
-// Running reports whether the drain goroutine is still polling.
-func (t *ActiveTrace) Running() bool {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.running
+// Opened is what an XEFactory reports about the session it created: its name
+// and the statements that created and started it.
+type Opened struct {
+	Name       string
+	Statements []string
+	FinalDelay time.Duration
 }
 
-// EventsSince returns every event whose Key is newer than sinceKey (i.e.
-// everything after the first match). An empty sinceKey returns the full
-// buffer. A sinceKey that is not found returns the full buffer too, so the
-// caller re-syncs rather than silently missing events.
-//
-// A store failure is returned, never swallowed: an empty slice would render as
-// "this trace captured no events", which is indistinguishable from a real
-// empty capture.
-func (t *ActiveTrace) EventsSince(sinceKey string) ([]xetrace.Event, error) {
-	if t.events == nil {
-		return nil, fmt.Errorf("trace %q has no event store", t.ID)
-	}
-	return t.events.Since(t.ID, sinceKey)
-}
+// XEFactory creates the XE session for a capture.
+type XEFactory func(ctx context.Context, db *sql.DB, opts xetrace.CreateOptions) (XESession, Opened, error)
 
-// Result renders the final TraceResult for post-run display in the UI
-// (via CommandOutput + application/clicky+json). Safe to call while running.
-func (t *ActiveTrace) Result() (xetrace.TraceResult, error) {
-	if t.events == nil {
-		return xetrace.TraceResult{}, fmt.Errorf("trace %q has no event store", t.ID)
-	}
-	events, err := t.events.All(t.ID)
-	if err != nil {
-		return xetrace.TraceResult{}, err
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	stopped := t.StoppedAt
-	if stopped.IsZero() {
-		stopped = time.Now().UTC()
-	}
-	return xetrace.TraceResult{
-		SessionName: t.SessionName,
-		Database:    t.Database,
-		StartedAt:   t.StartedAt,
-		StoppedAt:   stopped,
-		Duration:    stopped.Sub(t.StartedAt),
-		Events:      events,
-		Error:       t.Error,
-	}, nil
-}
-
-// Err returns the terminal capture or cleanup failure, if one occurred.
-func (t *ActiveTrace) Err() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.Error == "" {
-		return nil
-	}
-	return errors.New(t.Error)
-}
-
-func (t *ActiveTrace) finish(stoppedAt time.Time, err error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.running = false
-	if t.StoppedAt.IsZero() {
-		t.StoppedAt = stoppedAt
+// CreateXESession is the production XEFactory: a session on db, over the ring
+// buffer or — when opts.File is set — a .xel event_file target on the server,
+// or the built-in system_health session when opts.Session names it.
+func CreateXESession(ctx context.Context, db *sql.DB, opts xetrace.CreateOptions) (XESession, Opened, error) {
+	var session *xetrace.Session
+	var err error
+	if opts.Session == xetrace.SystemHealthSession {
+		session, err = xetrace.AttachSystemHealth(ctx, db, opts)
+	} else {
+		session, err = xetrace.Create(ctx, db, opts)
 	}
 	if err != nil {
-		t.Error = err.Error()
+		return nil, Opened{}, err
 	}
+	return session, Opened{Name: session.Name, Statements: session.Statements, FinalDelay: session.FinalDelay()}, nil
 }
 
-// Status is the trace's outcome: when it stopped, and why it failed if it did.
-// Both are read under the lock the drain writes them with, so a caller cannot
-// see a half-written stop.
-func (t *ActiveTrace) Status() (time.Time, string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	return t.StoppedAt, t.Error
-}
-
-// stop signals the drain loop to cancel and waits (bounded) for runDrain to
-// finish its final drain and drop the session, then records StoppedAt. Waiting
-// is what makes a synchronous Stop()+Result() see late events from a span
-// shorter than the poll interval. Safe to call multiple times; runDrain owns
-// the actual session Drop.
-func (t *ActiveTrace) stop() error {
-	t.stopOnce.Do(func() {
-		if t.cancel != nil {
-			t.cancel()
-		}
-	})
-	if t.done != nil {
-		select {
-		case <-t.done:
-		case <-time.After(stopDrainTimeout()):
-			return fmt.Errorf("timed out waiting for drain of session %q", t.SessionName)
-		}
-	}
-	return t.Err()
-}
-
-// xeFactory builds the XE session + reports the caller's session_id.
-// Pulled out of Start so tests can inject a fake without spinning up a
-// real SQL Server connection.
-type xeFactory func(ctx context.Context, db *sql.DB, opts xetrace.CreateOptions) (xeSession, string, error)
-
-// defaultXEFactory creates the session on its own dedicated connection, which is
-// also where it resolves the database to scope to and the session id to exclude.
-func defaultXEFactory(ctx context.Context, db *sql.DB, opts xetrace.CreateOptions) (xeSession, string, error) {
-	s, err := xetrace.Create(ctx, db, opts)
+// CurrentDatabase is the production database resolver: DB_NAME() of one of
+// db's connections.
+func CurrentDatabase(ctx context.Context, db *sql.DB) (string, error) {
+	conn, err := db.Conn(ctx)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
-	return s, s.Name, nil
+	defer func() { _ = conn.Close() }()
+	return xetrace.CurrentDatabase(ctx, conn)
 }
 
-// Registry holds every active and recently-stopped trace for one CLI
-// process. Safe for concurrent use by HTTP handlers.
+// RegistryOptions are the seams a Registry needs. Every one is required.
+type RegistryOptions struct {
+	// DB leases the context's write pool for one capture; the release runs
+	// after the capture's final drain and session drop.
+	DB func(context.Context) (*sql.DB, func(), error)
+	// Store is where captured rows are committed.
+	Store RecordStore
+	// NewSession creates the XE session (CreateXESession in production).
+	NewSession XEFactory
+	// CurrentDatabase names the context's database, which a capture scopes to
+	// when it names none (CurrentDatabase in production).
+	CurrentDatabase func(context.Context, *sql.DB) (string, error)
+}
+
+// Registry starts and stops XE captures. One is built per capture start, over
+// the record store the starting request's environment routes to.
 type Registry struct {
-	mu        sync.Mutex
-	traces    map[string]*ActiveTrace
-	dbFor     func(context.Context) (*sql.DB, func(), error) // injected so tests can stub it
-	events    EventLog                                       // where captured events are recorded
-	nowFunc   func() time.Time                               // overridable for tests
-	xeFactory xeFactory                                      // overridable for tests
+	opts    RegistryOptions
+	nowFunc func() time.Time
+
+	mu     sync.Mutex
+	traces map[string]*ActiveTrace
 }
 
-// EventLog is where a Registry records what it captures, and where it reads
-// those events back. It is an interface because a capture outlives neither the
-// process nor the request that started it: the events have to go somewhere the
-// host chooses, and this package should not choose for it.
-type EventLog interface {
-	// Append stores one poll's events under an increasing sequence number.
-	Append(traceID string, seq int, events []xetrace.Event) error
-
-	// All returns every event captured for a trace, in delivery order.
-	All(traceID string) ([]xetrace.Event, error)
-
-	// Since returns the events after the one whose Key is sinceKey. An empty
-	// cursor returns everything, and a cursor the log no longer holds returns
-	// everything rather than nothing — a re-send is visible to a caller, a
-	// silent hole is not.
-	Since(traceID, sinceKey string) ([]xetrace.Event, error)
-
-	// Forget removes a trace's events.
-	Forget(traceID string)
-
-	// Flush settles buffered writes, so a reader sees everything recorded.
-	Flush() error
-}
-
-// NewRegistry builds a Registry wired to the supplied DB provider and event
-// log. dbFor is called once per Start, and its release function runs after the
-// trace's final drain and session drop.
-//
-// Captured events live in the log rather than in this process, so a Registry
-// built without one can only fail: Start rejects it rather than pretending to
-// capture. Constructing without one is still allowed, so a caller can surface
-// the registry's capabilities and fail at Start rather than at construction.
-func NewRegistry(dbFor func(context.Context) (*sql.DB, func(), error), events EventLog) *Registry {
-	return &Registry{
-		traces:    make(map[string]*ActiveTrace),
-		dbFor:     dbFor,
-		events:    events,
-		nowFunc:   func() time.Time { return time.Now().UTC() },
-		xeFactory: defaultXEFactory,
+// NewRegistry builds a Registry over opts, refusing a missing seam.
+func NewRegistry(opts RegistryOptions) (*Registry, error) {
+	for _, seam := range []struct {
+		missing bool
+		name    string
+	}{
+		{opts.DB == nil, "database provider"},
+		{opts.Store == nil, "record store"},
+		{opts.NewSession == nil, "session factory"},
+		{opts.CurrentDatabase == nil, "database resolver"},
+	} {
+		if seam.missing {
+			return nil, fmt.Errorf("sql trace registry: the %s is not configured", seam.name)
+		}
 	}
+	return &Registry{opts: opts, nowFunc: func() time.Time { return time.Now().UTC() }, traces: map[string]*ActiveTrace{}}, nil
 }
 
-// StartOptions collapses everything a client can pass to Start.
+// StartOptions collapses everything a caller can pass to Start. An XE session
+// is server-wide: CreateOptions.Databases narrows it in SQL Server's own
+// predicate, and an empty Databases scopes the capture to the context's
+// database.
 type StartOptions struct {
 	xetrace.CreateOptions
 	// Duration bounds the trace. Zero means run until Stop.
@@ -262,76 +136,93 @@ type StartOptions struct {
 	Poll time.Duration
 }
 
-// Start creates an XE session and kicks off the drain goroutine. The
-// returned *ActiveTrace is registered before this function returns so
-// subsequent List/Get calls are consistent.
+// Start creates the XE session, opens its record stream and starts the drain.
+// Every store call the capture makes runs under ctx's values with its
+// cancellation detached, so the rows reach the environment ctx names even after
+// the request that started the capture has ended.
 func (r *Registry) Start(ctx context.Context, opts StartOptions) (*ActiveTrace, error) {
-	if r.dbFor == nil {
-		return nil, fmt.Errorf("resolve db: database provider is not configured")
-	}
-	if r.events == nil {
-		return nil, fmt.Errorf("resolve event store: sql trace requires a cache store; configure redis.url or pass --redis-url")
-	}
-	db, release, err := r.dbFor(ctx)
+	db, release, err := r.opts.DB(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("resolve db: %w", err)
 	}
 	if release == nil {
-		release = func() {}
+		return nil, errors.New("resolve db: the database provider returned a lease with no release")
 	}
-	// The id is minted before the session so the Extended Events session on the
-	// server carries it: the capture library requires a name, and one naming the
-	// trace it belongs to is what lets a DBA reading sys.dm_xe_sessions tie a
-	// session back to the trace that created it.
-	id := newID()
-	if opts.Name == "" {
-		opts.Name = "oipa_cli_trace_" + id
-	}
-
-	xe, sessionName, err := r.xeFactory(ctx, db, opts.CreateOptions)
+	databases, err := r.scope(ctx, db, opts.Databases)
 	if err != nil {
 		release()
 		return nil, err
 	}
-	// Create resolves an unnamed database against its own connection, so the
-	// scope is read back from the session rather than asked for a second time.
-	opts.DatabaseName = xe.Database()
-
-	now := r.nowFunc()
-	trace := &ActiveTrace{
-		ID:          id,
-		SessionName: sessionName,
-		Database:    opts.DatabaseName,
-		StartedAt:   now,
-		Options:     opts.CreateOptions,
-		xe:          xe,
-		events:      r.events,
-		running:     true,
+	opts.Databases = databases
+	if len(opts.Filter.Databases) == 0 && (opts.Session == xetrace.SystemHealthSession || slices.Contains(opts.Events, xetrace.EventXMLDeadlockReport)) {
+		opts.Filter.Databases = append([]string(nil), databases...)
 	}
-	if opts.Duration > 0 {
-		trace.StopAt = now.Add(opts.Duration)
+	xe, opened, err := r.opts.NewSession(ctx, db, opts.CreateOptions)
+	if err != nil {
+		release()
+		return nil, err
 	}
-
-	drainCtx, cancel := r.runContext(opts.Duration)
-	trace.cancel = cancel
-	trace.done = make(chan struct{})
-
+	drainCtx, cancel := runContext(opts.Duration)
+	trace, err := r.newTrace(ctx, db, opts, xe, opened, cancel)
+	if err != nil {
+		cancel()
+		dropErr := xe.Drop(context.WithoutCancel(ctx))
+		release()
+		return nil, errors.Join(err, dropErr)
+	}
 	r.mu.Lock()
 	r.traces[trace.ID] = trace
 	r.mu.Unlock()
 
-	pollInterval := opts.Poll
-	if pollInterval <= 0 {
-		pollInterval = defaultPollInterval
+	poll := opts.Poll
+	if poll <= 0 {
+		poll = defaultPollInterval
 	}
-
-	go r.runDrain(drainCtx, trace, pollInterval, release)
+	go r.runDrain(drainCtx, trace, poll, release)
 	return trace, nil
 }
 
-// runContext wires a drain context bounded by duration (when non-zero).
-// Extracted so tests can inject deterministic cancellation.
-func (r *Registry) runContext(duration time.Duration) (context.Context, context.CancelFunc) {
+// scope is the database patterns a capture's session is predicated on: the
+// caller's own, or, when it names none, the context's database. Every pattern
+// set is also pushed to SQL Server for managed sessions, while Go remains the
+// authoritative filter seam for managed and attached sessions alike.
+func (r *Registry) scope(ctx context.Context, db *sql.DB, databases []string) ([]string, error) {
+	if len(databases) > 0 {
+		return databases, nil
+	}
+	name, err := r.opts.CurrentDatabase(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("resolve context database: %w", err)
+	}
+	if name == "" {
+		return nil, errors.New("resolve context database: DB_NAME() named no database")
+	}
+	return []string{name}, nil
+}
+
+func (r *Registry) newTrace(
+	ctx context.Context, db *sql.DB, opts StartOptions, xe XESession, opened Opened, cancel context.CancelFunc,
+) (*ActiveTrace, error) {
+	now := r.nowFunc()
+	trace := &ActiveTrace{
+		ID: rand.Text(), SessionName: opened.Name, Statements: opened.Statements,
+		Database: strings.Join(opts.Databases, ", "), StartedAt: now,
+		Options: opts.CreateOptions, xe: xe, running: true, cancel: cancel, done: make(chan struct{}), finalDelay: opened.FinalDelay,
+	}
+	if opts.Duration > 0 {
+		trace.StopAt = now.Add(opts.Duration)
+	}
+	trace.appender = recordAppender{store: r.opts.Store, ctx: context.WithoutCancel(ctx), stream: trace.ID, db: db}
+	writer, err := newEventWriter(trace.appender, trace.failCapture)
+	if err != nil {
+		return nil, err
+	}
+	trace.writer = writer
+	return trace, nil
+}
+
+// runContext bounds the drain by duration, when non-zero.
+func runContext(duration time.Duration) (context.Context, context.CancelFunc) {
 	if duration <= 0 {
 		return context.WithCancel(context.Background())
 	}
@@ -339,51 +230,44 @@ func (r *Registry) runContext(duration time.Duration) (context.Context, context.
 }
 
 // runDrain owns a trace's poll loop until ctx is done, then performs the final
-// drain (inside xetrace.Drain) and drops the XE session, leaving the buffer in
-// place for GET /sessions/:id to read. It is the SOLE owner of the session Drop
-// and of closing trace.done; stop() only signals cancellation and waits.
+// drain (inside xetrace.Drain), commits every queued row, seals the stream and
+// drops the XE session. It is the SOLE owner of the session Drop and of closing
+// trace.done; stop() only signals cancellation and waits.
 //
-// Defer order (LIFO): the session is dropped first, then the database lease is
-// released, and done is closed LAST — so a caller unblocked by done is
-// guaranteed the buffer is final, the session is gone, AND the lease is free.
-// Closing done before releasing would let Stop return while release() was still
-// running, which is a data race on anything the release closure touches.
+// Defer order (LIFO): the database lease is released before done is closed, so
+// a caller unblocked by done is guaranteed the rows are committed, the stream is
+// sealed, the session is gone AND the lease is free.
 func (r *Registry) runDrain(ctx context.Context, trace *ActiveTrace, interval time.Duration, release func()) {
 	defer close(trace.done)
 	defer release()
 
 	// pending collects one poll's events. OnEvent runs inside Drain's dedup
-	// loop with its cross-poll state held, so it must stay a plain append —
-	// the store write happens at the batch boundary instead.
+	// loop with its cross-poll state held, so it stays a plain append; the
+	// batch is handed to the writer at the poll boundary.
 	var pending []xetrace.Event
-	var writeErr error
-
-	// The batch is handed to the writer rather than stored inline: EventStore
-	// .Append blocks once cachestore's bounded async channel backs up, and any
-	// stall here lets SQL Server's fixed-size ring buffer overwrite events we
-	// have not read yet. See eventWriter.
-	writer := newEventWriter(trace.events, trace.ID)
-
+	writer := trace.writer
+	startedAt := time.Time{}
+	if trace.Options.Session == xetrace.SystemHealthSession {
+		startedAt = trace.StartedAt
+	}
 	drainErr := xetrace.Drain(ctx, trace.xe, xetrace.DrainOptions{
-		Interval: interval,
-		OnEvent:  func(e xetrace.Event) { pending = append(pending, e) },
+		Interval:     interval,
+		StartedAt:    startedAt,
+		FinalDelay:   trace.finalDelay,
+		Filter:       trace.Options.Filter,
+		OnEvent:      func(e xetrace.Event) { pending = append(pending, e) },
+		OnUnresolved: func(xetrace.Event) { writer.AddUnresolved() },
 		OnPollBatch: func() {
-			if len(pending) == 0 {
-				return
-			}
-			trace.mu.Lock()
-			seq := trace.chunkSeq
-			trace.chunkSeq++
-			trace.mu.Unlock()
-			// Ownership of pending passes to the writer; the next poll builds a
-			// fresh slice rather than reusing this backing array.
-			writer.Enqueue(seq, pending)
+			writer.Enqueue(pending)
 			pending = nil
 		},
 		OnPollFailure: func(consecutive int, err error) {
 			logger.Warnf("sqltrace: poll %d of session %q failed, retrying: %v", consecutive, trace.SessionName, err)
 		},
-		OnDropped: func(delta int64, stats xetrace.RingBufferStats) {
+		OnDropped: func(delta int64, stats xetrace.TargetStats) {
+			// The summary is what a consumer reads, so the loss has to reach it
+			// and not only this log line: every figure undercounts by it.
+			writer.AddLost(delta)
 			logger.Warnf(
 				"sqltrace: session %q lost %d event(s) before they could be read (truncated=%v droppedCount=%d); "+
 					"raise --min-duration, shorten --poll, or raise sqltrace.ringBuffer.maxEvents",
@@ -393,36 +277,30 @@ func (r *Registry) runDrain(ctx context.Context, trace *ActiveTrace, interval ti
 	})
 	if drainErr != nil {
 		drainErr = fmt.Errorf("drain session %q: %w", trace.SessionName, drainErr)
-		logger.Warnf("sqltrace: %v", drainErr)
 	}
-	// Close before Flush, and both before anyone observes the trace as
-	// finished: Close drains the queue into the store, Flush pushes the store's
-	// write-behind buffer to Redis. stop() unblocks on trace.done and its caller
-	// reads the result immediately, so a chunk still queued here would read back
-	// as a missing chunk.
-	if err := writer.Close(); err != nil {
-		writeErr = errors.Join(writeErr, fmt.Errorf("write session %q events: %w", trace.SessionName, err))
-		logger.Warnf("sqltrace: %v", writeErr)
+	err := errors.Join(drainErr, closeDrained(trace))
+	if err != nil {
+		logger.Warnf("sqltrace: %v", err)
 	}
-	// Drain the write-behind buffer before anyone observes the trace as
-	// finished: stop() unblocks on trace.done, and its caller reads the
-	// result immediately.
-	if err := trace.events.Flush(); err != nil {
-		writeErr = errors.Join(writeErr, fmt.Errorf("flush session %q events: %w", trace.SessionName, err))
-		logger.Warnf("sqltrace: %v", writeErr)
-	}
-	var dropErr error
-	if trace.xe != nil {
-		if err := trace.xe.Drop(context.Background()); err != nil {
-			dropErr = fmt.Errorf("drop session %q: %w", trace.SessionName, err)
-			logger.Warnf("sqltrace: %v", dropErr)
-		}
-	}
-	trace.finish(r.nowFunc(), errors.Join(drainErr, writeErr, dropErr))
+	trace.finish(r.nowFunc(), err)
 }
 
-// Stop cancels a running trace. Idempotent: stopping an already-stopped
-// trace is a no-op.
+// closeDrained ends a drained trace in order: the writer commits every queued
+// row, then the stream is sealed, then the XE session is dropped.
+func closeDrained(trace *ActiveTrace) error {
+	var writeErr error
+	if err := trace.writer.Close(); err != nil {
+		writeErr = fmt.Errorf("record session %q events: %w", trace.SessionName, err)
+	}
+	sealErr := trace.appender.Seal()
+	var dropErr error
+	if err := trace.xe.Drop(context.Background()); err != nil {
+		dropErr = fmt.Errorf("drop session %q: %w", trace.SessionName, err)
+	}
+	return errors.Join(writeErr, sealErr, dropErr)
+}
+
+// Stop cancels a trace and waits for its final drain. Idempotent.
 func (r *Registry) Stop(id string) (*ActiveTrace, error) {
 	r.mu.Lock()
 	trace, ok := r.traces[id]
@@ -433,90 +311,37 @@ func (r *Registry) Stop(id string) (*ActiveTrace, error) {
 	return trace, trace.stop()
 }
 
-// Get returns a trace by ID.
-func (r *Registry) Get(id string) (*ActiveTrace, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	t, ok := r.traces[id]
-	return t, ok
-}
-
-// List returns a snapshot sorted newest-first.
-func (r *Registry) List() []*ActiveTrace {
-	r.mu.Lock()
-	out := make([]*ActiveTrace, 0, len(r.traces))
-	for _, t := range r.traces {
-		out = append(out, t)
-	}
-	r.mu.Unlock()
-	sort.Slice(out, func(i, j int) bool { return out[i].StartedAt.After(out[j].StartedAt) })
-	return out
-}
-
-// Delete removes a trace after stopping it if still running. Returns
-// false if unknown.
-func (r *Registry) Delete(id string) (bool, error) {
-	r.mu.Lock()
-	trace, ok := r.traces[id]
-	if ok {
-		delete(r.traces, id)
-	}
-	r.mu.Unlock()
-	if !ok {
-		return false, nil
-	}
-	err := trace.stop()
-	// Stop first, then forget: the drain's final flush must land before the
-	// chunks are removed, or it would resurrect keys the index no longer lists.
-	r.events.Forget(trace.ID)
-	return true, err
-}
-
-// StopAll tears down every active trace. Intended for server shutdown.
+// StopAll stops every trace this registry started.
 func (r *Registry) StopAll() {
 	r.mu.Lock()
 	snapshot := make([]*ActiveTrace, 0, len(r.traces))
-	for _, t := range r.traces {
-		snapshot = append(snapshot, t)
+	for _, trace := range r.traces {
+		snapshot = append(snapshot, trace)
 	}
 	r.mu.Unlock()
-	for _, t := range snapshot {
-		if err := t.stop(); err != nil {
-			logger.Warnf("sqltrace: stop session %q during shutdown: %v", t.SessionName, err)
+	for _, trace := range snapshot {
+		if err := trace.stop(); err != nil {
+			logger.Warnf("sqltrace: stop session %q: %v", trace.SessionName, err)
 		}
 	}
 }
 
-// GC evicts traces whose StoppedAt is older than traceTTL. Call
-// periodically; a sweep on every List call is cheap enough for
-// single-process use.
-func (r *Registry) GC() {
-	cutoff := r.nowFunc().Add(-traceTTL)
-	var evicted []string
-	r.mu.Lock()
-	for id, t := range r.traces {
-		t.mu.Lock()
-		running := t.running
-		stopped := t.StoppedAt
-		t.mu.Unlock()
-		if !running && !stopped.IsZero() && stopped.Before(cutoff) {
-			delete(r.traces, id)
-			evicted = append(evicted, id)
-		}
-	}
-	r.mu.Unlock()
-	// Drop the events too. The family TTL would eventually reclaim them, but it
-	// is measured in hours: evicting here keeps the store in step with the
-	// registry instead of leaving chunks no trace refers to.
-	for _, id := range evicted {
-		r.events.Forget(id)
-	}
+// Checkpoint blocks until every row captured so far has been committed and
+// returns the stream's ref over them. See eventWriter.Checkpoint.
+func (t *ActiveTrace) Checkpoint(ctx context.Context) (query.EventsRef, error) {
+	return t.writer.Checkpoint(ctx)
 }
 
-func newID() string {
-	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return fmt.Sprintf("t%d", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b[:])
-}
+// EventsRef is the stream's ref as of its last commit, without waiting.
+func (t *ActiveTrace) EventsRef() query.EventsRef { return t.writer.EventsRef() }
+
+// Preview returns the latest committed events whose seq is within from..to; a
+// bound of 0 is open.
+func (t *ActiveTrace) Preview(from, to int64) []xetrace.Event { return t.writer.Preview(from, to) }
+
+// Summary is the IO/CPU/timing aggregate over every committed event.
+func (t *ActiveTrace) Summary() xetrace.Summary { return t.writer.Summary() }
+
+// Done is closed once the capture has finished: rows committed, stream sealed,
+// session dropped and lease released.
+func (t *ActiveTrace) Done() <-chan struct{} { return t.done }

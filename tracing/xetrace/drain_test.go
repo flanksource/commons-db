@@ -17,19 +17,19 @@ type fakePoller struct {
 	err     error
 }
 
-func (f *fakePoller) Poll(ctx context.Context) (RingBufferSnapshot, error) {
+func (f *fakePoller) Poll(ctx context.Context) (TargetSnapshot, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.err != nil {
-		return RingBufferSnapshot{}, f.err
+		return TargetSnapshot{}, f.err
 	}
 	if f.calls >= len(f.batches) {
 		f.calls++
-		return RingBufferSnapshot{}, nil
+		return TargetSnapshot{}, nil
 	}
 	batch := f.batches[f.calls]
 	f.calls++
-	return RingBufferSnapshot{Events: batch}, nil
+	return TargetSnapshot{Events: batch}, nil
 }
 
 func mkEvent(sid int, d time.Duration, stmt string, ts time.Time) Event {
@@ -77,15 +77,21 @@ func TestDrain_DeliversDedupedEventsAcrossPolls(t *testing.T) {
 // delivered, in delivery order.
 func runDrainOver(t *testing.T, batches [][]Event) []Event {
 	t.Helper()
+	return runDrainWith(t, batches, DrainOptions{})
+}
+
+// runDrainWith is runDrainOver with the caller's options; OnEvent and Interval
+// are always set here.
+func runDrainWith(t *testing.T, batches [][]Event, opts DrainOptions) []Event {
+	t.Helper()
 	p := &fakePoller{batches: batches}
 	var got []Event
+	opts.Interval = 10 * time.Millisecond
+	opts.OnEvent = func(e Event) { got = append(got, e) }
 	ctx, cancel := context.WithCancel(context.Background())
 	doneCh := make(chan error, 1)
 	go func() {
-		doneCh <- Drain(ctx, p, DrainOptions{
-			Interval: 10 * time.Millisecond,
-			OnEvent:  func(e Event) { got = append(got, e) },
-		})
+		doneCh <- Drain(ctx, p, opts)
 	}()
 	time.Sleep(60 * time.Millisecond)
 	cancel()
@@ -93,6 +99,97 @@ func runDrainOver(t *testing.T, batches [][]Event) []Event {
 		t.Fatalf("Drain returned error: %v", err)
 	}
 	return got
+}
+
+// rpcEvent is an rpc_completed carrying stmt, derived the way the parser does.
+func rpcEvent(stmt string, at time.Time) Event {
+	e := mkEvent(1, time.Millisecond, stmt, at)
+	e.Name = EventRPCCompleted
+	deriveFromStatement(&e)
+	return e
+}
+
+// TestDrain_TableFilterMatchesPreparedReruns pins the undercount a `table:`
+// filter used to cause: an sp_execute ships a handle and values, no SQL, so a
+// filter applied before the handle resolves sees Tables=[sp_execute] and drops
+// every re-run of a prepared statement on the filtered table.
+func TestDrain_TableFilterMatchesPreparedReruns(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	prepare := rpcEvent(prepexecOf(
+		5089, "@P0 int", "SELECT StatusCode FROM AsActivity WHERE ActivityID = @P0", "1000"), t0)
+	rerun := rpcEvent("exec sp_execute 5089,2000", t0.Add(time.Second))
+	other := rpcEvent("SELECT 1 FROM AsPolicy", t0.Add(2*time.Second))
+
+	got := runDrainWith(t, [][]Event{{prepare}, {rerun, other}}, DrainOptions{
+		Filter: EventFilter{Tables: []string{"AsActivity"}},
+	})
+
+	want := []string{
+		"SELECT StatusCode FROM AsActivity WHERE ActivityID = 1000",
+		"SELECT StatusCode FROM AsActivity WHERE ActivityID = 2000",
+	}
+	if diff := sqls(got); !reflect.DeepEqual(diff, want) {
+		t.Fatalf("delivered %#v, want %#v", diff, want)
+	}
+}
+
+// TestDrain_ResolvesHandlesPreparedOutsideTheFilter: the handle cache must see
+// every prepare, not only the ones the filter keeps, or a re-run of an
+// excluded statement reads as "prepared before the capture" and is miscounted.
+func TestDrain_ResolvesHandlesPreparedOutsideTheFilter(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	prepare := rpcEvent(prepexecOf(7, "@P0 int", "SELECT 1 FROM AsPolicy WHERE PolicyID = @P0", "1"), t0)
+	rerun := rpcEvent("exec sp_execute 7,2", t0.Add(time.Second))
+
+	var unresolved []Event
+	got := runDrainWith(t, [][]Event{{prepare}, {rerun}}, DrainOptions{
+		Filter:       EventFilter{Tables: []string{"AsActivity"}},
+		OnUnresolved: func(e Event) { unresolved = append(unresolved, e) },
+	})
+
+	if len(got) != 0 {
+		t.Fatalf("delivered %v, want nothing: both statements are on AsPolicy", sqls(got))
+	}
+	if len(unresolved) != 0 {
+		t.Fatalf("reported %d unresolved, want 0: the re-run's handle was prepared inside the capture", len(unresolved))
+	}
+}
+
+// TestDrain_ReportsRerunsTheFilterCannotPlace: a handle prepared before the
+// capture started has no known text, so a table filter cannot say whether it
+// belongs. Dropping it silently would undercount; it is reported instead.
+func TestDrain_ReportsRerunsTheFilterCannotPlace(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	orphan := rpcEvent("exec sp_execute 91,N'9F1C',100000", t0)
+
+	var unresolved []Event
+	got := runDrainWith(t, [][]Event{{orphan}}, DrainOptions{
+		Filter:       EventFilter{Tables: []string{"AsActivity"}},
+		OnUnresolved: func(e Event) { unresolved = append(unresolved, e) },
+	})
+
+	if len(got) != 0 {
+		t.Fatalf("delivered %v, want nothing: the filter cannot place the re-run", sqls(got))
+	}
+	if len(unresolved) != 1 {
+		t.Fatalf("reported %d unresolved, want 1", len(unresolved))
+	}
+}
+
+// TestDrain_DeliversUnresolvedRerunsWithoutAFilter: with nothing to place the
+// re-run against, its cost belongs in the capture like any other statement.
+func TestDrain_DeliversUnresolvedRerunsWithoutAFilter(t *testing.T) {
+	t0 := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	orphan := rpcEvent("exec sp_execute 91,N'9F1C',100000", t0)
+
+	var unresolved []Event
+	got := runDrainWith(t, [][]Event{{orphan}}, DrainOptions{
+		OnUnresolved: func(e Event) { unresolved = append(unresolved, e) },
+	})
+
+	if len(got) != 1 || len(unresolved) != 0 {
+		t.Fatalf("delivered %d / unresolved %d, want 1 / 0", len(got), len(unresolved))
+	}
 }
 
 // TestDrain_ResolvesPreparedHandleAcrossPolls covers the reason the handle cache
@@ -200,16 +297,16 @@ type straddlePoller struct {
 	final []Event
 }
 
-func (p *straddlePoller) Poll(ctx context.Context) (RingBufferSnapshot, error) {
+func (p *straddlePoller) Poll(ctx context.Context) (TargetSnapshot, error) {
 	p.mu.Lock()
 	n := p.calls
 	p.calls++
 	p.mu.Unlock()
 	if n == 0 {
 		<-ctx.Done()
-		return RingBufferSnapshot{}, fmt.Errorf("read ring_buffer target: %w", ctx.Err())
+		return TargetSnapshot{}, fmt.Errorf("read ring_buffer target: %w", ctx.Err())
 	}
-	return RingBufferSnapshot{Events: p.final}, nil
+	return TargetSnapshot{Events: p.final}, nil
 }
 
 // TestDrain_TickerPollDeadlineFallsThroughToFinalDrain reproduces the

@@ -14,7 +14,7 @@ var _ = Describe("SQL XEvents provider options", func() {
 	It("projects every option onto the capture and drain settings", func() {
 		options := sqlXEventOptions{
 			SessionName: "acme_capture",
-			Database:    "warehouse",
+			Databases:   []string{"warehouse", "warehouse_audit"},
 			Users:       []string{"analytics", "!sa"},
 			Apps:        []string{"!go/reporting"},
 			Hosts:       []string{"app-0"},
@@ -29,7 +29,7 @@ var _ = Describe("SQL XEvents provider options", func() {
 
 		create, drain, err := options.captureOptions()
 		Expect(err).ToNot(HaveOccurred())
-		Expect(create.DatabaseName).To(Equal("warehouse"))
+		Expect(create.Databases).To(Equal([]string{"warehouse", "warehouse_audit"}))
 		Expect(create.Users).To(Equal([]string{"analytics", "!sa"}))
 		Expect(create.Apps).To(Equal([]string{"!go/reporting"}))
 		Expect(create.Hosts).To(Equal([]string{"app-0"}))
@@ -41,6 +41,8 @@ var _ = Describe("SQL XEvents provider options", func() {
 			Types: []string{"SELECT", "DML"}, Tables: []string{"orders"},
 		}))
 		Expect(drain.Interval).To(Equal(2 * time.Second))
+		Expect(drain.Filter).To(Equal(create.Filter),
+			"Drain is where types and tables are applied; without the filter it delivers every statement")
 	})
 
 	// Every unset knob must stay zero so xetrace applies its own documented
@@ -77,8 +79,8 @@ var _ = Describe("SQL XEvents provider options", func() {
 		Entry("negative poll", sqlXEventOptions{SessionName: "acme_capture", Poll: "-1s"}, `poll "-1s": must not be negative`),
 		Entry("negative event cap", sqlXEventOptions{SessionName: "acme_capture", MaxEvents: -1}, "maxEvents -1: must not be negative"),
 		Entry("negative memory cap", sqlXEventOptions{SessionName: "acme_capture", MaxMemoryKB: -1}, "maxMemoryKb -1: must not be negative"),
-		Entry("a named database and the whole instance",
-			sqlXEventOptions{SessionName: "acme_capture", Database: "warehouse", AllDatabases: true}, "mutually exclusive"),
+		Entry("a database pattern SQL Server cannot evaluate",
+			sqlXEventOptions{SessionName: "acme_capture", Databases: []string{"ware*house"}}, "* is a wildcard only at the start or end"),
 		Entry("no session name", sqlXEventOptions{}, "sessionName is required"),
 		Entry("a blank session name", sqlXEventOptions{SessionName: "  "}, "sessionName is required"),
 	)
@@ -95,22 +97,21 @@ var _ = Describe("SQL XEvents provider options", func() {
 		Expect(first.Name).ToNot(Equal(second.Name))
 	})
 
-	It("carries an instance-wide capture through as its own flag", func() {
-		create, _, err := sqlXEventOptions{SessionName: "acme_capture", AllDatabases: true}.captureOptions()
+	It("carries an instance-wide capture through as the all-databases pattern", func() {
+		create, _, err := sqlXEventOptions{SessionName: "acme_capture", Databases: []string{xetrace.AllDatabases}}.captureOptions()
 		Expect(err).ToNot(HaveOccurred())
-		Expect(create.AllDatabases).To(BeTrue())
-		Expect(create.DatabaseName).To(BeEmpty())
+		Expect(create.Databases).To(Equal([]string{"*"}))
 	})
 })
 
 var _ = Describe("SQL XEvents option decoding", func() {
 	It("reads every option the provider defines", func() {
 		decoded, err := decodeXEventOptions(map[string]any{
-			"database": "OIPA", "minDuration": "10ms", "maxEvents": float64(500),
+			"databases": []any{"warehouse"}, "minDuration": "10ms", "maxEvents": float64(500),
 			"events": []any{"rpc_completed"}, "types": []any{"SELECT"},
 		})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(decoded.Database).To(Equal("OIPA"))
+		Expect(decoded.Databases).To(Equal([]string{"warehouse"}))
 		Expect(decoded.MinDuration).To(Equal("10ms"))
 		Expect(decoded.MaxEvents).To(Equal(500))
 		Expect(decoded.Events).To(Equal([]string{"rpc_completed"}))

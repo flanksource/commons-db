@@ -7,6 +7,7 @@ import (
 
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
+	"github.com/flanksource/commons-db/query"
 )
 
 // TraceResult is the final value returned by the `sql trace` command. It is
@@ -14,33 +15,52 @@ import (
 // single-line summary in text mode. The per-event table is streamed to stdout
 // during collection by the command handler, not rendered from here.
 type TraceResult struct {
-	SessionName string         `json:"session_name"`
-	Database    string         `json:"database"`
-	StartedAt   time.Time      `json:"started_at"`
-	StoppedAt   time.Time      `json:"stopped_at"`
-	Duration    time.Duration  `json:"duration"`
-	Events      []Event        `json:"events"`
-	Replays     []ReplayResult `json:"replays,omitempty"`
-	Error       string         `json:"error,omitempty"`
+	SessionName string           `json:"session_name"`
+	Database    string           `json:"database"`
+	StartedAt   time.Time        `json:"started_at"`
+	StoppedAt   time.Time        `json:"stopped_at"`
+	Duration    time.Duration    `json:"duration"`
+	Events      []Event          `json:"events,omitempty"`
+	Ref         *query.EventsRef `json:"ref,omitempty"`
+	Preview     []Event          `json:"-"`
+	Replays     []ReplayResult   `json:"replays,omitempty"`
+	Error       string           `json:"error,omitempty"`
+
+	// Summary is the IO/CPU/timing aggregate over Events, or over Ref when a
+	// profiler persisted the events into the paged trace-result store.
+	Summary *Summary `json:"summary,omitempty"`
 }
 
 // Pretty renders a one-line summary followed by a table of the captured
 // events. The JSON/YAML formats bypass Pretty and serialize the exported
 // fields instead.
 func (r TraceResult) Pretty() api.Text {
+	events := r.displayEvents()
+	count := len(r.Events)
+	if r.Ref != nil {
+		count = int(r.Ref.Total)
+	}
 	summary := api.Text{}.
 		Add(icons.SQL).Space().
-		AddText(fmt.Sprintf("%d events", len(r.Events)), "font-bold").
+		AddText(fmt.Sprintf("%d events", count), "font-bold").
 		AddText(" captured in ", "text-muted").
 		Add(api.Human(r.Duration, "text-muted")).
 		AddText(" from ", "text-muted").
 		AddText(displayDatabase(r.Database), "text-blue-500")
 
-	if len(r.Events) == 0 {
+	if len(events) == 0 {
 		return summary
 	}
 
-	children := []api.Textable{summary, api.Text{Content: "\n"}, r.body()}
+	children := []api.Textable{summary}
+	if r.Summary != nil {
+		children = append(children, api.Text{Content: "\n"}, r.Summary.Pretty())
+	}
+	children = append(children, api.Text{Content: "\n"}, r.body(events))
+	if r.Ref != nil {
+		children = append(children, api.Text{Content: "\n"}, api.Text{}.
+			AddText(fmt.Sprintf("showing %d preview rows; page stream %s for all %d", len(events), r.Ref.Stream, r.Ref.Total), "text-muted"))
+	}
 	if len(r.Replays) > 0 {
 		// Per-replay blocks are streamed to stderr inline next to their
 		// corresponding trace line, so the final summary just needs the
@@ -58,10 +78,10 @@ func (r TraceResult) Pretty() api.Text {
 // The flat table stays the default on purpose: a tree row cannot carry the
 // duration/CPU/reads columns, and without sp_statement_completed there is
 // nothing to nest, so an ordinary trace renders exactly as it always has.
-func (r TraceResult) body() api.Textable {
-	events := Nest(r.Events)
+func (r TraceResult) body(source []Event) api.Textable {
+	events := Nest(source)
 	if !HasChildren(events) {
-		return api.NewTableFrom(r.Events)
+		return api.NewTableFrom(events)
 	}
 	opts := StreamLineOptions{ShowDatabase: r.Database == ""}
 	root := api.TextTree{}
@@ -69,6 +89,13 @@ func (r TraceResult) body() api.Textable {
 		root.Children = append(root.Children, eventTree(e, opts))
 	}
 	return root
+}
+
+func (r TraceResult) displayEvents() []Event {
+	if len(r.Events) > 0 {
+		return r.Events
+	}
+	return r.Preview
 }
 
 // eventTree renders one event and, beneath it, the inner statements attributed
@@ -192,6 +219,8 @@ func eventMarkerGlyph(name string) (string, string) {
 		return "𝔼", "text-red-500 font-bold"
 	case EventSPStatementCompleted:
 		return "ℙ", "text-purple-500 font-bold"
+	case EventObjectCreated, EventObjectAltered, EventObjectDeleted:
+		return "𝔻", "text-orange-500 font-bold"
 	default:
 		return "?", "text-muted"
 	}
@@ -330,6 +359,7 @@ func (e Event) RowDetail() api.Textable {
 	metrics = appendKV(metrics, "writes", intOrEmpty(e.Writes))
 	metrics = appendKV(metrics, "row_count", intOrEmpty(e.RowCount))
 	metrics = appendKV(metrics, "object_name", e.ObjectName)
+	metrics = appendKV(metrics, "object_type", e.ObjectType)
 	metrics = appendKV(metrics, "object_id", intOrEmpty(e.ObjectID))
 	metrics = appendKV(metrics, "database_name", e.DatabaseName)
 	metrics = appendKV(metrics, "client_app_name", e.ClientApp)
@@ -382,9 +412,10 @@ func displayDatabase(name string) string {
 
 // StreamLineOptions controls how StreamLine formats a single live event.
 type StreamLineOptions struct {
-	// ShowDatabase adds a "db=<name>" segment. Only set when the trace
-	// session is instance-wide (--database all); scoped sessions would
-	// otherwise repeat the same value on every line.
+	// ShowDatabase adds a "db=<name>" segment. Only set when the capture can
+	// see more than one database (anything but exactly one plain --database);
+	// a single-database capture would otherwise repeat the same value on every
+	// line.
 	ShowDatabase bool
 	// Full removes the max-w-[200ch] cap on the statement cell so long
 	// statements wrap naturally instead of being elided.
@@ -403,8 +434,11 @@ func StreamLine(e Event, opts StreamLineOptions) api.Text {
 
 	t := api.Text{}.
 		AddText(e.Timestamp.Format("15:04:05.000"), "text-muted").Space().
-		Add(eventMarker(e)).Space().
-		Add(statementCell(e, widthClass)).Space().
+		Add(eventMarker(e)).Space()
+	if e.ObjectType != "" {
+		t = t.AddText(e.ObjectType+" ", "text-orange-500").AddText(e.ObjectName, "font-bold").Space()
+	}
+	t = t.Add(statementCell(e, widthClass)).Space().
 		Add(api.Human(e.Duration, durationStyle(e.Duration)))
 
 	if e.ParamsUnavailable {
@@ -478,6 +512,12 @@ func shortEvent(name string) string {
 		return "error"
 	case EventSPStatementCompleted:
 		return "sp"
+	case EventObjectCreated:
+		return "create"
+	case EventObjectAltered:
+		return "alter"
+	case EventObjectDeleted:
+		return "drop"
 	default:
 		return name
 	}

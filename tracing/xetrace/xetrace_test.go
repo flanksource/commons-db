@@ -30,6 +30,56 @@ func TestNormalizeEvents(t *testing.T) {
 			in:    []string{"sql_statement_completed", " deadlock_report "},
 			error: `unsupported event "deadlock_report"`,
 		},
+		{
+			name:  "rejects an unsupported exclusion",
+			in:    []string{"!deadlock_report"},
+			error: `unsupported event "deadlock_report"`,
+		},
+		{
+			name: "star selects every supported event",
+			in:   []string{"*"},
+			want: SupportedEvents,
+		},
+		{
+			name: "a suffix pattern selects the supported events it matches",
+			in:   []string{"*_completed"},
+			want: []string{EventSQLStatementCompleted, EventRPCCompleted, EventSQLBatchCompleted, EventSPStatementCompleted},
+		},
+		{
+			name: "a prefix pattern is case-insensitive",
+			in:   []string{"SQL_*"},
+			want: []string{EventSQLStatementCompleted, EventSQLBatchCompleted},
+		},
+		{
+			name: "an exclusion-only list is the defaults minus the exclusions",
+			in:   []string{"!error_reported"},
+			want: []string{EventSQLStatementCompleted, EventRPCCompleted, EventSQLBatchCompleted},
+		},
+		{
+			name: "an exclusion wins over a pattern",
+			in:   []string{"*_completed,!sp_*"},
+			want: []string{EventSQLStatementCompleted, EventRPCCompleted, EventSQLBatchCompleted},
+		},
+		{
+			name: "a name and a pattern covering it are de-duplicated",
+			in:   []string{"rpc_completed", "*_completed"},
+			want: []string{EventRPCCompleted, EventSQLStatementCompleted, EventSQLBatchCompleted, EventSPStatementCompleted},
+		},
+		{
+			name:  "a pattern matching nothing is an error",
+			in:    []string{"deadlock*"},
+			error: `selects no event`,
+		},
+		{
+			name:  "excluding everything is an error",
+			in:    []string{"rpc_completed", "!rpc_completed"},
+			error: `selects no event`,
+		},
+		{
+			name:  "a mid-pattern star is refused",
+			in:    []string{"sql*completed"},
+			error: `"sql*completed"`,
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

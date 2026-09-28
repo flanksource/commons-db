@@ -2,14 +2,16 @@ package xetrace
 
 import (
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons/collections"
 )
 
-// StatementType is the coarse DML classification of a captured statement. It is
-// derived from the leading top-level keyword of the merged SQL — NOT a substring
-// scan — so the SQL text never has to be string-matched by callers filtering a
-// trace. Anything that is not one of the recognized DML verbs is StmtOther.
+// StatementType is the coarse classification of a captured statement. It is
+// derived from the top-level keywords of the merged SQL — NOT a substring scan —
+// so the SQL text never has to be string-matched by callers filtering a trace.
+// A statement opening with CREATE/ALTER/DROP/TRUNCATE is StmtDDL; otherwise the
+// first top-level DML verb decides, and anything with none is StmtOther.
 type StatementType string
 
 const (
@@ -19,8 +21,19 @@ const (
 	StmtDelete StatementType = "DELETE"
 	StmtMerge  StatementType = "MERGE"
 	StmtExec   StatementType = "EXEC"
+	StmtDDL    StatementType = "DDL"
 	StmtOther  StatementType = "OTHER"
 )
+
+// ddlKeywords are the leading verbs of a schema change. Only the statement's
+// first token is checked, so a procedure body (`CREATE PROCEDURE p AS SELECT …`)
+// is DDL while `SELECT … INTO #t` stays SELECT.
+var ddlKeywords = map[string]struct{}{
+	"CREATE":   {},
+	"ALTER":    {},
+	"DROP":     {},
+	"TRUNCATE": {},
+}
 
 // dmlGroup is the virtual token added to an event's type tokens when its
 // StatementType is a write (INSERT/UPDATE/DELETE/MERGE), so a `type=DML` filter
@@ -46,6 +59,7 @@ var FilterableTypes = []string{
 	string(StmtDelete),
 	string(StmtMerge),
 	string(StmtExec),
+	string(StmtDDL),
 	string(StmtOther),
 	dmlGroup,
 }
@@ -69,7 +83,8 @@ var classKeywords = map[string]StatementType{
 // has no JOIN…USING(col) syntax — so it never mis-fires on a join condition).
 // EXEC/EXECUTE name a stored procedure: it is an object reference, not a table,
 // but it is the only object the call text exposes, so it belongs in the same
-// token set that `--table` matches against.
+// token set that `--table` matches against. TABLE names the table a
+// CREATE/ALTER/DROP/TRUNCATE TABLE changes.
 var tableKeywords = map[string]struct{}{
 	"FROM":    {},
 	"JOIN":    {},
@@ -79,6 +94,7 @@ var tableKeywords = map[string]struct{}{
 	"USING":   {},
 	"EXEC":    {},
 	"EXECUTE": {},
+	"TABLE":   {},
 }
 
 // listStopKeywords end a comma-separated FROM list, so we stop expecting more
@@ -93,10 +109,18 @@ var listStopKeywords = map[string]struct{}{
 // first DML verb at parenthesis depth 0. This naturally resolves CTEs
 // (`WITH x AS (SELECT …) SELECT …` → SELECT, since the inner SELECT is nested)
 // and `INSERT … SELECT` (→ INSERT, the first top-level verb), and skips leading
-// comments/parens via the tokenizer. Unrecognized leading verbs → StmtOther.
+// comments/parens via the tokenizer. A leading DDL verb wins before that scan,
+// since a DDL body may itself contain DML. Unrecognized leading verbs →
+// StmtOther.
 func classifyStatement(sql string) StatementType {
+	tokens := tokenizeSQL(sql)
+	if len(tokens) > 0 {
+		if _, ok := ddlKeywords[strings.ToUpper(tokens[0])]; ok {
+			return StmtDDL
+		}
+	}
 	depth := 0
-	for _, tok := range tokenizeSQL(sql) {
+	for _, tok := range tokens {
 		switch tok {
 		case "(":
 			depth++
@@ -186,6 +210,11 @@ func extractTables(sql string) []string {
 				listAt[depth] = false
 				continue
 			}
+			// `RETURNS TABLE AS …`: no name follows TABLE.
+			if up == "AS" {
+				expect = false
+				continue
+			}
 			add(tok)
 			expect = false
 			continue
@@ -218,33 +247,37 @@ func typeTokens(t StatementType) []string {
 // exclusion). Both lists are matched against the event's STRUCTURED tokens
 // (typeTokens / Tables), never the raw SQL — so no LIKE/regex is involved.
 type EventFilter struct {
-	Types  []string
-	Tables []string
+	Events      []string
+	Databases   []string
+	Users       []string
+	Apps        []string
+	Hosts       []string
+	Types       []string
+	Tables      []string
+	MinDuration time.Duration
 }
 
-// IsZero reports whether the filter would match every event.
-func (f EventFilter) IsZero() bool {
-	return len(splitPatterns(f.Types)) == 0 && len(splitPatterns(f.Tables)) == 0
-}
-
-// Apply returns the events that pass the filter. A nil/zero filter returns the
-// input unchanged.
-func (f EventFilter) Apply(in []Event) []Event {
-	if f.IsZero() {
-		return in
-	}
-	out := in[:0:0]
-	for _, e := range in {
-		if f.match(e) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
+// match reports whether e passes the filter. The zero filter passes everything.
 func (f EventFilter) match(e Event) bool {
-	return matchTokens(typeTokens(e.StatementType), splitPatterns(f.Types)) &&
-		matchTokens(e.Tables, splitPatterns(f.Tables))
+	if e.Name == EventXMLDeadlockReport {
+		return matchTokens([]string{e.Name}, splitPatterns(f.Events)) &&
+			matchTokens(e.DeadlockDatabases, splitPatterns(f.Databases))
+	}
+	return matchTokens([]string{e.Name}, splitPatterns(f.Events)) &&
+		matchTokens(stringToken(e.DatabaseName), splitPatterns(f.Databases)) &&
+		matchTokens(stringToken(e.Username), splitPatterns(f.Users)) &&
+		matchTokens(stringToken(e.ClientApp), splitPatterns(f.Apps)) &&
+		matchTokens(stringToken(e.ClientHost), splitPatterns(f.Hosts)) &&
+		matchTokens(typeTokens(e.StatementType), splitPatterns(f.Types)) &&
+		matchTokens(e.Tables, splitPatterns(f.Tables)) &&
+		(f.MinDuration <= 0 || e.Duration <= 0 || e.Duration >= f.MinDuration)
+}
+
+func stringToken(value string) []string {
+	if value == "" {
+		return nil
+	}
+	return []string{value}
 }
 
 // matchTokens reports whether any of the event's structured tokens satisfies the

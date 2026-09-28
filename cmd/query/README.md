@@ -126,8 +126,9 @@ features, not part of this connection playground.
 
 The provider uses `tracing/xetrace`, migrated from OIPA's capture implementation.
 It captures statement, RPC, batch-completion, and error events by default;
-`sp_statement_completed` is opt-in via `events`. User/application/host
-patterns support `*` and `!` exclusions.
+`sp_statement_completed` is opt-in via `events`. Database/user/application/host
+patterns support `*` and `!` exclusions; with no database the capture scopes to
+the connection's own, and `*` captures the whole instance.
 Duration and CPU values in result rows are nanoseconds. Permission failures
 report the required grants without applying them. Stop drains pending events
 and drops the server session before the query session becomes terminal; cleanup

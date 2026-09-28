@@ -138,19 +138,29 @@ func stripStringLiterals(s string) string {
 // sp_prepexec prepared. It is stateful across polls by necessity: a handle can
 // be prepared in one ring-buffer read and executed in the next.
 //
+// A handle is scoped to the connection that prepared it, and concurrent
+// connections reuse the same numbers, so the cache is keyed by (session,
+// handle): an sp_execute only ever resolves to its own session's prepare.
+//
 // Not safe for concurrent use — Drain owns one per capture and calls it from a
 // single goroutine.
 type HandleCache struct {
-	prepared map[[2]int]*RPCCall
+	prepared map[preparedHandle]*RPCCall
+}
+
+// preparedHandle names one prepared statement: its handle on its connection.
+type preparedHandle struct {
+	sessionID int
+	handle    int
 }
 
 // NewHandleCache returns an empty cache.
 func NewHandleCache() *HandleCache {
-	return &HandleCache{prepared: map[[2]int]*RPCCall{}}
+	return &HandleCache{prepared: map[preparedHandle]*RPCCall{}}
 }
 
 // Observe records the SQL template an sp_prepexec event prepared, keyed by its
-// handle. Events that are not sp_prepexec are ignored.
+// session and handle. Events that are not sp_prepexec are ignored.
 func (c *HandleCache) Observe(e Event) {
 	handle, ok := prepexecHandle(collapseWhitespace(strings.TrimSpace(e.Statement)))
 	if !ok {
@@ -161,23 +171,25 @@ func (c *HandleCache) Observe(e Event) {
 		return
 	}
 	// Prepared handle numbers are local to a SQL Server connection.
-	c.prepared[[2]int{e.SessionID, handle}] = call
+	c.prepared[preparedHandle{sessionID: e.SessionID, handle: handle}] = call
 }
 
 // Resolve rewrites an sp_execute event in place into the call it re-ran,
 // substituting the event's own argument values into the cached template. When
-// the handle is unknown — prepared before capture started — the values are kept
-// and the missing text is named explicitly, with ParamsUnavailable set.
+// the handle is unknown on the event's session — prepared before capture
+// started — the values are kept and the missing text is named explicitly, with
+// ParamsUnavailable set, and Resolve reports it: no filter on type or table can
+// place such a statement.
 //
 // Events that are not sp_execute are left alone.
-func (c *HandleCache) Resolve(e *Event) {
+func (c *HandleCache) Resolve(e *Event) (unresolved bool) {
 	stmt := collapseWhitespace(strings.TrimSpace(e.Statement))
 	handle, values, ok := parseSPExecute(stmt)
 	if !ok {
-		return
+		return false
 	}
 
-	call, cached := c.prepared[[2]int{e.SessionID, handle}]
+	call, cached := c.prepared[preparedHandle{sessionID: e.SessionID, handle: handle}]
 	if !cached {
 		display := make([]string, len(values))
 		for i, v := range values {
@@ -187,11 +199,12 @@ func (c *HandleCache) Resolve(e *Event) {
 		deriveFromSQL(e)
 		e.Tables = nil
 		e.ParamsUnavailable = true
-		return
+		return true
 	}
 
 	e.SQL = substituteParams(call.Template, call.ParamDecl, values)
 	deriveFromSQL(e)
+	return false
 }
 
 // prepexecTrailRe matches the trailing `select @pN` that sp_prepexec batches

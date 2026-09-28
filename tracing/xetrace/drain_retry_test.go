@@ -44,11 +44,11 @@ type scriptedPoller struct {
 
 type scriptedStep struct {
 	events []Event
-	stats  RingBufferStats
+	stats  TargetStats
 	err    error
 }
 
-func (p *scriptedPoller) Poll(context.Context) (RingBufferSnapshot, error) {
+func (p *scriptedPoller) Poll(context.Context) (TargetSnapshot, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	step := p.steps[len(p.steps)-1]
@@ -57,9 +57,9 @@ func (p *scriptedPoller) Poll(context.Context) (RingBufferSnapshot, error) {
 	}
 	p.calls++
 	if step.err != nil {
-		return RingBufferSnapshot{}, step.err
+		return TargetSnapshot{}, step.err
 	}
-	return RingBufferSnapshot{Events: step.events, Stats: step.stats}, nil
+	return TargetSnapshot{Events: step.events, Stats: step.stats}, nil
 }
 
 func (p *scriptedPoller) callCount() int {
@@ -247,13 +247,13 @@ func TestDrain_ReportsEventsDroppedWhileNotReading(t *testing.T) {
 	p := &scriptedPoller{steps: []scriptedStep{
 		{
 			events: []Event{mkEvent(1, time.Millisecond, "SELECT first", t0)},
-			stats:  RingBufferStats{TotalEventsProcessed: 1, EventCount: 1},
+			stats:  TargetStats{TotalEventsProcessed: 1, EventCount: 1},
 		},
 		{err: transientPollErr()},
 		{
 			// The server dispatched 40 more events; we only see one of them.
 			events: []Event{mkEvent(2, time.Millisecond, "SELECT last", t0.Add(time.Second))},
-			stats:  RingBufferStats{TotalEventsProcessed: 41, EventCount: 1},
+			stats:  TargetStats{TotalEventsProcessed: 41, EventCount: 1},
 		},
 	}}
 
@@ -263,7 +263,7 @@ func TestDrain_ReportsEventsDroppedWhileNotReading(t *testing.T) {
 	go func() {
 		doneCh <- Drain(ctx, p, DrainOptions{
 			Interval:  5 * time.Millisecond,
-			OnDropped: func(delta int64, _ RingBufferStats) { drops = append(drops, delta) },
+			OnDropped: func(delta int64, _ TargetStats) { drops = append(drops, delta) },
 		})
 	}()
 	time.Sleep(120 * time.Millisecond)
@@ -285,16 +285,16 @@ func TestDrain_ReportsEventsDroppedWhileNotReading(t *testing.T) {
 func TestDrain_ReportsTruncatedTarget(t *testing.T) {
 	setPollProps(t, "2")
 	p := &scriptedPoller{steps: []scriptedStep{{
-		stats: RingBufferStats{Truncated: true, DroppedCount: 12, EventCount: 1000},
+		stats: TargetStats{Truncated: true, DroppedCount: 12, EventCount: 1000},
 	}}}
 
-	var seen []RingBufferStats
+	var seen []TargetStats
 	ctx, cancel := context.WithCancel(context.Background())
 	doneCh := make(chan error, 1)
 	go func() {
 		doneCh <- Drain(ctx, p, DrainOptions{
 			Interval:  5 * time.Millisecond,
-			OnDropped: func(_ int64, s RingBufferStats) { seen = append(seen, s) },
+			OnDropped: func(_ int64, s TargetStats) { seen = append(seen, s) },
 		})
 	}()
 	time.Sleep(60 * time.Millisecond)

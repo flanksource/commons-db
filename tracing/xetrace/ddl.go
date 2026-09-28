@@ -36,12 +36,6 @@ func BuildCreateSQL(opts CreateOptions) (string, error) {
 	if opts.Name == "" {
 		return "", fmt.Errorf("session name is required")
 	}
-	// Naming a database and asking for every database are contradictory, and
-	// honouring either one silently would answer a question the caller did not
-	// ask. Neither is a safe guess, so the pair is refused.
-	if opts.AllDatabases && opts.DatabaseName != "" {
-		return "", fmt.Errorf("database %q and allDatabases are mutually exclusive: capture one database or the whole instance, not both", opts.DatabaseName)
-	}
 	events, err := NormalizeEvents(opts.Events)
 	if err != nil {
 		return "", err
@@ -61,7 +55,15 @@ func BuildCreateSQL(opts CreateOptions) (string, error) {
 	if opts.MaxEvents < 0 {
 		return "", fmt.Errorf("ring buffer max_events_limit %d: must not be negative", opts.MaxEvents)
 	}
+	target, err := buildTargetClause(opts)
+	if err != nil {
+		return "", err
+	}
 
+	filters, err := sessionFilters(opts)
+	if err != nil {
+		return "", err
+	}
 	sort.Strings(events)
 	causality := wantsCausality(events)
 
@@ -72,23 +74,70 @@ func BuildCreateSQL(opts CreateOptions) (string, error) {
 		if i > 0 {
 			b.WriteString(",\n")
 		}
-		writeEventClause(&b, name, opts, causality)
+		writeSessionEvent(&b, name, opts.MinDurationMicros, filters)
 	}
 
 	trackCausality := "OFF"
 	if causality {
 		trackCausality = "ON"
 	}
-	fmt.Fprintf(&b, "\nADD TARGET package0.ring_buffer (SET max_memory = %d, max_events_limit = %d)", opts.MaxMemoryKB, opts.MaxEvents)
-	fmt.Fprintf(&b, "\nWITH (MAX_DISPATCH_LATENCY = %d SECONDS, TRACK_CAUSALITY = %s, STARTUP_STATE = OFF)", int(RingBufferDispatchLatency/time.Second), trackCausality)
+	fmt.Fprintf(&b, "\n%s", target)
+	fmt.Fprintf(&b, "\nWITH (MAX_DISPATCH_LATENCY = %d SECONDS, TRACK_CAUSALITY = %s, STARTUP_STATE = OFF)", int(DispatchLatency/time.Second), trackCausality)
 	return b.String(), nil
 }
 
-func writeEventClause(b *strings.Builder, name string, opts CreateOptions, causality bool) {
+// buildTargetClause is the session's single ADD TARGET line: the ring buffer by
+// default, or an event_file when one is configured. The ring-buffer sizing is
+// refused alongside a file target rather than ignored — it would read as a cap
+// on a capture that has none.
+func buildTargetClause(opts CreateOptions) (string, error) {
+	if opts.File == nil {
+		return fmt.Sprintf("ADD TARGET package0.ring_buffer (SET max_memory = %d, max_events_limit = %d)", opts.MaxMemoryKB, opts.MaxEvents), nil
+	}
+	file := *opts.File
+	if opts.MaxMemoryKB != 0 || opts.MaxEvents != 0 {
+		return "", fmt.Errorf("event_file target: maxMemoryKb/maxEvents size the ring buffer and do not apply; use maxFileSizeMb/maxRolloverFiles")
+	}
+	if err := validateEventFilePath(file.Path); err != nil {
+		return "", err
+	}
+	if file.MaxFileSizeMB < 0 {
+		return "", fmt.Errorf("event_file max_file_size %d MB: must not be negative", file.MaxFileSizeMB)
+	}
+	if file.MaxRolloverFiles < 0 {
+		return "", fmt.Errorf("event_file max_rollover_files %d: must not be negative", file.MaxRolloverFiles)
+	}
+	return fmt.Sprintf(
+		"ADD TARGET package0.event_file (SET filename = N'%s', max_file_size = %d, max_rollover_files = %d)",
+		escapeSQLStringLiteral(file.Path), file.MaxFileSizeMB, file.MaxRolloverFiles,
+	), nil
+}
+
+// writeSessionEvent writes one event's ADD EVENT clause. xml_deadlock_report
+// is added bare: a deadlock involves several sessions, so no session-level
+// predicate or action describes it, and its report names its own databases.
+func writeSessionEvent(b *strings.Builder, name string, minDurationMicros int64, filters []string) {
+	if name == EventXMLDeadlockReport {
+		b.WriteString("ADD EVENT sqlserver.xml_deadlock_report")
+		return
+	}
+	writeEventClause(b, name, buildPredicates(name, minDurationMicros, filters))
+}
+
+func writeEventClause(b *strings.Builder, name string, preds []string) {
 	fmt.Fprintf(b, "ADD EVENT sqlserver.%s (\n", name)
+	if isObjectEvent(name) {
+		// database_name is a customizable field of the object events, off by
+		// default: it is the object's database, where the database_name action
+		// is only the session's current one.
+		b.WriteString("    SET collect_database_name = (1)\n")
+	}
 
 	// Actions: extra columns we want alongside the event's intrinsic fields.
+	// event_sequence is the only one that is unique per event, so it is what
+	// Event.Key dedups overlapping polls on.
 	actions := []string{
+		"package0.event_sequence",
 		"sqlserver.client_app_name",
 		"sqlserver.client_hostname",
 		"sqlserver.database_name",
@@ -96,98 +145,64 @@ func writeEventClause(b *strings.Builder, name string, opts CreateOptions, causa
 		"sqlserver.sql_text",
 		"sqlserver.username",
 	}
-	if causality {
-		// TRACK_CAUSALITY only makes the activity id available; the action has
-		// to be attached to each event for it to reach the ring buffer.
-		// Prepended so the ACTION list stays sorted (package0 < sqlserver).
-		actions = append([]string{"package0.attach_activity_id"}, actions...)
-	}
+	// package0.attach_activity_id is deliberately NOT in this list. It is a
+	// private action (sys.dm_xe_objects.capabilities_desc = 'private'), so
+	// naming it in an ACTION list fails the whole CREATE with "The event action
+	// name, "package0.attach_activity_id", is invalid, or the object could not
+	// be found" — which took out every capture that included
+	// sp_statement_completed. TRACK_CAUSALITY = ON attaches it to each event on
+	// its own, which is what Nest reads.
 	fmt.Fprintf(b, "    ACTION (%s)", strings.Join(actions, ", "))
 
-	preds := buildPredicates(name, opts)
 	if len(preds) > 0 {
 		fmt.Fprintf(b, "\n    WHERE (%s)", strings.Join(preds, " AND "))
 	}
 	b.WriteString("\n)")
 }
 
-func buildPredicates(event string, opts CreateOptions) []string {
+// sessionFilters translates the database/user/app/host MultiFilters, and the
+// reader's own session, into the predicates every event of the session
+// carries, so SQL Server drops an unwanted event before it reaches the target.
+func sessionFilters(opts CreateOptions) ([]string, error) {
 	var preds []string
-	if opts.DatabaseName != "" {
-		preds = append(preds, fmt.Sprintf("sqlserver.database_name = N'%s'", escapeSQLStringLiteral(opts.DatabaseName)))
-	}
-	if p := buildMatchPredicate("sqlserver.username", opts.Users); p != "" {
-		preds = append(preds, p)
+	for _, f := range []struct {
+		label, field string
+		values       []string
+	}{
+		{"database", "sqlserver.database_name", opts.Databases},
+		{"user", "sqlserver.username", opts.Users},
+		{"app", "sqlserver.client_app_name", opts.Apps},
+		{"host", "sqlserver.client_hostname", opts.Hosts},
+	} {
+		p, err := buildMatchPredicate(f.field, f.values)
+		if err != nil {
+			return nil, fmt.Errorf("%s filter: %w", f.label, err)
+		}
+		if p != "" {
+			preds = append(preds, p)
+		}
 	}
 	if opts.ExcludeSessionID > 0 {
 		preds = append(preds, fmt.Sprintf("sqlserver.session_id <> %d", opts.ExcludeSessionID))
 	}
-	if p := buildMatchPredicate("sqlserver.client_app_name", opts.Apps); p != "" {
-		preds = append(preds, p)
+	return preds, nil
+}
+
+// buildPredicates is one event's WHERE list. The event's intrinsic fields come
+// first — duration, or an object event's objectEventPredicates — because they
+// are the cheapest tests SQL Server can make and short-circuit the action-based
+// filters behind them.
+func buildPredicates(event string, minDurationMicros int64, filters []string) []string {
+	var preds []string
+	switch {
+	case minDurationMicros > 0 && eventHasDuration(event):
+		preds = append(preds, fmt.Sprintf("duration >= %d", minDurationMicros))
+	case isObjectEvent(event):
+		preds = append(preds, objectEventPredicates...)
 	}
-	if p := buildMatchPredicate("sqlserver.client_hostname", opts.Hosts); p != "" {
-		preds = append(preds, p)
-	}
-	if opts.MinDurationMicros > 0 && eventHasDuration(event) {
-		preds = append(preds, fmt.Sprintf("duration >= %d", opts.MinDurationMicros))
-	}
-	return preds
+	return append(preds, filters...)
 }
 
 func escapeSQLStringLiteral(s string) string {
 	return strings.ReplaceAll(s, "'", "''")
-}
-
-// buildMatchPredicate translates collections.MatchItem patterns (exact, `*`
-// wildcard, `!` exclusion) for one XE field into a CREATE EVENT SESSION WHERE
-// fragment, so login filtering executes in SQL Server rather than post-capture
-// in Go. Positives are OR-grouped, negatives AND-grouped; an exclusion-only set
-// yields just the negatives ("match everything not excluded"), mirroring
-// MatchItem's precedence. Returns "" when nothing constrains (no patterns, or
-// only `*`). Comma-joined values are flattened the same way EventFilter does, so
-// `--user a,b` and `--user a --user b` are equivalent. Matching is
-// case-insensitive (like_i_sql_unicode_string), as collections.MatchItems is.
-func buildMatchPredicate(field string, patterns []string) string {
-	var positives, negatives []string
-	for _, raw := range splitPatterns(patterns) {
-		p := strings.TrimSpace(raw)
-		neg := strings.HasPrefix(p, "!")
-		p = strings.TrimSpace(strings.TrimPrefix(p, "!"))
-		if p == "" || p == "*" {
-			continue
-		}
-		if neg {
-			negatives = append(negatives, matchComparator(field, p, true))
-		} else {
-			positives = append(positives, matchComparator(field, p, false))
-		}
-	}
-	var groups []string
-	if len(positives) > 0 {
-		groups = append(groups, "("+strings.Join(positives, " OR ")+")")
-	}
-	if len(negatives) > 0 {
-		groups = append(groups, "("+strings.Join(negatives, " AND ")+")")
-	}
-	return strings.Join(groups, " AND ")
-}
-
-// matchComparator renders one XE comparator for a single MatchItem pattern: an
-// exact `field = N'x'` (or `<>` when negated), or a case-insensitive LIKE when
-// the pattern carries a `*` wildcard (translated to `%`). Login values do not
-// contain LIKE metacharacters, so only the quote is escaped.
-func matchComparator(field, pattern string, negate bool) string {
-	if strings.Contains(pattern, "*") {
-		lit := escapeSQLStringLiteral(strings.ReplaceAll(pattern, "*", "%"))
-		like := fmt.Sprintf("sqlserver.like_i_sql_unicode_string(%s, N'%s')", field, lit)
-		if negate {
-			return "NOT " + like
-		}
-		return like
-	}
-	op := "="
-	if negate {
-		op = "<>"
-	}
-	return fmt.Sprintf("%s %s N'%s'", field, op, escapeSQLStringLiteral(pattern))
 }

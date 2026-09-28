@@ -25,8 +25,8 @@ func init() { query.RegisterProvider(sqlXEventProvider{}) }
 const SQLXEventProviderType = "sqlserver-xevent"
 
 // sqlXEventProvider captures live SQL Server statements through an Extended
-// Events session on a ring_buffer target: it creates the session, drains it
-// for as long as the caller streams, and drops it on the way out.
+// Events session: it creates the session, drains it for as long as the caller
+// streams, and drops it on the way out.
 type sqlXEventProvider struct{}
 
 func (sqlXEventProvider) Type() string { return SQLXEventProviderType }
@@ -42,11 +42,11 @@ func (sqlXEventProvider) Execute(context.Context, query.ProviderRequest) ([]quer
 }
 
 // sqlXEventOptions are the capture knobs a profile sets under
-// `provider.options`. Users/Apps/Hosts are pushed into the Extended Events
-// predicate so they filter inside SQL Server; Types/Tables are applied to the
-// parsed events, because the predicate has no structured statement type or
-// referenced-object to match on. All three take collections.MatchItem patterns
-// (exact, `*` wildcard, `!` exclusion).
+// `provider.options`. Databases/Users/Apps/Hosts are pushed into the Extended
+// Events predicate so they filter inside SQL Server; Types/Tables are applied to
+// the parsed events, because the predicate has no structured statement type or
+// referenced-object to match on. All of them take collections.MatchItem
+// patterns (exact, prefix/suffix `*` wildcard, `!` exclusion).
 //
 // The sizing and poll knobs are zero by default so an unset one means "take
 // the documented default" rather than a number this struct has to keep in step
@@ -59,12 +59,9 @@ type sqlXEventOptions struct {
 	// collide on the server.
 	SessionName string `json:"sessionName"`
 
-	// Database scopes the session to one database; empty uses the connection's.
-	Database string `json:"database,omitempty"`
-	// AllDatabases captures across the whole instance instead of one database.
-	// It is separate from an empty Database because that already means "the
-	// connection's own", and instance-wide is the wider scope of the two.
-	AllDatabases bool `json:"allDatabases,omitempty"`
+	// Databases scopes the session by database name; empty uses the
+	// connection's own, and "*" captures the whole instance.
+	Databases []string `json:"databases,omitempty"`
 
 	Users []string `json:"users,omitempty"`
 	Apps  []string `json:"apps,omitempty"`
@@ -146,14 +143,18 @@ func (o sqlXEventOptions) captureOptions() (xetrace.CreateOptions, xetrace.Drain
 		return create, drain, fmt.Errorf("maxMemoryKb %d: must not be negative", o.MaxMemoryKB)
 	}
 
-	if o.AllDatabases && o.Database != "" {
-		return create, drain, fmt.Errorf("database %q and allDatabases are mutually exclusive: capture one database or the whole instance, not both", o.Database)
+	for _, patterns := range []struct {
+		name   string
+		values []string
+	}{{"databases", o.Databases}, {"users", o.Users}, {"apps", o.Apps}, {"hosts", o.Hosts}} {
+		if err := xetrace.ValidateMatchPatterns(patterns.values); err != nil {
+			return create, drain, fmt.Errorf("%s: %w", patterns.name, err)
+		}
 	}
 
 	create = xetrace.CreateOptions{
 		Name:              uniqueSessionName(o.SessionName),
-		DatabaseName:      o.Database,
-		AllDatabases:      o.AllDatabases,
+		Databases:         o.Databases,
 		Users:             o.Users,
 		Apps:              o.Apps,
 		Hosts:             o.Hosts,
@@ -163,7 +164,7 @@ func (o sqlXEventOptions) captureOptions() (xetrace.CreateOptions, xetrace.Drain
 		MaxMemoryKB:       o.MaxMemoryKB,
 		Filter:            xetrace.EventFilter{Types: o.Types, Tables: o.Tables},
 	}
-	drain = xetrace.DrainOptions{Interval: poll}
+	drain = xetrace.DrainOptions{Interval: poll, Filter: create.Filter}
 	return create, drain, nil
 }
 
@@ -214,12 +215,6 @@ func (sqlXEventProvider) Stream(ctx context.Context, req query.ProviderRequest, 
 		return err
 	}
 	defer release()
-	if create.DatabaseName != "" {
-		conn, err = conn.UseDatabase(create.DatabaseName)
-		if err != nil {
-			return err
-		}
-	}
 	client, err := conn.Client(ctx)
 	if err != nil {
 		return err
@@ -238,13 +233,14 @@ func (sqlXEventProvider) Stream(ctx context.Context, req query.ProviderRequest, 
 		}
 	}()
 
+	drain.FinalDelay = session.FinalDelay()
 	drain.OnEvent = func(event xetrace.Event) { emit(eventRow(event)) }
-	drain.OnDropped = func(delta int64, stats xetrace.RingBufferStats) {
+	drain.OnDropped = func(delta int64, stats xetrace.TargetStats) {
 		emit(query.Row{
 			"timestamp": time.Now().UTC(),
 			"name":      "warning",
 			"error_message": fmt.Sprintf(
-				"SQL Server ring buffer lost or truncated events (unseen: %d, dropped: %d, truncated: %t)",
+				"SQL Server lost or truncated events before they were read (unseen: %d, dropped: %d, truncated: %t)",
 				delta, stats.DroppedCount, stats.Truncated),
 		})
 	}

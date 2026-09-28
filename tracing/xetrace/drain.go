@@ -9,7 +9,7 @@ import (
 // poller is the subset of *Session that Drain needs. Keeping the surface
 // small lets tests substitute an in-memory fake without spinning up a DB.
 type poller interface {
-	Poll(ctx context.Context) (RingBufferSnapshot, error)
+	Poll(ctx context.Context) (TargetSnapshot, error)
 }
 
 // DrainOptions configures the poll loop. Every field is optional; zero values
@@ -17,6 +17,10 @@ type poller interface {
 type DrainOptions struct {
 	// Interval is the ring-buffer poll cadence. Defaults to one second.
 	Interval time.Duration
+	// StartedAt bounds passive sessions whose target can contain older events.
+	// The exclusive stop bound is captured when ctx ends.
+	StartedAt  time.Time
+	FinalDelay time.Duration
 	// OnEvent receives each new, deduplicated event in delivery order. It is
 	// invoked synchronously while dedup state is held — keep it fast (an append
 	// or a channel send, never a network round-trip).
@@ -33,7 +37,22 @@ type DrainOptions struct {
 	// buffer than we read back, or that it truncated/dropped events itself.
 	// This is how a tolerated poll failure stays auditable instead of silently
 	// losing the events the buffer evicted while we were not reading it.
-	OnDropped func(delta int64, stats RingBufferStats)
+	//
+	// Every delta is additive — the events lost since the previous report — so
+	// a caller can sum them into a capture's total loss. A truncated target is
+	// reported even when it carries no count of its own.
+	OnDropped func(delta int64, stats TargetStats)
+	// Filter narrows delivery by every supported event dimension. It is
+	// applied here rather than as each ring-buffer read is parsed because only
+	// here has an sp_execute been resolved to the statement it re-ran: before
+	// that, every re-run of a prepared statement reads as Tables=[sp_execute]
+	// and a table pattern would drop it. The zero value delivers everything.
+	Filter EventFilter
+	// OnUnresolved receives each event Filter excluded only because its text is
+	// unknowable — an sp_execute of a handle prepared before the capture
+	// started. Its cost is real but cannot be placed, so a caller that sums the
+	// delivered events must count these rather than let them vanish.
+	OnUnresolved func(Event)
 }
 
 // Drain polls p at the configured interval, deduplicates events via Event.Key,
@@ -69,8 +88,10 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 	// lastProcessed tracks the server's own running total so an eviction we
 	// never read shows up as a delta rather than as nothing at all.
 	var lastProcessed int64
-	var lastDropped int64
 	var haveProcessed bool
+	// lastDropped does the same for droppedCount, which is also a running total.
+	var lastDropped int64
+	var stoppedAt time.Time
 
 	emit := func(e Event) {
 		if opts.OnEvent != nil {
@@ -78,20 +99,38 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 		}
 	}
 
+	// deliver returns how many new events it observed — delivered or filtered
+	// out alike, since the buffer handed over both and only the eviction delta
+	// should count as lost.
 	deliver := func(events []Event) int64 {
-		var delivered int64
+		var observed int64
 		for _, e := range events {
 			key := e.Key()
 			if _, dup := seen[key]; dup {
 				continue
 			}
 			seen[key] = struct{}{}
-			delivered++
+			observed++
+			if !opts.StartedAt.IsZero() && e.Timestamp.Before(opts.StartedAt) {
+				continue
+			}
+			if !stoppedAt.IsZero() && !e.Timestamp.Before(stoppedAt) {
+				continue
+			}
+			// Every prepare is cached, including ones the filter rejects: a later
+			// re-run of it must resolve to its text, not read as prepared before
+			// the capture.
 			handles.Observe(e)
-			handles.Resolve(&e)
+			unresolved := handles.Resolve(&e)
+			if !opts.Filter.match(e) {
+				if unresolved && opts.OnUnresolved != nil {
+					opts.OnUnresolved(e)
+				}
+				continue
+			}
 			nester.Add(e, emit)
 		}
-		return delivered
+		return observed
 	}
 
 	// observe marks keys we read but deliberately did not deliver — driver
@@ -111,11 +150,12 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 		return n
 	}
 
-	reportDrops := func(observed int64, stats RingBufferStats) {
+	reportDrops := func(observed int64, stats TargetStats) {
+		dropped := max(stats.DroppedCount-lastDropped, 0)
+		lastDropped = stats.DroppedCount
 		if opts.OnDropped == nil {
 			return
 		}
-		dropped := max(int64(0), stats.DroppedCount-lastDropped)
 		if stats.Truncated || dropped > 0 {
 			opts.OnDropped(dropped, stats)
 		}
@@ -141,7 +181,6 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 		}
 		seen = visible
 		reportDrops(observed, snapshot.Stats)
-		lastDropped = snapshot.Stats.DroppedCount
 		lastProcessed, haveProcessed = snapshot.Stats.TotalEventsProcessed, true
 		if opts.OnPollBatch != nil {
 			opts.OnPollBatch()
@@ -174,9 +213,12 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 	for {
 		select {
 		case <-ctx.Done():
+			stoppedAt = time.Now().UTC()
 			// Events completing just before Stop may still be in SQL Server's
-			// dispatch buffer rather than the ring target we are about to read.
-			time.Sleep(RingBufferDispatchLatency + 250*time.Millisecond)
+			// dispatch buffer rather than the target we are about to read.
+			if opts.FinalDelay > 0 {
+				time.Sleep(opts.FinalDelay)
+			}
 			err := finalDrain()
 			// Statements whose parent never arrived must still be reported.
 			nester.Flush(emit)

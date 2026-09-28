@@ -1,180 +1,281 @@
 package sqltrace
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
 
+	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons/logger"
 
 	"github.com/flanksource/commons-db/tracing/xetrace"
 )
 
-// chunkAppender is the slice of EventStore the writer needs. Narrowing it here
-// lets a test inject a deliberately slow or failing store without standing up
-// Redis.
+// chunkAppender commits one poll's events and reports the seq window they took
+// and the stream's ref as of that commit. recordAppender is the production one.
 type chunkAppender interface {
-	Append(traceID string, seq int, events []xetrace.Event) error
+	Append(events []xetrace.Event) (recordstore.Window, query.EventsRef, error)
 }
 
 // backlogWarnFloor is the queue depth at which a backlog first gets reported,
 // doubling thereafter (64, 128, 256 …). The queue is deliberately unbounded, so
-// this is the only signal that Redis is not keeping up — without it a pathological
-// backlog would grow silently until the process ran out of memory.
+// this is the only signal that the store is not keeping up — without it a
+// pathological backlog would grow silently until the process ran out of memory.
 const backlogWarnFloor = 64
 
-// eventWriter decouples the Extended Events drain loop from Redis.
+// previewSize is how many of the latest committed events the writer keeps for a
+// result's preview.
+const previewSize = 10
+
+// previewEvent is a committed event and the seq the store gave its row.
+type previewEvent struct {
+	seq   int64
+	event xetrace.Event
+}
+
+// eventWriter decouples the Extended Events drain loop from the record store.
 //
 // The drain loop must return to SQL Server's ring buffer promptly: the buffer is
 // fixed-size and overwrites the oldest events once full, so every millisecond
-// spent writing is a millisecond in which captured events can be lost
-// ("lost N event(s) before they could be read"). Appending inline did exactly
-// that — EventStore.Append goes through cachestore's async handle, whose channel
-// is bounded and whose Set BLOCKS once the flusher falls behind
-// (internal/cachestore/async.go, "backpressure when the writer falls behind").
-// Against a slow L2 that is a half-second stall per poll, and the drain loop
-// wears it.
+// spent writing is a millisecond in which captured events can be lost. So a poll
+// batch is handed to an UNBOUNDED queue and a single goroutine commits it.
+// Enqueue never blocks, which moves the backpressure off the drain loop and onto
+// memory; the trade is deliberate, because a dropped event is unrecoverable
+// while a queued one is merely late.
 //
-// So the poll batch is handed to an UNBOUNDED queue here and a single goroutine
-// drains it into the store. Enqueue never blocks and never fails, which moves
-// the backpressure off the drain loop and onto memory; the trade is deliberate,
-// because a dropped event is unrecoverable while a queued one is merely late.
-// Each wake takes everything queued, so a slow store naturally coalesces into
-// larger, less frequent write batches instead of one round-trip per poll.
+// The writer is also the capture's source of truth for what has been stored:
+// the summary and preview fold only committed events, and Checkpoint is a
+// barrier that never describes rows the store does not hold yet.
 type eventWriter struct {
-	store   chunkAppender
-	traceID string
+	store  chunkAppender
+	onFail func(error)
 
-	mu     sync.Mutex
-	cond   *sync.Cond
-	queue  []pendingChunk
-	closed bool
-
-	// maxDepth is the high-water queue depth, and warnAt the next depth that
-	// earns a log line. Both are only touched under mu.
-	maxDepth int
-	warnAt   int
-
-	errMu sync.Mutex
-	err   error
+	mu       sync.Mutex
+	wake     *sync.Cond
+	queue    [][]xetrace.Event
+	closed   bool
+	enqueued int64 // chunks handed to Enqueue
+	settled  int64 // chunks committed, or discarded once the writer failed
+	// settledCh is closed, and replaced, whenever settled or err changes.
+	settledCh chan struct{}
+	ref       query.EventsRef
+	err       error
+	summary   *xetrace.Accumulator
+	preview   []previewEvent
+	maxDepth  int
+	warnAt    int
 
 	done chan struct{}
 }
 
-// pendingChunk is one poll's events plus the sequence number already allocated
-// for it. The sequence is assigned on the drain loop so chunk order stays poll
-// order regardless of how the writer batches.
-type pendingChunk struct {
-	seq    int
-	events []xetrace.Event
-}
-
-// newEventWriter starts the writer goroutine. Close must be called to drain it.
-func newEventWriter(store chunkAppender, traceID string) *eventWriter {
-	w := &eventWriter{
-		store:   store,
-		traceID: traceID,
-		warnAt:  backlogWarnFloor,
-		done:    make(chan struct{}),
+// newEventWriter opens the stream with an empty append, so a reader finds it
+// from the start of the capture, and starts the commit goroutine. onFail runs
+// once, on the commit goroutine, with the first store failure; Close must be
+// called to drain the writer.
+func newEventWriter(store chunkAppender, onFail func(error)) (*eventWriter, error) {
+	_, ref, err := store.Append(nil)
+	if err != nil {
+		return nil, fmt.Errorf("open sql_xevent stream: %w", err)
 	}
-	w.cond = sync.NewCond(&w.mu)
+	w := &eventWriter{
+		store: store, onFail: onFail, ref: ref, summary: xetrace.NewAccumulator(),
+		settledCh: make(chan struct{}), warnAt: backlogWarnFloor, done: make(chan struct{}),
+	}
+	w.wake = sync.NewCond(&w.mu)
 	go w.run()
-	return w
+	return w, nil
 }
 
-// Enqueue hands one poll's events to the writer. It never blocks: that is the
-// whole point of the type. events must not be mutated afterwards — the drain
-// loop allocates a fresh slice per poll, so it hands off ownership.
-func (w *eventWriter) Enqueue(seq int, events []xetrace.Event) {
+// Enqueue hands one poll's events to the writer without blocking. events must
+// not be mutated afterwards: the drain loop allocates a fresh slice per poll.
+func (w *eventWriter) Enqueue(events []xetrace.Event) {
 	if len(events) == 0 {
 		return
 	}
 	w.mu.Lock()
 	if w.closed {
+		w.fail(fmt.Errorf("%d event(s) discarded: writer already closed", len(events)))
 		w.mu.Unlock()
-		w.recordErr(fmt.Errorf("trace %s chunk %d discarded: writer already closed", w.traceID, seq))
 		return
 	}
-	w.queue = append(w.queue, pendingChunk{seq: seq, events: events})
+	w.queue = append(w.queue, events)
+	w.enqueued++
 	depth := len(w.queue)
-	if depth > w.maxDepth {
-		w.maxDepth = depth
-	}
-	warn := false
-	if depth >= w.warnAt {
-		warn = true
+	w.maxDepth = max(w.maxDepth, depth)
+	warn := depth >= w.warnAt
+	if warn {
 		w.warnAt *= 2
 	}
+	stream := w.ref.Stream
 	w.mu.Unlock()
-	w.cond.Signal()
-
+	w.wake.Signal()
 	if warn {
-		logger.Warnf(
-			"sqltrace: trace %s has %d unwritten event chunk(s) queued — the cache is not keeping up with capture",
-			w.traceID, depth,
-		)
+		logger.Warnf("sqltrace: stream %s has %d uncommitted event chunk(s) queued — the record store is not keeping up with capture", stream, depth)
 	}
 }
 
-// run drains the queue until Close. Each wake takes every queued chunk, so a
-// slow store coalesces into fewer, larger write batches rather than one
-// round-trip per poll.
+// run commits queued chunks in poll order until Close.
 func (w *eventWriter) run() {
 	defer close(w.done)
 	for {
 		w.mu.Lock()
 		for len(w.queue) == 0 && !w.closed {
-			w.cond.Wait()
+			w.wake.Wait()
 		}
-		if len(w.queue) == 0 && w.closed {
+		if len(w.queue) == 0 {
 			w.mu.Unlock()
 			return
 		}
 		batch := w.queue
 		w.queue = nil
 		w.mu.Unlock()
-
-		for _, chunk := range batch {
-			if err := w.store.Append(w.traceID, chunk.seq, chunk.events); err != nil {
-				w.recordErr(err)
-				logger.Warnf("sqltrace: %v", err)
-			}
+		for _, events := range batch {
+			w.commit(events)
 		}
 	}
 }
 
-// Close stops accepting chunks, waits for the queue to drain, and returns every
-// write error seen. Idempotent.
+// commit stores one chunk. After the first failure nothing more is stored: the
+// rows after a gap would read as a complete capture.
+func (w *eventWriter) commit(events []xetrace.Event) {
+	w.mu.Lock()
+	failed := w.err != nil
+	w.mu.Unlock()
+	var window recordstore.Window
+	var ref query.EventsRef
+	var err error
+	if !failed {
+		window, ref, err = w.store.Append(events)
+	}
+
+	w.mu.Lock()
+	first := err != nil && w.err == nil
+	switch {
+	case err != nil:
+		w.err = err
+	case !failed:
+		w.ref = ref
+		w.summary.AddAll(events)
+		w.remember(window.From, events)
+	}
+	w.settled++
+	w.signal()
+	w.mu.Unlock()
+
+	if first {
+		logger.Errorf("sqltrace: %v", err)
+		w.onFail(err)
+	}
+}
+
+// remember keeps the latest previewSize committed events, numbered from seq.
+func (w *eventWriter) remember(seq int64, events []xetrace.Event) {
+	skip := max(0, len(events)-previewSize)
+	for index, event := range events[skip:] {
+		w.preview = append(w.preview, previewEvent{seq: seq + int64(skip+index), event: event})
+	}
+	w.preview = w.preview[max(0, len(w.preview)-previewSize):]
+}
+
+// fail records err; mu must be held.
+func (w *eventWriter) fail(err error) {
+	w.err = errors.Join(w.err, err)
+	w.signal()
+}
+
+// signal wakes every waiting checkpoint; mu must be held.
+func (w *eventWriter) signal() {
+	close(w.settledCh)
+	w.settledCh = make(chan struct{})
+}
+
+// Checkpoint blocks until every chunk enqueued before the call is committed,
+// then returns the stream's ref as of the last commit. It never describes a row
+// the store does not hold. A store failure, past or while waiting, is returned.
+func (w *eventWriter) Checkpoint(ctx context.Context) (query.EventsRef, error) {
+	w.mu.Lock()
+	target := w.enqueued
+	for {
+		if w.err != nil {
+			err := w.err
+			w.mu.Unlock()
+			return query.EventsRef{}, err
+		}
+		if w.settled >= target {
+			ref := w.ref
+			w.mu.Unlock()
+			return ref, nil
+		}
+		settled := w.settledCh
+		w.mu.Unlock()
+		select {
+		case <-settled:
+		case <-ctx.Done():
+			return query.EventsRef{}, fmt.Errorf("checkpoint stream %s: %w", w.EventsRef().Stream, ctx.Err())
+		}
+		w.mu.Lock()
+	}
+}
+
+// EventsRef is the stream's ref as of the last commit, without waiting.
+func (w *eventWriter) EventsRef() query.EventsRef {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.ref
+}
+
+// Summary is the IO/CPU/timing aggregate over every committed event, with the
+// events the capture lost or could not resolve.
+func (w *eventWriter) Summary() xetrace.Summary {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.summary.Result()
+}
+
+// AddLost counts events the server evicted before they were read.
+func (w *eventWriter) AddLost(n int64) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.summary.AddLost(n)
+}
+
+// AddUnresolved counts an event the filter dropped only for want of its text.
+func (w *eventWriter) AddUnresolved() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.summary.AddUnresolved()
+}
+
+// Preview returns the kept events whose seq is within from..to, oldest first. A
+// from or to of 0 leaves that side open.
+func (w *eventWriter) Preview(from, to int64) []xetrace.Event {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := []xetrace.Event{}
+	for _, kept := range w.preview {
+		if (from == 0 || kept.seq >= from) && (to == 0 || kept.seq <= to) {
+			out = append(out, kept.event)
+		}
+	}
+	return out
+}
+
+// Close stops accepting chunks, waits for the queue to be committed, and
+// returns the store failure, if any. Idempotent.
 func (w *eventWriter) Close() error {
 	w.mu.Lock()
-	if w.closed {
-		w.mu.Unlock()
-		<-w.done
-		return w.loadErr()
-	}
+	alreadyClosed := w.closed
 	w.closed = true
-	depth := w.maxDepth
+	depth, stream := w.maxDepth, w.ref.Stream
 	w.mu.Unlock()
-	w.cond.Broadcast()
+	w.wake.Broadcast()
 	<-w.done
-
-	if depth >= backlogWarnFloor {
-		logger.Warnf("sqltrace: trace %s peaked at %d queued event chunk(s)", w.traceID, depth)
+	if !alreadyClosed && depth >= backlogWarnFloor {
+		logger.Warnf("sqltrace: stream %s peaked at %d queued event chunk(s)", stream, depth)
 	}
-	return w.loadErr()
-}
-
-func (w *eventWriter) recordErr(err error) {
-	if err == nil {
-		return
-	}
-	w.errMu.Lock()
-	w.err = errors.Join(w.err, err)
-	w.errMu.Unlock()
-}
-
-func (w *eventWriter) loadErr() error {
-	w.errMu.Lock()
-	defer w.errMu.Unlock()
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	return w.err
 }

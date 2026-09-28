@@ -1,6 +1,7 @@
 package xetrace
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -177,6 +178,45 @@ func TestHandleCacheResolvesSPExecute(t *testing.T) {
 	}
 	if len(reuse.Tables) != 1 || reuse.Tables[0] != "usp_GetOrderTotals" {
 		t.Errorf("Tables = %#v, want [usp_GetOrderTotals]", reuse.Tables)
+	}
+}
+
+// A prepared handle belongs to the connection that prepared it: concurrent
+// cycle connections all start numbering at 1, so a cache keyed by handle alone
+// would resolve one session's sp_execute to another session's statement.
+func TestHandleCacheResolvesPerSession(t *testing.T) {
+	const handle = 1
+	onSession := func(sid int, statement string) Event {
+		e := toEventFor(statement)
+		e.SessionID = sid
+		return e
+	}
+	cache := NewHandleCache()
+	cache.Observe(onSession(51, prepexecOf(handle, "@P0 int", "SELECT Status FROM AsActivity WHERE ActivityID = @P0 ", "1")))
+	cache.Observe(onSession(52, prepexecOf(handle, "@P0 int", "UPDATE AsPolicy SET Status = @P0 ", "2")))
+
+	cases := []struct {
+		sid        int
+		execute    string
+		wantSQL    string
+		wantTables []string
+	}{
+		{51, "exec sp_execute 1,7", "SELECT Status FROM AsActivity WHERE ActivityID = 7", []string{"AsActivity"}},
+		{52, "exec sp_execute 1,8", "UPDATE AsPolicy SET Status = 8", []string{"AsPolicy"}},
+	}
+	for _, tc := range cases {
+		e := onSession(tc.sid, tc.execute)
+		if cache.Resolve(&e) {
+			t.Fatalf("session %d: handle %d reported unresolved", tc.sid, handle)
+		}
+		if e.SQL != tc.wantSQL || !slices.Equal(e.Tables, tc.wantTables) {
+			t.Errorf("session %d resolved to %q %v, want %q %v", tc.sid, e.SQL, e.Tables, tc.wantSQL, tc.wantTables)
+		}
+	}
+
+	stranger := onSession(53, "exec sp_execute 1,9")
+	if !cache.Resolve(&stranger) || !stranger.ParamsUnavailable {
+		t.Errorf("session 53 never prepared handle 1 but resolved to %q", stranger.SQL)
 	}
 }
 
