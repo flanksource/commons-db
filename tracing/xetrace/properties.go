@@ -14,6 +14,9 @@ import (
 //	sqltrace.poll.retryDelay         pause before re-attempting a failed poll
 //	sqltrace.ringBuffer.maxMemoryKb  ring buffer size when the caller sets none
 //	sqltrace.ringBuffer.maxEvents    ring buffer event cap when the caller sets none
+//	sqltrace.eventFile.maxFileSizeMb one .xel file's size before rollover
+//	sqltrace.eventFile.maxRolloverFiles  how many rolled .xel files are kept
+//	sqltrace.eventFile.dir           where the server writes .xel files (probed when unset)
 //
 // The poll interval is deliberately absent: `--poll` and the `poll` request
 // field already own it, and a second source of truth would be worse than none.
@@ -46,7 +49,13 @@ const (
 	//
 	// This is a cap, not an allocation: the buffer still stops at
 	// maxMemoryKb, whichever binds first.
-	defaultRingBufferEventsValue = 8092
+	defaultRingBufferEventsValue = 8192
+
+	// An event_file target's whole disk budget on the server is
+	// maxFileSize × maxRolloverFiles — 2.5 GB with these defaults, which holds
+	// a long intake run without evicting anything.
+	defaultEventFileSizeMBValue    = 256
+	defaultEventFileRolloversValue = 10
 )
 
 // PollTimeout is the per-poll ring_buffer read deadline. Exported because the
@@ -87,6 +96,21 @@ func defaultRingBufferMemoryKB() int {
 
 func defaultRingBufferEvents() int {
 	return positiveOr(properties.Int(defaultRingBufferEventsValue, "sqltrace.ringBuffer.maxEvents"), defaultRingBufferEventsValue)
+}
+
+func defaultEventFileSizeMB() int {
+	return positiveOr(properties.Int(defaultEventFileSizeMBValue, "sqltrace.eventFile.maxFileSizeMb"), defaultEventFileSizeMBValue)
+}
+
+func defaultEventFileRollovers() int {
+	return positiveOr(properties.Int(defaultEventFileRolloversValue, "sqltrace.eventFile.maxRolloverFiles"), defaultEventFileRolloversValue)
+}
+
+// eventFileDirOverride is the operator's answer to "where may this instance
+// write .xel files", for an instance whose layout the host probe cannot
+// resolve. Empty means "probe the server".
+func eventFileDirOverride() string {
+	return properties.String("", "sqltrace.eventFile.dir")
 }
 
 func positiveOr(v, fallback int) int {

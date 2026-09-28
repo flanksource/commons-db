@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -30,6 +31,21 @@ type connectionTraceInput struct {
 	Events      []string `json:"events"`
 	MinDuration string   `json:"minDuration"`
 	Duration    string   `json:"duration"`
+}
+
+// providerOptions are the sqlserver-xevent options the input asks for. The
+// form's database is one database pattern; left blank, the capture scopes to
+// the connection's own database.
+func (input connectionTraceInput) providerOptions(sessionName string) map[string]any {
+	options := map[string]any{
+		"sessionName": sessionName,
+		"users":       input.Users, "apps": input.Apps, "hosts": input.Hosts,
+		"events": input.Events, "minDuration": input.MinDuration,
+	}
+	if database := strings.TrimSpace(input.Database); database != "" {
+		options["databases"] = []string{database}
+	}
+	return options
 }
 
 // startConnectionTrace creates an ephemeral profile in the shared session
@@ -61,14 +77,11 @@ func (h *sessionHandler) startConnectionTrace(w http.ResponseWriter, r *http.Req
 	}
 	profile := query.Profile{
 		Name: connectionTraceProfile(conn.ID), Virtual: true,
-		Provider: query.ProviderConfig{Type: providers.SQLXEventProviderType, Connection: reference, Options: map[string]any{
-			// The server-side session carries the same name this connection's
-			// trace profile does, so a DBA reading sys.dm_xe_sessions can tell
-			// which connection asked for it.
-			"sessionName": connectionTraceProfile(conn.ID),
-			"database":    input.Database, "users": input.Users, "apps": input.Apps,
-			"hosts": input.Hosts, "events": input.Events, "minDuration": input.MinDuration,
-		}},
+		// The server-side session carries the same name this connection's trace
+		// profile does, so a DBA reading sys.dm_xe_sessions can tell which
+		// connection asked for it.
+		Provider: query.ProviderConfig{Type: providers.SQLXEventProviderType, Connection: reference,
+			Options: input.providerOptions(connectionTraceProfile(conn.ID))},
 		Trace: &query.TraceSpec{MaxDuration: types.Duration{Duration: duration}},
 	}
 	session, err := query.ExecuteStream(h.sessionContext(r), h.registry, profile)

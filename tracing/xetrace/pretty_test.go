@@ -137,6 +137,21 @@ func TestStreamLine_ErrorEvent(t *testing.T) {
 	}
 }
 
+// A schema change leads with what it changed: the batch that made it may be
+// long, or open with anything.
+func TestStreamLine_ObjectEvent(t *testing.T) {
+	e := fixtureEvent(func(e *Event) {
+		e.Name = EventObjectCreated
+		e.SQL = "CREATE TABLE dbo.AsAudit (id int)"
+		e.ObjectName, e.ObjectType = "AsAudit", "USRTAB"
+		e.Duration, e.LogicalReads, e.RowCount = 0, 0, 0
+	})
+	got := StreamLine(e, StreamLineOptions{}).String()
+	if at, sql := strings.Index(got, "USRTAB AsAudit"), strings.Index(got, "CREATE TABLE"); at < 0 || sql < at {
+		t.Errorf("expected the object type and name before the statement, got: %s", got)
+	}
+}
+
 func TestDurationStyle_Thresholds(t *testing.T) {
 	cases := []struct {
 		d    time.Duration

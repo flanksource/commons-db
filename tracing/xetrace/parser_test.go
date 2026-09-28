@@ -58,7 +58,7 @@ func TestParseRingBuffer_Fixture(t *testing.T) {
 	// The root's bookkeeping is what makes a skipped poll auditable: without
 	// TotalEventsProcessed there is no way to tell that the ring buffer evicted
 	// events between two successful reads.
-	wantStats := RingBufferStats{TotalEventsProcessed: 2, EventCount: 2, MemoryUsed: 320}
+	wantStats := TargetStats{TotalEventsProcessed: 2, EventCount: 2, MemoryUsed: 320}
 	if got.Stats != wantStats {
 		t.Errorf("Stats = %#v, want %#v", got.Stats, wantStats)
 	}
@@ -74,7 +74,7 @@ func TestParseRingBuffer_StatsReportTruncationAndDrops(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseRingBuffer: %v", err)
 	}
-	want := RingBufferStats{
+	want := TargetStats{
 		Truncated:            true,
 		ProcessingTime:       17,
 		TotalEventsProcessed: 4096,

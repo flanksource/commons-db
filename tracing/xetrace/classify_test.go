@@ -3,6 +3,7 @@ package xetrace
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestClassifyStatement(t *testing.T) {
@@ -24,7 +25,14 @@ func TestClassifyStatement(t *testing.T) {
 		{"execute spelled out", "EXECUTE sp_who2", StmtExec},
 		{"unwrapped procedure call", "EXEC usp_GetOrderTotals '9F1C', '2026-08-30', '2026-08-30', 100000", StmtExec},
 		{"select wins over a later exec", "SELECT * FROM AsActivity WHERE x = 1 -- EXEC later\n", StmtSelect},
-		{"ddl create is other", "CREATE TABLE Foo (id int)", StmtOther},
+		{"create table is ddl", "CREATE TABLE Foo (id int)", StmtDDL},
+		{"alter is ddl", "ALTER INDEX IX_15_ASACTIVITY ON AsActivity REBUILD", StmtDDL},
+		{"drop is ddl", "drop table #t", StmtDDL},
+		{"truncate is ddl", "TRUNCATE TABLE AsStaging", StmtDDL},
+		{"a procedure body does not make its create a select", "CREATE PROCEDURE p AS SELECT 1", StmtDDL},
+		{"create after a comment is ddl", "/* rebuild */ -- step 1\nCREATE INDEX IX ON AsActivity (StatusCode)", StmtDDL},
+		{"select into a temp table stays select", "SELECT id INTO #t FROM AsActivity", StmtSelect},
+		{"dynamic ddl stays the exec that ran it", "EXEC sp_executesql N'CREATE TABLE Foo (id int)'", StmtExec},
 		{"set is other", "SET NOCOUNT ON", StmtOther},
 		{"keyword inside string not matched first", "SELECT 'DELETE ME' AS note", StmtSelect},
 	}
@@ -66,6 +74,14 @@ func TestExtractTables(t *testing.T) {
 		{"exec names the procedure", "EXEC usp_GetOrderTotals '9F1C', '2026-08-30', 100000", []string{"usp_GetOrderTotals"}},
 		{"execute spelled out", "EXECUTE dbo.usp_GetFundValues 1", []string{"usp_GetFundValues"}},
 		{"exec args are not a table list", "EXEC p 1, 2", []string{"p"}},
+		// A schema change names the table it changes, so a DDL row is not
+		// table-less and a --table filter keeps it.
+		{"create table", "CREATE TABLE dbo.AsAudit (id int)", []string{"AsAudit"}},
+		{"alter table", "ALTER TABLE [dbo].[AsPolicy] ADD Note varchar(10)", []string{"AsPolicy"}},
+		{"drop table after a guard", "IF OBJECT_ID('dbo.AsTmp') IS NOT NULL DROP TABLE dbo.AsTmp", []string{"AsTmp"}},
+		{"truncate table", "TRUNCATE TABLE AsStaging", []string{"AsStaging"}},
+		{"a table variable names no table", "DECLARE @t TABLE (id int)", nil},
+		{"an inline function returns no table named AS", "CREATE FUNCTION f() RETURNS TABLE AS RETURN (SELECT id FROM AsCode)", []string{"AsCode"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -81,13 +97,14 @@ func ev(sql string) Event {
 	return Event{SQL: sql, StatementType: classifyStatement(sql), Tables: extractTables(sql)}
 }
 
-func TestEventFilterApply(t *testing.T) {
+func TestEventFilterMatch(t *testing.T) {
 	sel := ev("SELECT * FROM AsActivity")
 	upd := ev("UPDATE AsActivity SET StatusCode = '09'")
 	ins := ev("INSERT INTO AsCode (id) VALUES (1)")
 	join := ev("SELECT * FROM AsActivity a, AsClient c WHERE a.id = c.id")
 	noTable := ev("SET NOCOUNT ON")
 	proc := ev("EXEC usp_GetOrderTotals '9F1C', '2026-08-30', 100000")
+	health := Event{Name: "scheduler_monitor_non_yielding_ring_buffer_recorded", DatabaseName: "warehouse", Username: "svc", ClientApp: "orders-api", ClientHost: "app-0"}
 
 	cases := []struct {
 		name   string
@@ -117,12 +134,22 @@ func TestEventFilterApply(t *testing.T) {
 		{"proc excluded by wildcard", EventFilter{Tables: []string{"!usp_*"}}, []Event{proc, sel}, []Event{sel}},
 		{"proc matched by type", EventFilter{Types: []string{"EXEC"}}, []Event{proc, sel, upd}, []Event{proc}},
 		{"exec is not DML", EventFilter{Types: []string{"DML"}}, []Event{proc, upd}, []Event{upd}},
+		{"event name", EventFilter{Events: []string{"scheduler_monitor*"}}, []Event{health, sel}, []Event{health}},
+		{"database user app and host", EventFilter{Databases: []string{"warehouse"}, Users: []string{"svc"}, Apps: []string{"orders-*"}, Hosts: []string{"app-*"}}, []Event{health, sel}, []Event{health}},
+		{"positive metadata drops missing values", EventFilter{Users: []string{"svc"}}, []Event{health, sel}, []Event{health}},
+		{"exclusion metadata keeps missing values", EventFilter{Users: []string{"!sa"}}, []Event{health, sel}, []Event{health, sel}},
+		{"minimum duration keeps duration-less diagnostics", EventFilter{MinDuration: time.Millisecond}, []Event{health, {Duration: 500 * time.Microsecond}, {Duration: 2 * time.Millisecond}}, []Event{health, {Duration: 2 * time.Millisecond}}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := tc.filter.Apply(tc.in)
+			var got []Event
+			for _, e := range tc.in {
+				if tc.filter.match(e) {
+					got = append(got, e)
+				}
+			}
 			if !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("Apply() = %v, want %v", sqls(got), sqls(tc.want))
+				t.Errorf("matched %v, want %v", sqls(got), sqls(tc.want))
 			}
 		})
 	}
@@ -139,7 +166,7 @@ func TestFilterableTypesCoversEveryToken(t *testing.T) {
 		offered[name] = struct{}{}
 	}
 
-	want := map[string]struct{}{string(StmtOther): {}, dmlGroup: {}}
+	want := map[string]struct{}{string(StmtOther): {}, string(StmtDDL): {}, dmlGroup: {}}
 	for _, typ := range classKeywords {
 		want[string(typ)] = struct{}{}
 	}

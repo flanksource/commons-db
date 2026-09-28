@@ -1,0 +1,47 @@
+<RingBufferTarget truncated="0" processingTime="0" totalEventsProcessed="3" eventCount="3" droppedCount="0" memoryUsed="2048">
+  <event name="object_created" package="sqlserver" timestamp="2026-09-18T10:00:00.100Z">
+    <data name="database_id"><type name="uint32" package="package0"/><value>7</value></data>
+    <data name="object_id"><type name="int32" package="package0"/><value>1205579333</value></data>
+    <data name="object_type"><type name="object_type" package="sqlserver"/><value>8277</value><text>USRTAB</text></data>
+    <data name="index_id"><type name="uint32" package="package0"/><value>0</value></data>
+    <data name="related_object_id"><type name="int32" package="package0"/><value>0</value></data>
+    <data name="ddl_phase"><type name="ddl_opcode" package="sqlserver"/><value>1</value><text>Commit</text></data>
+    <data name="transaction_id"><type name="int64" package="package0"/><value>9012</value></data>
+    <data name="object_name"><type name="unicode_string" package="package0"/><value>AsAudit</value></data>
+    <data name="database_name"><type name="unicode_string" package="package0"/><value>warehouse</value></data>
+    <action name="client_app_name" package="sqlserver"><type name="unicode_string" package="package0"/><value>sqlcmd</value></action>
+    <action name="client_hostname" package="sqlserver"><type name="unicode_string" package="package0"/><value>dba-laptop</value></action>
+    <action name="database_name" package="sqlserver"><type name="unicode_string" package="package0"/><value>master</value></action>
+    <action name="event_sequence" package="package0"><type name="uint64" package="package0"/><value>11</value></action>
+    <action name="session_id" package="sqlserver"><type name="uint16" package="package0"/><value>61</value></action>
+    <action name="sql_text" package="sqlserver"><type name="unicode_string" package="package0"/><value>CREATE TABLE warehouse.dbo.AsAudit (id int)</value></action>
+    <action name="username" package="sqlserver"><type name="unicode_string" package="package0"/><value>dba</value></action>
+  </event>
+  <event name="object_altered" package="sqlserver" timestamp="2026-09-18T10:00:01.200Z">
+    <data name="database_id"><type name="uint32" package="package0"/><value>7</value></data>
+    <data name="object_id"><type name="int32" package="package0"/><value>581577110</value></data>
+    <data name="object_type"><type name="object_type" package="sqlserver"/><value>22601</value><text>INDEX</text></data>
+    <data name="index_id"><type name="uint32" package="package0"/><value>3</value></data>
+    <data name="related_object_id"><type name="int32" package="package0"/><value>0</value></data>
+    <data name="ddl_phase"><type name="ddl_opcode" package="sqlserver"/><value>1</value><text>Commit</text></data>
+    <data name="transaction_id"><type name="int64" package="package0"/><value>9013</value></data>
+    <data name="object_name"><type name="unicode_string" package="package0"/><value>IX_AsPolicy_Status</value></data>
+    <data name="database_name"><type name="unicode_string" package="package0"/><value>warehouse</value></data>
+    <action name="database_name" package="sqlserver"><type name="unicode_string" package="package0"/><value>warehouse</value></action>
+    <action name="event_sequence" package="package0"><type name="uint64" package="package0"/><value>12</value></action>
+    <action name="session_id" package="sqlserver"><type name="uint16" package="package0"/><value>61</value></action>
+    <action name="sql_text" package="sqlserver"><type name="unicode_string" package="package0"/><value>ALTER INDEX IX_AsPolicy_Status ON dbo.AsPolicy REBUILD</value></action>
+  </event>
+  <event name="object_deleted" package="sqlserver" timestamp="2026-09-18T10:00:02.300Z">
+    <data name="database_id"><type name="uint32" package="package0"/><value>7</value></data>
+    <data name="object_id"><type name="int32" package="package0"/><value>1205579333</value></data>
+    <data name="object_type"><type name="object_type" package="sqlserver"/><value>8277</value><text>USRTAB</text></data>
+    <data name="ddl_phase"><type name="ddl_opcode" package="sqlserver"/><value>1</value><text>Commit</text></data>
+    <data name="object_name"><type name="unicode_string" package="package0"/><value>AsAudit</value></data>
+    <data name="database_name"><type name="unicode_string" package="package0"/><value>warehouse</value></data>
+    <action name="database_name" package="sqlserver"><type name="unicode_string" package="package0"/><value>warehouse</value></action>
+    <action name="event_sequence" package="package0"><type name="uint64" package="package0"/><value>13</value></action>
+    <action name="session_id" package="sqlserver"><type name="uint16" package="package0"/><value>61</value></action>
+    <action name="sql_text" package="sqlserver"><type name="unicode_string" package="package0"/><value>IF OBJECT_ID('dbo.AsAudit') IS NOT NULL DROP TABLE dbo.AsAudit</value></action>
+  </event>
+</RingBufferTarget>
