@@ -108,4 +108,11 @@ var _ = Describe("Shape", func() {
 		Entry(nil, deadlocks.ShapeKeyLookupVsWriter, "Key lookup vs writer"),
 		Entry(nil, deadlocks.ShapeOther, "Other"),
 	)
+
+	DescribeTable("styles a named shape to stand out and Other to recede",
+		func(shape deadlocks.Shape, style string) { Expect(shape.Style()).To(Equal(style)) },
+		Entry(nil, deadlocks.ShapeScanVsWriter, "text-orange-600 font-medium"),
+		Entry(nil, deadlocks.ShapeKeyLookupVsWriter, "text-orange-600 font-medium"),
+		Entry(nil, deadlocks.ShapeOther, "text-muted"),
+	)
 })
