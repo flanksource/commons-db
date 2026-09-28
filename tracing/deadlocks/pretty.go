@@ -15,8 +15,9 @@ import (
 // a burst of deadlocks apart.
 const timeLayout = "2006-01-02 15:04:05.000"
 
-func shapeStyle(shape Shape) string {
-	if shape == ShapeOther {
+// Style is how a shape is shown: a named shape stands out, Other recedes.
+func (s Shape) Style() string {
+	if s == ShapeOther {
 		return "text-muted"
 	}
 	return "text-orange-600 font-medium"
@@ -28,7 +29,7 @@ func (g Graph) Pretty() api.Text {
 	text := api.Text{}.
 		AddText(g.Timestamp.UTC().Format(timeLayout)+" UTC", "font-bold").
 		AddText(" · ", "text-muted").
-		AddText(g.Shape.Label(), shapeStyle(g.Shape)).
+		AddText(g.Shape.Label(), g.Shape.Style()).
 		AddText(" · ", "text-muted").
 		AddText(g.Database, "text-blue-500").
 		NewLine().
