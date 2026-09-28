@@ -1,5 +1,5 @@
 // Example: a sql_xevent trace span — SQL Server Extended Events polled
-// from a ring_buffer — stored in records.sqlite or valkey.
+// from a ring_buffer or event_file target — stored in records.sqlite or valkey.
 import React from 'react';
 import { SqlServer } from '@flanksource/icons/mi';
 import { HiCircleStack } from 'react-icons/hi2';
@@ -14,12 +14,12 @@ export function SQLXEventsCapture() {
     <CaptureStoreDiagram
       producer={{
         title: 'sql_xevent span', icon: HiCircleStack,
-        source: <><SqlServer className="w-4 h-4" /> XE session · ring_buffer</>,
+        source: <><SqlServer className="w-4 h-4" /> XE session · ring_buffer / event_file</>,
         steps: [
           { label: 'Start', detail: 'XE session + drain; empty append creates stream trace.ID' },
-          { label: 'drain every 1s', detail: 're-reads the whole ring; Drain dedupes on Event.Key into the cache EventStore' },
-          { label: 'Sample, per step', detail: 'EventsSince(lastKey) → FromXEvent → append' },
-          { label: 'Stop', detail: 'wait dispatch latency, final drain, append the rest' },
+          { label: 'poll every 1s', detail: 'Drain dedupes on Event.Key (event_sequence) and filters; each poll is queued as one append' },
+          { label: 'Checkpoint, per step', detail: 'waits for queued polls to commit, returns the EventsRef window' },
+          { label: 'Stop', detail: 'wait FinalDelay, final drain, commit, seal the stream, drop the session' },
         ],
       }}
       contract={{
@@ -46,7 +46,7 @@ export function SQLXEventsCapture() {
             [short, '2', 'sql_batch_completed', '0.8'],
             [short, '1840', 'rpc_completed', '231.0'],
           ]} />
-          <Facts title="Its own index" items={['one tx per Sample: rows, record_appends, record_streams', 'no UNIQUE index: every row is stored']} />
+          <Facts title="Its own index" items={['one tx per poll: rows, record_appends, record_streams', 'no UNIQUE index: every row is stored']} />
         </>
       }
       kv={
