@@ -1,0 +1,147 @@
+<deadlock>
+ <victim-list>
+  <victimProcess id="process2784a65e108"/>
+  <victimProcess id="process275d4c63848"/>
+  <victimProcess id="process27c135908c8"/>
+ </victim-list>
+ <process-list>
+  <process id="process2784a65e108" taskpriority="0" logused="0" waitresource="KEY: 8:72057595309522944 (fd6002a76cfd)" waittime="10957" ownerId="18235229107" transactionname="SELECT" lasttranstarted="2026-09-14T15:46:20.303" XDES="0x2799def3ac0" lockMode="S" schedulerid="8" kpid="4200" status="suspended" spid="211" sbid="0" ecid="0" priority="0" trancount="0" lastbatchstarted="2026-09-14T15:46:20.303" lastbatchcompleted="2026-09-14T15:46:20.300" lastattention="1900-01-01T00:00:00.300" clientapp="Microsoft JDBC Driver for SQL Server" hostname="app-0" hostpid="0" loginname="app" isolationlevel="read committed (2)" xactid="18235229107" currentdb="8" currentdbname="warehouse_uat" lockTimeout="4294967295" clientoption1="671088672" clientoption2="128056">
+   <executionStack>
+    <frame procname="adhoc" line="1" stmtstart="70" stmtend="23414" sqlhandle="0x02000000b91b281f109973881c0ed6bbd06da7abba13f9b00000000000000000000000000000000000000000">
+unknown    </frame>
+    <frame procname="unknown" line="1" sqlhandle="0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000">
+unknown    </frame>
+   </executionStack>
+   <inputbuf>
+(@P0 nvarchar(4000),@P1 date)      SELECT AsActivity.ActivityGUID, 
+              AsActivity.TransactionGUID, 
+              AsActivity.TypeCode typeCode, 
+              AsActivity.StatusCode, 
+              AsActivity.EffectiveDate effectiveDate, 
+              AsActivity.ActiveFromDate, 
+              AsActivity.ActiveToDate, 
+              AsActivity.ClientNumber, 
+              AsActivity.PolicyGuid, 
+              AsActivity.RelatedGuid, 
+              AsActivity.XMLData activityXmlData, 
+              AsActivity.ProcessingOrder processingOrder, 
+              AsActivity.ErrorStatusCode, 
+              AsActivity.SuspenseStatusCode, 
+              AsActivity.ActivityGMT, 
+              AsActivity.EntryGMT, 
+              AsActivity.CreationGMT creationGMT, 
+              AsActivity.OriginalActivityGUID 
+         FROM AsActivity 
+         JOIN AsClientActivity ON AsActivity.ActivityGuid = AsClientActivity.ActivityGuid 
+         AND AsClientActivity.ClientGuid = @P0 
+       WHERE AsActivity.StatusCode IN    </inputbuf>
+  </process>
+  <process id="process275d4c63848" taskpriority="0" logused="0" waitresource="KEY: 8:72057595309522944 (fd6002a76cfd)" waittime="10953" ownerId="18235173197" transactionname="implicit_transaction" lasttranstarted="2026-09-14T15:46:01.080" XDES="0x271c70bc420" lockMode="S" schedulerid="5" kpid="9084" status="suspended" spid="212" sbid="0" ecid="0" priority="0" trancount="1" lastbatchstarted="2026-09-14T15:46:20.273" lastbatchcompleted="2026-09-14T15:46:20.263" lastattention="1900-01-01T00:00:00.263" clientapp="Microsoft JDBC Driver for SQL Server" hostname="app-0" hostpid="0" loginname="app" isolationlevel="read committed (2)" xactid="18235173197" currentdb="8" currentdbname="warehouse_uat" lockTimeout="4294967295" clientoption1="671088672" clientoption2="128058">
+   <executionStack>
+    <frame procname="adhoc" line="1" stmtstart="70" stmtend="25208" sqlhandle="0x02000000411ff933aec1ef7116d3d8ba7abd70fccaff3f670000000000000000000000000000000000000000">
+unknown    </frame>
+    <frame procname="unknown" line="1" sqlhandle="0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000">
+unknown    </frame>
+   </executionStack>
+   <inputbuf>
+(@P0 nvarchar(4000),@P1 date)      SELECT AsActivity.ActivityGUID, 
+              AsActivity.TransactionGUID, 
+              AsActivity.TypeCode typeCode, 
+              AsActivity.StatusCode, 
+              AsActivity.EffectiveDate effectiveDate, 
+              AsActivity.ActiveFromDate, 
+              AsActivity.ActiveToDate, 
+              AsActivity.ClientNumber, 
+              AsActivity.PolicyGuid, 
+              AsActivity.RelatedGuid, 
+              AsActivity.XMLData activityXmlData, 
+              AsActivity.ProcessingOrder processingOrder, 
+              AsActivity.ErrorStatusCode, 
+              AsActivity.SuspenseStatusCode, 
+              AsActivity.ActivityGMT, 
+              AsActivity.EntryGMT, 
+              AsActivity.CreationGMT creationGMT, 
+              AsActivity.OriginalActivityGUID 
+         FROM AsActivity 
+         JOIN AsClientActivity ON AsActivity.ActivityGuid = AsClientActivity.ActivityGuid 
+         AND AsClientActivity.ClientGuid = @P0 
+       WHERE AsActivity.StatusCode IN    </inputbuf>
+  </process>
+  <process id="process27c135908c8" taskpriority="0" logused="0" waitresource="KEY: 8:72057595309522944 (fd6002a76cfd)" waittime="10965" ownerId="18235201133" transactionname="implicit_transaction" lasttranstarted="2026-09-14T15:46:09.930" XDES="0x27bf9e70420" lockMode="S" schedulerid="2" kpid="8256" status="suspended" spid="199" sbid="0" ecid="0" priority="0" trancount="1" lastbatchstarted="2026-09-14T15:46:20.170" lastbatchcompleted="2026-09-14T15:46:20.163" lastattention="1900-01-01T00:00:00.163" clientapp="Microsoft JDBC Driver for SQL Server" hostname="app-0" hostpid="0" loginname="app" isolationlevel="read committed (2)" xactid="18235201133" currentdb="8" currentdbname="warehouse_uat" lockTimeout="4294967295" clientoption1="671088672" clientoption2="128058">
+   <executionStack>
+    <frame procname="adhoc" line="1" stmtstart="70" stmtend="25520" sqlhandle="0x02000000073b8f161f356c5ff2499ce8ec3ea218e353ff7e0000000000000000000000000000000000000000">
+unknown    </frame>
+    <frame procname="unknown" line="1" sqlhandle="0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000">
+unknown    </frame>
+   </executionStack>
+   <inputbuf>
+(@P0 nvarchar(4000),@P1 date)      SELECT AsActivity.ActivityGUID, 
+              AsActivity.TransactionGUID, 
+              AsActivity.TypeCode typeCode, 
+              AsActivity.StatusCode, 
+              AsActivity.EffectiveDate effectiveDate, 
+              AsActivity.ActiveFromDate, 
+              AsActivity.ActiveToDate, 
+              AsActivity.ClientNumber, 
+              AsActivity.PolicyGuid, 
+              AsActivity.RelatedGuid, 
+              AsActivity.XMLData activityXmlData, 
+              AsActivity.ProcessingOrder processingOrder, 
+              AsActivity.ErrorStatusCode, 
+              AsActivity.SuspenseStatusCode, 
+              AsActivity.ActivityGMT, 
+              AsActivity.EntryGMT, 
+              AsActivity.CreationGMT creationGMT, 
+              AsActivity.OriginalActivityGUID 
+         FROM AsActivity 
+         JOIN AsClientActivity ON AsActivity.ActivityGuid = AsClientActivity.ActivityGuid 
+         AND AsClientActivity.ClientGuid = @P0 
+       WHERE AsActivity.StatusCode IN    </inputbuf>
+  </process>
+  <process id="process27c0b7528c8" taskpriority="0" logused="3828" waitresource="KEY: 8:72057595309719552 (bdc70c38b08d)" waittime="10981" ownerId="18235229260" transactionname="implicit_transaction" lasttranstarted="2026-09-14T15:46:20.377" XDES="0x27c0f178420" lockMode="X" schedulerid="6" kpid="3572" status="suspended" spid="210" sbid="0" ecid="0" priority="0" trancount="2" lastbatchstarted="2026-09-14T15:46:20.367" lastbatchcompleted="2026-09-14T15:46:20.367" lastattention="1900-01-01T00:00:00.367" clientapp="Microsoft JDBC Driver for SQL Server" hostname="app-0" hostpid="0" loginname="app" isolationlevel="read committed (2)" xactid="18235229260" currentdb="8" currentdbname="warehouse_uat" lockTimeout="4294967295" clientoption1="671088672" clientoption2="128058">
+   <executionStack>
+    <frame procname="adhoc" line="1" stmtstart="342" stmtend="702" sqlhandle="0x0200000029b796270f41bcfffe57737cdfd60af55cd966c90000000000000000000000000000000000000000">
+unknown    </frame>
+    <frame procname="unknown" line="1" sqlhandle="0x0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000">
+unknown    </frame>
+   </executionStack>
+   <inputbuf>
+(@P0 nvarchar(4000),@P1 datetime2,@P2 datetime2,@P3 nvarchar(4000),@P4 nvarchar(4000),@P5 nvarchar(4000),@P6 nvarchar(4000),@P7 datetime2,@P8 nvarchar(4000),@P9 datetime2)UPDATE ASACTIVITY SET StatusCode = @P0  , ActiveFromDate = @P1  , ActivityGMT = @P2  , XMLData = @P3  , ClientNumber = @P4  WHERE ACTIVITYGUID=&apos;92236A53-0953-4289-9A93-9B413BA78BE7&apos;;UPDATE ASCHANGEREQUEST SET StatusCode = @P5  WHERE ChangeRequestGUID = &apos;A2DE41BE-FE0F-421C-9CEF-CE99B0E0C7E8&apos;;UPDATE AsClientRelationship SET RecordStatusCode = @P6  WHERE ClientRelationshipGUID = &apos;6A84F895-DF6D-4207-89AA-4BB9D29A5863&apos;;UPDATE AsClient SET UpdatedGMT = @P7 WHERE ClientGUID = @P8 AND UpdatedGMT &lt; @P9 ;                                                                                   </inputbuf>
+  </process>
+ </process-list>
+ <resource-list>
+  <keylock hobtid="72057595309522944" dbid="8" objectname="warehouse_uat.dbo.AsActivity" indexname="CX_ASACTIVITY_EFFDATE_GUID" id="lock2785d2bdf00" mode="X" associatedObjectId="72057595309522944">
+   <owner-list>
+    <owner id="process27c135908c8" mode="S" requestType="wait"/>
+   </owner-list>
+   <waiter-list>
+    <waiter id="process2784a65e108" mode="S" requestType="wait"/>
+   </waiter-list>
+  </keylock>
+  <keylock hobtid="72057595309522944" dbid="8" objectname="warehouse_uat.dbo.AsActivity" indexname="CX_ASACTIVITY_EFFDATE_GUID" id="lock2785d2bdf00" mode="X" associatedObjectId="72057595309522944">
+   <owner-list>
+    <owner id="process27c135908c8" mode="S" requestType="wait"/>
+   </owner-list>
+   <waiter-list>
+    <waiter id="process275d4c63848" mode="S" requestType="wait"/>
+   </waiter-list>
+  </keylock>
+  <keylock hobtid="72057595309522944" dbid="8" objectname="warehouse_uat.dbo.AsActivity" indexname="CX_ASACTIVITY_EFFDATE_GUID" id="lock2785d2bdf00" mode="X" associatedObjectId="72057595309522944">
+   <owner-list>
+    <owner id="process27c0b7528c8" mode="X"/>
+   </owner-list>
+   <waiter-list>
+    <waiter id="process27c135908c8" mode="S" requestType="wait"/>
+   </waiter-list>
+  </keylock>
+  <keylock hobtid="72057595309719552" dbid="8" objectname="warehouse_uat.dbo.AsActivity" indexname="IX_2_AsActivity" id="lock26f6b5c7400" mode="U" associatedObjectId="72057595309719552">
+   <owner-list>
+    <owner id="process27c135908c8" mode="S"/>
+    <owner id="process275d4c63848" mode="S"/>
+   </owner-list>
+   <waiter-list>
+    <waiter id="process27c0b7528c8" mode="X" requestType="convert"/>
+   </waiter-list>
+  </keylock>
+ </resource-list>
+</deadlock>
