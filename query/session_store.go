@@ -37,11 +37,11 @@ type EventSink interface {
 	Append(ctx stdcontext.Context, e Event) error
 
 	// CloseSession reports that no further events will be appended for the
-	// session,
-	// so a sink that buffers must make what it holds durable before returning.
+	// session unless it is resumed, so a sink that buffers must make what it
+	// holds durable before returning.
 	//
-	// It is called once per persisted session, when the session becomes
-	// terminal and BEFORE its final status is written, so a reader that finds
+	// It is called each time a persisted session becomes terminal — again after
+	// every resume — and BEFORE its final status is written, so a reader that finds
 	// the record finished finds every event it claims. A session whose record
 	// was never begun is never closed — there is nothing to be consistent
 	// with. An error fails the session, for the same reason Append's does.
