@@ -24,7 +24,7 @@ To pick a declaration, ask two questions about the source:
 
 ### Capture → recordstore
 
-<div class="facet-diagram not-content" role="img" aria-label="sql_xevent span: extended events polled from a ring buffer, appended to an unkeyed stream per trace span in records.sqlite or kv">
+<div class="facet-diagram not-content" role="img" aria-label="sql_xevent span: extended events polled from a ring buffer or event file, appended to an unkeyed stream per trace span in records.sqlite or kv">
   <SQLXEventsCapture client:load />
 </div>
 
@@ -36,7 +36,7 @@ To pick a declaration, ask two questions about the source:
   <SQLXEventsComparison client:load />
 </div>
 
-A caveat: `EventStore.Since` returns the whole buffer when its cursor key is not found, and an unkeyed stream stores that re-append twice in either backend. Carrying `xetrace.Event.Sequence` on the row as `KeyColumn` would let both backends skip it.
+The stream is unkeyed because nothing reaches it twice: `xetrace.Drain` dedupes every poll on `Event.Key`, which is the session's `event_sequence`, before the writer appends it. A ring-buffer re-read, or an event-file read that overlaps the previous one, is dropped there, and every appended row is a new event.
 
 ## SQL Server deadlocks
 
