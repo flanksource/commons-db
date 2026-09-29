@@ -202,6 +202,18 @@ type CreateOptions struct {
 	Filter EventFilter
 }
 
+// DrainFilter is Filter as Drain applies it. A deadlock report is added to the
+// session without a predicate, and system_health's events never pass one of
+// ours, so for a capture that reads either the filter is scoped to Databases,
+// unless it names databases of its own.
+func (o CreateOptions) DrainFilter() EventFilter {
+	filter := o.Filter
+	if len(filter.Databases) == 0 && (o.Session == SystemHealthSession || slices.Contains(o.Events, EventXMLDeadlockReport)) {
+		filter.Databases = slices.Clone(o.Databases)
+	}
+	return filter
+}
+
 // Session represents a live XE session this process reads: one it created, or
 // the built-in system_health session it attached to.
 type Session struct {
@@ -323,13 +335,10 @@ func Create(ctx context.Context, pool *sql.DB, opts CreateOptions) (_ *Session, 
 	return session, nil
 }
 
-// Databases are the database patterns this session actually scoped to: the
-// ones the caller named, or the connection's own when they named none.
-//
-// Create resolves that for itself, so without this a caller wanting to report
-// or render the scope would have to ask the server the same question a second
-// time and hope it got the same answer.
-func (s *Session) Databases() []string { return s.opts.Databases }
+// DrainFilter is the filter to pass as DrainOptions.Filter: the session's
+// CreateOptions.Filter, scoped to the databases Create resolved for the events
+// the session predicate cannot scope.
+func (s *Session) DrainFilter() EventFilter { return s.opts.DrainFilter() }
 
 // dropTimeout bounds Session.Drop. Named (and exposed via DropTimeout) because
 // a caller waiting for a drain to finish has to budget for the final poll AND
