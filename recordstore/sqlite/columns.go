@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"ariga.io/atlas/sql/schema"
+	"github.com/flanksource/commons/logger"
 
 	"github.com/flanksource/commons-db/db/sqlitetable"
 	sqlitemigrate "github.com/flanksource/commons-db/migrate/sqlite"
@@ -35,6 +37,10 @@ type storedCatalog struct {
 	columns    []storedColumn
 	key        string
 	onConflict recordstore.OnConflict
+
+	// indexes are the table's indexes, which record_kinds keeps beside the
+	// column entries.
+	indexes []storedIndex
 }
 
 // replaceEntry is the entry recording that a kind replaces stored rows. A kind
@@ -65,12 +71,17 @@ func (c storedColumn) def() query.ColumnDef {
 	return query.ColumnDef{Name: c.declared, Type: query.ColumnType(c.storage[strings.LastIndex(c.storage, ":")+1:])}
 }
 
-// readCatalog reads a kind's catalog entry against its table, and describes,
-// as a mismatch, an entry that does not name the table's columns in order.
-func readCatalog(ctx context.Context, tx *sql.Tx, table, stored string) (storedCatalog, string, error) {
+// readCatalog reads a kind's catalog entry — its columns and its indexes —
+// against its table, and describes, as a mismatch, an entry that does not name
+// the table's columns in order.
+func readCatalog(ctx context.Context, tx *sql.Tx, table, stored, storedIndexes string) (storedCatalog, string, error) {
 	var parts []string
 	if err := json.Unmarshal([]byte(stored), &parts); err != nil {
 		return storedCatalog{}, "", fmt.Errorf("decode catalog columns: %w", err)
+	}
+	indexes, err := decodeIndexes(storedIndexes)
+	if err != nil {
+		return storedCatalog{}, "", err
 	}
 	physical, err := sqlitetable.PhysicalColumns(ctx, tx, table)
 	if err != nil {
@@ -80,7 +91,7 @@ func readCatalog(ctx context.Context, tx *sql.Tx, table, stored string) (storedC
 	if len(parts) < len(physical) {
 		return storedCatalog{}, mismatch, nil
 	}
-	var catalog storedCatalog
+	catalog := storedCatalog{indexes: indexes}
 	for _, part := range parts[len(physical):] {
 		switch {
 		case strings.HasPrefix(part, "key:") && catalog.key == "" && catalog.onConflict == recordstore.OnConflictSkip:
@@ -106,9 +117,9 @@ func readCatalog(ctx context.Context, tx *sql.Tx, table, stored string) (storedC
 }
 
 // catalogOf is the catalog of a table just created, whose physical columns are
-// its declared ones in order.
+// its declared ones in order, and whose indexes are the ones its kind asks for.
 func catalogOf(table kindTable) storedCatalog {
-	catalog := storedCatalog{key: table.schema.Options.Key, onConflict: table.schema.Options.OnConflict}
+	catalog := storedCatalog{key: table.schema.Options.Key, onConflict: table.schema.Options.OnConflict, indexes: kindIndexes(table.schema)}
 	for index, column := range table.Columns {
 		catalog.columns = append(catalog.columns, storedColumn{declared: column.Name, physical: table.StoredAs[index], storage: columnStorage(column)})
 	}
@@ -158,12 +169,13 @@ func (table *kindTable) adopt(catalog storedCatalog) ([]query.ColumnDef, string)
 	return added, ""
 }
 
-// addColumns adds to table the declared columns it lacks, under physical names
-// derived around every column the table already has. migrate/sqlite reconciles
-// them against the table the whole catalog declares, so a table that has
-// drifted from its catalog in any other way is refused, not patched. The
-// entries are appended to the kind's catalog.
-func addColumns(ctx context.Context, tx *sql.Tx, kind string, table *kindTable, catalog storedCatalog, added []query.ColumnDef) error {
+// widen adds to table the declared columns it lacks, under physical names
+// derived around every column the table already has, and the indexes its kind
+// asks for that it lacks. migrate/sqlite reconciles them against the table
+// the whole catalog declares, so a table that has drifted from its catalog in
+// any other way is refused, not patched. Both are recorded in the kind's
+// catalog.
+func widen(ctx context.Context, tx *sql.Tx, kind string, table *kindTable, catalog storedCatalog, added []query.ColumnDef, indexes []storedIndex) error {
 	taken := make([]string, len(catalog.columns))
 	for index, column := range catalog.columns {
 		taken[index] = column.physical
@@ -180,26 +192,46 @@ func addColumns(ctx context.Context, tx *sql.Tx, kind string, table *kindTable, 
 		catalog.columns = append(catalog.columns, storedColumn{declared: column.Name, physical: physical[index], storage: columnStorage(column)})
 		table.StoredAs[slices.IndexFunc(table.Columns, func(declared query.ColumnDef) bool { return declared.Name == column.Name })] = physical[index]
 	}
-	declared, err := catalog.declare(table.Name)
-	if err != nil {
-		return fmt.Errorf("kind %q: %w", kind, err)
-	}
-	if err := sqlitemigrate.ReconcileTables(ctx, tx, sqlitemigrate.ReconcileOptions{}, declared); err != nil {
-		return fmt.Errorf("kind %q: %w", kind, err)
+	catalog.indexes = indexes
+	if err := catalog.reconcile(ctx, tx, kind, table.Name); err != nil {
+		return err
 	}
 	entries, err := catalog.encode()
 	if err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE record_kinds SET columns = ? WHERE kind = ?`, entries, kind); err != nil {
-		return fmt.Errorf("kind %q: record added columns: %w", kind, err)
+	recorded, err := encodeIndexes(catalog.indexes)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE record_kinds SET columns = ?, indexes = ? WHERE kind = ?`, entries, recorded, kind); err != nil {
+		return fmt.Errorf("kind %q: record added columns and indexes: %w", kind, err)
+	}
+	return nil
+}
+
+// reconcile brings the table name up to the catalog: its recorded columns,
+// its key and every recorded index. Building an index blocks the writer for
+// as long as it takes, so the time is logged.
+func (c storedCatalog) reconcile(ctx context.Context, tx *sql.Tx, kind, name string) error {
+	declared, err := c.declare(name)
+	if err != nil {
+		return fmt.Errorf("kind %q: %w", kind, err)
+	}
+	started := time.Now()
+	if err := sqlitemigrate.ReconcileTables(ctx, tx, sqlitemigrate.ReconcileOptions{}, declared); err != nil {
+		return fmt.Errorf("kind %q: %w", kind, err)
+	}
+	if len(c.indexes) > 0 {
+		logger.V(1).Infof("sqlite record store: kind %q table and %d indexes reconciled in %s", kind, len(c.indexes), time.Since(started))
 	}
 	return nil
 }
 
 // declare is the kind table the catalog describes, as createKindTable creates
-// it: every recorded column, the store's primary key, and a keyed kind's
-// unique index.
+// it: every recorded column, the store's primary key, every recorded index —
+// which migrate/sqlite would otherwise try to drop — and a keyed kind's unique
+// index.
 func (c storedCatalog) declare(name string) (*schema.Table, error) {
 	table := sqlitetable.Table{Name: name, PrimaryKey: []string{streamColumn, seqColumn}}
 	for _, column := range c.columns {
@@ -207,8 +239,33 @@ func (c storedCatalog) declare(name string) (*schema.Table, error) {
 		table.StoredAs = append(table.StoredAs, column.physical)
 	}
 	declared, err := table.Declare()
-	if err != nil || c.key == "" {
-		return declared, err
+	if err != nil {
+		return nil, err
+	}
+	at := func(column string) (int, bool) {
+		index := slices.IndexFunc(c.columns, func(stored storedColumn) bool { return stored.declared == column })
+		return index, index >= 0
+	}
+	for _, index := range c.indexes {
+		indexName, err := index.name(name, func(column string) (string, bool) {
+			position, ok := at(column)
+			if !ok {
+				return "", false
+			}
+			return c.columns[position].physical, true
+		})
+		if err != nil {
+			return nil, err
+		}
+		built := schema.NewIndex(indexName)
+		for _, column := range index.Columns {
+			position, _ := at(column.Name)
+			built.AddParts(schema.NewColumnPart(declared.Columns[position]).SetDesc(column.Desc))
+		}
+		declared.AddIndexes(built)
+	}
+	if c.key == "" {
+		return declared, nil
 	}
 	var parts []*schema.Column
 	for _, key := range []string{streamColumn, c.key} {

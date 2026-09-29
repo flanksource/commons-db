@@ -251,6 +251,7 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		columns: columns,
 		options: recordstore.KindOptions{
 			Key: resultType.KeyColumn, Retention: resultType.Retention, OnConflict: resultType.OnConflict,
+			TimeColumn: resultType.TimeColumn,
 		},
 		timeColumn:    resultType.TimeColumn,
 		defaultFrom:   resultType.DefaultFrom,

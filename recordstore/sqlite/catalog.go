@@ -17,8 +17,8 @@ import (
 // possibly more than any one build declares — where version 4 listed exactly
 // the columns one build declared, and so refused a table another build had
 // added a column to. Version 6 streams may skip seqs, which a build reading
-// version 5 would take for rows it lost, and it records every batch it applied
-// in record_spool_batches.
+// version 5 would take for rows it lost; it records every batch it applied in
+// record_spool_batches, and every index of a kind table in record_kinds.
 const catalogVersion = 6
 
 func (b *Backend) createCatalog(ctx context.Context) error {
@@ -36,7 +36,7 @@ var catalogStatements = []string{
 		low_seq INTEGER NOT NULL, high_seq INTEGER NOT NULL,
 		updated_at TEXT NOT NULL, expires_at TEXT, capped INTEGER NOT NULL DEFAULT 0, sealed INTEGER NOT NULL DEFAULT 0)`,
 	`CREATE INDEX record_streams_expires_at ON record_streams (expires_at)`,
-	`CREATE TABLE record_kinds (kind TEXT PRIMARY KEY, table_name TEXT NOT NULL, columns TEXT NOT NULL)`,
+	`CREATE TABLE record_kinds (kind TEXT PRIMARY KEY, table_name TEXT NOT NULL, columns TEXT NOT NULL, indexes TEXT NOT NULL DEFAULT '[]')`,
 	// record_appends is when each write stored its rows, by the seq of the
 	// last row it stored: what Trim finds the rows appended before an
 	// instant through.

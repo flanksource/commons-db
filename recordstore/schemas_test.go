@@ -12,6 +12,8 @@ var _ = Describe("Schemas", func() {
 	columns := []query.ColumnDef{
 		{Name: "id", Type: query.ColumnTypeString},
 		{Name: "count", Type: query.ColumnTypeNumber},
+		{Name: "at", Type: query.ColumnTypeDateTime},
+		{Name: "detail", Type: query.ColumnTypeJSON},
 	}
 
 	It("resolves a kind to the columns and options it was declared with", func() {
@@ -40,7 +42,18 @@ var _ = Describe("Schemas", func() {
 		Entry("an unknown conflict policy", "event", recordstore.KindOptions{Key: "id", OnConflict: recordstore.OnConflict(7)}, "on conflict(7)"),
 		Entry("replacing stored rows with no key to find them by", "event", recordstore.KindOptions{OnConflict: recordstore.OnConflictReplace}, "replaces stored rows, which needs a key"),
 		Entry("an invalid kind", "bad kind", recordstore.KindOptions{}, "kind"),
+		Entry("a time column that is not a column", "event", recordstore.KindOptions{TimeColumn: "missing"}, `time column "missing" is not one of its columns`),
+		Entry("a time column that is not a datetime", "event", recordstore.KindOptions{TimeColumn: "count"}, "not a datetime"),
+		Entry("an index of no columns", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{}}}, "index 0 names no columns"),
+		Entry("an index of a column it does not declare", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{Columns: []string{"missing"}}}}, `index 0 column "missing" is not one of its columns`),
+		Entry("an index naming a column twice", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{Columns: []string{"id", "id"}}}}, `index 0 names column "id" twice`),
+		Entry("an index of a structured column", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{Columns: []string{"detail"}}}}, `index 0 column "detail" is a json column`),
 	)
+
+	It("accepts a time column and indexes of the kind's columns", func() {
+		options := recordstore.KindOptions{TimeColumn: "at", Indexes: []recordstore.IndexDef{{Columns: []string{"id", "count"}}}}
+		Expect(recordstore.NewSchemas().Register("event", columns, options)).To(Succeed())
+	})
 
 	It("refuses an unknown kind", func() {
 		_, err := recordstore.NewSchemas().Kind("event")

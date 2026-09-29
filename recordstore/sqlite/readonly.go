@@ -5,7 +5,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"time"
 
@@ -96,22 +95,19 @@ func (b *Backend) adoptReadOnly(ctx context.Context, kind string, table kindTabl
 }
 
 // readTable adopts table from the catalog without writing, reporting it
-// missing when the file has no table for the kind or lacks a declared column.
+// missing when the file has no table for the kind, or lacks a declared column
+// or an index the kind asks for.
 func (b *Backend) readTable(ctx context.Context, kind string, table kindTable) (kindTable, bool, error) {
 	tx, err := b.database.Reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return kindTable{}, false, fmt.Errorf("kind %q: begin read: %w", kind, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var stored string
-	err = tx.QueryRowContext(ctx, `SELECT columns FROM record_kinds WHERE kind = ?`, kind).Scan(&stored)
-	if errors.Is(err, sql.ErrNoRows) {
-		return kindTable{}, true, nil
+	stored, indexes, found, err := kindEntry(ctx, tx, kind)
+	if err != nil || !found {
+		return kindTable{}, !found && err == nil, err
 	}
-	if err != nil {
-		return kindTable{}, false, fmt.Errorf("kind %q: read catalog: %w", kind, err)
-	}
-	catalog, mismatch, err := readCatalog(ctx, tx, table.Name, stored)
+	catalog, mismatch, err := readCatalog(ctx, tx, table.Name, stored, indexes)
 	if err != nil {
 		return kindTable{}, false, fmt.Errorf("kind %q: %w", kind, err)
 	}
@@ -126,7 +122,7 @@ func (b *Backend) readTable(ctx context.Context, kind string, table kindTable) (
 	if mismatch != "" {
 		return kindTable{}, false, fmt.Errorf("kind %q was stored in %s with %s: %w", kind, b.Path(), mismatch, recordstore.ErrSchemaConflict)
 	}
-	if len(added) > 0 {
+	if _, indexed := withIndexes(catalog.indexes, kindIndexes(table.schema)); len(added) > 0 || indexed {
 		return kindTable{}, true, nil
 	}
 	adopted, err := withKey(table)

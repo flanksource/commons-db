@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -76,6 +77,21 @@ type KindOptions struct {
 	// OnConflict says what an append of a key the stream holds does. Replace
 	// needs a Key.
 	OnConflict OnConflict
+
+	// TimeColumn names the datetime column a stream's rows are read newest
+	// first by. A backend that indexes rows indexes (stream, time desc, seq),
+	// the order every profile of the kind pages in.
+	TimeColumn string
+
+	// Indexes are the column lists a backend that indexes rows indexes, each
+	// after the stream id, since every read is of one stream or a few. A
+	// backend keeps every index a kind ever declared.
+	Indexes []IndexDef
+}
+
+// IndexDef is one index of a kind's rows: its declared columns, in order.
+type IndexDef struct {
+	Columns []string
 }
 
 // KindSchema is everything a kind declares: its columns and how its streams
@@ -154,6 +170,9 @@ func (k KindSchema) Validate() error {
 	if k.Options.OnConflict != OnConflictSkip && k.Options.OnConflict != OnConflictReplace {
 		return fmt.Errorf("kind %q declares unknown %s", k.Kind, k.Options.OnConflict)
 	}
+	if err := k.validateIndexing(); err != nil {
+		return err
+	}
 	if k.Options.Key == "" {
 		if k.Options.OnConflict == OnConflictReplace {
 			return fmt.Errorf("kind %q replaces stored rows, which needs a key", k.Kind)
@@ -166,6 +185,45 @@ func (k KindSchema) Validate() error {
 	}
 	if k.Columns[index].Type != query.ColumnTypeString {
 		return fmt.Errorf("kind %q key %q is a %s column, not a string", k.Kind, k.Options.Key, k.Columns[index].Type)
+	}
+	return nil
+}
+
+// validateIndexing refuses a time column or an index a backend could not
+// build over the kind's columns.
+func (k KindSchema) validateIndexing() error {
+	column := func(name string) (query.ColumnDef, bool) {
+		index := slices.IndexFunc(k.Columns, func(column query.ColumnDef) bool { return column.Name == name })
+		if index < 0 {
+			return query.ColumnDef{}, false
+		}
+		return k.Columns[index], true
+	}
+	if k.Options.TimeColumn != "" {
+		declared, ok := column(k.Options.TimeColumn)
+		if !ok {
+			return fmt.Errorf("kind %q time column %q is not one of its columns", k.Kind, k.Options.TimeColumn)
+		}
+		if declared.Type != query.ColumnTypeDateTime {
+			return fmt.Errorf("kind %q time column %q is a %s column, not a datetime", k.Kind, k.Options.TimeColumn, declared.Type)
+		}
+	}
+	for at, index := range k.Options.Indexes {
+		if len(index.Columns) == 0 {
+			return fmt.Errorf("kind %q index %d names no columns", k.Kind, at)
+		}
+		for position, name := range index.Columns {
+			declared, ok := column(name)
+			if !ok {
+				return fmt.Errorf("kind %q index %d column %q is not one of its columns", k.Kind, at, name)
+			}
+			if sqlitetable.IsStructured(declared.Type) {
+				return fmt.Errorf("kind %q index %d column %q is a %s column, which has no order to index", k.Kind, at, name, declared.Type)
+			}
+			if slices.Contains(index.Columns[:position], name) {
+				return fmt.Errorf("kind %q index %d names column %q twice", k.Kind, at, name)
+			}
+		}
 	}
 	return nil
 }

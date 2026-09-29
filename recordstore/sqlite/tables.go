@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"slices"
 
@@ -140,15 +139,14 @@ func (b *Backend) reconcileTableLocked(ctx context.Context, writer *sql.DB, kind
 		return kindTable{}, fmt.Errorf("kind %q: begin: %w", kind, err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	var stored string
-	err = tx.QueryRowContext(ctx, `SELECT columns FROM record_kinds WHERE kind = ?`, kind).Scan(&stored)
+	stored, indexes, found, err := kindEntry(ctx, tx, kind)
 	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		table, err = createKindTable(ctx, tx, kind, table)
 	case err != nil:
-		return kindTable{}, fmt.Errorf("kind %q: read catalog: %w", kind, err)
+		return kindTable{}, err
+	case !found:
+		table, err = createKindTable(ctx, tx, kind, table)
 	default:
-		table, err = b.adoptStoredTable(ctx, tx, kind, table, stored)
+		table, err = b.adoptStoredTable(ctx, tx, kind, table, stored, indexes)
 	}
 	if err != nil {
 		return kindTable{}, err
@@ -163,12 +161,14 @@ func (b *Backend) reconcileTableLocked(ctx context.Context, writer *sql.DB, kind
 // once the entry names the columns the table actually has. A column the kind
 // now declares that the table lacks is added in place, in a durable file and a
 // derived index alike; a column it no longer declares stays, with its rows.
+// So does an index: one the kind asks for is built, and one it no longer asks
+// for is kept.
 // Any other difference — a column's storage, the key, a table that has drifted
 // from its catalog — would make the rows already written mean something else:
 // a derived index rebuilds the table, and a durable file refuses it, because
 // its rows exist nowhere else.
-func (b *Backend) adoptStoredTable(ctx context.Context, tx *sql.Tx, kind string, table kindTable, stored string) (kindTable, error) {
-	catalog, mismatch, err := readCatalog(ctx, tx, table.Name, stored)
+func (b *Backend) adoptStoredTable(ctx context.Context, tx *sql.Tx, kind string, table kindTable, stored, storedIndexes string) (kindTable, error) {
+	catalog, mismatch, err := readCatalog(ctx, tx, table.Name, stored, storedIndexes)
 	if err != nil {
 		return kindTable{}, fmt.Errorf("kind %q: %w", kind, err)
 	}
@@ -176,18 +176,19 @@ func (b *Backend) adoptStoredTable(ctx context.Context, tx *sql.Tx, kind string,
 	if mismatch == "" {
 		added, mismatch = table.adopt(catalog)
 	}
+	indexes, indexed := withIndexes(catalog.indexes, kindIndexes(table.schema))
 	switch {
-	case mismatch == "" && len(added) == 0:
+	case mismatch == "" && len(added) == 0 && !indexed:
 		return withKey(table)
 	case mismatch == "":
-		if err := addColumns(ctx, tx, kind, &table, catalog, added); err != nil {
+		if err := widen(ctx, tx, kind, &table, catalog, added, indexes); err != nil {
 			return kindTable{}, err
 		}
 		names := make([]string, len(added))
 		for index, column := range added {
 			names[index] = column.Name
 		}
-		logger.Infof("sqlite record store %s: kind %q gained columns %q", b.Path(), kind, names)
+		logger.Infof("sqlite record store %s: kind %q gained columns %q and now has %d indexes", b.Path(), kind, names, len(indexes))
 		return withKey(table)
 	case !b.derived:
 		return kindTable{}, fmt.Errorf("kind %q was stored in %s with %s; only added columns migrate, and its rows exist nowhere else, so remove the file or open it with the build that wrote it: %w", kind, b.Path(), mismatch, recordstore.ErrSchemaConflict)
@@ -232,12 +233,22 @@ func createKindTable(ctx context.Context, tx *sql.Tx, kind string, table kindTab
 			return kindTable{}, fmt.Errorf("kind %q: index key: %w", kind, err)
 		}
 	}
-	entries, err := catalogOf(table).encode()
+	catalog := catalogOf(table)
+	if len(catalog.indexes) > 0 {
+		if err := catalog.reconcile(ctx, tx, kind, table.Name); err != nil {
+			return kindTable{}, err
+		}
+	}
+	entries, err := catalog.encode()
 	if err != nil {
 		return kindTable{}, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO record_kinds (kind, table_name, columns) VALUES (?, ?, ?)`,
-		kind, table.Name, entries); err != nil {
+	indexes, err := encodeIndexes(catalog.indexes)
+	if err != nil {
+		return kindTable{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO record_kinds (kind, table_name, columns, indexes) VALUES (?, ?, ?, ?)`,
+		kind, table.Name, entries, indexes); err != nil {
 		return kindTable{}, fmt.Errorf("kind %q: record catalog: %w", kind, err)
 	}
 	return table, nil
