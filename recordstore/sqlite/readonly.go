@@ -133,13 +133,11 @@ func (b *Backend) readTable(ctx context.Context, kind string, table kindTable) (
 	return adopted, false, err
 }
 
-// WatchChanges calls changed whenever the process writing the file commits,
-// until ctx ends. A backend that writes the file itself has nothing to watch
-// and returns at once.
+// WatchChanges calls changed whenever a commit to the file lands, until ctx
+// ends: the writer's, when this backend reads, and its own once it writes —
+// which covers the batches it ingests on other processes' behalf, not only
+// the appends a Notifier sees made through it.
 func (b *Backend) WatchChanges(ctx context.Context, changed func()) error {
-	if !b.readOnly.Load() {
-		return nil
-	}
 	return b.database.WatchDataVersion(ctx, changePoll, changed)
 }
 

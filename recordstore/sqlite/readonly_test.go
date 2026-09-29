@@ -213,6 +213,27 @@ var _ = Describe("sqlite backend opened read-only", func() {
 		Eventually(changes.Load, 2*time.Second).Should(BeNumerically(">=", 1))
 	})
 
+	It("reports its own commits as changes once it writes the file", func() {
+		watchCtx, cancel := context.WithCancel(ctx)
+		DeferCleanup(cancel)
+		var changes atomic.Int32
+		go func() {
+			defer GinkgoRecover()
+			Expect(owner.WatchChanges(watchCtx, func() { changes.Add(1) })).To(Succeed())
+		}()
+		Consistently(changes.Load, 300*time.Millisecond).Should(BeZero())
+
+		_, err := owner.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(3, 3))
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(changes.Load, 2*time.Second).Should(BeNumerically(">=", 1))
+	})
+
+	It("names the file a configured path opens at this build's catalog version", func() {
+		Expect(sqlite.CatalogVersion).To(Equal(6))
+		Expect(sqlite.VersionedPath(path)).To(Equal(filepath.Join(filepath.Dir(path), "v6", "records.sqlite")))
+		Expect(owner.Path()).To(Equal(sqlite.VersionedPath(path)))
+	})
+
 	It("wakes a notifier's waiter when the writer appends", func() {
 		notifier, err := recordstore.NewNotifier(reader, recordstore.NotifierOptions{RecheckInterval: time.Hour})
 		Expect(err).ToNot(HaveOccurred())

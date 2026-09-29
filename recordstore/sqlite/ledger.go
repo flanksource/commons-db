@@ -55,6 +55,54 @@ func readBatchOutcome(ctx context.Context, database queryer, id string) (records
 	return result, true, nil
 }
 
+// ProducerSeq is the highest seq of the batches the ledger holds from
+// producer instance, or zero for a producer it holds none of.
+func (b *Backend) ProducerSeq(ctx context.Context, instance string) (int64, error) {
+	var seq sql.NullInt64
+	if err := b.database.Reader().QueryRowContext(ctx,
+		`SELECT MAX(producer_seq) FROM record_spool_batches WHERE producer = ?`, instance).Scan(&seq); err != nil {
+		return 0, fmt.Errorf("producer %q: read the ledger: %w", instance, err)
+	}
+	return seq.Int64, nil
+}
+
+// SweepBatches removes the ledger rows of batches applied before before, but
+// for those keep reports: a batch whose directory still exists must stay, or
+// ingesting it again would apply it twice.
+func (b *Backend) SweepBatches(ctx context.Context, before time.Time, keep func(id string) bool) (int, error) {
+	swept := 0
+	err := b.database.Write(func(writer *sql.DB) error {
+		return inTx(ctx, writer, "sweep the batch ledger", func(tx *sql.Tx) error {
+			rows, err := tx.QueryContext(ctx, `SELECT batch_id FROM record_spool_batches WHERE ingested_at < ?`, sqlitetable.FormatTime(before))
+			if err != nil {
+				return fmt.Errorf("list ledger rows to sweep: %w", err)
+			}
+			var ids []string
+			for rows.Next() {
+				var id string
+				if err := rows.Scan(&id); err != nil {
+					_ = rows.Close()
+					return fmt.Errorf("list ledger rows to sweep: %w", err)
+				}
+				if !keep(id) {
+					ids = append(ids, id)
+				}
+			}
+			if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+				return fmt.Errorf("list ledger rows to sweep: %w", err)
+			}
+			for _, id := range ids {
+				if _, err := tx.ExecContext(ctx, `DELETE FROM record_spool_batches WHERE batch_id = ?`, id); err != nil {
+					return fmt.Errorf("batch %q: sweep from the ledger: %w", id, err)
+				}
+			}
+			swept = len(ids)
+			return nil
+		})
+	})
+	return swept, err
+}
+
 // BatchOutcome reads batch id's recorded outcome.
 func (b *Backend) BatchOutcome(ctx context.Context, id string) (recordstore.BatchResult, bool, error) {
 	return readBatchOutcome(ctx, b.database.Reader(), id)
