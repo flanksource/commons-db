@@ -49,10 +49,13 @@ Optional interfaces extend a source:
 
 ## Arming a probe
 
-A `Manager` admits **at most one local writer per source identity**:
+A `Manager` admits **at most one writer per source identity**:
+
+- **Within its process** it always does.
+- **Across processes** it does when those processes' managers share a `LockDir`. `Arm` then holds `<LockDir>/<digest of the identity>.lock` for as long as the run lasts, and a manager in another process gets `ErrAlreadyManaged` without opening the source. The kernel releases the lock if the process dies.
 
 ```go
-manager := probe.NewManager()
+manager := probe.NewManager(probe.ManagerOptions{LockDir: filepath.Join(dir, "probes")})
 
 run, err := manager.Arm(ctx, probe.Options{
 	Identity: "jvm:" + host + ":" + probeID, // one writer per identity
