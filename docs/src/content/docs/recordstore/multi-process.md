@@ -72,7 +72,7 @@ The owner applies a `Writer`'s batches directly. A reader publishes them and, wi
 `recordstore/spool` is the only way writes cross processes. A batch is published by writing it under `tmp/`, syncing it, and **renaming** it into `incoming/`. That rename is its only commit point, so the owner never sees half a batch.
 
 - **Layout:** `incoming/<created>-<instance>-<seq>-<id>/`, holding a `manifest.json` (format 1) and one data file per append.
-- **Formats:** `ndjson` and `ndjson.gz` are built in. Others register with `spool.Register`.
+- **Formats:** `ndjson` and `ndjson.gz` are built in. Importing `recordstore/spool/parquet` registers `parquet`, where each column is a nullable string, boolean, int64 or double. Other codecs register with `spool.Register`. The owner reads only the formats its own build registered, and its state lists them.
 - **Manifest:** carries the schema of every kind the batch appends to, so the owner can ingest from a build whose kinds differ. Added columns are added to the file. A conflicting key, conflict policy or column storage fails the entry with `ErrSchemaConflict`.
 - **Values:** rows are normalized to what the sqlite table stores (`spool.Normalize`) before they are written. A spooled row and the same row appended directly store identical values.
 
