@@ -13,8 +13,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -55,8 +57,20 @@ type Options struct {
 	// SweepInterval is how often the file removes the streams whose expiry
 	// has passed, rows included, until it is closed. It is required: a stream
 	// expires from a ttl or from the source an index mirrors, and a file that
-	// never swept would keep every row it was ever given.
+	// never swept would keep every row it was ever given. A read-only backend
+	// sweeps once promoted.
 	SweepInterval time.Duration
+
+	// ReadOnly opens the file another process writes, which must exist at
+	// this build's catalog version, without writing it: no catalog creation,
+	// no sweeper. Every mutation is handed to Submit as a batch, and a kind's
+	// table is adopted from the catalog, or declared through Submit when the
+	// file lacks it. A derived index cannot be read-only.
+	ReadOnly bool
+
+	// Submit hands a read-only backend's batches to the process writing the
+	// file. Without it every mutation fails with sqlite.ErrReadOnly.
+	Submit recordstore.Submitter
 }
 
 // Backend is a recordstore.Backend over a SQLite file.
@@ -69,10 +83,18 @@ type Backend struct {
 	locks    recordstore.StreamLocks
 
 	// stopSweeper cancels the sweeper goroutine and swept reports it gone.
-	stopSweeper context.CancelFunc
-	swept       chan struct{}
-	closeOnce   sync.Once
-	closeErr    error
+	// lifecycle guards them against a Promote racing Close.
+	lifecycle     sync.Mutex
+	stopSweeper   context.CancelFunc
+	swept         chan struct{}
+	sweepInterval time.Duration
+	closeOnce     sync.Once
+	closeErr      error
+
+	// readOnly is set while the backend submits its mutations rather than
+	// writing them; submit is where they go.
+	readOnly atomic.Bool
+	submit   recordstore.Submitter
 
 	tablesMu sync.Mutex
 	tables   map[string]kindTable
@@ -94,11 +116,14 @@ func Open(options Options) (*Backend, error) {
 	if options.SweepInterval <= 0 {
 		return nil, fmt.Errorf("sqlite record store: a positive sweep interval is required, or expired streams are never removed")
 	}
-	path, err := versionedFile(context.Background(), options.Path, options.Derived)
+	if options.ReadOnly && options.Derived {
+		return nil, fmt.Errorf("sqlite record store: a derived index is rebuilt by the process that owns it, so it cannot be opened read-only")
+	}
+	path, err := openPath(options)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite record store: %w", err)
 	}
-	database, err := sqlitedb.Open(sqlitedb.Options{Path: path})
+	database, err := sqlitedb.Open(sqlitedb.Options{Path: path, ReadOnly: options.ReadOnly})
 	if err != nil {
 		return nil, fmt.Errorf("sqlite record store: %w", err)
 	}
@@ -108,13 +133,35 @@ func Open(options Options) (*Backend, error) {
 	}
 	backend := &Backend{
 		database: database, schema: options.Schema, ttl: options.TTL, derived: options.Derived,
-		now: now, tables: map[string]kindTable{},
+		now: now, tables: map[string]kindTable{}, sweepInterval: options.SweepInterval, submit: options.Submit,
+	}
+	if options.ReadOnly {
+		backend.readOnly.Store(true)
+		backend.stopSweeper, backend.swept = func() {}, make(chan struct{})
+		close(backend.swept)
+		if _, err := inspectCatalog(context.Background(), database.Reader(), path, catalogVersion); err != nil {
+			return nil, errors.Join(fmt.Errorf("sqlite record store %s: %w", path, err), database.Close())
+		}
+		return backend, nil
 	}
 	if err := backend.createCatalog(context.Background()); err != nil {
 		return nil, errors.Join(err, database.Close())
 	}
 	backend.startSweeper(options.SweepInterval)
 	return backend, nil
+}
+
+// openPath is the versioned file options open. A writer resolves it, copying
+// a predecessor in; a read-only backend takes the file the writer resolved.
+func openPath(options Options) (string, error) {
+	if !options.ReadOnly {
+		return versionedFile(context.Background(), options.Path, options.Derived)
+	}
+	configured, err := filepath.Abs(options.Path)
+	if err != nil {
+		return "", fmt.Errorf("resolve %s: %w", options.Path, err)
+	}
+	return versionedPath(configured, catalogVersion), nil
 }
 
 // startSweeper sweeps the file every interval until Close. A sweep that fails
@@ -158,6 +205,9 @@ func (b *Backend) Lease() func() {
 func (b *Backend) Append(ctx context.Context, stream, kind string, rows []recordstore.Row) (recordstore.AppendResult, error) {
 	if err := recordstore.ValidateAppend(stream, kind); err != nil {
 		return recordstore.AppendResult{}, err
+	}
+	if b.readOnly.Load() {
+		return b.submitAppend(ctx, stream, kind, rows)
 	}
 	unlock := b.locks.Lock(stream)
 	defer unlock()
@@ -337,6 +387,10 @@ func (b *Backend) Expire(ctx context.Context, stream string, ttl time.Duration) 
 	if err := recordstore.ValidateStream(stream); err != nil {
 		return err
 	}
+	if b.readOnly.Load() {
+		_, err := b.submitEntry(ctx, recordstore.BatchEntry{Op: recordstore.BatchExpire, Stream: stream, TTL: ttl})
+		return err
+	}
 	return b.database.Write(func(writer *sql.DB) error {
 		return inTx(ctx, writer, fmt.Sprintf("stream %q: expire", stream), func(tx *sql.Tx) error {
 			return expireTx(ctx, tx, stream, ttl, b.now())
@@ -362,6 +416,10 @@ func expireTx(ctx context.Context, tx *sql.Tx, stream string, ttl time.Duration,
 // sealed source through it once it holds every row the source does.
 func (b *Backend) Seal(ctx context.Context, stream string) error {
 	if err := recordstore.ValidateStream(stream); err != nil {
+		return err
+	}
+	if b.readOnly.Load() {
+		_, err := b.submitEntry(ctx, recordstore.BatchEntry{Op: recordstore.BatchSeal, Stream: stream})
 		return err
 	}
 	unlock := b.locks.Lock(stream)
@@ -394,6 +452,10 @@ func (b *Backend) Reopen(ctx context.Context, stream, generation string) error {
 	}
 	if generation == "" {
 		return fmt.Errorf("stream %q: reopen requires a generation", stream)
+	}
+	if b.readOnly.Load() {
+		_, err := b.submitEntry(ctx, recordstore.BatchEntry{Op: recordstore.BatchReopen, Stream: stream, Generation: generation})
+		return err
 	}
 	unlock := b.locks.Lock(stream)
 	defer unlock()
@@ -445,6 +507,8 @@ func (b *Backend) SetExpiry(ctx context.Context, stream string, expiresAt *time.
 // file.
 func (b *Backend) Close() error {
 	b.closeOnce.Do(func() {
+		b.lifecycle.Lock()
+		defer b.lifecycle.Unlock()
 		b.stopSweeper()
 		<-b.swept
 		b.closeErr = b.database.Close()

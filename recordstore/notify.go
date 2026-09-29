@@ -6,7 +6,16 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/flanksource/commons/logger"
 )
+
+// ChangeSource is a backend another process may write: WatchChanges calls
+// changed whenever that process may have committed, until ctx ends, without
+// knowing which streams it changed.
+type ChangeSource interface {
+	WatchChanges(ctx context.Context, changed func()) error
+}
 
 // NotifierOptions configure NewNotifier.
 type NotifierOptions struct {
@@ -24,10 +33,16 @@ type NotifierOptions struct {
 // Only appends made through the Notifier wake a waiter at once: a stream has
 // one writer process (see the package documentation), so that writer appending
 // through the Notifier is the whole of the contract. Anything else is seen at
-// the next recheck.
+// the next recheck — but for a backend that is a ChangeSource, whose changes
+// wake every waiter, which then re-reads its stream.
 type Notifier struct {
 	backend Backend
 	recheck time.Duration
+
+	// stopWatching ends the watch of a ChangeSource backend, and watched is
+	// closed once it has ended.
+	stopWatching context.CancelFunc
+	watched      chan struct{}
 
 	mu      sync.Mutex
 	signals map[string]*appendSignal
@@ -53,7 +68,25 @@ func NewNotifier(backend Backend, options NotifierOptions) (*Notifier, error) {
 	if _, wrapped := backend.(*Notifier); wrapped {
 		return nil, errors.New("record store notifier: the backend already is a notifier; wrap the backend it wraps once")
 	}
-	return &Notifier{backend: backend, recheck: options.RecheckInterval, signals: map[string]*appendSignal{}}, nil
+	notifier := &Notifier{backend: backend, recheck: options.RecheckInterval, signals: map[string]*appendSignal{}, watched: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	notifier.stopWatching = cancel
+	go notifier.watch(ctx)
+	return notifier, nil
+}
+
+// watch wakes every waiter whenever a ChangeSource backend reports a change,
+// until ctx ends. A watch that fails is logged: waiters still see the change
+// at their next recheck.
+func (n *Notifier) watch(ctx context.Context) {
+	defer close(n.watched)
+	source, ok := n.backend.(ChangeSource)
+	if !ok {
+		return
+	}
+	if err := source.WatchChanges(ctx, n.wakeAll); err != nil {
+		logger.Errorf("record store notifier: watch changes: %v", err)
+	}
 }
 
 // Unwrap is the backend the Notifier delegates to.
@@ -145,7 +178,22 @@ func (n *Notifier) Delete(ctx context.Context, stream string) error {
 	return err
 }
 
-func (n *Notifier) Close() error { return n.backend.Close() }
+// Close stops watching the backend and closes it.
+func (n *Notifier) Close() error {
+	n.stopWatching()
+	<-n.watched
+	return n.backend.Close()
+}
+
+// wakeAll wakes the waiters on every stream.
+func (n *Notifier) wakeAll() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for stream, signal := range n.signals {
+		close(signal.appended)
+		delete(n.signals, stream)
+	}
+}
 
 func (n *Notifier) wake(stream string) {
 	n.mu.Lock()

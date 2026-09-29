@@ -16,6 +16,13 @@ func (b *Backend) Trim(ctx context.Context, stream string, before time.Time) (re
 	if err := recordstore.ValidateStream(stream); err != nil {
 		return recordstore.Meta{}, err
 	}
+	if b.readOnly.Load() {
+		result, err := b.submitEntry(ctx, recordstore.BatchEntry{Op: recordstore.BatchTrim, Stream: stream, Before: before})
+		if err != nil {
+			return recordstore.Meta{}, err
+		}
+		return *result.Meta, nil
+	}
 	unlock := b.locks.Lock(stream)
 	defer unlock()
 	var meta recordstore.Meta

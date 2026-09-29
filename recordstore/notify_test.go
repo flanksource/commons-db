@@ -93,8 +93,53 @@ var _ = Describe("Notifier", func() {
 		Entry("no recheck interval", openMemoryKV(), recordstore.NotifierOptions{}, "RecheckInterval"),
 	)
 
+	It("wakes every waiter when a backend another process writes reports a change, and stops watching on Close", func() {
+		source := &changingBackend{Backend: openMemoryKV(), changes: make(chan struct{}), stopped: make(chan struct{})}
+		watched, err := recordstore.NewNotifier(source, recordstore.NotifierOptions{RecheckInterval: neverRechecked})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(source.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(1, 1))).Error().ToNot(HaveOccurred())
+		meta, err := watched.Meta(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		woken := make(chan recordstore.Meta, 1)
+		go func() {
+			defer GinkgoRecover()
+			meta, err := watched.Wait(ctx, "run-1", 1, meta.Generation)
+			Expect(err).ToNot(HaveOccurred())
+			woken <- meta
+		}()
+		Consistently(woken, 100*time.Millisecond).ShouldNot(Receive())
+		Expect(source.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(2, 2))).Error().ToNot(HaveOccurred())
+		Consistently(woken, 100*time.Millisecond).ShouldNot(Receive(), "an append made around the notifier wakes no one by itself")
+
+		Eventually(source.changes, time.Second).Should(BeSent(struct{}{}), "the notifier is not watching its backend")
+		Eventually(woken, time.Second).Should(Receive(HaveField("HighSeq", int64(2))))
+
+		Expect(watched.Close()).To(Succeed())
+		Eventually(source.stopped, time.Second).Should(BeClosed())
+	})
+
 	It("refuses to wrap a notifier, whose appends would wake only one of the two", func() {
 		_, err := recordstore.NewNotifier(notifier, recordstore.NotifierOptions{RecheckInterval: time.Second})
 		Expect(err).To(MatchError(ContainSubstring("already is a notifier")))
 	})
 })
+
+// changingBackend is a backend another process writes: it reports a change
+// whenever a spec sends on changes, and closes stopped once unwatched.
+type changingBackend struct {
+	recordstore.Backend
+	changes chan struct{}
+	stopped chan struct{}
+}
+
+func (b *changingBackend) WatchChanges(ctx context.Context, changed func()) error {
+	defer close(b.stopped)
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-b.changes:
+			changed()
+		}
+	}
+}

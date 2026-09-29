@@ -282,6 +282,15 @@ var _ = Describe("sqlite backend batches", func() {
 		Expect(meta("run-1").Sealed).To(BeTrue())
 	})
 
+	It("creates the table of a kind a batch declares without appending to it", func() {
+		result := apply(recordstore.Batch{ID: "b-1", Producer: producer, Schemas: []recordstore.KindSchema{
+			{Kind: recordstoretest.KeyedKind, Columns: recordstoretest.Columns, Options: recordstore.KindOptions{Key: "name"}},
+		}})
+
+		Expect(result.Entries).To(BeEmpty())
+		Expect(countWhere(`SELECT COUNT(*) FROM record_kinds WHERE kind = 'keyed'`)).To(Equal(1))
+	})
+
 	It("creates a kind's table for a batch without holding the batch up", func() {
 		done := make(chan recordstore.BatchResult)
 		go func() {

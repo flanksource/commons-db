@@ -11,6 +11,10 @@ func (b *Backend) Delete(ctx context.Context, stream string) error {
 	if err := recordstore.ValidateStream(stream); err != nil {
 		return err
 	}
+	if b.readOnly.Load() {
+		_, err := b.submitEntry(ctx, recordstore.BatchEntry{Op: recordstore.BatchDelete, Stream: stream})
+		return err
+	}
 	unlock := b.locks.Lock(stream)
 	defer unlock()
 	return b.database.Write(func(writer *sql.DB) error {
