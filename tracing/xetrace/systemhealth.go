@@ -89,7 +89,9 @@ func AttachSystemHealth(ctx context.Context, pool *sql.DB, opts CreateOptions) (
 	}
 	var fileName string
 	var offset int64
-	err = db.QueryRowContext(ctx, lastEventFileRowSQL, source.FilePattern).Scan(&fileName, &offset)
+	// The newest event is in the current file, so the baseline reads only that
+	// one: the rolled-over files before it can hold hundreds of MB.
+	err = db.QueryRowContext(ctx, lastEventFileRowSQL, source.CurrentFile).Scan(&fileName, &offset)
 	switch {
 	case err == nil:
 		session.fileCursor = fileCursor{file: fileName, offset: offset, valid: true}
