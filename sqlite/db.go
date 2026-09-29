@@ -76,6 +76,10 @@ type DB struct {
 	closing  bool
 	readOnly bool
 
+	// watching counts the running WatchDataVersion calls, which Close waits
+	// out before it closes the connection each one holds.
+	watching sync.WaitGroup
+
 	onWriteError func(error)
 	closeOnce    sync.Once
 	closeErr     error
@@ -167,13 +171,31 @@ func (d *DB) EnableWrites() error {
 }
 
 // WatchDataVersion calls changed whenever a commit to the file lands, checking
-// every interval, until ctx ends. It reads PRAGMA data_version on one pinned
-// read connection, which changes with every commit another connection makes —
-// another process's included.
+// every interval, until ctx ends or the database closes. It reads PRAGMA
+// data_version on one pinned read connection, which changes with every commit
+// another connection makes — another process's included. Close waits for the
+// watch to end before it closes that connection.
 func (d *DB) WatchDataVersion(ctx context.Context, every time.Duration, changed func()) error {
 	if every <= 0 {
 		return fmt.Errorf("sqlite: watch %s: a positive interval is required", d.path)
 	}
+	d.stateMu.Lock()
+	if d.closing {
+		d.stateMu.Unlock()
+		return nil
+	}
+	d.watching.Add(1)
+	d.stateMu.Unlock()
+	defer d.watching.Done()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		select {
+		case <-d.stop:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
 	conn, err := d.reader.Conn(ctx)
 	if err != nil {
 		return ignoreDone(ctx, fmt.Errorf("sqlite: watch %s: %w", d.path, err))
@@ -418,6 +440,7 @@ func (d *DB) Close() error {
 		close(d.stop)
 		d.stateMu.Unlock()
 		<-d.done
+		d.watching.Wait()
 		d.mutations.Lock()
 		defer d.mutations.Unlock()
 		d.closeErr = errors.Join(d.reader.Close(), closeWriter(d.writer))

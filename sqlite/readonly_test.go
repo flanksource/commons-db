@@ -80,6 +80,16 @@ var _ = Describe("SQLite database opened read-only", func() {
 		Expect(readOnly.EnableWrites()).To(Succeed(), "enabling writes twice changes nothing")
 	})
 
+	It("stops watching when its database closes, and closes only once the watch has ended", func() {
+		watched := make(chan error, 1)
+		go func() { watched <- readOnly.WatchDataVersion(context.Background(), 10*time.Millisecond, func() {}) }()
+		Consistently(watched, 100*time.Millisecond).ShouldNot(Receive())
+
+		Expect(readOnly.Close()).To(Succeed())
+		Expect(watched).To(Receive(BeNil()), "Close returned while the watch still held a connection")
+		Expect(readOnly.WatchDataVersion(context.Background(), 10*time.Millisecond, func() {})).To(Succeed(), "a closed database has nothing to watch")
+	})
+
 	It("calls back when another handle commits, until its context ends", func() {
 		ctx, cancel := context.WithCancel(context.Background())
 		var changes atomic.Int32
