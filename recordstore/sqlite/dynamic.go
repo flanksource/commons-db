@@ -115,6 +115,9 @@ func (table kindTable) withInferred(catalog storedCatalog) kindTable {
 	for _, stored := range catalog.columns {
 		if !slices.ContainsFunc(columns, func(column query.ColumnDef) bool { return column.Name == stored.declared }) {
 			columns = append(columns, stored.def())
+			if stored.compressed() {
+				table.Compressed = append(slices.Clone(table.Compressed), stored.declared)
+			}
 		}
 	}
 	table.Columns = columns

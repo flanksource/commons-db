@@ -25,6 +25,8 @@ type KindOptions struct {
 	MaxDynamicColumns int  // cap on inferred columns; 0 = 256
 
 	Compact []CompactRule // rows the sqlite backend drops as it compacts; see Concepts
+
+	Compressed []string // columns the sqlite backend stores zstd-compressed
 }
 
 type IndexDef struct {
@@ -42,6 +44,9 @@ type IndexDef struct {
 - the time column isn't one of the columns, or isn't `query.ColumnTypeDateTime`
 - an index names no columns, a column that isn't one of the kind's, a column twice, or a structured (json, key/value) column
 - a compact rule selects nothing, has a negative age, or ages rows with no time column
+- a compressed column isn't a declared string or structured column, is the key, the time column or indexed, or is a string column whose filter isn't switched off (`Filter: {Kind: none}`)
+
+**Compressed columns.** The sqlite backend stores each `Compressed` column as a zstd blob and reads it back whole (see [sqlitetable](../../sqlite/sqlitetable/#compressed-columns)). The catalog records its storage as `BLOB:<type>`, so compressing a column, or no longer compressing it, is refused on a durable file like any other storage change. Use it for large payloads that are only read, never filtered or searched.
 
 ## Dynamic kinds
 

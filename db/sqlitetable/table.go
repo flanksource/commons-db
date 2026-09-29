@@ -56,6 +56,12 @@ type Table struct {
 
 	// Unique names declared columns that each get their own unique index.
 	Unique []string
+
+	// Compressed names declared columns stored as a zstd blob of their text,
+	// and read back as that text through the rs_inflate SQL function. SQL
+	// cannot compare what is inside one, so a compressed column is for large
+	// payloads nothing filters, sorts or indexes by.
+	Compressed []string
 }
 
 // Write creates the table, inserts rows into it, and returns it with the
@@ -84,7 +90,7 @@ func (t Table) Create(ctx context.Context, database Execer) (Table, error) {
 	}
 	definitions := make([]string, len(t.Columns), len(t.Columns)+1)
 	for index, column := range t.Columns {
-		definitions[index] = QuoteIdentifier(t.StoredAs[index]) + " " + Type(column.Type)
+		definitions[index] = QuoteIdentifier(t.StoredAs[index]) + " " + t.storage(column)
 	}
 	if len(t.PrimaryKey) > 0 {
 		keys, err := t.physicalList(t.PrimaryKey)
@@ -157,7 +163,7 @@ func (t Table) Declare() (*schema.Table, error) {
 	}
 	declared := schema.NewTable(t.Name)
 	for index, column := range t.Columns {
-		declared.AddColumns(&schema.Column{Name: t.StoredAs[index], Type: &schema.ColumnType{Raw: Type(column.Type), Null: true}})
+		declared.AddColumns(&schema.Column{Name: t.StoredAs[index], Type: &schema.ColumnType{Raw: t.storage(column), Null: true}})
 	}
 	stored := func(name string) (*schema.Column, error) {
 		index := slices.IndexFunc(t.Columns, func(column query.ColumnDef) bool { return column.Name == name })
@@ -223,6 +229,9 @@ func (t Table) Insert(ctx context.Context, database Execer, rows []query.Row) er
 			if err != nil {
 				return fmt.Errorf("row %d column %q: %w", rowIndex, column.Name, err)
 			}
+			if t.compressed(column.Name) {
+				values[columnIndex] = deflate(values[columnIndex])
+			}
 		}
 		if _, err := statement.ExecContext(ctx, values...); err != nil {
 			return fmt.Errorf("insert row %d into %q: %w", rowIndex, t.Name, err)
@@ -232,7 +241,7 @@ func (t Table) Insert(ctx context.Context, database Execer, rows []query.Row) er
 }
 
 // Select reads every declared column under its declared name, aliasing only
-// the columns stored under another name. It panics on a table that carries no
+// the columns stored under another name, and a compressed column inflated. It panics on a table that carries no
 // stored names: that table was neither created nor read back from storage.
 func (t Table) Select() string {
 	if err := t.checkStoredAs(); err != nil {
@@ -241,7 +250,10 @@ func (t Table) Select() string {
 	selects := make([]string, len(t.Columns))
 	for index, column := range t.Columns {
 		selects[index] = QuoteIdentifier(t.StoredAs[index])
-		if t.StoredAs[index] != column.Name {
+		switch {
+		case t.compressed(column.Name):
+			selects[index] = inflateFunction + "(" + selects[index] + ") AS " + QuoteIdentifier(column.Name)
+		case t.StoredAs[index] != column.Name:
 			selects[index] += " AS " + QuoteIdentifier(column.Name)
 		}
 	}

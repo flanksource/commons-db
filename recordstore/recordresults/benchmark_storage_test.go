@@ -8,15 +8,16 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/recordstore"
+	"github.com/flanksource/commons-db/recordstore/recordstoretest"
 )
 
 var _ = Describe("recordstore benchmark storage", func() {
-	for _, backend := range []benchmarkBackend{benchmarkKVMemory, benchmarkNDJSON, benchmarkSQLite} {
+	for _, backend := range []benchmarkBackend{benchmarkKVMemory, benchmarkNDJSON, benchmarkSQLite, benchmarkSQLiteCompressed} {
 		backend := backend
 		It("measures stored size for "+string(backend), func() {
 			benchmarkCase := benchmarkCase{recordBytes: 4 << 10, records: 128}
 			schemas := recordstore.NewSchemas()
-			registerBenchmarkSchema(GinkgoT(), schemas)
+			registerBenchmarkSchema(GinkgoT(), schemas, backend)
 			source := openBenchmarkSource(GinkgoT(), backend, schemas)
 			DeferCleanup(source.Close, GinkgoT())
 			appendBenchmarkRows(GinkgoT(), source.backend, benchmarkRows(benchmarkCase), benchmarkCase.records)
@@ -28,6 +29,24 @@ var _ = Describe("recordstore benchmark storage", func() {
 			Expect(compressionRatio(benchmarkCase.datasetBytes(), storedBytes)).To(BeNumerically(">", 0))
 		})
 	}
+
+	It("stores a compressed payload column in fewer bytes than a plain one", func() {
+		benchmarkCase := benchmarkCase{recordBytes: 4 << 10, records: 128}
+		stored := map[benchmarkBackend]int64{}
+		for _, backend := range []benchmarkBackend{benchmarkSQLite, benchmarkSQLiteCompressed} {
+			schemas := recordstore.NewSchemas()
+			registerBenchmarkSchema(GinkgoT(), schemas, backend)
+			source := openBenchmarkSource(GinkgoT(), backend, schemas)
+			DeferCleanup(source.Close, GinkgoT())
+			appendBenchmarkRows(GinkgoT(), source.backend, benchmarkRows(benchmarkCase), benchmarkCase.records)
+			_, rows := recordstoretest.Scanned(source.backend, benchmarkStream, 0)
+			Expect(rows).To(HaveLen(benchmarkCase.records))
+			bytes, _, err := measureBenchmarkStorage(context.Background(), source)
+			Expect(err).ToNot(HaveOccurred())
+			stored[backend] = bytes
+		}
+		Expect(stored[benchmarkSQLiteCompressed]).To(BeNumerically("<", stored[benchmarkSQLite]))
+	})
 })
 
 func BenchmarkRecordStoreStorage(b *testing.B) {
@@ -36,7 +55,7 @@ func BenchmarkRecordStoreStorage(b *testing.B) {
 			b.Run(string(backend)+"/"+benchmarkCase.name(), func(b *testing.B) {
 				rows := benchmarkRows(benchmarkCase)
 				schemas := recordstore.NewSchemas()
-				registerBenchmarkSchema(b, schemas)
+				registerBenchmarkSchema(b, schemas, backend)
 				source := openBenchmarkSource(b, backend, schemas)
 				appendBenchmarkRows(b, source.backend, rows, benchmarkCase.records)
 

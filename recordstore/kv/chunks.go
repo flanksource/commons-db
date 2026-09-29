@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/cache"
+	"github.com/klauspost/compress/zstd"
 
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -25,6 +26,17 @@ import (
 // rewritten per append. Every key carries the stream's expiry, so the stream
 // leaves the store in one piece.
 type chunkLayout struct{ b *Backend }
+
+// zstdMagic begins every zstd frame; a plain chunk begins with "[". It is how
+// a chunk is read whichever way it was stored.
+var zstdMagic = []byte{0x28, 0xb5, 0x2f, 0xfd}
+
+// chunkEncoder and chunkDecoder compress chunks; both are safe for concurrent
+// EncodeAll and DecodeAll.
+var (
+	chunkEncoder, _ = zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.SpeedDefault))
+	chunkDecoder, _ = zstd.NewReader(nil)
+)
 
 // chunk is one stored JSON array of rows and the seq its first row takes.
 type chunk struct {
@@ -115,7 +127,11 @@ func (l chunkLayout) write(ctx context.Context, meta *recordstore.Meta, rows []r
 	ttl := meta.ExpiresAt.Sub(now)
 	for _, chunk := range chunks {
 		name := paddedSeq(chunk.first)
-		if err := b.store.Set(ctx, b.key(stream, "chunk/"+name), chunk.payload, ttl); err != nil {
+		payload := chunk.payload
+		if b.compress {
+			payload = chunkEncoder.EncodeAll(payload, nil)
+		}
+		if err := b.store.Set(ctx, b.key(stream, "chunk/"+name), payload, ttl); err != nil {
 			return fmt.Errorf("stream %q: write chunk %s: %w", stream, name, err)
 		}
 		if err := b.store.ZAdd(ctx, b.key(stream, "index"), float64(chunk.first), name); err != nil {
@@ -223,6 +239,11 @@ func (l chunkLayout) readChunk(ctx context.Context, stream string, first int64) 
 	}
 	if err != nil {
 		return nil, fmt.Errorf("stream %q: read chunk %d: %w", stream, first, err)
+	}
+	if bytes.HasPrefix(payload, zstdMagic) {
+		if payload, err = chunkDecoder.DecodeAll(payload, nil); err != nil {
+			return nil, fmt.Errorf("stream %q: decompress chunk %d: %w", stream, first, err)
+		}
 	}
 	var raw []json.RawMessage
 	if err := json.Unmarshal(payload, &raw); err != nil {

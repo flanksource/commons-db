@@ -41,6 +41,10 @@ const (
 	benchmarkKVValkey benchmarkBackend = "kv-valkey"
 	benchmarkNDJSON   benchmarkBackend = "ndjson"
 	benchmarkSQLite   benchmarkBackend = "sqlite"
+
+	// benchmarkSQLiteCompressed is sqlite storing the payload column
+	// compressed (KindOptions.Compressed).
+	benchmarkSQLiteCompressed benchmarkBackend = "sqlite-compressed"
 )
 
 var benchmarkBackends = []benchmarkBackend{
@@ -48,6 +52,7 @@ var benchmarkBackends = []benchmarkBackend{
 	benchmarkKVValkey,
 	benchmarkNDJSON,
 	benchmarkSQLite,
+	benchmarkSQLiteCompressed,
 }
 
 type benchmarkTB interface {
@@ -58,7 +63,7 @@ type benchmarkTB interface {
 	TempDir() string
 }
 
-func registerBenchmarkSchema(tb benchmarkTB, schemas *recordstore.Schemas) {
+func registerBenchmarkSchema(tb benchmarkTB, schemas *recordstore.Schemas, backend benchmarkBackend) {
 	tb.Helper()
 	columns, err := query.ColumnsFor(reflect.TypeFor[benchmarkRecordShape]())
 	if err != nil {
@@ -69,7 +74,11 @@ func registerBenchmarkSchema(tb benchmarkTB, schemas *recordstore.Schemas) {
 			columns[index].Kind = query.ColumnKindTimestamp
 		}
 	}
-	if err := schemas.Register(benchmarkKind, columns, recordstore.KindOptions{}); err != nil {
+	var options recordstore.KindOptions
+	if backend == benchmarkSQLiteCompressed {
+		options.Compressed = []string{"payload"}
+	}
+	if err := schemas.Register(benchmarkKind, columns, options); err != nil {
 		tb.Fatalf("register benchmark record schema: %v", err)
 	}
 }
@@ -113,7 +122,7 @@ func openBenchmarkSource(tb benchmarkTB, backend benchmarkBackend, schemas *reco
 			backend: store, storage: func(context.Context) (int64, error) { return benchmarkDirectoryBytes(dir) },
 			storageBasis: "NDJSON data and metadata file bytes", close: store.Close,
 		}
-	case benchmarkSQLite:
+	case benchmarkSQLite, benchmarkSQLiteCompressed:
 		path := filepath.Join(tb.TempDir(), "records.sqlite")
 		store, err := sqlite.Open(sqlite.Options{
 			Path:          path,

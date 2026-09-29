@@ -3,6 +3,7 @@ package kv_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -280,5 +281,45 @@ var _ = Describe("kv backend chunking", func() {
 		seqs, rows := recordstoretest.Scanned(backend, "run-1", 0)
 		Expect(seqs).To(Equal([]int64{1, 2, 3, 4}))
 		Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(1, 4))))
+	})
+})
+
+var _ = Describe("kv backend compressed chunks", func() {
+	It("stores chunks compressed, reads them back, and still reads chunks stored plain", func() {
+		ctx := context.Background()
+		store := cache.NewMemory()
+		plain := openKV(store, 1<<20)
+		_, err := plain.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(1, 50))
+		Expect(err).ToNot(HaveOccurred())
+		plainChunk, err := store.Get(ctx, "records/run-1/chunk/"+fmt.Sprintf("%019d", 1))
+		Expect(err).ToNot(HaveOccurred())
+
+		compressed, err := kv.New(kv.Options{
+			Store: store, Prefix: "records", Schema: recordstoretest.Schema, TTL: recordstoretest.TTL, MaxChunkBytes: 1 << 20,
+			CompressChunks: true,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		_, err = compressed.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(51, 100))
+		Expect(err).ToNot(HaveOccurred())
+		stored, err := store.Get(ctx, "records/run-1/chunk/"+fmt.Sprintf("%019d", 51))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(stored[:4]).To(Equal([]byte{0x28, 0xb5, 0x2f, 0xfd}), "a zstd frame")
+		Expect(len(stored)).To(BeNumerically("<", len(plainChunk)))
+
+		seqs, rows := recordstoretest.Scanned(compressed, "run-1", 0)
+		Expect(seqs).To(HaveLen(100))
+		Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(1, 100))))
+	})
+
+	It("caps a chunk by its size before compression", func() {
+		compressed, err := kv.New(kv.Options{
+			Store: cache.NewMemory(), Prefix: "records", Schema: recordstoretest.Schema, TTL: recordstoretest.TTL, MaxChunkBytes: 64,
+			CompressChunks: true,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		big := recordstoretest.SampleRow(1)
+		big["detail"] = map[string]any{"text": strings.Repeat("a", 200)}
+		_, err = compressed.Append(context.Background(), "run-1", recordstoretest.Kind, []recordstore.Row{big})
+		Expect(errors.Is(err, recordstore.ErrCapacity)).To(BeTrue(), "Append: %v", err)
 	})
 })

@@ -117,6 +117,11 @@ type ResultType[T any] struct {
 	Dynamic           bool
 	MaxDynamicColumns int
 
+	// Compressed names T's large text or JSON columns to store compressed in
+	// sqlite (recordstore.KindOptions.Compressed): read back whole, never
+	// filtered, searched or indexed by.
+	Compressed []string
+
 	// Follow lets a session tail the type's streams: its profile reads through
 	// the ProviderType provider, which streams each appended row, rather than
 	// plain sqlite. Only a type whose rows each stand alone should follow — one
@@ -241,7 +246,7 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 	if err := validateDefaultFrom(resultType.TimeColumn, resultType.DefaultFrom); err != nil {
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
-	if err := validateSearchColumns(columns, resultType.SearchColumns); err != nil {
+	if err := validateSearchColumns(columns, resultType.SearchColumns, resultType.Compressed); err != nil {
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
 	if err := validateHierarchy(columns, resultType.KeyColumn, resultType.Hierarchy); err != nil {
@@ -264,6 +269,7 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		options: recordstore.KindOptions{
 			Key: resultType.KeyColumn, Retention: resultType.Retention, OnConflict: resultType.OnConflict,
 			TimeColumn: resultType.TimeColumn, Dynamic: resultType.Dynamic, MaxDynamicColumns: resultType.MaxDynamicColumns,
+			Compressed: resultType.Compressed,
 		},
 		timeColumn:    resultType.TimeColumn,
 		defaultFrom:   resultType.DefaultFrom,

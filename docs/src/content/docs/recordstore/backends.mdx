@@ -42,7 +42,7 @@ The caller owns `Store`, and the backend never closes it. Every option is requir
 
 A stream is the set of keys under `<prefix>/<stream>/`. `meta` holds the stream's `Meta` as JSON and is the **commit point**. Its low and high seq bound everything a reader or key lookup believes, so anything an interrupted write left outside them is invisible, and the next write removes it. The layout depends on whether the kind is keyed:
 
-- **Unkeyed kinds are stored in chunks.** `chunk/<first seq>` holds one append's rows as a JSON array, split so that no chunk exceeds `MaxChunkBytes`. An `index` sorted set scores chunks by first seq, and an `appended` set scores them by append time. Chunks are never rewritten, so a stream of 10,000 rows costs 10,000 row encodings, not a growing blob. A single row larger than the cap is refused with `ErrCapacity`.
+- **Unkeyed kinds are stored in chunks.** `chunk/<first seq>` holds one append's rows as a JSON array, split so that no chunk exceeds `MaxChunkBytes`. An `index` sorted set scores chunks by first seq, and an `appended` set scores them by append time. Chunks are never rewritten, so a stream of 10,000 rows costs 10,000 row encodings, not a growing blob. A single row larger than the cap is refused with `ErrCapacity`. With `CompressChunks`, each chunk is stored zstd-compressed. The cap still measures its JSON before compression. A chunk is read by its first bytes, so chunks stored plain before the option was set stay readable.
 - **Keyed kinds are stored one row per key.** `row/<key>` holds the row with the generation and seq it was committed under, and the `seqs` and `appended` sets order it. Checking whether a key is stored is one read, so an append costs its own batch however large the stream is.
 
 ### Append and scan
@@ -128,6 +128,13 @@ Two bounds keep it from filling a disk nobody watches:
 
 - `MaxBytes`: an append that would take the stream past it is refused whole with `ErrCapacity`, and the stream is marked `Capped`. It's never silently dropped.
 - `KeepStreams`: opening a new stream removes every expired stream of that kind, then the least recently written ones beyond the budget. A stream being written at that moment is skipped.
+
+With `CompressSealed`, a stream's file is kept gzip-compressed once it is sealed.
+
+- **Sealing** rewrites the file as `<file>.gz` through a temp file and a rename, then removes the plain file.
+- **Scans and trims** read a compressed file from its start, since a gzip stream can't be bisected.
+- **Reopening** the stream writes the file plain again, so appends and bisection work as before.
+- **`File()`** returns the `.gz` path while the stream is sealed.
 
 ### Append and scan
 

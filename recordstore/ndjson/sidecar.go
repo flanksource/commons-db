@@ -77,9 +77,11 @@ func readSidecar(path string) (sidecar, error) {
 }
 
 // ownsDataFile reports whether name is a data file of stream: <stream>.ndjson,
-// or <stream>@<low seq>.ndjson once it was trimmed. A stream id never holds an
+// or <stream>@<low seq>.ndjson once it was trimmed, either one with .gz once
+// it was compressed. A stream id never holds an
 // @, so no other stream's file can match.
 func ownsDataFile(stream, name string) bool {
+	name = strings.TrimSuffix(name, gzipSuffix)
 	if name == stream+dataSuffix {
 		return true
 	}

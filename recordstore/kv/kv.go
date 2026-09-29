@@ -55,12 +55,18 @@ type Options struct {
 	// the cap is refused with recordstore.ErrCapacity.
 	MaxChunkBytes int
 
+	// CompressChunks stores each chunk zstd-compressed. MaxChunkBytes still
+	// caps a chunk by its JSON before compression. Chunks stored plain, by a
+	// backend without it, stay readable.
+	CompressChunks bool
+
 	// Now is the clock stream metadata is stamped with. Nil is time.Now.
 	Now func() time.Time
 }
 
 // Backend is a recordstore.Backend over a cache.Store.
 type Backend struct {
+	compress      bool
 	store         cache.Store
 	prefix        string
 	schema        recordstore.SchemaResolver
@@ -92,6 +98,7 @@ func New(options Options) (*Backend, error) {
 	}
 	return &Backend{
 		store: options.Store, prefix: strings.TrimRight(options.Prefix, "/"), schema: options.Schema, ttl: options.TTL,
+		compress:      options.CompressChunks,
 		maxChunkBytes: options.MaxChunkBytes, now: now,
 	}, nil
 }

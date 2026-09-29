@@ -14,7 +14,7 @@ const searchParam = "q"
 
 // validateSearchColumns refuses a search column the index could not match text
 // in, at registration rather than on the first search.
-func validateSearchColumns(columns []query.ColumnDef, names []string) error {
+func validateSearchColumns(columns []query.ColumnDef, names, compressed []string) error {
 	seen := make(map[string]bool, len(names))
 	for _, name := range names {
 		if seen[name] {
@@ -24,6 +24,9 @@ func validateSearchColumns(columns []query.ColumnDef, names []string) error {
 		index := slices.IndexFunc(columns, func(column query.ColumnDef) bool { return column.Name == name })
 		if index < 0 {
 			return fmt.Errorf("search column %q is not one of its columns", name)
+		}
+		if slices.Contains(compressed, name) {
+			return fmt.Errorf("search column %q is compressed, and a search reads inside a column", name)
 		}
 		if kind := columns[index].Type; kind != query.ColumnTypeString && kind != query.ColumnTypeJSON {
 			return fmt.Errorf("search column %q is %s, and a search matches only string or json columns", name, kind)

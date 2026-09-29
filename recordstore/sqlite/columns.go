@@ -66,6 +66,11 @@ func parseStoredColumn(entry string) (storedColumn, bool) {
 	return storedColumn{declared: entry[:namesAt], physical: entry[namesAt+1 : storageAt], storage: entry[storageAt:]}, true
 }
 
+// compressed reports an entry stored as a compressed blob.
+func (c storedColumn) compressed() bool {
+	return strings.HasPrefix(c.storage, ":"+compressedStorage+":")
+}
+
 // def is the declared column the entry stores, with the type it recorded.
 func (c storedColumn) def() query.ColumnDef {
 	return query.ColumnDef{Name: c.declared, Type: query.ColumnType(c.storage[strings.LastIndex(c.storage, ":")+1:])}
@@ -121,7 +126,7 @@ func readCatalog(ctx context.Context, tx *sql.Tx, table, stored, storedIndexes s
 func catalogOf(table kindTable) storedCatalog {
 	catalog := storedCatalog{key: table.schema.Options.Key, onConflict: table.schema.Options.OnConflict, indexes: kindIndexes(table.schema)}
 	for index, column := range table.Columns {
-		catalog.columns = append(catalog.columns, storedColumn{declared: column.Name, physical: table.StoredAs[index], storage: columnStorage(column)})
+		catalog.columns = append(catalog.columns, storedColumn{declared: column.Name, physical: table.StoredAs[index], storage: table.storage(column)})
 	}
 	return catalog
 }
@@ -161,7 +166,7 @@ func (table *kindTable) adopt(catalog storedCatalog) ([]query.ColumnDef, string)
 			added = append(added, column)
 			continue
 		}
-		if stored, storage := catalog.columns[at].storage, columnStorage(column); stored != storage {
+		if stored, storage := catalog.columns[at].storage, table.storage(column); stored != storage {
 			return nil, fmt.Sprintf("column %q stored as %s, now %s", column.Name, strings.TrimPrefix(stored, ":"), strings.TrimPrefix(storage, ":"))
 		}
 		table.StoredAs[index] = catalog.columns[at].physical
@@ -189,7 +194,7 @@ func widen(ctx context.Context, tx *sql.Tx, kind string, table *kindTable, catal
 		return fmt.Errorf("kind %q: %w", kind, err)
 	}
 	for index, column := range added {
-		catalog.columns = append(catalog.columns, storedColumn{declared: column.Name, physical: physical[index], storage: columnStorage(column)})
+		catalog.columns = append(catalog.columns, storedColumn{declared: column.Name, physical: physical[index], storage: table.storage(column)})
 		table.StoredAs[slices.IndexFunc(table.Columns, func(declared query.ColumnDef) bool { return declared.Name == column.Name })] = physical[index]
 	}
 	catalog.indexes = indexes
@@ -237,6 +242,9 @@ func (c storedCatalog) declare(name string) (*schema.Table, error) {
 	for _, column := range c.columns {
 		table.Columns = append(table.Columns, column.def())
 		table.StoredAs = append(table.StoredAs, column.physical)
+		if column.compressed() {
+			table.Compressed = append(table.Compressed, column.declared)
+		}
 	}
 	declared, err := table.Declare()
 	if err != nil {

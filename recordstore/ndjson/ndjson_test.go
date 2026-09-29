@@ -62,6 +62,58 @@ var _ = Describe("ndjson backend", func() {
 	})
 })
 
+// A backend compressing every sealed stream passes the whole conformance
+// suite too: reads, trims and reopens of a sealed stream read its gzip file.
+var _ = Describe("ndjson backend compressing sealed streams", func() {
+	recordstoretest.Conformance(func() recordstoretest.Harness {
+		clock := newFakeClock()
+		dir := GinkgoT().TempDir()
+		open := func() recordstore.Backend {
+			backend, err := ndjson.New(ndjson.Options{
+				Dir: dir, Schema: recordstoretest.Schema, MaxBytes: 1 << 20, KeepStreams: 100, TTL: recordstoretest.TTL, Now: clock.Now,
+				CompressSealed: true,
+			})
+			Expect(err).ToNot(HaveOccurred())
+			return backend
+		}
+		return recordstoretest.Harness{
+			Backend: open(), Elapse: clock.Advance, Advance: clock.Advance, Now: clock.Now, Reopen: open,
+		}
+	})
+
+	It("keeps a sealed stream in a gzip file, and a reopened one in a plain file again", func() {
+		ctx := context.Background()
+		backend, err := ndjson.New(ndjson.Options{
+			Dir: GinkgoT().TempDir(), Schema: recordstoretest.Schema, MaxBytes: 1 << 20, KeepStreams: 10, CompressSealed: true,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		_, err = backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(1, 3))
+		Expect(err).ToNot(HaveOccurred())
+		plain, err := backend.File(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(backend.Seal(ctx, "run-1")).To(Succeed())
+		sealed, err := backend.File(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sealed).To(Equal(plain + ".gz"))
+		Expect(plain).ToNot(BeAnExistingFile())
+		seqs, _ := recordstoretest.Scanned(backend, "run-1", 1)
+		Expect(seqs).To(Equal([]int64{2, 3}))
+
+		meta, err := backend.Meta(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(backend.Reopen(ctx, "run-1", meta.Generation)).To(Succeed())
+		reopened, err := backend.File(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(reopened).To(Equal(plain))
+		Expect(sealed).ToNot(BeAnExistingFile())
+		_, err = backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(4, 4))
+		Expect(err).ToNot(HaveOccurred())
+		seqs, _ = recordstoretest.Scanned(backend, "run-1", 0)
+		Expect(seqs).To(Equal([]int64{1, 2, 3, 4}))
+	})
+})
+
 var _ = Describe("ndjson backend files", func() {
 	var (
 		ctx   context.Context

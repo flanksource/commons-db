@@ -24,7 +24,7 @@ func BenchmarkRecordStoreAppend(b *testing.B) {
 				for range b.N {
 					b.StopTimer()
 					schemas := recordstore.NewSchemas()
-					registerBenchmarkSchema(b, schemas)
+					registerBenchmarkSchema(b, schemas, backend)
 					source := openBenchmarkSource(b, backend, schemas)
 					b.StartTimer()
 

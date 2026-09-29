@@ -16,7 +16,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,12 +59,19 @@ type Options struct {
 	// kind retaining rows.
 	TTL time.Duration
 
+	// CompressSealed keeps a sealed stream's file gzip-compressed, as
+	// <file>.gz: sealing rewrites it compressed and reopening writes it plain
+	// again. A compressed file is read from its start rather than bisected,
+	// and File may name it.
+	CompressSealed bool
+
 	// Now is the clock streams are stamped and expired by. Nil is time.Now.
 	Now func() time.Time
 }
 
 // Backend is a recordstore.Backend over a directory of files.
 type Backend struct {
+	compress bool
 	dir      string
 	schema   recordstore.SchemaResolver
 	maxBytes int64
@@ -132,6 +138,7 @@ func New(options Options) (*Backend, error) {
 	}
 	return &Backend{
 		dir: dir, schema: options.Schema, maxBytes: options.MaxBytes, keep: options.KeepStreams, ttl: options.TTL, now: now,
+		compress: options.CompressSealed,
 	}, nil
 }
 
@@ -331,18 +338,12 @@ func (b *Backend) Scan(_ context.Context, stream string, afterSeq int64, fn func
 	if first > state.HighSeq {
 		return nil
 	}
-	path := b.dataPath(state)
-	file, err := os.Open(path)
+	lines, _, file, err := b.linesFrom(state, first)
 	if err != nil {
-		return fmt.Errorf("stream %q: open %s: %w", stream, path, err)
+		return err
 	}
 	defer func() { _ = file.Close() }()
-	offset, err := lineAfter(file, state.Bytes, first-1)
-	if err != nil {
-		return fmt.Errorf("stream %q: find seq %d in %s: %w", stream, first, path, err)
-	}
-	section := io.NewSectionReader(file, offset, state.Bytes-offset)
-	return scanLines(bufio.NewReader(section), path, first, state.HighSeq, fn)
+	return scanLines(lines, b.dataPath(state), first, state.HighSeq, fn)
 }
 
 // scanLines reads lines first..high, checking each holds the seq its position
@@ -405,7 +406,8 @@ func (b *Backend) File(_ context.Context, stream string) (string, error) {
 	return b.dataPath(state), nil
 }
 
-// Seal marks stream complete in its sidecar.
+// Seal marks stream complete in its sidecar, and with CompressSealed rewrites
+// its file compressed.
 func (b *Backend) Seal(_ context.Context, stream string) error {
 	if err := recordstore.ValidateStream(stream); err != nil {
 		return err
@@ -417,7 +419,11 @@ func (b *Backend) Seal(_ context.Context, stream string) error {
 		return err
 	}
 	state.Sealed, state.UpdatedAt = true, b.now()
-	return b.writeSidecar(state)
+	if err := b.writeSidecar(state); err != nil || !b.compress || compressed(state) {
+		return err
+	}
+	_, err = b.compressFile(state)
+	return err
 }
 
 func (b *Backend) Reopen(_ context.Context, stream, generation string) error {
@@ -432,6 +438,11 @@ func (b *Backend) Reopen(_ context.Context, stream, generation string) error {
 	}
 	if !state.Sealed || state.Generation != generation || generation == "" {
 		return fmt.Errorf("stream %q: sealed generation %q was not found: %w", stream, generation, recordstore.ErrNotFound)
+	}
+	if compressed(state) {
+		if state, err = b.decompressFile(state); err != nil {
+			return err
+		}
 	}
 	state.Sealed, state.UpdatedAt = false, b.now()
 	return b.writeSidecar(state)

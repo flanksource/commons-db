@@ -1,6 +1,7 @@
 package ndjson
 
 import (
+	"compress/gzip"
 	"context"
 	"errors"
 	"fmt"
@@ -59,26 +60,28 @@ func (b *Backend) trimLocked(state sidecar, before time.Time) (sidecar, error) {
 // copyFrom writes state's committed lines from seq cut on to the data file a
 // stream starting at cut is kept in, and returns the sidecar describing it.
 func (b *Backend) copyFrom(state sidecar, cut int64) (sidecar, error) {
-	path := b.dataPath(state)
-	source, err := os.Open(path)
+	lines, offset, source, err := b.linesFrom(state, cut)
 	if err != nil {
-		return sidecar{}, fmt.Errorf("stream %q: open %s: %w", state.Stream, path, err)
+		return sidecar{}, err
 	}
 	defer func() { _ = source.Close() }()
-	offset, err := lineAfter(source, state.Bytes, cut-1)
-	if err != nil {
-		return sidecar{}, fmt.Errorf("stream %q: find seq %d in %s: %w", state.Stream, cut, path, err)
-	}
 	trimmed := state
 	trimmed.File = state.Stream + trimmedSeparator + strconv.FormatInt(cut, 10) + dataSuffix
+	if compressed(state) {
+		trimmed.File += gzipSuffix
+	}
 	trimmed.Bytes = state.Bytes - offset
 	target := b.dataPath(trimmed)
 	file, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return sidecar{}, fmt.Errorf("stream %q: create %s: %w", state.Stream, target, err)
 	}
-	_, copyErr := io.Copy(file, io.NewSectionReader(source, offset, trimmed.Bytes))
-	if err := errors.Join(copyErr, file.Close()); err != nil {
+	var writer io.WriteCloser = nopWriteCloser{file}
+	if compressed(state) {
+		writer = gzip.NewWriter(file)
+	}
+	_, copyErr := io.Copy(writer, lines)
+	if err := errors.Join(copyErr, writer.Close(), file.Close()); err != nil {
 		return sidecar{}, fmt.Errorf("stream %q: write %s: %w", state.Stream, filepath.Base(target), err)
 	}
 	trimmed.LowSeq = cut
