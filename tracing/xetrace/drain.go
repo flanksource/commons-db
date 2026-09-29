@@ -17,9 +17,15 @@ type poller interface {
 type DrainOptions struct {
 	// Interval is the ring-buffer poll cadence. Defaults to one second.
 	Interval time.Duration
-	// StartedAt bounds passive sessions whose target can contain older events.
-	// The exclusive stop bound is captured when ctx ends.
-	StartedAt  time.Time
+	// StartedAt bounds an attached session, whose target holds events from
+	// before the capture and keeps receiving them after it: events stamped
+	// before StartedAt, or at or after the moment ctx ends, are not delivered.
+	// Leave it zero for a session this process created, which only ever holds
+	// the capture's own events — comparing the server's timestamps with this
+	// host's clock would drop the last ones whenever the server's runs ahead.
+	StartedAt time.Time
+	// FinalDelay is how long Drain waits after ctx ends before its final read
+	// (Session.FinalDelay).
 	FinalDelay time.Duration
 	// OnEvent receives each new, deduplicated event in delivery order. It is
 	// invoked synchronously while dedup state is held — keep it fast (an append
@@ -213,7 +219,9 @@ func Drain(ctx context.Context, p poller, opts DrainOptions) error {
 	for {
 		select {
 		case <-ctx.Done():
-			stoppedAt = time.Now().UTC()
+			if !opts.StartedAt.IsZero() {
+				stoppedAt = time.Now().UTC()
+			}
 			// Events completing just before Stop may still be in SQL Server's
 			// dispatch buffer rather than the target we are about to read.
 			if opts.FinalDelay > 0 {

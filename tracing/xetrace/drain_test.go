@@ -365,3 +365,45 @@ func TestDrain_FinalDrainRunsAfterCancel(t *testing.T) {
 		t.Fatalf("expected LATE delivered via final drain, got %+v", got)
 	}
 }
+
+// runDrainToFinal cancels before the ticker fires, so batch reaches Drain only
+// through the final drain that follows the stop.
+func runDrainToFinal(t *testing.T, batch []Event, opts DrainOptions) []Event {
+	t.Helper()
+	p := &fakePoller{batches: [][]Event{batch}}
+	var got []Event
+	opts.Interval = time.Hour
+	opts.OnEvent = func(e Event) { got = append(got, e) }
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := Drain(ctx, p, opts); err != nil {
+		t.Fatalf("Drain returned error: %v", err)
+	}
+	return got
+}
+
+// A session this process created only holds what happened while it ran, so the
+// server's timestamps are not compared with this host's clock: a server clock
+// ahead of ours would otherwise drop the last events before the stop.
+func TestDrain_KeepsAnOwnedSessionsEventsStampedAfterOurStop(t *testing.T) {
+	serverAhead := mkEvent(9, time.Millisecond, "LAST", time.Now().UTC().Add(3*time.Second))
+
+	got := runDrainToFinal(t, []Event{serverAhead}, DrainOptions{})
+
+	if len(got) != 1 || got[0].Statement != "LAST" {
+		t.Fatalf("expected LAST delivered, got %+v", got)
+	}
+}
+
+// An attached session keeps running after the capture, so its stop bound still
+// cuts off what happened after the stop.
+func TestDrain_BoundsAnAttachedSessionAtTheStop(t *testing.T) {
+	now := time.Now().UTC()
+	after := mkEvent(9, time.Millisecond, "AFTER", now.Add(time.Minute))
+
+	got := runDrainToFinal(t, []Event{after}, DrainOptions{StartedAt: now.Add(-time.Minute)})
+
+	if len(got) != 0 {
+		t.Fatalf("expected nothing after the stop, got %+v", got)
+	}
+}
