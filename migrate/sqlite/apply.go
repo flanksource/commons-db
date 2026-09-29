@@ -28,35 +28,18 @@ type ReconcileOptions struct {
 // parses it as inspection does, so a declaration and the table it created
 // compare equal.
 func ReconcileTables(ctx context.Context, database schema.ExecQuerier, options ReconcileOptions, tables ...*schema.Table) error {
-	if len(tables) == 0 {
-		return errors.New("sqlite migrate: no table declared")
-	}
 	driver, err := atlas.Open(database)
 	if err != nil {
 		return fmt.Errorf("sqlite migrate: open driver: %w", err)
 	}
-	names := make([]string, len(tables))
-	for index, table := range tables {
-		if err := parseRawTypes(table); err != nil {
-			return err
-		}
-		names[index] = table.Name
-	}
-	current, err := driver.InspectSchema(ctx, "", &schema.InspectOptions{Mode: schema.InspectTables, Tables: names})
+	changes, err := diffTables(ctx, driver, options, tables)
 	if err != nil {
-		return fmt.Errorf("sqlite migrate: inspect %s: %w", strings.Join(names, ", "), err)
-	}
-	desired := schema.New(current.Name).AddTables(tables...)
-	changes, err := driver.SchemaDiff(current, desired)
-	if err != nil {
-		return fmt.Errorf("sqlite migrate: diff %s: %w", strings.Join(names, ", "), err)
-	}
-	if err := refuseRewrites(changes, options); err != nil {
 		return err
 	}
 	if len(changes) == 0 {
 		return nil
 	}
+	names := tableNames(tables)
 	plan, err := driver.PlanChanges(ctx, "", changes)
 	if err != nil {
 		return fmt.Errorf("sqlite migrate: plan %d changes: %w", len(changes), err)
@@ -73,6 +56,51 @@ func ReconcileTables(ctx context.Context, database schema.ExecQuerier, options R
 	}
 	log.V(1).Infof("Applied %d sqlite schema changes to %s", len(changes), strings.Join(names, ", "))
 	return nil
+}
+
+// PendingChanges reports the changes ReconcileTables would apply, without applying them. It only
+// reads the schema, so a caller can skip opening a migration transaction when nothing is pending.
+// It refuses the same rewrites ReconcileTables refuses.
+func PendingChanges(ctx context.Context, database schema.ExecQuerier, options ReconcileOptions, tables ...*schema.Table) ([]schema.Change, error) {
+	driver, err := atlas.Open(database)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite migrate: open driver: %w", err)
+	}
+	return diffTables(ctx, driver, options, tables)
+}
+
+func diffTables(ctx context.Context, driver atlasmigrate.Driver, options ReconcileOptions, tables []*schema.Table) ([]schema.Change, error) {
+	if len(tables) == 0 {
+		return nil, errors.New("sqlite migrate: no table declared")
+	}
+	for _, table := range tables {
+		if err := parseRawTypes(table); err != nil {
+			return nil, err
+		}
+	}
+	names := tableNames(tables)
+	current, err := driver.InspectSchema(ctx, "", &schema.InspectOptions{Mode: schema.InspectTables, Tables: names})
+	if err != nil {
+		return nil, fmt.Errorf("sqlite migrate: inspect %s: %w", strings.Join(names, ", "), err)
+	}
+	desired := schema.New(current.Name).AddTables(tables...)
+	changes, err := driver.SchemaDiff(current, desired)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite migrate: diff %s: %w", strings.Join(names, ", "), err)
+	}
+	changes = withCheckExpressionChanges(current, desired, changes)
+	if err := refuseRewrites(changes, options); err != nil {
+		return nil, err
+	}
+	return changes, nil
+}
+
+func tableNames(tables []*schema.Table) []string {
+	names := make([]string, len(tables))
+	for index, table := range tables {
+		names[index] = table.Name
+	}
+	return names
 }
 
 // parseRawTypes gives every column declared by its raw type alone the type
@@ -106,7 +134,7 @@ func refuseRewrites(changes []schema.Change, options ReconcileOptions) error {
 			for _, inner := range change.Changes {
 				switch item := inner.(type) {
 				case *schema.AddColumn, *schema.AddIndex:
-				case *schema.AddPrimaryKey, *schema.AddForeignKey, *schema.AddCheck:
+				case *schema.AddPrimaryKey, *schema.AddForeignKey, *schema.AddCheck, *schema.ModifyCheck:
 					if !options.AllowRebuilds {
 						described = append(described, describe(inner))
 					}
@@ -185,6 +213,8 @@ func describe(change schema.Change) string {
 		return "drop primary key"
 	case *schema.ModifyPrimaryKey:
 		return "change primary key"
+	case *schema.ModifyCheck:
+		return fmt.Sprintf("change check %q", change.To.Name)
 	case *schema.DropTable:
 		return fmt.Sprintf("drop table %q", change.T.Name)
 	default:
