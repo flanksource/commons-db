@@ -38,23 +38,7 @@ func (a recordAppender) Append(events []xetrace.Event) (recordstore.Window, quer
 	for index, event := range events {
 		result := FromEvent(event)
 		if event.Name == xetrace.EventXMLDeadlockReport {
-			graph, err := deadlocks.DecodeReport(event.Timestamp, event.DeadlockReportXML)
-			if err != nil {
-				return recordstore.Window{}, query.EventsRef{}, fmt.Errorf("decode deadlock row %d of stream %s: %w", index, a.stream, err)
-			}
-			if a.db == nil {
-				return recordstore.Window{}, query.EventsRef{}, fmt.Errorf("resolve deadlock row %d of stream %s: no database lease", index, a.stream)
-			}
-			graphs := []deadlocks.Graph{graph}
-			if err := deadlocks.Resolve(a.ctx, a.db, graphs); err != nil {
-				return recordstore.Window{}, query.EventsRef{}, fmt.Errorf("resolve deadlock row %d of stream %s: %w", index, a.stream, err)
-			}
-			graph = graphs[0]
-			deadlocks.Analyze(&graph.Deadlock)
-			result.Deadlock = &graph
-			result.Database = graph.Database
-			result.SQL = graph.VictimStatement
-			result.Tables = graph.Objects
+			a.decodeDeadlock(event, &result)
 		}
 		row, err := recordstore.EncodeRow(result)
 		if err != nil {
@@ -77,6 +61,32 @@ func (a recordAppender) Append(events []xetrace.Event) (recordstore.Window, quer
 		return recordstore.Window{}, query.EventsRef{}, fmt.Errorf("describe stream %s after appending %d row(s): %w", a.stream, len(rows), err)
 	}
 	return appended.Window, ref, nil
+}
+
+// decodeDeadlock fills result with the decoded, index-resolved and classified
+// graph of a deadlock report. A report that cannot be decoded is stored with its
+// XML and the failure instead, and one whose indexes cannot be looked up is
+// stored unresolved and naming why: either way it is one event's detail, and
+// failing the append would stop the whole capture from recording.
+func (a recordAppender) decodeDeadlock(event xetrace.Event, result *EventRow) {
+	graph, err := deadlocks.DecodeReport(event.Timestamp, event.DeadlockReportXML)
+	if err != nil {
+		result.RawStatement = event.DeadlockReportXML
+		result.ErrorMessage = fmt.Sprintf("decode deadlock report: %v", err)
+		return
+	}
+	graphs := []deadlocks.Graph{graph}
+	if a.db == nil {
+		result.ErrorMessage = "resolve deadlock indexes: no database lease"
+	} else if err := deadlocks.Resolve(a.ctx, a.db, graphs); err != nil {
+		result.ErrorMessage = fmt.Sprintf("resolve deadlock indexes: %v", err)
+	}
+	graph = graphs[0]
+	deadlocks.Analyze(&graph.Deadlock)
+	result.Deadlock = &graph
+	result.Database = graph.Database
+	result.SQL = graph.VictimStatement
+	result.Tables = graph.Objects
 }
 
 // Seal declares the stream complete, so a follower that has read its last row
