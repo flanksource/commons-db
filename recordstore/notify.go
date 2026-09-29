@@ -114,6 +114,31 @@ func (n *Notifier) Reopen(ctx context.Context, stream, generation string) error 
 	return nil
 }
 
+// AppendBatch applies batch through the wrapped backend, which must be a
+// BatchAppender, and wakes the waiters on every stream the batch names.
+func (n *Notifier) AppendBatch(ctx context.Context, batch Batch) (BatchResult, error) {
+	appender, ok := n.backend.(BatchAppender)
+	if !ok {
+		return BatchResult{}, fmt.Errorf("record store cannot apply batch %q: %w", batch.ID, ErrUnsupported)
+	}
+	result, err := appender.AppendBatch(ctx, batch)
+	if err != nil {
+		return result, err
+	}
+	for _, entry := range batch.Entries {
+		n.wake(entry.Stream)
+	}
+	return result, nil
+}
+
+func (n *Notifier) BatchOutcome(ctx context.Context, id string) (BatchResult, bool, error) {
+	appender, ok := n.backend.(BatchAppender)
+	if !ok {
+		return BatchResult{}, false, fmt.Errorf("record store cannot read batch %q: %w", id, ErrUnsupported)
+	}
+	return appender.BatchOutcome(ctx, id)
+}
+
 func (n *Notifier) Delete(ctx context.Context, stream string) error {
 	err := n.backend.Delete(ctx, stream)
 	n.wake(stream)

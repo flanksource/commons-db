@@ -137,8 +137,8 @@ func copyPredecessor(ctx context.Context, from predecessor, target string) error
 // migrateCopy brings the copy at path from version to catalogVersion in one
 // transaction: a version 2 catalog gains sealed streams, and a version 2 or 3
 // kind table renames its positional columns to derived names recorded in
-// record_kinds. A version 4 or 5 catalog already describes its tables as
-// version 6 reads them, so it only takes the new version.
+// record_kinds. A version 5 or older catalog gains the batch ledger; a version
+// 4 or 5 one already describes its tables as version 6 reads them.
 func migrateCopy(ctx context.Context, path string, version int) (err error) {
 	database, err := sql.Open("sqlite", fileURI(path))
 	if err != nil {
@@ -165,6 +165,9 @@ func migrateCopy(ctx context.Context, path string, version int) (err error) {
 				return fmt.Errorf("kind %q: %w", kind.kind, err)
 			}
 		}
+	}
+	if _, err := tx.ExecContext(ctx, ledgerStatement); err != nil {
+		return fmt.Errorf("add the batch ledger: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`UPDATE record_store_format SET version = %d WHERE key = 1`, catalogVersion)); err != nil {
 		return fmt.Errorf("record catalog version %d: %w", catalogVersion, err)

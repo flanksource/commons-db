@@ -167,6 +167,19 @@ var _ = Describe("sqlite backend versioned files", func() {
 			Expect(backend.Close()).To(Succeed())
 			Expect(fileBytes(v5Path)).To(Equal(original), "the v5 file changed")
 		})
+
+		It("gives the copy an empty batch ledger", func() {
+			backend := openSQLite(unversioned, clock, eventsSchema, false)
+			DeferCleanup(backend.Close)
+			_, found, err := backend.BatchOutcome(ctx, "b-1")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeFalse())
+
+			result, err := backend.AppendBatch(ctx, recordstore.Batch{ID: "b-1", Producer: recordstore.Producer{Instance: "cli-1", Seq: 1},
+				Entries: []recordstore.BatchEntry{{Op: recordstore.BatchAppend, Stream: "run-1", Kind: "events", Rows: []recordstore.Row{eventRow(3)}}}})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.Entries).To(Equal([]recordstore.EntryResult{{Append: &recordstore.AppendResult{Window: recordstore.Window{From: 3, To: 3}}}}))
+		})
 	})
 
 	Context("when a durable version 4 file holds rows", func() {
@@ -236,6 +249,19 @@ var _ = Describe("sqlite backend versioned files", func() {
 			Expect(fileBytes(unversioned)).To(Equal(original), "the unversioned file changed")
 		})
 
+		It("gives the copy an empty batch ledger", func() {
+			backend := openSQLite(unversioned, clock, eventsSchema, false)
+			DeferCleanup(backend.Close)
+			_, found, err := backend.BatchOutcome(ctx, "b-1")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeFalse())
+
+			result, err := backend.AppendBatch(ctx, recordstore.Batch{ID: "b-1", Producer: recordstore.Producer{Instance: "cli-1", Seq: 1},
+				Entries: []recordstore.BatchEntry{{Op: recordstore.BatchAppend, Stream: "run-1", Kind: "events", Rows: []recordstore.Row{eventRow(3)}}}})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.Entries).To(Equal([]recordstore.EntryResult{{Append: &recordstore.AppendResult{Window: recordstore.Window{From: 3, To: 3}}}}))
+		})
+
 		It("reuses the v6 copy on a second open rather than copying again", func() {
 			first := openSQLite(unversioned, clock, eventsSchema, false)
 			_, err := first.Append(ctx, "run-1", "events", []recordstore.Row{eventRow(3)})
@@ -263,6 +289,19 @@ var _ = Describe("sqlite backend versioned files", func() {
 			Expect(catalogVersion(ctx, index.Path())).To(Equal(6))
 			Expect(index.Close()).To(Succeed())
 			Expect(fileBytes(unversioned)).To(Equal(original), "the unversioned file changed")
+		})
+
+		It("gives the copy an empty batch ledger", func() {
+			backend := openSQLite(unversioned, clock, eventsSchema, false)
+			DeferCleanup(backend.Close)
+			_, found, err := backend.BatchOutcome(ctx, "b-1")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeFalse())
+
+			result, err := backend.AppendBatch(ctx, recordstore.Batch{ID: "b-1", Producer: recordstore.Producer{Instance: "cli-1", Seq: 1},
+				Entries: []recordstore.BatchEntry{{Op: recordstore.BatchAppend, Stream: "run-1", Kind: "events", Rows: []recordstore.Row{eventRow(3)}}}})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(result.Entries).To(Equal([]recordstore.EntryResult{{Append: &recordstore.AppendResult{Window: recordstore.Window{From: 3, To: 3}}}}))
 		})
 	})
 

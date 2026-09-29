@@ -26,6 +26,7 @@ backend, err := sqlite.Open(sqlite.Options{
 | `record_streams` | one row per stream: `stream_id`, `generation`, `kind`, `total`, `low_seq`, `high_seq`, `updated_at`, `expires_at`, `capped`, `sealed`. It's indexed on `expires_at` for the sweeper. |
 | `record_kinds` | one row per kind: its table name and a JSON catalog of each column's declared name, physical name, stored type and declared type, plus the key and, for a kind that replaces stored rows, `onConflict:replace` |
 | `record_appends` | when each append stored its rows, keyed by the seq of its last row. `Trim` finds the rows appended before an instant through it. |
+| `record_spool_batches` | one row per batch `AppendBatch` applied: `batch_id`, the producer instance and its `producer_seq`, the `outcome`, the per-entry `results` as JSON, and `ingested_at`. A batch id already recorded is answered from here instead of being applied twice. |
 | `records_<kind>` | the rows: `stream_id`, `seq`, then the kind's columns, with primary key `(stream_id, seq)` |
 
 Column names in `records_<kind>` are derived safe names (see [sqlitetable](../sqlitetable/#physical-names)). Read a kind's table through `backend.Table(kind)`, whose `Select()` aliases them back, or through the result profile.

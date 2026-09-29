@@ -17,7 +17,8 @@ import (
 // possibly more than any one build declares — where version 4 listed exactly
 // the columns one build declared, and so refused a table another build had
 // added a column to. Version 6 streams may skip seqs, which a build reading
-// version 5 would take for rows it lost.
+// version 5 would take for rows it lost, and it records every batch it applied
+// in record_spool_batches.
 const catalogVersion = 6
 
 func (b *Backend) createCatalog(ctx context.Context) error {
@@ -42,6 +43,7 @@ var catalogStatements = []string{
 	`CREATE TABLE record_appends (
 		stream_id TEXT NOT NULL, last_seq INTEGER NOT NULL, appended_at TEXT NOT NULL,
 		PRIMARY KEY (stream_id, last_seq))`,
+	ledgerStatement,
 }
 
 func (b *Backend) createCatalogLocked(ctx context.Context, writer *sql.DB) error {
@@ -118,13 +120,20 @@ func inspectCatalog(ctx context.Context, database queryer, path string, supporte
 	if !slices.Contains(supported, version) {
 		return 0, incompatibleCatalog(fmt.Sprintf("an unsupported catalog version %d, expected %s", version, strings.Trim(fmt.Sprint(supported), "[]")))
 	}
+	// Version 6 added the batch ledger; the other four objects every
+	// supported version has.
+	expected := 4
+	if version >= 6 {
+		expected++
+	}
 	var objects int
 	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM sqlite_schema WHERE
 		(type = 'table' AND name IN ('record_streams', 'record_kinds', 'record_appends')) OR
-		(type = 'index' AND name = 'record_streams_expires_at')`).Scan(&objects); err != nil {
+		(type = 'table' AND name = 'record_spool_batches' AND ? >= 6) OR
+		(type = 'index' AND name = 'record_streams_expires_at')`, version).Scan(&objects); err != nil {
 		return 0, fmt.Errorf("sqlite record store %s: validate catalog: %w", path, err)
 	}
-	if objects != 4 {
+	if objects != expected {
 		return 0, incompatibleCatalog(fmt.Sprintf("an incomplete catalog version %d", version))
 	}
 	return version, nil

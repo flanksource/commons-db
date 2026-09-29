@@ -275,7 +275,7 @@ func (b *Backend) Reopen(ctx context.Context, stream, generation string) error {
 		return err
 	}
 	if !meta.Sealed || meta.Generation != generation || generation == "" {
-		return fmt.Errorf("stream %q: sealed generation %q was not found", stream, generation)
+		return fmt.Errorf("stream %q: sealed generation %q was not found: %w", stream, generation, recordstore.ErrNotFound)
 	}
 	now := b.now()
 	meta.Sealed, meta.UpdatedAt = false, now
