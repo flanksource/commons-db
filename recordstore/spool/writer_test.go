@@ -117,6 +117,9 @@ var _ = Describe("Writer", func() {
 
 		Expect(writer.Flush(ctx)).To(Succeed())
 		Expect(rowsPerBatch()).To(Equal([]int{3, 3, 1}))
+		for _, batch := range delivered {
+			Expect(batch.Schemas).To(Equal([]recordstore.KindSchema{schema}), "every batch carries the schema of the kind it appends")
+		}
 		var names []string
 		for _, batch := range delivered {
 			for _, entry := range batch.Entries {
@@ -126,6 +129,15 @@ var _ = Describe("Writer", func() {
 			}
 		}
 		Expect(names).To(Equal([]string{"row-001", "row-002", "row-003", "row-004", "row-005", "row-006", "row-007"}))
+	})
+
+	It("gathers an append of no rows, which starts its stream", func() {
+		open(spool.WriterOptions{})
+		Expect(writer.Append(ctx, "run-1", schema.Kind, nil)).To(Succeed())
+		Expect(writer.Flush(ctx)).To(Succeed())
+		Expect(delivered).To(HaveLen(1))
+		Expect(delivered[0].Schemas).To(Equal([]recordstore.KindSchema{schema}))
+		Expect(delivered[0].Entries).To(Equal([]recordstore.BatchEntry{{Op: recordstore.BatchAppend, Stream: "run-1", Kind: schema.Kind}}))
 	})
 
 	It("cuts a batch at its byte cap, keeping at least one row in each", func() {
