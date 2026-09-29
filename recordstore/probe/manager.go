@@ -5,10 +5,16 @@ package probe
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/gofrs/flock"
 
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
@@ -129,13 +135,28 @@ func (o *Options) validate() error {
 	return nil
 }
 
-// Manager admits at most one local writer for an external source identity.
-type Manager struct {
-	mu   sync.Mutex
-	runs map[string]*Run
+// ManagerOptions configure NewManager.
+type ManagerOptions struct {
+	// LockDir, when set, is where an armed identity is held in a lock file
+	// for as long as its run lasts, so a manager in another process sharing
+	// the directory refuses the identity too. Without it a manager admits one
+	// writer per identity within its own process only.
+	LockDir string
 }
 
-func NewManager() *Manager { return &Manager{runs: map[string]*Run{}} }
+// Manager admits at most one writer for an external source identity: one in
+// its process, and one across the processes sharing its LockDir.
+type Manager struct {
+	lockDir string
+
+	mu    sync.Mutex
+	runs  map[string]*Run
+	locks map[string]*flock.Flock
+}
+
+func NewManager(options ManagerOptions) *Manager {
+	return &Manager{lockDir: options.LockDir, runs: map[string]*Run{}, locks: map[string]*flock.Flock{}}
+}
 
 // Arm reserves the identity before opening the source, creates its empty
 // stream, and returns only after its first durable reference is available.
@@ -197,8 +218,33 @@ func (m *Manager) reserve(identity string) error {
 	if _, found := m.runs[identity]; found {
 		return fmt.Errorf("probe %q: %w", identity, ErrAlreadyManaged)
 	}
+	if m.lockDir != "" {
+		lock, err := m.lockIdentity(identity)
+		if err != nil {
+			return err
+		}
+		m.locks[identity] = lock
+	}
 	m.runs[identity] = nil
 	return nil
+}
+
+// lockIdentity takes identity's lock file in the lock dir, named by a digest
+// of the identity so any identity makes a safe file name.
+func (m *Manager) lockIdentity(identity string) (*flock.Flock, error) {
+	if err := os.MkdirAll(m.lockDir, 0o755); err != nil {
+		return nil, fmt.Errorf("probe %q: create lock dir %s: %w", identity, m.lockDir, err)
+	}
+	sum := sha256.Sum256([]byte(identity))
+	lock := flock.New(filepath.Join(m.lockDir, hex.EncodeToString(sum[:])[:32]+".lock"))
+	held, err := lock.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("probe %q: lock: %w", identity, err)
+	}
+	if !held {
+		return nil, fmt.Errorf("probe %q is managed by another process: %w", identity, ErrAlreadyManaged)
+	}
+	return lock, nil
 }
 
 func (m *Manager) install(identity string, run *Run) {
@@ -211,6 +257,10 @@ func (m *Manager) forget(identity string, run *Run) {
 	m.mu.Lock()
 	if current, found := m.runs[identity]; found && (current == run || current == nil) {
 		delete(m.runs, identity)
+		if lock, locked := m.locks[identity]; locked {
+			_ = lock.Close()
+			delete(m.locks, identity)
+		}
 	}
 	m.mu.Unlock()
 }

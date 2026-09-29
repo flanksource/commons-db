@@ -3,6 +3,7 @@ package probe_test
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -165,7 +166,7 @@ func page(generation string, next, write int64, active bool, id string) probe.Ba
 var _ = Describe("durable probe manager", func() {
 	It("creates the stream before returning an exclusively owned run", func() {
 		backend := &fakeBackend{}
-		manager := probe.NewManager()
+		manager := probe.NewManager(probe.ManagerOptions{})
 		source := &fakeSource{}
 		opened := 0
 		run, err := manager.Arm(context.Background(), options(backend), func(context.Context) (probe.Source, error) {
@@ -192,7 +193,7 @@ var _ = Describe("durable probe manager", func() {
 	It("does not advance or commit a cursor until its rows append", func() {
 		appendErr := errors.New("record store unavailable")
 		backend := &fakeBackend{appendErr: appendErr}
-		manager := probe.NewManager()
+		manager := probe.NewManager(probe.ManagerOptions{})
 		source := &fakeSource{pages: []probe.Batch{page("source-7", 1, 1, true, "call-1")}}
 		_, err := manager.Arm(context.Background(), options(backend), func(context.Context) (probe.Source, error) { return source, nil })
 		Expect(err).To(MatchError(appendErr), "the stream creation itself must be durable")
@@ -214,7 +215,7 @@ var _ = Describe("durable probe manager", func() {
 
 	It("rejects a source generation change before appending it", func() {
 		backend := &fakeBackend{}
-		manager := probe.NewManager()
+		manager := probe.NewManager(probe.ManagerOptions{})
 		opts := options(backend)
 		opts.Cursor = probe.Cursor{Generation: "source-7", Next: 4}
 		source := &fakeSource{pages: []probe.Batch{page("source-8", 5, 5, true, "wrong-generation")}}
@@ -229,7 +230,7 @@ var _ = Describe("durable probe manager", func() {
 
 	It("fails a non-advancing source while backlog remains", func() {
 		backend := &fakeBackend{}
-		manager := probe.NewManager()
+		manager := probe.NewManager(probe.ManagerOptions{})
 		source := &fakeSource{pages: []probe.Batch{{Generation: "source-7", Next: 3, Write: 4, More: true, Active: true}}}
 		opts := options(backend)
 		opts.Cursor = probe.Cursor{Generation: "source-7", Next: 3}
@@ -243,7 +244,7 @@ var _ = Describe("durable probe manager", func() {
 
 	It("commits an empty page without appending an empty record batch", func() {
 		backend := &fakeBackend{}
-		manager := probe.NewManager()
+		manager := probe.NewManager(probe.ManagerOptions{})
 		source := &fakeSource{pages: []probe.Batch{{Generation: "source-7", Next: 3, Write: 3, Active: true}}}
 		run, err := manager.Arm(context.Background(), options(backend), func(context.Context) (probe.Source, error) { return source, nil })
 		Expect(err).NotTo(HaveOccurred())
@@ -258,7 +259,7 @@ var _ = Describe("durable probe manager", func() {
 
 	It("drains every page left behind by an inactive frozen source", func() {
 		backend := &fakeBackend{}
-		manager := probe.NewManager()
+		manager := probe.NewManager(probe.ManagerOptions{})
 		source := &fakeSource{pages: []probe.Batch{
 			{Generation: "source-7", Next: 1, Write: 2, More: true, Active: false, Rows: []recordstore.Row{{"id": "event-1"}}},
 			{Generation: "source-7", Next: 2, Write: 2, Active: false, Rows: []recordstore.Row{{"id": "event-2"}}},
@@ -277,7 +278,7 @@ var _ = Describe("durable probe manager", func() {
 	It("stops in freeze drain finalize seal release order", func() {
 		operations := []string{}
 		backend := &fakeBackend{operations: &operations}
-		manager := probe.NewManager()
+		manager := probe.NewManager(probe.ManagerOptions{})
 		source := &fakeSource{
 			operations: &operations,
 			pages:      []probe.Batch{page("source-7", 1, 1, false, "closed-call")},
@@ -297,7 +298,7 @@ var _ = Describe("durable probe manager", func() {
 	It("detaches without changing the source or sealing its stream", func() {
 		operations := []string{}
 		backend := &fakeBackend{operations: &operations}
-		manager := probe.NewManager()
+		manager := probe.NewManager(probe.ManagerOptions{})
 		source := &fakeSource{operations: &operations}
 		run, err := manager.Arm(context.Background(), options(backend), func(context.Context) (probe.Source, error) { return source, nil })
 		Expect(err).NotTo(HaveOccurred())
@@ -309,5 +310,53 @@ var _ = Describe("durable probe manager", func() {
 		Expect(backend.sealed).To(BeFalse())
 		_, err = manager.Arm(context.Background(), options(backend), func(context.Context) (probe.Source, error) { return &fakeSource{}, nil })
 		Expect(err).NotTo(HaveOccurred(), "a successor may claim the detached identity")
+	})
+})
+
+var _ = Describe("probe manager across processes", func() {
+	It("admits one manager sharing its lock dir per identity, until that run ends", func() {
+		lockDir := GinkgoT().TempDir()
+		backend := &fakeBackend{}
+		first := probe.NewManager(probe.ManagerOptions{LockDir: lockDir})
+		second := probe.NewManager(probe.ManagerOptions{LockDir: lockDir})
+		opened := 0
+		open := func(context.Context) (probe.Source, error) {
+			opened++
+			return &fakeSource{}, nil
+		}
+		run, err := first.Arm(context.Background(), options(backend), open)
+		Expect(err).NotTo(HaveOccurred())
+		locks, err := filepath.Glob(filepath.Join(lockDir, "*.lock"))
+		Expect(err).NotTo(HaveOccurred())
+		Expect(locks).To(HaveLen(1))
+		Expect(filepath.Base(locks[0])).To(MatchRegexp(`^[0-9a-f]{32}\.lock$`))
+
+		_, err = second.Arm(context.Background(), options(backend), open)
+		Expect(errors.Is(err, probe.ErrAlreadyManaged)).To(BeTrue(), "Arm: %v", err)
+		Expect(opened).To(Equal(1), "a managed identity's source is never opened twice")
+
+		_, err = run.Detach(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+		again, err := second.Arm(context.Background(), options(backend), open)
+		Expect(err).NotTo(HaveOccurred())
+		_, err = again.Detach(context.Background())
+		Expect(err).NotTo(HaveOccurred())
+	})
+
+	It("releases the identity's lock when arming fails", func() {
+		lockDir := GinkgoT().TempDir()
+		manager := probe.NewManager(probe.ManagerOptions{LockDir: lockDir})
+		_, err := manager.Arm(context.Background(), options(&fakeBackend{}), func(context.Context) (probe.Source, error) {
+			return nil, errors.New("source unreachable")
+		})
+		Expect(err).To(MatchError(ContainSubstring("unreachable")))
+
+		other := probe.NewManager(probe.ManagerOptions{LockDir: lockDir})
+		run, err := other.Arm(context.Background(), options(&fakeBackend{}), func(context.Context) (probe.Source, error) {
+			return &fakeSource{}, nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = run.Detach(context.Background())
+		Expect(err).NotTo(HaveOccurred())
 	})
 })
