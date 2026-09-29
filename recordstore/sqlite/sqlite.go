@@ -397,19 +397,26 @@ func (b *Backend) Reopen(ctx context.Context, stream, generation string) error {
 	}
 	unlock := b.locks.Lock(stream)
 	defer unlock()
-	now := b.now()
 	return b.database.Write(func(writer *sql.DB) error {
-		result, err := writer.ExecContext(ctx,
-			`UPDATE record_streams SET sealed = 0, updated_at = ? WHERE stream_id = ? AND generation = ? AND sealed = 1 AND (expires_at IS NULL OR expires_at > ?)`,
-			sqlitetable.FormatTime(now), stream, generation, sqlitetable.FormatTime(now))
-		if err != nil {
-			return fmt.Errorf("stream %q: reopen: %w", stream, err)
-		}
-		if affected, err := result.RowsAffected(); err != nil || affected != 1 {
-			return errors.Join(fmt.Errorf("stream %q: sealed generation %q was not found", stream, generation), err)
-		}
-		return nil
+		return inTx(ctx, writer, fmt.Sprintf("stream %q: reopen", stream), func(tx *sql.Tx) error {
+			return reopenTx(ctx, tx, stream, generation, b.now())
+		})
 	})
+}
+
+// reopenTx resumes stream's sealed generation in tx. The caller holds the
+// stream's lock.
+func reopenTx(ctx context.Context, tx *sql.Tx, stream, generation string, now time.Time) error {
+	result, err := tx.ExecContext(ctx,
+		`UPDATE record_streams SET sealed = 0, updated_at = ? WHERE stream_id = ? AND generation = ? AND sealed = 1 AND (expires_at IS NULL OR expires_at > ?)`,
+		sqlitetable.FormatTime(now), stream, generation, sqlitetable.FormatTime(now))
+	if err != nil {
+		return fmt.Errorf("stream %q: reopen: %w", stream, err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return errors.Join(fmt.Errorf("stream %q: sealed generation %q was not found", stream, generation), err)
+	}
+	return nil
 }
 
 // SetExpiry makes an index expire at the source's exact deadline. A nil

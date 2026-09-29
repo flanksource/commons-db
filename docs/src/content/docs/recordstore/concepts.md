@@ -107,6 +107,8 @@ A `Scan` from below the low seq starts at the low seq.
 
 Sealing a sealed stream does nothing. The seal ends with the stream, so an id reused after expiry starts unsealed.
 
+Every backend also implements `recordstore.Reopener`. `Reopen(ctx, stream, generation)` resumes a sealed stream, but only while it still holds the generation the caller recorded. The next append continues after `HighSeq`, and the rows already stored don't change. That holds for a kind that replaces rows too: the seqs they left behind stay skipped. A reader that saw the seal must fetch `Meta` again before it waits for more, and a derived index reopens when its source does.
+
 ## Errors
 
 | Error | Returned when |

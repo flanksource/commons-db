@@ -548,4 +548,22 @@ var _ = Describe("Indexer over a source that replaces rows", func() {
 		seqs, _ := recordstoretest.Scanned(index, "run-1", 0)
 		Expect(seqs).To(Equal([]int64{2, 4, 5}))
 	})
+
+	It("follows a sealed stream that resumes and replaces rows it had indexed", func() {
+		replace(recordstoretest.SampleRows(1, 3)...)
+		Expect(source.Seal(ctx, "run-1")).To(Succeed())
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		sealed, err := source.Meta(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(source.Reopen(ctx, "run-1", sealed.Generation)).To(Succeed())
+		replace(changed(2))
+
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		expectMirrored()
+		indexMeta, err := index.Meta(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(indexMeta.Sealed).To(BeFalse())
+		seqs, _ := recordstoretest.Scanned(index, "run-1", 0)
+		Expect(seqs).To(Equal([]int64{1, 3, 4}))
+	})
 })
