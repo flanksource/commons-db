@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"time"
 
@@ -118,6 +119,40 @@ var _ = Describe("sqlite backend batches", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(found).To(BeTrue())
 		Expect(outcome).To(Equal(first))
+	})
+
+	It("reports the last seq it applied of each producer", func() {
+		seq, err := backend.ProducerSeq(ctx, "cli-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(seq).To(BeZero())
+		for _, n := range []int64{1, 2, 3} {
+			next := producer
+			next.Seq = n
+			apply(recordstore.Batch{ID: fmt.Sprintf("b-%d", n), Producer: next, Entries: []recordstore.BatchEntry{appendEntry("run-1")}})
+		}
+
+		seq, err = backend.ProducerSeq(ctx, "cli-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(seq).To(Equal(int64(3)))
+		seq, err = backend.ProducerSeq(ctx, "cli-2")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(seq).To(BeZero())
+	})
+
+	It("sweeps the ledger rows older than a moment, but for the ones it is told to keep", func() {
+		apply(recordstore.Batch{ID: "b-old", Producer: producer, Entries: []recordstore.BatchEntry{appendEntry("run-1")}})
+		apply(recordstore.Batch{ID: "b-kept", Producer: producer, Entries: []recordstore.BatchEntry{appendEntry("run-1")}})
+		clock.Advance(time.Hour)
+		apply(recordstore.Batch{ID: "b-new", Producer: producer, Entries: []recordstore.BatchEntry{appendEntry("run-1")}})
+
+		swept, err := backend.SweepBatches(ctx, clock.Now().Add(-time.Minute), func(id string) bool { return id == "b-kept" })
+		Expect(err).ToNot(HaveOccurred())
+		Expect(swept).To(Equal(1))
+		for id, found := range map[string]bool{"b-old": false, "b-kept": true, "b-new": true} {
+			_, ok, err := backend.BatchOutcome(ctx, id)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(ok).To(Equal(found), id)
+		}
 	})
 
 	It("reports a batch id it never applied as not found", func() {

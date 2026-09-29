@@ -38,6 +38,19 @@ func predecessors(configured string) []predecessor {
 	}
 }
 
+// CatalogVersion is the catalog version this build reads and writes, for a
+// process telling another which files it can open.
+const CatalogVersion = catalogVersion
+
+// VersionedPath is the file this build opens for the configured path
+// <dir>/<file>: <dir>/v<CatalogVersion>/<file>, made absolute.
+func VersionedPath(configured string) string {
+	if absolute, err := filepath.Abs(configured); err == nil {
+		configured = absolute
+	}
+	return versionedPath(configured, catalogVersion)
+}
+
 // versionedPath is where catalog version keeps the configured path <dir>/<file>:
 // <dir>/v<version>/<file>.
 func versionedPath(configured string, version int) string {
