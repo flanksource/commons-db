@@ -20,6 +20,14 @@ const (
 	// values the backend can be asked to enumerate.
 	ColumnFilterKindTerms ColumnFilterKind = "terms"
 
+	// ColumnFilterKindMatch selects values by collections.MatchItem patterns:
+	// a comma-separated list whose "!" prefix excludes, each entry matched
+	// case-insensitively, whole or — with "*" at an edge — as a prefix, a
+	// suffix or a substring. It is a value selection like terms, so the
+	// backend can offer the values to pick, but it is opt-in: terms compares
+	// exactly and case-sensitively, and every profile relies on that.
+	ColumnFilterKindMatch ColumnFilterKind = "match"
+
 	// ColumnFilterKindExact matches whole values like terms, and is never
 	// offered as a list. It is what an identifier gets: enumerating one is a
 	// scan of the whole result that answers with a page of the rows, so the
@@ -82,7 +90,7 @@ func (k ColumnFilterKind) Normalized() ColumnFilterKind {
 // Valid reports whether k names a kind this package compiles.
 func (k ColumnFilterKind) Valid() bool {
 	switch k.Normalized() {
-	case ColumnFilterKindTerms, ColumnFilterKindExact, ColumnFilterKindText,
+	case ColumnFilterKindTerms, ColumnFilterKindMatch, ColumnFilterKindExact, ColumnFilterKindText,
 		ColumnFilterKindRange, ColumnFilterKindDuration,
 		ColumnFilterKindTime, ColumnFilterKindDate,
 		ColumnFilterKindBoolean, ColumnFilterKindWorkload,
@@ -120,7 +128,7 @@ func (k ColumnFilterKind) CompilesAs() ColumnFilterKind {
 // compares are identifiers rather than a vocabulary.
 func (k ColumnFilterKind) Lookupable() bool {
 	switch k.Normalized() {
-	case ColumnFilterKindTerms, ColumnFilterKindWorkload, ColumnFilterKindLabels:
+	case ColumnFilterKindTerms, ColumnFilterKindMatch, ColumnFilterKindWorkload, ColumnFilterKindLabels:
 		return true
 	default:
 		return false
@@ -140,7 +148,7 @@ func (k ColumnFilterKind) Lookupable() bool {
 // selection is picked or typed is not a property of the kind alone.
 func (k ColumnFilterKind) ControlType() string {
 	switch k.Normalized() {
-	case ColumnFilterKindTerms:
+	case ColumnFilterKindTerms, ColumnFilterKindMatch:
 		return "multi-filter"
 	case ColumnFilterKindExact:
 		return "value"
@@ -184,6 +192,7 @@ func (b ColumnFilterBinding) ControlUnit() string {
 func ColumnFilterKindValues() []string {
 	return []string{
 		string(ColumnFilterKindTerms),
+		string(ColumnFilterKindMatch),
 		string(ColumnFilterKindExact),
 		string(ColumnFilterKindText),
 		string(ColumnFilterKindRange),
@@ -293,8 +302,9 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 		// toggle and a substring are each one control writing one operand, and
 		// announcing them as multi is what made the browser render them as a
 		// comma-separated list of values to type. An exact match is a value
-		// selection that happens to have no list, so it still takes several.
-		Multi: kind == ColumnFilterKindTerms || kind == ColumnFilterKindExact,
+		// selection that happens to have no list, so it still takes several,
+		// and a pattern selection takes several patterns.
+		Multi: kind.selectsValues() || kind == ColumnFilterKindExact,
 		// An array's own type is json, which enumerates nothing; its elements
 		// are what the lookup lists.
 		Lookup: kind.Lookupable() && (column.Type.Enumerable() || array),

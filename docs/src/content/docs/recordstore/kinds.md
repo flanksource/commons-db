@@ -61,7 +61,7 @@ backend, err := kv.New(kv.Options{Store: store, Prefix: "records", Schema: schem
 | `pretty:"hide"` or `pretty:"-"` | hidden column |
 | `pretty:"type=…"`, `kind=…`, `unit=…` | override the inferred `ColumnType`, set a `ColumnKind`, set a unit (`type=duration,unit=ms`) |
 | `sort:"…"` | clicky's public sort key; it must equal the column name |
-| `filter:"…"` | override the inferred filter: `terms`, `exact`, `text`, `range`, `duration`, `date`, `time`, `boolean`, `none`, plus `field=`, `limit=`, `options=a\|b`, `lookup=bool`, `multi=bool`, `disabled`, or `-` |
+| `filter:"…"` | override the inferred filter: `terms`, `match`, `exact`, `text`, `range`, `duration`, `date`, `time`, `boolean`, `none`, plus `field=`, `limit=`, `options=a\|b`, `lookup=bool`, `multi=bool`, `disabled`, or `-` |
 
 A `[]string` field becomes a JSON column that is filtered as an array. The type comes from the Go type unless `pretty:"type=…"` overrides it. **An unknown tag key or value is an error**, never ignored.
 

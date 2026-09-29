@@ -72,7 +72,7 @@ func (b ColumnFilterBinding) parseSelection(value any) (ColumnFilterValue, error
 		}
 	}
 	switch resolved.Kind {
-	case ColumnFilterKindTerms, ColumnFilterKindExact, ColumnFilterKindText:
+	case ColumnFilterKindTerms, ColumnFilterKindMatch, ColumnFilterKindExact, ColumnFilterKindText:
 		resolved.Include, resolved.Exclude, err = parseTermTokens(tokens)
 	case ColumnFilterKindWorkload:
 		if len(tokens) > 1 {

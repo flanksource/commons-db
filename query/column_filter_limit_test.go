@@ -31,7 +31,7 @@ var _ = Describe("column filter limits", func() {
 				query.ColumnFilterDef{Limit: lo.ToPtr(query.MaxFilterLookupLimit + 1)}, "out of range"),
 			Entry("on a range filter, which has no list to cap",
 				query.ColumnFilterDef{Kind: query.ColumnFilterKindRange, Limit: lo.ToPtr(10)},
-				`requires a "terms" filter`),
+				`requires a "terms" or "match" filter`),
 		)
 
 		DescribeTable("accepts a limit a lookup can serve",

@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/pkg/allowlist"
+	"github.com/flanksource/commons-db/query"
 )
 
 // sqlDialect is the engine a statement is built for.
@@ -245,13 +246,45 @@ const likeEscapeChar = "!"
 // quoted column, and returns the pattern to bind for needle. ILIKE is
 // postgres-only, so every dialect folds case explicitly instead.
 func (d sqlDialect) likeMatch(quotedColumn, needle string) (string, string) {
+	return d.likeAnchored(quotedColumn, "%", needle, "%")
+}
+
+// likeAnchored renders a case-insensitive LIKE of needle between the
+// wildcards before and after — "%" or nothing — and returns the pattern to
+// bind.
+func (d sqlDialect) likeAnchored(quotedColumn, before, needle, after string) (string, string) {
 	if d == dialectClickHouse {
 		// ClickHouse's LIKE takes no ESCAPE clause, so its metacharacters are
 		// escaped with the backslash it does understand.
-		return fmt.Sprintf("lower(%s) LIKE ?", quotedColumn), "%" + escapeLikeNeedle(needle, `\`, d) + "%"
+		return fmt.Sprintf("lower(%s) LIKE ?", quotedColumn), before + escapeLikeNeedle(needle, `\`, d) + after
 	}
 	return fmt.Sprintf("LOWER(%s) LIKE ? ESCAPE '%s'", quotedColumn, likeEscapeChar),
-		"%" + escapeLikeNeedle(needle, likeEscapeChar, d) + "%"
+		before + escapeLikeNeedle(needle, likeEscapeChar, d) + after
+}
+
+// globMatch renders a match pattern as a case-insensitive predicate against an
+// already quoted column, with the arguments to bind: MatchItem's reading of
+// the pattern, in the dialect's own comparison.
+func (d sqlDialect) globMatch(quotedColumn string, pattern query.MatchPattern) (string, []any) {
+	switch pattern.Mode {
+	case query.MatchAny:
+		return "1=1", nil
+	case query.MatchPrefix:
+		predicate, bound := d.likeAnchored(quotedColumn, "", pattern.Text, "%")
+		return predicate, []any{bound}
+	case query.MatchSuffix:
+		predicate, bound := d.likeAnchored(quotedColumn, "%", pattern.Text, "")
+		return predicate, []any{bound}
+	case query.MatchContains:
+		predicate, bound := d.likeAnchored(quotedColumn, "%", pattern.Text, "%")
+		return predicate, []any{bound}
+	default:
+		lower := "LOWER"
+		if d == dialectClickHouse {
+			lower = "lower"
+		}
+		return fmt.Sprintf("%s(%s) = ?", lower, quotedColumn), []any{strings.ToLower(pattern.Text)}
+	}
 }
 
 // escapeLikeNeedle neutralises the wildcards in a typed search term, so

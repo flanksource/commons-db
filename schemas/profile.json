@@ -4316,6 +4316,7 @@
                 "description": "Overrides the control derived from Type; set it where the rendered type and the backend storage disagree",
                 "enum": [
                   "terms",
+                  "match",
                   "exact",
                   "text",
                   "range",
@@ -4333,6 +4334,7 @@
                   "date": "Date range",
                   "duration": "Duration range",
                   "exact": "Exact match",
+                  "match": "Pattern list",
                   "none": "Not filterable",
                   "range": "Numeric range",
                   "terms": "Value list",
