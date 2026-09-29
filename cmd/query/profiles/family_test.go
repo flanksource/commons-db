@@ -268,6 +268,73 @@ func TestProfileFamilyResolvesAProfileCreatedAfterTheRoutesWereBuilt(t *testing.
 	}
 }
 
+// The served document is the family's paths laid over the profile extension's,
+// and the family fills any profile path the extension left empty. A trace or a
+// legacy placeholder is left without a run on purpose — running it can only
+// fail — so the family must not put one back, nor list its surface twice.
+func TestProfileFamilyAdvertisesARunOnlyForAProfileThatRuns(t *testing.T) {
+	legacy, err := ConvertLegacyProfile([]byte("name: legacy-sql\nkind: sql_xevent\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	capture := lookupProfile("Capture")
+	capture.Trace = &query.TraceSpec{}
+	query.RegisterProvider(familyLookupMock{})
+	service, _ := newProfileServiceTest(t, lookupProfile("Spans"), capture, legacy)
+	service.RegisterFamily()
+	t.Cleanup(func() { entity.UnregisterDynamicEntityFamily(profileFamilyName) })
+
+	root := &cobra.Command{Use: "query"}
+	root.AddCommand(&cobra.Command{Use: "version", Run: func(*cobra.Command, []string) {}})
+	server := rpc.NewSwaggerServer(
+		&rpc.ServeConfig{
+			Title: "Query", Version: "0.1.0", SkipHealth: true,
+			Executor: &rpc.ExecutorConfig{Enabled: true, SkipPreRun: true, PathPrefix: "/api/v1"},
+		},
+		root, &rpc.OpenAPIConfig{
+			Title: "Query", Version: "0.1.0",
+			RequestExtensions: []func(context.Context, *rpc.OpenAPISpec) error{service.AddProfilesOpenAPI},
+		},
+	)
+	mux := http.NewServeMux()
+	server.RegisterRoutes(route.NewRouter(mux))
+	response := get(mux, "/api/openapi.json", "application/json")
+	if response.Code != http.StatusOK {
+		t.Fatalf("openapi status=%d body=%s", response.Code, response.Body.String())
+	}
+	var spec rpc.OpenAPISpec
+	if err := json.Unmarshal(response.Body.Bytes(), &spec); err != nil {
+		t.Fatal(err)
+	}
+
+	type advertised struct {
+		Run, SessionStart bool
+		Surfaces          int
+	}
+	got := map[string]advertised{}
+	for _, key := range []string{"profile-spans", "profile-capture", "profile-legacy-sql"} {
+		_, run := spec.Paths["/api/v1/profile/"+key]["get"]
+		_, start := spec.Paths["/api/v1/profile/"+key+"/sessions"]["post"]
+		surfaces := 0
+		for _, surface := range spec.Clicky.Surfaces {
+			if surface.Key == key {
+				surfaces++
+			}
+		}
+		got[key] = advertised{Run: run, SessionStart: start, Surfaces: surfaces}
+	}
+	want := map[string]advertised{
+		"profile-spans":      {Run: true, SessionStart: false, Surfaces: 1},
+		"profile-capture":    {Run: false, SessionStart: true, Surfaces: 1},
+		"profile-legacy-sql": {Run: false, SessionStart: false, Surfaces: 1},
+	}
+	for key, expected := range want {
+		if got[key] != expected {
+			t.Errorf("%s advertises %+v, want %+v", key, got[key], expected)
+		}
+	}
+}
+
 // A name nothing resolves is a 404 in the shared error shape, so a client can
 // branch on the code rather than string-matching the message.
 func TestProfileFamilyUnknownProfileIsAStructuredNotFound(t *testing.T) {
