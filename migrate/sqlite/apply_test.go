@@ -128,6 +128,34 @@ var _ = Describe("sqlite migrate.ReconcileTables", func() {
 		}))
 	})
 
+	It("widens a named check while preserving existing rows when rebuilds are enabled", func() {
+		_, err := database.ExecContext(ctx, `CREATE TABLE roles (id INTEGER, role INTEGER, PRIMARY KEY (id), CONSTRAINT roles_role_check CHECK (role IN (0, 1, 2))); INSERT INTO roles VALUES (1, 2)`)
+		Expect(err).ToNot(HaveOccurred())
+		declared := schema.NewTable("roles").AddColumns(column("id", "INTEGER"), column("role", "INTEGER"))
+		id, _ := declared.Column("id")
+		declared.SetPrimaryKey(schema.NewPrimaryKey(id))
+		declared.AddChecks(&schema.Check{Name: "roles_role_check", Expr: "role IN (0, 1, 2, 3)"})
+
+		before := schemaSQL()
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{}, declared)).To(MatchError(ContainSubstring("roles_role_check")))
+		Expect(schemaSQL()).To(Equal(before))
+		pending, err := sqlitemigrate.PendingChanges(ctx, database, sqlitemigrate.ReconcileOptions{AllowRebuilds: true}, declared)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pending).To(HaveLen(1))
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{AllowRebuilds: true}, declared)).To(Succeed())
+		var role int
+		Expect(database.QueryRowContext(ctx, `SELECT role FROM roles WHERE id = 1`).Scan(&role)).To(Succeed())
+		Expect(role).To(Equal(2))
+		_, err = database.ExecContext(ctx, `INSERT INTO roles VALUES (2, 3)`)
+		Expect(err).ToNot(HaveOccurred())
+		before = schemaSQL()
+		pending, err = sqlitemigrate.PendingChanges(ctx, database, sqlitemigrate.ReconcileOptions{AllowRebuilds: true}, declared)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pending).To(BeEmpty())
+		Expect(sqlitemigrate.ReconcileTables(ctx, database, sqlitemigrate.ReconcileOptions{AllowRebuilds: true}, declared)).To(Succeed())
+		Expect(schemaSQL()).To(Equal(before))
+	})
+
 	It("leaves alone the tables and views nothing declares", func() {
 		_, err := database.ExecContext(ctx, `CREATE TABLE "other" ("x" TEXT); CREATE VIEW "named" AS SELECT "name" FROM "events"`)
 		Expect(err).ToNot(HaveOccurred())
