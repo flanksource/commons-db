@@ -110,6 +110,15 @@ func trimBelowTx(ctx context.Context, tx *sql.Tx, table sqlitetable.Table, meta 
 	return meta, nil
 }
 
+// windowSeqs is every seq of window, in order.
+func windowSeqs(window recordstore.Window) []int64 {
+	seqs := make([]int64, 0, max(window.Len(), 0))
+	for seq := window.From; seq <= window.To; seq++ {
+		seqs = append(seqs, seq)
+	}
+	return seqs
+}
+
 // unstoredRows is the append's rows whose keys the stream does not hold, read
 // in the append's own transaction, and how many it skipped.
 func unstoredRows(ctx context.Context, tx *sql.Tx, table kindTable, stream string, write appendWrite) ([]query.Row, int64, error) {
@@ -138,20 +147,20 @@ func unstoredRows(ctx context.Context, tx *sql.Tx, table kindTable, stream strin
 	return kept, skipped, nil
 }
 
-// insertRows stores rows under window's seqs and records when they were
-// appended.
-func insertRows(ctx context.Context, tx *sql.Tx, table kindTable, stream string, window recordstore.Window, rows []query.Row, now time.Time) error {
+// insertRows stores each of rows under its seq in seqs and records when they
+// were appended.
+func insertRows(ctx context.Context, tx *sql.Tx, table kindTable, stream string, seqs []int64, rows []query.Row, now time.Time) error {
 	if len(rows) == 0 {
 		return nil
 	}
 	for index, row := range rows {
-		row[streamColumn], row[seqColumn] = stream, window.From+int64(index)
+		row[streamColumn], row[seqColumn] = stream, seqs[index]
 	}
 	if err := table.Insert(ctx, tx, rows); err != nil {
 		return fmt.Errorf("stream %q: %w", stream, err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO record_appends (stream_id, last_seq, appended_at) VALUES (?, ?, ?)`,
-		stream, window.To, sqlitetable.FormatTime(now)); err != nil {
+		stream, seqs[len(seqs)-1], sqlitetable.FormatTime(now)); err != nil {
 		return fmt.Errorf("stream %q: record append time: %w", stream, err)
 	}
 	return nil

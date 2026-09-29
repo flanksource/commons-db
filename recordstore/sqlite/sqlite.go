@@ -231,8 +231,10 @@ func inTx(ctx context.Context, writer *sql.DB, what string, fn func(*sql.Tx) err
 }
 
 // appendTx trims what the kind's retention has let go, skips the rows whose
-// keys the stream still holds, and numbers the rest after the high seq, writing
-// them with the stream's metadata in tx. The caller holds the stream's lock.
+// keys the stream still holds — or, for a kind that replaces stored rows,
+// removes the stored rows under those keys — and numbers the rows it keeps
+// after the high seq, writing them with the stream's metadata in tx. The
+// caller holds the stream's lock.
 func (b *Backend) appendTx(ctx context.Context, tx *sql.Tx, table kindTable, stream string, write appendWrite, now time.Time) (recordstore.AppendResult, error) {
 	meta, err := b.openStream(ctx, tx, stream, table.schema.Kind, now)
 	if err != nil {
@@ -245,20 +247,26 @@ func (b *Backend) appendTx(ctx context.Context, tx *sql.Tx, table kindTable, str
 		expires := now.Add(write.retention)
 		meta.ExpiresAt = &expires
 	}
-	stored, skipped, err := unstoredRows(ctx, tx, table, stream, write)
+	var result recordstore.AppendResult
+	stored := write.stored
+	if table.schema.Options.OnConflict == recordstore.OnConflictReplace {
+		result.Replaced, err = replaceStoredRows(ctx, tx, table, stream, write.keys)
+	} else {
+		stored, result.Skipped, err = unstoredRows(ctx, tx, table, stream, write)
+	}
 	if err != nil {
 		return recordstore.AppendResult{}, err
 	}
-	window := recordstore.Window{From: meta.HighSeq + 1, To: meta.HighSeq + int64(len(stored))}
-	if err := insertRows(ctx, tx, table, stream, window, stored, now); err != nil {
+	result.Window = recordstore.Window{From: meta.HighSeq + 1, To: meta.HighSeq + int64(len(stored))}
+	if err := insertRows(ctx, tx, table, stream, windowSeqs(result.Window), stored, now); err != nil {
 		return recordstore.AppendResult{}, err
 	}
-	meta.Total += int64(len(stored))
-	meta.HighSeq, meta.UpdatedAt = window.To, now
+	meta.Total += int64(len(stored)) - result.Replaced
+	meta.HighSeq, meta.UpdatedAt = result.Window.To, now
 	if err := upsertMeta(ctx, tx, meta); err != nil {
 		return recordstore.AppendResult{}, err
 	}
-	return recordstore.AppendResult{Window: window, Skipped: skipped}, nil
+	return result, nil
 }
 
 // purgeExpired removes an expired stream nothing has swept yet, so a write

@@ -193,6 +193,10 @@ func (b *Backend) resolveAppend(stream, kind string, rows []recordstore.Row) (ti
 	if err != nil {
 		return 0, nil, fmt.Errorf("stream %q: %w", stream, err)
 	}
+	// A stream's lines are its seqs in order, so a replaced line cannot leave.
+	if err := schema.RefuseReplacing(); err != nil {
+		return 0, nil, fmt.Errorf("stream %q: %w", stream, err)
+	}
 	retention, err := schema.RetentionTTL(b.ttl)
 	if err != nil {
 		return 0, nil, fmt.Errorf("stream %q: %w", stream, err)

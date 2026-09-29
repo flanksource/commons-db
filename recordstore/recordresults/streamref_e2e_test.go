@@ -51,7 +51,7 @@ var _ = Describe("Results.Ref", func() {
 		Expect(ref).To(Equal(recordresults.StreamRef{
 			Stream: "run-1", Kind: "sample_event", Generation: meta.Generation, Low: 1, High: 30, From: 1, To: 30, Total: 30,
 			ExpiresAt: meta.ExpiresAt,
-			Store:     recordresults.StoreLocation{Backend: recordstore.BackendSQLite, Host: host, File: filepath.Join(settings.Dir, "v5", "records.sqlite")},
+			Store:     recordresults.StoreLocation{Backend: recordstore.BackendSQLite, Host: host, File: filepath.Join(settings.Dir, "v6", "records.sqlite")},
 		}))
 	})
 
@@ -113,7 +113,7 @@ var _ = Describe("Results.Ref", func() {
 		ref, err := results.Ref(recordresultstest.ForTenant("b"), "run-1", 0, 0)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(ref.Store).To(Equal(recordresults.StoreLocation{
-			Backend: recordstore.BackendSQLite, Host: host, File: filepath.Join(dir, "v5", "b.sqlite"),
+			Backend: recordstore.BackendSQLite, Host: host, File: filepath.Join(dir, "v6", "b.sqlite"),
 		}))
 	})
 

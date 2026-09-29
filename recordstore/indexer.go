@@ -42,6 +42,11 @@ type ImportRequest struct {
 	Source Meta
 	First  int64
 	Rows   []Row
+
+	// Seqs is the source seq of each row, increasing from First. Nil numbers
+	// Rows contiguously from First. Only a kind that replaces stored rows may
+	// skip seqs, since only there did the source leave them behind.
+	Seqs []int64
 }
 
 // Indexer keeps an Index caught up with a source backend, one stream at a
@@ -214,35 +219,40 @@ func (i *Indexer) mirrorTrim(ctx context.Context, source, indexed Meta) (Meta, e
 	return trimmed, nil
 }
 
-// copyAfter imports every source row after high, checking the seqs arrive
-// without a gap and reach the high seq the source reported. A source stream
-// with no rows past high is imported as an empty stream when the index does
-// not hold it yet (create). It returns the last seq the index holds after.
+// copyAfter imports every source row after high under its source seq,
+// checking the seqs increase and reach the high seq the source reported; the
+// index refuses a skipped seq unless the kind replaces stored rows. A source
+// stream with no rows past high is imported as an empty stream when the index
+// does not hold it yet (create). It returns the last seq the index holds after.
 //
 // A scan that ends early is refused rather than taken as the stream: an index
 // that stopped short would page the stream as complete, and every later Ensure
 // would find it already caught up.
 func (i *Indexer) copyAfter(ctx context.Context, source Meta, high int64, create bool) (int64, error) {
 	stream := source.Stream
-	next := high + 1
+	last := high
 	var batch []Row
+	var seqs []int64
 	flush := func() error {
-		expected := Window{From: next, To: next + int64(len(batch)) - 1}
-		window, err := i.index.Import(ctx, ImportRequest{Source: source, First: next, Rows: batch})
+		expected := Window{From: last + 1, To: last}
+		if len(seqs) > 0 {
+			expected = Window{From: seqs[0], To: seqs[len(seqs)-1]}
+		}
+		window, err := i.index.Import(ctx, ImportRequest{Source: source, First: expected.From, Rows: batch, Seqs: seqs})
 		if err != nil {
 			return fmt.Errorf("index stream %q: %w", stream, err)
 		}
 		if window != expected {
 			return fmt.Errorf("index stream %q: import returned window %+v, expected %+v", stream, window, expected)
 		}
-		next, batch = window.To+1, nil
+		batch, seqs = nil, nil
 		return nil
 	}
 	err := i.source.Scan(ctx, stream, high, func(seq int64, row Row) error {
-		if expected := next + int64(len(batch)); seq != expected {
-			return fmt.Errorf("source stream %q skips from seq %d to %d", stream, expected-1, seq)
+		if seq <= last {
+			return fmt.Errorf("source stream %q returned seq %d after seq %d", stream, seq, last)
 		}
-		batch = append(batch, row)
+		batch, seqs, last = append(batch, row), append(seqs, seq), seq
 		if len(batch) < indexBatch {
 			return nil
 		}
@@ -251,15 +261,15 @@ func (i *Indexer) copyAfter(ctx context.Context, source Meta, high int64, create
 	if err != nil {
 		return 0, fmt.Errorf("index stream %q: %w", stream, err)
 	}
-	if reached := next + int64(len(batch)) - 1; reached < source.HighSeq {
-		return 0, fmt.Errorf("index stream %q: the source holds rows through seq %d but its scan reached seq %d", stream, source.HighSeq, reached)
+	if last < source.HighSeq {
+		return 0, fmt.Errorf("index stream %q: the source holds rows through seq %d but its scan reached seq %d", stream, source.HighSeq, last)
 	}
 	if len(batch) > 0 || create {
 		if err := flush(); err != nil {
 			return 0, err
 		}
 	}
-	return next - 1, nil
+	return last, nil
 }
 
 // expiryTolerance avoids rewriting an expiry for harmless timestamp precision

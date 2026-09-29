@@ -22,9 +22,9 @@ backend, err := sqlite.Open(sqlite.Options{
 
 | Table | Holds |
 | --- | --- |
-| `record_store_format` | one row: the catalog version (currently **5**) |
+| `record_store_format` | one row: the catalog version (currently **6**) |
 | `record_streams` | one row per stream: `stream_id`, `generation`, `kind`, `total`, `low_seq`, `high_seq`, `updated_at`, `expires_at`, `capped`, `sealed`. It's indexed on `expires_at` for the sweeper. |
-| `record_kinds` | one row per kind: its table name and a JSON catalog of each column's declared name, physical name, stored type and declared type, plus the key |
+| `record_kinds` | one row per kind: its table name and a JSON catalog of each column's declared name, physical name, stored type and declared type, plus the key and, for a kind that replaces stored rows, `onConflict:replace` |
 | `record_appends` | when each append stored its rows, keyed by the seq of its last row. `Trim` finds the rows appended before an instant through it. |
 | `records_<kind>` | the rows: `stream_id`, `seq`, then the kind's columns, with primary key `(stream_id, seq)` |
 
@@ -51,9 +51,9 @@ A label or filter change is always allowed. Only changes that would make stored 
 
 ## Versioned file paths
 
-The backend opens `<dir>/v<catalog version>/<file>`, not the configured `<dir>/<file>`. With `Path: /data/records.sqlite`, the file is `/data/v5/records.sqlite`. Each build keeps its own file, so two builds reading different catalog versions can run side by side, for example during a rolling deploy, without rewriting each other's files.
+The backend opens `<dir>/v<catalog version>/<file>`, not the configured `<dir>/<file>`. With `Path: /data/records.sqlite`, the file is `/data/v6/records.sqlite`. Each build keeps its own file, so two builds reading different catalog versions can run side by side, for example during a rolling deploy, without rewriting each other's files.
 
-The first time a **durable** v5 file is opened, the backend copies the newest older file it finds into the versioned path and migrates the copy: first the previous version's `<dir>/v4/<file>`, whose tables have named columns, then an unversioned file at the configured path (catalog version 2 or 3, which stored columns positionally), whose columns it renames. It leaves the original untouched for builds still reading it. The copy is built under a temporary name and linked into place, so a crash leaves no half-migrated file, and two processes starting together can't overwrite each other's copy. A **derived** index is always built fresh.
+The first time a **durable** v6 file is opened, the backend copies the newest older file it finds into the versioned path and migrates the copy: first a previous version's `<dir>/v5/<file>`, then `<dir>/v4/<file>`, whose tables have named columns, then an unversioned file at the configured path (catalog version 2 or 3, which stored columns positionally), whose columns it renames. It leaves the original untouched for builds still reading it. The copy is built under a temporary name and linked into place, so a crash leaves no half-migrated file, and two processes starting together can't overwrite each other's copy. A **derived** index is always built fresh.
 
 ## Expiry and sweeping
 

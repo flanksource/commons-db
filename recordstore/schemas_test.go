@@ -37,6 +37,8 @@ var _ = Describe("Schemas", func() {
 		Entry("a key that is not a column", "event", recordstore.KindOptions{Key: "missing"}, `key "missing" is not one of its columns`),
 		Entry("a key that is not a string column", "event", recordstore.KindOptions{Key: "count"}, "not a string"),
 		Entry("an unknown retention", "event", recordstore.KindOptions{Retention: recordstore.Retention(7)}, "retention(7)"),
+		Entry("an unknown conflict policy", "event", recordstore.KindOptions{Key: "id", OnConflict: recordstore.OnConflict(7)}, "on conflict(7)"),
+		Entry("replacing stored rows with no key to find them by", "event", recordstore.KindOptions{OnConflict: recordstore.OnConflictReplace}, "replaces stored rows, which needs a key"),
 		Entry("an invalid kind", "bad kind", recordstore.KindOptions{}, "kind"),
 	)
 

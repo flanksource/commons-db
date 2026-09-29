@@ -39,8 +39,8 @@ var _ = Describe("Open", func() {
 		response := getFor(serveResults(results.Registry), ctx, "stream=run-1")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 		Expect(response.Header().Get("X-Total-Count")).To(Equal("30"))
-		Expect(filepath.Join(settings.Dir, "v5", "records.sqlite")).To(BeAnExistingFile())
-		Expect(filepath.Join(settings.Dir, "v5", "index.sqlite")).ToNot(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v6", "records.sqlite")).To(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v6", "index.sqlite")).ToNot(BeAnExistingFile())
 	})
 
 	It("opens local ndjson streams mirrored into a derived index", func() {
@@ -54,7 +54,7 @@ var _ = Describe("Open", func() {
 		response := getFor(serveResults(results.Registry), ctx, "stream=run-1")
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 		Expect(response.Header().Get("X-Total-Count")).To(Equal("12"))
-		Expect(filepath.Join(settings.Dir, "v5", "index.sqlite")).To(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v6", "index.sqlite")).To(BeAnExistingFile())
 	})
 
 	It("deletes one stream from its source and derived index only when its kind matches", func() {
@@ -75,7 +75,7 @@ var _ = Describe("Open", func() {
 		kept, err := results.Backend.Meta(ctx, "keep-run")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(kept.Total).To(Equal(int64(2)))
-		index, err := sql.Open("sqlite", filepath.Join(settings.Dir, "v5", "index.sqlite"))
+		index, err := sql.Open("sqlite", filepath.Join(settings.Dir, "v6", "index.sqlite"))
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(index.Close)
 		var remaining int
@@ -105,7 +105,7 @@ var _ = Describe("Open", func() {
 		Expect(response.Code).To(Equal(http.StatusNotFound), response.Body.String())
 
 		By("never keeping a durable file a route could share: only the derived index")
-		Expect(filepath.Join(settings.Dir, "v5", "index.sqlite")).To(BeAnExistingFile())
-		Expect(filepath.Join(settings.Dir, "v5", "records.sqlite")).ToNot(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v6", "index.sqlite")).To(BeAnExistingFile())
+		Expect(filepath.Join(settings.Dir, "v6", "records.sqlite")).ToNot(BeAnExistingFile())
 	})
 })

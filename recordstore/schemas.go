@@ -36,16 +36,46 @@ func (r Retention) String() string {
 	}
 }
 
+// OnConflict says what an append to a keyed stream does with a row whose key
+// the stream already holds.
+type OnConflict int
+
+const (
+	// OnConflictSkip keeps the stored row and skips the appended one.
+	OnConflictSkip OnConflict = iota
+
+	// OnConflictReplace removes the stored row and stores the appended one
+	// after the stream's high seq, in the same write, so a reader following
+	// the stream sees the new row. The replaced row's seq is left behind, so
+	// the stream's seqs skip it.
+	OnConflictReplace
+)
+
+func (o OnConflict) String() string {
+	switch o {
+	case OnConflictSkip:
+		return "skip"
+	case OnConflictReplace:
+		return "replace"
+	default:
+		return fmt.Sprintf("on conflict(%d)", int(o))
+	}
+}
+
 // KindOptions say how a kind's streams store its rows.
 type KindOptions struct {
 	// Key names a string column whose value identifies a row within a stream.
-	// A keyed stream holds each key once: an append skips a row whose key is
-	// already stored. Empty leaves the kind unkeyed, where every row appended
+	// A keyed stream holds each key once; OnConflict says what an append of a
+	// stored key does. Empty leaves the kind unkeyed, where every row appended
 	// is stored.
 	Key string
 
 	// Retention says how long a stream keeps its rows.
 	Retention Retention
+
+	// OnConflict says what an append of a key the stream holds does. Replace
+	// needs a Key.
+	OnConflict OnConflict
 }
 
 // KindSchema is everything a kind declares: its columns and how its streams
@@ -121,7 +151,13 @@ func (k KindSchema) Validate() error {
 	if k.Options.Retention != RetainStream && k.Options.Retention != RetainRows {
 		return fmt.Errorf("kind %q declares unknown %s", k.Kind, k.Options.Retention)
 	}
+	if k.Options.OnConflict != OnConflictSkip && k.Options.OnConflict != OnConflictReplace {
+		return fmt.Errorf("kind %q declares unknown %s", k.Kind, k.Options.OnConflict)
+	}
 	if k.Options.Key == "" {
+		if k.Options.OnConflict == OnConflictReplace {
+			return fmt.Errorf("kind %q replaces stored rows, which needs a key", k.Kind)
+		}
 		return nil
 	}
 	index := slices.IndexFunc(k.Columns, func(column query.ColumnDef) bool { return column.Name == k.Options.Key })
@@ -185,6 +221,15 @@ func (k KindSchema) RowKeys(rows []Row) ([]string, error) {
 		keys[index] = key
 	}
 	return keys, nil
+}
+
+// RefuseReplacing is the error a backend that cannot replace stored rows
+// refuses schema's kind with, or nil when the kind never replaces them.
+func (k KindSchema) RefuseReplacing() error {
+	if k.Options.OnConflict != OnConflictReplace {
+		return nil
+	}
+	return fmt.Errorf("kind %q replaces stored rows: %w", k.Kind, ErrUnsupported)
 }
 
 // Unstored keeps the rows of an append whose key stored does not report as

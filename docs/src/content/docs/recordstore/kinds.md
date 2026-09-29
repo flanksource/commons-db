@@ -15,8 +15,9 @@ type KindSchema struct {
 }
 
 type KindOptions struct {
-	Key       string    // a string column identifying a row within a stream; empty = unkeyed
-	Retention Retention // RetainStream (default) or RetainRows
+	Key        string     // a string column identifying a row within a stream; empty = unkeyed
+	Retention  Retention  // RetainStream (default) or RetainRows
+	OnConflict OnConflict // OnConflictSkip (default) or OnConflictReplace, for a stored key
 }
 ```
 
@@ -24,8 +25,9 @@ type KindOptions struct {
 
 - the kind name fails `ValidateKind`
 - there are no columns, or a column fails `ColumnDef.Validate`
-- the retention is unknown
+- the retention or the conflict policy is unknown
 - the key isn't one of the columns, or the key column isn't `query.ColumnTypeString`
+- the kind replaces stored rows but declares no key
 
 ## The Schemas catalog
 

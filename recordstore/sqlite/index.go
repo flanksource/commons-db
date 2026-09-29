@@ -86,8 +86,11 @@ func (b *Backend) removeGenerationLocked(ctx context.Context, writer *sql.DB, so
 }
 
 // Import stores rows under source's generation and seqs. The requested first
-// seq must follow the indexed high seq exactly; a stream the index does not
-// hold yet starts at it, since its source may have trimmed the seqs below.
+// seq must follow the indexed high seq exactly, and the seqs must be
+// contiguous, unless the kind replaces stored rows: its source leaves replaced
+// rows' seqs behind, so its seqs only have to increase, and each imported row
+// replaces the indexed row under its key. A stream the index does not hold yet
+// starts at the first seq, since its source may have trimmed the seqs below.
 func (b *Backend) Import(ctx context.Context, request recordstore.ImportRequest) (recordstore.Window, error) {
 	if err := request.Source.Validate(); err != nil {
 		return recordstore.Window{}, err
@@ -104,6 +107,16 @@ func (b *Backend) Import(ctx context.Context, request recordstore.ImportRequest)
 	if err != nil {
 		return recordstore.Window{}, err
 	}
+	seqs, err := importSeqs(table, request)
+	if err != nil {
+		return recordstore.Window{}, fmt.Errorf("stream %q: %w", request.Source.Stream, err)
+	}
+	var keys []string
+	if table.schema.Options.OnConflict == recordstore.OnConflictReplace {
+		if keys, err = table.schema.RowKeys(request.Rows); err != nil {
+			return recordstore.Window{}, fmt.Errorf("stream %q: %w", request.Source.Stream, err)
+		}
+	}
 	stored, err := storedRows(table.Table, request.Source.Kind, request.Rows)
 	if err != nil {
 		return recordstore.Window{}, fmt.Errorf("stream %q: %w", request.Source.Stream, err)
@@ -111,13 +124,42 @@ func (b *Backend) Import(ctx context.Context, request recordstore.ImportRequest)
 	var window recordstore.Window
 	err = b.database.Write(func(writer *sql.DB) error {
 		var err error
-		window, err = b.commitImportLocked(ctx, writer, table, request, stored)
+		window, err = b.commitImportLocked(ctx, writer, table, request, stored, seqs, keys)
 		return err
 	})
 	return window, err
 }
 
-func (b *Backend) commitImportLocked(ctx context.Context, writer *sql.DB, table kindTable, request recordstore.ImportRequest, stored []query.Row) (recordstore.Window, error) {
+// importSeqs is the seq of each row an import stores: the request's seqs,
+// which must start at its first seq and increase — contiguously unless the
+// kind replaces stored rows — or, without them, contiguous from its first seq.
+func importSeqs(table kindTable, request recordstore.ImportRequest) ([]int64, error) {
+	if request.Seqs == nil {
+		return windowSeqs(recordstore.Window{From: request.First, To: request.First + int64(len(request.Rows)) - 1}), nil
+	}
+	if len(request.Seqs) != len(request.Rows) {
+		return nil, fmt.Errorf("import names %d seqs for %d rows", len(request.Seqs), len(request.Rows))
+	}
+	skips := table.schema.Options.OnConflict == recordstore.OnConflictReplace
+	for index, seq := range request.Seqs {
+		if index == 0 {
+			if seq != request.First {
+				return nil, fmt.Errorf("import starts at seq %d but names seq %d first", request.First, seq)
+			}
+			continue
+		}
+		previous := request.Seqs[index-1]
+		switch {
+		case seq <= previous:
+			return nil, fmt.Errorf("import seq %d does not follow seq %d", seq, previous)
+		case seq != previous+1 && !skips:
+			return nil, fmt.Errorf("import skips from seq %d to %d, but kind %q never leaves seqs behind", previous, seq, table.schema.Kind)
+		}
+	}
+	return request.Seqs, nil
+}
+
+func (b *Backend) commitImportLocked(ctx context.Context, writer *sql.DB, table kindTable, request recordstore.ImportRequest, stored []query.Row, seqs []int64, keys []string) (recordstore.Window, error) {
 	stream := request.Source.Stream
 	tx, err := writer.BeginTx(ctx, nil)
 	if err != nil {
@@ -129,14 +171,22 @@ func (b *Backend) commitImportLocked(ctx context.Context, writer *sql.DB, table 
 	if err != nil {
 		return recordstore.Window{}, err
 	}
-	if request.First != meta.HighSeq+1 {
+	skips := table.schema.Options.OnConflict == recordstore.OnConflictReplace
+	if request.First <= meta.HighSeq || !skips && request.First != meta.HighSeq+1 {
 		return recordstore.Window{}, fmt.Errorf("stream %q: import starts at seq %d but the next seq is %d", stream, request.First, meta.HighSeq+1)
 	}
-	window := recordstore.Window{From: request.First, To: request.First + int64(len(stored)) - 1}
-	if err := insertRows(ctx, tx, table, stream, window, stored, now); err != nil {
+	window := recordstore.Window{From: request.First, To: request.First - 1}
+	if len(seqs) > 0 {
+		window.To = seqs[len(seqs)-1]
+	}
+	replaced, err := replaceStoredRows(ctx, tx, table, stream, keys)
+	if err != nil {
 		return recordstore.Window{}, err
 	}
-	meta.Total += int64(len(stored))
+	if err := insertRows(ctx, tx, table, stream, seqs, stored, now); err != nil {
+		return recordstore.Window{}, err
+	}
+	meta.Total += int64(len(stored)) - replaced
 	meta.HighSeq = window.To
 	meta.UpdatedAt = request.Source.UpdatedAt
 	if meta.UpdatedAt.IsZero() {

@@ -130,11 +130,14 @@ var _ = Describe("Registry", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 			Kind: "sample_event", Title: "Sample events", KeyColumn: "user", Retention: recordstore.RetainRows,
+			OnConflict: recordstore.OnConflictReplace,
 		})).To(Succeed())
 
 		schema, err := schemas.Kind("sample_event")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(schema.Options).To(Equal(recordstore.KindOptions{Key: "user", Retention: recordstore.RetainRows}))
+		Expect(schema.Options).To(Equal(recordstore.KindOptions{
+			Key: "user", Retention: recordstore.RetainRows, OnConflict: recordstore.OnConflictReplace,
+		}))
 	})
 
 	It("marks the time column as the table's timestamp", func() {

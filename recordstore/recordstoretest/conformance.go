@@ -28,6 +28,14 @@ const (
 
 	// RollingKind holds each name once and keeps each row TTL after its append.
 	RollingKind = "rolling"
+
+	// ReplacingKind holds each name once, and an append of a stored name
+	// replaces the stored row with the appended one.
+	ReplacingKind = "replacing"
+
+	// RollingReplacingKind is ReplacingKind keeping each row TTL after its
+	// append.
+	RollingReplacingKind = "rolling_replacing"
 )
 
 // ExpiryTTL is the ttl the expiry spec sets. It is short because the
@@ -49,9 +57,13 @@ var Columns = []query.ColumnDef{
 var schemas = func() *recordstore.Schemas {
 	catalog := recordstore.NewSchemas()
 	for kind, options := range map[string]recordstore.KindOptions{
-		Kind:        {},
-		KeyedKind:   {Key: "name"},
-		RollingKind: {Key: "name", Retention: recordstore.RetainRows},
+		Kind:          {},
+		KeyedKind:     {Key: "name"},
+		RollingKind:   {Key: "name", Retention: recordstore.RetainRows},
+		ReplacingKind: {Key: "name", OnConflict: recordstore.OnConflictReplace},
+		RollingReplacingKind: {
+			Key: "name", Retention: recordstore.RetainRows, OnConflict: recordstore.OnConflictReplace,
+		},
 	} {
 		if err := catalog.Register(kind, Columns, options); err != nil {
 			panic(err)
@@ -84,6 +96,11 @@ type Harness struct {
 	// Reopen opens another backend over the storage Backend wrote, sharing
 	// its clock, as a process restarting would.
 	Reopen func() recordstore.Backend
+
+	// Replace reports that the backend stores kinds that replace stored rows
+	// (recordstore.OnConflictReplace). One that does not must refuse them with
+	// recordstore.ErrUnsupported.
+	Replace bool
 }
 
 // SampleRow is the n-th conformance row.
@@ -146,6 +163,7 @@ func Conformance(open func() Harness) {
 	s.sealSpecs()
 	s.sealTailSpecs()
 	s.deleteSpecs()
+	s.replaceSpecs()
 }
 
 // suite is the state every conformance spec reads, set before each one.

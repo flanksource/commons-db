@@ -3,12 +3,14 @@
 // of being carried inside whatever reported the capture.
 //
 // A stream is named by a stream id and holds rows of one kind. Every row gets
-// a per-stream seq, contiguous from 1, which is the only position a reader
+// a per-stream seq, increasing from 1, which is the only position a reader
 // resumes from — never a timestamp or a key, which neither order nor identify a
 // row's position reliably. A kind may still declare a key, and then a stream
 // holds each key once, which is what makes re-ingesting an overlapping source
-// window idempotent. Rows leave a stream only from its low end: the whole
-// stream expires, or Trim removes the oldest appends.
+// window idempotent. Rows leave a stream from its low end — the whole stream
+// expires, or Trim removes the oldest appends — or, for a kind that replaces
+// stored rows, when an append stores a new row under their key at a higher
+// seq; that is the only way a stream's seqs skip.
 //
 // Backends live in subpackages: kv (a clicky cache.Store: in-process memory or
 // valkey/redis), sqlite (a file that is also the query index a profile reads),
@@ -49,6 +51,10 @@ var (
 	// ErrSealed reports an append refused because its stream was sealed: the
 	// writer declared it complete, and a reader has already taken it as such.
 	ErrSealed = errors.New("record stream sealed")
+
+	// ErrUnsupported reports a kind the backend cannot store as declared, such
+	// as one that replaces stored rows in a backend whose seqs cannot skip.
+	ErrUnsupported = errors.New("record store operation unsupported")
 )
 
 // Window is an inclusive seq range. An empty window has From == To+1: an
@@ -62,10 +68,12 @@ type Window struct {
 func (w Window) Len() int64 { return w.To - w.From + 1 }
 
 // AppendResult is what one append stored: the window its rows were numbered
-// into, and how many rows it skipped because their key was already stored.
+// into, how many rows it skipped because their key was already stored, and how
+// many stored rows it replaced with the rows it appended.
 type AppendResult struct {
-	Window  Window `json:"window"`
-	Skipped int64  `json:"skipped"`
+	Window   Window `json:"window"`
+	Skipped  int64  `json:"skipped"`
+	Replaced int64  `json:"replaced,omitempty"`
 }
 
 // Meta describes a stream.
@@ -74,11 +82,12 @@ type Meta struct {
 	Kind       string `json:"kind"`
 	Generation string `json:"generation"`
 
-	// Total is how many rows the stream holds, LowSeq the seq of the first one
-	// and HighSeq the seq of the last. Rows only leave a stream from its low end
-	// (Trim), so Total is HighSeq-LowSeq+1 in a durable backend; all three are
-	// reported because an index mirroring it may lag. An empty stream has
-	// LowSeq HighSeq+1.
+	// Total is how many rows the stream holds and HighSeq the seq of the last
+	// one; LowSeq is a lower bound of the first one's seq. Seqs only grow, but
+	// a kind that replaces stored rows leaves the replaced rows' seqs behind,
+	// so its stream may skip seqs and hold fewer than HighSeq-LowSeq+1 rows.
+	// All three are reported because an index mirroring the stream may lag. An
+	// empty stream has LowSeq HighSeq+1.
 	Total   int64 `json:"total"`
 	LowSeq  int64 `json:"lowSeq"`
 	HighSeq int64 `json:"highSeq"`
@@ -135,7 +144,10 @@ type Backend interface {
 	//
 	// A keyed kind (KindOptions.Key) skips every row whose key the stream
 	// already holds, atomically with the append, and numbers only the rows it
-	// keeps; a batch naming one key twice is refused whole. A kind retaining
+	// keeps; a batch naming one key twice is refused whole. A kind that
+	// replaces stored rows (OnConflictReplace) instead removes each stored row
+	// the append names by key and numbers every appended row; a backend that
+	// cannot refuses such a kind with ErrUnsupported. A kind retaining
 	// rows (RetainRows) slides the stream's expiry to the backend ttl from now
 	// and trims the rows appended longer than that ago, in the same write.
 	Append(ctx context.Context, stream, kind string, rows []Row) (AppendResult, error)

@@ -478,3 +478,74 @@ var _ = Describe("Indexer", func() {
 		Expect(err).To(MatchError(ContainSubstring("must be derived")))
 	})
 })
+
+var _ = Describe("Indexer over a source that replaces rows", func() {
+	var (
+		ctx     context.Context
+		source  *sqlite.Backend
+		index   *sqlite.Backend
+		indexer *recordstore.Indexer
+	)
+
+	BeforeEach(func() {
+		ctx = context.Background()
+		var err error
+		dir := GinkgoT().TempDir()
+		source, err = sqlite.Open(sqlite.Options{
+			Path: filepath.Join(dir, "records.sqlite"), Schema: recordstoretest.Schema, TTL: time.Hour, SweepInterval: time.Minute,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(source.Close)
+		index, err = sqlite.Open(sqlite.Options{
+			Path: filepath.Join(dir, "index.sqlite"), Schema: recordstoretest.Schema, Derived: true, SweepInterval: time.Minute,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(index.Close)
+		indexer, err = recordstore.NewIndexer(source, index)
+		Expect(err).ToNot(HaveOccurred())
+	})
+
+	replace := func(rows ...recordstore.Row) {
+		_, err := source.Append(ctx, "run-1", recordstoretest.ReplacingKind, rows)
+		Expect(err).ToNot(HaveOccurred())
+	}
+	changed := func(n int) recordstore.Row {
+		row := recordstoretest.SampleRow(n)
+		row["count"] = 99
+		return row
+	}
+	expectMirrored := func() {
+		sourceSeqs, sourceRows := recordstoretest.Scanned(source, "run-1", 0)
+		indexSeqs, indexRows := recordstoretest.Scanned(index, "run-1", 0)
+		sourceMeta, err := source.Meta(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		indexMeta, err := index.Meta(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(map[string]any{
+			"seqs": indexSeqs, "rows": recordstoretest.Normalize(indexRows), "total": indexMeta.Total, "high": indexMeta.HighSeq,
+		}).To(Equal(map[string]any{
+			"seqs": sourceSeqs, "rows": recordstoretest.Normalize(sourceRows), "total": sourceMeta.Total, "high": sourceMeta.HighSeq,
+		}))
+	}
+
+	It("drops an indexed row's stale copy when its replacement is imported", func() {
+		replace(recordstoretest.SampleRows(1, 3)...)
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		replace(changed(2), recordstoretest.SampleRow(4))
+
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		expectMirrored()
+		seqs, _ := recordstoretest.Scanned(index, "run-1", 0)
+		Expect(seqs).To(Equal([]int64{1, 3, 4, 5}))
+	})
+
+	It("copies a stream whose seqs already skip into an empty index", func() {
+		replace(recordstoretest.SampleRows(1, 3)...)
+		replace(changed(1), changed(3))
+
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		expectMirrored()
+		seqs, _ := recordstoretest.Scanned(index, "run-1", 0)
+		Expect(seqs).To(Equal([]int64{2, 4, 5}))
+	})
+})
