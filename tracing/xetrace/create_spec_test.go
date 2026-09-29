@@ -58,11 +58,32 @@ var _ = Describe("Create", func() {
 		Expect(session.Statements[0]).To(ContainSubstring("sqlserver.session_id <> 57"), "the reader's own connection is excluded")
 		Expect(session.Statements[0]).To(ContainSubstring("equal_i_sql_unicode_string(sqlserver.database_name, N'warehouse')"),
 			"no Databases scopes to the connection's database")
-		Expect(session.Databases()).To(Equal([]string{"warehouse"}))
+		Expect(session.DrainFilter()).To(Equal(EventFilter{Types: []string{"DDL"}}),
+			"every captured event is already scoped by the session predicate")
 		Expect(session.FinalDelay()).To(Equal(DispatchLatency+dispatchMargin),
 			"a final read waits out the session's own dispatch latency")
 		Expect(session.opts.Events).To(Equal(DefaultEvents))
 		Expect(session.Statements[0]).NotTo(ContainSubstring("ADD EVENT sqlserver.object_created"))
+	})
+
+	It("scopes deadlock reports to the connection's database when the caller named none", func() {
+		pool, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(containsMatcher(nil)))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { _ = pool.Close() })
+
+		mock.ExpectQuery("SELECT @@SPID").WillReturnRows(sqlmock.NewRows([]string{"spid"}).AddRow(57))
+		mock.ExpectQuery("SELECT DB_NAME()").WillReturnRows(sqlmock.NewRows([]string{"name"}).AddRow("warehouse"))
+		mock.ExpectQuery("HAS_PERMS_BY_NAME").WillReturnRows(grantedPermissionRows())
+		mock.ExpectExec("CREATE EVENT SESSION [trace_deadlocks] ON SERVER").WillReturnResult(sqlmock.NewResult(0, 0))
+		mock.ExpectExec("ALTER EVENT SESSION [trace_deadlocks] ON SERVER STATE = START").WillReturnResult(sqlmock.NewResult(0, 0))
+
+		session, err := Create(context.Background(), pool, CreateOptions{
+			Name: "trace_deadlocks", Events: []string{EventXMLDeadlockReport, EventSQLStatementCompleted},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(session.DrainFilter().Databases).To(Equal([]string{"warehouse"}),
+			"a deadlock report is added to the session without a predicate, so only Drain can scope it")
 	})
 
 	It("captures the whole instance for Databases [*] without asking for DB_NAME()", func() {

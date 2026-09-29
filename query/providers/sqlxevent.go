@@ -233,6 +233,9 @@ func (sqlXEventProvider) Stream(ctx context.Context, req query.ProviderRequest, 
 		}
 	}()
 
+	// The same filter, scoped to the databases the session resolved for the
+	// deadlock reports its predicate does not reach.
+	drain.Filter = session.DrainFilter()
 	drain.FinalDelay = session.FinalDelay()
 	drain.OnEvent = func(event xetrace.Event) { emit(eventRow(event)) }
 	drain.OnDropped = func(delta int64, stats xetrace.TargetStats) {

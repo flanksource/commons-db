@@ -10,7 +10,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -154,9 +153,7 @@ func (r *Registry) Start(ctx context.Context, opts StartOptions) (*ActiveTrace, 
 		return nil, err
 	}
 	opts.Databases = databases
-	if len(opts.Filter.Databases) == 0 && (opts.Session == xetrace.SystemHealthSession || slices.Contains(opts.Events, xetrace.EventXMLDeadlockReport)) {
-		opts.Filter.Databases = append([]string(nil), databases...)
-	}
+	opts.Filter = opts.DrainFilter()
 	xe, opened, err := r.opts.NewSession(ctx, db, opts.CreateOptions)
 	if err != nil {
 		release()
