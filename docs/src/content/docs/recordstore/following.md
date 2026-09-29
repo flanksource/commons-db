@@ -13,7 +13,7 @@ notifier, err := recordstore.NewNotifier(backend, recordstore.NotifierOptions{
 })
 ```
 
-Only appends made **through the Notifier** wake a waiter at once. That covers the contract, because a stream has one writer process. `RecheckInterval` (required) is how often a waiter re-reads the metadata while nothing wakes it. The recheck is what notices events no append announces: a stream expired, trimmed away, or removed by the backend itself.
+Appends made **through the Notifier** wake a waiter at once. So do writes another process makes, when the backend is a `recordstore.ChangeSource`. A sqlite backend is one: it watches the file's `PRAGMA data_version` every 150ms, and every change wakes every waiter, which then re-reads its stream. That's how a reader of a [shared store](../multi-process/) follows the owner's writes, and how the owner's own followers see the batches it ingests. `RecheckInterval` (required) is how often a waiter re-reads the metadata while nothing wakes it. The recheck is what notices events no append announces: a stream expired, trimmed away, or removed by the backend itself.
 
 `Trim`, `Expire`, `Seal` and `Delete` also wake the stream's waiters, which then re-read what's left.
 

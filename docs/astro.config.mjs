@@ -29,6 +29,7 @@ export default defineConfig({
             { label: "Settings and routing", slug: "recordstore/settings" },
             { label: "Following and indexing", slug: "recordstore/following" },
             { label: "Probes: cursor sources", slug: "recordstore/probes" },
+            { label: "Multiple processes", slug: "recordstore/multi-process" },
             { label: "Writing a backend", slug: "recordstore/custom-backend" },
             { label: "Worked examples", slug: "recordstore/examples" },
           ],

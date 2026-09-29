@@ -18,7 +18,7 @@ ref, err := results.Ref(ctx, "job-42", 0, 0) // 0 = the stream's low / high seq
   "from": 1, "to": 1840,
   "total": 1840,
   "expiresAt": "2026-09-25T10:00:00Z",
-  "store": { "backend": "sqlite", "host": "build-7", "file": "/var/lib/acme/traces/v4/records.sqlite" }
+  "store": { "backend": "sqlite", "host": "build-7", "file": "/var/lib/acme/traces/v6/records.sqlite" }
 }
 ```
 

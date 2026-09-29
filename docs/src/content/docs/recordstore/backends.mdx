@@ -96,7 +96,7 @@ The same file is the query index a `sql` profile reads through `backend.ReadDSN(
   <SQLiteAppendFlow client:load />
 </div>
 
-A write holds the stream lock and runs in one transaction on the single writer connection, so a reader never sees rows without their `record_streams` row.
+A write holds the stream lock and runs in one transaction on the single writer connection, so a reader never sees rows without their `record_streams` row. Writer transactions begin immediately (`_txlock=immediate`), so a second process writing the file waits for the lock instead of failing mid-transaction. To share a file between processes, open it through [`recordstore/owner`](../multi-process/). Then one process writes it, and the others open it with `ReadOnly` and hand their writes to it through `Submit`.
 
 ### Storage layout
 

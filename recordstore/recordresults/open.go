@@ -5,13 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/ndjson"
+	"github.com/flanksource/commons-db/recordstore/owner"
 	"github.com/flanksource/commons-db/recordstore/sqlite"
 )
 
@@ -22,6 +26,10 @@ const (
 	recordsFile = "records.sqlite"
 	indexFile   = "index.sqlite"
 	ndjsonDir   = "ndjson"
+
+	// privateDir holds the derived indexes of processes that found the shared
+	// one held by another, one directory each.
+	privateDir = "private"
 
 	// sweepInterval is how often a sqlite file removes expired streams.
 	sweepInterval = 10 * time.Minute
@@ -54,6 +62,10 @@ type OpenOptions struct {
 
 	// Register declares the result types the registry serves.
 	Register func(*Registry) error
+
+	// Build names this build in the state published beside a store this
+	// process holds, so another process refused it can say who holds it.
+	Build string
 }
 
 // Results is an open result store: the backend captures append to, and the
@@ -67,6 +79,7 @@ type Results struct {
 	Registry *Registry
 	index    *sqlite.Backend
 	same     bool
+	role     func() owner.Role
 
 	closers []io.Closer
 }
@@ -77,6 +90,12 @@ type Results struct {
 //	nil      sqlite            records.sqlite the same file
 //	nil      ndjson            ndjson/        index.sqlite, derived
 //	a Router (any)             the Router     index.sqlite, derived
+//
+// Other processes may open the same directory. The sqlite store is shared
+// through an elected owner (see recordstore/owner); ndjson files are held by
+// one process, and another is refused with owner.ErrLocked naming it; a
+// derived index is held by one process, and another indexes the source into a
+// private index of its own, removed once its holder is gone.
 func Open(options OpenOptions) (*Results, error) {
 	results := &Results{}
 	if options.Source != nil {
@@ -179,17 +198,36 @@ func (r *Results) DeleteStream(ctx context.Context, stream, kind string) error {
 	return nil
 }
 
+// Role is what this process does with the store: its owner, or a reader
+// handing its writes to the owner. A process holding its ndjson files or its
+// derived index is their owner; one indexing a source privately is a reader.
+func (r *Results) Role() owner.Role { return r.role() }
+
 // openFiles opens the source and the index the options call for.
 func (r *Results) openFiles(options OpenOptions, schemas *recordstore.Schemas) (recordstore.Backend, *sqlite.Backend, error) {
 	settings := options.Settings
+	r.role = func() owner.Role { return owner.RoleOwner }
 	if options.Source == nil && settings.Backend == recordstore.BackendSQLite {
-		file, err := r.openSQLite(settings, recordsFile, schemas, false)
-		return file, file, err
+		shared, err := OpenSharedSQLite(context.Background(), sqlite.Options{
+			Path: filepath.Join(settings.Dir, recordsFile), Schema: schemas.Kind, TTL: settings.TTL, SweepInterval: sweepInterval,
+		}, options.Build)
+		if err != nil {
+			return nil, nil, fmt.Errorf("result store: %w", err)
+		}
+		r.closers = append(r.closers, shared)
+		r.role = shared.Role
+		return shared.Backend, shared.Backend, nil
 	}
 	source := options.Source
 	if source == nil {
+		dir := filepath.Join(settings.Dir, ndjsonDir)
+		release, err := owner.Exclusive(dir, options.Build)
+		if err != nil {
+			return nil, nil, fmt.Errorf("result store: hold ndjson streams: %w", err)
+		}
+		r.closers = append(r.closers, closerFunc(release))
 		local, err := ndjson.New(ndjson.Options{
-			Dir: filepath.Join(settings.Dir, ndjsonDir), Schema: schemas.Kind, MaxBytes: settings.NDJSONMaxBytes,
+			Dir: dir, Schema: schemas.Kind, MaxBytes: settings.NDJSONMaxBytes,
 			KeepStreams: settings.NDJSONKeepStreams, TTL: settings.TTL,
 		})
 		if err != nil {
@@ -198,27 +236,75 @@ func (r *Results) openFiles(options OpenOptions, schemas *recordstore.Schemas) (
 		r.closers = append(r.closers, local)
 		source = local
 	}
-	index, err := r.openSQLite(settings, indexFile, schemas, true)
-	return source, index, err
+	path, err := r.holdIndex(settings.Dir, options.Build)
+	if err != nil {
+		return nil, nil, err
+	}
+	index, err := sqlite.Open(sqlite.Options{Path: path, Schema: schemas.Kind, Derived: true, SweepInterval: sweepInterval})
+	if err != nil {
+		return nil, nil, fmt.Errorf("result store: open %s: %w", path, err)
+	}
+	r.closers = append(r.closers, index)
+	return source, index, nil
 }
 
-// openSQLite opens name under the store directory. A derived index keeps no
-// expiry of its own: the Indexer gives each stream its source's.
-func (r *Results) openSQLite(settings recordstore.Settings, name string, schemas *recordstore.Schemas, derived bool) (*sqlite.Backend, error) {
-	ttl := settings.TTL
-	if derived {
-		ttl = 0
+// holdIndex holds the derived index under dir and returns its path: the
+// shared index.sqlite, or, while another process holds that, a private one of
+// this process's under dir/private/, after removing the private indexes whose
+// holders are gone. A derived index keeps no expiry of its own: the Indexer
+// gives each stream its source's.
+func (r *Results) holdIndex(dir, build string) (string, error) {
+	path := filepath.Join(dir, indexFile)
+	release, err := owner.Exclusive(path, build)
+	if err == nil {
+		r.closers = append(r.closers, closerFunc(release))
+		return path, nil
 	}
-	file, err := sqlite.Open(sqlite.Options{
-		Path: filepath.Join(settings.Dir, name), Schema: schemas.Kind, TTL: ttl, Derived: derived,
-		SweepInterval: sweepInterval,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("result store: open %s: %w", name, err)
+	if !errors.Is(err, owner.ErrLocked) {
+		return "", fmt.Errorf("result store: hold %s: %w", path, err)
 	}
-	r.closers = append(r.closers, file)
-	return file, nil
+	private := filepath.Join(dir, privateDir)
+	if err := collectPrivate(private, build); err != nil {
+		return "", err
+	}
+	path = filepath.Join(private, uuid.NewString(), indexFile)
+	if release, err = owner.Exclusive(path, build); err != nil {
+		return "", fmt.Errorf("result store: hold %s: %w", path, err)
+	}
+	r.closers = append(r.closers, closerFunc(release))
+	r.role = func() owner.Role { return owner.RoleReader }
+	return path, nil
 }
+
+// collectPrivate removes the private indexes under dir that no process holds.
+func collectPrivate(dir, build string) error {
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("result store: list private indexes: %w", err)
+	}
+	for _, entry := range entries {
+		held := filepath.Join(dir, entry.Name())
+		release, err := owner.Exclusive(filepath.Join(held, indexFile), build)
+		if errors.Is(err, owner.ErrLocked) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("result store: inspect private index %s: %w", held, err)
+		}
+		if err := errors.Join(release(), os.RemoveAll(held)); err != nil {
+			return fmt.Errorf("result store: remove private index %s: %w", held, err)
+		}
+	}
+	return nil
+}
+
+// closerFunc is a release function as an io.Closer.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
 
 // Close closes everything Open opened, and the Source it was given, in
 // reverse order.
