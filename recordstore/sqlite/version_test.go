@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -74,6 +75,10 @@ const v4Events = `CREATE TABLE record_store_format (key INTEGER PRIMARY KEY CHEC
 		VALUES ('run-1', 'g-1', 'events', 2, 1, 2, '2026-09-15T10:00:00.000000000Z');
 	INSERT INTO record_appends (stream_id, last_seq, appended_at) VALUES ('run-1', 2, '2026-09-15T10:00:00.000000000Z');`
 
+// v5Events is a durable version 5 file, laid out as version 4 is, holding
+// stream run-1 under generation g-5.
+var v5Events = strings.NewReplacer("VALUES (1, 4)", "VALUES (1, 5)", "'g-1'", "'g-5'").Replace(v4Events)
+
 func fileBytes(path string) []byte {
 	content, err := os.ReadFile(path)
 	Expect(err).ToNot(HaveOccurred())
@@ -121,15 +126,47 @@ var _ = Describe("sqlite backend versioned files", func() {
 		_, err := backend.Append(ctx, "run-1", "events", []recordstore.Row{eventRow(1)})
 		Expect(err).ToNot(HaveOccurred())
 
-		Expect(backend.Path()).To(Equal(filepath.Join(dir, "v5", "records.sqlite")))
+		Expect(backend.Path()).To(Equal(filepath.Join(dir, "v6", "records.sqlite")))
 		Expect(unversioned).ToNot(BeAnExistingFile())
 		Expect(map[string]any{
 			"version": catalogVersion(ctx, backend.Path()), "columns": kindColumns(ctx, backend.Path(), "events"),
 			"physical": tableColumns(ctx, backend.Path(), "records_events"),
 		}).To(Equal(map[string]any{
-			"version": 5, "columns": namedEventsColumns,
+			"version": 6, "columns": namedEventsColumns,
 			"physical": []string{"stream_id", "seq", "id", "Pod_Name", "transaction_", "PolicyGuid", "policyGuid_2", "count"},
 		}))
+	})
+
+	Context("when a durable version 5 file holds rows", func() {
+		var v5Path string
+		var original []byte
+
+		BeforeEach(func() {
+			v5Path = filepath.Join(dir, "v5", "records.sqlite")
+			writeLegacy(ctx, v5Path, v5Events)
+			// The v4 file the v5 copy was made of is superseded by it.
+			writeLegacy(ctx, filepath.Join(dir, "v4", "records.sqlite"), v4Events)
+			original = fileBytes(v5Path)
+		})
+
+		It("copies it into v6 as it is, leaving the v5 file for the builds still reading it", func() {
+			backend := openSQLite(unversioned, clock, eventsSchema, false)
+			DeferCleanup(backend.Close)
+
+			seqs, rows := scannedEvents(backend)
+			meta, err := backend.Meta(ctx, "run-1")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(map[string]any{
+				"path": backend.Path(), "seqs": seqs, "rows": rows, "generation": meta.Generation,
+				"version": catalogVersion(ctx, backend.Path()), "columns": kindColumns(ctx, backend.Path(), "events"),
+			}).To(Equal(map[string]any{
+				"path": filepath.Join(dir, "v6", "records.sqlite"), "seqs": []int64{1, 2},
+				"rows": []recordstore.Row{eventRow(1), eventRow(2)}, "generation": "g-5",
+				"version": 6, "columns": namedEventsColumns,
+			}))
+			Expect(backend.Close()).To(Succeed())
+			Expect(fileBytes(v5Path)).To(Equal(original), "the v5 file changed")
+		})
 	})
 
 	Context("when a durable version 4 file holds rows", func() {
@@ -144,7 +181,7 @@ var _ = Describe("sqlite backend versioned files", func() {
 			original = fileBytes(v4Path)
 		})
 
-		It("copies it into v5 as it is, leaving the v4 file for the builds still reading it", func() {
+		It("copies it into v6 as it is, leaving the v4 file for the builds still reading it", func() {
 			backend := openSQLite(unversioned, clock, eventsSchema, false)
 			DeferCleanup(backend.Close)
 
@@ -153,9 +190,9 @@ var _ = Describe("sqlite backend versioned files", func() {
 				"path": backend.Path(), "seqs": seqs, "rows": rows,
 				"version": catalogVersion(ctx, backend.Path()), "columns": kindColumns(ctx, backend.Path(), "events"),
 			}).To(Equal(map[string]any{
-				"path": filepath.Join(dir, "v5", "records.sqlite"), "seqs": []int64{1, 2},
+				"path": filepath.Join(dir, "v6", "records.sqlite"), "seqs": []int64{1, 2},
 				"rows":    []recordstore.Row{eventRow(1), eventRow(2)},
-				"version": 5, "columns": namedEventsColumns,
+				"version": 6, "columns": namedEventsColumns,
 			}))
 			Expect(backend.Close()).To(Succeed())
 			Expect(fileBytes(v4Path)).To(Equal(original), "the v4 file changed")
@@ -176,7 +213,7 @@ var _ = Describe("sqlite backend versioned files", func() {
 			original = fileBytes(unversioned)
 		})
 
-		It("copies it into v5 with named columns, the same rows and working key skips, leaving the original untouched", func() {
+		It("copies it into v6 with named columns, the same rows and working key skips, leaving the original untouched", func() {
 			backend := openSQLite(unversioned, clock, eventsSchema, false)
 			DeferCleanup(backend.Close)
 
@@ -192,14 +229,14 @@ var _ = Describe("sqlite backend versioned files", func() {
 				"seqs": []int64{1, 2}, "rows": []recordstore.Row{eventRow(1), eventRow(2)},
 				"append":  recordstore.AppendResult{Window: recordstore.Window{From: 3, To: 3}, Skipped: 1},
 				"after":   []int64{1, 2, 3},
-				"version": 5, "columns": namedEventsColumns,
+				"version": 6, "columns": namedEventsColumns,
 				"physical": []string{"stream_id", "seq", "id", "Pod_Name", "transaction_", "PolicyGuid", "policyGuid_2", "count"},
 			}))
 			Expect(backend.Close()).To(Succeed())
 			Expect(fileBytes(unversioned)).To(Equal(original), "the unversioned file changed")
 		})
 
-		It("reuses the v5 copy on a second open rather than copying again", func() {
+		It("reuses the v6 copy on a second open rather than copying again", func() {
 			first := openSQLite(unversioned, clock, eventsSchema, false)
 			_, err := first.Append(ctx, "run-1", "events", []recordstore.Row{eventRow(3)})
 			Expect(err).ToNot(HaveOccurred())
@@ -216,14 +253,14 @@ var _ = Describe("sqlite backend versioned files", func() {
 				map[string]any{"seqs": []int64{1, 2, 3}, "oldBuildStreamFound": false}))
 		})
 
-		It("builds a derived index fresh in v5, copying nothing", func() {
+		It("builds a derived index fresh in v6, copying nothing", func() {
 			index := openSQLite(unversioned, clock, eventsSchema, true)
 			DeferCleanup(index.Close)
 
 			_, err := index.Meta(ctx, "run-1")
 			Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), fmt.Sprint(err))
-			Expect(index.Path()).To(Equal(filepath.Join(dir, "v5", "records.sqlite")))
-			Expect(catalogVersion(ctx, index.Path())).To(Equal(5))
+			Expect(index.Path()).To(Equal(filepath.Join(dir, "v6", "records.sqlite")))
+			Expect(catalogVersion(ctx, index.Path())).To(Equal(6))
 			Expect(index.Close()).To(Succeed())
 			Expect(fileBytes(unversioned)).To(Equal(original), "the unversioned file changed")
 		})

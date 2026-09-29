@@ -68,7 +68,7 @@ if err := indexer.Ensure(ctx, stream); err != nil { … }
 ### What Ensure does
 
 1. **Prepare**: reconcile the kind's table and read the indexed incarnation. A derived index drops an older generation stored under the same stream id.
-2. **Catch up**: mirror the source's trim (`TrimBelow`), then import every row after the indexed high seq in batches of 500 (`Import`). Seqs must arrive without a gap and must reach the source's high seq. A scan that ends early is refused, never taken as the whole stream, because an index that stopped short would page the stream as complete.
+2. **Catch up**: mirror the source's trim (`TrimBelow`), then import every row after the indexed high seq in batches of 500 (`Import`). Each row is imported under its source seq. Seqs must increase and must reach the source's high seq, and they must also be contiguous unless the kind replaces stored rows. For a replacing kind, each imported row also replaces the indexed row under its key. A scan that ends early is refused, never taken as the whole stream, because an index that stopped short would page the stream as complete.
 3. **Re-check the generation**: if the source was recreated while it was being indexed, fail.
 4. **Mirror trim, expiry and seal**: the index takes the source's exact `ExpiresAt` (`SetExpiry`), so an index entry never outlives its stream. It seals once it holds every row of a sealed source.
 

@@ -16,8 +16,9 @@ import (
 // ever gains columns, so its record_kinds entry lists every column it has —
 // possibly more than any one build declares — where version 4 listed exactly
 // the columns one build declared, and so refused a table another build had
-// added a column to.
-const catalogVersion = 5
+// added a column to. Version 6 streams may skip seqs, which a build reading
+// version 5 would take for rows it lost.
+const catalogVersion = 6
 
 func (b *Backend) createCatalog(ctx context.Context) error {
 	return b.database.Write(func(writer *sql.DB) error {

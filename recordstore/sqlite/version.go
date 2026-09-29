@@ -26,11 +26,13 @@ type predecessor struct {
 }
 
 // predecessors are the files a durable store copies into its versioned file
-// on first open, newest first: the previous catalog version's directory, whose
-// tables have named columns, then the unversioned file older builds wrote, whose
-// tables store columns positionally. Only the newest that exists is copied.
+// on first open, newest first: the previous catalog versions' directories,
+// whose tables have named columns, then the unversioned file older builds
+// wrote, whose tables store columns positionally. Only the newest that exists
+// is copied.
 func predecessors(configured string) []predecessor {
 	return []predecessor{
+		{path: versionedPath(configured, 5), versions: []int{5}},
 		{path: versionedPath(configured, 4), versions: []int{4}},
 		{path: configured, versions: []int{3, 2}},
 	}
@@ -135,8 +137,8 @@ func copyPredecessor(ctx context.Context, from predecessor, target string) error
 // migrateCopy brings the copy at path from version to catalogVersion in one
 // transaction: a version 2 catalog gains sealed streams, and a version 2 or 3
 // kind table renames its positional columns to derived names recorded in
-// record_kinds. A version 4 catalog already describes its tables as version 5
-// reads them, so it only takes the new version.
+// record_kinds. A version 4 or 5 catalog already describes its tables as
+// version 6 reads them, so it only takes the new version.
 func migrateCopy(ctx context.Context, path string, version int) (err error) {
 	database, err := sql.Open("sqlite", fileURI(path))
 	if err != nil {

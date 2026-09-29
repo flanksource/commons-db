@@ -28,14 +28,15 @@ The first append to a stream creates it under the append's kind. Appending to an
 
 ## Seqs and windows
 
-Every row gets a per-stream **seq**, contiguous from 1. The seq is the only position a reader resumes from. Timestamps and keys never are, because neither orders nor identifies a row's position reliably.
+Every row gets a per-stream **seq**, increasing from 1. The seq is the only position a reader resumes from. Timestamps and keys never are, because neither orders nor identifies a row's position reliably. Seqs are contiguous unless the kind replaces stored rows: a replaced row's seq is left behind (see [Replacing stored rows](#replacing-stored-rows)).
 
 A `Window` is an inclusive seq range `{From, To}`. An empty window has `From == To+1`, so an append of no rows reports the seq the next row will take.
 
 ```go
 type AppendResult struct {
-	Window  Window // the seqs this append's rows were numbered into
-	Skipped int64  // rows skipped because their key was already stored
+	Window   Window // the seqs this append's rows were numbered into
+	Skipped  int64  // rows skipped because their key was already stored
+	Replaced int64  // stored rows the appended rows replaced
 }
 ```
 
@@ -47,7 +48,7 @@ type AppendResult struct {
 | --- | --- |
 | `Stream`, `Kind` | the stream id and its kind |
 | `Generation` | a UUID for this incarnation of the stream id |
-| `Total`, `LowSeq`, `HighSeq` | rows held, and the seqs of the first and last. An empty stream has `LowSeq == HighSeq+1`. |
+| `Total`, `LowSeq`, `HighSeq` | rows held, a lower bound of the first row's seq, and the last row's seq. `Total` is `HighSeq-LowSeq+1` unless the kind replaces stored rows. An empty stream has `LowSeq == HighSeq+1`. |
 | `UpdatedAt` | when it was last written |
 | `ExpiresAt` | when the stream is removed, or `nil` when it's kept until something expires it |
 | `Capped` | an append was refused for capacity: complete up to `HighSeq`, missing that append |
@@ -67,6 +68,14 @@ A kind may declare a **key**, a string column that identifies a row within a str
 - One batch naming the same key twice is refused whole.
 - Once a row is trimmed away, its key can be appended again.
 
+### Replacing stored rows
+
+With `KindOptions.OnConflict: recordstore.OnConflictReplace`, an append of a stored key **replaces** the stored row instead of skipping the new one. The stored row is removed and the appended row is numbered after the high seq in the same write, so a reader following the stream sees the new row. `AppendResult.Replaced` counts the rows removed.
+
+The replaced row's seq is left behind, so the stream's seqs skip it. `LowSeq` stays a lower bound of the first row held, and `Total` counts the rows actually held.
+
+Replacing needs a key, and only the sqlite backend stores such kinds. kv and ndjson address rows by contiguous seqs, so they refuse a replacing kind with `ErrUnsupported`.
+
 ## Retention
 
 A kind picks one of two retention policies:
@@ -80,7 +89,7 @@ A kind picks one of two retention policies:
 
 ## Leaving a stream
 
-Rows only leave a stream **from its low end**:
+Rows leave a stream **from its low end**, or when a replacing kind stores a new row under their key:
 
 - `Trim(ctx, stream, before)` removes every append made before `before`. The rows kept keep their seqs, and `LowSeq` moves to the first of them.
 - `Expire(ctx, stream, ttl)` removes the whole stream `ttl` from now. The TTL must be positive.

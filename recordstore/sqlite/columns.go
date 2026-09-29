@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/commons-db/db/sqlitetable"
 	sqlitemigrate "github.com/flanksource/commons-db/migrate/sqlite"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/recordstore"
 )
 
 // storedColumn is one column entry of a kind's catalog, "declared=physical:SQLTYPE:type":
@@ -26,13 +27,19 @@ type storedColumn struct {
 
 // storedCatalog is a kind's record_kinds entry: one column entry for every
 // physical column of its table, in the table's order, then the key a keyed
-// kind holds once per stream. A table only ever gains columns, so the entry
-// may describe columns the current declaration no longer names — another build
-// sharing the file still reads and writes them.
+// kind holds once per stream and, for a kind that replaces stored rows, its
+// conflict policy. A table only ever gains columns, so the entry may describe
+// columns the current declaration no longer names — another build sharing the
+// file still reads and writes them.
 type storedCatalog struct {
-	columns []storedColumn
-	key     string
+	columns    []storedColumn
+	key        string
+	onConflict recordstore.OnConflict
 }
+
+// replaceEntry is the entry recording that a kind replaces stored rows. A kind
+// that skips them records none, so its entry reads as version 5 wrote it.
+const replaceEntry = "onConflict:replace"
 
 // parseStoredColumn splits an entry from the right: a physical name is a safe
 // identifier and the storage part holds exactly two colons, so the declared
@@ -70,15 +77,21 @@ func readCatalog(ctx context.Context, tx *sql.Tx, table, stored string) (storedC
 		return storedCatalog{}, "", err
 	}
 	mismatch := fmt.Sprintf("catalog columns %s naming a table whose columns are %q", stored, physical)
-	var catalog storedCatalog
-	switch {
-	case len(parts) == len(physical):
-	case len(parts) == len(physical)+1 && strings.HasPrefix(parts[len(physical)], "key:"):
-		catalog.key = strings.TrimPrefix(parts[len(physical)], "key:")
-		parts = parts[:len(physical)]
-	default:
+	if len(parts) < len(physical) {
 		return storedCatalog{}, mismatch, nil
 	}
+	var catalog storedCatalog
+	for _, part := range parts[len(physical):] {
+		switch {
+		case strings.HasPrefix(part, "key:") && catalog.key == "" && catalog.onConflict == recordstore.OnConflictSkip:
+			catalog.key = strings.TrimPrefix(part, "key:")
+		case part == replaceEntry && catalog.key != "" && catalog.onConflict == recordstore.OnConflictSkip:
+			catalog.onConflict = recordstore.OnConflictReplace
+		default:
+			return storedCatalog{}, mismatch, nil
+		}
+	}
+	parts = parts[:len(physical)]
 	for index, part := range parts {
 		column, ok := parseStoredColumn(part)
 		if !ok || column.physical != physical[index] {
@@ -95,7 +108,7 @@ func readCatalog(ctx context.Context, tx *sql.Tx, table, stored string) (storedC
 // catalogOf is the catalog of a table just created, whose physical columns are
 // its declared ones in order.
 func catalogOf(table kindTable) storedCatalog {
-	catalog := storedCatalog{key: table.schema.Options.Key}
+	catalog := storedCatalog{key: table.schema.Options.Key, onConflict: table.schema.Options.OnConflict}
 	for index, column := range table.Columns {
 		catalog.columns = append(catalog.columns, storedColumn{declared: column.Name, physical: table.StoredAs[index], storage: columnStorage(column)})
 	}
@@ -103,12 +116,15 @@ func catalogOf(table kindTable) storedCatalog {
 }
 
 func (c storedCatalog) encode() (string, error) {
-	parts := make([]string, len(c.columns), len(c.columns)+1)
+	parts := make([]string, len(c.columns), len(c.columns)+2)
 	for index, column := range c.columns {
 		parts[index] = column.declared + "=" + column.physical + column.storage
 	}
 	if c.key != "" {
 		parts = append(parts, "key:"+c.key)
+	}
+	if c.onConflict == recordstore.OnConflictReplace {
+		parts = append(parts, replaceEntry)
 	}
 	encoded, err := json.Marshal(parts)
 	return string(encoded), err
@@ -116,11 +132,15 @@ func (c storedCatalog) encode() (string, error) {
 
 // adopt gives table the physical name the catalog recorded for each of its
 // declared columns, and returns the declared columns the table does not have.
-// A declared column recorded with other storage, or a different key, is a
-// mismatch: the rows already written would mean something else.
+// A declared column recorded with other storage, a different key or a
+// different conflict policy is a mismatch: the rows already written would
+// mean something else.
 func (table *kindTable) adopt(catalog storedCatalog) ([]query.ColumnDef, string) {
 	if catalog.key != table.schema.Options.Key {
 		return nil, fmt.Sprintf("key %q, now %q", catalog.key, table.schema.Options.Key)
+	}
+	if catalog.onConflict != table.schema.Options.OnConflict {
+		return nil, fmt.Sprintf("conflict policy %s, now %s", catalog.onConflict, table.schema.Options.OnConflict)
 	}
 	var added []query.ColumnDef
 	table.StoredAs = make([]string, len(table.Columns))

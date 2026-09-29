@@ -97,13 +97,18 @@ type ResultType[T any] struct {
 	DefaultFrom string
 
 	// KeyColumn, when set, names T's string column identifying a row within a
-	// stream: a stream holds each key once, and appending a row whose key it
-	// already holds skips the row (recordstore.KindOptions.Key).
+	// stream: a stream holds each key once, and OnConflict says what appending
+	// a row whose key it already holds does (recordstore.KindOptions.Key).
 	KeyColumn string
 
 	// Retention says how long a stream of the type keeps its rows
 	// (recordstore.KindOptions.Retention).
 	Retention recordstore.Retention
+
+	// OnConflict says whether appending a row whose key the stream holds skips
+	// it or replaces the stored row (recordstore.KindOptions.OnConflict).
+	// Replacing needs KeyColumn and a sqlite store.
+	OnConflict recordstore.OnConflict
 
 	// Follow lets a session tail the type's streams: its profile reads through
 	// the ProviderType provider, which streams each appended row, rather than
@@ -243,8 +248,10 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		result: RegisteredResultType{
 			Kind: resultType.Kind, Title: resultType.Title, Profile: registry.prefix + "/" + resultType.Kind,
 		},
-		columns:       columns,
-		options:       recordstore.KindOptions{Key: resultType.KeyColumn, Retention: resultType.Retention},
+		columns: columns,
+		options: recordstore.KindOptions{
+			Key: resultType.KeyColumn, Retention: resultType.Retention, OnConflict: resultType.OnConflict,
+		},
 		timeColumn:    resultType.TimeColumn,
 		defaultFrom:   resultType.DefaultFrom,
 		presenter:     presenter,

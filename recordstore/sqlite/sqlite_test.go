@@ -96,7 +96,7 @@ var _ = Describe("sqlite backend", func() {
 		}
 		backend := open().(*sqlite.Backend)
 		return recordstoretest.Harness{
-			Backend: backend, Advance: clock.Advance, Now: clock.Now, Reopen: open,
+			Backend: backend, Advance: clock.Advance, Now: clock.Now, Reopen: open, Replace: true,
 			Elapse: func(d time.Duration) {
 				clock.Advance(d)
 				_, err := backend.Sweep(context.Background())
@@ -207,7 +207,7 @@ var _ = Describe("sqlite backend storage", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, rows := recordstoretest.Scanned(escaped, "run-1", 0)
 		Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(1, 1))))
-		Expect(escaped.Path()).To(Equal(filepath.Join(filepath.Dir(escapedPath), "v5", "records?#.sqlite")))
+		Expect(escaped.Path()).To(Equal(filepath.Join(filepath.Dir(escapedPath), "v6", "records?#.sqlite")))
 		Expect(os.Stat(escaped.Path())).Error().ToNot(HaveOccurred())
 	})
 
@@ -437,6 +437,17 @@ var _ = Describe("sqlite backend storage", func() {
 		Expect(meta.HighSeq).To(Equal(int64(1)))
 	})
 
+	It("refuses source seqs that skip for a kind that never leaves seqs behind", func() {
+		source := recordstore.NewStreamMeta("run-1", recordstoretest.Kind, clock.Now())
+		source.Total, source.HighSeq = 2, 3
+		_, err := backend.Import(ctx, recordstore.ImportRequest{
+			Source: source, First: 1, Rows: recordstoretest.SampleRows(1, 2), Seqs: []int64{1, 3},
+		})
+		Expect(err).To(MatchError(ContainSubstring("never leaves seqs behind")))
+		_, err = backend.Meta(ctx, "run-1")
+		Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), fmt.Sprint(err))
+	})
+
 	It("rejects overlapping, gapped and stale-generation imports", func() {
 		source := recordstore.NewStreamMeta("run-1", recordstoretest.Kind, clock.Now())
 		source.Total, source.HighSeq = 5, 5
@@ -611,5 +622,28 @@ var _ = Describe("sqlite backend storage", func() {
 				Expect(err).ToNot(HaveOccurred())
 			})
 		})
+	})
+})
+
+var _ = Describe("sqlite backend conflict policy", func() {
+	It("records a kind's replacing policy and refuses a build declaring it to skip instead", func() {
+		ctx := context.Background()
+		clock := &fakeClock{now: time.Now()}
+		path := filepath.Join(GinkgoT().TempDir(), "records.sqlite")
+		replacing := openSQLite(path, clock, recordstoretest.Schema, false)
+		_, err := replacing.Append(ctx, "run-1", recordstoretest.ReplacingKind, recordstoretest.SampleRows(1, 1))
+		Expect(err).ToNot(HaveOccurred())
+		catalog := kindColumns(ctx, replacing.Path(), recordstoretest.ReplacingKind)
+		Expect(replacing.Close()).To(Succeed())
+
+		skipping := openSQLite(path, clock, func(kind string) (recordstore.KindSchema, error) {
+			schema, err := recordstoretest.Schema(kind)
+			schema.Options.OnConflict = recordstore.OnConflictSkip
+			return schema, err
+		}, false)
+		DeferCleanup(skipping.Close)
+		_, err = skipping.Append(ctx, "run-1", recordstoretest.ReplacingKind, recordstoretest.SampleRows(1, 1))
+		Expect(err).To(MatchError(ContainSubstring("conflict policy replace, now skip")))
+		Expect(catalog).To(HaveSuffix(`"key:name","onConflict:replace"]`))
 	})
 })
