@@ -176,11 +176,11 @@ func decodeProcess(raw xmlProcess, victims map[string]bool, at time.Time) (Proce
 	}{{"spid", &process.SPID}, {"ecid", &process.ECID}, {"hostpid", &process.HostPID},
 		{"trancount", &process.TranCount}, {"priority", &process.Priority}}
 	for _, field := range ints {
-		value, err := optionalInt(attrs, field.name)
+		value, err := optionalSmallInt(attrs, field.name)
 		if err != nil {
 			return Process{}, fmt.Errorf("process %s: %w", process.ID, err)
 		}
-		*field.target = int(value)
+		*field.target = value
 	}
 	var err error
 	if process.WaitTimeMs, err = optionalInt(attrs, "waittime"); err != nil {
@@ -207,11 +207,11 @@ func decodeProcess(raw xmlProcess, victims map[string]bool, at time.Time) (Proce
 func decodeFrame(raw xmlFrame) (Frame, error) {
 	attrs := attrMap(raw.Attrs)
 	frame := Frame{ProcName: attrs["procname"], SQLHandle: attrs["sqlhandle"], Text: strings.TrimSpace(raw.Text)}
-	line, err := optionalInt(attrs, "line")
+	line, err := optionalSmallInt(attrs, "line")
 	if err != nil {
 		return Frame{}, err
 	}
-	frame.Line = int(line)
+	frame.Line = line
 	for _, offset := range []struct {
 		name   string
 		target **int
@@ -219,11 +219,11 @@ func decodeFrame(raw xmlFrame) (Frame, error) {
 		if attrs[offset.name] == "" {
 			continue
 		}
-		value, err := optionalInt(attrs, offset.name)
+		value, err := optionalSmallInt(attrs, offset.name)
 		if err != nil {
 			return Frame{}, err
 		}
-		*offset.target = new(int(value))
+		*offset.target = new(value)
 	}
 	start, end := frame.offsets()
 	if start < 0 || start%2 != 0 || end < -1 || (end != -1 && (end%2 != 0 || end < start)) {
@@ -324,16 +324,13 @@ func decodeResource(element xmlResource) (Resource, error) {
 		Owners:  appendDistinct(nil, lockRequests(element.Owners)...),
 		Waiters: appendDistinct(nil, lockRequests(element.Waiters)...),
 	}
-	dbid, err := optionalInt(attrs, "dbid")
-	if err != nil {
+	var err error
+	if resource.DatabaseID, err = optionalSmallInt(attrs, "dbid"); err != nil {
 		return Resource{}, fmt.Errorf("%s %s: %w", kind, resource.LockID, err)
 	}
-	resource.DatabaseID = int(dbid)
-	fileID, err := optionalInt(attrs, "fileid")
-	if err != nil {
+	if resource.FileID, err = optionalSmallInt(attrs, "fileid"); err != nil {
 		return Resource{}, fmt.Errorf("%s %s: %w", kind, resource.LockID, err)
 	}
-	resource.FileID = int(fileID)
 	if resource.PageID, err = optionalInt(attrs, "pageid"); err != nil {
 		return Resource{}, fmt.Errorf("%s %s: %w", kind, resource.LockID, err)
 	}
@@ -389,6 +386,20 @@ func optionalInt(attrs map[string]string, name string) (int64, error) {
 		return 0, nil
 	}
 	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s %q is not a number", name, raw)
+	}
+	return value, nil
+}
+
+// optionalSmallInt is optionalInt for an attribute held in an int: ids, counts
+// and offsets that never approach the platform's int range.
+func optionalSmallInt(attrs map[string]string, name string) (int, error) {
+	raw, ok := attrs[name]
+	if !ok || raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.Atoi(raw)
 	if err != nil {
 		return 0, fmt.Errorf("%s %q is not a number", name, raw)
 	}
