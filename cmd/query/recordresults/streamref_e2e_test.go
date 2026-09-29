@@ -150,6 +150,7 @@ var _ = Describe("Results.Ref", func() {
 			var back recordresults.StreamRef
 			Expect(json.Unmarshal(eventsJSON, &back)).To(Succeed())
 			Expect(back).To(Equal(want))
+			Expect(recordresults.StreamRefFrom(*events)).To(Equal(want))
 		},
 		Entry("a local sqlite stream, with host and file", func() recordresults.StreamRef {
 			results, _ := openLocal(recordstore.BackendSQLite)
