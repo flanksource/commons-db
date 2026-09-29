@@ -82,6 +82,23 @@ func (s *suite) replaceSpecs() {
 				recordstore.AppendResult{Window: recordstore.Window{From: 3, To: 3}, Replaced: 1}))
 			gomega.Expect(s.meta("run-1").Total).To(gomega.Equal(int64(2)))
 		})
+
+		ginkgo.It("resumes a sealed stream past the seqs replaced rows left behind", func() {
+			s.appendKind("run-1", ReplacingKind, SampleRows(1, 3))
+			s.appendKind("run-1", ReplacingKind, []recordstore.Row{changed(2, 99)})
+			generation := s.meta("run-1").Generation
+			gomega.Expect(s.backend.Seal(s.ctx, "run-1")).To(gomega.Succeed())
+			reopener, ok := s.backend.(recordstore.Reopener)
+			gomega.Expect(ok).To(gomega.BeTrue())
+			gomega.Expect(reopener.Reopen(s.ctx, "run-1", generation)).To(gomega.Succeed())
+
+			gomega.Expect(s.appendKind("run-1", ReplacingKind, []recordstore.Row{changed(1, 98)})).To(gomega.Equal(
+				recordstore.AppendResult{Window: recordstore.Window{From: 5, To: 5}, Replaced: 1}))
+			seqs, _ := Scanned(s.backend, "run-1", 0)
+			gomega.Expect(seqs).To(gomega.Equal([]int64{3, 4, 5}))
+			gomega.Expect(described(s.meta("run-1"))).To(gomega.Equal(
+				recordstore.Meta{Stream: "run-1", Kind: ReplacingKind, Total: 3, LowSeq: 1, HighSeq: 5}))
+		})
 	})
 
 	ginkgo.It("refuses a kind that replaces stored rows when it cannot store one, writing nothing", func() {
