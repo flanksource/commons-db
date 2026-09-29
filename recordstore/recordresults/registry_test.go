@@ -130,13 +130,13 @@ var _ = Describe("Registry", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{
 			Kind: "sample_event", Title: "Sample events", KeyColumn: "user", Retention: recordstore.RetainRows,
-			OnConflict: recordstore.OnConflictReplace,
+			OnConflict: recordstore.OnConflictReplace, TimeColumn: "at",
 		})).To(Succeed())
 
 		schema, err := schemas.Kind("sample_event")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(schema.Options).To(Equal(recordstore.KindOptions{
-			Key: "user", Retention: recordstore.RetainRows, OnConflict: recordstore.OnConflictReplace,
+			Key: "user", Retention: recordstore.RetainRows, OnConflict: recordstore.OnConflictReplace, TimeColumn: "at",
 		}))
 	})
 

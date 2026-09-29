@@ -18,6 +18,12 @@ type KindOptions struct {
 	Key        string     // a string column identifying a row within a stream; empty = unkeyed
 	Retention  Retention  // RetainStream (default) or RetainRows
 	OnConflict OnConflict // OnConflictSkip (default) or OnConflictReplace, for a stored key
+	TimeColumn string     // a datetime column rows are read newest first by; indexed by the sqlite backend
+	Indexes    []IndexDef // column lists the sqlite backend indexes, each after the stream id
+}
+
+type IndexDef struct {
+	Columns []string
 }
 ```
 
@@ -28,6 +34,17 @@ type KindOptions struct {
 - the retention or the conflict policy is unknown
 - the key isn't one of the columns, or the key column isn't `query.ColumnTypeString`
 - the kind replaces stored rows but declares no key
+- the time column isn't one of the columns, or isn't `query.ColumnTypeDateTime`
+- an index names no columns, a column that isn't one of the kind's, a column twice, or a structured (json, key/value) column
+
+## Indexes
+
+The sqlite backend indexes a kind's table for the reads profiles make. kv and ndjson ignore these options.
+
+- **Time column.** With a `TimeColumn`, it builds `(stream_id, <time> DESC, seq)`. That serves a stream's newest-first page without sorting it. `recordresults` sets it from `ResultType.TimeColumn`.
+- **Declared indexes.** Each `IndexDef` is built as `(stream_id, <columns…>)`, since every read selects one stream or a few.
+
+Indexes are named `records_<kind>_ix_<columns>`, with a descending column marked `_desc`. A table only ever gains indexes. One a later build no longer declares is kept, because another build sharing the file may still rely on it. Building an index blocks the writer while it runs, so it is logged with how long it took.
 
 ## The Schemas catalog
 

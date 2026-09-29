@@ -189,6 +189,23 @@ var _ = Describe("sqlite backend opened read-only", func() {
 			Expect(submissions()).To(HaveLen(1))
 		})
 
+		It("has the writer build an index the kind now asks for", func() {
+			timed := func(kind string) (recordstore.KindSchema, error) {
+				schema, err := recordstoretest.Schema(kind)
+				schema.Columns = append(append([]query.ColumnDef(nil), schema.Columns...), query.ColumnDef{Name: "at", Type: query.ColumnTypeDateTime})
+				schema.Options.TimeColumn = "at"
+				return schema, err
+			}
+			indexed := openReader(timed, submit)
+			_, err := indexed.Table(recordstoretest.Kind)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(submissions()).To(HaveLen(1))
+			var name string
+			Expect(readOnly(owner.Path()).QueryRowContext(ctx,
+				`SELECT name FROM pragma_index_list('records_sample') WHERE origin = 'c'`).Scan(&name)).To(Succeed())
+			Expect(name).To(Equal("records_sample_ix_stream_id_at_desc_seq"))
+		})
+
 		It("refuses a table the writer does not create", func() {
 			ignoring := openReader(recordstoretest.Schema, func(context.Context, recordstore.Batch) (recordstore.BatchResult, error) {
 				return recordstore.BatchResult{}, nil
