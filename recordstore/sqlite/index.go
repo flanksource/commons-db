@@ -140,7 +140,7 @@ func importSeqs(table kindTable, request recordstore.ImportRequest) ([]int64, er
 	if len(request.Seqs) != len(request.Rows) {
 		return nil, fmt.Errorf("import names %d seqs for %d rows", len(request.Seqs), len(request.Rows))
 	}
-	skips := table.schema.Options.OnConflict == recordstore.OnConflictReplace
+	skips := table.schema.SkipsSeqs()
 	for index, seq := range request.Seqs {
 		if index == 0 {
 			if seq != request.First {
@@ -171,7 +171,7 @@ func (b *Backend) commitImportLocked(ctx context.Context, writer *sql.DB, table 
 	if err != nil {
 		return recordstore.Window{}, err
 	}
-	skips := table.schema.Options.OnConflict == recordstore.OnConflictReplace
+	skips := table.schema.SkipsSeqs()
 	if request.First <= meta.HighSeq || !skips && request.First != meta.HighSeq+1 {
 		return recordstore.Window{}, fmt.Errorf("stream %q: import starts at seq %d but the next seq is %d", stream, request.First, meta.HighSeq+1)
 	}
@@ -222,9 +222,11 @@ func (b *Backend) importedStream(ctx context.Context, tx *sql.Tx, request record
 	if !errors.Is(err, recordstore.ErrNotFound) {
 		return recordstore.Meta{}, err
 	}
+	// A new index stream copies rows the source already compacted away, so it
+	// starts with the source's compaction count and has nothing to mirror.
 	meta = recordstore.Meta{
 		Stream: stream, Kind: request.Source.Kind, Generation: request.Source.Generation,
-		LowSeq: request.First, HighSeq: request.First - 1,
+		LowSeq: request.First, HighSeq: request.First - 1, Compactions: request.Source.Compactions,
 	}
 	if b.derived {
 		meta.ExpiresAt = request.Source.ExpiresAt
