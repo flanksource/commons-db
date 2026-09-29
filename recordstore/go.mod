@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/flanksource/commons-db v0.1.40
+	github.com/flanksource/commons-db v0.1.45
 )
 
 require (

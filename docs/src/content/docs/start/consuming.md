@@ -7,21 +7,21 @@ commons-db ships as **three Go modules** from one repository: the root module fo
 
 | Module | Tag format | Brings |
 | --- | --- | --- |
-| `github.com/flanksource/commons-db` | `v0.1.40` | `sqlite`, `db/sqlitetable`, `query` (the profile engine), `query/profilestore`, connections, migrations |
-| `github.com/flanksource/commons-db/recordstore` | `recordstore/v0.1.40` | `recordstore` and its backends, probes, `recordresults` |
-| `github.com/flanksource/commons-db/cmd/query` | `cmd/query/v0.1.40` | `profiles` (the profile HTTP service), `sessions` (trace/top sessions), the `query` CLI and its UI |
+| `github.com/flanksource/commons-db` | `v0.1.45` | `sqlite`, `db/sqlitetable`, `query` (the profile engine), `query/profilestore`, `tracing` (xetrace, deadlocks), connections, migrations |
+| `github.com/flanksource/commons-db/recordstore` | `recordstore/v0.1.45` | `recordstore` and its backends, probes, `recordresults`, `tracing/sqltrace` (SQL Server trace capture) |
+| `github.com/flanksource/commons-db/cmd/query` | `cmd/query/v0.1.45` | `profiles` (the profile HTTP service), `sessions` (trace/top sessions), the `query` CLI and its UI |
 
 The modules are released together, so pin every one you use to the **same version**:
 
 ```bash
-go get github.com/flanksource/commons-db@v0.1.40
-go get github.com/flanksource/commons-db/recordstore@v0.1.40
-go get github.com/flanksource/commons-db/cmd/query@v0.1.40
+go get github.com/flanksource/commons-db@v0.1.45
+go get github.com/flanksource/commons-db/recordstore@v0.1.45
+go get github.com/flanksource/commons-db/cmd/query@v0.1.45
 ```
 
 A store-only consumer, such as a CLI that writes streams another process serves, needs only the `recordstore` module, which brings the root module with it.
 
-Never mix the `recordstore` module with a root module at `v0.1.39` or older. Those root releases still contain `recordstore/` themselves, so every `recordstore` import becomes ambiguous.
+Never mix the `recordstore` module with a root module at `v0.1.44` or older. Those root releases still contain `recordstore/` themselves, so every `recordstore` import becomes ambiguous.
 
 ## Required: the sqlite driver replace
 
