@@ -49,6 +49,16 @@ func (r StreamRef) EventsRef() *query.EventsRef {
 	}
 }
 
+// StreamRefFrom is the StreamRef a session status's EventsRef records: the
+// inverse of StreamRef.EventsRef.
+func StreamRefFrom(ref query.EventsRef) StreamRef {
+	return StreamRef{
+		Stream: ref.Stream, Kind: ref.Kind, Generation: ref.Generation, Low: ref.Low, High: ref.High,
+		From: ref.From, To: ref.To, Total: ref.Total, ExpiresAt: ref.ExpiresAt,
+		Store: StoreLocation{Backend: recordstore.BackendKind(ref.Store.Backend), Host: ref.Store.Host, File: ref.Store.File},
+	}
+}
+
 // StoreLocation is where a stream's rows are: the backend kind, and for a
 // local file the host and file holding them. A kv stream has neither; it is
 // read back through the store the environment names.
