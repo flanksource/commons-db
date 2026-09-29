@@ -604,6 +604,7 @@ var _ = Describe("sqlite backend storage", func() {
 				backend = reopened
 				_, err := reopened.Append(ctx, "run-2", recordstoretest.Kind, []recordstore.Row{{"name": "x", "count": "one"}})
 				Expect(err).To(MatchError(And(ContainSubstring(`column "count"`), ContainSubstring("only added columns"))))
+				Expect(errors.Is(err, recordstore.ErrSchemaConflict)).To(BeTrue(), fmt.Sprint(err))
 				Expect(kindColumns(ctx, reopened.Path(), recordstoretest.Kind)).To(Equal(catalogBefore))
 			})
 
@@ -644,6 +645,7 @@ var _ = Describe("sqlite backend conflict policy", func() {
 		DeferCleanup(skipping.Close)
 		_, err = skipping.Append(ctx, "run-1", recordstoretest.ReplacingKind, recordstoretest.SampleRows(1, 1))
 		Expect(err).To(MatchError(ContainSubstring("conflict policy replace, now skip")))
+		Expect(errors.Is(err, recordstore.ErrSchemaConflict)).To(BeTrue(), fmt.Sprint(err))
 		Expect(catalog).To(HaveSuffix(`"key:name","onConflict:replace"]`))
 	})
 })

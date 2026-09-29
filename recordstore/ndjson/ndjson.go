@@ -431,7 +431,7 @@ func (b *Backend) Reopen(_ context.Context, stream, generation string) error {
 		return err
 	}
 	if !state.Sealed || state.Generation != generation || generation == "" {
-		return fmt.Errorf("stream %q: sealed generation %q was not found", stream, generation)
+		return fmt.Errorf("stream %q: sealed generation %q was not found: %w", stream, generation, recordstore.ErrNotFound)
 	}
 	state.Sealed, state.UpdatedAt = false, b.now()
 	return b.writeSidecar(state)

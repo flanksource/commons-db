@@ -56,19 +56,9 @@ func (b *Backend) kindTable(kind string) (kindTable, error) {
 	if err != nil {
 		return kindTable{}, fmt.Errorf("kind %q: %w", kind, err)
 	}
-	for _, column := range schema.Columns {
-		if column.Name == streamColumn || column.Name == seqColumn {
-			return kindTable{}, fmt.Errorf("kind %q declares %q, which every stream table reserves", kind, column.Name)
-		}
-	}
-	table := kindTable{
-		Table: sqlitetable.Table{
-			Name:       "records_" + kind,
-			Columns:    append(slices.Clone(storeColumns), schema.Columns...),
-			Reserved:   []string{streamColumn, seqColumn},
-			PrimaryKey: []string{streamColumn, seqColumn},
-		},
-		schema: schema,
+	table, err := newKindTable(schema)
+	if err != nil {
+		return kindTable{}, err
 	}
 	table, err = b.reconcileTable(context.Background(), kind, table)
 	if err != nil {
@@ -76,6 +66,25 @@ func (b *Backend) kindTable(kind string) (kindTable, error) {
 	}
 	b.tables[kind] = table
 	return table, nil
+}
+
+// newKindTable is the table schema declares, before it is reconciled with the
+// file: the store's columns, then the kind's.
+func newKindTable(schema recordstore.KindSchema) (kindTable, error) {
+	for _, column := range schema.Columns {
+		if column.Name == streamColumn || column.Name == seqColumn {
+			return kindTable{}, fmt.Errorf("kind %q declares %q, which every stream table reserves", schema.Kind, column.Name)
+		}
+	}
+	return kindTable{
+		Table: sqlitetable.Table{
+			Name:       "records_" + schema.Kind,
+			Columns:    append(slices.Clone(storeColumns), schema.Columns...),
+			Reserved:   []string{streamColumn, seqColumn},
+			PrimaryKey: []string{streamColumn, seqColumn},
+		},
+		schema: schema,
+	}, nil
 }
 
 // columnStorage is the part of a column's catalog entry after its names: its
@@ -177,7 +186,7 @@ func (b *Backend) adoptStoredTable(ctx context.Context, tx *sql.Tx, kind string,
 		logger.Infof("sqlite record store %s: kind %q gained columns %q", b.Path(), kind, names)
 		return withKey(table)
 	case !b.derived:
-		return kindTable{}, fmt.Errorf("kind %q was stored in %s with %s; only added columns migrate, and its rows exist nowhere else, so remove the file or open it with the build that wrote it", kind, b.Path(), mismatch)
+		return kindTable{}, fmt.Errorf("kind %q was stored in %s with %s; only added columns migrate, and its rows exist nowhere else, so remove the file or open it with the build that wrote it: %w", kind, b.Path(), mismatch, recordstore.ErrSchemaConflict)
 	}
 	if err := dropKindTable(ctx, tx, kind, table); err != nil {
 		return kindTable{}, err

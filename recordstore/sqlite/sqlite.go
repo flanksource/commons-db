@@ -303,7 +303,7 @@ func (b *Backend) openStream(ctx context.Context, tx *sql.Tx, stream, kind strin
 		return recordstore.Meta{}, err
 	}
 	if meta.Kind != kind {
-		return recordstore.Meta{}, fmt.Errorf("stream %q holds kind %q, not %q", stream, meta.Kind, kind)
+		return recordstore.Meta{}, invalidEntry{fmt.Errorf("stream %q holds kind %q, not %q", stream, meta.Kind, kind)}
 	}
 	return meta, recordstore.RefuseSealed(meta)
 }
@@ -414,7 +414,7 @@ func reopenTx(ctx context.Context, tx *sql.Tx, stream, generation string, now ti
 		return fmt.Errorf("stream %q: reopen: %w", stream, err)
 	}
 	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
-		return errors.Join(fmt.Errorf("stream %q: sealed generation %q was not found", stream, generation), err)
+		return errors.Join(fmt.Errorf("stream %q: sealed generation %q was not found: %w", stream, generation, recordstore.ErrNotFound), err)
 	}
 	return nil
 }

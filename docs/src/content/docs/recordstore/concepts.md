@@ -116,8 +116,23 @@ Every backend also implements `recordstore.Reopener`. `Reopen(ctx, stream, gener
 | `ErrNotFound` | the stream doesn't exist, no longer does, or was recreated under another generation |
 | `ErrCapacity` | the stream, or one row of it, would exceed what the backend was configured to hold. **None** of the refused append's rows are written. |
 | `ErrSealed` | the stream was sealed |
+| `ErrUnsupported` | the backend can't store the kind as declared, such as a replacing kind in kv or ndjson |
+| `ErrSchemaConflict` | a durable sqlite file stores the kind with another key, conflict policy or column storage than the rows' schema declares |
 
 Match them with `errors.Is`. Backends wrap them with the stream id and context.
+
+## Batches
+
+A backend that implements `recordstore.BatchAppender` (sqlite does) applies several writes at once. A `Batch` has an `ID`, the `Producer` that made it (a per-process `Instance` and a `Seq` counting its batches), optional `Schemas`, and `Entries`. Each entry is one operation on one stream: `append` (optionally sealing after), `seal`, `expire`, `trim`, `delete` or `reopen`. An entry that names a `Generation` applies only to that incarnation of its stream; any other fails it with `ErrNotFound`.
+
+`AppendBatch` applies a batch in one transaction:
+
+- Entries run in order, each under its own savepoint. An entry the store refuses (sealed, not found, a schema conflict, an invalid request) rolls back alone. Its `EntryResult.Error` is a `*BatchError` whose `Code` says why, and it unwraps to the matching sentinel for `errors.Is`. The other entries still commit.
+- The outcome is recorded under the batch id in the same transaction. Applying the same id again returns the recorded outcome and writes nothing. `BatchOutcome(ctx, id)` reads it back.
+- A kind the batch declares in `Schemas` is reconciled additively with the kind the file stores: added columns are added. The backend's own schema resolver is never changed.
+- Rows count as appended when the batch is applied, so a kind that retains rows keeps them from that moment.
+
+An error returned by `AppendBatch` itself means nothing was applied. A `Notifier` wrapping a batch appender wakes the followers of every stream the batch names.
 
 ## The single-writer contract
 
