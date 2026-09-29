@@ -90,6 +90,7 @@ const (
 	BatchErrorNotFound    BatchErrorCode = "not_found"
 	BatchErrorCapacity    BatchErrorCode = "capacity"
 	BatchErrorConflict    BatchErrorCode = "conflict"
+	BatchErrorMismatch    BatchErrorCode = "mismatch"
 	BatchErrorUnsupported BatchErrorCode = "unsupported"
 	BatchErrorInvalid     BatchErrorCode = "invalid"
 )
@@ -101,6 +102,7 @@ var batchErrorSentinels = map[BatchErrorCode]error{
 	BatchErrorNotFound:    ErrNotFound,
 	BatchErrorCapacity:    ErrCapacity,
 	BatchErrorConflict:    ErrSchemaConflict,
+	BatchErrorMismatch:    ErrSchemaMismatch,
 	BatchErrorUnsupported: ErrUnsupported,
 }
 
@@ -114,7 +116,7 @@ type BatchError struct {
 // codes are declared; an error wrapping none means the entry itself was
 // invalid.
 func NewBatchError(err error) *BatchError {
-	for _, code := range []BatchErrorCode{BatchErrorSealed, BatchErrorNotFound, BatchErrorCapacity, BatchErrorConflict, BatchErrorUnsupported} {
+	for _, code := range []BatchErrorCode{BatchErrorSealed, BatchErrorNotFound, BatchErrorCapacity, BatchErrorConflict, BatchErrorMismatch, BatchErrorUnsupported} {
 		if errors.Is(err, batchErrorSentinels[code]) {
 			return &BatchError{Code: code, Message: err.Error()}
 		}

@@ -17,11 +17,15 @@ import (
 )
 
 // rawRows is every row of the every kind's table as the driver reads it.
-func rawRows(backend *sqlite.Backend) [][]any {
+func rawRows(backend *sqlite.Backend) [][]any { return rawTable(backend, "records_every") }
+
+// rawTable is every row of table as the driver reads it, its columns by name
+// so tables whose columns were added in another order compare equal.
+func rawTable(backend *sqlite.Backend, table string) [][]any {
 	reader, err := sql.Open("sqlite", backend.ReadDSN())
 	Expect(err).ToNot(HaveOccurred())
 	defer func() { Expect(reader.Close()).To(Succeed()) }()
-	rows, err := reader.Query(`SELECT * FROM records_every ORDER BY seq`)
+	rows, err := reader.Query(`SELECT * FROM "` + table + `" ORDER BY seq`)
 	Expect(err).ToNot(HaveOccurred())
 	defer func() { Expect(rows.Close()).To(Succeed()) }()
 	columns, err := rows.Columns()

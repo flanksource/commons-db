@@ -53,7 +53,7 @@ func (b *Backend) AppendBatch(ctx context.Context, batch recordstore.Batch) (rec
 	}
 	planned := make([]plannedEntry, len(batch.Entries))
 	for index, entry := range batch.Entries {
-		planned[index] = b.planEntry(entry, tables)
+		planned[index] = b.planEntry(ctx, entry, tables)
 	}
 	defer b.lockStreams(batch.Entries)()
 	var result recordstore.BatchResult
@@ -82,7 +82,7 @@ func (b *Backend) AppendBatch(ctx context.Context, batch recordstore.Batch) (rec
 
 // planEntry checks entry against what it asks for, and for an append against
 // its kind's table.
-func (b *Backend) planEntry(entry recordstore.BatchEntry, tables map[string]batchTable) plannedEntry {
+func (b *Backend) planEntry(ctx context.Context, entry recordstore.BatchEntry, tables map[string]batchTable) plannedEntry {
 	planned := plannedEntry{entry: entry}
 	if err := recordstore.ValidateStream(entry.Stream); err != nil {
 		planned.err = invalidEntry{err}
@@ -99,12 +99,15 @@ func (b *Backend) planEntry(entry recordstore.BatchEntry, tables map[string]batc
 			planned.err = resolved.err
 			return planned
 		}
-		write, err := b.planAppend(resolved.table, entry.Stream, entry.Rows)
+		table, write, err := b.planAppend(ctx, resolved.table, entry.Stream, entry.Rows)
 		if err != nil {
-			planned.err = invalidEntry{err}
+			if !entryCaused(err) {
+				err = invalidEntry{err}
+			}
+			planned.err = err
 			return planned
 		}
-		planned.table, planned.write = resolved.table, write
+		planned.table, planned.write = table, write
 	case recordstore.BatchExpire:
 		if err := recordstore.ValidateTTL(entry.TTL); err != nil {
 			planned.err = invalidEntry{err}

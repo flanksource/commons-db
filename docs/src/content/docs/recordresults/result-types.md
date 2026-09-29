@@ -22,6 +22,7 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 | `KeyColumn` | a string field that identifies a row within a stream. A stream holds each key once (`KindOptions.Key`). |
 | `Retention` | `recordstore.RetainStream` (default) or `RetainRows`. See [Concepts](../../recordstore/concepts/#retention). |
 | `OnConflict` | `recordstore.OnConflictSkip` (default) or `OnConflictReplace`: whether appending a stored key skips the row or replaces the stored one. Replacing needs `KeyColumn` and a sqlite store. See [Concepts](../../recordstore/concepts/#replacing-stored-rows). |
+| `Dynamic`, `MaxDynamicColumns` | add a column for every key the type's rows bring beyond `T`'s own, typed by its first value, capped at `MaxDynamicColumns` (default 256). The profile serves those columns once they exist, filtered like the type's own. See [Dynamic kinds](../../recordstore/kinds/#dynamic-kinds). |
 | `Follow` | lets a session tail the type's streams. See [below](#follow). |
 | `SearchColumns` | string or JSON columns a search matches. Adds a `q` param. |
 | `Hierarchy` | `&HierarchyColumns{ID, Parent}` for root-only reads. Adds a `rootsOnly` param. |

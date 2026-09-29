@@ -175,6 +175,35 @@ var _ = Describe("spool", func() {
 		Expect(rawRows(spooled)).To(Equal(rawRows(direct)))
 	})
 
+	It("spools a dynamic kind's undeclared keys and stores them as a direct append stores them", func() {
+		dynamic := recordstore.KindSchema{Kind: "open", Columns: []query.ColumnDef{{Name: "name", Type: query.ColumnTypeString}},
+			Options: recordstore.KindOptions{Dynamic: true, MaxDynamicColumns: 9}}
+		resolver := func(string) (recordstore.KindSchema, error) { return dynamic, nil }
+		open := func(name string) *sqlite.Backend {
+			backend, err := sqlite.Open(sqlite.Options{Path: filepath.Join(GinkgoT().TempDir(), name), Schema: resolver, TTL: time.Hour, SweepInterval: time.Hour})
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(backend.Close)
+			return backend
+		}
+		at := time.Date(2026, 9, 30, 8, 0, 0, 5, time.UTC)
+		rows := []recordstore.Row{{"name": "a", "count": int64(3), "ok": true, "at": at, "labels": map[string]any{"z": "1", "a": "2"}, "gone": nil}}
+		direct := open("direct.sqlite")
+		_, err := direct.Append(ctx, "run-1", dynamic.Kind, rows)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = dir.Publish(recordstore.Batch{ID: "b-1", Producer: producer, Schemas: []recordstore.KindSchema{dynamic},
+			Entries: []recordstore.BatchEntry{{Op: recordstore.BatchAppend, Stream: "run-1", Kind: dynamic.Kind, Rows: rows}}}, spool.FormatNDJSON)
+		Expect(err).ToNot(HaveOccurred())
+		_, loaded := loadOnly()
+		Expect(loaded.Schemas).To(Equal([]recordstore.KindSchema{dynamic}))
+		spooled := open("spooled.sqlite")
+		result, err := spooled.AppendBatch(ctx, loaded)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.Entries[0].Error).To(BeNil())
+
+		Expect(rawTable(spooled, "records_open")).To(Equal(rawTable(direct, "records_open")))
+	})
+
 	It("commits by rename, so a batch still being written is never listed", func() {
 		Expect(os.MkdirAll(filepath.Join(dir.Path(), "tmp", "cli-1-b-0"), 0o700)).To(Succeed())
 		names, err := dir.Incoming()

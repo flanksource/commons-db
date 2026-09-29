@@ -110,6 +110,13 @@ type ResultType[T any] struct {
 	// Replacing needs KeyColumn and a sqlite store.
 	OnConflict recordstore.OnConflict
 
+	// Dynamic makes the type's streams add a column for every key their rows
+	// bring beyond T's own, typed by the first value
+	// (recordstore.KindOptions.Dynamic), and its profile serve those columns
+	// too once they exist. MaxDynamicColumns caps them; zero is 256.
+	Dynamic           bool
+	MaxDynamicColumns int
+
 	// Follow lets a session tail the type's streams: its profile reads through
 	// the ProviderType provider, which streams each appended row, rather than
 	// plain sqlite. Only a type whose rows each stand alone should follow — one
@@ -163,6 +170,11 @@ type Registry struct {
 type registeredResult struct {
 	RegisteredResultType
 	profile query.Profile
+
+	// registration and tableColumns are a dynamic type's own, to rebuild its
+	// profile once its table has more columns than the profile was built over.
+	registration *registration
+	tableColumns int
 
 	// view marks one of the type's views, which refuses baseOnly: the params
 	// of the type's own profile it does not share.
@@ -251,7 +263,7 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		columns: columns,
 		options: recordstore.KindOptions{
 			Key: resultType.KeyColumn, Retention: resultType.Retention, OnConflict: resultType.OnConflict,
-			TimeColumn: resultType.TimeColumn,
+			TimeColumn: resultType.TimeColumn, Dynamic: resultType.Dynamic, MaxDynamicColumns: resultType.MaxDynamicColumns,
 		},
 		timeColumn:    resultType.TimeColumn,
 		defaultFrom:   resultType.DefaultFrom,
@@ -394,7 +406,11 @@ func (r *Registry) register(registration registration) error {
 	for _, view := range views {
 		result.Views = append(result.Views, view.registered)
 	}
-	r.results[result.Profile] = registeredResult{RegisteredResultType: result, profile: profile}
+	registered := registeredResult{RegisteredResultType: result, profile: profile}
+	if registration.options.Dynamic {
+		registered.registration, registered.tableColumns = &registration, len(table.Columns)
+	}
+	r.results[result.Profile] = registered
 	baseOnly := baseOnlyParams(profile)
 	for _, view := range views {
 		r.results[view.profile.Name] = registeredResult{RegisteredResultType: result, profile: view.profile, view: true, baseOnly: baseOnly}
@@ -406,6 +422,20 @@ func (r *Registry) register(registration registration) error {
 // seq window binds as a placeholder, the time window binds as a filter on the
 // time column so an absent edge leaves it open, and seq breaks every tie, which
 // is what lets the engine page it past the first page.
+// withInferred is a dynamic type's columns with every column its table gained
+// beyond them, other than the store's own, as the table types it.
+func withInferred(declared, table []query.ColumnDef) []query.ColumnDef {
+	columns := slices.Clone(declared)
+	for _, column := range table {
+		if column.Name == seqColumn || column.Name == streamIDKey ||
+			slices.ContainsFunc(columns, func(other query.ColumnDef) bool { return other.Name == column.Name }) {
+			continue
+		}
+		columns = append(columns, query.ColumnDef{Name: column.Name, Type: column.Type})
+	}
+	return columns
+}
+
 // matchStrings gives every string column declaring no filter of its own a
 // match filter, so a record type's text columns select by the MatchItem
 // patterns a user types everywhere else, rather than by exact value.
@@ -429,7 +459,11 @@ func (r *Registry) resultProfile(table sqlitetable.Table, registration registrat
 	if timeColumn != "" {
 		order = append(query.Order{{Column: timeColumn, Desc: true}}, order...)
 	}
-	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber, Format: api.FormatInteger}}, matchStrings(registration.columns)...)
+	columns := registration.columns
+	if registration.options.Dynamic {
+		columns = withInferred(columns, table.Columns)
+	}
+	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber, Format: api.FormatInteger}}, matchStrings(columns)...)
 	profileColumns = append(profileColumns, query.ColumnDef{Name: streamIDKey, Type: query.ColumnTypeString, Hidden: true})
 	providerType := indexProviderType
 	if registration.follow {

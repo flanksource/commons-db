@@ -61,7 +61,13 @@ func (b *Backend) submitAppend(ctx context.Context, stream, kind string, rows []
 	if err != nil {
 		return recordstore.AppendResult{}, err
 	}
-	if _, err := b.planAppend(table, stream, rows); err != nil {
+	// A dynamic kind's new columns are the writer's to add; this process
+	// checks only that the rows agree with the columns it has.
+	if table.schema.Options.Dynamic {
+		if _, err := inferColumns(table, rows); err != nil {
+			return recordstore.AppendResult{}, err
+		}
+	} else if _, _, err := b.planAppend(context.Background(), table, stream, rows); err != nil {
 		return recordstore.AppendResult{}, err
 	}
 	result, err := b.submitEntry(ctx, recordstore.BatchEntry{Op: recordstore.BatchAppend, Stream: stream, Kind: kind, Rows: rows}, table.schema)
@@ -113,6 +119,7 @@ func (b *Backend) readTable(ctx context.Context, kind string, table kindTable) (
 	}
 	var added []string
 	if mismatch == "" {
+		table = table.withInferred(catalog)
 		columns, found := table.adopt(catalog)
 		for _, column := range columns {
 			added = append(added, column.Name)
