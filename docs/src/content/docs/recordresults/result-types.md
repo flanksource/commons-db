@@ -22,6 +22,8 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 | `KeyColumn` | a string field that identifies a row within a stream. A stream holds each key once (`KindOptions.Key`). |
 | `Retention` | `recordstore.RetainStream` (default) or `RetainRows`. See [Concepts](../../recordstore/concepts/#retention). |
 | `OnConflict` | `recordstore.OnConflictSkip` (default) or `OnConflictReplace`: whether appending a stored key skips the row or replaces the stored one. Replacing needs `KeyColumn` and a sqlite store. See [Concepts](../../recordstore/concepts/#replacing-stored-rows). |
+| `Enrich`, `EnrichColumns` | a read-time hook adding `EnrichColumns` to the rows the profile serves: pages, follows and exports. The profile reads through the `recordstore` provider so the hook runs on every read. The columns are `Computed`, so nothing filters, sorts or looks values up by them. The enricher must return one row per row given, in order, with every stored column unchanged and no column it didn't declare, or the read fails. |
+| `Compressed` | columns stored zstd-compressed in sqlite, read back whole and never filtered, searched or indexed by. See [Kinds](../../recordstore/kinds/#compressed-columns). |
 | `Dynamic`, `MaxDynamicColumns` | add a column for every key the type's rows bring beyond `T`'s own, typed by its first value, capped at `MaxDynamicColumns` (default 256). The profile serves those columns once they exist, filtered like the type's own. See [Dynamic kinds](../../recordstore/kinds/#dynamic-kinds). |
 | `Follow` | lets a session tail the type's streams. See [below](#follow). |
 | `SearchColumns` | string or JSON columns a search matches. Adds a `q` param. |

@@ -65,7 +65,7 @@ func (s *registrySet) resolve(ctx dbcontext.Context, reference string) (*Registr
 	defer s.mu.RUnlock()
 	registry, ok := s.registries[resolved.ID]
 	if !ok {
-		return nil, fmt.Errorf("follow record results: connection %q is not the index of an open result registry whose source notifies", reference)
+		return nil, fmt.Errorf("follow record results: connection %q is not the index of an open result registry", reference)
 	}
 	return registry, nil
 }
@@ -159,15 +159,55 @@ func (followProvider) Execute(ctx dbcontext.Context, req query.ProviderRequest) 
 	if err != nil {
 		return nil, err
 	}
-	return index.Execute(ctx, req)
+	enriching, err := enrichmentOf(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := index.Execute(ctx, req)
+	if err != nil || enriching == nil {
+		return rows, err
+	}
+	return enriching.apply(ctx, rows)
 }
 
+// Pages are the sqlite provider's, each enriched when the result type
+// enriches its rows.
 func (followProvider) Pages(ctx dbcontext.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
 	index, err := sqliteProvider()
 	if err != nil {
 		return query.ErrorPage(err)
 	}
-	return index.Pages(ctx, req, page)
+	enriching, err := enrichmentOf(ctx, req)
+	if err != nil {
+		return query.ErrorPage(err)
+	}
+	pages := index.Pages(ctx, req, page)
+	if enriching == nil {
+		return pages
+	}
+	return func(yield func(query.Page, error) bool) {
+		for page, err := range pages {
+			if err == nil {
+				page.Rows, err = enriching.apply(ctx, page.Rows)
+			}
+			if !yield(page, err) || err != nil {
+				return
+			}
+		}
+	}
+}
+
+// enrichmentOf is the enrichment of the result type req reads, or nil.
+func enrichmentOf(ctx dbcontext.Context, req query.ProviderRequest) (*enrichment, error) {
+	registry, err := followRegistries.resolve(ctx, req.Connection)
+	if err != nil {
+		return nil, err
+	}
+	enriching, ok, err := registry.enrichmentFor(ctx, req)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return &enriching, nil
 }
 
 // PagingModes are the sqlite provider's; none when it is not linked, which

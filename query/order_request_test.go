@@ -137,3 +137,17 @@ var _ = Describe("Profile.RequestedOrder", func() {
 		Expect(err).To(MatchError(ContainSubstring("no sortable columns")))
 	})
 })
+
+var _ = Describe("a computed column", func() {
+	It("is not sorted by, since no backend field holds it", func() {
+		profile := sortableProfile()
+		profile.Columns = append(profile.Columns, query.ColumnDef{Name: "region", Type: query.ColumnTypeString, Computed: true})
+
+		sortKeys, err := profile.ColumnSortKeys()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(sortKeys).To(HaveKey("key"))
+		Expect(sortKeys).ToNot(HaveKey("region"))
+		_, err = profile.RequestedOrder("region", false)
+		Expect(err).To(HaveOccurred())
+	})
+})

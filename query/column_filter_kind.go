@@ -320,7 +320,7 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 // offers no filter at all.
 func resolvedColumnFilterKind(column ColumnDef) (ColumnFilterKind, error) {
 	def := column.Filter
-	if column.Hidden || (def != nil && def.Disabled) {
+	if column.Hidden || column.Computed || (def != nil && def.Disabled) {
 		return ColumnFilterKindNone, nil
 	}
 	kind := columnFilterKindFor(column)
