@@ -82,7 +82,7 @@ func Open() (*recordresults.Results, error) {
 }
 ```
 
-With `trace.store.backend` unset, this opens `.acme/traces/v4/records.sqlite`, a durable file that is also the index profiles read. Running with `-P trace.store.backend=ndjson` writes NDJSON files instead and keeps a derived `index.sqlite` next to them. The application code stays the same.
+With `trace.store.backend` unset, this opens `.acme/traces/v6/records.sqlite`, a durable file that is also the index profiles read. Running with `-P trace.store.backend=ndjson` writes NDJSON files instead and keeps a derived `index.sqlite` next to them. The application code stays the same.
 
 ## 3. Append and seal a stream
 

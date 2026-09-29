@@ -56,6 +56,17 @@ The backend opens `<dir>/v<catalog version>/<file>`, not the configured `<dir>/<
 
 The first time a **durable** v6 file is opened, the backend copies the newest older file it finds into the versioned path and migrates the copy: first a previous version's `<dir>/v5/<file>`, then `<dir>/v4/<file>`, whose tables have named columns, then an unversioned file at the configured path (catalog version 2 or 3, which stored columns positionally), whose columns it renames. It leaves the original untouched for builds still reading it. The copy is built under a temporary name and linked into place, so a crash leaves no half-migrated file, and two processes starting together can't overwrite each other's copy. A **derived** index is always built fresh.
 
+## Opening a file another process writes
+
+`Options.ReadOnly` opens the versioned file another process writes. The file must exist at this build's catalog version. The backend doesn't create a catalog or sweep, and a derived index can't be opened this way.
+
+- **Reads** go straight to the file.
+- **Every mutation** (`Append`, `Seal`, `Expire`, `Trim`, `Delete`, `Reopen`, `AppendBatch`) is handed to `Options.Submit` as a batch. Without one it fails with `sqlite.ErrReadOnly`.
+- **`Table(kind)`** adopts the kind's table from the catalog without writing. If the table or a declared column is missing, it has the writer declare it with a batch of no entries.
+- **`Promote(ctx)`** makes the backend write the file itself.
+
+[`recordstore/owner`](../../recordstore/multi-process/) decides which process writes and wires this up.
+
 ## Expiry and sweeping
 
 - A background sweeper removes every stream whose `expires_at` has passed, rows included, every `SweepInterval` (required). A failed sweep is logged and retried on the next tick.

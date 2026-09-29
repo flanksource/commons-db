@@ -38,18 +38,25 @@ defer results.Close()
 | `Source` | no | a backend you route yourself, usually a `recordstore.Router` over kv per tenant. `Open` owns it: `Close`, or a failed `Open`, closes it. |
 | `Schemas` | no | pass the catalog `Source`'s backends resolve kinds through. `nil` makes a fresh one. |
 | `Register` | yes | declares the result types the registry serves |
+| `Build` | no | names this build in the state published beside a store this process holds, so another process refused it can say who holds it |
 
 ## What gets opened
 
 | `Source` | `Settings.Backend` | streams are written to | profiles read |
 | --- | --- | --- | --- |
-| `nil` | `sqlite` | `<dir>/v4/records.sqlite` | the same file |
-| `nil` | `ndjson` | `<dir>/ndjson/<kind>/<stream>.ndjson` | `<dir>/v4/index.sqlite`, derived |
-| a Router, or any backend | (any) | the Source | `<dir>/v4/index.sqlite`, derived |
+| `nil` | `sqlite` | `<dir>/v6/records.sqlite` | the same file |
+| `nil` | `ndjson` | `<dir>/ndjson/<kind>/<stream>.ndjson` | `<dir>/v6/index.sqlite`, derived |
+| a Router, or any backend | (any) | the Source | `<dir>/v6/index.sqlite`, derived |
 
 A separate index is always **derived**. It's never a file a route could also write, so one route's streams can't be read through another. A derived index keeps no TTL of its own: the Indexer gives each indexed stream its source's exact expiry. Both sqlite files sweep expired streams every 10 minutes.
 
-The `v4/` directory is the sqlite catalog version. See [The sqlite record file](../../sqlite/record-file/#versioned-file-paths).
+The `v6/` directory is the sqlite catalog version. See [The sqlite record file](../../sqlite/record-file/#versioned-file-paths).
+
+Several processes can open the same directory. See [Multiple processes](../../recordstore/multi-process/).
+
+- **The sqlite store** is shared: one process owns and writes it, and the others read it and hand their writes to the owner.
+- **ndjson files** are held by one process. Another gets `owner.ErrLocked`, naming the holder.
+- **A derived index** is held by one process. Another indexes the Source into a private index of its own.
 
 ## Results
 
@@ -64,7 +71,8 @@ type Results struct {
 - **`results.Registry`**: plug it into the profile service. See [Serving over HTTP](../serving/).
 - **`results.Ref(ctx, stream, from, to)`**: describes a window of a stream for another process. See [Stream refs](../stream-refs/).
 - **`results.DeleteStream(ctx, stream, kind)`**: removes a stream from its source and from the derived index, and refuses if the stream holds another kind. Deleting a stream that doesn't exist is not an error.
-- **`results.Close()`**: closes the registry, the files and the Source, in reverse order of opening.
+- **`results.Role()`**: `owner.RoleOwner` when this process writes the store (or holds its ndjson files or index), `owner.RoleReader` when it hands its writes to another process or indexes privately.
+- **`results.Close()`**: closes the registry, the files and the Source, in reverse order of opening, and releases this process's hold on them.
 
 ## Building the pieces yourself
 

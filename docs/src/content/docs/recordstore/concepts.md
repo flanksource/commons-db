@@ -134,9 +134,9 @@ A backend that implements `recordstore.BatchAppender` (sqlite does) applies seve
 
 An error returned by `AppendBatch` itself means nothing was applied. A `Notifier` wrapping a batch appender wakes the followers of every stream the batch names.
 
-## The single-writer contract
+## One writer per store
 
-**A stream has one writer at a time.** Backends serialize appends made within one process with `StreamLocks`. Two processes appending to the same stream is outside the contract. Route each stream to exactly one writer. The [probe manager](../probes/) enforces this for cursor-based sources.
+**A store has one writer process at a time.** Backends serialize the writes made within one process with `StreamLocks`. Several processes can share a store only by opening it through [`recordstore/owner`](../multi-process/), which elects one owner to write it. The other processes read it and hand their writes to the owner over the spool. Two processes writing one store any other way is outside the contract. The [probe manager](../probes/) keeps each cursor-based source to one writer.
 
 ## The Backend interface
 

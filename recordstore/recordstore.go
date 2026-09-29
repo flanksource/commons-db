@@ -18,8 +18,10 @@
 // index incrementally, which is what makes a stream written by one process
 // pageable through another's query engine.
 //
-// A stream has one writer at a time. Backends serialize appends made within
-// one process; two processes appending to one stream is outside the contract.
+// A store has one writer process at a time. Backends serialize the writes
+// made within one process; several processes share a store only through
+// recordstore/owner, which elects one to write it while the others hand their
+// writes over the spool.
 package recordstore
 
 import (
