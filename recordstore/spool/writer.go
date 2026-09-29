@@ -109,7 +109,10 @@ func (w *Writer) Append(ctx context.Context, stream, kind string, rows []records
 		}
 		sizes[index] = len(encoded)
 	}
-	w.declare(schema)
+	if len(rows) == 0 {
+		w.declare(schema)
+		w.entries = append(w.entries, recordstore.BatchEntry{Op: recordstore.BatchAppend, Stream: stream, Kind: kind})
+	}
 	for len(rows) > 0 {
 		taken := 0
 		for taken < len(rows) && w.rows < w.options.MaxRows && (w.rows == 0 || w.bytes+sizes[taken] <= w.options.MaxBytes) {
@@ -117,6 +120,7 @@ func (w *Writer) Append(ctx context.Context, stream, kind string, rows []records
 			taken++
 		}
 		if taken > 0 {
+			w.declare(schema)
 			w.entries = append(w.entries, recordstore.BatchEntry{Op: recordstore.BatchAppend, Stream: stream, Kind: kind, Rows: rows[:taken]})
 			rows, sizes = rows[taken:], sizes[taken:]
 		}
