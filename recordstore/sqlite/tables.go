@@ -96,6 +96,7 @@ func newKindTable(schema recordstore.KindSchema) (kindTable, error) {
 			Columns:    append(slices.Clone(storeColumns), schema.Columns...),
 			Reserved:   []string{streamColumn, seqColumn},
 			PrimaryKey: []string{streamColumn, seqColumn},
+			Compressed: slices.Clone(schema.Options.Compressed),
 		},
 		schema: schema,
 	}, nil
@@ -105,6 +106,23 @@ func newKindTable(schema recordstore.KindSchema) (kindTable, error) {
 // stored type and declared type. A label or a filter can change freely; these
 // cannot without the rows already written meaning something else.
 func columnStorage(column query.ColumnDef) string {
+	return storage(column, false)
+}
+
+// compressedStorage is the SQL type a compressed column is stored as.
+const compressedStorage = "BLOB"
+
+// storage is a column's catalog storage, stored compressed or as its type is.
+// Compressing a column or no longer compressing it changes its storage, which
+// a durable file refuses like any other change of what its rows mean.
+func (table kindTable) storage(column query.ColumnDef) string {
+	return storage(column, slices.Contains(table.Compressed, column.Name))
+}
+
+func storage(column query.ColumnDef, compressed bool) string {
+	if compressed {
+		return ":" + compressedStorage + ":" + string(column.Type)
+	}
 	return ":" + sqlitetable.Type(column.Type) + ":" + string(column.Type)
 }
 

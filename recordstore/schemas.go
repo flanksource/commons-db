@@ -102,6 +102,13 @@ type KindOptions struct {
 	// compacts; a store whose seqs cannot refuses the kind with
 	// ErrUnsupported.
 	Compact []CompactRule
+
+	// Compressed names columns a backend storing rows by column keeps
+	// compressed. SQL cannot compare what is inside one, so each must be a
+	// text or structured column that is not the key, the time column or
+	// indexed, and that offers no filter — a string column's filter must be
+	// switched off explicitly. For large payloads read whole.
+	Compressed []string
 }
 
 // IndexDef is one index of a kind's rows: its declared columns, in order.
@@ -191,6 +198,9 @@ func (k KindSchema) Validate() error {
 	if err := k.validateCompaction(); err != nil {
 		return err
 	}
+	if err := k.validateCompression(); err != nil {
+		return err
+	}
 	if k.Options.MaxDynamicColumns < 0 {
 		return fmt.Errorf("kind %q caps its inferred columns at a negative %d", k.Kind, k.Options.MaxDynamicColumns)
 	}
@@ -244,6 +254,34 @@ func (k KindSchema) validateIndexing() error {
 			if slices.Contains(index.Columns[:position], name) {
 				return fmt.Errorf("kind %q index %d names column %q twice", k.Kind, at, name)
 			}
+		}
+	}
+	return nil
+}
+
+// validateCompression refuses compressing a column SQL still has to compare.
+func (k KindSchema) validateCompression() error {
+	for position, name := range k.Options.Compressed {
+		index := slices.IndexFunc(k.Columns, func(column query.ColumnDef) bool { return column.Name == name })
+		if index < 0 {
+			return fmt.Errorf("kind %q compressed column %q is not one of its columns", k.Kind, name)
+		}
+		column := k.Columns[index]
+		indexed := slices.ContainsFunc(k.Options.Indexes, func(index IndexDef) bool { return slices.Contains(index.Columns, name) })
+		filterOff := column.Filter != nil && (column.Filter.Disabled || column.Filter.Kind == query.ColumnFilterKindNone)
+		switch {
+		case column.Type != query.ColumnTypeString && !sqlitetable.IsStructured(column.Type):
+			return fmt.Errorf("kind %q compressed column %q is a %s column; only text and structured columns compress", k.Kind, name, column.Type)
+		case name == k.Options.Key:
+			return fmt.Errorf("kind %q compressed column %q is the key, which rows are found by", k.Kind, name)
+		case name == k.Options.TimeColumn:
+			return fmt.Errorf("kind %q compressed column %q is the time column, which rows are ordered by", k.Kind, name)
+		case indexed:
+			return fmt.Errorf("kind %q compressed column %q is indexed", k.Kind, name)
+		case column.Type == query.ColumnTypeString && !filterOff:
+			return fmt.Errorf("kind %q compressed column %q offers a filter; set its filter kind to none", k.Kind, name)
+		case slices.Contains(k.Options.Compressed[:position], name):
+			return fmt.Errorf("kind %q compresses column %q twice", k.Kind, name)
 		}
 	}
 	return nil

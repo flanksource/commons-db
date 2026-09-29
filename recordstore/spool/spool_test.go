@@ -35,7 +35,7 @@ var everyType = recordstore.KindSchema{Kind: "every", Columns: []query.ColumnDef
 	{Name: "labels", Type: query.ColumnTypeKeyValue},
 	{Name: "tags", Type: query.ColumnTypeKeyValues},
 	{Name: "detail", Type: query.ColumnTypeJSON},
-}, Options: recordstore.KindOptions{Key: "name", Retention: recordstore.RetainRows, OnConflict: recordstore.OnConflictReplace}}
+}, Options: recordstore.KindOptions{Key: "name", Retention: recordstore.RetainRows, OnConflict: recordstore.OnConflictReplace, Compressed: []string{"detail"}}}
 
 type detail struct {
 	Zeta  int    `json:"zeta"`

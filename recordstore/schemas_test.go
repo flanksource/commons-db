@@ -52,8 +52,21 @@ var _ = Describe("Schemas", func() {
 		Entry("an index of a structured column", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{Columns: []string{"detail"}}}}, `index 0 column "detail" is a json column`),
 		Entry("a compact rule that selects nothing", "event", recordstore.KindOptions{Compact: []recordstore.CompactRule{{}}}, "compact rule 0 selects no rows"),
 		Entry("a compact rule by age with no time column", "event", recordstore.KindOptions{Compact: []recordstore.CompactRule{{OlderThan: time.Hour}}}, "compact rule 0 needs a time column"),
+		Entry("compressing a column it does not declare", "event", recordstore.KindOptions{Compressed: []string{"missing"}}, `compressed column "missing" is not one of its columns`),
+		Entry("compressing a number", "event", recordstore.KindOptions{Compressed: []string{"count"}}, `compressed column "count" is a number column`),
+		Entry("compressing the key", "event", recordstore.KindOptions{Key: "id", Compressed: []string{"id"}}, `compressed column "id" is the key`),
+		Entry("compressing an indexed column", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{Columns: []string{"id"}}}, Compressed: []string{"id"}}, `compressed column "id" is indexed`),
+		Entry("compressing a string column that still offers a filter", "event", recordstore.KindOptions{Compressed: []string{"id"}}, `compressed column "id" offers a filter`),
 		Entry("a negative compact age", "event", recordstore.KindOptions{TimeColumn: "at", Compact: []recordstore.CompactRule{{OlderThan: -time.Hour}}}, "compact rule 0 has a negative age"),
 	)
+
+	It("accepts compressing a structured column and a string column whose filter is off", func() {
+		quiet := append(append([]query.ColumnDef(nil), columns...), query.ColumnDef{
+			Name: "body", Type: query.ColumnTypeString, Filter: &query.ColumnFilterDef{Kind: query.ColumnFilterKindNone},
+		})
+		options := recordstore.KindOptions{Compressed: []string{"detail", "body"}}
+		Expect(recordstore.NewSchemas().Register("event", quiet, options)).To(Succeed())
+	})
 
 	It("accepts a time column and indexes of the kind's columns", func() {
 		options := recordstore.KindOptions{TimeColumn: "at", Indexes: []recordstore.IndexDef{{Columns: []string{"id", "count"}}}}

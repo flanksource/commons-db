@@ -38,6 +38,7 @@ type manifestSchema struct {
 	OnConflict        string           `json:"onConflict"`
 	TimeColumn        string           `json:"timeColumn,omitempty"`
 	Indexes           [][]string       `json:"indexes,omitempty"`
+	Compressed        []string         `json:"compressed,omitempty"`
 	Dynamic           bool             `json:"dynamic,omitempty"`
 	MaxDynamicColumns int              `json:"maxDynamicColumns,omitempty"`
 }
@@ -82,6 +83,7 @@ func schemaOf(schema recordstore.KindSchema) manifestSchema {
 		Kind: schema.Kind, Key: schema.Options.Key,
 		Retention: schema.Options.Retention.String(), OnConflict: schema.Options.OnConflict.String(),
 		TimeColumn: schema.Options.TimeColumn, Dynamic: schema.Options.Dynamic, MaxDynamicColumns: schema.Options.MaxDynamicColumns,
+		Compressed: schema.Options.Compressed,
 	}
 	for _, index := range schema.Options.Indexes {
 		encoded.Indexes = append(encoded.Indexes, index.Columns)
@@ -95,6 +97,7 @@ func schemaOf(schema recordstore.KindSchema) manifestSchema {
 func (s manifestSchema) schema() (recordstore.KindSchema, error) {
 	schema := recordstore.KindSchema{Kind: s.Kind, Options: recordstore.KindOptions{
 		Key: s.Key, TimeColumn: s.TimeColumn, Dynamic: s.Dynamic, MaxDynamicColumns: s.MaxDynamicColumns,
+		Compressed: s.Compressed,
 	}}
 	for _, columns := range s.Indexes {
 		schema.Options.Indexes = append(schema.Options.Indexes, recordstore.IndexDef{Columns: columns})

@@ -67,4 +67,15 @@ SQLite has no time type, so instants are `TEXT` compared as text. Text only orde
 
 `DecodeStructured(columns, row)` parses the JSON text of every structured column in place, so a row read back holds the value that was written. `ProfileColumns(columns)` returns the columns for a profile over the table, where each structured column reads its JSON text back as the value it encodes (`Source` = name, `JSONPath` = `$`).
 
+### Compressed columns
+
+`Table.Compressed` names columns stored compressed:
+- `Create` and `Declare` give them `BLOB` storage.
+- `Insert` stores the zstd blob of the text `Value` gives.
+- `Select` reads each one back as `rs_inflate(<column>) AS <name>`.
+
+`rs_inflate` is a SQL function the package registers with the modernc driver, so every connection in the process has it; a profile reading the table through its read-only DSN does too. It passes a value that isn't a zstd blob through unchanged.
+
+SQL can't compare what is inside a compressed column, so it's for large payloads that are read whole. Filtering, searching and indexing by one don't work, and sorting by one sorts its text with no index behind it.
+
 `QuoteIdentifier` quotes a SQLite identifier.
