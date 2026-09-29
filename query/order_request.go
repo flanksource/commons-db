@@ -34,7 +34,7 @@ func (p Profile) SortBindings() ([]SortBinding, error) {
 	}
 	bindings := make([]SortBinding, 0, len(p.Columns))
 	for _, column := range p.Columns {
-		if column.Hidden {
+		if column.Hidden || column.Computed {
 			continue
 		}
 		target, declared, ok, err := columnFilterTarget(column)

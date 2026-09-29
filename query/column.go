@@ -112,6 +112,11 @@ type ColumnDef struct {
 	// to later column and style CEL expressions.
 	Hidden bool `json:"hidden,omitempty" yaml:"hidden,omitempty"`
 
+	// Computed marks a column the rows carry that no backend field holds —
+	// filled in after the read, such as by an enrichment hook — so it is never
+	// filtered, sorted or looked up by.
+	Computed bool `json:"computed,omitempty" yaml:"computed,omitempty"`
+
 	// Style is an optional CEL expression returning this cell's presentation
 	// classes (e.g. `level == "ERROR" ? "text-red-500" : ""`). It reads the row
 	// the same way CEL does and affects rendering only: the row itself is

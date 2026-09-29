@@ -47,10 +47,19 @@ func (r *Registry) follow(ctx dbcontext.Context, req query.ProviderRequest, emit
 		return err
 	}
 	req.Order = query.Order{{Column: seqColumn, Unique: true}}
+	enriching, enriches, err := r.enrichmentFor(ctx, req)
+	if err != nil {
+		return err
+	}
 	for position < through {
 		read, err := r.readAfter(ctx, req, source, position)
 		if err != nil {
 			return err
+		}
+		if enriches {
+			if read.rows, err = enriching.apply(ctx, read.rows); err != nil {
+				return err
+			}
 		}
 		for _, row := range read.rows {
 			// The stream id is the index's key, a hidden column no page serves,

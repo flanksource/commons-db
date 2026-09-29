@@ -117,6 +117,13 @@ type ResultType[T any] struct {
 	Dynamic           bool
 	MaxDynamicColumns int
 
+	// Enrich, when set, adds EnrichColumns to the rows the type's profile
+	// serves as they are read — pages, follows and exports alike. The columns
+	// are computed, so nothing filters or sorts by them; the rows the enricher
+	// is given must come back one for one with their stored columns intact.
+	Enrich        Enricher
+	EnrichColumns []query.ColumnDef
+
 	// Compressed names T's large text or JSON columns to store compressed in
 	// sqlite (recordstore.KindOptions.Compressed): read back whole, never
 	// filtered, searched or indexed by.
@@ -168,8 +175,9 @@ type Registry struct {
 	notifier   *recordstore.Notifier
 	connection models.Connection
 
-	mu      sync.RWMutex
-	results map[string]registeredResult
+	mu          sync.RWMutex
+	results     map[string]registeredResult
+	enrichments map[string]enrichment
 }
 
 type registeredResult struct {
@@ -218,11 +226,9 @@ func NewRegistry(options RegistryOptions) (*Registry, error) {
 			Type: models.ConnectionTypeSQLite, URL: options.Index.ReadDSN(), Virtual: true, ReadOnly: true,
 			CreatedAt: now, UpdatedAt: now,
 		},
-		results: map[string]registeredResult{},
+		results: map[string]registeredResult{}, enrichments: map[string]enrichment{},
 	}
-	if notifies {
-		followRegistries.add(registry)
-	}
+	followRegistries.add(registry)
 	return registry, nil
 }
 
@@ -244,6 +250,9 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
 	if err := validateDefaultFrom(resultType.TimeColumn, resultType.DefaultFrom); err != nil {
+		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
+	if err := validateEnrichment(columns, resultType.Enrich, resultType.EnrichColumns); err != nil {
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
 	if err := validateSearchColumns(columns, resultType.SearchColumns, resultType.Compressed); err != nil {
@@ -275,6 +284,8 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		defaultFrom:   resultType.DefaultFrom,
 		presenter:     presenter,
 		follow:        resultType.Follow,
+		enrich:        resultType.Enrich,
+		enrichColumns: resultType.EnrichColumns,
 		searchColumns: resultType.SearchColumns,
 		hierarchy:     resultType.Hierarchy,
 		views:         resultType.Views,
@@ -378,6 +389,9 @@ type registration struct {
 	presenter   query.RowPresenter
 	follow      bool
 
+	enrich        Enricher
+	enrichColumns []query.ColumnDef
+
 	searchColumns []string
 	hierarchy     *HierarchyColumns
 	views         []ResultView
@@ -417,6 +431,13 @@ func (r *Registry) register(registration registration) error {
 		registered.registration, registered.tableColumns = &registration, len(table.Columns)
 	}
 	r.results[result.Profile] = registered
+	if registration.enrich != nil {
+		names := make([]string, len(registration.enrichColumns))
+		for index, column := range registration.enrichColumns {
+			names[index] = column.Name
+		}
+		r.enrichments[result.Kind] = enrichment{enrich: registration.enrich, columns: names}
+	}
 	baseOnly := baseOnlyParams(profile)
 	for _, view := range views {
 		r.results[view.profile.Name] = registeredResult{RegisteredResultType: result, profile: view.profile, view: true, baseOnly: baseOnly}
@@ -470,9 +491,13 @@ func (r *Registry) resultProfile(table sqlitetable.Table, registration registrat
 		columns = withInferred(columns, table.Columns)
 	}
 	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber, Format: api.FormatInteger}}, matchStrings(columns)...)
+	for _, column := range registration.enrichColumns {
+		column.Computed = true
+		profileColumns = append(profileColumns, column)
+	}
 	profileColumns = append(profileColumns, query.ColumnDef{Name: streamIDKey, Type: query.ColumnTypeString, Hidden: true})
 	providerType := indexProviderType
-	if registration.follow {
+	if registration.follow || registration.enrich != nil {
 		providerType = ProviderType
 	}
 	search, err := searchClause(table, registration.searchColumns)

@@ -76,6 +76,12 @@ var _ = Describe("column filter kind", func() {
 		}
 	})
 
+	It("offers no filter for a computed column, which no backend field holds", func() {
+		kind, err := resolvedColumnFilterKind(ColumnDef{Name: "region", Type: ColumnTypeString, Computed: true})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(kind).To(Equal(ColumnFilterKindNone))
+	})
+
 	It("treats an unset kind as a value selection", func() {
 		Expect(ColumnFilterKind("").Normalized()).To(Equal(ColumnFilterKindTerms))
 		Expect(ColumnFilterKind("").Valid()).To(BeTrue())
