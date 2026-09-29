@@ -57,7 +57,7 @@ jobs:
         run: |
           set -euo pipefail
           corepack enable pnpm
-          corepack prepare pnpm@10.20.0 --activate
+          corepack prepare pnpm@11.22.0 --activate
           pnpm --dir cmd/query/www install --frozen-lockfile
           pnpm --dir cmd/query/www build
 
@@ -148,7 +148,7 @@ jobs:
         run: |
           set -euo pipefail
           corepack enable pnpm
-          corepack prepare pnpm@10.20.0 --activate
+          corepack prepare pnpm@11.22.0 --activate
           pnpm --dir cmd/query/www install --frozen-lockfile
 
       # Each module must tidy on its own, the way a consumer resolves it, so the

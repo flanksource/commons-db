@@ -19,6 +19,13 @@ func NewGorm(connection string, config *gorm.Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
+	if config == nil {
+		config = DefaultGormConfig()
+	} else if config.Logger == nil {
+		configured := *config
+		configured.Logger = DefaultGormConfig().Logger
+		config = &configured
+	}
 	var sqlDB *sql.DB
 	switch target.Dialect {
 	case dbtarget.Postgres:
