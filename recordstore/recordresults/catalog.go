@@ -20,10 +20,18 @@ var _ profilestore.VirtualStore = (*Registry)(nil)
 // List returns every result profile by name.
 func (r *Registry) List(context.Context) ([]query.Profile, error) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	items := make([]query.Profile, 0, len(r.results))
-	for _, result := range r.results {
-		items = append(items, result.profile)
+	names := make([]string, 0, len(r.results))
+	for name := range r.results {
+		names = append(names, name)
+	}
+	r.mu.RUnlock()
+	items := make([]query.Profile, 0, len(names))
+	for _, name := range names {
+		profile, err := r.current(name)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, profile)
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items, nil
@@ -31,13 +39,38 @@ func (r *Registry) List(context.Context) ([]query.Profile, error) {
 
 // Get returns the result profile named name.
 func (r *Registry) Get(_ context.Context, name string) (query.Profile, error) {
+	return r.current(name)
+}
+
+// current is the profile named name, rebuilt first for a dynamic type whose
+// table gained columns since the profile was built.
+func (r *Registry) current(name string) (query.Profile, error) {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	result, ok := r.results[name]
+	r.mu.RUnlock()
 	if !ok {
 		return query.Profile{}, fmt.Errorf("record result profile %q not found", name)
 	}
-	return result.profile, nil
+	if result.registration == nil {
+		return result.profile, nil
+	}
+	table, err := r.index.Table(result.Kind)
+	if err != nil {
+		return query.Profile{}, err
+	}
+	if len(table.Columns) == result.tableColumns {
+		return result.profile, nil
+	}
+	profile, err := r.resultProfile(table, *result.registration)
+	if err != nil {
+		return query.Profile{}, fmt.Errorf("result type %q: %w", result.Kind, err)
+	}
+	profile.Presenter = result.registration.presenter
+	result.profile, result.tableColumns = profile, len(table.Columns)
+	r.mu.Lock()
+	r.results[name] = result
+	r.mu.Unlock()
+	return profile, nil
 }
 
 // Peek is Get: reading a result profile has no expiry to slide.

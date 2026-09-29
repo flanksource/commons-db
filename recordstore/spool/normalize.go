@@ -14,12 +14,25 @@ import (
 // Normalize converts row into the values sqlitetable.Value stores for
 // schema's columns: a structured column's value as its JSON text, a time as
 // sqlitetable.TimeLayout, and any other value the driver cannot store as its
-// JSON text. A key schema does not declare is an error.
+// JSON text. A key schema does not declare is an error, but for a dynamic
+// kind, whose key gets the value its inferred column stores — a null none, an
+// object or an array itself, for the owner to infer its column from.
 func Normalize(schema recordstore.KindSchema, row recordstore.Row) (recordstore.Row, error) {
 	types := columnTypes(schema)
 	normalized := make(recordstore.Row, len(row))
 	for key, value := range row {
 		columnType, ok := types[key]
+		if !ok && schema.Options.Dynamic {
+			inferred, typed := recordstore.InferColumnType(value)
+			switch {
+			case !typed:
+				continue
+			case inferred == query.ColumnTypeJSON:
+				normalized[key] = value
+				continue
+			}
+			columnType, ok = inferred, true
+		}
 		if !ok {
 			return nil, fmt.Errorf("key %q is not a column of kind %q", key, schema.Kind)
 		}

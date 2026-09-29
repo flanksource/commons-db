@@ -20,6 +20,9 @@ type KindOptions struct {
 	OnConflict OnConflict // OnConflictSkip (default) or OnConflictReplace, for a stored key
 	TimeColumn string     // a datetime column rows are read newest first by; indexed by the sqlite backend
 	Indexes    []IndexDef // column lists the sqlite backend indexes, each after the stream id
+
+	Dynamic           bool // add a column for every undeclared key a row brings
+	MaxDynamicColumns int  // cap on inferred columns; 0 = 256
 }
 
 type IndexDef struct {
@@ -36,6 +39,25 @@ type IndexDef struct {
 - the kind replaces stored rows but declares no key
 - the time column isn't one of the columns, or isn't `query.ColumnTypeDateTime`
 - an index names no columns, a column that isn't one of the kind's, a column twice, or a structured (json, key/value) column
+
+## Dynamic kinds
+
+A kind with `Dynamic` set takes rows with keys it doesn't declare. The sqlite backend adds a column for each undeclared key, typed by `recordstore.InferColumnType` from the class of its first value:
+
+| Value | Column |
+| --- | --- |
+| string, bytes, a time | string |
+| number, `json.Number`, a duration | number |
+| bool | boolean |
+| object, array, struct | json |
+| null | none: the key adds no column and stores nothing |
+
+- **No datetime is ever inferred.** A time arriving as JSON is only a string, so inferring a datetime would type the same key differently depending on the path it took.
+- **An inferred column keeps its type.** A value of another type is `ErrSchemaMismatch`, and so are two types for one new column in the same append. The whole append is refused and none of its rows are written.
+- **The cap.** Inferring more than `MaxDynamicColumns` (default 256) is `ErrCapacity`.
+- **The catalog is the record.** The file's catalog records every inferred column. `Schemas` stays declared-only, and every process adopts the columns the catalog records. A read-only process never infers; the writing process does.
+- **Other backends store every key anyway.** kv and ndjson have no columns to add. A derived index adds the columns an imported window brings.
+- **Spooled writes.** A spooled batch carries the flag, and the owner infers the columns as it ingests.
 
 ## Indexes
 

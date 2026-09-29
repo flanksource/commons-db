@@ -87,6 +87,16 @@ type KindOptions struct {
 	// after the stream id, since every read is of one stream or a few. A
 	// backend keeps every index a kind ever declared.
 	Indexes []IndexDef
+
+	// Dynamic makes a backend that stores rows by column add a column for
+	// every key a row brings that the kind does not declare, typed by
+	// InferColumnType; a value of another type later is ErrSchemaMismatch.
+	// Other backends store every key anyway.
+	Dynamic bool
+
+	// MaxDynamicColumns caps the columns a dynamic kind may infer; an append
+	// needing more is ErrCapacity. Zero is 256.
+	MaxDynamicColumns int
 }
 
 // IndexDef is one index of a kind's rows: its declared columns, in order.
@@ -172,6 +182,9 @@ func (k KindSchema) Validate() error {
 	}
 	if err := k.validateIndexing(); err != nil {
 		return err
+	}
+	if k.Options.MaxDynamicColumns < 0 {
+		return fmt.Errorf("kind %q caps its inferred columns at a negative %d", k.Kind, k.Options.MaxDynamicColumns)
 	}
 	if k.Options.Key == "" {
 		if k.Options.OnConflict == OnConflictReplace {

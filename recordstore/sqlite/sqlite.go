@@ -223,7 +223,7 @@ func (b *Backend) Append(ctx context.Context, stream, kind string, rows []record
 	if err != nil {
 		return recordstore.AppendResult{}, err
 	}
-	write, err := b.planAppend(table, stream, rows)
+	table, write, err := b.planAppend(ctx, table, stream, rows)
 	if err != nil {
 		return recordstore.AppendResult{}, err
 	}
@@ -247,20 +247,22 @@ type appendWrite struct {
 	retention time.Duration
 }
 
-func (b *Backend) planAppend(table kindTable, stream string, rows []recordstore.Row) (appendWrite, error) {
+// planAppend checks rows against table and converts them, returning the
+// table they are stored in: a dynamic kind's, widened with their new columns.
+func (b *Backend) planAppend(ctx context.Context, table kindTable, stream string, rows []recordstore.Row) (kindTable, appendWrite, error) {
 	retention, err := table.schema.RetentionTTL(b.ttl)
 	if err != nil {
-		return appendWrite{}, fmt.Errorf("stream %q: %w", stream, err)
+		return kindTable{}, appendWrite{}, fmt.Errorf("stream %q: %w", stream, err)
 	}
 	keys, err := table.schema.RowKeys(rows)
 	if err != nil {
-		return appendWrite{}, fmt.Errorf("stream %q: %w", stream, err)
+		return kindTable{}, appendWrite{}, fmt.Errorf("stream %q: %w", stream, err)
 	}
-	stored, err := storedRows(table.Table, table.schema.Kind, rows)
+	table, stored, err := b.rowsFor(ctx, table, rows)
 	if err != nil {
-		return appendWrite{}, fmt.Errorf("stream %q: %w", stream, err)
+		return kindTable{}, appendWrite{}, fmt.Errorf("stream %q: %w", stream, err)
 	}
-	return appendWrite{stored: stored, keys: keys, retention: retention}, nil
+	return table, appendWrite{stored: stored, keys: keys, retention: retention}, nil
 }
 
 // inTx runs fn in one transaction on writer and commits it; what names the

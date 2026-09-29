@@ -117,7 +117,7 @@ func (b *Backend) Import(ctx context.Context, request recordstore.ImportRequest)
 			return recordstore.Window{}, fmt.Errorf("stream %q: %w", request.Source.Stream, err)
 		}
 	}
-	stored, err := storedRows(table.Table, request.Source.Kind, request.Rows)
+	table, stored, err := b.rowsFor(ctx, table, request.Rows)
 	if err != nil {
 		return recordstore.Window{}, fmt.Errorf("stream %q: %w", request.Source.Stream, err)
 	}

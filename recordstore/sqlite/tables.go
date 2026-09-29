@@ -49,7 +49,18 @@ func (b *Backend) kindTable(kind string) (kindTable, error) {
 	b.tablesMu.Lock()
 	defer b.tablesMu.Unlock()
 	if table, ok := b.tables[kind]; ok {
-		return table, nil
+		if !table.schema.Options.Dynamic {
+			return table, nil
+		}
+		// A dynamic kind's table may have gained columns through another
+		// process, or another append here; a longer catalog is adopted again.
+		recorded, err := b.catalogColumns(context.Background(), kind)
+		if err != nil {
+			return kindTable{}, err
+		}
+		if recorded <= len(table.Columns) {
+			return table, nil
+		}
 	}
 	schema, err := recordstore.ResolveKind(b.schema, kind)
 	if err != nil {
@@ -174,6 +185,7 @@ func (b *Backend) adoptStoredTable(ctx context.Context, tx *sql.Tx, kind string,
 	}
 	var added []query.ColumnDef
 	if mismatch == "" {
+		table = table.withInferred(catalog)
 		added, mismatch = table.adopt(catalog)
 	}
 	indexes, indexed := withIndexes(catalog.indexes, kindIndexes(table.schema))
