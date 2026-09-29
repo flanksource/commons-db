@@ -567,7 +567,29 @@ func TestProfileOpenAPITopOffersOnlySessionStart(t *testing.T) {
 	}
 }
 
-// The gate is on the profile's kind, not on its provider: an ordinary query
+// A legacy trace placeholder is catalogued so it can be listed, but its
+// provider refuses every run. Advertising a run operation would hand a generic
+// surface an entry point that can only fail, so it gets none — neither a run
+// nor a session start, since it is not a trace the engine can capture either.
+func TestProfileOpenAPILegacyTraceOffersNoOperation(t *testing.T) {
+	profile, err := ConvertLegacyProfile([]byte("name: sql\nkind: sql_xevent\ndescription: Capture SQL statements.\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	if err := addProfileToSpec(spec, profile); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/api/v1/profile/profile-sql"
+	if _, listed := spec.Paths[path]; listed {
+		t.Fatalf("a legacy trace profile must advertise no run operation, got %+v", spec.Paths[path])
+	}
+	if _, listed := spec.Paths[path+"/sessions"]; listed {
+		t.Fatalf("a legacy trace profile must advertise no session start, got %+v", spec.Paths[path+"/sessions"])
+	}
+}
+
+// Kind decides between a run and a session start, and an ordinary query
 // profile keeps the run operation it has always had.
 func TestProfileOpenAPIQueryKeepsRunOperation(t *testing.T) {
 	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}

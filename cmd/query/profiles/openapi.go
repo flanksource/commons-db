@@ -305,7 +305,10 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	// and points the caller at ExecuteStream. Advertising a run operation anyway
 	// is how a generic surface ends up executing one the moment the profile is
 	// opened — so the session start below is the only entry point it gets.
-	if profile.Kind() == query.KindQuery {
+	// A legacy trace placeholder is listed but never runs: its provider refuses
+	// every execution, so a run operation would be an entry point that can only
+	// fail.
+	if profile.Kind() == query.KindQuery && profile.Provider.Type != legacyTraceProvider {
 		spec.Paths[path] = rpc.OpenAPIPath{"get": {
 			Summary:     "Run " + profile.Name,
 			Description: "Execute the stored query profile",
