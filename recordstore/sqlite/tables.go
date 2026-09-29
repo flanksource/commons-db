@@ -60,7 +60,11 @@ func (b *Backend) kindTable(kind string) (kindTable, error) {
 	if err != nil {
 		return kindTable{}, err
 	}
-	table, err = b.reconcileTable(context.Background(), kind, table)
+	if b.readOnly.Load() {
+		table, err = b.adoptReadOnly(context.Background(), kind, table)
+	} else {
+		table, err = b.reconcileTable(context.Background(), kind, table)
+	}
 	if err != nil {
 		return kindTable{}, err
 	}

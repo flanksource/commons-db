@@ -126,6 +126,11 @@ func (e *BatchError) Error() string { return e.Message }
 
 func (e *BatchError) Unwrap() error { return batchErrorSentinels[e.Code] }
 
+// Submitter hands a batch to the process that writes a store and returns
+// what the batch did there, for a process that only reads the store. It sets
+// the batch's producer.
+type Submitter func(ctx context.Context, batch Batch) (BatchResult, error)
+
 // BatchAppender is a backend that applies batches. AppendBatch applies a batch
 // id once: a repeat returns the outcome recorded the first time, so a producer
 // may hand the same batch over again after a crash. An entry that fails rolls

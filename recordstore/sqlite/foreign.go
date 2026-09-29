@@ -23,7 +23,7 @@ type batchTable struct {
 	err   error
 }
 
-// batchTables resolves every kind the batch appends to, before its
+// batchTables resolves every kind the batch declares or appends to, before its
 // transaction begins, since creating or widening a table takes the writer. A
 // kind the batch's own schemas declare gets a table built from that schema,
 // widened in the file with the columns it adds but never cached, so the
@@ -37,20 +37,26 @@ func (b *Backend) batchTables(ctx context.Context, batch recordstore.Batch) (map
 		}
 		declared[schema.Kind] = schema
 	}
-	tables := map[string]batchTable{}
+	kinds := make([]string, 0, len(batch.Schemas)+len(batch.Entries))
+	for _, schema := range batch.Schemas {
+		kinds = append(kinds, schema.Kind)
+	}
 	for _, entry := range batch.Entries {
-		if entry.Op != recordstore.BatchAppend || recordstore.ValidateKind(entry.Kind) != nil {
+		if entry.Op == recordstore.BatchAppend && recordstore.ValidateKind(entry.Kind) == nil {
+			kinds = append(kinds, entry.Kind)
+		}
+	}
+	tables := map[string]batchTable{}
+	for _, kind := range kinds {
+		if _, resolved := tables[kind]; resolved {
 			continue
 		}
-		if _, resolved := tables[entry.Kind]; resolved {
-			continue
-		}
-		schema, foreign := declared[entry.Kind]
-		table, err := b.batchTable(ctx, entry.Kind, schema, foreign)
+		schema, foreign := declared[kind]
+		table, err := b.batchTable(ctx, kind, schema, foreign)
 		if err != nil && !errors.As(err, new(invalidEntry)) && !errors.Is(err, recordstore.ErrSchemaConflict) {
 			return nil, err
 		}
-		tables[entry.Kind] = batchTable{table: table, err: err}
+		tables[kind] = batchTable{table: table, err: err}
 	}
 	return tables, nil
 }

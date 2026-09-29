@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"maps"
 	"net/url"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -32,6 +33,9 @@ var (
 	ErrWriteQueueFull = errors.New("sqlite asynchronous write queue is full")
 	// ErrWriteErrorHandlerRequired is returned when an asynchronous write has no error handler.
 	ErrWriteErrorHandlerRequired = errors.New("sqlite asynchronous writes require OnWriteError")
+	// ErrReadOnly is returned when a write is submitted to a database opened
+	// read-only whose writes were not enabled.
+	ErrReadOnly = errors.New("sqlite database is read-only")
 )
 
 // Options configure a file-backed SQLite database.
@@ -42,6 +46,11 @@ type Options struct {
 	// OnWriteError receives failures from accepted asynchronous mutations.
 	// It is called after the write lock is released.
 	OnWriteError func(error)
+
+	// ReadOnly opens only the read pool over an existing file, for a process
+	// that reads a database another process writes. Every write fails with
+	// ErrReadOnly until EnableWrites.
+	ReadOnly bool
 }
 
 // Mutation changes a SQLite database through its serialized writer.
@@ -63,8 +72,9 @@ type DB struct {
 	stop      chan struct{}
 	done      chan struct{}
 
-	stateMu sync.Mutex
-	closing bool
+	stateMu  sync.Mutex
+	closing  bool
+	readOnly bool
 
 	onWriteError func(error)
 	closeOnce    sync.Once
@@ -80,16 +90,20 @@ func Open(options Options) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: resolve %s: %w", options.Path, err)
 	}
-	writer, err := openWriter(path)
-	if err != nil {
+	var writer *sql.DB
+	if options.ReadOnly {
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("sqlite: open %s read-only: %w", path, err)
+		}
+	} else if writer, err = openWriter(path); err != nil {
 		return nil, err
 	}
 	reader, err := openReader(path)
 	if err != nil {
-		return nil, errors.Join(err, writer.Close())
+		return nil, errors.Join(err, closeWriter(writer))
 	}
 	database := &DB{
-		writer: writer, reader: reader, path: path, onWriteError: options.OnWriteError,
+		writer: writer, reader: reader, path: path, onWriteError: options.OnWriteError, readOnly: options.ReadOnly,
 		queue: make(chan queuedMutation, asyncWriteQueueCapacity), stop: make(chan struct{}), done: make(chan struct{}),
 	}
 	go database.writeLoop()
@@ -122,6 +136,86 @@ func openReader(path string) (*sql.DB, error) {
 	return reader, nil
 }
 
+// closeWriter closes writer, which a read-only database does not have.
+func closeWriter(writer *sql.DB) error {
+	if writer == nil {
+		return nil
+	}
+	return writer.Close()
+}
+
+// EnableWrites opens the writer of a database opened read-only, for a process
+// that has become the one writing it. It does nothing once writes are enabled.
+func (d *DB) EnableWrites() error {
+	d.mutations.Lock()
+	defer d.mutations.Unlock()
+	if d.isClosing() {
+		return ErrClosed
+	}
+	if d.writer != nil {
+		return nil
+	}
+	writer, err := openWriter(d.path)
+	if err != nil {
+		return err
+	}
+	d.writer = writer
+	d.stateMu.Lock()
+	d.readOnly = false
+	d.stateMu.Unlock()
+	return nil
+}
+
+// WatchDataVersion calls changed whenever a commit to the file lands, checking
+// every interval, until ctx ends. It reads PRAGMA data_version on one pinned
+// read connection, which changes with every commit another connection makes —
+// another process's included.
+func (d *DB) WatchDataVersion(ctx context.Context, every time.Duration, changed func()) error {
+	if every <= 0 {
+		return fmt.Errorf("sqlite: watch %s: a positive interval is required", d.path)
+	}
+	conn, err := d.reader.Conn(ctx)
+	if err != nil {
+		return ignoreDone(ctx, fmt.Errorf("sqlite: watch %s: %w", d.path, err))
+	}
+	defer func() { _ = conn.Close() }()
+	read := func() (int64, error) {
+		var version int64
+		err := conn.QueryRowContext(ctx, `PRAGMA data_version`).Scan(&version)
+		return version, err
+	}
+	last, err := read()
+	if err != nil {
+		return ignoreDone(ctx, fmt.Errorf("sqlite: watch %s: %w", d.path, err))
+	}
+	ticker := time.NewTicker(every)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-ticker.C:
+		}
+		version, err := read()
+		if err != nil {
+			return ignoreDone(ctx, fmt.Errorf("sqlite: watch %s: %w", d.path, err))
+		}
+		if version != last {
+			last = version
+			changed()
+		}
+	}
+}
+
+// ignoreDone is err, or nil once ctx has ended: a watch stopped by its
+// context ended as asked.
+func ignoreDone(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
 // Reader returns the query-only read pool. Callers that require several
 // statements to observe one stable mutation boundary must hold Lease as well.
 func (d *DB) Reader() *sql.DB { return d.reader }
@@ -135,6 +229,9 @@ func (d *DB) Write(mutation Mutation) error {
 	defer d.mutations.Unlock()
 	if d.isClosing() {
 		return ErrClosed
+	}
+	if d.writer == nil {
+		return ErrReadOnly
 	}
 	return mutation(d.writer)
 }
@@ -210,6 +307,9 @@ func (d *DB) enqueue(name string, mutation Mutation) error {
 	defer d.stateMu.Unlock()
 	if d.closing {
 		return ErrClosed
+	}
+	if d.readOnly {
+		return ErrReadOnly
 	}
 	if d.onWriteError == nil {
 		return ErrWriteErrorHandlerRequired
@@ -320,7 +420,7 @@ func (d *DB) Close() error {
 		<-d.done
 		d.mutations.Lock()
 		defer d.mutations.Unlock()
-		d.closeErr = errors.Join(d.reader.Close(), d.writer.Close())
+		d.closeErr = errors.Join(d.reader.Close(), closeWriter(d.writer))
 	})
 	return d.closeErr
 }

@@ -27,11 +27,18 @@ type plannedEntry struct {
 }
 
 // AppendBatch applies batch's entries in order, each one committed or rolled
-// back alone, and records the outcome under batch.ID. A batch id the ledger
+// back alone, and records the outcome under batch.ID; a read-only backend
+// submits it instead. A batch id the ledger
 // already holds is answered with the outcome it recorded, applying nothing.
 // Rows are stamped as appended now, when the batch is applied, so a kind
 // retaining rows keeps them from then rather than from when they were made.
 func (b *Backend) AppendBatch(ctx context.Context, batch recordstore.Batch) (recordstore.BatchResult, error) {
+	if b.readOnly.Load() {
+		if b.submit == nil {
+			return recordstore.BatchResult{}, b.errNoSubmitter()
+		}
+		return b.submit(ctx, batch)
+	}
 	switch {
 	case b.derived:
 		return recordstore.BatchResult{}, fmt.Errorf("sqlite record store %s: batch %q: a derived index takes rows only from its Indexer", b.Path(), batch.ID)
