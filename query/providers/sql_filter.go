@@ -467,6 +467,26 @@ func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squi
 				squirrel.Expr("NOT ("+predicate+")", pattern),
 			})
 		}
+	case query.ColumnFilterKindMatch:
+		// collections.MatchItem: a row matching any exclusion is out, then one
+		// matching any inclusion is in; with exclusions alone, everything they
+		// leave is in. A row with no value was not one of the excluded values,
+		// as for terms.
+		included := squirrel.Or{}
+		for _, pattern := range filter.Include {
+			predicate, args := dialect.globMatch(column, query.ParseMatchPattern(pattern))
+			included = append(included, squirrel.Expr(predicate, args...))
+		}
+		if len(included) > 0 {
+			conditions = append(conditions, included)
+		}
+		for _, pattern := range filter.Exclude {
+			predicate, args := dialect.globMatch(column, query.ParseMatchPattern(pattern))
+			conditions = append(conditions, squirrel.Or{
+				squirrel.Eq{column: nil},
+				squirrel.Expr("NOT ("+predicate+")", args...),
+			})
+		}
 	case query.ColumnFilterKindRange, query.ColumnFilterKindTime:
 		if filter.Range == nil {
 			return nil, nil

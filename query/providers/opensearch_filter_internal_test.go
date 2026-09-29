@@ -274,6 +274,14 @@ var _ = Describe("applyOpenSearchFilters", func() {
 			Expect(err).To(MatchError(ContainSubstring("two lower bounds")))
 		})
 
+		// MatchItem patterns compile to SQL only; OpenSearch keeps terms exact.
+		It("refuses a pattern selection", func() {
+			err := applyOpenSearchFilters(baseBody(), []query.ColumnFilterValue{
+				{Field: "service", Kind: query.ColumnFilterKindMatch, Include: []string{"api*"}},
+			}, nil)
+			Expect(err).To(MatchError(ContainSubstring("no OpenSearch compiler for a match filter")))
+		})
+
 		It("refuses a field selected as both values and a range", func() {
 			err := applyOpenSearchFilters(baseBody(), []query.ColumnFilterValue{
 				{Field: "status", Kind: query.ColumnFilterKindTerms, Include: []string{"200"}},

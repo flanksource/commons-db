@@ -405,6 +405,19 @@ func (r *Registry) register(registration registration) error {
 // seq window binds as a placeholder, the time window binds as a filter on the
 // time column so an absent edge leaves it open, and seq breaks every tie, which
 // is what lets the engine page it past the first page.
+// matchStrings gives every string column declaring no filter of its own a
+// match filter, so a record type's text columns select by the MatchItem
+// patterns a user types everywhere else, rather than by exact value.
+func matchStrings(columns []query.ColumnDef) []query.ColumnDef {
+	matched := slices.Clone(columns)
+	for index, column := range matched {
+		if column.Type == query.ColumnTypeString && column.Filter == nil {
+			matched[index].Filter = &query.ColumnFilterDef{Kind: query.ColumnFilterKindMatch}
+		}
+	}
+	return matched
+}
+
 func (r *Registry) resultProfile(table sqlitetable.Table, registration registration) (query.Profile, error) {
 	window, err := streamWindow(table)
 	if err != nil {
@@ -415,7 +428,7 @@ func (r *Registry) resultProfile(table sqlitetable.Table, registration registrat
 	if timeColumn != "" {
 		order = append(query.Order{{Column: timeColumn, Desc: true}}, order...)
 	}
-	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber, Format: api.FormatInteger}}, registration.columns...)
+	profileColumns := append([]query.ColumnDef{{Name: seqColumn, Label: "Seq", Type: query.ColumnTypeNumber, Format: api.FormatInteger}}, matchStrings(registration.columns)...)
 	profileColumns = append(profileColumns, query.ColumnDef{Name: streamIDKey, Type: query.ColumnTypeString, Hidden: true})
 	providerType := indexProviderType
 	if registration.follow {

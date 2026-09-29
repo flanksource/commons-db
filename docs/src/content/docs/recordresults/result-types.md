@@ -50,6 +50,15 @@ Every result profile takes:
 
 On top of these, the engine's own column filters (`filter.<column>=…`), sort, paging (`limit`, `cursor`) and export (`scope=all`, `format=csv|json|ndjson|yaml|markdown|html|excel|pdf`) apply. Pages default to 100 rows (500 max). A whole-stream export stops at `MaxExportRows` (1,000,000).
 
+A string column with no filter of its own selects by **patterns**, the `match` filter kind. `filter.db=oi*,!*-canary` works the way `collections.MatchItem` reads it:
+
+- Each pattern matches case-insensitively.
+- A pattern matches the whole value, or, with `*` at an edge, a prefix, a suffix or a substring. A `*` anywhere else, and `%` or `_`, are literal.
+- `*` alone matches everything.
+- A `!` pattern excludes rows. A row matching an exclusion is out even if it matches an inclusion, and a list of exclusions alone keeps everything else.
+
+Give the column an explicit filter kind to compare exactly (`terms`) instead.
+
 `seq` is always the last, unique order column, which is what lets the engine page past the first page. `stream_id` is a hidden column.
 
 ## Search

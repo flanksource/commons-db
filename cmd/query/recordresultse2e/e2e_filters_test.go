@@ -113,6 +113,22 @@ var _ = Describe("filtering a record result type by its columns", Ordered, func(
 		}),
 	)
 
+	// A string column of a record type selects by MatchItem patterns, so a
+	// user's "db=o*" means what it means everywhere else they type one.
+	DescribeTable("selects rows of a string column by MatchItem patterns",
+		func(selection string, keep func(recordresultstest.SampleEvent) bool) {
+			expected := expectedEvents(keep)
+			Expect(expected).To(BeNumerically(">", 0), "the selection keeps some rows")
+			rows, header := server.rows("stream=run-1&limit=500&filter.db=" + url.QueryEscape(selection))
+			Expect(header.Get("X-Total-Count")).To(Equal(fmt.Sprint(expected)))
+			Expect(rows).To(HaveLen(expected))
+		},
+		Entry("a prefix in another case", "OI*", func(event recordresultstest.SampleEvent) bool { return event.DB == "oipa" }),
+		Entry("a substring less an exclusion", "*a*,!audit", func(event recordresultstest.SampleEvent) bool { return event.DB == "oipa" }),
+		Entry("an exclusion alone", "!*port", func(event recordresultstest.SampleEvent) bool { return event.DB != "report" }),
+		Entry("a whole value", "audit", func(event recordresultstest.SampleEvent) bool { return event.DB == "audit" }),
+	)
+
 	It("offers a string list column's elements, not its arrays, as its filter values", func() {
 		tables := server.lookupFilters()["filter.tables"]
 		Expect(tables.Total).To(Equal(3))

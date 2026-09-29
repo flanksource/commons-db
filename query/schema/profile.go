@@ -228,6 +228,7 @@ func ProfileSource() Schema {
 						"type": "string", "title": "Kind", "enum": query.ColumnFilterKindValues(),
 						"x-enum-labels": map[string]string{
 							"terms":    "Value list",
+							"match":    "Pattern list",
 							"exact":    "Exact match",
 							"text":     "Text search",
 							"range":    "Numeric range",

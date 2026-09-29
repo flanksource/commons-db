@@ -115,8 +115,8 @@ func (d ColumnFilterDef) Validate(column string) error {
 		return err
 	}
 	if d.Limit != nil {
-		if kind := d.Kind.Normalized(); kind != ColumnFilterKindTerms {
-			return fmt.Errorf("column %q filter limit requires a %q filter, not %q", column, ColumnFilterKindTerms, kind)
+		if kind := d.Kind.Normalized(); !kind.selectsValues() {
+			return fmt.Errorf("column %q filter limit requires a %q or %q filter, not %q", column, ColumnFilterKindTerms, ColumnFilterKindMatch, kind)
 		}
 		if *d.Limit < 1 || *d.Limit > MaxFilterLookupLimit {
 			return fmt.Errorf(
@@ -127,8 +127,8 @@ func (d ColumnFilterDef) Validate(column string) error {
 	if len(d.Options) == 0 {
 		return nil
 	}
-	if kind := d.Kind.Normalized(); kind != ColumnFilterKindTerms {
-		return fmt.Errorf("column %q filter options require a %q filter, not %q", column, ColumnFilterKindTerms, kind)
+	if kind := d.Kind.Normalized(); !kind.selectsValues() {
+		return fmt.Errorf("column %q filter options require a %q or %q filter, not %q", column, ColumnFilterKindTerms, ColumnFilterKindMatch, kind)
 	}
 	if err := validateFilterOptions(d.Options); err != nil {
 		return fmt.Errorf("column %q filter: %w", column, err)
@@ -240,7 +240,7 @@ type ColumnFilterBinding struct {
 // instead. That is what a UUID column gets — the values still compare exactly,
 // they are just written rather than chosen.
 func (b ColumnFilterBinding) ControlType() string {
-	if b.Kind.Normalized() == ColumnFilterKindTerms && !b.Lookup && len(b.Options) == 0 {
+	if b.Kind.Normalized().selectsValues() && !b.Lookup && len(b.Options) == 0 {
 		return "value"
 	}
 	return b.Kind.ControlType()
