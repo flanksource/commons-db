@@ -110,4 +110,14 @@ func (s *suite) replaceSpecs() {
 		_, err = s.backend.Meta(s.ctx, "run-1")
 		gomega.Expect(errors.Is(err, recordstore.ErrNotFound)).To(gomega.BeTrue(), "Meta: %v", err)
 	})
+
+	ginkgo.It("refuses a kind that compacts its rows when its seqs cannot skip, writing nothing", func() {
+		if s.harness.Replace {
+			ginkgo.Skip("the backend stores kinds whose seqs skip")
+		}
+		_, err := s.backend.Append(s.ctx, "run-1", CompactingKind, SampleRows(1, 1))
+		gomega.Expect(errors.Is(err, recordstore.ErrUnsupported)).To(gomega.BeTrue(), "Append: %v", err)
+		_, err = s.backend.Meta(s.ctx, "run-1")
+		gomega.Expect(errors.Is(err, recordstore.ErrNotFound)).To(gomega.BeTrue(), "Meta: %v", err)
+	})
 }

@@ -104,6 +104,11 @@ type Meta struct {
 	// complete up to HighSeq and missing whatever that append carried.
 	Capped bool `json:"capped,omitempty"`
 
+	// Compactions counts the compactions that dropped rows from the middle of
+	// the stream; an index mirroring it drops the same rows when the count
+	// changes.
+	Compactions int64 `json:"compactions,omitempty"`
+
 	// Sealed reports that the writer declared the stream complete for now.
 	// A reader that has read through HighSeq is done until an explicit Reopen;
 	// readers revisiting a stream must fetch Meta again.

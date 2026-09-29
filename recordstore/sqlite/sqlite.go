@@ -182,6 +182,9 @@ func (b *Backend) startSweeper(interval time.Duration) {
 				if _, err := b.Sweep(ctx); err != nil && ctx.Err() == nil {
 					logger.Errorf("sqlite record store %s: sweep: %v", b.Path(), err)
 				}
+				if _, err := b.Compact(ctx); err != nil && ctx.Err() == nil {
+					logger.Errorf("sqlite record store %s: compact: %v", b.Path(), err)
+				}
 			}
 		}
 	}()

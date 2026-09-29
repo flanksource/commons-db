@@ -214,7 +214,7 @@ func (b *Backend) resolveAppend(stream, kind string, rows []recordstore.Row) (re
 	}
 	// Entries are addressed by dense seqs (rows.go, chunks.go), which a
 	// replaced row would leave a hole in.
-	if err := schema.RefuseReplacing(); err != nil {
+	if err := schema.RefuseSkippedSeqs(); err != nil {
 		return recordstore.KindSchema{}, 0, nil, fmt.Errorf("stream %q: %w", stream, err)
 	}
 	retention, err := schema.RetentionTTL(b.ttl)

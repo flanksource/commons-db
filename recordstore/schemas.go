@@ -97,6 +97,11 @@ type KindOptions struct {
 	// MaxDynamicColumns caps the columns a dynamic kind may infer; an append
 	// needing more is ErrCapacity. Zero is 256.
 	MaxDynamicColumns int
+
+	// Compact are the rules a store whose seqs can skip drops rows by when it
+	// compacts; a store whose seqs cannot refuses the kind with
+	// ErrUnsupported.
+	Compact []CompactRule
 }
 
 // IndexDef is one index of a kind's rows: its declared columns, in order.
@@ -181,6 +186,9 @@ func (k KindSchema) Validate() error {
 		return fmt.Errorf("kind %q declares unknown %s", k.Kind, k.Options.OnConflict)
 	}
 	if err := k.validateIndexing(); err != nil {
+		return err
+	}
+	if err := k.validateCompaction(); err != nil {
 		return err
 	}
 	if k.Options.MaxDynamicColumns < 0 {
@@ -292,15 +300,6 @@ func (k KindSchema) RowKeys(rows []Row) ([]string, error) {
 		keys[index] = key
 	}
 	return keys, nil
-}
-
-// RefuseReplacing is the error a backend that cannot replace stored rows
-// refuses schema's kind with, or nil when the kind never replaces them.
-func (k KindSchema) RefuseReplacing() error {
-	if k.Options.OnConflict != OnConflictReplace {
-		return nil
-	}
-	return fmt.Errorf("kind %q replaces stored rows: %w", k.Kind, ErrUnsupported)
 }
 
 // Unstored keeps the rows of an append whose key stored does not report as

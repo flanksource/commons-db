@@ -97,6 +97,35 @@ Rows leave a stream **from its low end**, or when a replacing kind stores a new 
 
 A `Scan` from below the low seq starts at the low seq.
 
+## Compaction
+
+A kind's `Compact` rules let the sqlite backend drop rows from the **middle** of its streams, not only from the low end:
+
+```go
+recordstore.KindOptions{TimeColumn: "at", Compact: []recordstore.CompactRule{
+	{Where: `row.level == "debug"`, OlderThan: time.Hour},
+}}
+```
+
+A row is dropped when any rule selects it:
+- **`Where`** is a CEL expression over the row, bound as `row`.
+- **`OlderThan`** selects rows whose time column (which it requires) is older than that.
+- A rule that sets both selects the rows matching both.
+
+The backend compacts on every sweep, reading at most 10,000 rows per sweep. `Compact(ctx)` runs one pass now.
+
+- **The last row always stays.** It keeps the high seq, so no seq is ever reused.
+- **Seqs skip.** `Total` counts the rows held and `LowSeq` moves to the first one left. A dropped row's key may be appended again.
+- **The index follows.** Each compaction that drops rows bumps `Meta.Compactions`. An Indexer seeing the count change drops the same rows from its index (`Index.DeleteSeqs`).
+- **kv and ndjson refuse the kind.** They number rows contiguously, so a compacting kind gets `ErrUnsupported`, as a replacing one does.
+
+`Merge(ctx, target, sources, MergeOptions{Where, DeleteSources})` (the `recordstore.Merger` interface, implemented by sqlite) copies several streams of one kind into a new stream:
+- **Order.** Rows are ordered by the kind's time column, then by source order, then by seq.
+- **Shared keys.** A key several sources hold keeps its first row, or, for a replacing kind, its last.
+- **Filtering.** `Where` keeps only the rows it selects.
+- **Sources.** `DeleteSources` removes the sources in the same transaction.
+- **Retention restarts.** The merged rows are appended at merge time, so a kind that retains rows keeps them from the merge, not from their first append.
+
 ## Sealing
 
 `Seal(ctx, stream)` marks a stream complete. After that:

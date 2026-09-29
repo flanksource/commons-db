@@ -36,6 +36,10 @@ const (
 	// RollingReplacingKind is ReplacingKind keeping each row TTL after its
 	// append.
 	RollingReplacingKind = "rolling_replacing"
+
+	// CompactingKind drops the rows whose count exceeds 2 when its store
+	// compacts, which only a store whose seqs can skip does.
+	CompactingKind = "compacting"
 )
 
 // ExpiryTTL is the ttl the expiry spec sets. It is short because the
@@ -64,6 +68,7 @@ var schemas = func() *recordstore.Schemas {
 		RollingReplacingKind: {
 			Key: "name", Retention: recordstore.RetainRows, OnConflict: recordstore.OnConflictReplace,
 		},
+		CompactingKind: {Key: "name", Compact: []recordstore.CompactRule{{Where: "row.count > 2"}}},
 	} {
 		if err := catalog.Register(kind, Columns, options); err != nil {
 			panic(err)

@@ -23,6 +23,8 @@ type KindOptions struct {
 
 	Dynamic           bool // add a column for every undeclared key a row brings
 	MaxDynamicColumns int  // cap on inferred columns; 0 = 256
+
+	Compact []CompactRule // rows the sqlite backend drops as it compacts; see Concepts
 }
 
 type IndexDef struct {
@@ -39,6 +41,7 @@ type IndexDef struct {
 - the kind replaces stored rows but declares no key
 - the time column isn't one of the columns, or isn't `query.ColumnTypeDateTime`
 - an index names no columns, a column that isn't one of the kind's, a column twice, or a structured (json, key/value) column
+- a compact rule selects nothing, has a negative age, or ages rows with no time column
 
 ## Dynamic kinds
 

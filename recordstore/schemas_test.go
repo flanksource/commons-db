@@ -1,6 +1,8 @@
 package recordstore_test
 
 import (
+	"time"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
@@ -48,6 +50,9 @@ var _ = Describe("Schemas", func() {
 		Entry("an index of a column it does not declare", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{Columns: []string{"missing"}}}}, `index 0 column "missing" is not one of its columns`),
 		Entry("an index naming a column twice", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{Columns: []string{"id", "id"}}}}, `index 0 names column "id" twice`),
 		Entry("an index of a structured column", "event", recordstore.KindOptions{Indexes: []recordstore.IndexDef{{Columns: []string{"detail"}}}}, `index 0 column "detail" is a json column`),
+		Entry("a compact rule that selects nothing", "event", recordstore.KindOptions{Compact: []recordstore.CompactRule{{}}}, "compact rule 0 selects no rows"),
+		Entry("a compact rule by age with no time column", "event", recordstore.KindOptions{Compact: []recordstore.CompactRule{{OlderThan: time.Hour}}}, "compact rule 0 needs a time column"),
+		Entry("a negative compact age", "event", recordstore.KindOptions{TimeColumn: "at", Compact: []recordstore.CompactRule{{OlderThan: -time.Hour}}}, "compact rule 0 has a negative age"),
 	)
 
 	It("accepts a time column and indexes of the kind's columns", func() {

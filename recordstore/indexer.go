@@ -35,6 +35,10 @@ type Index interface {
 	// SetExpiry mirrors the source's absolute expiry. Nil keeps the indexed
 	// stream while its source exists.
 	SetExpiry(ctx context.Context, stream string, expiresAt *time.Time) error
+
+	// DeleteSeqs mirrors a source compaction: it drops the indexed rows at
+	// seqs and records the source's compaction count.
+	DeleteSeqs(ctx context.Context, stream string, seqs []int64, compactions int64) (Meta, error)
 }
 
 // ImportRequest is one source window copied into an index.
@@ -110,6 +114,9 @@ func (i *Indexer) Ensure(ctx context.Context, stream string) error {
 		return fmt.Errorf("index stream %q changed generation from %q to %q while it was being indexed", stream, source.Generation, latest.Generation)
 	}
 	if indexed, err = i.mirrorTrim(ctx, latest, indexed); err != nil {
+		return err
+	}
+	if indexed, err = i.mirrorCompaction(ctx, latest, indexed); err != nil {
 		return err
 	}
 	if indexed, err = i.mirrorReopen(ctx, latest, indexed); err != nil {
@@ -202,6 +209,36 @@ func (i *Indexer) mirrorSeal(ctx context.Context, source, indexed Meta) error {
 		return fmt.Errorf("index stream %q: seal: %w", source.Stream, err)
 	}
 	return nil
+}
+
+// mirrorCompaction drops the indexed rows a compaction of the source dropped,
+// once the source's compaction count differs from the index's: the seqs the
+// index holds that the source no longer does.
+func (i *Indexer) mirrorCompaction(ctx context.Context, source, indexed Meta) (Meta, error) {
+	if source.Compactions == indexed.Compactions {
+		return indexed, nil
+	}
+	held := map[int64]bool{}
+	if err := i.source.Scan(ctx, source.Stream, 0, func(seq int64, _ Row) error {
+		held[seq] = true
+		return nil
+	}); err != nil {
+		return Meta{}, fmt.Errorf("index stream %q: read the compacted source: %w", source.Stream, err)
+	}
+	var dropped []int64
+	if err := i.index.Scan(ctx, source.Stream, 0, func(seq int64, _ Row) error {
+		if !held[seq] && seq <= source.HighSeq {
+			dropped = append(dropped, seq)
+		}
+		return nil
+	}); err != nil {
+		return Meta{}, fmt.Errorf("index stream %q: read the index: %w", source.Stream, err)
+	}
+	mirrored, err := i.index.DeleteSeqs(ctx, source.Stream, dropped, source.Compactions)
+	if err != nil {
+		return Meta{}, fmt.Errorf("index stream %q: drop %d compacted rows: %w", source.Stream, len(dropped), err)
+	}
+	return mirrored, nil
 }
 
 // mirrorTrim drops the indexed rows the source no longer holds.
