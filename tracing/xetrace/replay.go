@@ -267,11 +267,17 @@ func isReplayable(e Event, template string) (bool, string) {
 
 var intoExecRe = regexp.MustCompile(`\b(INTO|EXEC(UTE)?)\b`)
 
+// Querier runs a query: a pool, or one pinned connection whose session
+// settings — its current database, say — the replay must run under.
+type Querier interface {
+	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
+}
+
 // Replay walks the trace events, picks the ones that are safe to re-run,
 // and executes each against db. The returned slice has one entry per
 // input event (including skipped ones) so the caller can display both
 // the replay results and why some were not replayed.
-func Replay(ctx context.Context, db *sql.DB, events []Event) []ReplayResult {
+func Replay(ctx context.Context, db Querier, events []Event) []ReplayResult {
 	out := make([]ReplayResult, 0, len(events))
 	for _, e := range events {
 		out = append(out, ReplayOne(ctx, db, e))
@@ -283,7 +289,7 @@ func Replay(ctx context.Context, db *sql.DB, events []Event) []ReplayResult {
 // the CLI drain loop can run replay inline immediately after streaming
 // the original trace line, keeping replay output interleaved with the
 // rest of the live output.
-func ReplayOne(ctx context.Context, db *sql.DB, e Event) ReplayResult {
+func ReplayOne(ctx context.Context, db Querier, e Event) ReplayResult {
 	res := ReplayResult{
 		EventKey:          e.Key(),
 		OriginalStatement: e.Statement,
