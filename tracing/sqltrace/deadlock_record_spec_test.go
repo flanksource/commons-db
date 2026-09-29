@@ -1,6 +1,7 @@
 package sqltrace
 
 import (
+	"errors"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -37,11 +38,50 @@ var _ = Describe("captured deadlock rows", func() {
 		Expect(rows[0]["database"]).To(Equal("tenant_a"))
 	})
 
-	It("reports a malformed graph as an append error", func() {
+	It("stores a graph it cannot decode as a row naming the failure, and keeps the rest of the chunk", func() {
 		env := newEnvironment(nil)
 		appender := recordAppender{store: env.store(), ctx: env.ctx(), stream: "bad-deadlock"}
-		_, _, err := appender.Append([]xetrace.Event{{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: "<deadlock/>"}})
-		Expect(err).To(MatchError(ContainSubstring("lists no processes")))
+		_, _, err := appender.Append([]xetrace.Event{
+			{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: "<deadlock/>"},
+			{Name: xetrace.EventSQLStatementCompleted, Timestamp: capturedAt, Statement: "SELECT 1"},
+		})
+		Expect(err).NotTo(HaveOccurred(), "one unreadable report must not end the capture's recording")
+		var rows []recordstore.Row
+		Expect(env.backend.Scan(env.ctx(), "bad-deadlock", 0, func(_ int64, row recordstore.Row) error {
+			rows = append(rows, row)
+			return nil
+		})).To(Succeed())
+		Expect(rows).To(HaveLen(2))
+		Expect(rows[0]["deadlock"]).To(BeNil())
+		Expect(rows[0]["errorMessage"]).To(ContainSubstring("lists no processes"))
+		Expect(rows[0]["rawStatement"]).To(Equal("<deadlock/>"), "the report is kept to be read by hand")
+		Expect(rows[1]["rawStatement"]).To(Equal("SELECT 1"))
+	})
+
+	It("stores a graph whose indexes cannot be looked up, unresolved and naming the failure", func() {
+		connection, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(connection.Close()).To(Succeed())
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+		mock.ExpectQuery("SELECT DB_ID()").WillReturnError(errors.New("login failed"))
+		mock.ExpectClose()
+
+		env := newEnvironment(nil)
+		appender := recordAppender{store: env.store(), ctx: env.ctx(), stream: "unresolved-deadlock", db: connection}
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/></process-list><resource-list/></deadlock>`
+		_, _, err = appender.Append([]xetrace.Event{{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report}})
+		Expect(err).NotTo(HaveOccurred())
+		var rows []recordstore.Row
+		Expect(env.backend.Scan(env.ctx(), "unresolved-deadlock", 0, func(_ int64, row recordstore.Row) error {
+			rows = append(rows, row)
+			return nil
+		})).To(Succeed())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]["deadlock"]).To(HaveKeyWithValue("xml", report))
+		Expect(rows[0]["database"]).To(Equal("tenant_a"))
+		Expect(rows[0]["errorMessage"]).To(ContainSubstring("login failed"))
 	})
 
 	It("stores no graph for ordinary SQL rows", func() {
