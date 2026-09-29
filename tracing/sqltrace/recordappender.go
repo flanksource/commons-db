@@ -78,7 +78,7 @@ func (a recordAppender) decodeDeadlock(event xetrace.Event, result *EventRow) {
 	graphs := []deadlocks.Graph{graph}
 	if a.db == nil {
 		result.ErrorMessage = "resolve deadlock indexes: no database lease"
-	} else if err := deadlocks.Resolve(a.ctx, a.db, graphs); err != nil {
+	} else if err := a.resolve(graphs); err != nil {
 		result.ErrorMessage = fmt.Sprintf("resolve deadlock indexes: %v", err)
 	}
 	graph = graphs[0]
@@ -87,6 +87,15 @@ func (a recordAppender) decodeDeadlock(event xetrace.Event, result *EventRow) {
 	result.Database = graph.Database
 	result.SQL = graph.VictimStatement
 	result.Tables = graph.Objects
+}
+
+// resolve looks up graphs' indexes within one poll timeout: a ctx is detached
+// from cancellation, so a catalog query blocked on the server would otherwise
+// hold the writer, and the stop that waits on it, indefinitely.
+func (a recordAppender) resolve(graphs []deadlocks.Graph) error {
+	ctx, cancel := context.WithTimeout(a.ctx, xetrace.PollTimeout())
+	defer cancel()
+	return deadlocks.Resolve(ctx, a.db, graphs)
 }
 
 // Seal declares the stream complete, so a follower that has read its last row

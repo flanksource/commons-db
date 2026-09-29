@@ -7,6 +7,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/tracing/xetrace"
+	"github.com/flanksource/commons/properties"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -82,6 +83,32 @@ var _ = Describe("captured deadlock rows", func() {
 		Expect(rows[0]["deadlock"]).To(HaveKeyWithValue("xml", report))
 		Expect(rows[0]["database"]).To(Equal("tenant_a"))
 		Expect(rows[0]["errorMessage"]).To(ContainSubstring("login failed"))
+	})
+
+	It("stops waiting on an index lookup after the poll timeout and stores the graph unresolved", func() {
+		properties.Set("sqltrace.poll.timeout", "50ms")
+		DeferCleanup(func() { properties.Set("sqltrace.poll.timeout", "") })
+		connection, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(connection.Close()).To(Succeed()) })
+		mock.ExpectQuery("SELECT DB_ID()").WillDelayFor(time.Minute).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(5))
+		mock.ExpectClose()
+
+		env := newEnvironment(nil)
+		appender := recordAppender{store: env.store(), ctx: env.ctx(), stream: "blocked-deadlock", db: connection}
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/></process-list><resource-list/></deadlock>`
+		started := time.Now()
+		_, _, err = appender.Append([]xetrace.Event{{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(time.Since(started)).To(BeNumerically("<", 5*time.Second))
+		var rows []recordstore.Row
+		Expect(env.backend.Scan(env.ctx(), "blocked-deadlock", 0, func(_ int64, row recordstore.Row) error {
+			rows = append(rows, row)
+			return nil
+		})).To(Succeed())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]["deadlock"]).To(HaveKeyWithValue("xml", report))
+		Expect(rows[0]["errorMessage"]).To(ContainSubstring("resolve deadlock indexes"))
 	})
 
 	It("stores no graph for ordinary SQL rows", func() {
