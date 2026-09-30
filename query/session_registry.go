@@ -118,7 +118,8 @@ type RegistryOptions struct {
 	// BeforeRead, when set, prepares a profile's data before a session reads
 	// it: once as the session starts, and again before every later sample a
 	// top session takes, so each sample reads data as current as a one-off
-	// execution would. It gets the parameters the caller supplied, unresolved.
+	// execution would. It gets the parameters the caller supplied, unresolved,
+	// and may bind them in place: the session resolves and reads them after.
 	// The returned function releases the prepared read after that read ends. A
 	// failure refuses the start, or fails the session at that sample.
 	BeforeRead func(ctx stdcontext.Context, p Profile, params map[string]any) (release func(), err error)

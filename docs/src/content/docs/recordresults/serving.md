@@ -101,3 +101,21 @@ http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 ```
 
 Streams written for one tenant are `ErrNotFound`, and so `ErrProfileDataNotFound`, for every other tenant. Use `sessions.Options.Authorize` and `Principal` to control who may start, stop or read a session.
+
+### Reading across routes
+
+Each result type also serves `<prefix>/<kind>/streams`, listed as `RegisteredResultType.Streams`. It reads several streams as one table, newest first, and breaks ties by `stream_id`, then `seq`. Its required `streams` param lists them. Over a Router, each entry is `<route>:<stream>`:
+
+```
+GET /api/v1/profile/profile-trace-results-job-event-streams?streams=acme:run-1,globex:run-1
+```
+
+A caller may read its own route, and only the routes your middleware grants it with `recordresults.WithRoutes`. No route is granted by default. A route that wasn't granted is refused with `403 profile_forbidden` (`profilestore.ErrProfileForbidden`):
+
+```go
+ctx := context.WithValue(r.Context(), tenantKey{}, tenant)
+ctx = recordresults.WithRoutes(ctx, routesGrantedTo(r)...)
+handler.ServeHTTP(w, r.WithContext(ctx))
+```
+
+The rows' `stream_id` is the routed id, `<route>:<stream>`.

@@ -48,7 +48,7 @@ defer results.Close()
 | `nil` | `ndjson` | `<dir>/ndjson/<kind>/<stream>.ndjson` | `<dir>/v6/index.sqlite`, derived |
 | a Router, or any backend | (any) | the Source | `<dir>/v6/index.sqlite`, derived |
 
-A separate index is always **derived**. It's never a file a route could also write, so one route's streams can't be read through another. A derived index keeps no TTL of its own: the Indexer gives each indexed stream its source's exact expiry. Both sqlite files sweep expired streams every 10 minutes.
+A separate index is always **derived**. It's never a file a route could also write, so one route's streams can't be read through another. Over a Router, the index holds each stream as `<route>:<stream>`, so two routes' streams with the same id stay apart. A route name must not contain `:`. A derived index keeps no TTL of its own: the Indexer gives each indexed stream its source's exact expiry. Both sqlite files sweep expired streams every 10 minutes.
 
 The `v6/` directory is the sqlite catalog version. See [The sqlite record file](../../sqlite/record-file/#versioned-file-paths).
 

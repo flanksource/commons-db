@@ -34,6 +34,9 @@ func (r *Registry) follow(ctx dbcontext.Context, req query.ProviderRequest, emit
 	if err != nil {
 		return err
 	}
+	if stream, err = r.boundSourceStream(ctx, req.Params, stream); err != nil {
+		return err
+	}
 	position, err := seqParam(req.Params, afterSeqParam)
 	if err != nil {
 		return err
@@ -46,13 +49,17 @@ func (r *Registry) follow(ctx dbcontext.Context, req query.ProviderRequest, emit
 	if err != nil {
 		return err
 	}
+	target, err := r.ownStream(ctx, stream)
+	if err != nil {
+		return err
+	}
 	req.Order = query.Order{{Column: seqColumn, Unique: true}}
 	enriching, enriches, err := r.enrichmentFor(ctx, req)
 	if err != nil {
 		return err
 	}
 	for position < through {
-		read, err := r.readAfter(ctx, req, source, position)
+		read, err := r.readAfter(ctx, req, target, source, position)
 		if err != nil {
 			return err
 		}
@@ -114,13 +121,13 @@ type followRead struct {
 
 // readAfter catches the index up and reads the rows after position through
 // the followed query, under a lease held only for the read.
-func (r *Registry) readAfter(ctx dbcontext.Context, req query.ProviderRequest, source recordstore.Meta, position int64) (followRead, error) {
-	if err := r.indexer.Ensure(ctx, source.Stream); err != nil {
+func (r *Registry) readAfter(ctx dbcontext.Context, req query.ProviderRequest, target mirror, source recordstore.Meta, position int64) (followRead, error) {
+	if err := r.ensure(ctx, target); err != nil {
 		return followRead{}, notFound(err)
 	}
 	release := r.index.Lease()
 	defer release()
-	indexed, err := r.index.Meta(ctx, source.Stream)
+	indexed, err := r.index.Meta(ctx, target.index)
 	if err != nil {
 		return followRead{}, notFound(fmt.Errorf("follow stream %q: %w", source.Stream, err))
 	}

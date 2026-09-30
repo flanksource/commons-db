@@ -17,6 +17,7 @@ import (
 	"regexp"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -161,6 +162,10 @@ type RegisteredResultType struct {
 	Title   string `json:"title"`
 	Profile string `json:"profile"`
 
+	// Streams is the profile reading several streams of the type at once,
+	// merged: the streams param lists them.
+	Streams string `json:"streams"`
+
 	Views []RegisteredResultView `json:"views,omitempty"`
 }
 
@@ -174,6 +179,10 @@ type Registry struct {
 	indexer    *recordstore.Indexer
 	notifier   *recordstore.Notifier
 	connection models.Connection
+
+	// router is the source when it routes per call: each route's streams are
+	// indexed under <route>:<stream>.
+	router *recordstore.Router
 
 	mu          sync.RWMutex
 	results     map[string]registeredResult
@@ -193,6 +202,9 @@ type registeredResult struct {
 	// of the type's own profile it does not share.
 	view     bool
 	baseOnly []string
+
+	// streams marks the type's profile reading the streams param's streams.
+	streams bool
 }
 
 // NewRegistry validates options and returns an empty registry.
@@ -219,8 +231,9 @@ func NewRegistry(options RegistryOptions) (*Registry, error) {
 		return nil, fmt.Errorf("result registry: %w", err)
 	}
 	now := time.Now()
+	router, _ := source.(*recordstore.Router)
 	registry := &Registry{
-		prefix: options.Prefix, schemas: options.Schemas, index: options.Index, indexer: indexer, notifier: notifier,
+		prefix: options.Prefix, schemas: options.Schemas, index: options.Index, indexer: indexer, notifier: notifier, router: router,
 		connection: models.Connection{
 			ID: uuid.New(), Name: options.ConnectionName, Namespace: options.Prefix, Source: "recordstore",
 			Type: models.ConnectionTypeSQLite, URL: options.Index.ReadDSN(), Virtual: true, ReadOnly: true,
@@ -419,6 +432,16 @@ func (r *Registry) register(registration registration) error {
 		return fmt.Errorf("result type %q: %w", result.Kind, err)
 	}
 	profile.Presenter = registration.presenter
+	for _, view := range registration.views {
+		if view.Name == strings.TrimPrefix(streamsProfile, "/") {
+			return fmt.Errorf("result type %q: view name %q is the type's streams profile", result.Kind, view.Name)
+		}
+	}
+	streams, err := r.streamsProfile(table, registration, profile)
+	if err != nil {
+		return fmt.Errorf("result type %q: %w", result.Kind, err)
+	}
+	result.Streams = streams.Name
 	views, err := r.viewProfiles(table, profile, registration.views)
 	if err != nil {
 		return fmt.Errorf("result type %q: %w", result.Kind, err)
@@ -431,6 +454,7 @@ func (r *Registry) register(registration registration) error {
 		registered.registration, registered.tableColumns = &registration, len(table.Columns)
 	}
 	r.results[result.Profile] = registered
+	r.results[streams.Name] = registeredResult{RegisteredResultType: result, profile: streams, streams: true}
 	if registration.enrich != nil {
 		names := make([]string, len(registration.enrichColumns))
 		for index, column := range registration.enrichColumns {
@@ -449,6 +473,50 @@ func (r *Registry) register(registration registration) error {
 // seq window binds as a placeholder, the time window binds as a filter on the
 // time column so an absent edge leaves it open, and seq breaks every tie, which
 // is what lets the engine page it past the first page.
+// streamsProfile is the type's profile reading several streams at once, which
+// the streams param lists: the base profile's rows of each, the stream id
+// shown, newest first across them when the type has a time column, then by
+// stream and seq.
+func (r *Registry) streamsProfile(table sqlitetable.Table, registration registration, base query.Profile) (query.Profile, error) {
+	streamID, err := table.Physical(streamIDKey)
+	if err != nil {
+		return query.Profile{}, err
+	}
+	search, err := searchClause(table, registration.searchColumns)
+	if err != nil {
+		return query.Profile{}, err
+	}
+	profile := base
+	profile.Name = registration.result.Profile + streamsProfile
+	profile.Query = table.Select() + fmt.Sprintf(` WHERE %s IN ({{.params.%s}})`, streamID, streamsParam) + search
+	params := []query.ParamDef{{
+		Name: streamsParam, Label: "Streams", Type: query.ParamTypeList, Required: true,
+		Description: "The record streams to read, merged; a routed store lists <route>:<stream>",
+	}}
+	for _, param := range base.Params {
+		switch param.Name {
+		case streamParam, afterSeqParam, toSeqParam:
+		default:
+			params = append(params, param)
+		}
+	}
+	profile.Params = params
+	profile.Columns = slices.Clone(base.Columns)
+	for index := range profile.Columns {
+		if profile.Columns[index].Name == streamIDKey {
+			profile.Columns[index].Hidden, profile.Columns[index].Label = false, "Stream"
+		}
+	}
+	profile.Order = query.Order{{Column: streamIDKey}, {Column: seqColumn, Unique: true}}
+	if registration.timeColumn != "" {
+		profile.Order = append(query.Order{{Column: registration.timeColumn, Desc: true}}, profile.Order...)
+	}
+	if err := validateProfile(profile); err != nil {
+		return query.Profile{}, err
+	}
+	return profile, nil
+}
+
 // withInferred is a dynamic type's columns with every column its table gained
 // beyond them, other than the store's own, as the table types it.
 func withInferred(declared, table []query.ColumnDef) []query.ColumnDef {
@@ -568,7 +636,7 @@ func (r *Registry) ResultTypes() []RegisteredResultType {
 	defer r.mu.RUnlock()
 	types := make([]RegisteredResultType, 0, len(r.results))
 	for _, result := range r.results {
-		if !result.view {
+		if !result.view && !result.streams {
 			types = append(types, result.RegisteredResultType)
 		}
 	}

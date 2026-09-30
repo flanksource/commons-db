@@ -62,6 +62,10 @@ type followServer struct {
 // middleware puts on the request context the way a host's auth middleware does.
 const tenantHeader = "X-Tenant"
 
+// routesHeader grants a request the routes it lists beyond its tenant's own,
+// as a host's authorization middleware would.
+const routesHeader = "X-Routes"
+
 func newFollowServer(backend recordstore.BackendKind) followServer {
 	return newFollowServerWith(recordresults.OpenOptions{
 		Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(backend), Register: registerFollowTypes,
@@ -87,6 +91,9 @@ func newFollowServerWith(options recordresults.OpenOptions) followServer {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if tenant := r.Header.Get(tenantHeader); tenant != "" {
 			r = r.WithContext(recordresultstest.WithTenant(r.Context(), tenant))
+		}
+		if routes := r.Header.Get(routesHeader); routes != "" {
+			r = r.WithContext(recordresults.WithRoutes(r.Context(), strings.Split(routes, ",")...))
 		}
 		handler.ServeHTTP(w, r)
 	}))

@@ -623,3 +623,32 @@ var _ = Describe("Indexer over a source that compacts", func() {
 		Expect(indexSeqs).To(Equal([]int64{1, 3}))
 	})
 })
+
+var _ = Describe("Indexer mirroring a stream under another id", func() {
+	It("keeps two sources' streams of one id apart in the index", func() {
+		ctx := context.Background()
+		dir := GinkgoT().TempDir()
+		first := openMemoryKV()
+		second := openMemoryKV()
+		index, err := sqlite.Open(sqlite.Options{Path: filepath.Join(dir, "index.sqlite"), Schema: recordstoretest.Schema, Derived: true, SweepInterval: time.Hour})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(index.Close)
+		indexer, err := recordstore.NewIndexer(first, index)
+		Expect(err).ToNot(HaveOccurred())
+		_, err = first.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(1, 2))
+		Expect(err).ToNot(HaveOccurred())
+		_, err = second.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(10, 12))
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(indexer.EnsureAs(ctx, first, "run-1", "a:run-1")).To(Succeed())
+		Expect(indexer.EnsureAs(ctx, second, "run-1", "b:run-1")).To(Succeed())
+		Expect(indexer.EnsureAs(ctx, first, "run-1", "a:run-1")).To(Succeed())
+
+		_, aRows := recordstoretest.Scanned(index, "a:run-1", 0)
+		_, bRows := recordstoretest.Scanned(index, "b:run-1", 0)
+		Expect(recordstoretest.Normalize(aRows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(1, 2))))
+		Expect(recordstoretest.Normalize(bRows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(10, 12))))
+		_, err = index.Meta(ctx, "run-1")
+		Expect(errors.Is(err, recordstore.ErrNotFound)).To(BeTrue(), "nothing is indexed under the bare id")
+	})
+})

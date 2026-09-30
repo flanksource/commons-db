@@ -78,11 +78,16 @@ func (e enrichment) apply(ctx context.Context, rows []query.Row) ([]query.Row, e
 }
 
 // enrichmentFor is the enrichment of the result type whose stream req reads,
-// if it has one.
+// if it has one. req names its index streams already: a stream param, or the streams param's
+// first, since every stream a read spans holds the same kind.
 func (r *Registry) enrichmentFor(ctx dbcontext.Context, req query.ProviderRequest) (enrichment, bool, error) {
-	stream, err := requestedStream(ProviderType, req.Params)
-	if err != nil {
-		return enrichment{}, false, err
+	stream, _ := req.Params[streamParam].(string)
+	if stream == "" {
+		entries, err := requestedStreams(ProviderType, req.Params)
+		if err != nil {
+			return enrichment{}, false, err
+		}
+		stream = entries[0]
 	}
 	meta, err := r.index.Meta(ctx, stream)
 	if err != nil {

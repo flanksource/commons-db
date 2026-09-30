@@ -175,8 +175,12 @@ func (r *Results) DeleteStream(ctx context.Context, stream, kind string) error {
 	if err == nil && meta.Kind != kind {
 		return fmt.Errorf("stream %q holds kind %q, not %q", stream, meta.Kind, kind)
 	}
+	target, targetErr := r.Registry.ownStream(ctx, stream)
+	if targetErr != nil {
+		return targetErr
+	}
 	if !r.same {
-		indexed, indexErr := r.index.Meta(ctx, stream)
+		indexed, indexErr := r.index.Meta(ctx, target.index)
 		if indexErr != nil && !errors.Is(indexErr, recordstore.ErrNotFound) {
 			return fmt.Errorf("read stream %q from index: %w", stream, indexErr)
 		}
@@ -184,7 +188,7 @@ func (r *Results) DeleteStream(ctx context.Context, stream, kind string) error {
 			return fmt.Errorf("indexed stream %q holds kind %q, not %q", stream, indexed.Kind, kind)
 		}
 		if indexErr == nil {
-			if err := r.index.Delete(ctx, stream); err != nil {
+			if err := r.index.Delete(ctx, target.index); err != nil {
 				return fmt.Errorf("delete stream %q from index: %w", stream, err)
 			}
 		}
