@@ -52,12 +52,31 @@ func NewRouter(options RouterOptions) (*Router, error) {
 // Resolve is the backend of the route ctx names, opened on first use: every
 // call delegates to it, and a caller asking where a stream lives asks it.
 func (r *Router) Resolve(ctx context.Context) (Backend, error) {
+	route, err := r.Route(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return r.Backend(ctx, route)
+}
+
+// Route is the route ctx names.
+func (r *Router) Route(ctx context.Context) (string, error) {
 	route, err := r.options.Route(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("route the record store call: %w", err)
+		return "", fmt.Errorf("route the record store call: %w", err)
 	}
 	if route == "" {
-		return nil, errors.New("route the record store call: the route is empty")
+		return "", errors.New("route the record store call: the route is empty")
+	}
+	return route, nil
+}
+
+// Backend is route's backend, opened on first use. It serves a caller that
+// has already decided which routes a read may span — a read across routes
+// the caller authorized — rather than the one route a context names.
+func (r *Router) Backend(ctx context.Context, route string) (Backend, error) {
+	if route == "" {
+		return nil, errors.New("record store route: the route is empty")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()

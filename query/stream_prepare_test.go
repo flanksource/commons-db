@@ -203,6 +203,25 @@ var _ = Describe("ExecuteStream with a registry that prepares reads", func() {
 		}))
 	})
 
+	It("reads by the params its read hook bound", func() {
+		streamed := make(chan any, 1)
+		query.RegisterProvider(boundParamProvider{typ: "bound-trace", streamed: streamed})
+		registry := query.NewSessionRegistry(query.RegistryOptions{
+			BeforeRead: func(_ stdcontext.Context, _ query.Profile, supplied map[string]any) (func(), error) {
+				supplied["stream"] = "tenant-a:" + fmt.Sprint(supplied["stream"])
+				return nil, nil
+			},
+		})
+		profile := query.Profile{
+			Name: "bound-trace", Provider: query.ProviderConfig{Type: "bound-trace"},
+			Params: []query.ParamDef{{Name: "stream"}}, Trace: &query.TraceSpec{},
+		}
+
+		_, err := query.ExecuteStream(context.New(), registry, profile, map[string]any{"stream": "run-1"})
+		Expect(err).ToNot(HaveOccurred())
+		Eventually(streamed, "5s").Should(Receive(Equal("tenant-a:run-1")))
+	})
+
 	It("keeps a top session's resolved parameters isolated from its sampler", func() {
 		provider := &parameterMutatingProvider{typ: "isolated-top", sampled: make(chan struct{})}
 		query.RegisterProvider(provider)
@@ -252,5 +271,22 @@ func (p preparedStreamProvider) Stream(ctx context.Context, _ query.ProviderRequ
 		p.log.add("stream stopped")
 		return ctx.Err()
 	}
+	return nil
+}
+
+// boundParamProvider reports the stream param each follow it serves reads by.
+type boundParamProvider struct {
+	typ      string
+	streamed chan any
+}
+
+func (p boundParamProvider) Type() string { return p.typ }
+
+func (p boundParamProvider) Execute(context.Context, query.ProviderRequest) ([]query.Row, error) {
+	return nil, nil
+}
+
+func (p boundParamProvider) Stream(_ context.Context, request query.ProviderRequest, _ func(query.Row)) error {
+	p.streamed <- request.Params["stream"]
 	return nil
 }

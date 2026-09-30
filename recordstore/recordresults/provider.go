@@ -159,7 +159,7 @@ func (followProvider) Execute(ctx dbcontext.Context, req query.ProviderRequest) 
 	if err != nil {
 		return nil, err
 	}
-	enriching, err := enrichmentOf(ctx, req)
+	req, enriching, err := prepare(ctx, req)
 	if err != nil {
 		return nil, err
 	}
@@ -177,7 +177,7 @@ func (followProvider) Pages(ctx dbcontext.Context, req query.ProviderRequest, pa
 	if err != nil {
 		return query.ErrorPage(err)
 	}
-	enriching, err := enrichmentOf(ctx, req)
+	req, enriching, err := prepare(ctx, req)
 	if err != nil {
 		return query.ErrorPage(err)
 	}
@@ -197,17 +197,19 @@ func (followProvider) Pages(ctx dbcontext.Context, req query.ProviderRequest, pa
 	}
 }
 
-// enrichmentOf is the enrichment of the result type req reads, or nil.
-func enrichmentOf(ctx dbcontext.Context, req query.ProviderRequest) (*enrichment, error) {
+// prepare is req, whose stream param BeforeExecute already bound to the index
+// stream the caller's route reads, and the enrichment of the result type it
+// reads, or nil.
+func prepare(ctx dbcontext.Context, req query.ProviderRequest) (query.ProviderRequest, *enrichment, error) {
 	registry, err := followRegistries.resolve(ctx, req.Connection)
 	if err != nil {
-		return nil, err
+		return query.ProviderRequest{}, nil, err
 	}
 	enriching, ok, err := registry.enrichmentFor(ctx, req)
 	if err != nil || !ok {
-		return nil, err
+		return req, nil, err
 	}
-	return &enriching, nil
+	return req, &enriching, nil
 }
 
 // PagingModes are the sqlite provider's; none when it is not linked, which

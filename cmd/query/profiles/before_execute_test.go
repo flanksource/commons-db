@@ -182,3 +182,17 @@ var _ = Describe("BeforeExecute", func() {
 		Expect(events).To(Equal([]string{"hook", "execute", "execute", "release"}))
 	})
 })
+
+var _ = Describe("PrepareErrorStatus", func() {
+	DescribeTable("answers a hook's error with the status its cause names",
+		func(err error, status int, code string) {
+			gotStatus, gotCode := PrepareErrorStatus(fmt.Errorf("prepare: %w", err))
+			Expect(gotStatus).To(Equal(status))
+			Expect(gotCode).To(Equal(code))
+		},
+		Entry("data that does not exist", profilestore.ErrProfileDataNotFound, http.StatusNotFound, "profile_data_not_found"),
+		Entry("a malformed request", profilestore.ErrProfileRequestInvalid, http.StatusBadRequest, "invalid_params"),
+		Entry("data the caller may not read", profilestore.ErrProfileForbidden, http.StatusForbidden, "profile_forbidden"),
+		Entry("anything else", errors.New("store down"), http.StatusInternalServerError, "prepare_failed"),
+	)
+})

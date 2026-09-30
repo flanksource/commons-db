@@ -11,7 +11,10 @@ import (
 )
 
 // ReadRequest is one resolved profile read and the parameters the caller
-// supplied, unresolved.
+// supplied, unresolved. Params is the map the caller executes the read with,
+// and a hook may rewrite it in place: a data source that indexes what a
+// caller names under another id — a routed record stream — binds that id, which
+// only the hook, running under the request's context, can resolve.
 type ReadRequest struct {
 	Profile query.Profile
 	Params  map[string]any
@@ -24,6 +27,8 @@ type ReadRequest struct {
 //
 // It is the seam a data source that has to be prepared per request plugs into
 // — a record stream index caught up to its source before the index is paged.
+// A hook may rewrite a read's Params (see ReadRequest), and must leave a map
+// it already rewrote as it is when it prepares that map again.
 type BeforeExecuteFunc func(ctx context.Context, reads []ReadRequest) (release func(), err error)
 
 var (
@@ -36,6 +41,10 @@ var (
 	// request itself cannot be served — a param missing or malformed — so the
 	// transport answers 400. Every failure it does not wrap is the server's.
 	ErrProfileRequestInvalid = errors.New("profile request invalid")
+
+	// ErrProfileForbidden is what a BeforeExecuteFunc wraps when the request
+	// names data the caller may not read, so the transport answers 403.
+	ErrProfileForbidden = errors.New("profile data forbidden")
 )
 
 // PrepareReads runs hook and normalises its cleanup contract. A hook that

@@ -121,7 +121,7 @@ func (r *Registry) ResolveConnection(_ dbcontext.Context, reference string) (*mo
 // profilestore.ErrProfileDataNotFound — an empty page would say "nothing matched"
 // about a stream nobody wrote. Every other profile passes through untouched.
 func (r *Registry) BeforeExecute(ctx context.Context, reads []profilestore.ReadRequest) (func(), error) {
-	targets, err := r.readTargets(reads)
+	targets, err := r.readTargets(ctx, reads)
 	if err != nil {
 		return nil, err
 	}
@@ -146,11 +146,11 @@ func (r *Registry) BeforeExecute(ctx context.Context, reads []profilestore.ReadR
 }
 
 type readTarget struct {
-	stream string
-	kind   string
+	mirror
+	kind string
 }
 
-func (r *Registry) readTargets(reads []profilestore.ReadRequest) ([]readTarget, error) {
+func (r *Registry) readTargets(ctx context.Context, reads []profilestore.ReadRequest) ([]readTarget, error) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	targets := make([]readTarget, 0, len(reads))
@@ -160,7 +160,7 @@ func (r *Registry) readTargets(reads []profilestore.ReadRequest) ([]readTarget, 
 		if !ok {
 			continue
 		}
-		stream, err := requestedStream(read.Profile.Name, read.Params)
+		mirrors, err := r.readMirrors(ctx, read, result)
 		if err != nil {
 			return nil, err
 		}
@@ -170,23 +170,64 @@ func (r *Registry) readTargets(reads []profilestore.ReadRequest) ([]readTarget, 
 					profilestore.ErrProfileRequestInvalid, read.Profile.Name, result.Kind, name, result.Profile)
 			}
 		}
-		target := readTarget{stream: stream, kind: result.Kind}
-		if previous, ok := seen[stream]; ok {
-			if previous.kind != target.kind {
-				return nil, fmt.Errorf("%w: stream %q is requested as both %q and %q results",
-					profilestore.ErrProfileDataNotFound, stream, previous.kind, target.kind)
+		for _, target := range mirrors {
+			target := readTarget{mirror: target, kind: result.Kind}
+			if previous, ok := seen[target.index]; ok {
+				if previous.kind != target.kind {
+					return nil, fmt.Errorf("%w: stream %q is requested as both %q and %q results",
+						profilestore.ErrProfileDataNotFound, target.stream, previous.kind, target.kind)
+				}
+				continue
 			}
-			continue
+			seen[target.index] = target
+			targets = append(targets, target)
 		}
-		seen[stream] = target
-		targets = append(targets, target)
 	}
 	return targets, nil
 }
 
+// readMirrors are the index streams a read of result reads: the streams its
+// streams param lists, or the one its stream param names.
+func (r *Registry) readMirrors(ctx context.Context, read profilestore.ReadRequest, result registeredResult) ([]mirror, error) {
+	if result.streams {
+		entries, err := requestedStreams(read.Profile.Name, read.Params)
+		if err != nil {
+			return nil, err
+		}
+		mirrors := make([]mirror, len(entries))
+		indexes := make([]string, len(entries))
+		for index, entry := range entries {
+			if mirrors[index], err = r.listedStream(ctx, entry); err != nil {
+				return nil, err
+			}
+			indexes[index] = mirrors[index].index
+		}
+		// The query binds the list as it reads the index: one id each.
+		read.Params[streamsParam] = indexes
+		return mirrors, nil
+	}
+	stream, err := requestedStream(read.Profile.Name, read.Params)
+	if err != nil {
+		return nil, err
+	}
+	if source, bound := read.Params[sourceStreamParam].(string); bound {
+		stream = source
+	}
+	target, err := r.ownStream(ctx, stream)
+	if err != nil {
+		return nil, err
+	}
+	if r.router != nil {
+		// The query reads the index by the routed id; the request's route is
+		// only known here, so it is bound into the params the read runs with.
+		read.Params[streamParam], read.Params[sourceStreamParam] = target.index, target.stream
+	}
+	return []mirror{target}, nil
+}
+
 func (r *Registry) ensureTargets(ctx context.Context, targets []readTarget) error {
 	for _, target := range targets {
-		if err := r.indexer.Ensure(ctx, target.stream); err != nil {
+		if err := r.ensure(ctx, target.mirror); err != nil {
 			return notFound(err)
 		}
 	}
@@ -195,7 +236,7 @@ func (r *Registry) ensureTargets(ctx context.Context, targets []readTarget) erro
 
 func (r *Registry) validateTargets(ctx context.Context, targets []readTarget) error {
 	for _, target := range targets {
-		meta, err := r.index.Meta(ctx, target.stream)
+		meta, err := r.index.Meta(ctx, target.index)
 		if err != nil {
 			return err
 		}

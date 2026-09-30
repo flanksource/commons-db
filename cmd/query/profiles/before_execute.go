@@ -31,6 +31,8 @@ func PrepareErrorStatus(err error) (int, string) {
 		return http.StatusGone, "profile_data_expired"
 	case errors.Is(err, profilestore.ErrProfileRequestInvalid):
 		return http.StatusBadRequest, "invalid_params"
+	case errors.Is(err, profilestore.ErrProfileForbidden):
+		return http.StatusForbidden, "profile_forbidden"
 	default:
 		return http.StatusInternalServerError, "prepare_failed"
 	}

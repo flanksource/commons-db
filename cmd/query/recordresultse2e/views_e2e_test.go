@@ -116,10 +116,10 @@ var _ = Describe("views over a record result type", Ordered, func() {
 
 	It("lists each result type once, with its views", func() {
 		Expect(server.results.Registry.ResultTypes()).To(Equal([]recordresults.RegisteredResultType{
-			{Kind: "audit_event", Title: "Audit events", Profile: "trace-results/audit_event", Views: []recordresults.RegisteredResultView{
+			{Kind: "audit_event", Title: "Audit events", Profile: "trace-results/audit_event", Streams: "trace-results/audit_event/streams", Views: []recordresults.RegisteredResultView{
 				{Name: "jobs", Title: "Audited jobs", Profile: "trace-results/audit_event/jobs"},
 			}},
-			{Kind: "job_event", Title: "Job events", Profile: "trace-results/job_event", Views: []recordresults.RegisteredResultView{
+			{Kind: "job_event", Title: "Job events", Profile: "trace-results/job_event", Streams: "trace-results/job_event/streams", Views: []recordresults.RegisteredResultView{
 				{Name: "overview", Title: "Overview", Profile: "trace-results/job_event/overview"},
 				{Name: "jobs", Title: "Jobs", Profile: "trace-results/job_event/jobs"},
 				{Name: "busy_jobs", Title: "Busy jobs", Profile: "trace-results/job_event/busy_jobs"},

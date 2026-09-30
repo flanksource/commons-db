@@ -84,15 +84,39 @@ func NewIndexer(source Backend, index Index) (*Indexer, error) {
 // source does not have is ErrNotFound. When the source is the index there is
 // nothing to copy, and Ensure only confirms the stream exists.
 func (i *Indexer) Ensure(ctx context.Context, stream string) error {
-	unlock := i.locks.Lock(stream)
+	return i.EnsureAs(ctx, i.source, stream, stream)
+}
+
+// sourceStream is the stream an index stream mirrors: the backend holding it
+// and its id there.
+type sourceStream struct {
+	Backend
+	stream string
+}
+
+// EnsureAs is Ensure for stream of from, mirrored into the index as
+// indexStream: how one index holds the streams of several sources that may
+// share an id, each under an id of its own. Every index call names
+// indexStream; only reads of the source name stream.
+func (i *Indexer) EnsureAs(ctx context.Context, from Backend, stream, indexStream string) error {
+	if i.same && (from != i.source || stream != indexStream) {
+		return fmt.Errorf("index stream %q: an index that is its own source mirrors only its own streams, under their own ids", indexStream)
+	}
+	if err := ValidateStream(indexStream); err != nil {
+		return err
+	}
+	unlock := i.locks.Lock(indexStream)
 	defer unlock()
-	source, err := i.source.Meta(ctx, stream)
+	origin := sourceStream{Backend: from, stream: stream}
+	source, err := from.Meta(ctx, stream)
 	if err != nil {
-		return fmt.Errorf("index stream %q: %w", stream, err)
+		return fmt.Errorf("index stream %q: %w", indexStream, err)
 	}
 	if err := source.Validate(); err != nil {
-		return fmt.Errorf("index stream %q: source metadata: %w", stream, err)
+		return fmt.Errorf("index stream %q: source metadata: %w", indexStream, err)
 	}
+	source.Stream = indexStream
+	stream = indexStream
 	indexed, found, err := i.prepare(ctx, source)
 	if err != nil {
 		return err
@@ -103,20 +127,21 @@ func (i *Indexer) Ensure(ctx context.Context, stream string) error {
 		}
 		return nil
 	}
-	if indexed, err = i.catchUp(ctx, source, indexed, found); err != nil {
+	if indexed, err = i.catchUp(ctx, origin, source, indexed, found); err != nil {
 		return err
 	}
-	latest, err := i.source.Meta(ctx, stream)
+	latest, err := from.Meta(ctx, origin.stream)
 	if err != nil {
 		return fmt.Errorf("index stream %q: re-read source metadata: %w", stream, err)
 	}
+	latest.Stream = indexStream
 	if latest.Generation != source.Generation {
 		return fmt.Errorf("index stream %q changed generation from %q to %q while it was being indexed", stream, source.Generation, latest.Generation)
 	}
 	if indexed, err = i.mirrorTrim(ctx, latest, indexed); err != nil {
 		return err
 	}
-	if indexed, err = i.mirrorCompaction(ctx, latest, indexed); err != nil {
+	if indexed, err = i.mirrorCompaction(ctx, origin, latest, indexed); err != nil {
 		return err
 	}
 	if indexed, err = i.mirrorReopen(ctx, latest, indexed); err != nil {
@@ -151,7 +176,7 @@ func (i *Indexer) prepare(ctx context.Context, source Meta) (Meta, bool, error) 
 
 // catchUp brings a separate index of source's stream to its high seq: trimmed
 // as the source is, then filled with the rows it lacks.
-func (i *Indexer) catchUp(ctx context.Context, source, indexed Meta, found bool) (Meta, error) {
+func (i *Indexer) catchUp(ctx context.Context, origin sourceStream, source, indexed Meta, found bool) (Meta, error) {
 	stream := source.Stream
 	if found && indexed.Generation != source.Generation {
 		return Meta{}, fmt.Errorf("index stream %q: prepare returned generation %q for source generation %q", stream, indexed.Generation, source.Generation)
@@ -173,7 +198,7 @@ func (i *Indexer) catchUp(ctx context.Context, source, indexed Meta, found bool)
 		// A stream the index does not hold yet starts at the source's low seq:
 		// the rows below it are trimmed and no scan returns them.
 		high := max(indexed.HighSeq, source.LowSeq-1)
-		if indexed.HighSeq, err = i.copyAfter(ctx, source, high, !found); err != nil {
+		if indexed.HighSeq, err = i.copyAfter(ctx, origin, source, high, !found); err != nil {
 			return Meta{}, err
 		}
 		indexed.LowSeq = max(indexed.LowSeq, source.LowSeq)
@@ -214,12 +239,12 @@ func (i *Indexer) mirrorSeal(ctx context.Context, source, indexed Meta) error {
 // mirrorCompaction drops the indexed rows a compaction of the source dropped,
 // once the source's compaction count differs from the index's: the seqs the
 // index holds that the source no longer does.
-func (i *Indexer) mirrorCompaction(ctx context.Context, source, indexed Meta) (Meta, error) {
+func (i *Indexer) mirrorCompaction(ctx context.Context, origin sourceStream, source, indexed Meta) (Meta, error) {
 	if source.Compactions == indexed.Compactions {
 		return indexed, nil
 	}
 	held := map[int64]bool{}
-	if err := i.source.Scan(ctx, source.Stream, 0, func(seq int64, _ Row) error {
+	if err := origin.Scan(ctx, origin.stream, 0, func(seq int64, _ Row) error {
 		held[seq] = true
 		return nil
 	}); err != nil {
@@ -265,7 +290,7 @@ func (i *Indexer) mirrorTrim(ctx context.Context, source, indexed Meta) (Meta, e
 // A scan that ends early is refused rather than taken as the stream: an index
 // that stopped short would page the stream as complete, and every later Ensure
 // would find it already caught up.
-func (i *Indexer) copyAfter(ctx context.Context, source Meta, high int64, create bool) (int64, error) {
+func (i *Indexer) copyAfter(ctx context.Context, origin sourceStream, source Meta, high int64, create bool) (int64, error) {
 	stream := source.Stream
 	last := high
 	var batch []Row
@@ -285,7 +310,7 @@ func (i *Indexer) copyAfter(ctx context.Context, source Meta, high int64, create
 		batch, seqs = nil, nil
 		return nil
 	}
-	err := i.source.Scan(ctx, stream, high, func(seq int64, row Row) error {
+	err := origin.Scan(ctx, origin.stream, high, func(seq int64, row Row) error {
 		if seq <= last {
 			return fmt.Errorf("source stream %q returned seq %d after seq %d", stream, seq, last)
 		}

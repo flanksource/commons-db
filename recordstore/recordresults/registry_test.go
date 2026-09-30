@@ -84,7 +84,7 @@ var _ = Describe("Registry", func() {
 			Output: []string{"table", "json", "ndjson", "yaml", "csv", "markdown", "html", "excel", "pdf"},
 		}))
 		Expect(registry.ResultTypes()).To(Equal([]recordresults.RegisteredResultType{
-			{Kind: "sample_event", Title: "Sample events", Profile: "trace-results/sample_event"},
+			{Kind: "sample_event", Title: "Sample events", Profile: "trace-results/sample_event", Streams: "trace-results/sample_event/streams"},
 		}))
 	})
 
