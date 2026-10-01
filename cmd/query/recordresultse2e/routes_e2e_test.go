@@ -76,10 +76,10 @@ var _ = Describe("record results routed per tenant", func() {
 	indexedStreams := func() []string {
 		index, err := sql.Open("sqlite", "file:"+filepath.ToSlash(indexPath)+"?mode=ro")
 		Expect(err).ToNot(HaveOccurred())
-		defer index.Close()
+		defer func() { _ = index.Close() }()
 		rows, err := index.Query(`SELECT stream_id FROM record_streams ORDER BY stream_id`)
 		Expect(err).ToNot(HaveOccurred())
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		var streams []string
 		for rows.Next() {
 			var stream string
