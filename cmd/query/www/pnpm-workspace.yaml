@@ -14,7 +14,7 @@ catalog:
   '@codemirror/lang-sql': ^6.10.0
   '@codemirror/state': ^6.7.0
   '@codemirror/view': ^6.43.4
-  '@flanksource/clicky-ui': 0.3.42
+  '@flanksource/clicky-ui': 0.3.43
   '@flanksource/icons': 1.0.65
   '@floating-ui/react': ^0.27.19
   '@mdxeditor/editor': ^4.0.4
@@ -98,12 +98,12 @@ overrides:
   tailwind-merge: 'catalog:'
 
 packageExtensions:
-  '@flanksource/clicky-ui@0.3.42':
+  '@flanksource/clicky-ui@0.3.43':
     dependencies:
       '@codemirror/language': ^6.12.4
 
 patchedDependencies:
-  '@flanksource/clicky-ui@0.3.42': patches/@flanksource__clicky-ui@0.3.42.patch
+  '@flanksource/clicky-ui@0.3.43': patches/@flanksource__clicky-ui@0.3.43.patch
 
 preferWorkspacePackages: true
 
