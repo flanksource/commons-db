@@ -41,14 +41,14 @@ type connectionDashboardResponse struct {
 }
 
 type connectionDashboardItem struct {
-	ID               string                    `json:"id"`
-	Name             string                    `json:"name"`
-	Namespace        string                    `json:"namespace"`
-	Type             string                    `json:"type"`
-	Endpoint         *dashboardEndpoint        `json:"endpoint,omitempty"`
-	SecretCount      int                       `json:"secretCount"`
-	InlineCredential bool                      `json:"inlineCredential"`
-	InsecureTLS      bool                      `json:"insecureTLS"`
+	ID               string             `json:"id"`
+	Name             string             `json:"name"`
+	Namespace        string             `json:"namespace"`
+	Type             string             `json:"type"`
+	Endpoint         *dashboardEndpoint `json:"endpoint,omitempty"`
+	SecretCount      int                `json:"secretCount"`
+	InlineCredential bool               `json:"inlineCredential"`
+	InsecureTLS      bool               `json:"insecureTLS"`
 	// Health is present only when a probe result is already cached for this
 	// exact row. Listing never probes — see POST /connections/health.
 	Health       *connectionDashboardHealth `json:"health,omitempty"`
@@ -320,7 +320,7 @@ func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 					"results": {Type: "array", Items: &rpc.OpenAPISchema{
 						Type: "object", Properties: map[string]*rpc.OpenAPISchema{
 							"id": {Type: "string"}, "state": {Type: "string"}, "detail": {Type: "string"},
-							"checkedAt": {Type: "string", Format: "date-time"},
+							"checkedAt":  {Type: "string", Format: "date-time"},
 							"durationMs": {Type: "integer"}, "cached": {Type: "boolean"},
 						},
 					}},

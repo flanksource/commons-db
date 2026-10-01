@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/rpc"
 	rpchttp "github.com/flanksource/clicky/rpc/http"
-	"github.com/flanksource/clicky/route"
 	"github.com/flanksource/clicky/task"
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
