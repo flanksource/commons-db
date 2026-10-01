@@ -4,6 +4,7 @@ package recordresultse2e
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -25,6 +26,7 @@ const streamsProfile = "/api/v1/profile/profile-trace-results-sample-event-strea
 
 var _ = Describe("record results routed per tenant", func() {
 	var server followServer
+	var indexPath string
 
 	// serveRoutes routes tenant a to a sqlite file and every other tenant to
 	// an in-process kv store of its own.
@@ -46,8 +48,10 @@ var _ = Describe("record results routed per tenant", func() {
 			},
 		})
 		Expect(err).ToNot(HaveOccurred())
+		settings := recordresultstest.LocalSettings("")
+		indexPath = sqlite.VersionedPath(filepath.Join(settings.Dir, "index.sqlite"))
 		return newFollowServerWith(recordresults.OpenOptions{
-			Prefix: "trace-results", ConnectionName: "index", Settings: recordresultstest.LocalSettings(""),
+			Prefix: "trace-results", ConnectionName: "index", Settings: settings,
 			Source: router, Schemas: schemas, Register: registerFollowTypes,
 		})
 	}
@@ -67,6 +71,23 @@ var _ = Describe("record results routed per tenant", func() {
 			Expect(json.NewDecoder(response.Body).Decode(&rows)).To(Succeed())
 		}
 		return response.StatusCode, rows
+	}
+	// indexedStreams is every stream id the routed results' index holds.
+	indexedStreams := func() []string {
+		index, err := sql.Open("sqlite", "file:"+filepath.ToSlash(indexPath)+"?mode=ro")
+		Expect(err).ToNot(HaveOccurred())
+		defer index.Close()
+		rows, err := index.Query(`SELECT stream_id FROM record_streams ORDER BY stream_id`)
+		Expect(err).ToNot(HaveOccurred())
+		defer rows.Close()
+		var streams []string
+		for rows.Next() {
+			var stream string
+			Expect(rows.Scan(&stream)).To(Succeed())
+			streams = append(streams, stream)
+		}
+		Expect(rows.Err()).ToNot(HaveOccurred())
+		return streams
 	}
 
 	BeforeEach(func() {
@@ -97,6 +118,10 @@ var _ = Describe("record results routed per tenant", func() {
 		status, rows = rowsAs("a", "", followedProfile+"?stream=run-1")
 		Expect(status).To(Equal(http.StatusOK))
 		Expect(rows).To(HaveLen(4))
+		// Every read catches its own route's stream up first, so one index
+		// stream the two routes shared would still serve each its own rows;
+		// only the ids it holds show they are two.
+		Expect(indexedStreams()).To(Equal([]string{"a:run-1", "b:run-1"}))
 	})
 
 	It("reads the streams of the routes a caller was granted, merged newest first", func() {
