@@ -9,7 +9,6 @@ import (
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/recordstore/recordresults/recordresultstest"
-	"github.com/flanksource/commons-db/recordstore/tracing/sqltrace"
 )
 
 var _ = Describe("TraceStore", func() {
@@ -17,7 +16,6 @@ var _ = Describe("TraceStore", func() {
 
 	It("commits a capture's rows and describes them as the results store does", func() {
 		results, _ := openLocal(recordstore.BackendSQLite)
-		var store sqltrace.RecordStore
 		store, err := recordresults.NewTraceStore(results)
 		Expect(err).ToNot(HaveOccurred())
 
