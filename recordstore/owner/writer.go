@@ -43,9 +43,14 @@ func (s *Store[T]) Writer(schema recordstore.SchemaResolver, options spool.Write
 	return writer, nil
 }
 
-// deliver applies a cut batch as the owner, or publishes it as a reader.
+// deliver applies a cut batch as the owner, or publishes it as a reader. An
+// owner first waits for the batches this writer published before it was
+// promoted, so its batches land in the order it cut them.
 func (w *Writer[T]) deliver(ctx context.Context, batch recordstore.Batch) error {
 	if w.store.Role() == RoleOwner {
+		if err := w.awaitPublished(ctx); err != nil {
+			return err
+		}
 		backend, err := w.store.Backend()
 		if err != nil {
 			return err
@@ -95,19 +100,8 @@ func (w *Writer[T]) Flush(ctx context.Context, options FlushOptions) error {
 		return err
 	}
 	if options.Wait {
-		w.mu.Lock()
-		pending := w.pending
-		w.pending = nil
-		w.mu.Unlock()
-		for index, id := range pending {
-			result, err := w.store.Await(ctx, id)
-			if err != nil {
-				w.mu.Lock()
-				w.pending = append(pending[index:], w.pending...)
-				w.mu.Unlock()
-				return err
-			}
-			w.record(result)
+		if err := w.awaitPublished(ctx); err != nil {
+			return err
 		}
 	}
 	w.mu.Lock()
@@ -115,4 +109,25 @@ func (w *Writer[T]) Flush(ctx context.Context, options FlushOptions) error {
 	refused := errors.Join(w.refused...)
 	w.refused = nil
 	return refused
+}
+
+// awaitPublished waits for every batch this writer published to be applied,
+// keeping the entries the owner refused. Batches still pending when ctx ends
+// stay pending, to be awaited again.
+func (w *Writer[T]) awaitPublished(ctx context.Context) error {
+	w.mu.Lock()
+	pending := w.pending
+	w.pending = nil
+	w.mu.Unlock()
+	for index, id := range pending {
+		result, err := w.store.Await(ctx, id)
+		if err != nil {
+			w.mu.Lock()
+			w.pending = append(pending[index:], w.pending...)
+			w.mu.Unlock()
+			return err
+		}
+		w.record(result)
+	}
+	return nil
 }
