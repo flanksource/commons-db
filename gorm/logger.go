@@ -202,7 +202,7 @@ func (l *SqlLogger) Trace(ctx context.Context, begin time.Time, fc func() (strin
 		event.Slow = l.SlowThreshold > 0 && elapsed > l.SlowThreshold
 		event.Error = err != nil
 		if writeErr := l.profile.write(event); writeErr != nil {
-			panic(writeErr)
+			l.Errorf("SQL profile write failed: %v", writeErr)
 		}
 	}
 	if !l.IsLevelEnabled(commons.Error) {

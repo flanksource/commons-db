@@ -68,8 +68,10 @@ func wrappingParentheses(expression string) bool {
 					quote = 0
 				}
 			}
-		case expression[i] == '\'' || expression[i] == '"':
+		case expression[i] == '\'' || expression[i] == '"' || expression[i] == '`':
 			quote = expression[i]
+		case expression[i] == '[':
+			quote = ']'
 		case expression[i] == '(':
 			depth++
 		case expression[i] == ')':
