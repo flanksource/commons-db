@@ -60,8 +60,18 @@ var _ = Describe("database target DSNs", func() {
 		Entry("unknown URL scheme", "mysql://localhost/app", `unsupported database scheme "mysql"`),
 		Entry("explicit memory database", "sqlite://:memory:", "file-backed"),
 		Entry("file URI memory database", "sqlite://file::memory:?cache=shared", "file-backed"),
+		Entry("upper-case file URI scheme memory database", "sqlite://FILE::memory:", "file-backed"),
 		Entry("bare memory database", ":memory:", "sqlite://"),
 	)
+
+	It("treats a file URI whose filename only case-folds to :memory: as a disk file", func() {
+		target, err := dbtarget.Parse("sqlite://file::MEMORY:")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(target.Dialect).To(Equal(dbtarget.SQLite))
+		parsed, err := url.Parse(target.DSN)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(parsed.Opaque).To(Equal(":MEMORY:"))
+	})
 })
 
 func absolutePath(path string) string {

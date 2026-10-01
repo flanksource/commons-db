@@ -21,6 +21,7 @@ type SQLProfileEvent struct {
 type sqlProfileWriter struct {
 	path      string
 	mu        sync.Mutex
+	disabled  bool
 	traceMu   sync.Mutex
 	captureMu sync.Mutex
 	current   *sqlProfileCapture
@@ -79,9 +80,21 @@ func newSQLProfileWriter(path string) (*sqlProfileWriter, error) {
 	return &sqlProfileWriter{path: path}, nil
 }
 
-func (w *sqlProfileWriter) write(event SQLProfileEvent) error {
+// write appends event to the profile. Profiling is diagnostic, so the first
+// failure disables the writer for the rest of the process instead of failing
+// every later query with the same error.
+func (w *sqlProfileWriter) write(event SQLProfileEvent) (err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.disabled {
+		return nil
+	}
+	defer func() {
+		if err != nil {
+			w.disabled = true
+			err = fmt.Errorf("%w; SQL profiling is disabled for the rest of this process", err)
+		}
+	}()
 	data, err := json.Marshal(event)
 	if err != nil {
 		return fmt.Errorf("encode SQL profile event: %w", err)
