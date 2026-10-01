@@ -9,6 +9,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -213,6 +215,68 @@ var _ = Describe("Store", func() {
 		Consistently(func() []string { return names(backendOf(first), "run-1") }, 500*time.Millisecond).Should(Equal([]string{"a"}))
 		publish(2, "b")
 		Eventually(func() []string { return names(backendOf(first), "run-1") }, 5*time.Second).Should(Equal([]string{"a", "b", "c"}))
+	})
+
+	It("keeps a Writer's order across its promotion: batches it spooled as a reader land before those it applies as the owner", func() {
+		// second's promotion pauses before it owns, so it spools as a reader
+		// while nobody ingests; its first ingest then pauses after one batch.
+		// The failpoint is set before the stores open and reset after they
+		// close, so no store goroutine reads it while it changes; it pauses
+		// nothing until armed, once first owns the store.
+		starting, ingesting := make(chan struct{}), make(chan struct{})
+		resumeStart, resumeIngest := make(chan struct{}), make(chan struct{})
+		var startedOnce, ingestedOnce sync.Once
+		var armed atomic.Bool
+		owner.SetFailpoint(func(name string) {
+			if !armed.Load() {
+				return
+			}
+			switch name {
+			case "during-starting":
+				startedOnce.Do(func() { close(starting); <-resumeStart })
+			case "after-ledger-commit":
+				ingestedOnce.Do(func() { close(ingesting); <-resumeIngest })
+			}
+		})
+		DeferCleanup(owner.SetFailpoint, func(string) {})
+		first := openStore(options("build-1"))
+		second := openStore(options("build-1"))
+		writer, err := second.Writer(recordstoretest.Schema, spool.WriterOptions{MaxRows: 1})
+		Expect(err).ToNot(HaveOccurred())
+		armed.Store(true)
+
+		Expect(first.Close()).To(Succeed())
+		Eventually(starting, 5*time.Second).Should(BeClosed())
+		for _, name := range []string{"r-0", "r-1", "r-2"} {
+			Expect(writer.Append(ctx, "run-1", recordstoretest.Kind, []recordstore.Row{{"name": name}})).To(Succeed())
+		}
+		Expect(writer.Flush(ctx, owner.FlushOptions{})).To(Succeed())
+		close(resumeStart)
+		Eventually(ingesting, 5*time.Second).Should(BeClosed())
+		Expect(second.Role()).To(Equal(owner.RoleOwner))
+
+		flushed := make(chan error, 1)
+		go func() {
+			for _, name := range []string{"r-3", "r-4"} {
+				if err := writer.Append(ctx, "run-1", recordstoretest.Kind, []recordstore.Row{{"name": name}}); err != nil {
+					flushed <- err
+					return
+				}
+			}
+			flushed <- writer.Flush(ctx, owner.FlushOptions{Wait: true})
+		}()
+		// An owner's own writes wait for the batches it spooled: the flush
+		// cannot finish while the ingest that holds them is paused.
+		select {
+		case err := <-flushed:
+			close(resumeIngest)
+			Expect(err).ToNot(HaveOccurred())
+		case <-time.After(500 * time.Millisecond):
+			close(resumeIngest)
+			Expect(<-flushed).To(Succeed())
+		}
+		Eventually(func() []string { return names(backendOf(second), "run-1") }, 5*time.Second).Should(HaveLen(5))
+		Expect(names(backendOf(second), "run-1")).To(Equal([]string{"r-0", "r-1", "r-2", "r-3", "r-4"}))
 	})
 
 	It("shares one store between the openers of one path within a process", func() {
