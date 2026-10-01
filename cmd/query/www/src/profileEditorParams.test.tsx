@@ -34,6 +34,11 @@ const DRAFT = {
   ],
 } as unknown as ProfileWizardDraft;
 
+// A collapsed parameter row: its header toggles the panel it controls. The
+// section heading's options menu also starts unexpanded, so a bare
+// aria-expanded count would take it for a row.
+const COLLAPSED_ROW = /aria-expanded="false" aria-controls="[^"]*-panel"/g;
+
 function markup(draft: ProfileWizardDraft = DRAFT): string {
   return renderToStaticMarkup(
     <ProfileSchemaSection
@@ -51,7 +56,7 @@ function markup(draft: ProfileWizardDraft = DRAFT): string {
 describe("profile editor — Parameters section", () => {
   it("collapses each parameter to one row instead of a stack of fields", () => {
     const html = markup();
-    expect(html.match(/aria-expanded="false"/g)).toHaveLength(2);
+    expect(html.match(COLLAPSED_ROW)).toHaveLength(2);
     // The ten per-parameter fields are not rendered at rest — the whole point.
     expect(html).not.toContain("Value rewrite");
   });
@@ -82,7 +87,7 @@ describe("profile editor — Parameters section", () => {
       ...DRAFT,
       params: [],
     } as unknown as ProfileWizardDraft);
-    expect(html).not.toContain('aria-expanded="false"');
+    expect(html.match(COLLAPSED_ROW)).toBeNull();
     expect(html).toContain("No parameters yet");
     expect(html).toContain("Add parameter");
     expect(html).toContain(
