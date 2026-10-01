@@ -125,6 +125,16 @@ type ResultType[T any] struct {
 	Enrich        Enricher
 	EnrichColumns []query.ColumnDef
 
+	// Compact lists the rules by which a sqlite store drops rows from the
+	// middle of the type's streams as it sweeps (recordstore.KindOptions.Compact).
+	// A rule with OlderThan needs TimeColumn.
+	Compact []recordstore.CompactRule
+
+	// Indexes declares indexes over T's columns beyond the one TimeColumn
+	// brings (recordstore.KindOptions.Indexes). Once created, an index is
+	// never dropped.
+	Indexes []recordstore.IndexDef
+
 	// Compressed names T's large text or JSON columns to store compressed in
 	// sqlite (recordstore.KindOptions.Compressed): read back whole, never
 	// filtered, searched or indexed by.
@@ -291,7 +301,7 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		options: recordstore.KindOptions{
 			Key: resultType.KeyColumn, Retention: resultType.Retention, OnConflict: resultType.OnConflict,
 			TimeColumn: resultType.TimeColumn, Dynamic: resultType.Dynamic, MaxDynamicColumns: resultType.MaxDynamicColumns,
-			Compressed: resultType.Compressed,
+			Compressed: resultType.Compressed, Compact: resultType.Compact, Indexes: resultType.Indexes,
 		},
 		timeColumn:    resultType.TimeColumn,
 		defaultFrom:   resultType.DefaultFrom,
