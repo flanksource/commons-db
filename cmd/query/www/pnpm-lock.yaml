@@ -7,8 +7,8 @@ settings:
 catalogs:
   default:
     '@flanksource/clicky-ui':
-      specifier: 0.3.42
-      version: 0.3.42
+      specifier: 0.3.43
+      version: 0.3.43
     '@flanksource/icons':
       specifier: 1.0.65
       version: 1.0.65
@@ -43,12 +43,12 @@ catalogs:
 overrides:
   tailwind-merge: ^3.6.0
 
-packageExtensionsChecksum: sha256-ZHbswe+d1BMkPK0dKQu6CcVgssPTyliznJbrICV3TjA=
+packageExtensionsChecksum: sha256-asNbmmaTfDQWV7cVUB755tkCRRHHDoMDoNHQybVbWOs=
 
 patchedDependencies:
-  '@flanksource/clicky-ui@0.3.42':
+  '@flanksource/clicky-ui@0.3.43':
     hash: 2f25c12d89e77b4c6411208f28ae541efe986d3f1b7e7c9c6e100963491b578f
-    path: patches/@flanksource__clicky-ui@0.3.42.patch
+    path: patches/@flanksource__clicky-ui@0.3.43.patch
 
 importers:
 
@@ -59,7 +59,7 @@ importers:
         version: 3.0.210(react@18.3.1)(zod@4.4.3)
       '@flanksource/clicky-ui':
         specifier: 'catalog:'
-        version: 0.3.42(patch_hash=2f25c12d89e77b4c6411208f28ae541efe986d3f1b7e7c9c6e100963491b578f)(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)
+        version: 0.3.43(patch_hash=2f25c12d89e77b4c6411208f28ae541efe986d3f1b7e7c9c6e100963491b578f)(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)
       '@flanksource/commons-db-ui':
         specifier: workspace:*
         version: link:packages/reconcile
@@ -415,8 +415,8 @@ packages:
       streamdown:
         optional: true
 
-  '@flanksource/clicky-ui@0.3.42':
-    resolution: {integrity: sha512-C/Lq06zuJvFpRBGDB39R4otAf5GwMhcf0r+9Z0PClHSJOcDrR8c2oHPzCNiV6sMbWXl4FWLqGFX4uG8LDLSbkw==}
+  '@flanksource/clicky-ui@0.3.43':
+    resolution: {integrity: sha512-zfVQl8IFaA7TC3QO3KDuw5p5KYoxzDvkLKE1faI4shNiJ7y2n0JybwKFkyucQjZGc0QssqdRxHSrmvcZLETx2g==}
     peerDependencies:
       '@ai-sdk/react': ^3.0.0
       '@mdxeditor/editor': ^4.0.4
@@ -2197,7 +2197,7 @@ snapshots:
       - '@babel/template'
       - '@types/react'
 
-  '@flanksource/clicky-ui@0.3.42(patch_hash=2f25c12d89e77b4c6411208f28ae541efe986d3f1b7e7c9c6e100963491b578f)(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)':
+  '@flanksource/clicky-ui@0.3.43(patch_hash=2f25c12d89e77b4c6411208f28ae541efe986d3f1b7e7c9c6e100963491b578f)(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4
