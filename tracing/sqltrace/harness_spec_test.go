@@ -125,7 +125,7 @@ func (e environment) ctx() context.Context {
 	return context.WithValue(context.Background(), environmentKey{}, "lab")
 }
 
-func (e environment) store() RecordStore { return backendStore{backend: e.backend} }
+func (e environment) store() RecordStore { return backendStore(e) }
 
 // statements reads back the SQL of every row stream holds, in seq order.
 func (e environment) statements(stream string) []string {
