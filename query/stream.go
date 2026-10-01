@@ -97,13 +97,18 @@ func ExecuteStream(ctx context.Context, reg *SessionRegistry, p Profile, params 
 	if len(params) > 0 {
 		supplied = params[0]
 	}
-	// The read hook runs first: it may bind params the query then reads by
-	// (profilestore.ReadRequest), so they are resolved after it.
+	// The params are resolved on both sides of the read hook: before it, so a
+	// request the profile refuses prepares no data, and after it, since it
+	// may bind params the query then reads by (profilestore.ReadRequest).
+	now := time.Now()
+	if _, _, err := resolveProfileInput(p, supplied, now); err != nil {
+		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
 	release, err := reg.prepareRead(ctx, p, supplied)
 	if err != nil {
 		return nil, err
 	}
-	resolved, filters, err := resolveProfileInput(p, supplied, time.Now())
+	resolved, filters, err := resolveProfileInput(p, supplied, now)
 	if err != nil {
 		release()
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)

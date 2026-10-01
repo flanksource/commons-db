@@ -222,6 +222,20 @@ var _ = Describe("ExecuteStream with a registry that prepares reads", func() {
 		Eventually(streamed, "5s").Should(Receive(Equal("tenant-a:run-1")))
 	})
 
+	It("refuses params it cannot resolve before preparing any data", func() {
+		log := &preparedLog{}
+		query.RegisterProvider(preparedStreamProvider{typ: "prepared-invalid", log: log})
+		registry := query.NewSessionRegistry(query.RegistryOptions{BeforeRead: log.prepare})
+		profile := query.Profile{
+			Name: "prepared-invalid", Provider: query.ProviderConfig{Type: "prepared-invalid"},
+			Params: []query.ParamDef{{Name: "stream"}}, Trace: &query.TraceSpec{},
+		}
+
+		_, err := query.ExecuteStream(context.New(), registry, profile, map[string]any{"stream": "run-1", "filter.bogus": "x"})
+		Expect(err).To(MatchError(ContainSubstring(`column filter "filter.bogus" is not supported`)))
+		Expect(log.snapshot()).To(BeEmpty())
+	})
+
 	It("keeps a top session's resolved parameters isolated from its sampler", func() {
 		provider := &parameterMutatingProvider{typ: "isolated-top", sampled: make(chan struct{})}
 		query.RegisterProvider(provider)
