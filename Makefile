@@ -1,4 +1,4 @@
-GO_MODULES := . recordstore cmd/query
+GO_MODULES := . recordstore tracing/sqltrace cmd/query
 
 .PHONY: tidy tidy-check
 tidy:

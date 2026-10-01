@@ -90,6 +90,21 @@ tasks:
     cmds:
       - make -C recordstore test
 
+  sqltrace:build:
+    desc: Build the tracing/sqltrace Go module
+    cmds:
+      - make -C tracing/sqltrace build
+
+  sqltrace:lint:
+    desc: Lint the tracing/sqltrace Go module
+    cmds:
+      - make -C tracing/sqltrace lint
+
+  sqltrace:test:
+    desc: Test the tracing/sqltrace Go module
+    cmds:
+      - make -C tracing/sqltrace test
+
   query:schema:
     desc: Generate per-type/provider source schemas and bundled Clicky UI schemas into schemas/
     dir: cmd/query

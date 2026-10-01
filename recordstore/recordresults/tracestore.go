@@ -9,7 +9,7 @@ import (
 )
 
 // TraceStore is an opened results store as the store a SQL Server trace
-// (recordstore/tracing/sqltrace) commits its rows through. Rows go through its
+// (tracing/sqltrace) commits its rows through. Rows go through its
 // notifying backend, which wakes followers tailing the stream, and refs come from
 // Results.Ref, which resolves an environment router to the store that really
 // holds the stream.
