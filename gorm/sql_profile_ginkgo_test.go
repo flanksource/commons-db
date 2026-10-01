@@ -124,6 +124,28 @@ var _ = Describe("SQL profile export", func() {
 		Expect(values).To(HaveLen(count))
 	})
 
+	It("keeps tracing queries and disables profiling after a profile write fails", func() {
+		dir := filepath.Join(GinkgoT().TempDir(), "profile")
+		Expect(os.Mkdir(dir, 0o700)).To(Succeed())
+		path := filepath.Join(dir, "sqlprofile.jsonl")
+		writer, err := newSQLProfileWriter(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.RemoveAll(dir)).To(Succeed())
+		log := &SqlLogger{Logger: commons.GetLogger("sql-profile-test"), profile: writer}
+		trace := func() {
+			log.Trace(context.Background(), time.Now(), func() (string, int64) { return "SELECT 1", 1 }, nil)
+		}
+		Expect(trace).NotTo(Panic())
+		Expect(writer.disabled).To(BeTrue())
+
+		Expect(os.Mkdir(dir, 0o700)).To(Succeed())
+		Expect(os.WriteFile(path, nil, 0o600)).To(Succeed())
+		Expect(trace).NotTo(Panic())
+		data, err := os.ReadFile(path)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(data).To(BeEmpty())
+	})
+
 	It("marks statements that exceed the configured slow threshold", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "sqlprofile.jsonl")
 		writer, err := newSQLProfileWriter(path)

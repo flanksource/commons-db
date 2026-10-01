@@ -138,13 +138,13 @@ func (i *Indexer) EnsureAs(ctx context.Context, from Backend, stream, indexStrea
 	if latest.Generation != source.Generation {
 		return fmt.Errorf("index stream %q changed generation from %q to %q while it was being indexed", stream, source.Generation, latest.Generation)
 	}
-	if indexed, err = i.mirrorTrim(ctx, latest, indexed); err != nil {
+	// Catch up again to the re-read snapshot: rows, trims and reopens the
+	// source reported while the first pass ran are in the index before Ensure
+	// returns.
+	if indexed, err = i.catchUp(ctx, origin, latest, indexed, true); err != nil {
 		return err
 	}
 	if indexed, err = i.mirrorCompaction(ctx, origin, latest, indexed); err != nil {
-		return err
-	}
-	if indexed, err = i.mirrorReopen(ctx, latest, indexed); err != nil {
 		return err
 	}
 	if err := i.mirrorExpiry(ctx, latest, indexed); err != nil {
@@ -203,13 +203,20 @@ func (i *Indexer) catchUp(ctx context.Context, origin sourceStream, source, inde
 		}
 		indexed.LowSeq = max(indexed.LowSeq, source.LowSeq)
 	}
+	if !found {
+		if indexed, err = i.index.Meta(ctx, stream); err != nil {
+			return Meta{}, fmt.Errorf("index stream %q: read the created index: %w", stream, err)
+		}
+	}
 	return indexed, nil
 }
 
 // mirrorReopen reopens a sealed index whose source has resumed, so readers do
-// not take the stale seal as the end of the stream.
+// not take the stale seal as the end of the stream. A sealed index short of
+// the source's high seq is reopened even when the source is sealed again, so
+// the rows it gained in between can be imported; mirrorSeal reseals it.
 func (i *Indexer) mirrorReopen(ctx context.Context, source, indexed Meta) (Meta, error) {
-	if !indexed.Sealed || source.Sealed {
+	if !indexed.Sealed || (source.Sealed && indexed.HighSeq >= source.HighSeq) {
 		return indexed, nil
 	}
 	reopener, ok := i.index.(Reopener)
