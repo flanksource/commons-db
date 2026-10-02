@@ -102,6 +102,24 @@ func (r *reopenAfterMeta) Meta(ctx context.Context, stream string) (recordstore.
 	return meta, r.Reopen(ctx, stream, meta.Generation)
 }
 
+// appendBeforeMeta appends rows to its source just before the metadata read
+// numbered on, so that read is the first to report them.
+type appendBeforeMeta struct {
+	*kv.Backend
+	on, reads   int
+	first, last int
+}
+
+func (a *appendBeforeMeta) Meta(ctx context.Context, stream string) (recordstore.Meta, error) {
+	a.reads++
+	if a.reads == a.on {
+		if _, err := a.Append(ctx, stream, recordstoretest.Kind, recordstoretest.SampleRows(a.first, a.last)); err != nil {
+			return recordstore.Meta{}, err
+		}
+	}
+	return a.Backend.Meta(ctx, stream)
+}
+
 // fakeClock is the source's clock, started at the wall clock so the expiries
 // it stamps agree with the in-process store's.
 type fakeClock struct {
@@ -242,6 +260,42 @@ var _ = Describe("Indexer", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect([]bool{sourceMeta.Sealed, indexMeta.Sealed}).To(Equal([]bool{false, false}))
 	})
+
+	It("imports and reseals the rows a source gained while reopened and sealed again between two Ensures", func() {
+		appendSource(1, 2)
+		Expect(source.Seal(ctx, "run-1")).To(Succeed())
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		sealed, err := source.Meta(ctx, "run-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(source.Reopen(ctx, "run-1", sealed.Generation)).To(Succeed())
+		appendSource(3, 4)
+		Expect(source.Seal(ctx, "run-1")).To(Succeed())
+
+		Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+		indexMeta, err := index.Meta(ctx, "run-1")
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]any{indexMeta.Sealed, indexMeta.HighSeq}).To(Equal([]any{true, int64(4)}))
+		seqs, _ := recordstoretest.Scanned(index, "run-1", 0)
+		Expect(seqs).To(Equal([]int64{1, 2, 3, 4}))
+	})
+
+	DescribeTable("imports the rows its second source metadata read is the first to report",
+		func(indexedFirst bool) {
+			appendSource(1, 2)
+			if indexedFirst {
+				Expect(indexer.Ensure(ctx, "run-1")).To(Succeed())
+			}
+			growing := &appendBeforeMeta{Backend: source, on: 2, first: 3, last: 4}
+			racing, err := recordstore.NewIndexer(growing, index)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(racing.Ensure(ctx, "run-1")).To(Succeed())
+
+			seqs, _ := recordstoretest.Scanned(index, "run-1", 0)
+			Expect(seqs).To(Equal([]int64{1, 2, 3, 4}))
+		},
+		Entry("when the index already holds the stream", true),
+		Entry("when the first pass creates the index", false),
+	)
 
 	It("does not expire an index whose source has no expiry", func() {
 		immortal, err := ndjson.New(ndjson.Options{

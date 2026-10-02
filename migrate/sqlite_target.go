@@ -16,45 +16,11 @@ import (
 	sqlitemigrate "github.com/flanksource/commons-db/migrate/sqlite"
 )
 
-func applySQLite(ctx context.Context, connection string, schemaFS fs.FS, config options) error {
-	if schemaFS == nil {
-		return errors.New("schema filesystem is nil")
-	}
-	if config.schema != defaultSchema {
-		return fmt.Errorf("SQLite migrations do not support schema %q", config.schema)
-	}
-	if len(config.exclude) > 0 {
-		return errors.New("SQLite migrations do not support inspection exclusions")
-	}
-	if config.allowDrops {
-		return errors.New("SQLite migrations do not support destructive changes")
-	}
-	scripts, err := loadScripts(schemaFS, config.dir)
+func applySQLite(ctx context.Context, connection string, schemaFS fs.FS, config options) (returnErr error) {
+	tables, err := sqliteTables(schemaFS, config)
 	if err != nil {
 		return err
 	}
-	if len(scripts) > 0 {
-		return errors.New("SQLite migrations do not support SQL migration files")
-	}
-	parser, security, err := loadHCL(schemaFS, config.dir, config.input)
-	if err != nil {
-		return err
-	}
-	if len(security.Roles) > 0 || len(security.Permissions) > 0 {
-		return errors.New("SQLite migrations do not support roles or permissions")
-	}
-	desired := &schema.Realm{}
-	if err := postgres.EvalHCL.Eval(parser, desired, config.input); err != nil {
-		return fmt.Errorf("evaluate HCL schemas for SQLite: %w", err)
-	}
-	tables, err := projectSQLiteRealm(desired)
-	if err != nil {
-		return fmt.Errorf("project HCL schema to SQLite: %w", err)
-	}
-	return reconcileSQLite(ctx, connection, tables, config.allowRebuilds)
-}
-
-func reconcileSQLite(ctx context.Context, connection string, tables []*schema.Table, allowRebuilds bool) (returnErr error) {
 	database, err := sql.Open("sqlite", connection)
 	if err != nil {
 		return fmt.Errorf("open SQLite migration database: %w", err)
@@ -65,11 +31,67 @@ func reconcileSQLite(ctx context.Context, connection string, tables []*schema.Ta
 	if err := database.PingContext(ctx); err != nil {
 		return fmt.Errorf("connect SQLite migration database: %w", err)
 	}
+	return reconcileSQLite(ctx, database, tables, config.allowRebuilds)
+}
+
+// sqliteTables evaluates the HCL bundle and projects it to the SQLite tables it declares.
+func sqliteTables(schemaFS fs.FS, config options) ([]*schema.Table, error) {
+	if schemaFS == nil {
+		return nil, errors.New("schema filesystem is nil")
+	}
+	if config.schema != defaultSchema {
+		return nil, fmt.Errorf("SQLite migrations do not support schema %q", config.schema)
+	}
+	if len(config.exclude) > 0 {
+		return nil, errors.New("SQLite migrations do not support inspection exclusions")
+	}
+	if config.allowDrops {
+		return nil, errors.New("SQLite migrations do not support destructive changes")
+	}
+	scripts, err := loadScripts(schemaFS, config.dir)
+	if err != nil {
+		return nil, err
+	}
+	if len(scripts) > 0 {
+		return nil, errors.New("SQLite migrations do not support SQL migration files")
+	}
+	parser, security, err := loadHCL(schemaFS, config.dir, config.input)
+	if err != nil {
+		return nil, err
+	}
+	if len(security.Roles) > 0 || len(security.Permissions) > 0 {
+		return nil, errors.New("SQLite migrations do not support roles or permissions")
+	}
+	desired := &schema.Realm{}
+	if err := postgres.EvalHCL.Eval(parser, desired, config.input); err != nil {
+		return nil, fmt.Errorf("evaluate HCL schemas for SQLite: %w", err)
+	}
+	tables, err := projectSQLiteRealm(desired)
+	if err != nil {
+		return nil, fmt.Errorf("project HCL schema to SQLite: %w", err)
+	}
+	return tables, nil
+}
+
+// reconcileSQLite checks for pending changes before opening a transaction, because Atlas's OpenTx
+// runs PRAGMA foreign_key_check over the whole database when it opens and again when it commits.
+// On an up-to-date database that pair of scans was the entire cost of a migration, and it grows with
+// the data. The transaction re-inspects, so a change another process applied in between is not
+// applied twice.
+func reconcileSQLite(ctx context.Context, database *sql.DB, tables []*schema.Table, allowRebuilds bool) error {
+	options := sqlitemigrate.ReconcileOptions{AllowRebuilds: allowRebuilds}
+	pending, err := sqlitemigrate.PendingChanges(ctx, database, options, tables...)
+	if err != nil {
+		return err
+	}
+	if len(pending) == 0 {
+		return nil
+	}
 	tx, err := atlassqlite.OpenTx(ctx, database, nil)
 	if err != nil {
 		return fmt.Errorf("begin SQLite migration: %w", err)
 	}
-	if err := sqlitemigrate.ReconcileTables(ctx, tx, sqlitemigrate.ReconcileOptions{AllowRebuilds: allowRebuilds}, tables...); err != nil {
+	if err := sqlitemigrate.ReconcileTables(ctx, tx, options, tables...); err != nil {
 		return errors.Join(err, tx.Rollback())
 	}
 	if err := tx.Commit(); err != nil {

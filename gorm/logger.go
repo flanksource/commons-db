@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -66,6 +67,7 @@ type SqlLogger struct {
 	baseLevel              commons.LogLevel
 	loggerName             string
 	defaultStatementOffset bool
+	profile                *sqlProfileWriter
 }
 
 type schemaChangeContextKey struct{}
@@ -90,7 +92,7 @@ func isSchemaChange(ctx context.Context) bool {
 
 func (l *SqlLogger) WithLogLevel(level any) *SqlLogger {
 	newlogger := *l
-	newlogger.Logger = l.Logger.WithV(level)
+	newlogger.Logger = l.WithV(level)
 	newlogger.defaultStatementOffset = false
 	return &newlogger
 }
@@ -113,6 +115,14 @@ func (l *SqlLogger) LogMode(level logger.LogLevel) logger.Interface {
 }
 
 func NewSqlLogger(logger *commons.SlogLogger) logger.Interface {
+	var profile *sqlProfileWriter
+	if path := os.Getenv(SQLProfileFileEnv); path != "" {
+		var err error
+		profile, err = newSQLProfileWriter(path)
+		if err != nil {
+			panic(err)
+		}
+	}
 	return &SqlLogger{
 		Config: Config{
 			Colorful:                  true,
@@ -125,6 +135,7 @@ func NewSqlLogger(logger *commons.SlogLogger) logger.Interface {
 		baseLevel:              commons.Info,
 		loggerName:             logger.Prefix,
 		defaultStatementOffset: true,
+		profile:                profile,
 	}
 }
 
@@ -169,27 +180,50 @@ func (trace SQLTrace) Pretty() api.Text {
 //
 //nolint:cyclop
 func (l *SqlLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
-	if !l.IsLevelEnabled(commons.Error) {
+	if !l.IsLevelEnabled(commons.Error) && l.profile == nil {
 		return
 	}
 
 	elapsed := time.Since(begin)
+	var sql string
+	var rows int64
+	var captured bool
+	capture := func() (string, int64) {
+		if !captured {
+			sql, rows = fc()
+			captured = true
+		}
+		return sql, rows
+	}
+	if l.profile != nil {
+		event, rows := l.profile.capture(capture)
+		event.DurationNS = elapsed.Nanoseconds()
+		event.Rows = rows
+		event.Slow = l.SlowThreshold > 0 && elapsed > l.SlowThreshold
+		event.Error = err != nil
+		if writeErr := l.profile.write(event); writeErr != nil {
+			l.Errorf("SQL profile write failed: %v", writeErr)
+		}
+	}
+	if !l.IsLevelEnabled(commons.Error) {
+		return
+	}
 	level := l.baseLevel
 	var trace SQLTrace
 
 	switch {
 	case err != nil && (!errors.Is(err, gorm.ErrRecordNotFound) || !l.IgnoreRecordNotFoundError):
-		sql, rows := fc()
+		sql, rows := capture()
 		trace = SQLTrace{Duration: elapsed, Rows: rows, SQL: trunc(sql, l.maxLength), Err: err}
 		level = l.baseLevel - (commons.Error * -1)
 
 	case elapsed > l.SlowThreshold && l.SlowThreshold != 0:
-		sql, rows := fc()
+		sql, rows := capture()
 		trace = SQLTrace{Duration: elapsed, Rows: rows, SQL: trunc(sql, l.maxLength), Slow: true}
 		level = l.baseLevel - (commons.Warn * -1)
 
 	case l.LogLevel == int(commons.Info):
-		sql, rows := fc()
+		sql, rows := capture()
 		sql = trunc(sql, l.maxLength)
 		level = classifySQLLevel(sql, rows, l.baseLevel, isSchemaChange(ctx))
 		level += l.statementLevelOffset()
@@ -262,6 +296,9 @@ func trunc(s string, length int) string {
 
 // ParamsFilter filter params
 func (l *SqlLogger) ParamsFilter(ctx context.Context, sql string, params ...interface{}) (string, []interface{}) {
+	if l.profile != nil {
+		l.profile.captureParams(sql, params)
+	}
 	if l.traceParams || l.GetLevel() >= commons.Trace1 {
 		return sql, params
 	}
