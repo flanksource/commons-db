@@ -39,9 +39,9 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	// Kept in lockstep with the root module's clicky pin (see ../go.mod):
 	// a workspace build resolves one clicky for every module.
-	github.com/flanksource/clicky v1.21.67-0.20260919170348-0696dc4c805f
-	github.com/flanksource/clicky/valkey v1.21.66
-	github.com/flanksource/commons v1.59.1
+	github.com/flanksource/clicky v1.21.73
+	github.com/flanksource/clicky/valkey v1.21.73
+	github.com/flanksource/commons v1.60.0
 	github.com/flanksource/gomplate/v3 v3.24.90 // indirect
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
@@ -180,6 +180,7 @@ require (
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/emirpasic/gods/v2 v2.0.0-alpha // indirect
@@ -307,6 +308,7 @@ require (
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
+	github.com/shirou/gopsutil/v4 v4.26.7 // indirect
 	github.com/shoenig/go-m1cpu v0.1.7 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
