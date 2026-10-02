@@ -40,8 +40,8 @@ require (
 	// Pinned to the commit adding api.ColumnBuilder.DefaultHidden, which
 	// query/render_test.go exercises; no clicky release carries it yet. Bump
 	// this (and aichat/valkey back to the matching release) once it ships.
-	github.com/flanksource/clicky v1.21.67-0.20260919170348-0696dc4c805f
-	github.com/flanksource/commons v1.59.1
+	github.com/flanksource/clicky v1.21.73
+	github.com/flanksource/commons v1.60.0
 	github.com/flanksource/deps v1.0.42
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92
@@ -193,6 +193,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/eapache/go-resiliency v1.7.0 // indirect
 	github.com/eapache/queue v1.1.0 // indirect
+	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/emirpasic/gods/v2 v2.0.0-alpha // indirect
@@ -328,6 +329,7 @@ require (
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
+	github.com/shirou/gopsutil/v4 v4.26.7 // indirect
 	github.com/shoenig/go-m1cpu v0.1.7 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
