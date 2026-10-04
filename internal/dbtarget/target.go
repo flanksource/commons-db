@@ -54,7 +54,13 @@ func parseSQLite(raw string) (Target, error) {
 		return Target{}, fmt.Errorf("parse SQLite DSN query: %w", err)
 	}
 	fileURI := strings.HasPrefix(strings.ToLower(path), "file:")
-	if path == ":memory:" || (fileURI && path[len("file:"):] == ":memory:") || strings.EqualFold(query.Get("mode"), "memory") {
+	filename := path
+	if fileURI {
+		if filename, err = url.PathUnescape(path[len("file:"):]); err != nil {
+			return Target{}, fmt.Errorf("decode SQLite file URI %q: %w", path, err)
+		}
+	}
+	if filename == ":memory:" || strings.EqualFold(query.Get("mode"), "memory") {
 		return Target{}, fmt.Errorf("SQLite migrations require a file-backed database")
 	}
 

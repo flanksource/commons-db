@@ -120,7 +120,8 @@ func NewSqlLogger(logger *commons.SlogLogger) logger.Interface {
 		var err error
 		profile, err = newSQLProfileWriter(path)
 		if err != nil {
-			panic(err)
+			logger.Errorf("SQL profiling disabled: %v", err)
+			profile = nil
 		}
 	}
 	return &SqlLogger{

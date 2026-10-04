@@ -35,6 +35,14 @@ var _ = Describe("SQL profile export", func() {
 		Expect(strings.Count(string(data), "\n")).To(Equal(1))
 	})
 
+	It("constructs a logger with profiling disabled when SQL_PROFILE_FILE cannot be opened", func() {
+		path := filepath.Join(GinkgoT().TempDir(), "missing-dir", "sqlprofile.jsonl")
+		GinkgoT().Setenv(SQLProfileFileEnv, path)
+		var log *SqlLogger
+		Expect(func() { log = NewSqlLogger(commons.GetLogger("sql-profile-test")).(*SqlLogger) }).NotTo(Panic())
+		Expect(log.profile).To(BeNil())
+	})
+
 	It("records every statement regardless of console log level", func() {
 		path := filepath.Join(GinkgoT().TempDir(), "sqlprofile.jsonl")
 		writer, err := newSQLProfileWriter(path)
