@@ -61,6 +61,9 @@ var _ = Describe("database target DSNs", func() {
 		Entry("explicit memory database", "sqlite://:memory:", "file-backed"),
 		Entry("file URI memory database", "sqlite://file::memory:?cache=shared", "file-backed"),
 		Entry("upper-case file URI scheme memory database", "sqlite://FILE::memory:", "file-backed"),
+		Entry("percent-encoded file URI memory database", "sqlite://file:%3Amemory%3A", "file-backed"),
+		Entry("partially percent-encoded file URI memory database", "sqlite://file::memory%3a?cache=shared", "file-backed"),
+		Entry("malformed file URI escape", "sqlite://file:state%zz.db", "decode SQLite file URI"),
 		Entry("bare memory database", ":memory:", "sqlite://"),
 	)
 
