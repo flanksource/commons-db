@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
+	"github.com/flanksource/commons-db/tracing/traces"
 )
 
 type ProfileStoreProvider func() (profilestore.Store, error)
@@ -72,6 +73,10 @@ type Options struct {
 	// a restarted session. Nil stops "via API" and restarts as the previous
 	// principal.
 	Principal func(r *http.Request) string
+
+	// Traces starts trace plugin captures, each authorized as its profile
+	// traces/<kind>. Nil serves no trace routes.
+	Traces *traces.Runtime
 }
 
 type Service struct {
@@ -99,7 +104,8 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 	o := s.options
 	return newSessionHandler(sessionHandlerOptions{
 		Prefix: prefix, Ctx: o.Context(), Store: store, Registry: o.Registry, Sessions: o.Store,
-		EventLog: o.EventLog, Records: o.Records, Authorize: o.Authorize, Principal: o.Principal, Next: next,
+		EventLog: o.EventLog, Records: o.Records, Authorize: o.Authorize, Principal: o.Principal, Traces: o.Traces,
+		Next: next,
 	}), nil
 }
 
@@ -107,6 +113,8 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 //
 //	POST {prefix}/profile/{name}/sessions        start (?interval samples, ?follow tails)
 //	POST {prefix}/connection/{id}/trace/sessions start a connection trace
+//	GET  {prefix}/traces/kinds                   the trace plugin kinds served
+//	POST {prefix}/traces/{kind}/sessions         start a trace plugin capture
 //	GET  {prefix}/sessions                       list (filters, window, sort, paging, ?__lookup=filters)
 //	GET  {prefix}/sessions/{id}                  info
 //	POST {prefix}/sessions/{id}/stop             stop a live session
@@ -124,6 +132,7 @@ type sessionHandler struct {
 	records   EventRecords
 	authorize AuthorizeFunc
 	principal func(r *http.Request) string
+	traces    *traces.Runtime
 	next      http.Handler
 }
 
@@ -137,6 +146,7 @@ type sessionHandlerOptions struct {
 	Records   EventRecords
 	Authorize AuthorizeFunc
 	Principal func(r *http.Request) string
+	Traces    *traces.Runtime
 	Next      http.Handler
 }
 
@@ -144,7 +154,7 @@ func newSessionHandler(opts sessionHandlerOptions) *sessionHandler {
 	return &sessionHandler{
 		prefix: strings.TrimRight(opts.Prefix, "/"), ctx: opts.Ctx, store: opts.Store, registry: opts.Registry,
 		sessions: opts.Sessions, eventLog: opts.EventLog, records: opts.Records, authorize: opts.Authorize,
-		principal: opts.Principal, next: opts.Next,
+		principal: opts.Principal, traces: opts.Traces, next: opts.Next,
 	}
 }
 
@@ -157,6 +167,10 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.startConnectionTrace(w, r, parts[1])
 	case post && len(parts) == 3 && parts[0] == "profile" && parts[2] == "sessions":
 		h.start(w, r, parts[1])
+	case h.traces != nil && get && len(parts) == 2 && parts[0] == "traces" && parts[1] == "kinds":
+		h.traceKinds(w, r)
+	case h.traces != nil && post && len(parts) == 3 && parts[0] == "traces" && parts[2] == "sessions":
+		h.startTrace(w, r, parts[1])
 	case parts[0] != "sessions":
 		h.next.ServeHTTP(w, r)
 	case get && len(parts) == 1:
