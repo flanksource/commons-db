@@ -2,6 +2,7 @@ package providers
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -41,7 +42,7 @@ func (sqlXEventProvider) Execute(context.Context, query.ProviderRequest) ([]quer
 		SQLXEventProviderType)
 }
 
-// sqlXEventOptions are the capture knobs a profile sets under
+// XEventCaptureOptions are the capture knobs a profile sets under
 // `provider.options`. Databases/Users/Apps/Hosts are pushed into the Extended
 // Events predicate so they filter inside SQL Server; Types/Tables are applied to
 // the parsed events, because the predicate has no structured statement type or
@@ -51,7 +52,7 @@ func (sqlXEventProvider) Execute(context.Context, query.ProviderRequest) ([]quer
 // The sizing and poll knobs are zero by default so an unset one means "take
 // the documented default" rather than a number this struct has to keep in step
 // with xetrace.
-type sqlXEventOptions struct {
+type XEventCaptureOptions struct {
 	// SessionName names the Extended Events session on the server. Required:
 	// the session is visible in sys.dm_xe_sessions to everyone on the instance,
 	// so what it is called is the profile author's to say, not this package's.
@@ -94,8 +95,8 @@ type sqlXEventOptions struct {
 // would run unfiltered, recording every statement on the instance instead of the
 // slow ones the author asked for. Nothing about that looks wrong from the
 // outside, so it has to be refused at the point the profile is read.
-func decodeXEventOptions(options map[string]any) (sqlXEventOptions, error) {
-	var decoded sqlXEventOptions
+func decodeXEventOptions(options map[string]any) (XEventCaptureOptions, error) {
+	var decoded XEventCaptureOptions
 	if len(options) == 0 {
 		return decoded, nil
 	}
@@ -111,13 +112,13 @@ func decodeXEventOptions(options map[string]any) (sqlXEventOptions, error) {
 	return decoded, nil
 }
 
-// captureOptions projects the decoded options onto the two xetrace option sets,
+// CaptureOptions projects the decoded options onto the two xetrace option sets,
 // rejecting any value the session could not honour.
 //
 // It is separate from Stream so a bad profile fails at decode with the option
 // named, rather than as an opaque SQL Server syntax error once a session is
 // half-created.
-func (o sqlXEventOptions) captureOptions() (xetrace.CreateOptions, xetrace.DrainOptions, error) {
+func (o XEventCaptureOptions) CaptureOptions() (xetrace.CreateOptions, xetrace.DrainOptions, error) {
 	var create xetrace.CreateOptions
 	var drain xetrace.DrainOptions
 
@@ -198,28 +199,16 @@ func (sqlXEventProvider) Stream(ctx context.Context, req query.ProviderRequest, 
 	if err != nil {
 		return err
 	}
-	create, drain, err := options.captureOptions()
+	create, drain, err := options.CaptureOptions()
 	if err != nil {
 		return fmt.Errorf("provider %q: %w", SQLXEventProviderType, err)
 	}
 
-	conn := connection.SQLConnection{ConnectionName: req.Connection}
-	if err := conn.HydrateConnection(ctx); err != nil {
-		return err
-	}
-	if conn.Type != models.ConnectionTypeSQLServer {
-		return fmt.Errorf("SQL XEvents requires a SQL Server connection")
-	}
-	release, err := ctx.AcquireConnectionLease(req.Connection)
+	client, release, err := OpenSQLServer(ctx, req.Connection)
 	if err != nil {
 		return err
 	}
 	defer release()
-	client, err := conn.Client(ctx)
-	if err != nil {
-		return err
-	}
-	defer client.Close()
 
 	session, err := xetrace.Create(ctx, client, create)
 	if err != nil {
@@ -248,6 +237,32 @@ func (sqlXEventProvider) Stream(ctx context.Context, req query.ProviderRequest, 
 		})
 	}
 	return xetrace.Drain(ctx, session, drain)
+}
+
+// OpenSQLServer leases the SQL Server connection named reference and opens a
+// client on it for an Extended Events capture; release closes the client and
+// gives the lease back. A connection of any other type is refused.
+func OpenSQLServer(ctx context.Context, reference string) (*sql.DB, func(), error) {
+	conn := connection.SQLConnection{ConnectionName: reference}
+	if err := conn.HydrateConnection(ctx); err != nil {
+		return nil, nil, err
+	}
+	if conn.Type != models.ConnectionTypeSQLServer {
+		return nil, nil, fmt.Errorf("SQL XEvents requires a SQL Server connection")
+	}
+	releaseLease, err := ctx.AcquireConnectionLease(reference)
+	if err != nil {
+		return nil, nil, err
+	}
+	client, err := conn.Client(ctx)
+	if err != nil {
+		releaseLease()
+		return nil, nil, err
+	}
+	return client, func() {
+		_ = client.Close()
+		releaseLease()
+	}, nil
 }
 
 // eventRow converts a captured event to a generic row through its own JSON
