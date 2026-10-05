@@ -191,7 +191,7 @@ func (p opensearchProvider) Stream(ctx context.Context, req query.ProviderReques
 			return err
 		}
 	}
-	boundField, boundValue, err := openSearchTailBound(runtime.options, settings.lag, timeFieldMapping, time.Now().UTC())
+	boundField, boundValue, err := openSearchTailBound(runtime.options.Search, settings.lag, timeFieldMapping, time.Now().UTC())
 	if err != nil {
 		return err
 	}
