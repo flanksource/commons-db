@@ -23,6 +23,7 @@ import (
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
+	"github.com/flanksource/commons-db/tracing/traces"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/spf13/cobra"
@@ -83,7 +84,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	}
 	defer func() { _ = a.snapshots.Close() }()
 	if err := a.Runtime.SetContext(dbcontext.NewContext(ctx).
-		WithConnectionResolver(a.snapshots.ResolveConnection).
+		WithConnectionResolver(a.traces.resolveConnection(a.snapshots.ResolveConnection)).
 		WithConnectionLeaseResolver(a.snapshots.AcquireConnection)); err != nil {
 		return err
 	}
@@ -150,10 +151,23 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	if err := sessionStore.Prune(ctx); err != nil {
 		return err
 	}
+	kinds, err := traceKinds()
+	if err != nil {
+		return err
+	}
+	traceRuntime, closeTraces, err := a.traces.open(configDir, options.SessionRetention, kinds)
+	if err != nil {
+		return fmt.Errorf("open trace results: %w", err)
+	}
+	defer func() { _ = closeTraces() }()
+
 	sessionRegistry := query.NewSessionRegistry(query.RegistryOptions{
 		MaxSessions: options.MaxSessions, MaxDuration: options.MaxSessionDuration,
 		Store: sessionStore, Events: sessionStore,
+		BeforeRead: traceRuntime.Results.Registry.BeforeRead,
+		Restarters: map[string]query.RestartFunc{traces.ProfilePrefix: traceRuntime.Restarter(a.Runtime.Context)},
 	})
+	traceRuntime.Sessions = sessionRegistry
 	sessionStore.BindResolver(sessionRegistry.Get)
 	// Sessions a previous run of this server left active have no owner now.
 	if err := sessionRegistry.Sweep(ctx); err != nil {
@@ -233,6 +247,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	sessionService, err := sessions.New(sessions.Options{
 		Profiles: func() (profilestore.Store, error) { return a.profileStore() },
 		Context:  a.Runtime.Context, Registry: sessionRegistry, Store: sessionStore, EventLog: sessionStore,
+		Records: traceRuntime.Results.Backend, Traces: traceRuntime,
 	})
 	if err != nil {
 		return err

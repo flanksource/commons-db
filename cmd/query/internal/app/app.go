@@ -40,6 +40,7 @@ type App struct {
 	scheduleStore  schedules.StoreProvider
 	scheduleRunner *schedules.Runner
 	scheduler      *task.Scheduler
+	traces         *tracePlugins
 	stdout         io.Writer
 	stderr         io.Writer
 }
@@ -64,15 +65,20 @@ func New(options Options) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	tracePlugins := &tracePlugins{}
 	profileStore := func() (profilestore.Store, error) {
 		base, err := runtime.ProfileStore()
 		if err != nil {
 			return nil, err
 		}
-		return profiles.NewOverlayStore(base, snapshotManager)
+		overlay, err := profiles.NewOverlayStore(base, snapshotManager)
+		if err != nil {
+			return nil, err
+		}
+		return tracePlugins.overlay(overlay)
 	}
 	if err := runtime.SetContext(runtime.Context().
-		WithConnectionResolver(snapshotManager.ResolveConnection).
+		WithConnectionResolver(tracePlugins.resolveConnection(snapshotManager.ResolveConnection)).
 		WithConnectionLeaseResolver(snapshotManager.AcquireConnection)); err != nil {
 		return nil, err
 	}
@@ -92,7 +98,10 @@ func New(options Options) (*App, error) {
 	}
 	profileService, err := profiles.New(profiles.Options{
 		Store: profileStore, Context: runtime.Context, DecodeBody: DecodeBody, Snapshots: snapshotManager,
-		OpenAPIExtensions: []profiles.OpenAPIExtension{connections.AddConnectionsOpenAPI, profiles.AddSessionsOpenAPI},
+		OpenAPIExtensions: []profiles.OpenAPIExtension{
+			connections.AddConnectionsOpenAPI, profiles.AddSessionsOpenAPI, sessions.AddTracesOpenAPI(tracePlugins.current),
+		},
+		BeforeExecute: tracePlugins.beforeExecute,
 	})
 	if err != nil {
 		return nil, err
@@ -133,7 +142,7 @@ func New(options Options) (*App, error) {
 		Runtime: runtime, Connections: connectionService, Profiles: profileService,
 		Schedules: scheduleService, Sessions: runner,
 		fileStore: fileStore, snapshots: snapshotManager, profileStore: profileStore,
-		scheduleStore: scheduleStore, scheduleRunner: scheduleRunner, scheduler: scheduler,
+		scheduleStore: scheduleStore, scheduleRunner: scheduleRunner, scheduler: scheduler, traces: tracePlugins,
 		stdout: options.Stdout, stderr: options.Stderr,
 	}, nil
 }
