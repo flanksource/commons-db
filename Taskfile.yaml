@@ -105,6 +105,21 @@ tasks:
     cmds:
       - make -C tracing/sqltrace test
 
+  traces:build:
+    desc: Build the tracing/traces Go module
+    cmds:
+      - make -C tracing/traces build
+
+  traces:lint:
+    desc: Lint the tracing/traces Go module
+    cmds:
+      - make -C tracing/traces lint
+
+  traces:test:
+    desc: Test the tracing/traces Go module
+    cmds:
+      - make -C tracing/traces test
+
   query:schema:
     desc: Generate per-type/provider source schemas and bundled Clicky UI schemas into schemas/
     dir: cmd/query

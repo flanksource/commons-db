@@ -41,6 +41,14 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         run: git push origin "tracing/sqltrace/${{ steps.version.outputs.next }}"
 
+      - name: Tag the traces module
+        if: steps.version.outputs.changed == 'true'
+        run: git tag "tracing/traces/${{ steps.version.outputs.next }}"
+
+      - name: Publish the traces module tag
+        if: steps.version.outputs.changed == 'true'
+        run: git push origin "tracing/traces/${{ steps.version.outputs.next }}"
+
       - name: Tag the query module
         if: steps.version.outputs.changed == 'true'
         run: git tag "cmd/query/${{ steps.version.outputs.next }}"
