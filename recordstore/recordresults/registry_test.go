@@ -188,6 +188,21 @@ var _ = Describe("Registry", func() {
 		}, "already registered"),
 	)
 
+	It("describes the kind schema it would register, without a registry", func() {
+		schema, err := recordresults.ResultType[recordresultstest.SampleEvent]{
+			Kind: "sample_event", Title: "Sample events", KeyColumn: "user", Retention: recordstore.RetainRows, TimeColumn: "at",
+		}.KindSchema()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(schema.Kind).To(Equal("sample_event"))
+		Expect(schema.Options).To(Equal(recordstore.KindOptions{Key: "user", Retention: recordstore.RetainRows, TimeColumn: "at"}))
+		Expect(schema.Columns[0]).To(Equal(query.ColumnDef{
+			Name: "at", Label: "Captured", Type: query.ColumnTypeDateTime, Kind: query.ColumnKindTimestamp,
+		}))
+
+		_, err = recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K", KeyColumn: "id"}.KindSchema()
+		Expect(err).To(MatchError(ContainSubstring(`key "id" is not one of its columns`)))
+	})
+
 	It("refuses every write to its profiles", func() {
 		registry, _ := newRegistry()
 		Expect(recordresults.RegisterResultType(registry, recordresults.ResultType[recordresultstest.SampleEvent]{Kind: "k", Title: "K"})).To(Succeed())

@@ -262,16 +262,11 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 	if resultType.Title == "" {
 		return fmt.Errorf("result type %q needs a title", resultType.Kind)
 	}
-	if err := recordstore.ValidateKind(resultType.Kind); err != nil {
+	schema, err := resultType.KindSchema()
+	if err != nil {
 		return err
 	}
-	columns, err := query.ColumnsFor(reflect.TypeFor[T]())
-	if err != nil {
-		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
-	}
-	if err := markTimeColumn(columns, resultType.TimeColumn); err != nil {
-		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
-	}
+	columns := schema.Columns
 	if err := validateDefaultFrom(resultType.TimeColumn, resultType.DefaultFrom); err != nil {
 		return fmt.Errorf("result type %q: %w", resultType.Kind, err)
 	}
@@ -297,12 +292,8 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		result: RegisteredResultType{
 			Kind: resultType.Kind, Title: resultType.Title, Profile: registry.prefix + "/" + resultType.Kind,
 		},
-		columns: columns,
-		options: recordstore.KindOptions{
-			Key: resultType.KeyColumn, Retention: resultType.Retention, OnConflict: resultType.OnConflict,
-			TimeColumn: resultType.TimeColumn, Dynamic: resultType.Dynamic, MaxDynamicColumns: resultType.MaxDynamicColumns,
-			Compressed: resultType.Compressed, Compact: resultType.Compact, Indexes: resultType.Indexes,
-		},
+		columns:       columns,
+		options:       schema.Options,
 		timeColumn:    resultType.TimeColumn,
 		defaultFrom:   resultType.DefaultFrom,
 		presenter:     presenter,
@@ -313,6 +304,34 @@ func RegisterResultType[T any](registry *Registry, resultType ResultType[T]) err
 		hierarchy:     resultType.Hierarchy,
 		views:         resultType.Views,
 	})
+}
+
+// KindSchema is the record-store schema of T's kind: T's columns (reflected
+// through query.ColumnsFor, the time column marked as the timestamp) and the
+// kind options the type declares, validated as the store would.
+func (resultType ResultType[T]) KindSchema() (recordstore.KindSchema, error) {
+	if err := recordstore.ValidateKind(resultType.Kind); err != nil {
+		return recordstore.KindSchema{}, err
+	}
+	columns, err := query.ColumnsFor(reflect.TypeFor[T]())
+	if err != nil {
+		return recordstore.KindSchema{}, fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
+	if err := markTimeColumn(columns, resultType.TimeColumn); err != nil {
+		return recordstore.KindSchema{}, fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
+	schema := recordstore.KindSchema{
+		Kind: resultType.Kind, Columns: columns,
+		Options: recordstore.KindOptions{
+			Key: resultType.KeyColumn, Retention: resultType.Retention, OnConflict: resultType.OnConflict,
+			TimeColumn: resultType.TimeColumn, Dynamic: resultType.Dynamic, MaxDynamicColumns: resultType.MaxDynamicColumns,
+			Compressed: resultType.Compressed, Compact: resultType.Compact, Indexes: resultType.Indexes,
+		},
+	}
+	if err := schema.Validate(); err != nil {
+		return recordstore.KindSchema{}, fmt.Errorf("result type %q: %w", resultType.Kind, err)
+	}
+	return schema, nil
 }
 
 // validateDefaultFrom refuses a default window start the profile could never
