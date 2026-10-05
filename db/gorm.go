@@ -59,6 +59,10 @@ func NewGorm(connection string, config *gorm.Config) (*gorm.DB, error) {
 		return nil, errors.Join(fmt.Errorf("error setting up server timing: %w", err), sqlDB.Close())
 	}
 
+	if err := gormDB.Use(NewSQLStatementPlugin()); err != nil {
+		return nil, errors.Join(fmt.Errorf("error setting up sql statement publishing: %w", err), sqlDB.Close())
+	}
+
 	return gormDB, nil
 }
 

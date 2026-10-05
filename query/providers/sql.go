@@ -289,7 +289,7 @@ func (p sqlProvider) readPage(
 	page query.PageRequest,
 ) (batch []query.Row, total *query.Total, more bool, err error) {
 	result, err := ReadSQLPage(ctx, client, string(dialect), SQLPageRequest{
-		Query: req.Query, QueryArgs: req.QueryArgs, QueryIdentifiers: req.QueryIdentifiers,
+		Connection: req.Connection, Query: req.Query, QueryArgs: req.QueryArgs, QueryIdentifiers: req.QueryIdentifiers,
 		Filters: req.Filters, Order: req.Order, Position: req.Position,
 		Page: page, Diagnostics: req.Diagnostics,
 	})

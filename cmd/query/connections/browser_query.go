@@ -195,7 +195,7 @@ func (h *connectionBrowserHandler) executeSQL(
 	}
 
 	page, err := providers.ReadSQLPage(r.Context(), client, conn.Type, providers.SQLPageRequest{
-		Query: statement, Filters: filters, Page: pageRequest, Diagnostics: request.diagnostics,
+		Connection: conn.ID.String(), Query: statement, Filters: filters, Page: pageRequest, Diagnostics: request.diagnostics,
 	})
 	if err != nil {
 		return browserQueryResult{}, err

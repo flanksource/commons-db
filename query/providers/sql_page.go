@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/query"
 )
 
 type SQLPageRequest struct {
+	// Connection names the connection client is, for the SQL statement tap.
+	Connection       string
 	Query            string
 	QueryArgs        []any
 	QueryIdentifiers []string
@@ -101,6 +104,19 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		requestDetails["queryId"] = queryID
 	}
 	request.Diagnostics.RecordRequest(statement, args, requestDetails)
+
+	if connection.ObservingSQL(request.Connection) {
+		defer func() {
+			published := connection.Statement{
+				Connection: request.Connection, Driver: string(dialect), SQL: statement, Args: args,
+				StartedAt: started, Duration: time.Since(started), Rows: int64(len(result.Rows)),
+			}
+			if err != nil {
+				published.Error = err.Error()
+			}
+			connection.PublishSQL(published)
+		}()
+	}
 
 	// A failure is the one moment the statement that ran is worth more than it
 	// costs to carry, so it travels on the error rather than only in a debug
