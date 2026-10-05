@@ -38,6 +38,7 @@ func ApplyHTTPObservability(ctx any, feature string, base netHTTP.RoundTripper, 
 	if base == nil {
 		base = netHTTP.DefaultTransport
 	}
+	base = trafficMiddleware(feature)(base)
 	if middleware := harCollectorMiddleware(ctx, feature, explicit); middleware != nil {
 		base = middleware(base)
 	}
@@ -55,6 +56,7 @@ func ApplyHTTPClientObservability(ctx any, feature string, client *commonsHTTP.C
 	if client == nil {
 		return nil
 	}
+	client.Use(trafficMiddleware(feature))
 
 	var tokenTransport middlewares.Middleware
 	level := logger.Info

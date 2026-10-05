@@ -8,10 +8,35 @@ import (
 	commonsgorm "github.com/flanksource/commons-db/gorm"
 	"github.com/flanksource/commons/logger"
 
+	"github.com/flanksource/commons-db/connection"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"gorm.io/gorm"
 )
+
+var _ = Describe("NewGorm SQL statements", func() {
+	It("publishes the statements it runs to observers of every connection", func() {
+		database, err := NewGorm(filepath.Join(GinkgoT().TempDir(), "gorm.db"), DefaultGormConfig())
+		Expect(err).ToNot(HaveOccurred())
+		sqlDB, err := database.DB()
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(sqlDB.Close)
+		var statements []connection.Statement
+		DeferCleanup(connection.ObserveSQL("", func(s connection.Statement) { statements = append(statements, s) }))
+
+		Expect(database.Exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)").Error).To(Succeed())
+		var count int64
+		Expect(database.Raw("SELECT count(*) FROM notes WHERE body = ?", "x").Scan(&count).Error).To(Succeed())
+
+		Expect(statements).To(HaveLen(2))
+		Expect(statements[0].SQL).To(Equal("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)"))
+		Expect(statements[1].SQL).To(Equal("SELECT count(*) FROM notes WHERE body = ?"))
+		Expect(statements[1].Args).To(Equal([]any{"x"}))
+		Expect(statements[1].Driver).To(Equal("sqlite"))
+		Expect(statements[1].Connection).To(BeEmpty())
+	})
+})
 
 var _ = Describe("NewGorm SQLite", func() {
 	It("installs the commons-db slow SQL logger when no config is supplied", func() {

@@ -1,7 +1,6 @@
 package db
 
 import (
-	"fmt"
 	"time"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
@@ -32,38 +31,7 @@ func NewServerTimingPlugin() gorm.Plugin { return serverTimingPlugin{} }
 func (serverTimingPlugin) Name() string { return "commons-db:server-timing" }
 
 func (p serverTimingPlugin) Initialize(db *gorm.DB) error {
-	cb := db.Callback()
-	hooks := []struct {
-		callback interface{ Register(string, func(*gorm.DB)) error }
-		hook     func(*gorm.DB)
-		name     string
-	}{
-		{cb.Create().Before("gorm:create"), p.before, "before:create"},
-		{cb.Create().After("gorm:create"), p.after(withoutRows), "after:create"},
-
-		{cb.Query().Before("gorm:query"), p.before, "before:select"},
-		{cb.Query().After("gorm:query"), p.after(withRows), "after:select"},
-
-		{cb.Delete().Before("gorm:delete"), p.before, "before:delete"},
-		{cb.Delete().After("gorm:delete"), p.after(withoutRows), "after:delete"},
-
-		{cb.Update().Before("gorm:update"), p.before, "before:update"},
-		{cb.Update().After("gorm:update"), p.after(withoutRows), "after:update"},
-
-		{cb.Row().Before("gorm:row"), p.before, "before:row"},
-		{cb.Row().After("gorm:row"), p.after(withoutRows), "after:row"},
-
-		{cb.Raw().Before("gorm:raw"), p.before, "before:raw"},
-		{cb.Raw().After("gorm:raw"), p.after(withoutRows), "after:raw"},
-	}
-
-	var firstErr error
-	for _, h := range hooks {
-		if err := h.callback.Register("server-timing:"+h.name, h.hook); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("callback register %s failed: %w", h.name, err)
-		}
-	}
-	return firstErr
+	return registerStatementHooks(db, "server-timing", p.before, p.after)
 }
 
 func (serverTimingPlugin) before(tx *gorm.DB) {
@@ -73,18 +41,10 @@ func (serverTimingPlugin) before(tx *gorm.DB) {
 	tx.Statement.Settings.Store(timingStartKey, time.Now())
 }
 
-// withRows marks the callbacks whose row count is already populated when the
-// after-hook runs. Only the Query callback qualifies: it scans inside
-// "gorm:query" and so has RowsAffected by then. Row/Raw statements (the
-// Rows()/Scan() finishers) scan after the whole callback chain has returned, and
-// Create/Update/Delete report rows written rather than read — neither
-// contributes to rows_returned, so the counter stays a count of rows actually
-// read rather than a number that quietly means several different things.
-const (
-	withRows    = true
-	withoutRows = false
-)
-
+// after counts rows only for the callbacks withRows marks: Create/Update/Delete
+// report rows written rather than read, and Row/Raw scan after the hooks run, so
+// neither contributes to rows_returned — the counter stays a count of rows
+// actually read rather than a number that quietly means several different things.
 func (serverTimingPlugin) after(countsRows bool) func(*gorm.DB) {
 	return func(tx *gorm.DB) {
 		if !timingsEnabled(tx) {
