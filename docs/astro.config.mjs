@@ -45,6 +45,10 @@ export default defineConfig({
           ],
         },
         {
+          label: "Tracing",
+          items: [{ label: "Trace plugins", slug: "tracing/plugins" }],
+        },
+        {
           label: "SQLite",
           items: [
             { label: "sqlite.DB", slug: "sqlite/database" },

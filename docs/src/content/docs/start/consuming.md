@@ -3,13 +3,14 @@ title: Consuming commons-db
 description: Add commons-db's modules to another Go application, carry the sqlite replace, and develop against a local checkout.
 ---
 
-commons-db ships as **four Go modules** from one repository: the root module for connections and the profile engine, the `recordstore` module for record streams and the result types served over them, the `tracing/sqltrace` module for SQL Server trace capture into a record stream, and the `cmd/query` module for the profile HTTP service and the `query` CLI.
+commons-db ships as **five Go modules** from one repository: the root module for connections and the profile engine, the `recordstore` module for record streams and the result types served over them, the `tracing/sqltrace` module for SQL Server trace capture into a record stream, the `tracing/traces` module for trace plugins, and the `cmd/query` module for the profile HTTP service and the `query` CLI.
 
 | Module | Tag format | Brings |
 | --- | --- | --- |
 | `github.com/flanksource/commons-db` | `v0.1.45` | `sqlite`, `db/sqlitetable`, `query` (the profile engine), `query/profilestore`, `tracing` (xetrace, deadlocks), connections, migrations |
 | `github.com/flanksource/commons-db/recordstore` | `recordstore/v0.1.45` | `recordstore` and its backends, probes, `recordresults` |
 | `github.com/flanksource/commons-db/tracing/sqltrace` | `tracing/sqltrace/v0.1.45` | `sqltrace` (SQL Server Extended Events capture, committing to a recordstore backend) |
+| `github.com/flanksource/commons-db/tracing/traces` | `tracing/traces/v0.1.45` | `traces` ([trace plugins](../../tracing/plugins/) run as managed sessions) and its kinds: `httptraffic`, `sqlstatements`, `xevent`, `opensearchtraces` |
 | `github.com/flanksource/commons-db/cmd/query` | `cmd/query/v0.1.45` | `profiles` (the profile HTTP service), `sessions` (trace/top sessions), the `query` CLI and its UI |
 
 The modules are released together, so pin every one you use to the **same version**:
@@ -18,6 +19,7 @@ The modules are released together, so pin every one you use to the **same versio
 go get github.com/flanksource/commons-db@v0.1.45
 go get github.com/flanksource/commons-db/recordstore@v0.1.45
 go get github.com/flanksource/commons-db/tracing/sqltrace@v0.1.45
+go get github.com/flanksource/commons-db/tracing/traces@v0.1.45
 go get github.com/flanksource/commons-db/cmd/query@v0.1.45
 ```
 
@@ -77,7 +79,7 @@ Use a Go workspace next to your application to build against an unreleased commo
 ```bash
 # in your application's parent directory
 go work init ./acme-app
-go work use ../commons-db ../commons-db/recordstore ../commons-db/tracing/sqltrace ../commons-db/cmd/query
+go work use ../commons-db ../commons-db/recordstore ../commons-db/tracing/sqltrace ../commons-db/tracing/traces ../commons-db/cmd/query
 ```
 
 `go.work` and `go.work.sum` are ignored by commons-db's own `.gitignore`. Keep them out of your application's repository too. When the change is done, fix shared behaviour in commons-db, release it, and bump every commons-db module in your application together.
