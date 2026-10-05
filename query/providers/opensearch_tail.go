@@ -65,6 +65,9 @@ func openSearchTailOrder(req query.ProviderRequest, opts opensearchOptions) (que
 type openSearchTailSettings struct {
 	poll time.Duration
 	lag  time.Duration
+	// untilCaughtUp ends the read at the first short poll, so it reads what
+	// the index holds and returns rather than waiting for more.
+	untilCaughtUp bool
 }
 
 // openSearchTailOptions reads the tail controls off the profile.
@@ -112,7 +115,7 @@ func openSearchTailOptions(opts opensearchOptions) (openSearchTailSettings, erro
 // or as an epoch integer, so a lag on a raw-DSL profile is refused rather than
 // guessed at.
 func openSearchTailBound(
-	opts opensearchOptions,
+	search *esdsl.Search,
 	lag time.Duration,
 	mapping *esdsl.TimeFieldMapping,
 	now time.Time,
@@ -120,20 +123,20 @@ func openSearchTailBound(
 	if lag == 0 {
 		return "", nil, nil
 	}
-	if opts.Search == nil || strings.TrimSpace(opts.Search.TimeField) == "" {
+	if search == nil || strings.TrimSpace(search.TimeField) == "" {
 		return "", nil, fmt.Errorf(
 			"tailLag bounds the tail on a time field, so it requires `provider.options.search.timeField`; this profile declares none")
 	}
 	if mapping == nil {
 		return "", nil, fmt.Errorf(
 			"tailLag needs the mapping of timeField %q to spell its bound, and none was resolved; declare a time-from parameter so the field is inspected",
-			opts.Search.TimeField)
+			search.TimeField)
 	}
-	value, err = esdsl.EncodeTimeBound(now.Add(-lag), *opts.Search, mapping)
+	value, err = esdsl.EncodeTimeBound(now.Add(-lag), *search, mapping)
 	if err != nil {
-		return "", nil, fmt.Errorf("tailLag bound for timeField %q: %w", opts.Search.TimeField, err)
+		return "", nil, fmt.Errorf("tailLag bound for timeField %q: %w", search.TimeField, err)
 	}
-	return strings.TrimSpace(opts.Search.TimeField), value, nil
+	return strings.TrimSpace(search.TimeField), value, nil
 }
 
 // applyOpenSearchTailBound ANDs the lag bound onto an already-built body.
@@ -216,6 +219,9 @@ func (w openSearchWalk) tail(
 
 		if size > 0 && len(rows) >= size {
 			continue
+		}
+		if settings.untilCaughtUp {
+			return nil
 		}
 		select {
 		case <-ctx.Done():

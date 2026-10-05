@@ -163,7 +163,9 @@ func openTelemetryRows(result opensearch.Response, options openTelemetryOptions)
 		for name, value := range hit.Source {
 			document[name] = value
 		}
-		rows = append(rows, openTelemetryRow(document, options))
+		row := openTelemetryRow(document, options)
+		row["source_index"], row["source_id"] = hit.Index, hit.ID
+		rows = append(rows, row)
 	}
 	return rows
 }
