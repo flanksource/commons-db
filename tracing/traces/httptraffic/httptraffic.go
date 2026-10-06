@@ -25,6 +25,13 @@ import (
 // maxValueBytes caps any one value an exchange stores.
 const maxValueBytes = 1 << 20
 
+// RequestBody and ResponseBody are where an exchange holds its bodies, as
+// paths WithJSONProcessor takes.
+const (
+	RequestBody  = "request.postData.text"
+	ResponseBody = "response.content.text"
+)
+
 // Params choose the features whose exchanges a capture records.
 type Params struct {
 	// Features name the transports to observe, as their HAR levels do:
@@ -151,5 +158,5 @@ func Kind() *traces.Handler[Params, Exchange] {
 		}).
 		WithSecretMasking().
 		WithTruncation(maxValueBytes).
-		WithJSONProcessor("request.postData.text", "response.content.text")
+		WithJSONProcessor(RequestBody, ResponseBody)
 }
