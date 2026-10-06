@@ -40,7 +40,7 @@ type Runtime struct {
 	// Zero is a second.
 	PollEvery time.Duration
 	// BufferRows caps the records a capture holds before they are committed.
-	// Zero is 10,000.
+	// Zero is 10,000; it is never more than one sample of the probe commits.
 	BufferRows int
 }
 

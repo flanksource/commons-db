@@ -42,6 +42,9 @@ type source struct {
 	// otherwise the first, as the store would.
 	key     string
 	replace bool
+	// drainLimit is the most rows one final drain can commit: the probe's
+	// page budget for one sample. capacity never exceeds it.
+	drainLimit int
 
 	mu      sync.Mutex
 	space   chan struct{}
@@ -60,8 +63,9 @@ type source struct {
 }
 
 func newSource(generation string, capacity int, key string, replace bool) *source {
+	drainLimit := probe.DefaultMaxPages * pageRows
 	return &source{
-		generation: generation, capacity: capacity, key: key, replace: replace,
+		generation: generation, capacity: min(capacity, drainLimit), drainLimit: drainLimit, key: key, replace: replace,
 		space: make(chan struct{}), running: true, done: make(chan struct{}),
 	}
 }
@@ -101,8 +105,9 @@ func (s *source) end(err error) {
 	close(s.done)
 }
 
-// push buffers row, waiting while the buffer is full. A frozen source takes
-// every row: its handler is finishing, and the probe drains only after it has.
+// push buffers row, waiting while the buffer is full. A frozen source does not
+// wait, because nothing commits until its handler has returned: it takes rows
+// until it holds what one final drain can commit, and drops and counts the rest.
 func (s *source) push(ctx context.Context, row recordstore.Row) error {
 	s.mu.Lock()
 	for s.running && !s.frozen && len(s.rows) >= s.capacity {
@@ -119,6 +124,10 @@ func (s *source) push(ctx context.Context, row recordstore.Row) error {
 	if !s.running {
 		return errCaptureEnded
 	}
+	if s.frozen && len(s.rows) >= s.drainLimit {
+		s.summary.Dropped++
+		return nil
+	}
 	s.rows = append(s.rows, row)
 	s.summary.Emitted++
 	return nil
@@ -128,7 +137,11 @@ func (s *source) push(ctx context.Context, row recordstore.Row) error {
 func (s *source) tryPush(row recordstore.Row) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if !s.running || (!s.frozen && len(s.rows) >= s.capacity) {
+	limit := s.capacity
+	if s.frozen {
+		limit = s.drainLimit
+	}
+	if !s.running || len(s.rows) >= limit {
 		s.summary.Dropped++
 		return false
 	}

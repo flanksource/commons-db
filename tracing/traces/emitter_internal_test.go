@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/recordstore/probe"
 )
 
@@ -60,5 +61,26 @@ var _ = Describe("emitter deduplication", func() {
 		commitAll(src)
 		Expect(emitter.Emit(context.Background(), keyedRecord{Key: "b"})).To(Succeed())
 		Expect(src.summary).To(Equal(Summary{Emitted: 2}))
+	})
+})
+
+var _ = Describe("source as its capture stops", func() {
+	It("holds no more than one final drain can commit, dropping and counting the rest", func() {
+		src := newSource("spec", 2, "", false)
+		src.drainLimit = 3
+		src.prepare(dbcontext.New(), func(ctx dbcontext.Context) error {
+			<-ctx.Done()
+			for range 5 {
+				if err := src.push(context.Background(), map[string]any{"n": 1}); err != nil {
+					return err
+				}
+			}
+			return nil
+		}, nil)
+		src.start()
+		Expect(src.Freeze(context.Background())).To(Succeed())
+		Expect(src.handlerErr()).ToNot(HaveOccurred())
+		Expect(src.rows).To(HaveLen(3))
+		Expect(src.summary).To(Equal(Summary{Emitted: 3, Dropped: 2}))
 	})
 })

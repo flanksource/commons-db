@@ -453,3 +453,25 @@ var _ = Describe("Runtime with a key repeated many times", func() {
 		Expect(numbers(env.Rows(info))).To(Equal([]string{"500"}))
 	})
 })
+
+var _ = Describe("Runtime stopping a capture with a large final drain", func() {
+	It("commits what one drain can, reports the rest dropped, and seals the stream", func() {
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{
+			"ticks": traces.NewHandler[tickParams, tick](scripted{handle: func(ctx dbcontext.Context, _ tickParams, records traces.Emitter[tick], _ traces.Records[tick]) error {
+				<-ctx.Done()
+				return emitTicks(context.Background(), records, 70_000)
+			}}, traces.Capabilities{Live: true}),
+		})
+		session := env.Start("ticks", "")
+		tracestest.Running(session)
+		session.Stop("spec")
+		// Tens of thousands of rows: far slower under the race detector.
+		Eventually(session.Done()).WithTimeout(2 * time.Minute).Should(BeClosed())
+		info := session.Snapshot()
+		Expect(info.Error).To(BeEmpty())
+		Expect(info.State).To(Equal(query.SessionStopped))
+		Expect(info.EventCount).To(Equal(int64(64_000)))
+		Expect(info.Warning).To(ContainSubstring("dropped 6000"))
+		Expect(env.Sealed(info)).To(BeTrue())
+	})
+})
