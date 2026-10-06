@@ -19,7 +19,7 @@ type keyedRecord struct {
 }
 
 func newKeyedEmitter(capacity int) (*emitter[keyedRecord], *source) {
-	src := newSource("spec", capacity, "")
+	src := newSource("spec", capacity, "", false)
 	return &emitter[keyedRecord]{
 		source: src, process: pipeline(nil),
 		dedup: newDeduplicator(time.Hour, func(r keyedRecord) string { return r.Key }),
