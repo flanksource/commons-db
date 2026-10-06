@@ -20,20 +20,27 @@ func newDeduplicator[R any](window time.Duration, key func(R) string) *deduplica
 	return &deduplicator[R]{window: window, key: key, now: time.Now, seen: map[string]time.Time{}}
 }
 
-// admit reports whether record is the first of its key within the window. A
-// dropped record does not extend its key's window.
-func (d *deduplicator[R]) admit(record R) bool {
+// reserve claims record's key for the window, reporting false when the key
+// was already claimed within it: by a record that was accepted, or by one
+// still being accepted. A claim for a record that is then not accepted is
+// given back with forget. A dropped record does not extend its key's window.
+func (d *deduplicator[R]) reserve(record R) (string, bool) {
 	key := d.key(record)
 	now := d.now()
 	if last, ok := d.seen[key]; ok && now.Sub(last) < d.window {
-		return false
+		return key, false
 	}
 	d.seen[key] = now
 	d.inserts++
 	if d.inserts%sweepEvery == 0 {
 		d.sweep()
 	}
-	return true
+	return key, true
+}
+
+// forget gives back the claim on key of a record that was not accepted.
+func (d *deduplicator[R]) forget(key string) {
+	delete(d.seen, key)
 }
 
 // sweep forgets the keys whose window has passed.

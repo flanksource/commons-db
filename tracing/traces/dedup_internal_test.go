@@ -10,6 +10,11 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+func admitted(dedup *deduplicator[string], record string) bool {
+	_, ok := dedup.reserve(record)
+	return ok
+}
+
 var _ = Describe("deduplicator", func() {
 	var now time.Time
 	var dedup *deduplicator[string]
@@ -21,25 +26,25 @@ var _ = Describe("deduplicator", func() {
 	})
 
 	It("drops a key seen within the window and admits it once the window has passed", func() {
-		Expect(dedup.admit("a")).To(BeTrue())
-		Expect(dedup.admit("b")).To(BeTrue())
+		Expect(admitted(dedup, "a")).To(BeTrue())
+		Expect(admitted(dedup, "b")).To(BeTrue())
 		now = now.Add(59 * time.Minute)
-		Expect(dedup.admit("a")).To(BeFalse())
+		Expect(admitted(dedup, "a")).To(BeFalse())
 		now = now.Add(2 * time.Minute)
-		Expect(dedup.admit("a")).To(BeTrue())
+		Expect(admitted(dedup, "a")).To(BeTrue())
 	})
 
 	It("measures the window from the admitted record, not from a dropped one", func() {
-		Expect(dedup.admit("a")).To(BeTrue())
+		Expect(admitted(dedup, "a")).To(BeTrue())
 		now = now.Add(50 * time.Minute)
-		Expect(dedup.admit("a")).To(BeFalse())
+		Expect(admitted(dedup, "a")).To(BeFalse())
 		now = now.Add(11 * time.Minute)
-		Expect(dedup.admit("a")).To(BeTrue())
+		Expect(admitted(dedup, "a")).To(BeTrue())
 	})
 
 	It("forgets keys whose window has passed as it sweeps", func() {
 		for _, key := range []string{"a", "b", "c"} {
-			Expect(dedup.admit(key)).To(BeTrue())
+			Expect(admitted(dedup, key)).To(BeTrue())
 		}
 		now = now.Add(2 * time.Hour)
 		dedup.sweep()
