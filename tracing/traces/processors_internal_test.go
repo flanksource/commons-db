@@ -45,22 +45,40 @@ var _ = Describe("Row processors", func() {
 		})
 	})
 
-	Describe("parseEmbeddedJSON", func() {
-		It("decodes strings holding a JSON object or array, keeping numbers exact", func() {
-			out := parseEmbeddedJSON(recordstore.Row{
+	Describe("parseJSONAt", func() {
+		It("decodes the named strings holding a JSON object or array, keeping numbers exact", func() {
+			out := parseJSONAt([]string{"object", "array", "invalid", "plain", "scalar", "nested.body", "absent.text"})(recordstore.Row{
 				"object":  `{"a": 12345678901234567890}`,
 				"array":   ` [1, "two"] `,
 				"invalid": `{"a":`,
 				"plain":   "not json",
 				"scalar":  "42",
-				"nested":  map[string]any{"body": `{"ok": true}`},
+				"nested":  map[string]any{"body": `{"ok": true}`, "other": `{"ok": true}`},
+				"unnamed": `{"ok": true}`,
 			})
 			Expect(out["object"]).To(Equal(map[string]any{"a": json.Number("12345678901234567890")}))
 			Expect(out["array"]).To(Equal([]any{json.Number("1"), "two"}))
 			Expect(out["invalid"]).To(Equal(`{"a":`))
 			Expect(out["plain"]).To(Equal("not json"))
 			Expect(out["scalar"]).To(Equal("42"))
-			Expect(out["nested"]).To(Equal(map[string]any{"body": map[string]any{"ok": true}}))
+			Expect(out["nested"]).To(Equal(map[string]any{"body": map[string]any{"ok": true}, "other": `{"ok": true}`}))
+			Expect(out["unnamed"]).To(Equal(`{"ok": true}`))
+			Expect(out).ToNot(HaveKey("absent"))
+		})
+	})
+
+	Describe("jsonAsText", func() {
+		It("encodes the structure at the named paths back into text, leaving text as it was", func() {
+			row := recordstore.Row{
+				"object": map[string]any{"b": json.Number("2"), "a": "x"},
+				"plain":  "not json",
+				"nested": map[string]any{"body": []any{json.Number("1")}, "other": map[string]any{"k": "v"}},
+			}
+			jsonAsText(row, []string{"object", "plain", "nested.body", "absent.text"})
+			Expect(row["object"]).To(Equal(`{"a":"x","b":2}`))
+			Expect(row["plain"]).To(Equal("not json"))
+			Expect(row["nested"]).To(Equal(map[string]any{"body": `[1]`, "other": map[string]any{"k": "v"}}))
+			Expect(row).ToNot(HaveKey("absent"))
 		})
 	})
 
@@ -102,7 +120,7 @@ var _ = Describe("Row processors", func() {
 	})
 
 	It("processes in order: truncate, then parse JSON, then mask", func() {
-		process := pipeline([]rowProcessor{truncateStrings(64, nil), parseEmbeddedJSON, maskSecrets(nil)})
+		process := pipeline([]rowProcessor{truncateStrings(64, nil), parseJSONAt([]string{"body", "large"}), maskSecrets(nil)})
 		out := process(recordstore.Row{
 			"body":  `{"password": "hunter2", "user": "bob"}`,
 			"large": `{"password": "` + strings.Repeat("p", 100) + `"}`,

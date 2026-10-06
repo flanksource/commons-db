@@ -9,7 +9,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/flanksource/clicky/rpc"
@@ -111,6 +113,7 @@ type Handler[P, R any] struct {
 	dedup      *dedupOption[P, R]
 	truncateAt int
 	parseJSON  bool
+	jsonPaths  []string
 	mask       bool
 	keep       []string
 }
@@ -146,10 +149,13 @@ func (h *Handler[P, R]) WithTruncation(maxBytes int) *Handler[P, R] {
 	return h
 }
 
-// WithJSONProcessor parses every string in a record that holds a JSON object or
-// array, so its fields are stored, masked and read as structure.
-func (h *Handler[P, R]) WithJSONProcessor() *Handler[P, R] {
-	h.parseJSON = true
+// WithJSONProcessor parses the text fields at paths, dotted JSON names such
+// as "response.content.text", when they hold a JSON object or array, so their
+// fields are stored, masked and filtered as structure. Records read back
+// through Records hold that JSON as text again. Each path must name a string
+// field of R.
+func (h *Handler[P, R]) WithJSONProcessor(paths ...string) *Handler[P, R] {
+	h.parseJSON, h.jsonPaths = true, paths
 	return h
 }
 
@@ -170,7 +176,7 @@ func (h *Handler[P, R]) processors(schema recordstore.KindSchema) []rowProcessor
 		processors = append(processors, truncateStrings(h.truncateAt, fixed))
 	}
 	if h.parseJSON {
-		processors = append(processors, parseEmbeddedJSON)
+		processors = append(processors, parseJSONAt(h.jsonPaths))
 	}
 	if h.mask {
 		processors = append(processors, maskSecrets(h.keep))
@@ -205,7 +211,71 @@ func (h *Handler[P, R]) Schema(kind string) (recordstore.KindSchema, error) {
 	if h.truncateAt > 0 && !slices.ContainsFunc(schema.Columns, func(column query.ColumnDef) bool { return column.Name == TruncatedColumn }) {
 		return schema, fmt.Errorf("records of kind %q are truncated, so they must embed traces.Truncation", kind)
 	}
+	if h.parseJSON {
+		if len(h.jsonPaths) == 0 {
+			return schema, fmt.Errorf("kind %q parses JSON but WithJSONProcessor names no fields to parse", kind)
+		}
+		for _, path := range h.jsonPaths {
+			if !textFieldAt(reflect.TypeFor[R](), path) {
+				return schema, fmt.Errorf("records of kind %q have no text field at %q for WithJSONProcessor to parse", kind, path)
+			}
+		}
+	}
 	return schema, nil
+}
+
+// textFieldAt reports whether path, dotted JSON names, leads through the
+// structs of t to a string field.
+func textFieldAt(t reflect.Type, path string) bool {
+	for _, name := range strings.Split(path, ".") {
+		t = indirect(t)
+		if t.Kind() != reflect.Struct {
+			return false
+		}
+		field, ok := jsonField(t, name)
+		if !ok {
+			return false
+		}
+		t = field.Type
+	}
+	return indirect(t).Kind() == reflect.String
+}
+
+// jsonField is the field of struct t that encoding/json names name, looking
+// into embedded structs as encoding/json does.
+func jsonField(t reflect.Type, name string) (reflect.StructField, bool) {
+	for index := range t.NumField() {
+		field := t.Field(index)
+		tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if tag == "-" {
+			continue
+		}
+		if field.Anonymous && tag == "" {
+			if embedded := indirect(field.Type); embedded.Kind() == reflect.Struct {
+				if found, ok := jsonField(embedded, name); ok {
+					return found, true
+				}
+			}
+			continue
+		}
+		if !field.IsExported() {
+			continue
+		}
+		if tag == "" {
+			tag = field.Name
+		}
+		if tag == name {
+			return field, true
+		}
+	}
+	return reflect.StructField{}, false
+}
+
+func indirect(t reflect.Type) reflect.Type {
+	for t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	return t
 }
 
 func (h *Handler[P, R]) ValidateParams(params json.RawMessage) error {
@@ -247,7 +317,7 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 			release = prepareRelease
 		}
 	}
-	records := storedRecords[R]{store: options.store, stream: options.stream}
+	records := storedRecords[R]{store: options.store, stream: options.stream, jsonPaths: h.jsonPaths}
 	src.prepare(captureCtx, func(capture dbcontext.Context) error {
 		return h.handler.Handle(capture, params, emitter, records)
 	}, release)

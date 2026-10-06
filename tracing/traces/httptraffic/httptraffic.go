@@ -141,7 +141,8 @@ func (traffic) Handle(ctx dbcontext.Context, _ Params, _ traces.Emitter[Exchange
 }
 
 // Kind is the http trace kind: exchanges masked, capped at 1MiB a value, their
-// JSON bodies stored as structure, and deduplicated within the params' window.
+// request and response bodies stored as structure when they hold JSON, and
+// deduplicated within the params' window.
 func Kind() *traces.Handler[Params, Exchange] {
 	return traces.NewHandler[Params, Exchange](traffic{}, traces.Capabilities{Live: true}).
 		WithDeduplication(Key, func(p Params) time.Duration {
@@ -150,5 +151,5 @@ func Kind() *traces.Handler[Params, Exchange] {
 		}).
 		WithSecretMasking().
 		WithTruncation(maxValueBytes).
-		WithJSONProcessor()
+		WithJSONProcessor("request.postData.text", "response.content.text")
 }

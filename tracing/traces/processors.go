@@ -1,5 +1,5 @@
 // Row processing a trace kind opts into before its records are stored: cutting
-// long strings, parsing JSON embedded in strings, and masking secrets.
+// long strings, parsing JSON held in named text fields, and masking secrets.
 
 package traces
 
@@ -89,42 +89,70 @@ func truncateValue(value any, maxBytes int, path string, cut *[]any) any {
 	return value
 }
 
-// parseEmbeddedJSON replaces every string, at any depth, that holds a JSON
-// object or array with its decoded value, keeping numbers as json.Number as
-// recordstore.EncodeRow does.
-func parseEmbeddedJSON(row recordstore.Row) recordstore.Row {
-	for key, value := range row {
-		row[key] = parseValue(value)
+// parseJSONAt replaces the string at each dotted path that holds a JSON object
+// or array with its decoded value, keeping numbers as json.Number as
+// recordstore.EncodeRow does. No other string is parsed, and a path the row
+// does not reach is skipped.
+func parseJSONAt(paths []string) rowProcessor {
+	return func(row recordstore.Row) recordstore.Row {
+		for _, path := range paths {
+			updateAt(row, path, parseJSONText)
+		}
+		return row
 	}
-	return row
 }
 
-func parseValue(value any) any {
-	switch v := value.(type) {
-	case string:
-		trimmed := strings.TrimSpace(v)
-		if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') || !json.Valid([]byte(trimmed)) {
-			return v
-		}
-		decoder := json.NewDecoder(bytes.NewReader([]byte(trimmed)))
-		decoder.UseNumber()
-		var decoded any
-		if err := decoder.Decode(&decoded); err != nil {
-			return v
-		}
-		return decoded
-	case map[string]any:
-		for key, nested := range v {
-			v[key] = parseValue(nested)
-		}
-		return v
-	case []any:
-		for index, nested := range v {
-			v[index] = parseValue(nested)
-		}
-		return v
+func parseJSONText(value any) any {
+	text, ok := value.(string)
+	if !ok {
+		return value
 	}
-	return value
+	trimmed := strings.TrimSpace(text)
+	if trimmed == "" || (trimmed[0] != '{' && trimmed[0] != '[') || !json.Valid([]byte(trimmed)) {
+		return text
+	}
+	decoder := json.NewDecoder(bytes.NewReader([]byte(trimmed)))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return text
+	}
+	return decoded
+}
+
+// jsonAsText encodes the structure at each dotted path back into JSON text,
+// so a record whose text parseJSONAt parsed decodes into its own type again.
+func jsonAsText(row recordstore.Row, paths []string) {
+	for _, path := range paths {
+		updateAt(row, path, func(value any) any {
+			if _, ok := value.(string); ok || value == nil {
+				return value
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				return value
+			}
+			return string(encoded)
+		})
+	}
+}
+
+// updateAt replaces the value at the dotted path through row's objects with
+// update's, if the row has one there.
+func updateAt(row recordstore.Row, path string, update func(any) any) {
+	keys := strings.Split(path, ".")
+	parent := map[string]any(row)
+	for _, key := range keys[:len(keys)-1] {
+		child, ok := parent[key].(map[string]any)
+		if !ok {
+			return
+		}
+		parent = child
+	}
+	last := keys[len(keys)-1]
+	if value, ok := parent[last]; ok {
+		parent[last] = update(value)
+	}
 }
 
 // maskSecrets replaces the value of every sensitive key (logger.IsSensitiveLogKey)

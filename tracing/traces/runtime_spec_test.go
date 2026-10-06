@@ -187,17 +187,41 @@ var _ = Describe("Runtime", func() {
 	It("truncates, parses embedded JSON and masks secrets before a record is stored", func() {
 		env := tracestest.NewEnv(map[string]traces.TracePlugin{
 			"exchanges": traces.NewHandler[tickParams, exchange](exchanges{}, traces.Capabilities{Historical: true}).
-				WithTruncation(64).WithJSONProcessor().WithSecretMasking(),
+				WithTruncation(64).WithJSONProcessor("body.text").WithSecretMasking(),
 		})
 		info := tracestest.Ended(env.Start("exchanges", ""))
 		Expect(info.Error).To(BeEmpty())
 		rows := env.Rows(info)
 		Expect(rows).To(HaveLen(1))
-		Expect(rows[0]["body"]).To(Equal(map[string]any{"password": "****", "n": json.Number("1")}))
+		Expect(rows[0]["body"]).To(Equal(map[string]any{"text": map[string]any{"password": "****", "n": json.Number("1")}}))
+		Expect(rows[0]["raw"]).To(Equal(`{"a": 1}`))
 		Expect(rows[0]["note"]).To(Equal(strings.Repeat("n", 64) + "…[truncated]"))
 		Expect(rows[0]["truncated"]).To(Equal([]any{"note"}))
 		Expect(rows[0]["url"]).ToNot(ContainSubstring("hunter2"))
 	})
+
+	It("reads a record back with the JSON it parsed as text again", func() {
+		read := make(chan exchange, 1)
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{
+			"exchanges": traces.NewHandler[tickParams, exchange](readback{read: read}, traces.Capabilities{Historical: true}).
+				WithJSONProcessor("body.text").WithSecretMasking(),
+		})
+		info := tracestest.Ended(env.Start("exchanges", ""))
+		Expect(info.Error).To(BeEmpty())
+		Expect(read).To(Receive(HaveField("Body.Text", `{"n":1,"password":"****"}`)))
+	})
+
+	DescribeTable("refuses JSON parsing of anything but text its records declare",
+		func(paths []string, message string) {
+			Expect(traces.NewKinds().RegisterKind("exchanges", traces.NewHandler[tickParams, exchange](exchanges{}, traces.Capabilities{Historical: true}).
+				WithJSONProcessor(paths...))).To(MatchError(ContainSubstring(message)))
+		},
+		Entry("no paths", []string{}, "names no fields"),
+		Entry("a field the record lacks", []string{"body.html"}, `"body.html"`),
+		Entry("a path through text", []string{"note.text"}, `"note.text"`),
+		Entry("a field that is not text", []string{"body"}, `"body"`),
+		Entry("a time", []string{"at"}, `"at"`),
+	)
 
 	It("refuses truncation for a kind whose records cannot list what was cut", func() {
 		Expect(traces.NewKinds().RegisterKind("ticks", traces.NewHandler[tickParams, tick](ticker{}, traces.Capabilities{Live: true}).WithTruncation(16))).
@@ -349,7 +373,14 @@ type exchange struct {
 	At   time.Time `json:"at"`
 	URL  string    `json:"url"`
 	Note string    `json:"note"`
-	Body any       `json:"body"`
+	// Body is text a kind names for JSON parsing; Raw holds JSON it does not.
+	Body content `json:"body"`
+	Raw  string  `json:"raw,omitempty"`
+}
+
+// content nests its text in a json column, as a HAR body is.
+type content struct {
+	Text string `json:"text"`
 }
 
 type exchanges struct{}
@@ -363,8 +394,42 @@ func (exchanges) Schema() recordresults.ResultType[exchange] {
 func (exchanges) Handle(ctx dbcontext.Context, _ tickParams, records traces.Emitter[exchange], _ traces.Records[exchange]) error {
 	return records.Emit(ctx, exchange{
 		At: time.Now().UTC(), URL: "https://example.com/?password=hunter2",
-		Note: strings.Repeat("n", 80), Body: `{"password": "x", "n": 1}`,
+		Note: strings.Repeat("n", 80), Body: content{Text: `{"password": "x", "n": 1}`}, Raw: `{"a": 1}`,
 	})
+}
+
+// readback emits one exchange with a JSON body, then reads it back through
+// its own records and hands what it read to read.
+type readback struct{ read chan exchange }
+
+func (readback) Params() tickParams { return tickParams{} }
+
+func (readback) Schema() recordresults.ResultType[exchange] {
+	return recordresults.ResultType[exchange]{Title: "Exchanges", TimeColumn: "at"}
+}
+
+func (r readback) Handle(ctx dbcontext.Context, _ tickParams, records traces.Emitter[exchange], store traces.Records[exchange]) error {
+	if err := records.Emit(ctx, exchange{At: time.Now().UTC(), Body: content{Text: `{"password": "x", "n": 1}`}}); err != nil {
+		return err
+	}
+	for {
+		var found []exchange
+		if err := store.Scan(ctx, 0, func(_ int64, record exchange) error {
+			found = append(found, record)
+			return nil
+		}); err != nil {
+			return err
+		}
+		if len(found) > 0 {
+			r.read <- found[0]
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 type preparedLabel struct{}

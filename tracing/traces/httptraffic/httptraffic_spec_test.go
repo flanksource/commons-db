@@ -85,6 +85,14 @@ var _ = Describe("http trace kind", func() {
 		Expect(response["content"].(map[string]any)["text"]).To(Equal(map[string]any{"ok": true, "items": []any{json.Number("1"), json.Number("2")}}))
 	})
 
+	It("parses only its bodies as JSON, leaving a header that holds JSON as text", func() {
+		_, rows := capture(`{"features": ["http"]}`, func() { send("http", "POST", "/api", `{"q": 1}`, "X-Filter", `{"a": 1}`) })
+		Expect(rows).To(HaveLen(1))
+		request := rows[0]["request"].(map[string]any)
+		Expect(request["postData"].(map[string]any)["text"]).To(Equal(map[string]any{"q": json.Number("1")}))
+		Expect(request["headers"]).To(ContainElement(map[string]any{"name": "X-Filter", "value": `{"a": 1}`}))
+	})
+
 	It("never stores a secret: not in headers, the URL or a body, and not in the store's files", func() {
 		_, rows := capture(`{"features": ["http"]}`, func() {
 			send("http", "POST", "/login?token="+secret, `{"user": "bob", "password": "`+secret+`"}`,
