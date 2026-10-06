@@ -57,6 +57,38 @@ func TestProfileStoreRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFileStoreCreatesItsDirOnlyToSave(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "profiles")
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("NewFileStore created %s (stat: %v)", dir, err)
+	}
+	list, err := store.List(context.Background())
+	if err != nil || len(list) != 0 {
+		t.Fatalf("List of a missing dir: %v, %v", names(list), err)
+	}
+	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+		t.Fatalf("List created %s (stat: %v)", dir, err)
+	}
+
+	if err := store.Save(context.Background(), sampleProfile("Sales Report")); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("Save did not create %s: %v", dir, err)
+	}
+	if gotMode := info.Mode().Perm(); gotMode != 0o700 {
+		t.Fatalf("profiles dir mode = %o, want 700", gotMode)
+	}
+	if _, err := store.Get(context.Background(), "Sales Report"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+}
+
 func TestProfileStoreListAndDelete(t *testing.T) {
 	store, err := NewFileStore(t.TempDir())
 	if err != nil {

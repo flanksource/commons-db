@@ -43,9 +43,8 @@ func NewFileStore(dir string) (*FileStore, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve profiles dir %q: %w", dir, err)
 	}
-	if err := ensurePrivateDir(abs); err != nil {
-		return nil, fmt.Errorf("create profiles dir %q: %w", abs, err)
-	}
+	// The dir is created by the first Save, so a store that is only read, as
+	// to print help, writes nothing.
 	store := &FileStore{Dir: abs}
 	if err := store.migrateLegacyTraceProfiles(); err != nil {
 		return nil, err
@@ -98,7 +97,7 @@ func Import(ctx context.Context, source profilestore.Store, target *DBStore) err
 
 func (s *FileStore) List(context.Context) ([]query.Profile, error) {
 	entries, err := os.ReadDir(s.Dir)
-	if err != nil {
+	if err != nil && !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read profiles dir %q: %w", s.Dir, err)
 	}
 	profiles := make([]query.Profile, 0, len(entries))
@@ -132,6 +131,9 @@ func (s *FileStore) Save(_ context.Context, profile query.Profile) error {
 	data, err := yaml.Marshal(profile)
 	if err != nil {
 		return fmt.Errorf("marshal profile %q: %w", name, err)
+	}
+	if err := ensurePrivateDir(s.Dir); err != nil {
+		return fmt.Errorf("create profiles dir %q: %w", s.Dir, err)
 	}
 	path := filepath.Join(s.Dir, slug+".yaml")
 	if err := os.WriteFile(path, data, 0o600); err != nil {

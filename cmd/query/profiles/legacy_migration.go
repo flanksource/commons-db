@@ -97,6 +97,9 @@ type profileMigration struct {
 
 func (s *FileStore) migrateLegacyTraceProfiles() error {
 	entries, err := os.ReadDir(s.Dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("read profiles dir %q for migration: %w", s.Dir, err)
 	}
