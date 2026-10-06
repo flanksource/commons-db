@@ -148,6 +148,6 @@ Its routes:
 
 The `http` and `sql` kinds observe commons-db through taps in the `connection` package:
 - `ObserveHTTP` hands a HAR collector every exchange of a feature, whatever its HAR level.
-- `ObserveSQL` hands an observer every statement published for a connection, for every named connection (`EveryConnection`), or for the server's own database (`""`).
+- `ObserveSQL` hands an observer every statement published for a connection, for every connection (`EveryConnection`), or for the server's own database (`OwnDatabase`).
 
 Both are process-wide: a session sees every caller's traffic for what it observes.

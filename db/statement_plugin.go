@@ -17,8 +17,8 @@ const statementStartKey = "commons-db:statement-start"
 type sqlStatementPlugin struct{}
 
 // NewSQLStatementPlugin returns a gorm plugin that publishes each statement the
-// handle runs (connection.PublishSQL) as the context's own database's, which
-// has no connection name. A handle nobody observes pays one lookup per statement.
+// handle runs (connection.PublishSQL) as the context's own database's
+// (connection.OwnDatabase). A handle nobody observes pays one lookup per statement.
 func NewSQLStatementPlugin() gorm.Plugin { return sqlStatementPlugin{} }
 
 func (sqlStatementPlugin) Name() string { return "commons-db:sql-statements" }
@@ -28,7 +28,7 @@ func (p sqlStatementPlugin) Initialize(db *gorm.DB) error {
 }
 
 func (sqlStatementPlugin) before(tx *gorm.DB) {
-	if tx.Statement == nil || !connection.ObservingSQL("") {
+	if tx.Statement == nil || !connection.ObservingSQL(connection.OwnDatabase) {
 		return
 	}
 	tx.Statement.Settings.Store(statementStartKey, time.Now())
@@ -48,7 +48,7 @@ func (sqlStatementPlugin) after(countsRows bool) func(*gorm.DB) {
 			return
 		}
 		statement := connection.Statement{
-			Driver: tx.Dialector.Name(), SQL: tx.Statement.SQL.String(), Args: tx.Statement.Vars,
+			Connection: connection.OwnDatabase, Driver: tx.Dialector.Name(), SQL: tx.Statement.SQL.String(), Args: tx.Statement.Vars,
 			StartedAt: started, Duration: time.Since(started), Rows: -1,
 		}
 		if countsRows {

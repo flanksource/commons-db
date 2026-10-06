@@ -1,5 +1,5 @@
-// The SQL statement tap: observers of a connection, of every named connection,
-// or of the context's own database receive each statement commons-db runs there.
+// The SQL statement tap: observers of a connection, of every connection, or of
+// the context's own database receive each statement commons-db runs there.
 
 package connection
 
@@ -9,7 +9,8 @@ import (
 )
 
 // Statement is one SQL statement commons-db ran. Connection names the
-// connection it ran on; it is empty for the context's own database.
+// connection it ran on: OwnDatabase for the context's own database, and empty
+// for a connection given without a name, such as by URL.
 type Statement struct {
 	Connection string
 	Driver     string
@@ -22,9 +23,12 @@ type Statement struct {
 	Error string
 }
 
-// EveryConnection observes the statements of every named connection; the
-// context's own database, which has no name, is observed separately as "".
-const EveryConnection = "*"
+// EveryConnection observes the statements of every connection but the
+// context's own database, which is observed separately as OwnDatabase.
+const (
+	EveryConnection = "*"
+	OwnDatabase     = "self"
+)
 
 type sqlObservers struct {
 	mu        sync.RWMutex
@@ -35,8 +39,8 @@ type sqlObservers struct {
 var sqlStatements = &sqlObservers{observers: map[string]map[uint64]func(Statement){}}
 
 // ObserveSQL hands deliver every statement published for connection until
-// release is called: EveryConnection for any named connection, and "" for the
-// context's own database. deliver
+// release is called: EveryConnection for any connection but the context's own
+// database, and OwnDatabase for that. deliver
 // runs on the goroutine that ran the statement, so it must not block.
 func ObserveSQL(connection string, deliver func(Statement)) (release func()) {
 	sqlStatements.mu.Lock()
@@ -67,18 +71,18 @@ func ObservingSQL(connection string) bool {
 	sqlStatements.mu.RLock()
 	defer sqlStatements.mu.RUnlock()
 	return len(sqlStatements.observers[connection]) > 0 ||
-		(connection != "" && len(sqlStatements.observers[EveryConnection]) > 0)
+		(connection != OwnDatabase && len(sqlStatements.observers[EveryConnection]) > 0)
 }
 
-// PublishSQL hands statement to the observers of its connection and, when it
-// ran on a named connection, to those of every named connection.
+// PublishSQL hands statement to the observers of its connection and, unless it
+// ran on the context's own database, to those of every connection.
 func PublishSQL(statement Statement) {
 	sqlStatements.mu.RLock()
 	var delivers []func(Statement)
 	for _, deliver := range sqlStatements.observers[statement.Connection] {
 		delivers = append(delivers, deliver)
 	}
-	if statement.Connection != "" {
+	if statement.Connection != OwnDatabase {
 		for _, deliver := range sqlStatements.observers[EveryConnection] {
 			delivers = append(delivers, deliver)
 		}

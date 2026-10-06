@@ -18,13 +18,10 @@ import (
 // maxValueBytes caps any one value a statement stores, such as its SQL.
 const maxValueBytes = 64 << 10
 
-// OwnDatabase is how a capture names the server's own database.
-const OwnDatabase = "self"
-
 // Params choose the statements a capture records.
 type Params struct {
 	// Connections name the connections to observe, as profiles reference
-	// them, "*" for every named connection, or "self" for the server's own
+	// them, "*" for every connection, or "self" for the server's own
 	// database, which "*" does not include.
 	Connections []string `json:"connections" clicky:"required,title=Connections"`
 	// MinDuration, a duration such as 100ms, records only statements that ran
@@ -34,7 +31,7 @@ type Params struct {
 
 func (p Params) Validate() error {
 	if len(p.Connections) == 0 {
-		return errors.New(`connections is required: name connections, "*" for every named connection, or "self" for the server's own database`)
+		return errors.New(`connections is required: name connections, "*" for every connection, or "self" for the server's own database`)
 	}
 	for _, name := range p.Connections {
 		if strings.TrimSpace(name) == "" {
@@ -100,10 +97,6 @@ func (statements) Prepare(ctx dbcontext.Context, params Params, records traces.E
 	}
 	var releases []func()
 	for _, name := range params.Connections {
-		if name == OwnDatabase {
-			// The tap publishes the server's own database's statements unnamed.
-			name = ""
-		}
 		releases = append(releases, connection.ObserveSQL(name, deliver))
 	}
 	return ctx, func() error {
