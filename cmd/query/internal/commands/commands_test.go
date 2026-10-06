@@ -52,10 +52,11 @@ var _ = Describe("New", Ordered, func() {
 	DescribeTable("builds the command tree without starting postgres",
 		func(args []string) {
 			configDir := filepath.Join(GinkgoT().TempDir(), "config")
+			profilesDir := filepath.Join(GinkgoT().TempDir(), "profiles")
 			root, err := commands.New(commands.Options{
 				Args: append([]string{
 					"--config-dir", configDir,
-					"--profiles-dir", filepath.Join(GinkgoT().TempDir(), "profiles"),
+					"--profiles-dir", profilesDir,
 				}, args...),
 				Stdout: io.Discard, Stderr: io.Discard, BuildInfo: build,
 			})
@@ -65,6 +66,8 @@ var _ = Describe("New", Ordered, func() {
 			// The embedded cluster lives at <config-dir>/postgres. Its absence is
 			// what proves a metadata-only invocation never opened the database.
 			Expect(filepath.Join(configDir, "postgres")).NotTo(BeAnExistingFile())
+			// Nor does it write anything else: the profiles dir waits for a profile.
+			Expect(profilesDir).NotTo(BeAnExistingFile())
 		},
 		Entry("with no command", []string{}),
 		Entry("with --help", []string{"--help"}),
