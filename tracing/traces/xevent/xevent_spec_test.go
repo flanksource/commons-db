@@ -15,6 +15,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/tracing/sqltrace"
 	"github.com/flanksource/commons-db/tracing/xetrace"
 
@@ -31,6 +32,7 @@ type fakeXE struct {
 	released bool
 	served   bool
 	dropped  bool
+	dropErr  error
 }
 
 func (f *fakeXE) Poll(context.Context) (xetrace.TargetSnapshot, error) {
@@ -47,7 +49,7 @@ func (f *fakeXE) Drop(context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.dropped = true
-	return nil
+	return f.dropErr
 }
 
 func (f *fakeXE) release() {
@@ -120,6 +122,23 @@ var _ = Describe("sql_xevent trace kind", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(string(stored)).ToNot(ContainSubstring("hunter2"))
 		Expect(xe.wasDropped()).To(BeTrue())
+		Expect(*leaseReleased).To(BeTrue())
+	})
+
+	It("records on its session that the XE session could not be dropped, so it is not left running unnoticed", func() {
+		xe := &fakeXE{events: []xetrace.Event{statement(51, "SELECT 1", 0)}, dropErr: errors.New("permission denied")}
+		kind, leaseReleased := capture(xe, nil)
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{"sql_xevent": xevent.NewKind(kind)})
+		session := env.Start("sql_xevent", params)
+		tracestest.Running(session)
+		xe.release()
+		session.Stop("spec")
+		info := tracestest.Ended(session)
+		// A stop the user asked for ends stopped; its error is still recorded.
+		Expect(info.State).To(Equal(query.SessionStopped))
+		Expect(info.Error).To(ContainSubstring("permission denied"))
+		Expect(env.Rows(info)).To(HaveLen(1))
+		Expect(env.Sealed(info)).To(BeTrue())
 		Expect(*leaseReleased).To(BeTrue())
 	})
 

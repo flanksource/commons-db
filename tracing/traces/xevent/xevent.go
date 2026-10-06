@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/flanksource/commons/logger"
@@ -62,8 +63,8 @@ func (events) Schema() recordresults.ResultType[sqltrace.EventRow] {
 
 // Prepare creates the XE session before the session runs, so a connection or
 // permission failure refuses the start. The release drops the XE session and
-// gives the connection back.
-func (e events) Prepare(ctx dbcontext.Context, params Params, _ traces.Emitter[sqltrace.EventRow]) (dbcontext.Context, func(), error) {
+// gives the connection back; a drop that fails is the session's error.
+func (e events) Prepare(ctx dbcontext.Context, params Params, _ traces.Emitter[sqltrace.EventRow]) (dbcontext.Context, func() error, error) {
 	create, drain, err := params.CaptureOptions()
 	if err != nil {
 		return ctx, nil, err
@@ -87,11 +88,12 @@ func (e events) Prepare(ctx dbcontext.Context, params Params, _ traces.Emitter[s
 		return ctx, nil, err
 	}
 	drain.Filter, drain.FinalDelay = create.Filter, opened.FinalDelay
-	release := func() {
+	release := func() error {
+		defer releaseDB()
 		if err := session.Drop(context.WithoutCancel(ctx)); err != nil {
-			logger.Warnf("sql_xevent: drop session %q: %v", opened.Name, err)
+			return fmt.Errorf("drop XE session %q, which may still be running on the server: %w", opened.Name, err)
 		}
-		releaseDB()
+		return nil
 	}
 	return ctx.WithValue(runningKey{}, &running{session: session, name: opened.Name, drain: drain}), release, nil
 }

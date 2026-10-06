@@ -302,6 +302,21 @@ var _ = Describe("Runtime", func() {
 		Expect(released).To(BeClosed())
 	})
 
+	It("records on the session that what Prepare set up could not be released, keeping its records", func() {
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{
+			"ticks": traces.NewHandler[tickParams, tick](prepared{released: make(chan struct{}), releaseErr: errors.New("could not drop")}, traces.Capabilities{Live: true}),
+		})
+		session := env.Start("ticks", "")
+		Eventually(func() int64 { return session.Snapshot().EventCount }).WithTimeout(5 * time.Second).Should(Equal(int64(2)))
+		session.Stop("user")
+		info := tracestest.Ended(session)
+		// A stop the user asked for ends stopped; its error is still recorded.
+		Expect(info.State).To(Equal(query.SessionStopped))
+		Expect(info.Error).To(ContainSubstring("could not drop"))
+		Expect(env.Rows(info)).To(HaveLen(2))
+		Expect(env.Sealed(info)).To(BeTrue())
+	})
+
 	It("refuses to start a capture it cannot prepare", func() {
 		env := tracestest.NewEnv(map[string]traces.TracePlugin{
 			"ticks": traces.NewHandler[tickParams, tick](prepared{fail: errors.New("server refused")}, traces.Capabilities{Live: true}),
@@ -357,8 +372,9 @@ type preparedLabel struct{}
 // prepared emits a tick as it prepares, before its session runs, and one more
 // from Handle labelled by what Prepare put on its context.
 type prepared struct {
-	fail     error
-	released chan struct{}
+	fail       error
+	released   chan struct{}
+	releaseErr error
 }
 
 func (prepared) Params() tickParams { return tickParams{} }
@@ -367,12 +383,15 @@ func (prepared) Schema() recordresults.ResultType[tick] {
 	return recordresults.ResultType[tick]{Title: "Ticks", TimeColumn: "at"}
 }
 
-func (p prepared) Prepare(ctx dbcontext.Context, _ tickParams, records traces.Emitter[tick]) (dbcontext.Context, func(), error) {
+func (p prepared) Prepare(ctx dbcontext.Context, _ tickParams, records traces.Emitter[tick]) (dbcontext.Context, func() error, error) {
 	if p.fail != nil {
 		return ctx, nil, p.fail
 	}
 	records.TryEmit(tick{At: time.Now().UTC(), N: 1})
-	return ctx.WithValue(preparedLabel{}, "set up by prepare"), func() { close(p.released) }, nil
+	return ctx.WithValue(preparedLabel{}, "set up by prepare"), func() error {
+		close(p.released)
+		return p.releaseErr
+	}, nil
 }
 
 func (prepared) Handle(ctx dbcontext.Context, _ tickParams, records traces.Emitter[tick], _ traces.Records[tick]) error {

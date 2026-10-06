@@ -74,7 +74,7 @@ func (statements) Schema() recordresults.ResultType[StatementRow] {
 
 // Prepare observes the connections before the session runs, emitting each
 // statement without waiting: it arrives on the goroutine that ran it.
-func (statements) Prepare(ctx dbcontext.Context, params Params, records traces.Emitter[StatementRow]) (dbcontext.Context, func(), error) {
+func (statements) Prepare(ctx dbcontext.Context, params Params, records traces.Emitter[StatementRow]) (dbcontext.Context, func() error, error) {
 	minimum, err := params.minimum()
 	if err != nil {
 		return ctx, nil, err
@@ -92,10 +92,11 @@ func (statements) Prepare(ctx dbcontext.Context, params Params, records traces.E
 	for _, name := range connections {
 		releases = append(releases, connection.ObserveSQL(name, deliver))
 	}
-	return ctx, func() {
+	return ctx, func() error {
 		for _, release := range releases {
 			release()
 		}
+		return nil
 	}, nil
 }
 

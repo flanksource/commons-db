@@ -112,7 +112,7 @@ func (traffic) Schema() recordresults.ResultType[Exchange] {
 // made once it runs is missed. Each exchange is emitted without waiting: it
 // arrives on the goroutine of the request it records, which a full buffer
 // must never stall.
-func (traffic) Prepare(ctx dbcontext.Context, params Params, records traces.Emitter[Exchange]) (dbcontext.Context, func(), error) {
+func (traffic) Prepare(ctx dbcontext.Context, params Params, records traces.Emitter[Exchange]) (dbcontext.Context, func() error, error) {
 	var releases []func()
 	for _, feature := range params.Features {
 		config := ctx.HARConfig(feature)
@@ -125,10 +125,11 @@ func (traffic) Prepare(ctx dbcontext.Context, params Params, records traces.Emit
 		})
 		releases = append(releases, connection.ObserveHTTP(feature, collector))
 	}
-	return ctx, func() {
+	return ctx, func() error {
 		for _, release := range releases {
 			release()
 		}
+		return nil
 	}, nil
 }
 
