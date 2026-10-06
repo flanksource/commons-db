@@ -23,12 +23,14 @@ const pageRows = 1000
 var errCaptureEnded = errors.New("the trace capture has ended")
 
 // Summary counts what a capture's handler emitted: the records buffered for
-// the store, and those it lost before they got there.
+// the store, those it lost before they got there, and the copies of a key one
+// page collapsed, which the store never saw.
 type Summary struct {
 	Emitted      int64 `json:"emitted"`
 	Deduplicated int64 `json:"deduplicated,omitempty"`
 	Dropped      int64 `json:"dropped,omitempty"`
 	Unencodable  int64 `json:"unencodable,omitempty"`
+	Collapsed    int64 `json:"collapsed,omitempty"`
 }
 
 // source buffers the rows of one capture. rows[0] is the row at index base of
@@ -199,13 +201,17 @@ func (s *source) distinct(page []recordstore.Row) []recordstore.Row {
 	return kept
 }
 
-// Commit releases the rows the probe has stored, making room for more.
+// Commit releases the rows the probe has stored, making room for more. The
+// page committed is the one Read handed out from base; the rows it spans but
+// did not carry are the copies it collapsed. They are counted here rather
+// than in Read, which a retry repeats.
 func (s *source) Commit(_ context.Context, batch probe.Batch) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if batch.Next <= s.base {
 		return nil
 	}
+	s.summary.Collapsed += batch.Next - s.base - int64(len(batch.Rows))
 	s.rows = append([]recordstore.Row(nil), s.rows[batch.Next-s.base:]...)
 	s.base = batch.Next
 	s.signalSpaceLocked()

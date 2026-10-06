@@ -461,6 +461,7 @@ var _ = Describe("Runtime with a key repeated many times", func() {
 		info := tracestest.Ended(env.Start("ticks", ""))
 		Expect(info.Error).To(BeEmpty())
 		Expect(numbers(env.Rows(info))).To(Equal([]string{"1"}))
+		Expect(tracestest.Summary(info)).To(Equal(traces.Summary{Emitted: 500, Collapsed: 499}))
 	})
 
 	It("stores the last of a key's copies for a kind that replaces", func() {
@@ -470,6 +471,7 @@ var _ = Describe("Runtime with a key repeated many times", func() {
 		info := tracestest.Ended(env.Start("ticks", ""))
 		Expect(info.Error).To(BeEmpty())
 		Expect(numbers(env.Rows(info))).To(Equal([]string{"500"}))
+		Expect(tracestest.Summary(info)).To(Equal(traces.Summary{Emitted: 500, Collapsed: 499}))
 	})
 })
 
