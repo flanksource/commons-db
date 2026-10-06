@@ -462,6 +462,11 @@ var _ = Describe("Runtime stopping a capture with a large final drain", func() {
 				return emitTicks(context.Background(), records, 70_000)
 			}}, traces.Capabilities{Live: true}),
 		})
+		// Draining tens of thousands of rows outlasts the registry's default
+		// stop timeout under the race detector on a loaded machine.
+		env.Runtime.Sessions = query.NewSessionRegistry(query.RegistryOptions{
+			StopTimeout: func(string) time.Duration { return 2 * time.Minute },
+		})
 		session := env.Start("ticks", "")
 		tracestest.Running(session)
 		session.Stop("spec")
