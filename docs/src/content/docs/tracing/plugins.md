@@ -100,7 +100,7 @@ Options on the `Handler` process each record in this fixed order, after deduplic
 | `WithSecretMasking(keep...)` | Masks sensitive keys and HAR name/value pairs, and strips secrets from every other string. Keys named in `keep` are never masked. |
 
 Two more ways a kind can avoid duplicates:
-- **Key column.** A kind with a `KeyColumn` stores each key once per stream. The store skips a repeated key, and a page never names one key twice.
+- **Key column.** A kind with a `KeyColumn` stores each key once per stream. The store skips a repeated key, and a page never names one key twice: the session summary's `collapsed` counts the copies a page left out.
 - **Retries.** A retried append is idempotent through the probe's cursor, separately from content deduplication.
 
 ## Serving kinds
