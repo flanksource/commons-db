@@ -85,6 +85,7 @@ var _ = Describe("sql trace kind", func() {
 			rows := capture(params, func() {
 				read("events-db", "SELECT id FROM events")
 				read("other-db", "SELECT id FROM events")
+				read("", "SELECT id FROM events")
 				Expect(gormDB.Exec("CREATE TABLE notes (id INTEGER PRIMARY KEY)").Error).To(Succeed())
 			})
 			connections := []any{}
@@ -94,16 +95,16 @@ var _ = Describe("sql trace kind", func() {
 			return connections
 		}
 
-		It("stores every named connection's statements, but not its own database's, for *", func() {
-			Expect(connectionsOf(`{"connections": ["*"]}`)).To(ConsistOf("events-db", "other-db"))
+		It("stores every other connection's statements, named or not, but not its own database's, for *", func() {
+			Expect(connectionsOf(`{"connections": ["*"]}`)).To(ConsistOf("events-db", "other-db", ""))
 		})
 
 		It("stores only its own database's statements for self", func() {
-			Expect(connectionsOf(`{"connections": ["self"]}`)).To(ConsistOf(""))
+			Expect(connectionsOf(`{"connections": ["self"]}`)).To(ConsistOf("self"))
 		})
 
 		It("stores both when it names * and self", func() {
-			Expect(connectionsOf(`{"connections": ["*", "self"]}`)).To(ConsistOf("events-db", "other-db", ""))
+			Expect(connectionsOf(`{"connections": ["*", "self"]}`)).To(ConsistOf("events-db", "other-db", "", "self"))
 		})
 	})
 

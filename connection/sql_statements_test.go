@@ -13,15 +13,16 @@ var _ = Describe("SQL statement tap", func() {
 		var events, every, own, other []string
 		DeferCleanup(ObserveSQL("events-db", func(s Statement) { events = append(events, s.SQL) }))
 		DeferCleanup(ObserveSQL(EveryConnection, func(s Statement) { every = append(every, s.SQL) }))
-		DeferCleanup(ObserveSQL("", func(s Statement) { own = append(own, s.SQL) }))
+		DeferCleanup(ObserveSQL(OwnDatabase, func(s Statement) { own = append(own, s.SQL) }))
 		DeferCleanup(ObserveSQL("other-db", func(s Statement) { other = append(other, s.SQL) }))
 
 		Expect(ObservingSQL("events-db")).To(BeTrue())
 		PublishSQL(Statement{Connection: "events-db", SQL: "SELECT 1"})
-		PublishSQL(Statement{SQL: "SELECT 2"})
+		PublishSQL(Statement{Connection: OwnDatabase, SQL: "SELECT 2"})
+		PublishSQL(Statement{SQL: "SELECT 3"})
 
 		Expect(events).To(Equal([]string{"SELECT 1"}))
-		Expect(every).To(Equal([]string{"SELECT 1"}))
+		Expect(every).To(Equal([]string{"SELECT 1", "SELECT 3"}))
 		Expect(own).To(Equal([]string{"SELECT 2"}))
 		Expect(other).To(BeEmpty())
 	})
@@ -30,7 +31,8 @@ var _ = Describe("SQL statement tap", func() {
 		DeferCleanup(ObserveSQL(EveryConnection, func(Statement) {}))
 
 		Expect(ObservingSQL("events-db")).To(BeTrue())
-		Expect(ObservingSQL("")).To(BeFalse())
+		Expect(ObservingSQL("")).To(BeTrue())
+		Expect(ObservingSQL(OwnDatabase)).To(BeFalse())
 	})
 
 	It("stops once released, and a second release is harmless", func() {
