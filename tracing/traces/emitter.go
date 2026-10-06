@@ -97,12 +97,17 @@ type scanner interface {
 type storedRecords[R any] struct {
 	store  scanner
 	stream string
+	// jsonPaths are the text fields the kind parses as JSON, which Scan
+	// turns back into text before decoding.
+	jsonPaths []string
 }
 
 // Scan decodes every row the session has committed after afterSeq, as it was
-// stored: masked and truncated values come back masked and truncated.
+// stored: masked and truncated values come back masked and truncated, and
+// parsed JSON comes back as its text, re-encoded.
 func (r storedRecords[R]) Scan(ctx context.Context, afterSeq int64, fn func(seq int64, record R) error) error {
 	return r.store.Scan(ctx, r.stream, afterSeq, func(seq int64, row recordstore.Row) error {
+		jsonAsText(row, r.jsonPaths)
 		var record R
 		if err := roundTrip(row, &record); err != nil {
 			return err

@@ -96,7 +96,7 @@ Options on the `Handler` process each record in this fixed order, after deduplic
 | --- | --- |
 | `WithDeduplication(key, window)` | Drops a record whose key the session already emitted within the window its params give. It is off unless configured, and a window of zero keeps everything. |
 | `WithTruncation(maxBytes)` | Cuts every text or JSON string longer than `maxBytes` and lists the cut paths in a `truncated` column. The record must embed `traces.Truncation`. |
-| `WithJSONProcessor()` | Parses strings holding JSON objects or arrays, so they are stored, masked and read as structure. |
+| `WithJSONProcessor(paths...)` | Parses the text fields at `paths` (dotted JSON names such as `response.content.text`) when they hold a JSON object or array, so they are stored, masked and filtered as structure. Each path must name a string field of the record, or the kind is refused. `Records.Scan` hands that JSON back as text, re-encoded, so key order and spacing can differ from what was emitted. |
 | `WithSecretMasking(keep...)` | Masks sensitive keys and HAR name/value pairs, and strips secrets from every other string. Keys named in `keep` are never masked. |
 
 Two more ways a kind can avoid duplicates:
