@@ -96,18 +96,25 @@ func requestsVersion(args []string) bool {
 	return false
 }
 
+// requestsMetadataOnly reports whether args ask for help, the version or
+// completion rather than to run a command. A command's --help can follow it
+// and its sub-commands, so every argument up to "--" is read, not only those
+// before the command.
 func requestsMetadataOnly(args []string) bool {
+	command := ""
 	for index := 0; index < len(args); index++ {
 		switch arg := args[index]; {
+		case arg == "--":
+			index = len(args)
 		case arg == "--version" || arg == "--help" || arg == "-h":
 			return true
 		case flagsWithValues[arg]:
 			index++
 		case strings.HasPrefix(arg, "-"):
-		default:
-			return metadataOnlyCommands[arg]
+		case command == "":
+			command = arg
 		}
 	}
 	// No command is a request for the root help text.
-	return true
+	return command == "" || metadataOnlyCommands[command]
 }
