@@ -44,6 +44,10 @@ func (e *emitter[R]) TryEmit(record R) bool {
 		return false
 	}
 	row, err := e.encode(record)
+	if err != nil {
+		// Nobody receives TryEmit's error, so the log is where it is seen.
+		logger.Warnf("trace capture %s: %v", e.source.generation, err)
+	}
 	if err != nil || !e.source.tryPush(row) {
 		e.forget(key)
 		return false
@@ -80,7 +84,6 @@ func (e *emitter[R]) encode(record R) (recordstore.Row, error) {
 	row, err := recordstore.EncodeRow(record)
 	if err != nil {
 		e.source.count(&e.source.summary.Unencodable)
-		logger.Warnf("trace capture %s: %v", e.source.generation, err)
 		return nil, err
 	}
 	return e.process(row), nil
