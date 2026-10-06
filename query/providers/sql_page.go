@@ -105,18 +105,9 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 	}
 	request.Diagnostics.RecordRequest(statement, args, requestDetails)
 
-	if connection.ObservingSQL(request.Connection) {
-		defer func() {
-			published := connection.Statement{
-				Connection: request.Connection, Driver: string(dialect), SQL: statement, Args: args,
-				StartedAt: started, Duration: time.Since(started), Rows: int64(len(result.Rows)),
-			}
-			if err != nil {
-				published.Error = err.Error()
-			}
-			connection.PublishSQL(published)
-		}()
-	}
+	defer func() {
+		publishSQLStatement(request.Connection, dialect, statement, args, started, len(result.Rows), err)
+	}()
 
 	// A failure is the one moment the statement that ran is worth more than it
 	// costs to carry, so it travels on the error rather than only in a debug
@@ -174,4 +165,20 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		result.Total = &query.Total{Exact: true}
 	}
 	return result, nil
+}
+
+// publishSQLStatement hands a statement that ran on the named connection, with
+// the rows it returned or the error it failed with, to the SQL statement tap.
+func publishSQLStatement(name string, dialect sqlDialect, statement string, args []any, started time.Time, rows int, err error) {
+	if !connection.ObservingSQL(name) {
+		return
+	}
+	published := connection.Statement{
+		Connection: name, Driver: string(dialect), SQL: statement, Args: args,
+		StartedAt: started, Duration: time.Since(started), Rows: int64(rows),
+	}
+	if err != nil {
+		published.Error = err.Error()
+	}
+	connection.PublishSQL(published)
 }
