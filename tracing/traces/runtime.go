@@ -42,6 +42,9 @@ type Runtime struct {
 	// BufferRows caps the records a capture holds before they are committed.
 	// Zero is 10,000; it is never more than one sample of the probe commits.
 	BufferRows int
+	// BufferBytes caps the bytes of records a capture holds before they are
+	// committed, measured by their keys and text. Zero is 64MiB.
+	BufferBytes int
 }
 
 // StartRequest is one capture to start.
@@ -88,7 +91,7 @@ func (r *Runtime) Start(ctx dbcontext.Context, request StartRequest) (*query.Man
 			Backend: r.Results.Backend, Describe: r.describe,
 		}, func(openCtx context.Context) (probe.Source, error) {
 			opened, err := plugin.open(ctx.Wrap(openCtx), openOptions{
-				kind: request.Kind, stream: stream, params: request.Params, store: r.Results.Backend, bufferRows: r.bufferRows(),
+				kind: request.Kind, stream: stream, params: request.Params, store: r.Results.Backend, bufferRows: r.bufferRows(), bufferBytes: r.bufferBytes(),
 			})
 			src = opened
 			return opened, err
@@ -140,6 +143,13 @@ func (r *Runtime) bufferRows() int {
 		return r.BufferRows
 	}
 	return 10_000
+}
+
+func (r *Runtime) bufferBytes() int {
+	if r.BufferBytes > 0 {
+		return r.BufferBytes
+	}
+	return defaultBufferBytes
 }
 
 // captureRun is a probe run that ends with its handler's error too: the probe

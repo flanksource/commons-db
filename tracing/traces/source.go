@@ -19,6 +19,10 @@ import (
 // pageRows caps the rows one Read hands the probe.
 const pageRows = 1000
 
+// defaultBufferBytes is how many bytes of rows a capture holds unless its
+// runtime says otherwise.
+const defaultBufferBytes = 64 << 20
+
 // errCaptureEnded refuses a record emitted after the capture's handler returned.
 var errCaptureEnded = errors.New("the trace capture has ended")
 
@@ -38,6 +42,9 @@ type Summary struct {
 type source struct {
 	generation string
 	capacity   int
+	// maxBytes caps the bytes of the rows held, as rowBytes measures them;
+	// a row larger than it is still taken while nothing else is held.
+	maxBytes int
 	// key is the kind's key column: a page never names one key twice,
 	// which a store refuses in one append. replace says which copy a page
 	// keeps: the last, for a kind whose later rows replace earlier ones,
@@ -51,6 +58,8 @@ type source struct {
 	mu      sync.Mutex
 	space   chan struct{}
 	rows    []recordstore.Row
+	sizes   []int
+	bytes   int
 	base    int64
 	running bool
 	frozen  bool
@@ -64,10 +73,11 @@ type source struct {
 	done    chan struct{}
 }
 
-func newSource(generation string, capacity int, key string, replace bool) *source {
+func newSource(generation string, capacity, maxBytes int, key string, replace bool) *source {
 	drainLimit := probe.DefaultMaxPages * pageRows
 	return &source{
-		generation: generation, capacity: min(capacity, drainLimit), drainLimit: drainLimit, key: key, replace: replace,
+		generation: generation, capacity: min(capacity, drainLimit), maxBytes: maxBytes, drainLimit: drainLimit,
+		key: key, replace: replace,
 		space: make(chan struct{}), running: true, done: make(chan struct{}),
 	}
 }
@@ -109,10 +119,12 @@ func (s *source) end(err error) {
 
 // push buffers row, waiting while the buffer is full. A frozen source does not
 // wait, because nothing commits until its handler has returned: it takes rows
-// until it holds what one final drain can commit, and drops and counts the rest.
+// until it holds what one final drain can commit, or its byte cap, and drops
+// and counts the rest.
 func (s *source) push(ctx context.Context, row recordstore.Row) error {
+	size := rowBytes(row)
 	s.mu.Lock()
-	for s.running && !s.frozen && len(s.rows) >= s.capacity {
+	for s.running && !s.frozen && (len(s.rows) >= s.capacity || s.overBytes(size)) {
 		space := s.space
 		s.mu.Unlock()
 		select {
@@ -126,12 +138,11 @@ func (s *source) push(ctx context.Context, row recordstore.Row) error {
 	if !s.running {
 		return errCaptureEnded
 	}
-	if s.frozen && len(s.rows) >= s.drainLimit {
+	if s.frozen && (len(s.rows) >= s.drainLimit || s.overBytes(size)) {
 		s.summary.Dropped++
 		return nil
 	}
-	s.rows = append(s.rows, row)
-	s.summary.Emitted++
+	s.add(row, size)
 	return nil
 }
 
@@ -143,13 +154,56 @@ func (s *source) tryPush(row recordstore.Row) bool {
 	if s.frozen {
 		limit = s.drainLimit
 	}
-	if !s.running || len(s.rows) >= limit {
+	size := rowBytes(row)
+	if !s.running || len(s.rows) >= limit || s.overBytes(size) {
 		s.summary.Dropped++
 		return false
 	}
-	s.rows = append(s.rows, row)
-	s.summary.Emitted++
+	s.add(row, size)
 	return true
+}
+
+// overBytes reports whether a row of size would take the rows held past the
+// byte cap. A buffer holding nothing takes any row, so one larger than the cap
+// is stored rather than waiting forever.
+func (s *source) overBytes(size int) bool {
+	return len(s.rows) > 0 && s.bytes+size > s.maxBytes
+}
+
+func (s *source) add(row recordstore.Row, size int) {
+	s.rows = append(s.rows, row)
+	s.sizes = append(s.sizes, size)
+	s.bytes += size
+	s.summary.Emitted++
+}
+
+// rowBytes estimates what row holds in memory: the length of its keys and
+// text, and eight bytes for every other value.
+func rowBytes(row recordstore.Row) int {
+	return valueBytes(map[string]any(row))
+}
+
+func valueBytes(value any) int {
+	switch value := value.(type) {
+	case string:
+		return len(value)
+	case []byte:
+		return len(value)
+	case map[string]any:
+		total := 0
+		for key, item := range value {
+			total += len(key) + valueBytes(item)
+		}
+		return total
+	case []any:
+		total := 0
+		for _, item := range value {
+			total += valueBytes(item)
+		}
+		return total
+	default:
+		return 8
+	}
 }
 
 func (s *source) count(field *int64) {
@@ -211,8 +265,13 @@ func (s *source) Commit(_ context.Context, batch probe.Batch) error {
 	if batch.Next <= s.base {
 		return nil
 	}
-	s.summary.Collapsed += batch.Next - s.base - int64(len(batch.Rows))
-	s.rows = append([]recordstore.Row(nil), s.rows[batch.Next-s.base:]...)
+	committed := int(batch.Next - s.base)
+	s.summary.Collapsed += int64(committed - len(batch.Rows))
+	for _, size := range s.sizes[:committed] {
+		s.bytes -= size
+	}
+	s.rows = append([]recordstore.Row(nil), s.rows[committed:]...)
+	s.sizes = append([]int(nil), s.sizes[committed:]...)
 	s.base = batch.Next
 	s.signalSpaceLocked()
 	return nil
