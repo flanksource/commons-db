@@ -1,5 +1,5 @@
 // A gorm plugin that publishes every statement a handle runs to the SQL
-// statement tap while anyone observes every connection's statements.
+// statement tap while anyone observes the context's own database.
 
 package db
 

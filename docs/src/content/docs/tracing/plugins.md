@@ -135,7 +135,7 @@ managed, err := runtime.Start(ctx, traces.StartRequest{Kind: "heartbeat", Params
 | Kind | Records |
 | --- | --- |
 | `http` | Outbound HTTP exchanges of chosen features (`prometheus`, `loki`, `http`, ...), one HAR entry each. |
-| `sql` | SQL statements commons-db runs on chosen connections. With no connections named, it also records the server's own database. |
+| `sql` | SQL statements commons-db runs on the connections it names. `"*"` names every connection and `"self"` the server's own database; `"*"` does not include `"self"`, and naming none is refused. |
 | `sql_xevent` | SQL Server Extended Events, as `sqltrace` event rows. |
 | `opensearch` | Span documents of an opentelemetry connection's index, over a window and optionally followed. |
 
@@ -148,6 +148,6 @@ Its routes:
 
 The `http` and `sql` kinds observe commons-db through taps in the `connection` package:
 - `ObserveHTTP` hands a HAR collector every exchange of a feature, whatever its HAR level.
-- `ObserveSQL` hands an observer every statement published for a connection.
+- `ObserveSQL` hands an observer every statement published for a connection, for every named connection (`EveryConnection`), or for the server's own database (`""`).
 
 Both are process-wide: a session sees every caller's traffic for what it observes.

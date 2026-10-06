@@ -11,6 +11,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"gorm.io/gorm"
 
 	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/models"
@@ -68,30 +69,57 @@ var _ = Describe("sql trace kind", func() {
 		Expect(rows[0]["startedAt"]).ToNot(BeNil())
 	})
 
-	It("stores every connection's statements, and the context database's, when it names none", func() {
-		gormDB, err := db.NewGorm(filepath.Join(GinkgoT().TempDir(), "own.db"), db.DefaultGormConfig())
-		Expect(err).ToNot(HaveOccurred())
-		own, err := gormDB.DB()
-		Expect(err).ToNot(HaveOccurred())
-		DeferCleanup(own.Close)
+	Context("with the server's own database", func() {
+		var gormDB *gorm.DB
 
-		rows := capture(`{}`, func() {
-			read("events-db", "SELECT id FROM events")
-			Expect(gormDB.Exec("CREATE TABLE notes (id INTEGER PRIMARY KEY)").Error).To(Succeed())
+		BeforeEach(func() {
+			var err error
+			gormDB, err = db.NewGorm(filepath.Join(GinkgoT().TempDir(), "own.db"), db.DefaultGormConfig())
+			Expect(err).ToNot(HaveOccurred())
+			own, err := gormDB.DB()
+			Expect(err).ToNot(HaveOccurred())
+			DeferCleanup(own.Close)
 		})
-		connections := []any{}
-		for _, row := range rows {
-			connections = append(connections, row["connection"])
+
+		connectionsOf := func(params string) []any {
+			rows := capture(params, func() {
+				read("events-db", "SELECT id FROM events")
+				read("other-db", "SELECT id FROM events")
+				Expect(gormDB.Exec("CREATE TABLE notes (id INTEGER PRIMARY KEY)").Error).To(Succeed())
+			})
+			connections := []any{}
+			for _, row := range rows {
+				connections = append(connections, row["connection"])
+			}
+			return connections
 		}
-		Expect(connections).To(ConsistOf("events-db", ""))
+
+		It("stores every named connection's statements, but not its own database's, for *", func() {
+			Expect(connectionsOf(`{"connections": ["*"]}`)).To(ConsistOf("events-db", "other-db"))
+		})
+
+		It("stores only its own database's statements for self", func() {
+			Expect(connectionsOf(`{"connections": ["self"]}`)).To(ConsistOf(""))
+		})
+
+		It("stores both when it names * and self", func() {
+			Expect(connectionsOf(`{"connections": ["*", "self"]}`)).To(ConsistOf("events-db", "other-db", ""))
+		})
+	})
+
+	It("refuses a capture that names no connections", func() {
+		for _, params := range []string{`{}`, `{"connections": []}`, `{"connections": [""]}`, `{"connections": ["events-db", " "]}`} {
+			Expect(sqlstatements.Kind().ValidateParams(json.RawMessage(params))).
+				To(MatchError(ContainSubstring("connections")), params)
+		}
 	})
 
 	It("stores only the statements that ran at least as long as its minimum duration", func() {
-		Expect(capture(`{"minDuration": "1h"}`, func() { read("events-db", "SELECT id FROM events") })).To(BeEmpty())
+		Expect(capture(`{"connections": ["events-db"], "minDuration": "1h"}`, func() { read("events-db", "SELECT id FROM events") })).To(BeEmpty())
 	})
 
 	It("masks secrets written into a statement", func() {
-		rows := capture(`{}`, func() { read("events-db", "SELECT id FROM events WHERE message <> 'password=hunter2'") })
+		rows := capture(`{"connections": ["*"]}`, func() { read("events-db", "SELECT id FROM events WHERE message <> 'password=hunter2'") })
 		Expect(rows).To(HaveLen(1))
 		stored, err := json.Marshal(rows[0])
 		Expect(err).ToNot(HaveOccurred())
@@ -99,7 +127,7 @@ var _ = Describe("sql trace kind", func() {
 	})
 
 	It("refuses a minimum duration that is not one", func() {
-		Expect(sqlstatements.Kind().ValidateParams(json.RawMessage(`{"minDuration": "soon"}`))).
+		Expect(sqlstatements.Kind().ValidateParams(json.RawMessage(`{"connections": ["*"], "minDuration": "soon"}`))).
 			To(MatchError(ContainSubstring("minDuration")))
 	})
 })
