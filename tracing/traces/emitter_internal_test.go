@@ -144,3 +144,19 @@ var _ = Describe("source holding rows by size", func() {
 		Expect((&Runtime{BufferBytes: 1024}).bufferBytes()).To(Equal(1024))
 	})
 })
+
+var _ = Describe("source collapsing a repeated key", func() {
+	It("counts only the copies each committed page left out", func() {
+		src := newSource("spec", 10, defaultBufferBytes, "label", false)
+		for range 2 {
+			Expect(src.push(context.Background(), map[string]any{"label": "same"})).To(Succeed())
+			Expect(src.push(context.Background(), map[string]any{"label": "same"})).To(Succeed())
+			batch, err := src.Read(context.Background(), probe.Cursor{Next: src.base})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(batch.Rows).To(HaveLen(1))
+			Expect(src.Commit(context.Background(), batch)).To(Succeed())
+		}
+		// The second page's copy repeats the first's: the store skips it.
+		Expect(src.summary).To(Equal(Summary{Emitted: 4, Collapsed: 2}))
+	})
+})

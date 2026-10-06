@@ -497,7 +497,8 @@ var _ = Describe("Runtime with a keyed kind", func() {
 	})
 })
 
-// repeating emits count ticks all labelled "same", numbered from one.
+// repeating emits count ticks all labelled "same", numbered from one, as it
+// prepares: before the session's first read, so they all fall in one page.
 type repeating struct {
 	count      int
 	onConflict recordstore.OnConflict
@@ -509,12 +510,16 @@ func (r repeating) Schema() recordresults.ResultType[tick] {
 	return recordresults.ResultType[tick]{Title: "Ticks", TimeColumn: "at", KeyColumn: "label", OnConflict: r.onConflict}
 }
 
-func (r repeating) Handle(ctx dbcontext.Context, _ tickParams, records traces.Emitter[tick], _ traces.Records[tick]) error {
+func (r repeating) Prepare(ctx dbcontext.Context, _ tickParams, records traces.Emitter[tick]) (dbcontext.Context, func() error, error) {
 	for n := 1; n <= r.count; n++ {
 		if err := records.Emit(ctx, tick{At: time.Now().UTC(), N: n, Label: "same"}); err != nil {
-			return err
+			return ctx, nil, err
 		}
 	}
+	return ctx, nil, nil
+}
+
+func (repeating) Handle(dbcontext.Context, tickParams, traces.Emitter[tick], traces.Records[tick]) error {
 	return nil
 }
 
