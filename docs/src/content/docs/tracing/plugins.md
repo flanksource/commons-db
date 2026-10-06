@@ -62,7 +62,7 @@ func (heartbeats) Handle(ctx dbcontext.Context, p HeartbeatParams,
 How the handler's params and records behave:
 
 - **Params validation.** Params are decoded over `Params()`'s defaults, and unknown fields are refused. Params that implement `Validate() error` are checked too. All of this happens before any session exists.
-- **`Emit`** waits while the session's buffer is full, so a slow store holds the capture back rather than growing memory.
+- **`Emit`** waits while the session's buffer is full, so a slow store holds the capture back rather than growing memory. The buffer is full at `Runtime.BufferRows` records (10,000) or `Runtime.BufferBytes` of their keys and text (64MiB), whichever comes first; one record larger than that is still taken into an empty buffer.
 - **`TryEmit`** never waits. A record it cannot buffer is dropped, counted in the session summary, and reported as a warning. Use it from a callback that runs on someone else's goroutine, such as a request's.
 - **Handle's return.** Returning nil ends the capture normally. An error fails the session, but the records already emitted are still committed and sealed.
 

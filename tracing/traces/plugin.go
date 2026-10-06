@@ -99,6 +99,7 @@ type openOptions struct {
 	params       json.RawMessage
 	store        scanner
 	bufferRows   int
+	bufferBytes  int
 }
 
 // Handler is a TraceHandler as a TracePlugin, with the processing its records
@@ -228,7 +229,7 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 	if err != nil {
 		return nil, err
 	}
-	src := newSource(options.stream, options.bufferRows, schema.Options.Key, schema.Options.OnConflict == recordstore.OnConflictReplace)
+	src := newSource(options.stream, options.bufferRows, options.bufferBytes, schema.Options.Key, schema.Options.OnConflict == recordstore.OnConflictReplace)
 	emitter := &emitter[R]{source: src, process: pipeline(h.processors(schema))}
 	if h.dedup != nil {
 		if window := h.dedup.window(params); window > 0 {
