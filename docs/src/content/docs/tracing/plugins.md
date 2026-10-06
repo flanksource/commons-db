@@ -71,12 +71,12 @@ How the handler's params and records behave:
 A kind that subscribes to something, or creates a server-side session, implements `Preparer[P, R]`:
 
 ```go
-Prepare(ctx dbcontext.Context, params P, records Emitter[R]) (prepared dbcontext.Context, release func(), err error)
+Prepare(ctx dbcontext.Context, params P, records Emitter[R]) (prepared dbcontext.Context, release func() error, err error)
 ```
 
 - `Prepare` runs synchronously as the session starts, before it reports running. A subscription made there misses nothing, and an error refuses the start.
 - `Handle` then runs under the context `Prepare` returned, which can carry what it set up.
-- `release` runs once `Handle` has returned, or at once if the capture never started.
+- `release` runs once `Handle` has returned, or at once if the capture never started. An error it returns, such as a server-side session that could not be dropped, becomes the session's error; the records are still committed and sealed.
 
 ### Capabilities
 

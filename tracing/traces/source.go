@@ -57,7 +57,7 @@ type source struct {
 
 	ctx     dbcontext.Context
 	capture func(dbcontext.Context) error
-	release func()
+	release func() error
 	cancel  context.CancelFunc
 	done    chan struct{}
 }
@@ -72,7 +72,7 @@ func newSource(generation string, capacity int, key string, replace bool) *sourc
 
 // prepare sets the capture start runs, under a context Freeze cancels, and
 // the release that runs once the capture has ended.
-func (s *source) prepare(ctx dbcontext.Context, capture func(dbcontext.Context) error, release func()) {
+func (s *source) prepare(ctx dbcontext.Context, capture func(dbcontext.Context) error, release func() error) {
 	s.ctx, s.capture, s.release = ctx, capture, release
 }
 
@@ -96,7 +96,7 @@ func (s *source) start() {
 
 func (s *source) end(err error) {
 	if s.release != nil {
-		s.release()
+		err = errors.Join(err, s.release())
 	}
 	s.mu.Lock()
 	s.running, s.err = false, err

@@ -39,9 +39,10 @@ type TraceHandler[P, R any] interface {
 // whose failure should refuse the start. Prepare runs as the session starts,
 // before it reports running; Handle then runs under the context Prepare
 // returns, which can carry what it set up, and release runs once Handle has
-// returned, or at once if the capture never started.
+// returned, or at once if the capture never started. A release that fails
+// is the session's error, its records still committed and sealed.
 type Preparer[P, R any] interface {
-	Prepare(ctx dbcontext.Context, params P, records Emitter[R]) (prepared dbcontext.Context, release func(), err error)
+	Prepare(ctx dbcontext.Context, params P, records Emitter[R]) (prepared dbcontext.Context, release func() error, err error)
 }
 
 // Capabilities say how a kind captures: Live captures what happens while a
@@ -234,7 +235,7 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 			emitter.dedup = newDeduplicator(window, h.dedup.key)
 		}
 	}
-	captureCtx, release := ctx, func() {}
+	captureCtx, release := ctx, func() error { return nil }
 	if preparer, ok := h.handler.(Preparer[P, R]); ok {
 		prepared, prepareRelease, err := preparer.Prepare(ctx, params, emitter)
 		if err != nil {
