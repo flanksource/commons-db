@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -37,18 +38,37 @@ func newConnectionTestDB(connections []models.Connection) *gorm.DB {
 
 // blackholeAddress returns an address that completes a TCP handshake and then
 // never replies, which is how an unreachable-but-listening backend stalls a
-// probe until its timeout.
+// probe until its timeout. The connections it accepts are closed with it, by
+// the spec's cleanup: Ginkgo's DeferCleanup must not be called from the
+// accepting goroutine.
 func blackholeAddress() string {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	Expect(err).NotTo(HaveOccurred())
-	DeferCleanup(func() { _ = listener.Close() })
+	var mu sync.Mutex
+	var accepted []net.Conn
+	closed := false
+	DeferCleanup(func() {
+		_ = listener.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		closed = true
+		for _, conn := range accepted {
+			_ = conn.Close()
+		}
+	})
 	go func() {
 		for {
 			conn, err := listener.Accept()
 			if err != nil {
 				return
 			}
-			DeferCleanup(func() { _ = conn.Close() })
+			mu.Lock()
+			if closed {
+				_ = conn.Close()
+			} else {
+				accepted = append(accepted, conn)
+			}
+			mu.Unlock()
 		}
 	}()
 	return listener.Addr().String()
