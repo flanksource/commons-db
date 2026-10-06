@@ -20,38 +20,70 @@ type emitter[R any] struct {
 	dedup   *deduplicator[R]
 }
 
+// Emit buffers record unless its key's window already admitted it. A record
+// that does not encode, or that is not buffered before ctx ends, gives its
+// key back, so a later copy of it is admitted.
 func (e *emitter[R]) Emit(ctx context.Context, record R) error {
-	row, ok, err := e.prepare(record)
-	if !ok {
-		return err
+	key, admitted := e.reserve(record)
+	if !admitted {
+		return nil
 	}
-	return e.source.push(ctx, row)
+	row, err := e.encode(record)
+	if err == nil {
+		err = e.source.push(ctx, row)
+	}
+	if err != nil {
+		e.forget(key)
+	}
+	return err
 }
 
 func (e *emitter[R]) TryEmit(record R) bool {
-	row, ok, _ := e.prepare(record)
-	return ok && e.source.tryPush(row)
+	key, admitted := e.reserve(record)
+	if !admitted {
+		return false
+	}
+	row, err := e.encode(record)
+	if err != nil || !e.source.tryPush(row) {
+		e.forget(key)
+		return false
+	}
+	return true
 }
 
-// prepare turns record into the row to store, reporting false for a record
-// its key's window already admitted, and for one that does not encode.
-func (e *emitter[R]) prepare(record R) (recordstore.Row, bool, error) {
-	if e.dedup != nil {
-		e.dedupMu.Lock()
-		admitted := e.dedup.admit(record)
-		e.dedupMu.Unlock()
-		if !admitted {
-			e.source.count(&e.source.summary.Deduplicated)
-			return nil, false, nil
-		}
+// reserve claims record's dedup key, counting a record its window already
+// admitted. Every record is admitted when the kind deduplicates nothing.
+func (e *emitter[R]) reserve(record R) (string, bool) {
+	if e.dedup == nil {
+		return "", true
 	}
+	e.dedupMu.Lock()
+	key, admitted := e.dedup.reserve(record)
+	e.dedupMu.Unlock()
+	if !admitted {
+		e.source.count(&e.source.summary.Deduplicated)
+	}
+	return key, admitted
+}
+
+func (e *emitter[R]) forget(key string) {
+	if e.dedup == nil {
+		return
+	}
+	e.dedupMu.Lock()
+	e.dedup.forget(key)
+	e.dedupMu.Unlock()
+}
+
+// encode turns record into the row to store, counting one that does not encode.
+func (e *emitter[R]) encode(record R) (recordstore.Row, error) {
 	row, err := recordstore.EncodeRow(record)
 	if err != nil {
 		e.source.count(&e.source.summary.Unencodable)
 		logger.Warnf("trace capture %s: %v", e.source.generation, err)
-		return nil, false, err
+		return nil, err
 	}
-	return e.process(row), true, nil
+	return e.process(row), nil
 }
 
 // scanner reads a stream's committed rows.
