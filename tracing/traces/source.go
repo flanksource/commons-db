@@ -37,8 +37,11 @@ type source struct {
 	generation string
 	capacity   int
 	// key is the kind's key column: a page never names one key twice,
-	// which a store refuses in one append.
-	key string
+	// which a store refuses in one append. replace says which copy a page
+	// keeps: the last, for a kind whose later rows replace earlier ones,
+	// otherwise the first, as the store would.
+	key     string
+	replace bool
 
 	mu      sync.Mutex
 	space   chan struct{}
@@ -56,9 +59,9 @@ type source struct {
 	done    chan struct{}
 }
 
-func newSource(generation string, capacity int, key string) *source {
+func newSource(generation string, capacity int, key string, replace bool) *source {
 	return &source{
-		generation: generation, capacity: capacity, key: key,
+		generation: generation, capacity: capacity, key: key, replace: replace,
 		space: make(chan struct{}), running: true, done: make(chan struct{}),
 	}
 }
@@ -154,29 +157,33 @@ func (s *source) Read(_ context.Context, cursor probe.Cursor) (probe.Batch, erro
 		return probe.Batch{}, fmt.Errorf("trace capture %s: cursor %d is before the committed %d", s.generation, cursor.Next, s.base)
 	}
 	write := s.base + int64(len(s.rows))
-	next := s.pageEnd(cursor.Next, min(write, cursor.Next+pageRows))
+	next := min(write, cursor.Next+pageRows)
 	return probe.Batch{
 		Generation: s.generation, Next: next, Write: write, More: next < write, Active: s.running,
-		Rows: append([]recordstore.Row(nil), s.rows[cursor.Next-s.base:next-s.base]...), Summary: s.summary,
+		Rows: s.distinct(s.rows[cursor.Next-s.base : next-s.base]), Summary: s.summary,
 	}, nil
 }
 
-// pageEnd is where a page from start ends, at most at end: before the first
-// row whose key an earlier row of the page already names. The repeated row
-// starts the next page, where the store skips the key it then holds.
-func (s *source) pageEnd(start, end int64) int64 {
+// distinct is a copy of page naming each key once, keeping the copy of a
+// repeated key the store would end up holding.
+func (s *source) distinct(page []recordstore.Row) []recordstore.Row {
 	if s.key == "" {
-		return end
+		return append([]recordstore.Row(nil), page...)
 	}
-	seen := map[any]bool{}
-	for index := start; index < end; index++ {
-		key := s.rows[index-s.base][s.key]
-		if seen[key] {
-			return index
+	kept := make([]recordstore.Row, 0, len(page))
+	position := map[any]int{}
+	for _, row := range page {
+		key := row[s.key]
+		if index, seen := position[key]; seen {
+			if s.replace {
+				kept[index] = row
+			}
+			continue
 		}
-		seen[key] = true
+		position[key] = len(kept)
+		kept = append(kept, row)
 	}
-	return end
+	return kept
 }
 
 // Commit releases the rows the probe has stored, making room for more.

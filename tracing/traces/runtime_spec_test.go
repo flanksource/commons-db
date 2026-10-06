@@ -412,3 +412,44 @@ var _ = Describe("Runtime with a keyed kind", func() {
 		Expect(numbers(env.Rows(info))).To(Equal([]string{"1", "2", "4"}))
 	})
 })
+
+// repeating emits count ticks all labelled "same", numbered from one.
+type repeating struct {
+	count      int
+	onConflict recordstore.OnConflict
+}
+
+func (repeating) Params() tickParams { return tickParams{} }
+
+func (r repeating) Schema() recordresults.ResultType[tick] {
+	return recordresults.ResultType[tick]{Title: "Ticks", TimeColumn: "at", KeyColumn: "label", OnConflict: r.onConflict}
+}
+
+func (r repeating) Handle(ctx dbcontext.Context, _ tickParams, records traces.Emitter[tick], _ traces.Records[tick]) error {
+	for n := 1; n <= r.count; n++ {
+		if err := records.Emit(ctx, tick{At: time.Now().UTC(), N: n, Label: "same"}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var _ = Describe("Runtime with a key repeated many times", func() {
+	It("stores a long run of one key once rather than failing its capture", func() {
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{
+			"ticks": traces.NewHandler[tickParams, tick](repeating{count: 500}, traces.Capabilities{Historical: true}),
+		})
+		info := tracestest.Ended(env.Start("ticks", ""))
+		Expect(info.Error).To(BeEmpty())
+		Expect(numbers(env.Rows(info))).To(Equal([]string{"1"}))
+	})
+
+	It("stores the last of a key's copies for a kind that replaces", func() {
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{
+			"ticks": traces.NewHandler[tickParams, tick](repeating{count: 500, onConflict: recordstore.OnConflictReplace}, traces.Capabilities{Historical: true}),
+		})
+		info := tracestest.Ended(env.Start("ticks", ""))
+		Expect(info.Error).To(BeEmpty())
+		Expect(numbers(env.Rows(info))).To(Equal([]string{"500"}))
+	})
+})
