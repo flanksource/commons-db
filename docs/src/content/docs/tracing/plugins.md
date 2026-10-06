@@ -146,6 +146,8 @@ Its routes:
 
 `/api/openapi.json` describes one start operation per kind, whose request body is that kind's params form.
 
+The routes authorize nothing themselves. A host that serves them sets `sessions.Options.Authorize`, which is asked for every start, read and control of a session under its `traces/<kind>` profile; without it, as in `query serve`, anyone who reaches the server can start a capture. A host such as oipa authorizes its users in front of these routes.
+
 The `http` and `sql` kinds observe commons-db through taps in the `connection` package:
 - `ObserveHTTP` hands a HAR collector every exchange of a feature, whatever its HAR level.
 - `ObserveSQL` hands an observer every statement published for a connection, for every connection (`EveryConnection`), or for the server's own database (`OwnDatabase`).
