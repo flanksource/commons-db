@@ -5,6 +5,7 @@ package providers_test
 
 import (
 	gocontext "context"
+	"fmt"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -75,6 +76,30 @@ var _ = Describe("ReadOpenTelemetrySpans", func() {
 		var row query.Row
 		Eventually(received).Should(Receive(&row))
 		Expect(row["source_id"]).To(Equal("d"))
+		cancel()
+		Eventually(done).Should(Receive(BeNil()))
+	})
+
+	It("moves a lagged follow's bound forward with every poll, so later spans become eligible", func() {
+		followCtx, cancel := gocontext.WithCancel(ctx)
+		defer cancel()
+		done := make(chan error, 1)
+		go func() {
+			done <- providers.ReadOpenTelemetrySpans(ctx.Wrap(followCtx), providers.OpenTelemetryRead{
+				Connection: "connection://traces", Options: map[string]any{"index": "logs"},
+				From: "now-1y", Follow: true, Poll: 20 * time.Millisecond, Lag: 30 * time.Second,
+			}, func(query.Row) {})
+		}()
+		lteOf := func() time.Time {
+			lte, err := time.Parse(time.RFC3339Nano, fmt.Sprint(openSearchRangeBounds(stub.lastBody(), "@timestamp")["lte"]))
+			if err != nil {
+				return time.Time{}
+			}
+			return lte
+		}
+		Eventually(lteOf).ShouldNot(BeZero())
+		first := lteOf()
+		Eventually(lteOf, "5s", "20ms").Should(BeTemporally(">", first))
 		cancel()
 		Eventually(done).Should(Receive(BeNil()))
 	})

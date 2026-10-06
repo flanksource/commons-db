@@ -585,6 +585,27 @@ var _ = Describe("opensearch provider streaming", func() {
 		Expect(lte).To(BeTemporally("<", time.Now().UTC().Add(-25*time.Second)))
 	})
 
+	// A bound fixed when the tail opened would stop every document indexed
+	// after it from ever becoming eligible, however long the tail ran.
+	It("moves its tailLag bound forward with every poll", func() {
+		request := osRequest(map[string]any{"tailLag": "30s", "tailPoll": "20ms"})
+		request.Params = map[string]any{"since": "now-1h"}
+		request.ParamRoles = map[string]query.ParamRole{"since": query.ParamRoleTimeFrom}
+
+		ctx, cancel := tailContext(dbcontext.New())
+		DeferCleanup(cancel)
+		rows, _ := tail(ctx, streamer("opensearch"), request)
+		_ = drain(rows, "a1")
+
+		lteOf := func() time.Time {
+			lte, err := time.Parse(time.RFC3339Nano, fmt.Sprint(openSearchRangeBounds(stub.lastBody(), "@timestamp")["lte"]))
+			Expect(err).ToNot(HaveOccurred())
+			return lte
+		}
+		first := lteOf()
+		Eventually(lteOf, "5s", "20ms").Should(BeTemporally(">", first))
+	})
+
 	It("refuses a tailLag it cannot spell without a time field", func() {
 		request := osRequest(map[string]any{"tailLag": "30s"})
 		delete(request.Options, "search")

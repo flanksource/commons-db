@@ -191,8 +191,9 @@ func (p opensearchProvider) Stream(ctx context.Context, req query.ProviderReques
 			return err
 		}
 	}
-	boundField, boundValue, err := openSearchTailBound(runtime.options.Search, settings.lag, timeFieldMapping, time.Now().UTC())
-	if err != nil {
+	// Checked now so a lag that cannot be bounded fails the start; each poll
+	// then bounds again from its own now, so the cursor keeps moving.
+	if _, _, err := openSearchTailBound(runtime.options.Search, settings.lag, timeFieldMapping, time.Now().UTC()); err != nil {
 		return err
 	}
 
@@ -208,6 +209,10 @@ func (p opensearchProvider) Stream(ctx context.Context, req query.ProviderReques
 		diagnostics: req.Diagnostics,
 		build: func(position openSearchPage) (openSearchRequest, error) {
 			built, err := buildOpenSearchRequest(tailReq, runtime.options, position, timeFieldMapping)
+			if err != nil {
+				return openSearchRequest{}, err
+			}
+			boundField, boundValue, err := openSearchTailBound(runtime.options.Search, settings.lag, timeFieldMapping, time.Now().UTC())
 			if err != nil {
 				return openSearchRequest{}, err
 			}

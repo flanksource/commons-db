@@ -61,8 +61,9 @@ func ReadOpenTelemetrySpans(ctx context.Context, read OpenTelemetryRead, emit fu
 	if err != nil {
 		return err
 	}
-	boundField, boundValue, err := openSearchTailBound(&search, read.Lag, mapping, time.Now().UTC())
-	if err != nil {
+	// Checked now so a lag that cannot be bounded fails the start; each poll
+	// then bounds again from its own now, so the cursor keeps moving.
+	if _, _, err := openSearchTailBound(&search, read.Lag, mapping, time.Now().UTC()); err != nil {
 		return err
 	}
 	req.Order = query.Order{{Column: search.TimeField}, {Column: openSearchTiebreaker, Unique: true}}
@@ -72,6 +73,10 @@ func ReadOpenTelemetrySpans(ctx context.Context, read OpenTelemetryRead, emit fu
 		paging:   runtime.paging,
 		build: func(position openSearchPage) (openSearchRequest, error) {
 			built, err := buildOpenTelemetryRequest(req, runtime.options, position, mapping)
+			if err != nil {
+				return openSearchRequest{}, err
+			}
+			boundField, boundValue, err := openSearchTailBound(&search, read.Lag, mapping, time.Now().UTC())
 			if err != nil {
 				return openSearchRequest{}, err
 			}
