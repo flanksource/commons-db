@@ -3,7 +3,7 @@ module github.com/flanksource/commons-db/tracing/traces
 go 1.26.1
 
 require (
-	github.com/flanksource/clicky v1.21.67-0.20260919170348-0696dc4c805f
+	github.com/flanksource/clicky v1.21.70
 	github.com/flanksource/commons v1.59.1
 	github.com/flanksource/commons-db v0.1.45
 	github.com/flanksource/commons-db/recordstore v0.1.45
