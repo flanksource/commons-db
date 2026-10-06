@@ -3,6 +3,7 @@ package providers_test
 import (
 	"fmt"
 
+	"github.com/flanksource/commons-db/connection"
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
@@ -367,6 +368,38 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 				ContainSubstring(`"region" AS value`),
 			))
 			Expect(operations[0].Request.Details).To(HaveKeyWithValue("operation", "filter-values"))
+		})
+
+		It("hands each lookup statement, including one that fails, to the SQL statement tap", func() {
+			var statements []connection.Statement
+			DeferCleanup(connection.ObserveSQL(connection.EveryConnection, func(s connection.Statement) {
+				statements = append(statements, s)
+			}))
+			// Refresh reads past the lookup cache, which an earlier spec may have filled.
+			options, _, err := query.LookupFilterValues(context.New(), query.FilterValueLookupRequest{
+				Profile: profileFor(selectOrders), Key: "filter.region", Search: "us", Limit: 20,
+				Inspection: query.InspectionOptions{Refresh: true},
+			})
+			Expect(err).ToNot(HaveOccurred())
+
+			profile := profileFor("SELECT id, region FROM orders ORDER BY id")
+			profile.Columns = append(profile.Columns, query.ColumnDef{
+				Name: "missing", Filter: &query.ColumnFilterDef{Field: "nosuchcolumn"},
+			})
+			_, _, err = query.LookupFilterValues(context.New(), query.FilterValueLookupRequest{
+				Profile: profile, Key: "filter.missing", Limit: 20,
+			})
+			Expect(err).To(HaveOccurred())
+
+			Expect(statements).To(HaveLen(2))
+			Expect(statements[0].Driver).To(Equal("postgres"))
+			Expect(statements[0].SQL).To(ContainSubstring(`"region" AS value`))
+			Expect(statements[0].Args).ToNot(BeEmpty())
+			Expect(statements[0].Rows).To(Equal(int64(len(options))))
+			Expect(statements[0].Error).To(BeEmpty())
+			Expect(statements[0].StartedAt).ToNot(BeZero())
+			Expect(statements[1].SQL).To(ContainSubstring("nosuchcolumn"))
+			Expect(statements[1].Error).To(ContainSubstring("nosuchcolumn"))
 		})
 
 		It("records a failed lookup in the inspection detail", func() {

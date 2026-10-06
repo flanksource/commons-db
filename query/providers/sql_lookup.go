@@ -1,6 +1,7 @@
 package providers
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -59,9 +60,25 @@ func (p sqlProvider) LookupFilterValues(
 		"dialect": string(dialect), "operation": "filter-values",
 	})
 
+	options, total, err := readFilterValues(ctx, client, statement, args, limit)
+	publishSQLStatement(req.Connection, dialect, statement, args, started, len(options), err)
+	if err != nil {
+		return nil, nil, err
+	}
+	req.Diagnostics.RecordResponse(started, len(options), map[string]any{
+		"distinctValues": total,
+	})
+	// COUNT(*) OVER () over the grouped set is the number of distinct values,
+	// not an estimate of it.
+	return options, &query.Total{Value: int64(total), Exact: true}, nil
+}
+
+// readFilterValues runs a lookup statement and reads up to limit options, and
+// the number of distinct values there are.
+func readFilterValues(ctx context.Context, client *sql.DB, statement string, args []any, limit int) ([]query.FilterOption, int, error) {
 	rows, err := client.QueryContext(ctx, statement, args...)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to look up filter values: %w", err)
+		return nil, 0, fmt.Errorf("failed to look up filter values: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -71,20 +88,15 @@ func (p sqlProvider) LookupFilterValues(
 		var value any
 		var count, distinct int64
 		if err := rows.Scan(&value, &count, &distinct); err != nil {
-			return nil, nil, fmt.Errorf("failed to read filter values: %w", err)
+			return nil, 0, fmt.Errorf("failed to read filter values: %w", err)
 		}
 		options = append(options, query.FilterOption{Value: fmt.Sprintf("%v", value), Count: count})
 		total = int(distinct)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, nil, fmt.Errorf("failed to read filter values: %w", err)
+		return nil, 0, fmt.Errorf("failed to read filter values: %w", err)
 	}
-	req.Diagnostics.RecordResponse(started, len(options), map[string]any{
-		"distinctValues": total,
-	})
-	// COUNT(*) OVER () over the grouped set is the number of distinct values,
-	// not an estimate of it.
-	return options, &query.Total{Value: int64(total), Exact: true}, nil
+	return options, total, nil
 }
 
 // buildLookupSQL builds the distinct-values query over the wrapped base.
