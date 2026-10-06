@@ -72,6 +72,8 @@ var _ = Describe("New", Ordered, func() {
 		Entry("from the help command", []string{"help"}),
 		Entry("from the schema command", []string{"schema", "--out", "/dev/null"}),
 		Entry("from shell completion", []string{"__complete", ""}),
+		Entry("with a command's --help", []string{"serve", "--help"}),
+		Entry("with a sub-command's -h", []string{"connection", "list", "-h"}),
 	)
 
 	It("falls back to the file store when --db is explicitly empty", func() {
