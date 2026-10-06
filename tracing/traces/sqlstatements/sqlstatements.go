@@ -3,7 +3,9 @@
 package sqlstatements
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/flanksource/commons-db/connection"
@@ -16,17 +18,29 @@ import (
 // maxValueBytes caps any one value a statement stores, such as its SQL.
 const maxValueBytes = 64 << 10
 
+// OwnDatabase is how a capture names the server's own database.
+const OwnDatabase = "self"
+
 // Params choose the statements a capture records.
 type Params struct {
 	// Connections name the connections to observe, as profiles reference
-	// them; none observes every connection and the context's own database.
-	Connections []string `json:"connections,omitempty" clicky:"title=Connections"`
+	// them, "*" for every named connection, or "self" for the server's own
+	// database, which "*" does not include.
+	Connections []string `json:"connections" clicky:"required,title=Connections"`
 	// MinDuration, a duration such as 100ms, records only statements that ran
 	// at least that long.
 	MinDuration string `json:"minDuration,omitempty" clicky:"title=Minimum duration"`
 }
 
 func (p Params) Validate() error {
+	if len(p.Connections) == 0 {
+		return errors.New(`connections is required: name connections, "*" for every named connection, or "self" for the server's own database`)
+	}
+	for _, name := range p.Connections {
+		if strings.TrimSpace(name) == "" {
+			return errors.New("connections must not name a blank connection")
+		}
+	}
 	_, err := p.minimum()
 	return err
 }
@@ -84,12 +98,12 @@ func (statements) Prepare(ctx dbcontext.Context, params Params, records traces.E
 			records.TryEmit(FromStatement(statement))
 		}
 	}
-	connections := params.Connections
-	if len(connections) == 0 {
-		connections = []string{""}
-	}
 	var releases []func()
-	for _, name := range connections {
+	for _, name := range params.Connections {
+		if name == OwnDatabase {
+			// The tap publishes the server's own database's statements unnamed.
+			name = ""
+		}
 		releases = append(releases, connection.ObserveSQL(name, deliver))
 	}
 	return ctx, func() error {

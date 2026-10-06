@@ -1,5 +1,5 @@
-// The SQL statement tap: observers of a connection, or of every connection,
-// receive each statement commons-db runs on it while they observe.
+// The SQL statement tap: observers of a connection, of every named connection,
+// or of the context's own database receive each statement commons-db runs there.
 
 package connection
 
@@ -22,6 +22,10 @@ type Statement struct {
 	Error string
 }
 
+// EveryConnection observes the statements of every named connection; the
+// context's own database, which has no name, is observed separately as "".
+const EveryConnection = "*"
+
 type sqlObservers struct {
 	mu        sync.RWMutex
 	next      uint64
@@ -30,8 +34,9 @@ type sqlObservers struct {
 
 var sqlStatements = &sqlObservers{observers: map[string]map[uint64]func(Statement){}}
 
-// ObserveSQL hands deliver every statement published for connection, or for
-// any connection when connection is empty, until release is called. deliver
+// ObserveSQL hands deliver every statement published for connection until
+// release is called: EveryConnection for any named connection, and "" for the
+// context's own database. deliver
 // runs on the goroutine that ran the statement, so it must not block.
 func ObserveSQL(connection string, deliver func(Statement)) (release func()) {
 	sqlStatements.mu.Lock()
@@ -61,11 +66,12 @@ func ObserveSQL(connection string, deliver func(Statement)) (release func()) {
 func ObservingSQL(connection string) bool {
 	sqlStatements.mu.RLock()
 	defer sqlStatements.mu.RUnlock()
-	return len(sqlStatements.observers[connection]) > 0 || len(sqlStatements.observers[""]) > 0
+	return len(sqlStatements.observers[connection]) > 0 ||
+		(connection != "" && len(sqlStatements.observers[EveryConnection]) > 0)
 }
 
-// PublishSQL hands statement to the observers of its connection and to those
-// of every connection.
+// PublishSQL hands statement to the observers of its connection and, when it
+// ran on a named connection, to those of every named connection.
 func PublishSQL(statement Statement) {
 	sqlStatements.mu.RLock()
 	var delivers []func(Statement)
@@ -73,7 +79,7 @@ func PublishSQL(statement Statement) {
 		delivers = append(delivers, deliver)
 	}
 	if statement.Connection != "" {
-		for _, deliver := range sqlStatements.observers[""] {
+		for _, deliver := range sqlStatements.observers[EveryConnection] {
 			delivers = append(delivers, deliver)
 		}
 	}
