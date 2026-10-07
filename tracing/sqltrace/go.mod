@@ -4,10 +4,10 @@ go 1.26.1
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/flanksource/clicky v1.21.70
-	github.com/flanksource/commons v1.59.1
-	github.com/flanksource/commons-db v0.1.45
-	github.com/flanksource/commons-db/recordstore v0.1.45
+	github.com/flanksource/clicky v1.21.75
+	github.com/flanksource/commons v1.60.0
+	github.com/flanksource/commons-db v0.1.46
+	github.com/flanksource/commons-db/recordstore v0.1.46
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.42.1
@@ -102,6 +102,7 @@ require (
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/ebitengine/purego v0.10.2 // indirect
 	github.com/eko/gocache/lib/v4 v4.2.3 // indirect
 	github.com/eko/gocache/store/go_cache/v4 v4.2.5 // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
@@ -260,6 +261,7 @@ require (
 	github.com/segmentio/asm v1.2.1 // indirect
 	github.com/sergi/go-diff v1.4.0 // indirect
 	github.com/shirou/gopsutil/v3 v3.24.5 // indirect
+	github.com/shirou/gopsutil/v4 v4.26.7 // indirect
 	github.com/shoenig/go-m1cpu v0.1.7 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
