@@ -8,7 +8,7 @@ import (
 	"strconv"
 	"time"
 
-	cloudpubsub "cloud.google.com/go/pubsub"
+	cloudpubsub "cloud.google.com/go/pubsub" //nolint:staticcheck // SA1019: moving to pubsub/v2 changes the subscriber API
 	"github.com/aws/aws-sdk-go-v2/service/sqs"
 	"github.com/aws/aws-sdk-go-v2/service/sqs/types"
 	"github.com/aws/smithy-go"
@@ -135,11 +135,11 @@ func (s *sqsSubscription) ReceiveBatch(ctx stdctx.Context, maxMessages int) ([]*
 	}
 
 	output, err := s.client.ReceiveMessage(ctx, &sqs.ReceiveMessageInput{
-		QueueUrl:              &s.queueURL,
-		MaxNumberOfMessages:   int32(maxMessages),
-		WaitTimeSeconds:       int32(s.waitTime.Seconds()),
-		MessageAttributeNames: []string{"All"},
-		AttributeNames:        []types.QueueAttributeName{types.QueueAttributeNameAll},
+		QueueUrl:                    &s.queueURL,
+		MaxNumberOfMessages:         int32(maxMessages),
+		WaitTimeSeconds:             int32(s.waitTime.Seconds()),
+		MessageAttributeNames:       []string{"All"},
+		MessageSystemAttributeNames: []types.MessageSystemAttributeName{types.MessageSystemAttributeNameAll},
 	})
 	if err != nil {
 		return nil, err

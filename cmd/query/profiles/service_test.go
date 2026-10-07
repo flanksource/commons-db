@@ -374,12 +374,12 @@ func TestRegisterProfileEntitiesRegistersEveryFilterKind(t *testing.T) {
 		// is empty — but it still has to answer, because the registry has no way
 		// to express a filter that cannot be asked. It must answer without
 		// reaching the backend: there is no list there to go and read.
-		options, total, err := registered.Source.Options(entity.FilterContext{}, "", 0)
+		result, err := countedFilterOptions(registered.Source, entity.FilterContext{}, "", 0)
 		if err != nil {
 			t.Errorf("column %q options: %v", column, err)
 		}
-		if len(options) != 0 || total != 0 {
-			t.Errorf("column %q offers %d of %d options, want none", column, len(options), total)
+		if len(result.Options) != 0 || result.Total != 0 {
+			t.Errorf("column %q offers %d of %d options, want none", column, len(result.Options), result.Total)
 		}
 	}
 }

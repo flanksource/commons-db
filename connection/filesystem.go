@@ -25,14 +25,6 @@ func GetFilesystemForConnection(ctx context.Context, conn interface{}) (fs.Files
 	switch c := conn.(type) {
 	case FilesystemProvider:
 		return c.Filesystem(ctx)
-	case *S3Connection:
-		return c.Filesystem(ctx)
-	case *GCSConnection:
-		return c.Filesystem(ctx)
-	case *SFTPConnection:
-		return c.Filesystem(ctx)
-	case *SMBConnection:
-		return c.Filesystem(ctx)
 	case string:
 		// Treat string as local filesystem path
 		return fs.NewLocalFS(c), nil

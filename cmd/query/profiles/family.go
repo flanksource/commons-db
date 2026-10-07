@@ -191,8 +191,8 @@ func timeRangeParamFilters(p query.Profile) []entity.DynamicFilter {
 			Label:       param.DisplayLabel(),
 			Type:        edge.control,
 			TimeEnabled: &timeEnabled,
-			Options: func(context.Context, map[string]string, string, int) (map[string]api.Textable, int, error) {
-				return nil, 0, nil
+			CountedOptions: func(context.Context, map[string]string, string, int) (entity.FilterOptions, error) {
+				return entity.FilterOptions{}, nil
 			},
 		})
 	}
@@ -206,15 +206,15 @@ func (s *Service) profileFilter(profileName string, binding query.ColumnFilterBi
 	filterContext := func(ctx context.Context, flags map[string]string) entity.FilterContext {
 		return entity.FilterContext{Context: ctx, Key: binding.Key, Params: flags}
 	}
-	filter := entity.DynamicFilter{
+	return entity.DynamicFilter{
 		Key:        binding.Key,
 		Label:      binding.Label,
 		Type:       binding.ControlType(),
 		Multi:      binding.Multi,
 		Searchable: binding.Lookup,
 		Limit:      filterLookupLimit(binding),
-		Options: func(ctx context.Context, flags map[string]string, search string, limit int) (map[string]api.Textable, int, error) {
-			return source.Options(filterContext(ctx, flags), search, limit)
+		CountedOptions: func(ctx context.Context, flags map[string]string, search string, limit int) (entity.FilterOptions, error) {
+			return countedFilterOptions(source, filterContext(ctx, flags), search, limit)
 		},
 		Selected: func(ctx context.Context, flags map[string]string) (map[string]api.Textable, error) {
 			values := selectedFilterValues(flags[binding.Key])
@@ -224,12 +224,16 @@ func (s *Service) profileFilter(profileName string, binding query.ColumnFilterBi
 			return source.Resolve(filterContext(ctx, flags), values)
 		},
 	}
+}
+
+// countedFilterOptions answers a lookup with per-value counts from a source that
+// keeps them, and with the plain option set from one that does not.
+func countedFilterOptions(source entity.FilterSource, fc entity.FilterContext, search string, limit int) (entity.FilterOptions, error) {
 	if counted, ok := source.(entity.CountedFilterSource); ok {
-		filter.CountedOptions = func(ctx context.Context, flags map[string]string, search string, limit int) (entity.FilterOptions, error) {
-			return counted.CountedOptions(filterContext(ctx, flags), search, limit)
-		}
+		return counted.CountedOptions(fc, search, limit)
 	}
-	return filter
+	options, total, err := source.Options(fc, search, limit) //nolint:staticcheck // SA1019: entity.StaticOptions has no counted form
+	return entity.FilterOptions{Options: options, Total: total}, err
 }
 
 // filterLookupLimit is how many values this filter offers before the rest have

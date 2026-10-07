@@ -60,9 +60,9 @@ func traceProfile(providerType string) query.Profile {
 	}
 }
 
-// backendTimeout is a provider's own store call running out of time while the
+// errBackendTimeout is a provider's own store call running out of time while the
 // session that made it is still live.
-var backendTimeout = fmt.Errorf("wait on stream %q: %w", "jvm-probe:cycle", stdcontext.DeadlineExceeded)
+var errBackendTimeout = fmt.Errorf("wait on stream %q: %w", "jvm-probe:cycle", stdcontext.DeadlineExceeded)
 
 func waitState(s *query.Session, state query.SessionState) {
 	GinkgoHelper()
@@ -209,7 +209,7 @@ var _ = Describe("ExecuteStream trace", func() {
 		Entry("with its own error", "stream-err", errors.New("socket closed")),
 		// A follow's store read carries its own deadline; that one expiring is
 		// the store failing, not the session's bound ending the stream.
-		Entry("with a timeout of its own backend call while the session is live", "stream-backend-timeout", backendTimeout),
+		Entry("with a timeout of its own backend call while the session is live", "stream-backend-timeout", errBackendTimeout),
 	)
 
 	It("tears down a blocked provider on Stop", func() {
@@ -446,7 +446,7 @@ var _ = Describe("ExecuteStream top", func() {
 			Expect(events[len(events)-1].Error).To(ContainSubstring(failure.Error()))
 		},
 		Entry("with its own error", "top-fail", errors.New("backend gone")),
-		Entry("with a timeout of its own backend call while the session is live", "top-backend-timeout", backendTimeout),
+		Entry("with a timeout of its own backend call while the session is live", "top-backend-timeout", errBackendTimeout),
 	)
 
 	It("executes a single tick synchronously via Execute", func() {

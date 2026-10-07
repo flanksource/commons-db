@@ -3,7 +3,6 @@ package helpers
 import (
 	"context"
 	"fmt"
-	"net"
 	"time"
 )
 
@@ -23,13 +22,13 @@ type DockerManager struct {
 
 func NewDockerManager() *DockerManager {
 	return &DockerManager{
-		containerIDs:    make(map[string]string),
-		sftpPort:        2222,
-		smbPort:         445,
-		gcsPort:         4443,
-		azuriteBlob:     10000,
-		azuriteQueue:    10001,
-		azuriteTable:    10002,
+		containerIDs: make(map[string]string),
+		sftpPort:     2222,
+		smbPort:      445,
+		gcsPort:      4443,
+		azuriteBlob:  10000,
+		azuriteQueue: 10001,
+		azuriteTable: 10002,
 	}
 }
 
@@ -98,40 +97,6 @@ func (dm *DockerManager) startAzuriteServer(ctx context.Context) error {
 	dm.azuriteContainer = "azurite-stub"
 	time.Sleep(100 * time.Millisecond)
 	return nil
-}
-
-func (dm *DockerManager) isSFTPHealthy() bool {
-	return dm.isPortHealthy(dm.sftpPort)
-}
-
-func (dm *DockerManager) isSMBHealthy() bool {
-	return dm.isPortHealthy(dm.smbPort)
-}
-
-func (dm *DockerManager) isGCSHealthy() bool {
-	return dm.isPortHealthy(dm.gcsPort)
-}
-
-func (dm *DockerManager) isAzuriteHealthy() bool {
-	return dm.isPortHealthy(dm.azuriteBlob)
-}
-
-func (dm *DockerManager) isPortHealthy(port int) bool {
-	conn, err := net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", port), 500*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-	return true
-}
-
-func (dm *DockerManager) isPortAvailable(port int) bool {
-	conn, err := net.Listen("tcp", fmt.Sprintf("localhost:%d", port))
-	if err != nil {
-		return false
-	}
-	defer conn.Close()
-	return true
 }
 
 func (dm *DockerManager) SFTPPort() int {

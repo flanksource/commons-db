@@ -295,7 +295,7 @@ func discoverPrometheus(ctx context.Context, connectionContext dbcontext.Context
 		return serverInfo{}, err
 	}
 	if response.Status != "success" {
-		return serverInfo{}, fmt.Errorf("Prometheus build information returned status %q", response.Status)
+		return serverInfo{}, fmt.Errorf("prometheus build information returned status %q", response.Status)
 	}
 	return serverInfo{
 		Product: "Prometheus", Version: response.Data.Version,

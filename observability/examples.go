@@ -120,9 +120,10 @@ func previewHTTPDetail(event Event) string {
 
 func previewCompletion(event Event, family ProviderFamily, duration time.Duration, rows int64) string {
 	prefix := ""
-	if event == EventError {
+	switch event {
+	case EventError:
 		prefix = "ERROR >="
-	} else if event == EventSlow {
+	case EventSlow:
 		prefix = "SLOW >= "
 	}
 	text := fmt.Sprintf("%s[%dms] [rows:%d]", prefix, duration.Milliseconds(), rows)

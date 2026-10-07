@@ -30,7 +30,7 @@ func TestSetupEnvDotEnvPrecedence(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer setup.Cleanup()
+	defer func() { assert.NoError(t, setup.Cleanup()) }()
 
 	env := envSliceMap(setup.Env)
 	assert.Equal(t, "one", env["A"])
@@ -57,7 +57,7 @@ func TestPrepareDotEnvPrecedence(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer setup.Cleanup()
+	defer func() { assert.NoError(t, setup.Cleanup()) }()
 
 	env := envSliceMap(setup.Env)
 	assert.Equal(t, "one", env["A"])
@@ -269,7 +269,7 @@ func TestSetupEnvLocalGitPath(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	defer setup.Cleanup()
+	defer func() { assert.NoError(t, setup.Cleanup()) }()
 
 	assert.Equal(t, repo, setup.Cwd)
 	assert.Equal(t, "local", setup.Extra["git"])

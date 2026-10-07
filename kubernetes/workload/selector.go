@@ -74,11 +74,11 @@ func (s Selector) Exact() bool {
 
 func validate(field *grammar.QueryField) error {
 	if field == nil {
-		return fmt.Errorf("Kubernetes target selector is empty")
+		return fmt.Errorf("kubernetes target selector is empty")
 	}
 	if field.Field == "" {
 		if field.Op != "and" && field.Op != "or" {
-			return fmt.Errorf("Kubernetes target group operator %q is unsupported", field.Op)
+			return fmt.Errorf("kubernetes target group operator %q is unsupported", field.Op)
 		}
 		for _, child := range field.Fields {
 			if err := validate(child); err != nil {
@@ -88,13 +88,13 @@ func validate(field *grammar.QueryField) error {
 		return nil
 	}
 	if !supportedField(field.Field) {
-		return fmt.Errorf("Kubernetes target field %q is unsupported", field.Field)
+		return fmt.Errorf("kubernetes target field %q is unsupported", field.Field)
 	}
 	if field.Op != grammar.Eq && field.Op != grammar.Neq {
-		return fmt.Errorf("Kubernetes target operator %q is unsupported for field %q", field.Op, field.Field)
+		return fmt.Errorf("kubernetes target operator %q is unsupported for field %q", field.Op, field.Field)
 	}
 	if strings.TrimSpace(fmt.Sprint(field.Value)) == "" {
-		return fmt.Errorf("Kubernetes target field %q has an empty value", field.Field)
+		return fmt.Errorf("kubernetes target field %q has an empty value", field.Field)
 	}
 	return nil
 }

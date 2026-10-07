@@ -416,7 +416,7 @@ func validateFilterOptions(options []string) error {
 			return fmt.Errorf("option %q must not contain a comma", option)
 		}
 		if strings.HasPrefix(option, "!") {
-			return fmt.Errorf("option %q must not start with !", option)
+			return fmt.Errorf("option %q must not start with \"!\"", option)
 		}
 	}
 	return nil

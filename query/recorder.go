@@ -128,7 +128,6 @@ type Recorder struct {
 
 	finished   bool
 	duration   time.Duration
-	rows       int
 	status     int
 	failure    error
 	finishOnce sync.Once

@@ -191,7 +191,7 @@ var _ = Describe("column filter kind", func() {
 			Expect(validateFilterOptions([]string{option})).To(MatchError(ContainSubstring(message)))
 		},
 		Entry("a comma", "us,eu", "must not contain a comma"),
-		Entry("a leading exclusion", "!eu", "must not start with !"),
+		Entry("a leading exclusion", "!eu", `must not start with "!"`),
 		Entry("nothing at all", "  ", "must not be empty"),
 	)
 })

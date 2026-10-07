@@ -22,7 +22,7 @@ func (h *connectionBrowserHandler) kubernetesCatalogClient(
 		return nil, err
 	}
 	if client == nil {
-		return nil, fmt.Errorf("Kubernetes connection %q returned no client", connection.Name)
+		return nil, fmt.Errorf("kubernetes connection %q returned no client", connection.Name)
 	}
 	return client, nil
 }

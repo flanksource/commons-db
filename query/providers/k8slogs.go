@@ -66,7 +66,7 @@ func (p k8sLogsProvider) Pages(
 	page query.PageRequest,
 ) iter.Seq2[query.Page, error] {
 	if page.Mode() != query.PagingCursor {
-		return query.ErrorPage(fmt.Errorf("Kubernetes logs page only by cursor, got %s", page.Mode()))
+		return query.ErrorPage(fmt.Errorf("kubernetes logs page only by cursor, got %s", page.Mode()))
 	}
 	return p.cursorPages(ctx, req, page)
 }
