@@ -177,7 +177,7 @@ var _ = Describe("SessionRegistry.ResumeTrack", func() {
 		store := newFakeSessionStore()
 		reg := query.NewSessionRegistry(query.RegistryOptions{Store: store})
 		first := track(reg, stdcontext.Background(), jvmTrackOptions())
-		first.Running(query.RunningUpdate{Events: &query.EventsRef{Stream: "recording-1", Kind: "oipa_notification_v4", Generation: "generation-1", High: 5, Total: 5}})
+		Expect(first.Running(query.RunningUpdate{Events: &query.EventsRef{Stream: "recording-1", Kind: "oipa_notification_v4", Generation: "generation-1", High: 5, Total: 5}})).To(Succeed())
 		first.Finish(query.FinishUpdate{})
 		prior := first.Snapshot()
 

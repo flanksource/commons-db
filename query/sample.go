@@ -286,7 +286,7 @@ func scanSQL(input string) ([]string, int, bool) {
 		}
 		if c == '/' && i+1 < len(input) && input[i+1] == '*' {
 			i += 2
-			for i+1 < len(input) && !(input[i] == '*' && input[i+1] == '/') {
+			for i+1 < len(input) && (input[i] != '*' || input[i+1] != '/') {
 				i++
 			}
 			if i+1 < len(input) {

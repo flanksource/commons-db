@@ -83,46 +83,6 @@ func GetEnvStringFromCache(ctx Context, env string, namespace string) (string, e
 	return GetEnvValueFromCache(ctx, envvar, namespace)
 }
 
-// debugJsonPath is a helper function to visualize the result of a jsonpath expression on some data
-// it splits the jsonpath into parts, and then applies each part sequentially, printing the intermediate success
-// and highlighting which part failed, and what the available keys where at the failure point
-//
-//	jsonPath: "spec.template.spec.containers[0].image"
-//
-// spec: ✓
-// template: ✓
-// spec: ✓
-// containers: ✓
-// [0]: ✓
-// image: ✖ available keys: [name image ports]
-func debugJsonPath(key string, data any) string {
-	parts := strings.Split(key, ".")
-	current := data
-	var result strings.Builder
-	for _, part := range parts {
-		jpExpr, err := jp.ParseString(part)
-		if err != nil {
-			result.WriteString(fmt.Sprintf("%s: ✖ could not parse jsonpath expression: %s\n", part, err))
-			break
-		}
-		values := jpExpr.Get(current)
-		if len(values) == 0 {
-			switch v := current.(type) {
-			case map[string]any:
-				result.WriteString(fmt.Sprintf("%s: ✖ available keys: [%s]\n", part, strings.Join(lo.Keys(v), ", ")))
-			default:
-				result.WriteString(fmt.Sprintf("%s: ✖ could not find key in current data\n", part))
-			}
-			break
-		} else {
-			result.WriteString(fmt.Sprintf("%s: ✓\n", part))
-			current = values[0]
-		}
-	}
-	return result.String()
-
-}
-
 func GetHelmValuesFromCache(ctx Context, namespace, releaseName string) (map[string]any, error) {
 
 	client, err := ctx.LocalKubernetes()

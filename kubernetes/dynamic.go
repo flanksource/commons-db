@@ -23,7 +23,6 @@ import (
 	"github.com/samber/lo"
 	"golang.org/x/sync/errgroup"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	apiErrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -709,7 +708,7 @@ func NewResources(objs ...unstructured.Unstructured) Resources {
 func (c *Client) GetResource(ctx context.Context, kind, namespace, name string) (*Resource, error) {
 
 	resource, err := c.Get(ctx, kind, namespace, name)
-	if errors.IsNotFound(err) {
+	if apiErrors.IsNotFound(err) {
 		return nil, nil
 	}
 	if err != nil || resource == nil {
@@ -827,7 +826,7 @@ func (c *Client) Apply(ctx context.Context, manifest string) (Resources, error) 
 		c.logger.Infof("Applying %s", NewResources(o).Pretty().ANSI())
 		dynClient, mapping, err := c.GetClientByGroupVersionKind(ctx, o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind())
 		if err != nil {
-			return nil, fmt.Errorf("Failed to get client for %s/%s/%s", o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind())
+			return nil, fmt.Errorf("failed to get client for %s/%s/%s", o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind())
 		}
 		// Only set namespace for namespaced resources that don't already have one
 		if mapping.Scope.Name() == meta.RESTScopeNameNamespace && o.GetNamespace() == "" {
@@ -837,7 +836,7 @@ func (c *Client) Apply(ctx context.Context, manifest string) (Resources, error) 
 			FieldManager: "flanksource-commons",
 		})
 		if err != nil {
-			return nil, fmt.Errorf("Failed to apply %s/%s/%s: %w", o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind(), err)
+			return nil, fmt.Errorf("failed to apply %s/%s/%s: %w", o.GroupVersionKind().Group, o.GroupVersionKind().Version, o.GetKind(), err)
 		}
 		out = append(out, *saved)
 	}

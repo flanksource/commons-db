@@ -1,15 +1,15 @@
 package connection_test
 
 import (
+	"context"
 	"testing"
 
 	"github.com/flanksource/commons-db/connection"
-	"github.com/flanksource/commons-db/fs"
 	dbctx "github.com/flanksource/commons-db/context"
 )
 
 func TestGetFilesystemForConnection_String(t *testing.T) {
-	ctx := dbctx.NewContext(nil)
+	ctx := dbctx.NewContext(context.Background())
 
 	// Test with string path (local filesystem)
 	filesystem, err := connection.GetFilesystemForConnection(ctx, "/tmp/test")
@@ -21,12 +21,10 @@ func TestGetFilesystemForConnection_String(t *testing.T) {
 	if filesystem == nil {
 		t.Fatal("Expected non-nil filesystem")
 	}
-
-	var _ fs.FilesystemRW = filesystem
 }
 
 func TestGetFilesystemForConnection_Nil(t *testing.T) {
-	ctx := dbctx.NewContext(nil)
+	ctx := dbctx.NewContext(context.Background())
 
 	_, err := connection.GetFilesystemForConnection(ctx, nil)
 	if err == nil {
@@ -35,7 +33,7 @@ func TestGetFilesystemForConnection_Nil(t *testing.T) {
 }
 
 func TestGetFilesystemForConnection_UnsupportedType(t *testing.T) {
-	ctx := dbctx.NewContext(nil)
+	ctx := dbctx.NewContext(context.Background())
 
 	_, err := connection.GetFilesystemForConnection(ctx, 123)
 	if err == nil {
@@ -44,7 +42,7 @@ func TestGetFilesystemForConnection_UnsupportedType(t *testing.T) {
 }
 
 func TestGetFilesystem_FilesystemProvider(t *testing.T) {
-	ctx := dbctx.NewContext(nil)
+	ctx := dbctx.NewContext(context.Background())
 
 	// Create a local path connection
 	localConn := "/tmp/test"
@@ -54,7 +52,4 @@ func TestGetFilesystem_FilesystemProvider(t *testing.T) {
 		t.Fatalf("GetFilesystemForConnection failed: %v", err)
 	}
 	defer filesystem.Close()
-
-	// Verify it implements FilesystemRW
-	var _ fs.FilesystemRW = filesystem
 }

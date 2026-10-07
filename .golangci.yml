@@ -9,4 +9,4 @@ linters:
         text: 'QF1008:'
       - linters:
           - staticcheck
-        text: 'SA1019:.*WithCredentialsJSON'
+        text: 'SA1019:.*(WithCredentialsJSON|CredentialsFromJSON)'

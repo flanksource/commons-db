@@ -1,18 +1,19 @@
 package fs_test
 
 import (
+	"context"
 	"testing"
 
-	"github.com/flanksource/commons-db/fs"
 	dbctx "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/fs"
 )
 
 func TestGCSFS_ImplementsFilesystemRW(t *testing.T) {
-	ctx := dbctx.NewContext(nil)
 	// Note: Requires actual GCS client for full initialization
 	// This test verifies the interface compliance only
 	t.Skip("Requires GCS client - skipping interface test")
 
+	ctx := dbctx.NewContext(context.Background())
 	gcsFS := fs.NewGCSFS(ctx, "test-bucket", nil)
 	defer gcsFS.Close()
 

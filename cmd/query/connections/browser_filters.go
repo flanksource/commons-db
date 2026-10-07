@@ -16,8 +16,6 @@ import (
 	"github.com/flanksource/commons-db/query"
 )
 
-type browserColumnFilter = query.ResultColumnFilter
-
 type browserFilterOption struct {
 	Value string `json:"value"`
 	Count int64  `json:"count,omitempty"`
@@ -99,6 +97,10 @@ func sqlBrowserColumns(columnTypes []*sql.ColumnType) []query.ColumnDef {
 	}
 	columns := make([]query.ColumnDef, 0, len(columnTypes))
 	for _, column := range columnTypes {
+		// The driver's type name is read first because it is the more specific of
+		// the two signals, and the Go type it scans into second — a user-defined
+		// type (a postgres enum, say) has no name in any driver's static table and
+		// arrives as a bare OID, but it still scans into the Go type it behaves like.
 		storage := sqlColumnStorageOf(column.DatabaseTypeName())
 		if storage.Type == "" {
 			storage.Type = sqlScanColumnType(column.ScanType())
@@ -113,19 +115,6 @@ func sqlBrowserColumns(columnTypes []*sql.ColumnType) []query.ColumnDef {
 		columns = append(columns, def)
 	}
 	return columns
-}
-
-// sqlColumnTypeOf resolves how a result column's values compare.
-//
-// The driver's type name is read first because it is the more specific of the
-// two signals, and the Go type it scans into second — a user-defined type (a
-// postgres enum, say) has no name in any driver's static table and arrives as a
-// bare OID, but it still scans into the Go type it behaves like.
-func sqlColumnTypeOf(column *sql.ColumnType) query.ColumnType {
-	if storage := sqlColumnStorageOf(column.DatabaseTypeName()); storage.Type != "" {
-		return storage.Type
-	}
-	return sqlScanColumnType(column.ScanType())
 }
 
 type sqlColumnStorage struct {
