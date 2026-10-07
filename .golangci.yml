@@ -1,0 +1,12 @@
+version: "2"
+linters:
+  exclusions:
+    presets:
+      - std-error-handling
+    rules:
+      - linters:
+          - staticcheck
+        text: 'QF1008:'
+      - linters:
+          - staticcheck
+        text: 'SA1019:.*WithCredentialsJSON'
