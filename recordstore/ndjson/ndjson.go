@@ -325,20 +325,27 @@ func (b *Backend) Meta(_ context.Context, stream string) (recordstore.Meta, erro
 }
 
 // Scan reads stream's file in seq order up to its committed high seq, starting
-// at the first line after afterSeq rather than at the top of the file.
+// at the first line after afterSeq rather than at the top of the file. It holds
+// the stream's lock only while it reads the sidecar and opens the file it names,
+// so a seal, reopen or trim cannot remove that file in between; the open file
+// stays readable once they do, and fn never runs under the lock.
 func (b *Backend) Scan(_ context.Context, stream string, afterSeq int64, fn func(int64, recordstore.Row) error) error {
 	if err := recordstore.ValidateStream(stream); err != nil {
 		return err
 	}
+	unlock := b.locks.Lock(stream)
 	state, err := b.find(stream)
 	if err != nil {
+		unlock()
 		return err
 	}
 	first := max(afterSeq+1, state.LowSeq)
 	if first > state.HighSeq {
+		unlock()
 		return nil
 	}
 	lines, _, file, err := b.linesFrom(state, first)
+	unlock()
 	if err != nil {
 		return err
 	}
