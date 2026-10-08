@@ -112,6 +112,42 @@ var _ = Describe("ndjson backend compressing sealed streams", func() {
 		seqs, _ = recordstoretest.Scanned(backend, "run-1", 0)
 		Expect(seqs).To(Equal([]int64{1, 2, 3, 4}))
 	})
+
+	It("scans a stream while a seal compresses its file and a reopen decompresses it", func() {
+		ctx := context.Background()
+		backend, err := ndjson.New(ndjson.Options{
+			Dir: GinkgoT().TempDir(), Schema: recordstoretest.Schema, MaxBytes: 1 << 20, KeepStreams: 10, CompressSealed: true,
+		})
+		Expect(err).ToNot(HaveOccurred())
+		_, err = backend.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(1, 3))
+		Expect(err).ToNot(HaveOccurred())
+
+		stop := make(chan struct{})
+		scanned := make(chan error, 1)
+		go func() {
+			defer GinkgoRecover()
+			for {
+				select {
+				case <-stop:
+					scanned <- nil
+					return
+				default:
+				}
+				if err := backend.Scan(ctx, "run-1", 0, func(int64, recordstore.Row) error { return nil }); err != nil {
+					scanned <- err
+					return
+				}
+			}
+		}()
+		for range 100 {
+			Expect(backend.Seal(ctx, "run-1")).To(Succeed())
+			meta, err := backend.Meta(ctx, "run-1")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(backend.Reopen(ctx, "run-1", meta.Generation)).To(Succeed())
+		}
+		close(stop)
+		Expect(<-scanned).To(Succeed())
+	})
 })
 
 var _ = Describe("ndjson backend files", func() {
