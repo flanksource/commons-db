@@ -376,6 +376,69 @@ func TestSetupEnvWorktreeCopiesAreIndependentOfSource(t *testing.T) {
 	}
 }
 
+func TestSetupToExecBranchWorktree(t *testing.T) {
+	exec := Setup{
+		Checkout: &Checkout{
+			Mode:     CheckoutLocal,
+			Path:     "/repo",
+			Worktree: &Worktree{Mode: WorktreeBranch, Branch: "shell/abc", Keep: true, Ignored: CloneClone},
+		},
+	}.ToExec()
+
+	require.NotNil(t, exec.Checkout)
+	assert.Equal(t, &connection.GitWorktree{Enabled: true, Branch: "shell/abc", Existing: true, Keep: true, Ignored: true},
+		exec.Checkout.Worktree)
+}
+
+func TestWorktreeApplyDefaultsBranchModeSkipsUncommitted(t *testing.T) {
+	got := Worktree{Mode: WorktreeBranch, Branch: "shell/abc"}
+	assert.Empty(t, got.ApplyDefaults())
+	assert.Equal(t, Worktree{Mode: WorktreeBranch, Branch: "shell/abc", Uncommitted: CloneSkip, Ignored: CloneClone}, got)
+}
+
+// A branch an earlier run left behind is checked out as-is: the worktree's HEAD
+// is that branch's tip, not a fresh branch cut from the source's HEAD.
+func TestSetupEnvWorktreeChecksOutExistingBranch(t *testing.T) {
+	repo := initShellGitRepo(t)
+	runShellGit(t, repo, "checkout", "-q", "-b", "shell/previous")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "previous.txt"), []byte("previous run\n"), 0644))
+	runShellGit(t, repo, "add", "previous.txt")
+	runShellGit(t, repo, "commit", "-q", "-m", "previous run")
+	tip := gitLinesForTest(t, repo, "rev-parse", "HEAD")
+	runShellGit(t, repo, "checkout", "-q", "main")
+
+	setup := worktreeSetup(t, repo, &connection.GitWorktree{Enabled: true, Branch: "shell/previous", Existing: true})
+
+	assert.Equal(t, []string{"shell/previous"}, gitLinesForTest(t, setup.Cwd, "symbolic-ref", "--short", "HEAD"))
+	assert.Equal(t, tip, gitLinesForTest(t, setup.Cwd, "rev-parse", "HEAD"))
+	assert.FileExists(t, filepath.Join(setup.Cwd, "previous.txt"))
+}
+
+func TestSetupEnvWorktreeExistingBranchMustExist(t *testing.T) {
+	repo := initShellGitRepo(t)
+
+	_, err := SetupEnv(context.New(), &Exec{
+		BaseDir:  t.TempDir(),
+		Checkout: &connection.GitConnection{Path: repo, Worktree: &connection.GitWorktree{Enabled: true, Branch: "shell/gone", Existing: true}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shell/gone")
+	assert.Empty(t, gitLinesForTest(t, repo, "branch", "--list", "shell/gone"), "a missing branch is never created")
+}
+
+func TestSetupEnvWorktreeExistingBranchCheckedOutElsewhereFails(t *testing.T) {
+	repo := initShellGitRepo(t)
+	runShellGit(t, repo, "branch", "shell/busy")
+	runShellGit(t, repo, "worktree", "add", "-q", filepath.Join(t.TempDir(), "busy"), "shell/busy")
+
+	_, err := SetupEnv(context.New(), &Exec{
+		BaseDir:  t.TempDir(),
+		Checkout: &connection.GitConnection{Path: repo, Worktree: &connection.GitWorktree{Enabled: true, Branch: "shell/busy", Existing: true}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "shell/busy")
+}
+
 func initShellGitRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

@@ -111,7 +111,12 @@ func addNativeWorktree(ctx context.Context, repo, baseDir string, checkout *conn
 	}
 
 	args := []string{"worktree", "add", "-b", branch, target}
-	if base := strings.TrimSpace(wt.Base); base != "" {
+	if wt.Existing {
+		if strings.TrimSpace(wt.Branch) == "" {
+			return "", nil, fmt.Errorf("checkout.worktree.existing requires a branch")
+		}
+		args = []string{"worktree", "add", target, branch}
+	} else if base := strings.TrimSpace(wt.Base); base != "" {
 		args = append(args, base)
 	} else if checkout.Branch != "" {
 		args = append(args, checkout.Branch)
@@ -123,6 +128,11 @@ func addNativeWorktree(ctx context.Context, repo, baseDir string, checkout *conn
 	}
 	defer lock.Release()
 
+	if wt.Existing {
+		if _, err := gitOutput(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+			return "", nil, fmt.Errorf("worktree branch %s does not exist in %s", branch, repo)
+		}
+	}
 	if _, err := gitOutput(ctx, repo, args...); err != nil {
 		return "", nil, err
 	}
