@@ -51,6 +51,17 @@ async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
+async function stopSession(sessionID: string): Promise<void> {
+  const response = await fetch(
+    `/api/v1/sessions/${encodeURIComponent(sessionID)}/stop`,
+    { method: "POST" },
+  );
+  if (!response.ok)
+    throw new Error(
+      (await response.text()).trim() || `Stop failed: ${response.status}`,
+    );
+}
+
 function list(value: string): string[] | undefined {
   const values = value
     .split(",")
@@ -108,14 +119,7 @@ export function ConnectionTrace({
     }
     setState("stopping");
     try {
-      const response = await fetch(
-        `/api/v1/sessions/${encodeURIComponent(sessionID)}`,
-        { method: "DELETE" },
-      );
-      if (!response.ok)
-        throw new Error(
-          (await response.text()).trim() || `Stop failed: ${response.status}`,
-        );
+      await stopSession(sessionID);
       if (mounted.current) setError("");
     } catch (reason) {
       if (mounted.current) {
@@ -134,9 +138,7 @@ export function ConnectionTrace({
       stopRequested.current = true;
       const sessionID = sessionRef.current;
       if (sessionID) {
-        void fetch(`/api/v1/sessions/${encodeURIComponent(sessionID)}`, {
-          method: "DELETE",
-        }).catch(() => undefined);
+        void stopSession(sessionID).catch(() => undefined);
       }
     };
   }, []);
@@ -223,22 +225,13 @@ export function ConnectionTrace({
       );
       sessionRef.current = created.id;
       if (!mounted.current) {
-        await fetch(`/api/v1/sessions/${encodeURIComponent(created.id)}`, {
-          method: "DELETE",
-        }).catch(() => undefined);
+        await stopSession(created.id).catch(() => undefined);
         return;
       }
       setSession(created);
       if (stopRequested.current) {
         setState("stopping");
-        const response = await fetch(
-          `/api/v1/sessions/${encodeURIComponent(created.id)}`,
-          { method: "DELETE" },
-        );
-        if (!response.ok)
-          throw new Error(
-            (await response.text()).trim() || `Stop failed: ${response.status}`,
-          );
+        await stopSession(created.id);
       } else {
         setState("running");
       }
