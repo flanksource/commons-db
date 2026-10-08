@@ -268,8 +268,8 @@ type GitWorktree struct {
 	// branch must already exist.
 	Existing bool   `yaml:"existing,omitempty" json:"existing,omitempty"`
 	Base     string `yaml:"base,omitempty" json:"base,omitempty"`
-	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
-	Keep    bool   `yaml:"keep,omitempty" json:"keep,omitempty"`
+	Path     string `yaml:"path,omitempty" json:"path,omitempty"`
+	Keep     bool   `yaml:"keep,omitempty" json:"keep,omitempty"`
 	// Uncommitted carries staged, unstaged and untracked changes from the
 	// source repo into the worktree. The source is never mutated.
 	Uncommitted bool `yaml:"uncommitted,omitempty" json:"uncommitted,omitempty"`
@@ -279,7 +279,7 @@ type GitWorktree struct {
 
 func (w *GitWorktree) IsEnabled() bool {
 	return w != nil && (w.Enabled || w.Prefix != "" || w.Branch != "" || w.Base != "" || w.Path != "" || w.Keep ||
-		w.Uncommitted || w.Ignored)
+		w.Existing || w.Uncommitted || w.Ignored)
 }
 
 // Deprecated: no-op. See GitConnection.Dirty.
