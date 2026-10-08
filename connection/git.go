@@ -264,7 +264,10 @@ type GitWorktree struct {
 	Enabled bool   `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	Prefix  string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 	Branch  string `yaml:"branch,omitempty" json:"branch,omitempty"`
-	Base    string `yaml:"base,omitempty" json:"base,omitempty"`
+	// Existing checks Branch out as it is instead of creating it from Base; the
+	// branch must already exist.
+	Existing bool   `yaml:"existing,omitempty" json:"existing,omitempty"`
+	Base     string `yaml:"base,omitempty" json:"base,omitempty"`
 	Path    string `yaml:"path,omitempty" json:"path,omitempty"`
 	Keep    bool   `yaml:"keep,omitempty" json:"keep,omitempty"`
 	// Uncommitted carries staged, unstaged and untracked changes from the

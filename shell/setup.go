@@ -90,6 +90,8 @@ type Worktree struct {
 	Base   string       `json:"base,omitempty" yaml:"base,omitempty"`
 	Path   string       `json:"path,omitempty" yaml:"path,omitempty"`
 	Keep   bool         `json:"keep,omitempty" yaml:"keep,omitempty"`
+	// Branch is the existing branch a `branch` mode worktree checks out.
+	Branch string `json:"branch,omitempty" yaml:"branch,omitempty"`
 
 	// Uncommitted controls whether staged, unstaged and untracked changes are
 	// carried from the source repo into the new worktree. Nothing is ever
@@ -118,6 +120,9 @@ const (
 	WorktreeNone     WorktreeMode = "none"
 	WorktreeNew      WorktreeMode = "new"
 	WorktreeExisting WorktreeMode = "existing"
+	// WorktreeBranch adds a worktree that checks out an existing Branch as-is,
+	// e.g. to continue on the branch an earlier run left behind.
+	WorktreeBranch WorktreeMode = "branch"
 )
 
 // ApplyDefaults fills in the worktree defaults and returns any downgrade
@@ -130,6 +135,18 @@ const (
 // uncommitted to skip unless it was set explicitly.
 func (w *Worktree) ApplyDefaults() []string {
 	if w == nil || w.Mode == "" || w.Mode == WorktreeNone {
+		return nil
+	}
+
+	// An existing branch is not branched from HEAD, so the source's
+	// work-in-progress never belongs on it.
+	if w.Mode == WorktreeBranch {
+		if w.Ignored == "" {
+			w.Ignored = CloneClone
+		}
+		if w.Uncommitted == "" {
+			w.Uncommitted = CloneSkip
+		}
 		return nil
 	}
 
@@ -228,7 +245,7 @@ func (w *Worktree) toGitWorktree() *connection.GitWorktree {
 		}
 		return &connection.GitWorktree{Path: w.Path}
 	}
-	return &connection.GitWorktree{
+	wt := &connection.GitWorktree{
 		Enabled:     true,
 		Prefix:      w.Prefix,
 		Base:        w.Base,
@@ -236,6 +253,10 @@ func (w *Worktree) toGitWorktree() *connection.GitWorktree {
 		Uncommitted: w.Uncommitted.IsClone(),
 		Ignored:     w.Ignored.IsClone(),
 	}
+	if w.Mode == WorktreeBranch {
+		wt.Branch, wt.Existing = w.Branch, true
+	}
+	return wt
 }
 
 func SetupEnv(ctx context.Context, exec *Exec) (*SetupResult, error) {
