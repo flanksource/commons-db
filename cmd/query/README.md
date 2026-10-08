@@ -210,8 +210,8 @@ discovery data and exposes the profile as a runnable sidebar surface without a
 server restart.
 
 A Vite + React app using `@flanksource/clicky-ui`'s `EntityExplorerApp`, embedded
-via `go:embed` (`www/embed.go`). A placeholder `dist/index.html` is committed so the
-Go binary builds before a frontend build.
+via `go:embed` (`www/embed.go`). `www/dist/` is not committed: run `task www:build`
+(or `make -C cmd/query ui-build`) before anything that imports `www` compiles.
 
 ```bash
 task www:build           # pnpm install && vite build → www/dist
