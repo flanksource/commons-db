@@ -81,6 +81,10 @@ func prepareLocalCheckout(ctx context.Context, baseDir string, checkout *connect
 		_ = cleanup()
 		return "", nil, nil, err
 	}
+	if extra["commit"], err = gitString(ctx, worktree, "rev-parse", "HEAD"); err != nil {
+		_ = cleanup()
+		return "", nil, nil, err
+	}
 	extra["worktree"] = worktree
 	return worktree, extra, cleanup, nil
 }
