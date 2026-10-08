@@ -411,7 +411,19 @@ func TestSetupEnvWorktreeChecksOutExistingBranch(t *testing.T) {
 
 	assert.Equal(t, []string{"shell/previous"}, gitLinesForTest(t, setup.Cwd, "symbolic-ref", "--short", "HEAD"))
 	assert.Equal(t, tip, gitLinesForTest(t, setup.Cwd, "rev-parse", "HEAD"))
+	assert.Equal(t, tip, []string{setup.Extra["commit"].(string)}, "commit metadata reports the checked-out branch tip")
 	assert.FileExists(t, filepath.Join(setup.Cwd, "previous.txt"))
+}
+
+func TestSetupEnvWorktreeExistingRequiresBranch(t *testing.T) {
+	repo := initShellGitRepo(t)
+
+	_, err := SetupEnv(context.New(), &Exec{
+		BaseDir:  t.TempDir(),
+		Checkout: &connection.GitConnection{Path: repo, Worktree: &connection.GitWorktree{Existing: true}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "requires a branch")
 }
 
 func TestSetupEnvWorktreeExistingBranchMustExist(t *testing.T) {
