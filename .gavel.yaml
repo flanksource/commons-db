@@ -1,0 +1,4 @@
+lint:
+  linters:
+    golangci-lint:
+      enabled: true
