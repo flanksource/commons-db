@@ -59,13 +59,17 @@ func (r *SessionRegistry) Track(ctx stdcontext.Context, opts TrackOptions) (*Ses
 	} else if len(params) > maxSessionParamsBytes {
 		return nil, fmt.Errorf("track session %q: params are %d bytes, over the %d byte cap", opts.Profile, len(params), maxSessionParamsBytes)
 	}
+	labels, err := r.scopeLabels(ctx, opts.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("track session %q: %w", opts.Profile, err)
+	}
 	session, err := NewSession(SessionOptions{
 		ID:        uuid.NewString(),
 		Profile:   Profile{Name: opts.Profile},
 		Kind:      opts.Kind,
 		Role:      SessionRoleCapture,
 		Params:    opts.Params,
-		Labels:    opts.Labels,
+		Labels:    labels,
 		Principal: opts.Principal,
 		Owner:     r.opts.Owner,
 		RestartOf: opts.RestartOf,
@@ -115,8 +119,12 @@ func (r *SessionRegistry) ResumeTrack(ctx stdcontext.Context, id string, stopAt 
 	if !stopAt.After(time.Now()) {
 		return nil, fmt.Errorf("resume session %s: stopAt must be in the future", id)
 	}
+	labels, err := r.scopeLabels(ctx, previous.Labels)
+	if err != nil {
+		return nil, fmt.Errorf("resume session %s: %w", id, err)
+	}
 	session, err := NewSession(SessionOptions{ID: id, Profile: Profile{Name: previous.Profile}, Kind: previous.Kind,
-		Role: previous.Role, Params: previous.Params, Labels: previous.Labels, Principal: previous.Principal,
+		Role: previous.Role, Params: previous.Params, Labels: labels, Principal: previous.Principal,
 		Owner: previous.Owner, RestartOf: previous.RestartOf, MaxEvents: r.opts.MaxEvents})
 	if err != nil {
 		return nil, err
@@ -142,9 +150,9 @@ func (r *SessionRegistry) ResumeTrack(ctx stdcontext.Context, id string, stopAt 
 		cancel()
 		return nil, fmt.Errorf("resume session %s: already live", id)
 	}
-	if r.activeLocked(SessionRoleCapture) >= r.opts.MaxSessions {
+	if err := r.admissionLocked(SessionRoleCapture, labels); err != nil {
 		cancel()
-		return nil, fmt.Errorf("resume session %s: %w", id, ErrMaxSessions)
+		return nil, fmt.Errorf("resume session %s: %w", id, err)
 	}
 	if err := r.opts.Store.Update(ctx, id, session.rec.SessionStatus); err != nil {
 		cancel()
@@ -175,9 +183,13 @@ func (r *SessionRegistry) startStream(ctx context.Context, p Profile, params map
 	if p.Trace != nil && p.Trace.Follow {
 		role = SessionRoleView
 	}
+	labels, err := r.scopeLabels(ctx, nil)
+	if err != nil {
+		return streamRun{}, fmt.Errorf("profile %q: %w", p.Name, err)
+	}
 	session, err := NewSession(SessionOptions{
 		ID: uuid.NewString(), Profile: p, Kind: p.Kind(), Role: role,
-		Params: params, Owner: r.opts.Owner, MaxEvents: maxEvents,
+		Params: params, Labels: labels, Owner: r.opts.Owner, MaxEvents: maxEvents,
 	})
 	if err != nil {
 		return streamRun{}, err

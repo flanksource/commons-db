@@ -41,6 +41,11 @@ type EventRecords interface {
 type Options struct {
 	Profiles ProfileStoreProvider
 	Context  ContextProvider
+
+	// Registry holds the live sessions. When it has a Scope, a request lists,
+	// reads and controls only the live sessions of the scope its context names
+	// — another scope's is answered 404, as a missing one is — and Store must
+	// partition its records by the same scope.
 	Registry *query.SessionRegistry
 
 	// Store answers for sessions that are not live in the registry: the list,

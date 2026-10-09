@@ -26,10 +26,15 @@ func (h *sessionHandler) overlay(ctx context.Context, records []query.SessionRec
 	if lineage, err = h.readableLineage(ctx, lineage, records, allow); err != nil {
 		return nil, err
 	}
+	visible, err := h.registry.Visible(ctx)
+	if err != nil {
+		return nil, err
+	}
 	now, boot, staleAfter := time.Now(), h.registry.Owner().Boot, h.registry.StaleAfter()
 	infos := make([]query.SessionInfo, len(records))
 	for i, rec := range records {
-		_, live := h.registry.Get(rec.ID)
+		session, live := h.registry.Get(rec.ID)
+		live = live && visible(session.Snapshot().SessionRecord)
 		terminal := rec.State.Terminal()
 		info := query.SessionInfo{
 			SessionRecord: rec,
@@ -97,7 +102,11 @@ func (h *sessionHandler) lineage(ctx context.Context, ids []string) (map[string]
 		}
 		return lineage, nil
 	}
-	return lineageOf(h.liveRecords(), ids), nil
+	live, err := h.liveRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return lineageOf(live, ids), nil
 }
 
 // readableLineage drops the restarted sessions allow refuses, so restartedAs
@@ -106,8 +115,12 @@ func (h *sessionHandler) readableLineage(ctx context.Context, lineage map[string
 	if allow == nil {
 		return lineage, nil
 	}
+	live, err := h.liveRecords(ctx)
+	if err != nil {
+		return nil, err
+	}
 	profiles := map[string]string{}
-	for _, rec := range append(h.liveRecords(), known...) {
+	for _, rec := range append(live, known...) {
 		profiles[rec.ID] = rec.Profile
 	}
 	readable := make(map[string][]string, len(lineage))
@@ -135,12 +148,18 @@ func (h *sessionHandler) readableLineage(ctx context.Context, lineage map[string
 	return readable, nil
 }
 
-// liveRecords is every session the registry holds, oldest first.
-func (h *sessionHandler) liveRecords() []query.SessionRecord {
-	infos := h.registry.List()
-	records := make([]query.SessionRecord, len(infos))
-	for i, info := range infos {
-		records[i] = info.SessionRecord
+// liveRecords is every session the registry holds in the scope ctx names,
+// oldest first.
+func (h *sessionHandler) liveRecords(ctx context.Context) ([]query.SessionRecord, error) {
+	visible, err := h.registry.Visible(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return records
+	var records []query.SessionRecord
+	for _, info := range h.registry.List() {
+		if visible(info.SessionRecord) {
+			records = append(records, info.SessionRecord)
+		}
+	}
+	return records, nil
 }

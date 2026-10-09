@@ -115,9 +115,20 @@ type errSessionNotFound string
 
 func (e errSessionNotFound) Error() string { return fmt.Sprintf("session %q not found", string(e)) }
 
+// resolve finds session id live in the registry, or else in the session store.
+// A live session outside the scope ctx names is not found: it is never looked
+// up in the store either, whose copy of it would show it across scopes.
 func (h *sessionHandler) resolve(ctx context.Context, id string) (resolvedSession, error) {
+	visible, err := h.registry.Visible(ctx)
+	if err != nil {
+		return resolvedSession{}, err
+	}
 	if session, ok := h.registry.Get(id); ok {
-		return resolvedSession{Live: session, Info: session.Snapshot()}, nil
+		info := session.Snapshot()
+		if !visible(info.SessionRecord) {
+			return resolvedSession{}, errSessionNotFound(id)
+		}
+		return resolvedSession{Live: session, Info: info}, nil
 	}
 	if h.sessions == nil {
 		return resolvedSession{}, errSessionNotFound(id)

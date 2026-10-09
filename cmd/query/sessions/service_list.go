@@ -95,7 +95,11 @@ type sessionListResponse struct {
 // registry holds no session the filter could select, the store's own page is
 // the answer, and the store pages it.
 func (h *sessionHandler) listRecords(ctx context.Context, filter query.SessionFilter) (query.SessionPage, error) {
-	if h.sessions != nil && !h.registryMaySelect(filter) {
+	live, err := h.liveRecords(ctx)
+	if err != nil {
+		return query.SessionPage{}, err
+	}
+	if h.sessions != nil && !registryMaySelect(live, filter) {
 		page, err := h.sessions.List(ctx, filter)
 		if err != nil {
 			return query.SessionPage{}, fmt.Errorf("list sessions: %w", err)
@@ -111,12 +115,12 @@ func (h *sessionHandler) listRecords(ctx context.Context, filter query.SessionFi
 	return page, err
 }
 
-// registryMaySelect reports whether a session the registry holds could be on
-// filter's page. Only the start fields are matched: a live session's state can
-// differ from its stored copy's, which it replaces.
-func (h *sessionHandler) registryMaySelect(filter query.SessionFilter) bool {
+// registryMaySelect reports whether a live session could be on filter's page.
+// Only the start fields are matched: a live session's state can differ from its
+// stored copy's, which it replaces.
+func registryMaySelect(live []query.SessionRecord, filter query.SessionFilter) bool {
 	filter.State, filter.Limit, filter.Offset = nil, 0, 0
-	page, err := query.ApplySessionFilter(h.liveRecords(), filter)
+	page, err := query.ApplySessionFilter(live, filter)
 	if err != nil {
 		// parseSessionFilter validated the filter; ApplySessionFilter fails on
 		// nothing else.
@@ -125,9 +129,13 @@ func (h *sessionHandler) registryMaySelect(filter query.SessionFilter) bool {
 	return page.Total > 0
 }
 
-// candidates is every record filter selects, unpaged, live ones included.
+// candidates is every record filter selects, unpaged, the live ones of ctx's
+// scope included.
 func (h *sessionHandler) candidates(ctx context.Context, filter query.SessionFilter) ([]query.SessionRecord, bool, error) {
-	live := h.liveRecords()
+	live, err := h.liveRecords(ctx)
+	if err != nil {
+		return nil, false, err
+	}
 	if h.sessions == nil {
 		return live, false, nil
 	}

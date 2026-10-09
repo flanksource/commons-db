@@ -57,12 +57,17 @@ type RestartFunc func(ctx stdcontext.Context, previous SessionRecord, opts Track
 // RegistryOptions bounds a SessionRegistry. Zero values take the defaults;
 // profile-declared limits are clamped to these server caps, never raised.
 type RegistryOptions struct {
-	// MaxSessions caps concurrently active capture sessions. Views never count
-	// against it, so a client re-opening live views cannot starve captures.
+	// MaxSessions caps concurrently active capture sessions, per Scope when one
+	// is set. Views never count against it, so a client re-opening live views
+	// cannot starve captures.
 	MaxSessions int // default 5
 
-	// MaxViews caps concurrently active view sessions.
+	// MaxViews caps concurrently active view sessions, per Scope when one is set.
 	MaxViews int // default DefaultMaxViews
+
+	// Scope partitions the sessions by the scope their start context names.
+	// Nil holds one process-wide set.
+	Scope *SessionScope
 
 	// MaxDuration caps any session's run duration.
 	MaxDuration time.Duration // default 15m
@@ -158,8 +163,12 @@ type SessionRegistry struct {
 	persistFailures atomic.Int64
 }
 
-// NewSessionRegistry creates a registry, applying defaults to zero options.
+// NewSessionRegistry creates a registry, applying defaults to zero options. An
+// incomplete Scope is a programming error and panics.
 func NewSessionRegistry(opts RegistryOptions) *SessionRegistry {
+	if err := opts.Scope.validate(); err != nil {
+		panic(fmt.Sprintf("query: %v", err))
+	}
 	opts.MaxSessions = defaultInt(opts.MaxSessions, 5)
 	opts.MaxViews = defaultInt(opts.MaxViews, DefaultMaxViews)
 	opts.MaxEvents = defaultInt(opts.MaxEvents, DefaultMaxEvents)
@@ -212,18 +221,14 @@ func (r *SessionRegistry) Owner() SessionOwner { return r.opts.Owner }
 func (r *SessionRegistry) StaleAfter() time.Duration { return r.opts.StaleAfter }
 
 // Add registers s, failing fast when its role's cap — MaxViews for a view,
-// MaxSessions for a capture — is already reached, and prunes the oldest
-// terminal sessions beyond RetainDone.
+// MaxSessions for a capture — is already reached in its scope, and prunes the
+// oldest terminal sessions beyond RetainDone.
 func (r *SessionRegistry) Add(s *Session) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if info := s.Snapshot(); !info.State.Terminal() {
-		limit, refusal := r.opts.MaxSessions, ErrMaxSessions
-		if info.Role == SessionRoleView {
-			limit, refusal = r.opts.MaxViews, ErrMaxViews
-		}
-		if active := r.activeLocked(info.Role); active >= limit {
-			return fmt.Errorf("%w (%d active); stop one first", refusal, active)
+		if err := r.admissionLocked(info.Role, info.Labels); err != nil {
+			return err
 		}
 	}
 	r.sessions[s.ID()] = s
