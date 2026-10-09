@@ -133,7 +133,13 @@ func addNativeWorktree(ctx context.Context, repo, baseDir string, checkout *conn
 	defer lock.Release()
 
 	if wt.Existing {
-		if _, err := gitOutput(ctx, repo, "rev-parse", "--verify", "--quiet", "refs/heads/"+branch); err != nil {
+		// check-ref-format rejects revision expressions (main~1, main^) and
+		// show-ref matches only the exact ref, so the worktree always attaches
+		// HEAD to the named branch rather than detaching at a resolved commit.
+		if name, err := gitString(ctx, repo, "check-ref-format", "--branch", branch); err != nil || name != branch {
+			return "", nil, fmt.Errorf("worktree branch %q is not a valid branch name", branch)
+		}
+		if _, err := gitOutput(ctx, repo, "show-ref", "--quiet", "--verify", "--", "refs/heads/"+branch); err != nil {
 			return "", nil, fmt.Errorf("worktree branch %s does not exist in %s", branch, repo)
 		}
 	}
@@ -178,16 +184,26 @@ func populateWorktree(ctx context.Context, source, target string, wt *connection
 			}
 		}
 
-		if err := copyListedFiles(ctx, source, target, "untracked",
+		if err := copyListedFiles(ctx, source, target, "untracked", nil,
 			"ls-files", "--others", "--exclude-standard", "-z"); err != nil {
 			return err
 		}
 	}
 
 	if wt.Ignored {
+		// The checked-out branch may track a path the source ignores; its
+		// committed content wins over the source's ignored copy.
+		tracked, err := gitOutput(ctx, target, "ls-files", "-z")
+		if err != nil {
+			return fmt.Errorf("list tracked files in worktree: %w", err)
+		}
+		skip := map[string]struct{}{}
+		for _, name := range strings.Split(string(tracked), "\x00") {
+			skip[name] = struct{}{}
+		}
 		// --others --ignored --exclude-standard is the exact complement of the
 		// untracked listing above: `git worktree add` brings neither.
-		if err := copyListedFiles(ctx, source, target, "ignored",
+		if err := copyListedFiles(ctx, source, target, "ignored", skip,
 			"ls-files", "--others", "--ignored", "--exclude-standard", "-z"); err != nil {
 			return err
 		}
@@ -240,8 +256,8 @@ func dirtyFiles(ctx context.Context, source, since string) ([]string, error) {
 }
 
 // copyListedFiles copies every path emitted by a NUL-separated `git ls-files`
-// invocation from source into target.
-func copyListedFiles(ctx context.Context, source, target, kind string, args ...string) error {
+// invocation from source into target, skipping any path in skip.
+func copyListedFiles(ctx context.Context, source, target, kind string, skip map[string]struct{}, args ...string) error {
 	out, err := gitOutput(ctx, source, args...)
 	if err != nil {
 		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
@@ -251,6 +267,9 @@ func copyListedFiles(ctx context.Context, source, target, kind string, args ...s
 	for _, name := range strings.Split(string(out), "\x00") {
 		name = strings.TrimSpace(name)
 		if name == "" || name == ".git" || strings.HasPrefix(name, ".git/") {
+			continue
+		}
+		if _, ok := skip[name]; ok {
 			continue
 		}
 		src := filepath.Join(source, name)
