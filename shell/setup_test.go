@@ -438,6 +438,47 @@ func TestSetupEnvWorktreeExistingBranchMustExist(t *testing.T) {
 	assert.Empty(t, gitLinesForTest(t, repo, "branch", "--list", "shell/gone"), "a missing branch is never created")
 }
 
+// A revision expression such as main~1 resolves to a commit, not a branch:
+// checking it out would leave a detached HEAD whose commits no branch retains.
+func TestSetupEnvWorktreeExistingRejectsRevisionExpression(t *testing.T) {
+	repo := initShellGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "second.txt"), []byte("second\n"), 0644))
+	runShellGit(t, repo, "add", "second.txt")
+	runShellGit(t, repo, "commit", "-q", "-m", "second")
+
+	for _, branch := range []string{"main~1", "main^", "HEAD"} {
+		_, err := SetupEnv(context.New(), &Exec{
+			BaseDir:  t.TempDir(),
+			Checkout: &connection.GitConnection{Path: repo, Worktree: &connection.GitWorktree{Enabled: true, Branch: branch, Existing: true}},
+		})
+		require.Error(t, err, "branch %q", branch)
+		assert.Contains(t, err.Error(), branch)
+	}
+	assert.Len(t, gitLinesForTest(t, repo, "worktree", "list"), 1, "no worktree is added for a non-branch ref")
+}
+
+// A file the source ignores but the existing branch tracks must keep the
+// branch's committed content rather than being overwritten by the source copy.
+func TestSetupEnvWorktreeIgnoredSkipsPathsTrackedOnBranch(t *testing.T) {
+	repo := initShellGitRepo(t)
+	require.NoError(t, os.WriteFile(filepath.Join(repo, ".gitignore"), []byte("config.env\nlocal.env\n"), 0644))
+	runShellGit(t, repo, "add", ".gitignore")
+	runShellGit(t, repo, "commit", "-q", "-m", "gitignore")
+	runShellGit(t, repo, "checkout", "-q", "-b", "shell/tracks-config")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "config.env"), []byte("tracked on branch\n"), 0644))
+	runShellGit(t, repo, "add", "-f", "config.env")
+	runShellGit(t, repo, "commit", "-q", "-m", "track config")
+	runShellGit(t, repo, "checkout", "-q", "main")
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "config.env"), []byte("source ignored\n"), 0644))
+	require.NoError(t, os.WriteFile(filepath.Join(repo, "local.env"), []byte("local\n"), 0644))
+
+	setup := worktreeSetup(t, repo, &connection.GitWorktree{Enabled: true, Branch: "shell/tracks-config", Existing: true, Ignored: true})
+
+	assert.Equal(t, "tracked on branch\n", string(readFile(t, filepath.Join(setup.Cwd, "config.env"))))
+	assert.Equal(t, "local\n", string(readFile(t, filepath.Join(setup.Cwd, "local.env"))))
+	assert.Empty(t, gitLinesForTest(t, setup.Cwd, "status", "--porcelain"))
+}
+
 func TestSetupEnvWorktreeExistingBranchCheckedOutElsewhereFails(t *testing.T) {
 	repo := initShellGitRepo(t)
 	runShellGit(t, repo, "branch", "shell/busy")
