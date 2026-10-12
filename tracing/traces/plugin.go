@@ -154,12 +154,18 @@ func (h *Handler[P, R]) WithDefaults(defaults P) *Handler[P, R] {
 	return h
 }
 
-// params are the defaults a capture starts from.
-func (h *Handler[P, R]) params() P {
-	if h.defaults != nil {
-		return *h.defaults
+// params are the defaults a capture starts from. A host's defaults are
+// copied, so decoding a start's params into them never reaches the slices and
+// maps the host and every other start share.
+func (h *Handler[P, R]) params() (P, error) {
+	if h.defaults == nil {
+		return h.handler.Params(), nil
 	}
-	return h.handler.Params()
+	var params P
+	if err := roundTrip(*h.defaults, &params); err != nil {
+		return params, fmt.Errorf("params defaults: %w", err)
+	}
+	return params, nil
 }
 
 // WithDeduplication drops a record whose key a session already emitted within
@@ -223,7 +229,10 @@ func (h *Handler[P, R]) Title() string { return h.handler.Schema().Title }
 func (h *Handler[P, R]) Capabilities() Capabilities { return h.capabilities }
 
 func (h *Handler[P, R]) Params() (*rpc.OpenAPISchema, error) {
-	defaults := h.params()
+	defaults, err := h.params()
+	if err != nil {
+		return nil, err
+	}
 	schema := rpc.SchemaForStruct(defaults)
 	var values map[string]any
 	if err := roundTrip(defaults, &values); err != nil {
@@ -399,7 +408,10 @@ func (h *Handler[P, R]) resultType(kind string) recordresults.ResultType[R] {
 // fields and trailing data, then lets params that validate themselves do so.
 // No params, or null, start from the defaults.
 func (h *Handler[P, R]) decodeParams(params json.RawMessage) (P, error) {
-	decoded := h.params()
+	decoded, err := h.params()
+	if err != nil {
+		return decoded, err
+	}
 	trimmed := bytes.TrimSpace(params)
 	if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
 		decoder := json.NewDecoder(bytes.NewReader(trimmed))

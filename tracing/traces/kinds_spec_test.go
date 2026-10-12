@@ -31,6 +31,28 @@ type untitled struct{ ticker }
 
 func (untitled) Schema() recordresults.ResultType[tick] { return recordresults.ResultType[tick]{} }
 
+type labelParams struct {
+	Labels []string `json:"labels,omitempty"`
+}
+
+// labeller emits one tick per label its params name, then ends.
+type labeller struct{}
+
+func (labeller) Params() labelParams { return labelParams{} }
+
+func (labeller) Schema() recordresults.ResultType[tick] {
+	return recordresults.ResultType[tick]{Title: "Labels", TimeColumn: "at"}
+}
+
+func (labeller) Handle(ctx dbcontext.Context, p labelParams, records traces.Emitter[tick], _ traces.Records[tick]) error {
+	for n, label := range p.Labels {
+		if err := records.Emit(ctx, tick{At: time.Now().UTC(), N: n + 1, Label: label}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 var _ = Describe("Kinds", func() {
 	It("describes a registered kind: its params form with defaults, its columns and capabilities", func() {
 		kinds := traces.NewKinds()
@@ -83,6 +105,20 @@ var _ = Describe("Kinds", func() {
 		Eventually(func() int64 { return session.Snapshot().EventCount }).Should(Equal(int64(7)))
 		rows := env.Rows(tracestest.Ended(stopped(session)))
 		Expect(rows[0]["label"]).To(Equal("mine"))
+	})
+
+	It("starts every capture from the host's defaults, whatever an earlier start asked for", func() {
+		plugin := traces.NewHandler[labelParams, tick](labeller{}, traces.Capabilities{Historical: true}).
+			WithDefaults(labelParams{Labels: []string{"self"}})
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{"labels": plugin})
+
+		asked := env.Rows(tracestest.Ended(env.Start("labels", `{"labels": ["other"]}`)))
+		Expect(asked).To(HaveLen(1))
+		Expect(asked[0]["label"]).To(Equal("other"))
+
+		defaulted := env.Rows(tracestest.Ended(env.Start("labels", `{}`)))
+		Expect(defaulted).To(HaveLen(1))
+		Expect(defaulted[0]["label"]).To(Equal("self"))
 	})
 
 	It("lists kinds by name", func() {
