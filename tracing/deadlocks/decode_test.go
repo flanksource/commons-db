@@ -185,7 +185,26 @@ var _ = Describe("DecodeReport", func() {
 		Entry("an odd stmtend, which is not a UTF-16 byte offset", withFrame(`stmtstart="0" stmtend="15"`, "SELECT 1"), "stmtend=15"),
 		Entry("a stmtend before its stmtstart", withFrame(`stmtstart="20" stmtend="10"`, "SELECT 1"), "stmtend=10"),
 		Entry("a negative stmtstart", withFrame(`stmtstart="-2" stmtend="10"`, "SELECT 1"), "stmtstart=-2"),
+		Entry("a stmtstart of -1 with a stmtend, which is not the unavailable marker",
+			withFrame(`stmtstart="-1" stmtend="10"`, "SELECT 1"), "stmtstart=-1"),
 	)
+
+	It("decodes a frame SQL Server reports without statement offsets", func() {
+		graph, err := deadlocks.DecodeReport(reportedAt, fixture("module-frame-unavailable-offsets.xml"))
+		Expect(err).NotTo(HaveOccurred())
+		var unavailable []string
+		for _, process := range graph.Processes {
+			for _, frame := range process.Frames {
+				if frame.OffsetsUnavailable() {
+					unavailable = append(unavailable, process.ID+" "+frame.ProcName)
+				}
+			}
+		}
+		Expect(unavailable).To(Equal([]string{
+			"process2776f525c28 mssqlsystemresource.sys.sp_executesql",
+			"process27c13591c28 mssqlsystemresource.sys.sp_executesql",
+		}))
+	})
 
 	type running struct {
 		Statement string
@@ -208,6 +227,8 @@ var _ = Describe("DecodeReport", func() {
 		Entry("a missing stmtend runs to the end of the batch", `stmtstart="36"`, "adhoc",
 			"(@P0 int)SELECT 1;SELECT @P0", running{"SELECT @P0", 10, false}),
 		Entry("no offsets: the whole batch", ``, "adhoc",
+			"(@P0 int)SELECT 1;SELECT @P0", running{"(@P0 int)SELECT 1;SELECT @P0", 28, false}),
+		Entry("unavailable offsets: the whole batch", `stmtstart="-1"`, "adhoc",
 			"(@P0 int)SELECT 1;SELECT @P0", running{"(@P0 int)SELECT 1;SELECT @P0", 28, false}),
 		// U+1F600 is two UTF-16 code units and four UTF-8 bytes, é one unit and two
 		// bytes: the second SELECT starts at code unit 14, byte 28.

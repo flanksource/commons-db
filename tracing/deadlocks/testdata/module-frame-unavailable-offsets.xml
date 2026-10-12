@@ -1,0 +1,121 @@
+<deadlock>
+ <victim-list>
+  <victimProcess id="process2776f525c28"/>
+ </victim-list>
+ <process-list>
+  <process id="process2776f525c28" taskpriority="10" logused="498634724" waitresource="KEY: 53:281474978938880 (a56f57a234ba)" waittime="3030" ownerId="20742827948" transactionname="ALTER INDEX" lasttranstarted="2026-10-02T01:57:27.317" XDES="0x274761b0040" lockMode="X" schedulerid="7" kpid="11508" status="suspended" spid="293" sbid="0" ecid="0" priority="-10" trancount="1" lastbatchstarted="2026-10-02T01:05:00.397" lastbatchcompleted="2026-10-02T01:05:00.397" lastattention="1900-01-01T00:00:00.397" clientapp="SQLAgent - TSQL JobStep (Job 0x0 : Step 1)" hostname="sqlhost" hostpid="6376" loginname="maint" isolationlevel="read committed (2)" xactid="20742827948" currentdb="32" currentdbname="dbadmin" lockTimeout="4294967295" clientoption1="673384544" clientoption2="128056">
+   <executionStack>
+    <frame procname="adhoc" line="1" stmtend="334" sqlhandle="0x01002000fd6eae28805c307d7902000000000000000000000000000000000000000000000000000000000000">
+ALTER INDEX [IX_AsActivity_ActGuid_Status_EffDate] ON [ACME_APP_QA].[dbo].[AsActivity] REBUILD WITH (DATA_COMPRESSION = NONE, FILLFACTOR = 100, SORT_IN_TEMPDB = ON    </frame>
+    <frame procname="mssqlsystemresource.sys.sp_executesql" line="1" stmtstart="-1" sqlhandle="0x0400ff7f427f99d9010000000000000000000000000000000000000000000000000000000000000000000000">
+sp_executesql    </frame>
+    <frame procname="dbadmin.dbo.usp_AdaptiveIndexDefrag" line="1769" stmtstart="203362" stmtend="203426" sqlhandle="0x0300200048f2e349e451b700fbb2000001000000000000000000000000000000000000000000000000000000">
+EXECUTE sp_executesql @sqlcomman    </frame>
+    <frame procname="adhoc" line="4" stmtstart="52" stmtend="876" sqlhandle="0x0100010092c12c2f905fdb227502000000000000000000000000000000000000000000000000000000000000">
+EXEC usp_AdaptiveIndexDefrag
+      @defragOrderColumn = 'page_count',
+      @defragSortOrder = 'DESC',
+      @forceRescan = 1,
+      @onlineRebuild = 1,
+      @outputResults=1 ,
+      @scanMode = 'DETAILED',
+      @sortInTempDB = 1,
+      @updateStats = 1,
+      @abortAfterwait = 2,
+      @maxDopRestriction = 2,
+      @timeLimit = 300,
+      @minFragmentation = 50 ,
+      @offlinelocktimeout = 18    </frame>
+   </executionStack>
+   <inputbuf>
+
+    USE dbadmin;
+
+    EXEC usp_AdaptiveIndexDefrag
+      @defragOrderColumn = 'page_count',
+      @defragSortOrder = 'DESC',
+      @forceRescan = 1,
+      @onlineRebuild = 1,
+      @outputResults=1 ,
+      @scanMode = 'DETAILED',
+      @sortInTempDB = 1,
+      @updateStats = 1,
+      @abortAfterwait = 2,
+      @maxDopRestriction = 2,
+      @timeLimit = 300,
+      @minFragmentation = 50 ,
+      @offlinelocktimeout = 180
+           </inputbuf>
+  </process>
+  <process id="process27c13591c28" taskpriority="0" logused="0" waitresource="OBJECT: 53:834818036:0 " waittime="6884" ownerId="20742833399" transactionname="MDView" lasttranstarted="2026-10-02T01:57:29.123" XDES="0x277ffed7ac0" lockMode="Sch-S" schedulerid="2" kpid="7916" status="suspended" spid="302" sbid="0" ecid="0" priority="0" trancount="2" lastbatchstarted="2026-10-02T01:36:01.293" lastbatchcompleted="2026-10-02T01:36:01.297" lastattention="1900-01-01T00:00:00.297" clientapp="go-mssqldb" hostname="apphost" hostpid="1" loginname="maint" isolationlevel="read committed (2)" xactid="20742809793" currentdb="53" currentdbname="ACME_APP_QA" lockTimeout="4294967295" clientoption1="673185824" clientoption2="128056">
+   <executionStack>
+    <frame procname="adhoc" line="4" stmtstart="66" stmtend="1952" sqlhandle="0x0200000020317f12e4d0697b06f7a5846176a4866dbac0510000000000000000000000000000000000000000">
+unknown    </frame>
+    <frame procname="mssqlsystemresource.sys.sp_executesql" line="1" stmtstart="-1" sqlhandle="0x0400ff7f427f99d9010000000000000000000000000000000000000000000000000000000000000000000000">
+sp_executesql    </frame>
+    <frame procname="adhoc" line="68" stmtstart="4042" stmtend="4086" sqlhandle="0x020000009600b00888d74cba5f0f15d2f16b61e63150d6d50000000000000000000000000000000000000000">
+unknown    </frame>
+   </executionStack>
+   <inputbuf>
+SET NOCOUNT ON;
+
+-- Create a temporary table to store the results
+IF OBJECT_ID('tempdb..#FragmentedIndexes') IS NOT NULL
+    DROP TABLE #FragmentedIndexes;
+
+CREATE TABLE #FragmentedIndexes (
+    DatabaseName NVARCHAR(128),
+    SchemaName NVARCHAR(128),
+    TableName NVARCHAR(128),
+    IndexName NVARCHAR(128),
+    IndexID INT,
+    FragmentationPercent FLOAT,
+    PageCount BIGINT,
+    IndexType NVARCHAR(60),
+    Partition INT
+);
+
+-- Declare variables for the cursor
+DECLARE @DatabaseName NVARCHAR(128);
+DECLARE @SQL NVARCHAR(MAX);
+
+-- Create a cursor to iterate through all user databases
+DECLARE db_cursor CURSOR FOR
+SELECT name
+FROM sys.databases
+WHERE database_id &gt; 4  -- Skip system databases
+AND name like '%OIPA%'
+AND state_desc = 'ONLINE'
+AND is_read_only = 0;
+
+-- Open the cursor
+OPEN db_cursor;
+FETCH NEXT FROM db_cursor INTO @DatabaseName;
+
+-- Loop through each database
+WHILE @@FETCH_STATUS = 0
+BEGIN
+    -- Create dynamic SQL to execute in each database context
+    SET @SQL = N'
+    USE [' + @DatabaseName +    </inputbuf>
+  </process>
+ </process-list>
+ <resource-list>
+  <keylock hobtid="281474978938880" dbid="53" objectname="ACME_APP_QA.sys.sysschobjs" indexname="clst" id="lock2730609af80" mode="U" associatedObjectId="281474978938880">
+   <owner-list>
+    <owner id="process27c13591c28" mode="S"/>
+   </owner-list>
+   <waiter-list>
+    <waiter id="process2776f525c28" mode="X" requestType="convert"/>
+   </waiter-list>
+  </keylock>
+  <objectlock lockPartition="0" objid="834818036" subresource="FULL" dbid="53" objectname="ACME_APP_QA.dbo.AsActivity" id="lock27745435480" mode="Sch-M" associatedObjectId="834818036">
+   <owner-list>
+    <owner id="process2776f525c28" mode="Sch-M"/>
+   </owner-list>
+   <waiter-list>
+    <waiter id="process27c13591c28" mode="Sch-S" requestType="wait"/>
+   </waiter-list>
+  </objectlock>
+ </resource-list>
+</deadlock>
