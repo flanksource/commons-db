@@ -1,6 +1,7 @@
 package sqltrace
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -11,6 +12,37 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+var _ = Describe("DecodeEvent", func() {
+	It("is a statement's row as FromEvent builds it", func() {
+		event := xetrace.Event{Name: xetrace.EventSQLStatementCompleted, Timestamp: capturedAt, Statement: "SELECT 1"}
+		Expect(DecodeEvent(context.Background(), nil, event)).To(Equal(FromEvent(event)))
+	})
+
+	It("decodes a deadlock report, resolving its indexes through db", func() {
+		connection, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(connection.Close()).To(Succeed())
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+		mock.ExpectQuery("SELECT DB_ID()").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(5))
+		mock.ExpectClose()
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/><process id="p2" currentdbname="tenant_b"/></process-list><resource-list/></deadlock>`
+
+		row := DecodeEvent(context.Background(), connection, xetrace.Event{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report})
+		Expect(row.Deadlock).NotTo(BeNil())
+		Expect(row.Database).To(Equal("tenant_a"))
+		Expect(row.ErrorMessage).To(BeEmpty())
+	})
+
+	It("keeps a deadlock it cannot resolve without a database, naming why", func() {
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/></process-list><resource-list/></deadlock>`
+		row := DecodeEvent(context.Background(), nil, xetrace.Event{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report})
+		Expect(row.Deadlock).NotTo(BeNil())
+		Expect(row.ErrorMessage).To(Equal("resolve deadlock indexes: no database lease"))
+	})
+})
 
 var _ = Describe("captured deadlock rows", func() {
 	It("stores a decoded graph and its XML in the sql_xevent stream", func() {

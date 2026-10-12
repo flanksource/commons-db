@@ -82,6 +82,12 @@ type Options struct {
 	// Traces starts trace plugin captures, each authorized as its profile
 	// traces/<kind>. Nil serves no trace routes.
 	Traces *traces.Runtime
+
+	// TraceStartError answers a trace start the runtime refused, when the host
+	// recognises the refusal and can describe it better than its error text
+	// (a missing database grant, say), and reports whether it answered. Nil,
+	// or false, answers the error as text.
+	TraceStartError func(w http.ResponseWriter, r *http.Request, err error) bool
 }
 
 type Service struct {
@@ -110,7 +116,7 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 	return newSessionHandler(sessionHandlerOptions{
 		Prefix: prefix, Ctx: o.Context(), Store: store, Registry: o.Registry, Sessions: o.Store,
 		EventLog: o.EventLog, Records: o.Records, Authorize: o.Authorize, Principal: o.Principal, Traces: o.Traces,
-		Next: next,
+		TraceStartError: o.TraceStartError, Next: next,
 	}), nil
 }
 
@@ -138,7 +144,9 @@ type sessionHandler struct {
 	authorize AuthorizeFunc
 	principal func(r *http.Request) string
 	traces    *traces.Runtime
-	next      http.Handler
+	// traceStartError answers a refused trace start the host describes.
+	traceStartError func(w http.ResponseWriter, r *http.Request, err error) bool
+	next            http.Handler
 }
 
 type sessionHandlerOptions struct {
@@ -152,14 +160,16 @@ type sessionHandlerOptions struct {
 	Authorize AuthorizeFunc
 	Principal func(r *http.Request) string
 	Traces    *traces.Runtime
-	Next      http.Handler
+	// TraceStartError answers a refused trace start the host describes.
+	TraceStartError func(w http.ResponseWriter, r *http.Request, err error) bool
+	Next            http.Handler
 }
 
 func newSessionHandler(opts sessionHandlerOptions) *sessionHandler {
 	return &sessionHandler{
 		prefix: strings.TrimRight(opts.Prefix, "/"), ctx: opts.Ctx, store: opts.Store, registry: opts.Registry,
 		sessions: opts.Sessions, eventLog: opts.EventLog, records: opts.Records, authorize: opts.Authorize,
-		principal: opts.Principal, traces: opts.Traces, next: opts.Next,
+		principal: opts.Principal, traces: opts.Traces, traceStartError: opts.TraceStartError, next: opts.Next,
 	}
 }
 

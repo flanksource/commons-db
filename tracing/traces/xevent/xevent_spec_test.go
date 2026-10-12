@@ -16,6 +16,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/tracing/sqltrace"
 	"github.com/flanksource/commons-db/tracing/xetrace"
 
@@ -29,6 +30,8 @@ import (
 type fakeXE struct {
 	mu       sync.Mutex
 	events   []xetrace.Event
+	stats    xetrace.TargetStats
+	opened   sqltrace.Opened
 	released bool
 	served   bool
 	dropped  bool
@@ -42,7 +45,7 @@ func (f *fakeXE) Poll(context.Context) (xetrace.TargetSnapshot, error) {
 		return xetrace.TargetSnapshot{}, nil
 	}
 	f.served = true
-	return xetrace.TargetSnapshot{Events: f.events}, nil
+	return xetrace.TargetSnapshot{Events: f.events, Stats: f.stats}, nil
 }
 
 func (f *fakeXE) Drop(context.Context) error {
@@ -89,10 +92,35 @@ func capture(xe *fakeXE, createErr error) (xevent.Capture, *bool) {
 			if createErr != nil {
 				return nil, sqltrace.Opened{}, createErr
 			}
+			if xe.opened.Name != "" {
+				return xe, xe.opened, nil
+			}
 			return xe, sqltrace.Opened{Name: "spec"}, nil
 		},
 		CurrentDatabase: func(context.Context, *sql.DB) (string, error) { return "warehouse", nil },
 	}, leaseReleased
+}
+
+// hostParams are a host's own form for a capture, which always captures on
+// the host's own connection.
+type hostParams struct {
+	Database string `json:"database" clicky:"title=Database"`
+}
+
+func (p hostParams) XEventOptions() (xevent.Options, error) {
+	if p.Database == "" {
+		return xevent.Options{}, errors.New("database is required")
+	}
+	return xevent.Options{
+		Connection: "oipa",
+		Create:     xetrace.CreateOptions{Name: "host_capture", Databases: []string{p.Database}},
+		Drain:      xetrace.DrainOptions{Interval: time.Hour},
+	}, nil
+}
+
+func (p hostParams) Validate() error {
+	_, err := p.XEventOptions()
+	return err
 }
 
 const params = `{"connection": "warehouse", "sessionName": "spec", "poll": "1h"}`
@@ -123,6 +151,75 @@ var _ = Describe("sql_xevent trace kind", func() {
 		Expect(string(stored)).ToNot(ContainSubstring("hunter2"))
 		Expect(xe.wasDropped()).To(BeTrue())
 		Expect(*leaseReleased).To(BeTrue())
+	})
+
+	It("reports the capture's summary, names its session after the XE session, and warns of events it lost", func() {
+		xe := &fakeXE{
+			events: []xetrace.Event{statement(51, "SELECT 1", 0), statement(52, "SELECT 2", time.Second)},
+			stats:  xetrace.TargetStats{DroppedCount: 3},
+			opened: sqltrace.Opened{Name: "spec_capture_1", Statements: []string{"CREATE EVENT SESSION spec_capture_1", "ALTER EVENT SESSION spec_capture_1 STATE = START"}},
+		}
+		kind, _ := capture(xe, nil)
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{"sql_xevent": xevent.NewKind(kind)})
+		session := env.Start("sql_xevent", params)
+		tracestest.Running(session)
+		running := session.Snapshot()
+		Expect(running.Handle).To(Equal("spec_capture_1"))
+		Expect(running.Metadata).To(ConsistOf(query.SessionMetadata{
+			Name: "sql_xevent.databases", Label: "Databases", Value: "warehouse",
+		}, query.SessionMetadata{
+			Name: "sql_xevent.statements", Label: "Started with", Language: "sql",
+			Value: "CREATE EVENT SESSION spec_capture_1;\n\nALTER EVENT SESSION spec_capture_1 STATE = START;",
+		}))
+		xe.release()
+		session.Stop("spec")
+		info := tracestest.Ended(session)
+		Expect(info.Error).To(BeEmpty())
+		report := tracestest.Summary(info).Report
+		Expect(report).To(HaveKeyWithValue("events", float64(2)))
+		Expect(report).To(HaveKeyWithValue("lost", float64(3)))
+		Expect(info.Warning).To(ContainSubstring("lost 3 event(s)"))
+	})
+
+	It("stores a deadlock report as its decoded graph", func() {
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/></process-list><resource-list/></deadlock>`
+		xe := &fakeXE{events: []xetrace.Event{{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report}}}
+		kind, _ := capture(xe, nil)
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{"sql_xevent": xevent.NewKind(kind)})
+		session := env.Start("sql_xevent", params)
+		tracestest.Running(session)
+		xe.release()
+		session.Stop("spec")
+		rows := env.Rows(tracestest.Ended(session))
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]["deadlock"]).ToNot(BeNil())
+		Expect(rows[0]["database"]).To(Equal("tenant_a"))
+	})
+
+	It("captures with a host's own params type, through the options it maps them to", func() {
+		xe := &fakeXE{events: []xetrace.Event{statement(51, "SELECT 1", 0)}}
+		kind, _ := capture(xe, nil)
+		var connections []string
+		open := kind.Open
+		kind.Open = func(ctx dbcontext.Context, connection string) (*sql.DB, func(), error) {
+			connections = append(connections, connection)
+			return open(ctx, connection)
+		}
+		host := xevent.NewKindFor[hostParams](kind).WithDefaults(hostParams{Database: "tenant_a"})
+		schema, err := host.Params()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(schema.Properties["database"].Default).To(Equal("tenant_a"))
+		Expect(host.ValidateParams(json.RawMessage(`{"database": ""}`))).To(MatchError(ContainSubstring("database is required")))
+
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{"sql_xevent": host})
+		session := env.Start("sql_xevent", `{}`)
+		tracestest.Running(session)
+		xe.release()
+		session.Stop("spec")
+		info := tracestest.Ended(session)
+		Expect(info.Error).To(BeEmpty())
+		Expect(env.Rows(info)).To(HaveLen(1))
+		Expect(connections).To(Equal([]string{"oipa"}))
 	})
 
 	It("records on its session that the XE session could not be dropped, so it is not left running unnoticed", func() {
@@ -160,6 +257,21 @@ var _ = Describe("sql_xevent trace kind", func() {
 		Entry("a negative minimum duration", `{"connection": "warehouse", "sessionName": "spec", "minDuration": "-1s"}`, "minDuration"),
 		Entry("an option it does not define", `{"connection": "warehouse", "sessionName": "spec", "minDurationMs": 5}`, "minDurationMs"),
 	)
+})
+
+var _ = Describe("sql_xevent result profile", func() {
+	It("follows a capture's stream and searches its statements' text", func() {
+		kind, _ := capture(&fakeXE{}, nil)
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{"sql_xevent": xevent.NewKind(kind)})
+		profile, err := env.Results.Registry.Get(context.Background(), "traces/sql_xevent")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(profile.Provider.Type).To(Equal(recordresults.ProviderType))
+		var roles []query.ParamRole
+		for _, param := range profile.Params {
+			roles = append(roles, param.Role)
+		}
+		Expect(roles).To(ContainElement(query.ParamRoleSearch))
+	})
 })
 
 var _ = Describe("sql_xevent params form", func() {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/probe"
 
@@ -35,6 +36,8 @@ type Summary struct {
 	Dropped      int64 `json:"dropped,omitempty"`
 	Unencodable  int64 `json:"unencodable,omitempty"`
 	Collapsed    int64 `json:"collapsed,omitempty"`
+	// Report is the kind's own summary, as it last reported it.
+	Report any `json:"report,omitempty"`
 }
 
 // source buffers the rows of one capture. rows[0] is the row at index base of
@@ -66,11 +69,20 @@ type source struct {
 	summary Summary
 	err     error
 
+	// warnings are the kind's, which the session ends with; handle and
+	// metadata are what it described its session with.
+	warnings []string
+	handle   string
+	metadata []query.SessionMetadata
+
 	ctx     dbcontext.Context
 	capture func(dbcontext.Context) error
-	release func() error
-	cancel  context.CancelFunc
-	done    chan struct{}
+	// checkpoint takes the kind's reading at a checkpoint; nil for a kind
+	// that takes none.
+	checkpoint func(context.Context) error
+	release    func() error
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 func newSource(generation string, capacity, maxBytes int, key string, replace bool) *source {
@@ -212,6 +224,37 @@ func (s *source) count(field *int64) {
 	s.mu.Unlock()
 }
 
+func (s *source) report(summary any) {
+	s.mu.Lock()
+	s.summary.Report = summary
+	s.mu.Unlock()
+}
+
+func (s *source) warn(message string) {
+	s.mu.Lock()
+	s.warnings = append(s.warnings, message)
+	s.mu.Unlock()
+}
+
+func (s *source) describe(handle string, metadata []query.SessionMetadata) {
+	s.mu.Lock()
+	s.handle, s.metadata = handle, metadata
+	s.mu.Unlock()
+}
+
+// described overlays the handle and metadata the kind described onto status.
+func (s *source) described(status query.ManagedStatus) query.ManagedStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.handle != "" {
+		status.Handle = s.handle
+	}
+	if len(s.metadata) > 0 {
+		status.Metadata = s.metadata
+	}
+	return status
+}
+
 func (s *source) signalSpaceLocked() {
 	close(s.space)
 	s.space = make(chan struct{})
@@ -297,6 +340,7 @@ func (s *source) Finalize(context.Context) (probe.Final, error) {
 	if s.summary.Unencodable > 0 {
 		warnings = append(warnings, fmt.Sprintf("could not encode %d records", s.summary.Unencodable))
 	}
+	warnings = append(warnings, s.warnings...)
 	return probe.Final{Summary: s.summary, Warning: strings.Join(warnings, "; ")}, nil
 }
 
@@ -327,6 +371,18 @@ func (s *source) wait(ctx context.Context) error {
 	case <-ctx.Done():
 		return fmt.Errorf("trace capture %s: the handler did not return: %w", s.generation, ctx.Err())
 	}
+}
+
+// takeCheckpoint takes the kind's reading while the capture runs; a capture
+// that ended, or a kind that takes no readings, takes none.
+func (s *source) takeCheckpoint(ctx context.Context) error {
+	s.mu.Lock()
+	running := s.running
+	s.mu.Unlock()
+	if !running || s.checkpoint == nil {
+		return nil
+	}
+	return s.checkpoint(ctx)
 }
 
 // handlerErr is the error the capture's handler ended with.

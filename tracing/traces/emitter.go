@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/commons/logger"
 
+	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
 
@@ -53,6 +54,14 @@ func (e *emitter[R]) TryEmit(record R) bool {
 		return false
 	}
 	return true
+}
+
+func (e *emitter[R]) Report(summary any) { e.source.report(summary) }
+
+func (e *emitter[R]) Warn(message string) { e.source.warn(message) }
+
+func (e *emitter[R]) Describe(handle string, metadata ...query.SessionMetadata) {
+	e.source.describe(handle, metadata)
 }
 
 // reserve claims record's dedup key, counting a record its window already

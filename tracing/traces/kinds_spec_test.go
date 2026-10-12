@@ -6,17 +6,26 @@ package traces_test
 import (
 	"context"
 	"encoding/json"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/recordstore/recordresults/recordresultstest"
 
+	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing/traces/tracestest"
 )
+
+// stopped stops session, returning it.
+func stopped(session *query.Session) *query.Session {
+	session.Stop("spec")
+	return session
+}
 
 type untitled struct{ ticker }
 
@@ -52,6 +61,28 @@ var _ = Describe("Kinds", func() {
 		}))
 		Expect(info.Columns[1].Name).To(Equal("n"))
 		Expect(info.Columns[2].Name).To(Equal("label"))
+	})
+
+	It("prefills a kind's form and starts its captures from the defaults a host gives it", func() {
+		plugin := traces.NewHandler[tickParams, tick](scripted{handle: func(ctx dbcontext.Context, p tickParams, records traces.Emitter[tick], _ traces.Records[tick]) error {
+			for n := 1; n <= p.Count; n++ {
+				if err := records.Emit(ctx, tick{At: time.Now().UTC(), N: n, Label: p.Label}); err != nil {
+					return err
+				}
+			}
+			<-ctx.Done()
+			return nil
+		}}, traces.Capabilities{Live: true}).WithDefaults(tickParams{Count: 7, Label: "host"})
+		schema, err := plugin.Params()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(schema.Properties["count"].Default).To(Equal(float64(7)))
+		Expect(schema.Properties["label"].Default).To(Equal("host"))
+
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{"ticks": plugin})
+		session := env.Start("ticks", `{"label": "mine"}`)
+		Eventually(func() int64 { return session.Snapshot().EventCount }).Should(Equal(int64(7)))
+		rows := env.Rows(tracestest.Ended(stopped(session)))
+		Expect(rows[0]["label"]).To(Equal("mine"))
 	})
 
 	It("lists kinds by name", func() {

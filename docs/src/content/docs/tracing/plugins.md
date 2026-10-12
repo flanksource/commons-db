@@ -66,6 +66,18 @@ How the handler's params and records behave:
 - **`TryEmit`** never waits. A record it cannot buffer is dropped, counted in the session summary, and reported as a warning. Use it from a callback that runs on someone else's goroutine, such as a request's.
 - **Handle's return.** Returning nil ends the capture normally. An error fails the session, but the records already emitted are still committed and sealed.
 
+### Reporting beyond records
+
+A capture can say more about itself than its records, through the same `Emitter`:
+
+| Method | Effect |
+| --- | --- |
+| `Report(summary)` | Replaces the kind's own summary, such as the events its source lost. The session shows the latest one under `summary.source.report` while it runs and keeps the last. |
+| `Warn(message)` | Adds a warning the session ends with, after the runtime's own (dropped or unencodable records). |
+| `Describe(handle, metadata...)` | Names the session by what the capture set up on its source, such as an XE session, with the statements that set it up. A session records these once, as it starts running, so call it from `Prepare`. |
+
+A kind that keeps data apart from its records, such as HTTP bodies served only on request, writes it to a companion stream named after its own: `traces.StreamOf(ctx)` is that stream, under the context `Prepare` and `Handle` run with.
+
 ### Setup that must finish before the session runs
 
 A kind that subscribes to something, or creates a server-side session, implements `Preparer[P, R]`:
@@ -77,6 +89,20 @@ Prepare(ctx dbcontext.Context, params P, records Emitter[R]) (prepared dbcontext
 - `Prepare` runs synchronously as the session starts, before it reports running. A subscription made there misses nothing, and an error refuses the start.
 - `Handle` then runs under the context `Prepare` returned, which can carry what it set up.
 - `release` runs once `Handle` has returned, or at once if the capture never started. An error it returns, such as a server-side session that could not be dropped, becomes the session's error; the records are still committed and sealed.
+
+### Readings at a host's checkpoints
+
+A kind that reads state rather than observing events, such as an expression evaluated against a JVM, can take a reading at each checkpoint its host marks by implementing `Checkpointer[P, R]`:
+
+```go
+Checkpoint(ctx dbcontext.Context, params P, records Emitter[R]) error
+```
+
+A host marks a checkpoint with `Runtime.Checkpoint(ctx, session)`, for example at the end of each step a span covers. The kind's reading is taken, then the session is sampled, so the reading is committed when `Checkpoint` returns. The session's background polls are not checkpoints. For a kind that takes no readings, `Checkpoint` only samples the session.
+
+### Defaults a host gives
+
+`Handler.WithDefaults(params)` starts a kind's form and its captures from `params` rather than the handler's own `Params()`. A host that knows its connections prefills them this way, such as `sqlstatements.Kind().WithDefaults(sqlstatements.Params{Connections: []string{"self"}})`.
 
 ### Capabilities
 
@@ -136,7 +162,7 @@ managed, err := runtime.Start(ctx, traces.StartRequest{Kind: "heartbeat", Params
 | --- | --- |
 | `http` | Outbound HTTP exchanges of chosen features (`prometheus`, `loki`, `http`, ...), one HAR entry each. |
 | `sql` | SQL statements commons-db runs on the connections it names. `"*"` names every connection and `"self"` the server's own database; `"*"` does not include `"self"`, and naming none is refused. |
-| `sql_xevent` | SQL Server Extended Events, as `sqltrace` event rows. |
+| `sql_xevent` | SQL Server Extended Events, as `sqltrace` event rows, deadlock reports decoded (`sqltrace.DecodeEvent`). The session is named after its XE session, reports an `xetrace.Summary` and warns of events it lost. A host with its own params form serves it with `xevent.NewKindFor`, over a params type whose `XEventOptions()` names the connection, the XE session and its drain. |
 | `opensearch` | Span documents of an opentelemetry connection's index, over a window and optionally followed. |
 
 Its routes:
@@ -147,6 +173,8 @@ Its routes:
 `/api/openapi.json` describes one start operation per kind, whose request body is that kind's params form.
 
 The routes authorize nothing themselves. A host that serves them sets `sessions.Options.Authorize`, which is asked for every start, read and control of a session under its `traces/<kind>` profile; without it, as in `query serve`, anyone who reaches the server can start a capture. A host such as oipa authorizes its users in front of these routes.
+
+A refused start is answered with its error as text: 404 for an unknown kind, 409 at the session limit, 400 otherwise. A host that can say more about a refusal sets `sessions.Options.TraceStartError`. It is given the error first, and when it returns true its own response stands. oipa uses it to answer a missing SQL Server grant with a 403 that carries the grant statements.
 
 The `http` and `sql` kinds observe commons-db through taps in the `connection` package:
 - `ObserveHTTP` hands a HAR collector every exchange of a feature, whatever its HAR level.

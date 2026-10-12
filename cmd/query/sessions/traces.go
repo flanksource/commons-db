@@ -12,11 +12,13 @@ import (
 	"github.com/flanksource/commons-db/tracing/traces"
 )
 
-// traceStartInput is the body of a trace start: the kind's params, and how
-// long the capture runs (the registry's longest duration when empty).
+// traceStartInput is the body of a trace start: the kind's params, how long
+// the capture runs (the registry's longest duration when empty), and labels a
+// host lists its sessions by.
 type traceStartInput struct {
-	Params   json.RawMessage `json:"params,omitempty"`
-	Duration string          `json:"duration,omitempty"`
+	Params   json.RawMessage   `json:"params,omitempty"`
+	Duration string            `json:"duration,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
 }
 
 // traceKinds answers the kinds the caller may read, each with its params form
@@ -48,7 +50,7 @@ func (h *sessionHandler) startTrace(w http.ResponseWriter, r *http.Request, kind
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	request := traces.StartRequest{Kind: kind, Params: input.Params}
+	request := traces.StartRequest{Kind: kind, Params: input.Params, Labels: input.Labels}
 	if input.Duration != "" {
 		duration, err := time.ParseDuration(input.Duration)
 		if err != nil || duration <= 0 {
@@ -65,6 +67,8 @@ func (h *sessionHandler) startTrace(w http.ResponseWriter, r *http.Request, kind
 	switch {
 	case errors.Is(err, traces.ErrUnknownKind):
 		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case err != nil && h.traceStartError != nil && h.traceStartError(w, r, err):
 		return
 	case err != nil:
 		http.Error(w, err.Error(), sessionStartErrorStatus(err))

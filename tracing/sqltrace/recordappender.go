@@ -36,11 +36,7 @@ type recordAppender struct {
 func (a recordAppender) Append(events []xetrace.Event) (recordstore.Window, query.EventsRef, error) {
 	rows := make([]recordstore.Row, len(events))
 	for index, event := range events {
-		result := FromEvent(event)
-		if event.Name == xetrace.EventXMLDeadlockReport {
-			a.decodeDeadlock(event, &result)
-		}
-		row, err := recordstore.EncodeRow(result)
+		row, err := recordstore.EncodeRow(DecodeEvent(a.ctx, a.db, event))
 		if err != nil {
 			return recordstore.Window{}, query.EventsRef{}, fmt.Errorf("encode %s row %d of stream %s: %w", RowKind, index, a.stream, err)
 		}
@@ -63,12 +59,21 @@ func (a recordAppender) Append(events []xetrace.Event) (recordstore.Window, quer
 	return appended.Window, ref, nil
 }
 
-// decodeDeadlock fills result with the decoded, index-resolved and classified
-// graph of a deadlock report. A report that cannot be decoded is stored with its
-// XML and the failure instead, and one whose indexes cannot be looked up is
-// stored unresolved and naming why: either way it is one event's detail, and
-// failing the append would stop the whole capture from recording.
-func (a recordAppender) decodeDeadlock(event xetrace.Event, result *EventRow) {
+// DecodeEvent is the row a capture stores for event: FromEvent's, and for a
+// deadlock report its graph decoded, its indexes resolved through db and
+// classified. A report that cannot be decoded is stored with its XML and the
+// failure instead, and one whose indexes cannot be looked up is stored
+// unresolved and naming why: either way it is one event's detail, and failing
+// would stop the whole capture from recording.
+func DecodeEvent(ctx context.Context, db *sql.DB, event xetrace.Event) EventRow {
+	result := FromEvent(event)
+	if event.Name == xetrace.EventXMLDeadlockReport {
+		decodeDeadlock(ctx, db, event, &result)
+	}
+	return result
+}
+
+func decodeDeadlock(ctx context.Context, db *sql.DB, event xetrace.Event, result *EventRow) {
 	graph, err := deadlocks.DecodeReport(event.Timestamp, event.DeadlockReportXML)
 	if err != nil {
 		result.RawStatement = event.DeadlockReportXML
@@ -76,9 +81,9 @@ func (a recordAppender) decodeDeadlock(event xetrace.Event, result *EventRow) {
 		return
 	}
 	graphs := []deadlocks.Graph{graph}
-	if a.db == nil {
+	if db == nil {
 		result.ErrorMessage = "resolve deadlock indexes: no database lease"
-	} else if err := a.resolve(graphs); err != nil {
+	} else if err := resolveIndexes(ctx, db, graphs); err != nil {
 		result.ErrorMessage = fmt.Sprintf("resolve deadlock indexes: %v", err)
 	}
 	graph = graphs[0]
@@ -89,13 +94,13 @@ func (a recordAppender) decodeDeadlock(event xetrace.Event, result *EventRow) {
 	result.Tables = graph.Objects
 }
 
-// resolve looks up graphs' indexes within one poll timeout: a ctx is detached
-// from cancellation, so a catalog query blocked on the server would otherwise
-// hold the writer, and the stop that waits on it, indefinitely.
-func (a recordAppender) resolve(graphs []deadlocks.Graph) error {
-	ctx, cancel := context.WithTimeout(a.ctx, xetrace.PollTimeout())
+// resolveIndexes looks up graphs' indexes within one poll timeout: a ctx
+// detached from cancellation would otherwise let a catalog query blocked on
+// the server hold the capture, and the stop that waits on it, indefinitely.
+func resolveIndexes(ctx context.Context, db *sql.DB, graphs []deadlocks.Graph) error {
+	ctx, cancel := context.WithTimeout(ctx, xetrace.PollTimeout())
 	defer cancel()
-	return deadlocks.Resolve(ctx, a.db, graphs)
+	return deadlocks.Resolve(ctx, db, graphs)
 }
 
 // Seal declares the stream complete, so a follower that has read its last row

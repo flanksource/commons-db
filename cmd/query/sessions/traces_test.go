@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -62,6 +63,27 @@ func (pings) Handle(ctx dbcontext.Context, p pingParams, records traces.Emitter[
 	return nil
 }
 
+// lockedOut refuses every start in Prepare, with an error a host recognises.
+type lockedOut struct{}
+
+type loginDenied struct{ login string }
+
+func (e loginDenied) Error() string { return "login " + e.login + " lacks ALTER ANY EVENT SESSION" }
+
+func (lockedOut) Params() pingParams { return pingParams{} }
+
+func (lockedOut) Schema() recordresults.ResultType[ping] {
+	return recordresults.ResultType[ping]{Title: "Locked out", TimeColumn: "at"}
+}
+
+func (lockedOut) Prepare(ctx dbcontext.Context, _ pingParams, _ traces.Emitter[ping]) (dbcontext.Context, func() error, error) {
+	return ctx, nil, fmt.Errorf("prepare: %w", loginDenied{login: "oipa"})
+}
+
+func (lockedOut) Handle(dbcontext.Context, pingParams, traces.Emitter[ping], traces.Records[ping]) error {
+	return nil
+}
+
 type traceHarness struct {
 	handler  *sessionHandler
 	registry *query.SessionRegistry
@@ -71,10 +93,14 @@ type traceHarness struct {
 	refused map[string]Action
 }
 
-func newTraceHarness() *traceHarness {
+// newTraceHarness serves the pings kind, and whatever kinds extra registers.
+func newTraceHarness(extra ...func(*traces.Kinds)) *traceHarness {
 	h := &traceHarness{refused: map[string]Action{}}
 	kinds := traces.NewKinds()
 	Expect(kinds.RegisterKind("pings", traces.NewHandler[pingParams, ping](pings{}, traces.Capabilities{Live: true}))).To(Succeed())
+	for _, register := range extra {
+		register(kinds)
+	}
 	h.results = recordresultstest.OpenResults(recordresults.OpenOptions{
 		Prefix: "traces", ConnectionName: "traces",
 		Settings: recordresultstest.LocalSettings(recordstore.BackendSQLite), Register: kinds.RegisterResultTypes,
@@ -91,6 +117,14 @@ func newTraceHarness() *traceHarness {
 		Prefix: "/api/v1", Ctx: dbcontext.New(), Store: profiles, Registry: h.registry,
 		Records: h.results.Backend, Traces: runtime, Authorize: h.authorize, Next: &nextMarker{},
 		Principal: func(*http.Request) string { return "tester" },
+		TraceStartError: func(w http.ResponseWriter, _ *http.Request, err error) bool {
+			var denied loginDenied
+			if !errors.As(err, &denied) {
+				return false
+			}
+			writeSessionJSON(w, http.StatusForbidden, map[string]string{"code": "login_denied", "login": denied.login})
+			return true
+		},
 	})
 	return h
 }
@@ -161,6 +195,16 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 		Expect(strings.Count(strings.TrimSpace(events.Body.String()), "\n")).To(Equal(1))
 	})
 
+	ginkgo.It("labels a capture as its start asks, so a host lists its sessions by label", func() {
+		h := newTraceHarness()
+		response := h.do(http.MethodPost, "/api/v1/traces/pings/sessions", `{"labels": {"target": "cycle", "label": "nightly"}}`)
+		Expect(response.Code).To(Equal(http.StatusCreated), response.Body.String())
+		var info query.SessionInfo
+		Expect(json.Unmarshal(response.Body.Bytes(), &info)).To(Succeed())
+		Expect(info.Labels).To(HaveKeyWithValue("target", "cycle"))
+		Expect(info.Labels).To(HaveKeyWithValue("label", "nightly"))
+	})
+
 	ginkgo.DescribeTable("refuses a start it cannot serve",
 		func(path, body string, status int, message string) {
 			h := newTraceHarness()
@@ -175,6 +219,22 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 		ginkgo.Entry("a body field the route lacks", "/api/v1/traces/pings/sessions", `{"parms": {}}`, http.StatusBadRequest, "parms"),
 		ginkgo.Entry("a duration that is not one", "/api/v1/traces/pings/sessions", `{"duration": "soon"}`, http.StatusBadRequest, "duration"),
 	)
+
+	ginkgo.It("answers a refused start as the host describes the refusal", func() {
+		h := newTraceHarness(func(kinds *traces.Kinds) {
+			Expect(kinds.RegisterKind("locked_out", traces.NewHandler[pingParams, ping](lockedOut{}, traces.Capabilities{Live: true}))).To(Succeed())
+		})
+		response := h.do(http.MethodPost, "/api/v1/traces/locked_out/sessions", `{}`)
+		Expect(response.Code).To(Equal(http.StatusForbidden), response.Body.String())
+		Expect(response.Body.String()).To(MatchJSON(`{"code": "login_denied", "login": "oipa"}`))
+	})
+
+	ginkgo.It("answers a refused start the host does not describe with its error", func() {
+		h := newTraceHarness()
+		response := h.do(http.MethodPost, "/api/v1/traces/pings/sessions", `{"params": {"count": -1}}`)
+		Expect(response.Code).To(Equal(http.StatusBadRequest))
+		Expect(response.Body.String()).To(ContainSubstring("must not be negative"))
+	})
 
 	ginkgo.It("refuses a start the caller may not control", func() {
 		h := newTraceHarness()
