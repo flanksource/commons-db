@@ -226,6 +226,9 @@ func decodeFrame(raw xmlFrame) (Frame, error) {
 		*offset.target = new(value)
 	}
 	start, end := frame.offsets()
+	if frame.OffsetsUnavailable() {
+		return frame, nil
+	}
 	if start < 0 || start%2 != 0 || end < -1 || (end != -1 && (end%2 != 0 || end < start)) {
 		return Frame{}, fmt.Errorf("stmtstart=%d stmtend=%d are not the UTF-16 byte offsets of a statement", start, end)
 	}
@@ -245,6 +248,14 @@ func (f Frame) offsets() (start, end int) {
 	return start, end
 }
 
+// OffsetsUnavailable reports SQL Server's stmtstart="-1" with no stmtend (or
+// stmtend="-1"): the frame names no statement within its text, as it writes for
+// a sys.sp_executesql frame between a module and the batch it runs.
+func (f Frame) OffsetsUnavailable() bool {
+	start, end := f.offsets()
+	return start == -1 && end == -1
+}
+
 // adhocProcName is the procname of a frame running a batch rather than a
 // module: only its offsets index the input buffer.
 const adhocProcName = "adhoc"
@@ -259,7 +270,7 @@ const adhocProcName = "adhoc"
 func (p *Process) sliceStatement() {
 	batch := utf16.Encode([]rune(p.InputBuffer))
 	p.Statement, p.StatementLength, p.InputBufferTruncated = p.InputBuffer, len(batch), false
-	if len(p.Frames) == 0 || p.Frames[0].ProcName != adhocProcName {
+	if len(p.Frames) == 0 || p.Frames[0].ProcName != adhocProcName || p.Frames[0].OffsetsUnavailable() {
 		return
 	}
 	start, end := p.Frames[0].offsets()

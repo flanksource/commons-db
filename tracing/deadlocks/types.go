@@ -108,7 +108,9 @@ type Frame struct {
 	// StmtStart and StmtEnd are the statement's UTF-16 byte offsets into the
 	// batch or module text, a prepared statement's parameter declaration
 	// included. StmtEnd is inclusive of the last character, and -1 means the
-	// end of the text; SQL Server omits either at its default (0, -1).
+	// end of the text; SQL Server omits either at its default (0, -1). A
+	// stmtstart of -1 with the default end means the frame names no statement
+	// (Frame.OffsetsUnavailable).
 	StmtStart *int   `json:"stmtStart,omitempty"`
 	StmtEnd   *int   `json:"stmtEnd,omitempty"`
 	SQLHandle string `json:"sqlHandle,omitempty"`
