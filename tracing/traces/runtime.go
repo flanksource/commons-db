@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -45,6 +46,10 @@ type Runtime struct {
 	// BufferBytes caps the bytes of records a capture holds before they are
 	// committed, measured by their keys and text. Zero is 64MiB.
 	BufferBytes int
+
+	// sources are the running captures' sources, by session id, for the
+	// checkpoints their hosts mark.
+	sources sync.Map
 }
 
 // StartRequest is one capture to start.
@@ -77,7 +82,8 @@ func (r *Runtime) Start(ctx dbcontext.Context, request StartRequest) (*query.Man
 		}
 	}
 	stream := rand.Text()
-	return r.Sessions.Manage(ctx, query.ManageOptions{
+	var src *source
+	managed, err := r.Sessions.Manage(ctx, query.ManageOptions{
 		Track: query.TrackOptions{
 			Profile: ProfilePrefix + request.Kind, Kind: query.KindCapture, Params: params,
 			Labels: request.Labels, Principal: request.Principal, RestartOf: request.RestartOf, StopAt: request.StopAt,
@@ -85,7 +91,6 @@ func (r *Runtime) Start(ctx dbcontext.Context, request StartRequest) (*query.Man
 		PollEvery:  r.pollEvery(),
 		PullOnPoll: true,
 	}, func(armCtx context.Context) (query.ManagedRun, error) {
-		var src *source
 		run, err := r.Probes.Arm(armCtx, probe.Options{
 			Identity: ProfilePrefix + request.Kind + "/" + stream, Stream: stream, Kind: request.Kind,
 			Backend: r.Results.Backend, Describe: r.describe,
@@ -102,6 +107,33 @@ func (r *Runtime) Start(ctx dbcontext.Context, request StartRequest) (*query.Man
 		src.start()
 		return captureRun{Run: run, source: src}, nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	session := managed.Session()
+	if src == nil {
+		return managed, nil
+	}
+	r.sources.Store(session.ID(), src)
+	go func() {
+		<-session.Done()
+		r.sources.Delete(session.ID())
+	}()
+	return managed, nil
+}
+
+// Checkpoint marks a checkpoint in a running capture: a kind that is a
+// Checkpointer takes its reading, and the session is then sampled, so the
+// reading and anything the capture emitted before it are committed when
+// Checkpoint returns. The session's background polls are not checkpoints.
+func (r *Runtime) Checkpoint(ctx context.Context, managed *query.ManagedSession) error {
+	if src, ok := r.sources.Load(managed.Session().ID()); ok {
+		if err := src.(*source).takeCheckpoint(ctx); err != nil {
+			return fmt.Errorf("checkpoint: %w", err)
+		}
+	}
+	_, err := managed.Sample(ctx)
+	return err
 }
 
 // Restarter re-arms an ended trace session as a new capture of its kind with
@@ -159,7 +191,13 @@ type captureRun struct {
 	source *source
 }
 
+// Status names the session by what its kind described, over the probe's.
+func (r captureRun) Status() query.ManagedStatus {
+	return r.source.described(r.Run.Status())
+}
+
 func (r captureRun) Stop(ctx context.Context) (query.ManagedFinish, error) {
 	finish, err := r.Run.Stop(ctx)
+	finish.ManagedStatus = r.source.described(finish.ManagedStatus)
 	return finish, errors.Join(err, r.source.handlerErr())
 }

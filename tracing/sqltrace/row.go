@@ -1,6 +1,7 @@
 package sqltrace
 
 import (
+	"math"
 	"time"
 
 	"github.com/flanksource/clicky/api"
@@ -66,6 +67,29 @@ func FromEvent(event xetrace.Event) EventRow {
 		ObjectName: event.ObjectName, ObjectType: event.ObjectType, ParamsUnavailable: event.ParamsUnavailable,
 		AdditionalFields: event.AdditionalFields,
 		ActivityID:       event.ActivityID, ActivitySeq: event.ActivitySeq, Children: children,
+	}
+}
+
+// Event is the event r was stored from, with its nested statements, so what
+// summarizes captured events (xetrace.Summarize) reads stored rows too. What a
+// row does not keep does not come back: a deadlock report's XML and databases,
+// the object id and the event's sequence.
+func (r EventRow) Event() xetrace.Event {
+	var children []xetrace.Event
+	for _, child := range r.Children {
+		children = append(children, child.Event())
+	}
+	return xetrace.Event{
+		Name: r.Name, StatementType: xetrace.StatementType(r.StatementType), Timestamp: r.Timestamp,
+		Duration: fromMilliseconds(r.DurationMs), CPUTime: fromMilliseconds(r.CPUMs),
+		LogicalReads: r.LogicalReads, PhysicalReads: r.PhysicalReads, Writes: r.Writes, RowCount: r.RowCount,
+		DatabaseName: r.Database, ClientApp: r.ClientApp, ClientHost: r.ClientHost,
+		Username: r.Username, SessionID: r.SessionID,
+		SQL: r.SQL, Statement: r.RawStatement, Tables: append([]string{}, r.Tables...),
+		ErrorNumber: r.ErrorNumber, ErrorMessage: r.ErrorMessage,
+		ObjectName: r.ObjectName, ObjectType: r.ObjectType, ParamsUnavailable: r.ParamsUnavailable,
+		AdditionalFields: r.AdditionalFields,
+		ActivityID:       r.ActivityID, ActivitySeq: r.ActivitySeq, Children: children,
 	}
 }
 
@@ -157,3 +181,7 @@ func humanCount(value int64) api.Text {
 }
 
 func milliseconds(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
+
+func fromMilliseconds(ms float64) time.Duration {
+	return time.Duration(math.Round(ms * float64(time.Millisecond)))
+}

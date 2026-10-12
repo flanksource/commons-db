@@ -47,6 +47,14 @@ type Preparer[P, R any] interface {
 	Prepare(ctx dbcontext.Context, params P, records Emitter[R]) (prepared dbcontext.Context, release func() error, err error)
 }
 
+// Checkpointer is a TraceHandler that takes a reading at each checkpoint its
+// host marks in a running capture, such as the end of each step a span
+// covers: the value of an expression, the state of a cache. Its records are
+// committed before the checkpoint returns.
+type Checkpointer[P, R any] interface {
+	Checkpoint(ctx dbcontext.Context, params P, records Emitter[R]) error
+}
+
 // Capabilities say how a kind captures: Live captures what happens while a
 // session runs, Historical reads what already happened and ends by itself,
 // Follow goes on to capture what happens next.
@@ -64,6 +72,16 @@ type Emitter[R any] interface {
 	// TryEmit never waits: a record a full buffer cannot take is dropped and
 	// counted, so a handler called on someone else's goroutine never stalls it.
 	TryEmit(record R) bool
+	// Report replaces the kind's own summary of its capture, what it counts
+	// beyond the records it emits, such as events its source lost. The
+	// session shows the latest report with its progress and keeps the last.
+	Report(summary any)
+	// Warn adds a warning the session ends with.
+	Warn(message string)
+	// Describe names the session by what the capture set up on its source,
+	// with the statements or settings that set it up. A session records them
+	// once, as it starts running, so only a Preparer's Prepare describes it.
+	Describe(handle string, metadata ...query.SessionMetadata)
 }
 
 // Records reads back the records a session has committed.
@@ -109,6 +127,7 @@ type openOptions struct {
 type Handler[P, R any] struct {
 	handler      TraceHandler[P, R]
 	capabilities Capabilities
+	defaults     *P
 
 	dedup      *dedupOption[P, R]
 	truncateAt int
@@ -126,6 +145,21 @@ type dedupOption[P, R any] struct {
 // NewHandler makes handler a plugin with capabilities.
 func NewHandler[P, R any](handler TraceHandler[P, R], capabilities Capabilities) *Handler[P, R] {
 	return &Handler[P, R]{handler: handler, capabilities: capabilities}
+}
+
+// WithDefaults starts the kind's form and its captures from defaults rather
+// than the handler's own Params, as a host that knows its connections does.
+func (h *Handler[P, R]) WithDefaults(defaults P) *Handler[P, R] {
+	h.defaults = &defaults
+	return h
+}
+
+// params are the defaults a capture starts from.
+func (h *Handler[P, R]) params() P {
+	if h.defaults != nil {
+		return *h.defaults
+	}
+	return h.handler.Params()
 }
 
 // WithDeduplication drops a record whose key a session already emitted within
@@ -189,7 +223,7 @@ func (h *Handler[P, R]) Title() string { return h.handler.Schema().Title }
 func (h *Handler[P, R]) Capabilities() Capabilities { return h.capabilities }
 
 func (h *Handler[P, R]) Params() (*rpc.OpenAPISchema, error) {
-	defaults := h.handler.Params()
+	defaults := h.params()
 	schema := rpc.SchemaForStruct(defaults)
 	var values map[string]any
 	if err := roundTrip(defaults, &values); err != nil {
@@ -306,6 +340,7 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 			emitter.dedup = newDeduplicator(window, h.dedup.key)
 		}
 	}
+	ctx = ctx.WithValue(streamKey{}, options.stream)
 	captureCtx, release := ctx, func() error { return nil }
 	if preparer, ok := h.handler.(Preparer[P, R]); ok {
 		prepared, prepareRelease, err := preparer.Prepare(ctx, params, emitter)
@@ -317,11 +352,26 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 			release = prepareRelease
 		}
 	}
+	if checkpointer, ok := h.handler.(Checkpointer[P, R]); ok {
+		src.checkpoint = func(ctx context.Context) error {
+			return checkpointer.Checkpoint(captureCtx.Wrap(ctx), params, emitter)
+		}
+	}
 	records := storedRecords[R]{store: options.store, stream: options.stream, jsonPaths: h.jsonPaths}
 	src.prepare(captureCtx, func(capture dbcontext.Context) error {
 		return h.handler.Handle(capture, params, emitter, records)
 	}, release)
 	return src, nil
+}
+
+type streamKey struct{}
+
+// StreamOf is the stream a capture's records are written to, from the context
+// its Prepare and Handle run under. A kind that writes companion streams, such
+// as bodies kept apart from its records, names them after it.
+func StreamOf(ctx context.Context) string {
+	stream, _ := ctx.Value(streamKey{}).(string)
+	return stream
 }
 
 func (h *Handler[P, R]) resultType(kind string) recordresults.ResultType[R] {
@@ -334,7 +384,7 @@ func (h *Handler[P, R]) resultType(kind string) recordresults.ResultType[R] {
 // fields and trailing data, then lets params that validate themselves do so.
 // No params, or null, start from the defaults.
 func (h *Handler[P, R]) decodeParams(params json.RawMessage) (P, error) {
-	decoded := h.handler.Params()
+	decoded := h.params()
 	trimmed := bytes.TrimSpace(params)
 	if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
 		decoder := json.NewDecoder(bytes.NewReader(trimmed))

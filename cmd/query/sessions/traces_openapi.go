@@ -51,6 +51,8 @@ func traceStartOperation(kind traces.KindInfo) rpc.OpenAPIOperation {
 			"application/json": {Schema: &rpc.OpenAPISchema{Type: "object", Properties: map[string]*rpc.OpenAPISchema{
 				"params":   kind.Params,
 				"duration": {Type: "string", Description: "Go duration the capture runs for, e.g. 5m; empty runs for the server's longest"},
+				"labels": {Type: "object", Description: "Labels the session is listed by, e.g. label.target=cycle",
+					AdditionalProperties: &rpc.OpenAPISchema{Type: "string"}},
 			}}},
 		}},
 		Responses: map[string]rpc.OpenAPIResponse{
