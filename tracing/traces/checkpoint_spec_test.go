@@ -37,7 +37,38 @@ func (r readings) Checkpoint(ctx dbcontext.Context, _ tickParams, records traces
 	return records.Emit(ctx, tick{At: time.Now().UTC(), N: int(r.taken.Add(1))})
 }
 
+// preparedReadings takes its readings from what Prepare set up.
+type preparedReadings struct{ readings }
+
+type readingBase struct{}
+
+func (preparedReadings) Prepare(ctx dbcontext.Context, _ tickParams, _ traces.Emitter[tick]) (dbcontext.Context, func() error, error) {
+	return ctx.WithValue(readingBase{}, 100), nil, nil
+}
+
+func (r preparedReadings) Checkpoint(ctx dbcontext.Context, _ tickParams, records traces.Emitter[tick]) error {
+	base, _ := ctx.Value(readingBase{}).(int)
+	return records.Emit(ctx, tick{At: time.Now().UTC(), N: base + int(r.taken.Add(1))})
+}
+
 var _ = Describe("a capture's checkpoint", func() {
+	It("reads under what Prepare set up, bounded by the host's context", func() {
+		env := tracestest.NewEnv(map[string]traces.TracePlugin{
+			"readings": traces.NewHandler[tickParams, tick](preparedReadings{readings{taken: &atomic.Int64{}}}, traces.Capabilities{Live: true}),
+		})
+		managed, err := env.Runtime.Start(dbcontext.New(), traces.StartRequest{Kind: "readings"})
+		Expect(err).ToNot(HaveOccurred())
+		tracestest.Running(managed.Session())
+
+		Expect(env.Runtime.Checkpoint(context.Background(), managed)).To(Succeed())
+		cancelled, cancel := context.WithCancel(context.Background())
+		cancel()
+		Expect(env.Runtime.Checkpoint(cancelled, managed)).ToNot(Succeed(), "a checkpoint whose host gave up does not wait")
+
+		managed.Session().Stop("spec")
+		Expect(numbers(env.Rows(tracestest.Ended(managed.Session())))).To(ContainElement("101"))
+	})
+
 	It("records the kind's reading and commits it before it returns, while the background poll takes none", func() {
 		taken := &atomic.Int64{}
 		env := tracestest.NewEnv(map[string]traces.TracePlugin{

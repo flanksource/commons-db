@@ -354,7 +354,7 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 	}
 	if checkpointer, ok := h.handler.(Checkpointer[P, R]); ok {
 		src.checkpoint = func(ctx context.Context) error {
-			return checkpointer.Checkpoint(captureCtx.Wrap(ctx), params, emitter)
+			return checkpointer.Checkpoint(captureCtx.Wrap(checkpointContext{Context: ctx, capture: captureCtx}), params, emitter)
 		}
 	}
 	records := storedRecords[R]{store: options.store, stream: options.stream, jsonPaths: h.jsonPaths}
@@ -362,6 +362,21 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 		return h.handler.Handle(capture, params, emitter, records)
 	}, release)
 	return src, nil
+}
+
+// checkpointContext is the context a checkpoint reads under: the values its
+// capture's Prepare set up, ahead of the host's, and the cancellation and
+// deadline of the host that marked it.
+type checkpointContext struct {
+	context.Context
+	capture context.Context
+}
+
+func (c checkpointContext) Value(key any) any {
+	if value := c.capture.Value(key); value != nil {
+		return value
+	}
+	return c.Context.Value(key)
 }
 
 type streamKey struct{}
