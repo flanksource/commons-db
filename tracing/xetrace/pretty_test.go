@@ -168,8 +168,8 @@ func TestDurationStyle_Thresholds(t *testing.T) {
 		{5 * time.Second, "text-red-500 font-bold"},
 	}
 	for _, tc := range cases {
-		if got := durationStyle(tc.d); got != tc.want {
-			t.Errorf("durationStyle(%s) = %q, want %q", tc.d, got, tc.want)
+		if got := DurationStyle(tc.d); got != tc.want {
+			t.Errorf("DurationStyle(%s) = %q, want %q", tc.d, got, tc.want)
 		}
 	}
 }

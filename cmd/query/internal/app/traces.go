@@ -31,10 +31,10 @@ const tracesPrefix = "traces"
 func traceKinds() (*traces.Kinds, error) {
 	kinds := traces.NewKinds()
 	for name, plugin := range map[string]traces.TracePlugin{
-		"http":       httptraffic.Kind(),
-		"opensearch": opensearchtraces.Kind(),
-		"sql":        sqlstatements.Kind(),
-		"sql_xevent": xevent.Kind(),
+		"http":                httptraffic.Kind(),
+		"opensearch":          opensearchtraces.Kind(),
+		sqlstatements.RowKind: sqlstatements.Kind(),
+		"sql_xevent":          xevent.Kind(),
 	} {
 		if err := kinds.RegisterKind(name, plugin); err != nil {
 			return nil, err

@@ -35,7 +35,7 @@ type EventRow struct {
 
 	SQL          string   `json:"sql" pretty:"label=SQL" filter:"text"`
 	RawStatement string   `json:"rawStatement" pretty:"hide"`
-	Tables       []string `json:"tables"`
+	Tables       []string `json:"tables" filter:"terms"`
 
 	ErrorNumber       int              `json:"errorNumber" pretty:"label=Error"`
 	ErrorMessage      string           `json:"errorMessage" pretty:"label=Error message" filter:"text"`
