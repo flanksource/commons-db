@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -29,7 +30,7 @@ var _ = Describe("sql trace kind", func() {
 	var database *sql.DB
 
 	BeforeEach(func() {
-		env = tracestest.NewEnv(map[string]traces.TracePlugin{"sql": sqlstatements.Kind()})
+		env = tracestest.NewEnv(map[string]traces.TracePlugin{sqlstatements.RowKind: sqlstatements.Kind()})
 		var err error
 		database, err = sql.Open("sqlite", filepath.Join(GinkgoT().TempDir(), "events.db"))
 		Expect(err).ToNot(HaveOccurred())
@@ -46,14 +47,18 @@ var _ = Describe("sql trace kind", func() {
 		Expect(err).ToNot(HaveOccurred())
 	}
 
-	capture := func(params string, statements func()) []recordstore.Row {
-		session := env.Start("sql", params)
+	captureSession := func(params string, statements func()) query.SessionInfo {
+		session := env.Start(sqlstatements.RowKind, params)
 		tracestest.Running(session)
 		statements()
 		session.Stop("spec")
 		info := tracestest.Ended(session)
 		Expect(info.Error).To(BeEmpty())
-		return env.Rows(info)
+		return info
+	}
+
+	capture := func(params string, statements func()) []recordstore.Row {
+		return env.Rows(captureSession(params, statements))
 	}
 
 	It("stores the statements run on the connections it observes", func() {
@@ -130,5 +135,70 @@ var _ = Describe("sql trace kind", func() {
 	It("refuses a minimum duration that is not one", func() {
 		Expect(sqlstatements.Kind().ValidateParams(json.RawMessage(`{"connections": ["*"], "minDuration": "soon"}`))).
 			To(MatchError(ContainSubstring("minDuration")))
+	})
+
+	Context("read back through its result profile", func() {
+		const (
+			first   = "SELECT id FROM events WHERE id = 1"
+			second  = "SELECT id FROM events WHERE id = 2"
+			notes   = "SELECT id FROM notes"
+			missing = "SELECT id FROM missing"
+		)
+		var info query.SessionInfo
+
+		BeforeEach(func() {
+			_, err := database.Exec(`CREATE TABLE notes (id INTEGER PRIMARY KEY); INSERT INTO notes (id) VALUES (1);`)
+			Expect(err).ToNot(HaveOccurred())
+			info = captureSession(`{"connections": ["events-db"]}`, func() {
+				read("events-db", first)
+				read("events-db", second)
+				read("events-db", notes)
+				_, err := providers.ReadSQLPage(context.Background(), database, models.ConnectionTypeSQLite, providers.SQLPageRequest{
+					Connection: "events-db", Query: missing, Page: query.PageRequest{Limit: 10},
+				})
+				Expect(err).To(MatchError(ContainSubstring("no such table")))
+			})
+		})
+
+		statementsOf := func(profile string, params map[string]any) []string {
+			var statements []string
+			for _, row := range env.Read(profile, info.Events.Stream, query.PageRequest{Limit: 50}, params) {
+				Expect(row["sql"]).To(BeAssignableToTypeOf(""))
+				for _, statement := range []string{first, second, notes, missing} {
+					if strings.Contains(row["sql"].(string), statement) {
+						statements = append(statements, statement)
+					}
+				}
+			}
+			return statements
+		}
+
+		It("filters by the tables a statement names, its op and connection, and searches its SQL and error", func() {
+			Expect(statementsOf(sqlstatements.RowKind, nil)).To(ConsistOf(first, second, notes, missing))
+			Expect(statementsOf(sqlstatements.RowKind, map[string]any{"filter.tables": "notes"})).To(ConsistOf(notes))
+			Expect(statementsOf(sqlstatements.RowKind, map[string]any{"filter.tables": "!events"})).To(ConsistOf(notes, missing))
+			Expect(statementsOf(sqlstatements.RowKind, map[string]any{"filter.op": "!SELECT"})).To(BeEmpty())
+			Expect(statementsOf(sqlstatements.RowKind, map[string]any{"filter.connection": "events-db"})).To(HaveLen(4))
+			Expect(statementsOf(sqlstatements.RowKind, map[string]any{"q": "NO SUCH TABLE"})).To(ConsistOf(missing))
+		})
+
+		It("serves the statements that ran more than once as one row each, with how often", func() {
+			rows := env.Read(sqlstatements.RowKind+"/repeats", info.Events.Stream, query.PageRequest{Limit: 50}, nil)
+			Expect(rows).To(HaveLen(1))
+			Expect(rows[0]).To(HaveKeyWithValue("sql", ContainSubstring("FROM events WHERE id = ")))
+			Expect(rows[0]).To(And(
+				HaveKeyWithValue("repeatKey", sqlstatements.RepeatKey(rows[0]["sql"].(string))),
+				HaveKeyWithValue("runs", BeNumerically("==", 2)),
+			))
+		})
+
+		It("reports the summary of the statements it stored as the session ends", func() {
+			report := tracestest.Summary(info).Report
+			Expect(report).To(HaveKeyWithValue("statements", float64(4)))
+			Expect(report).To(HaveKeyWithValue("errors", float64(1)))
+			Expect(report).To(HaveKeyWithValue("repeated", float64(2)))
+			Expect(report).To(HaveKeyWithValue("tables", ContainElements("events", "notes", "missing")))
+			Expect(report).To(HaveKeyWithValue("byOp", HaveKeyWithValue("SELECT", float64(4))))
+		})
 	})
 })

@@ -5,6 +5,7 @@ package tracestest
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"time"
 
 	"github.com/onsi/ginkgo/v2"
@@ -12,6 +13,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/probe"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
@@ -86,6 +88,28 @@ func (e Env) Rows(info query.SessionInfo) []recordstore.Row {
 		rows = append(rows, row)
 		return nil
 	})).To(gomega.Succeed())
+	return rows
+}
+
+// Read reads every row of stream through kind's result profile under params,
+// as a host serving it would: the profile's own columns, filters and sort.
+func (e Env) Read(kind, stream string, page query.PageRequest, params map[string]any) []query.Row {
+	ctx := dbcontext.New().WithConnectionResolver(e.Results.Registry.ResolveConnection)
+	profile, err := e.Results.Registry.Get(ctx, "traces/"+kind)
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+	params = maps.Clone(params)
+	if params == nil {
+		params = map[string]any{}
+	}
+	params["stream"] = stream
+	release, err := e.Results.Registry.BeforeExecute(ctx, []profilestore.ReadRequest{{Profile: profile, Params: params}})
+	gomega.Expect(err).ToNot(gomega.HaveOccurred())
+	defer release()
+	var rows []query.Row
+	for read, err := range query.ExecutePages(ctx, profile, page, params) {
+		gomega.Expect(err).ToNot(gomega.HaveOccurred())
+		rows = append(rows, read.Rows...)
+	}
 	return rows
 }
 
