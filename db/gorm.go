@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/flanksource/commons-db/internal/dbtarget"
-	"github.com/flanksource/commons-db/tracing"
+	"github.com/flanksource/commons-db/otel"
 	gormsqlite "github.com/glebarez/sqlite"
 	gormpostgres "gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -51,7 +51,7 @@ func NewGorm(connection string, config *gorm.Config) (*gorm.DB, error) {
 		return nil, errors.Join(err, sqlDB.Close())
 	}
 
-	if err := gormDB.Use(tracing.NewPlugin()); err != nil {
+	if err := gormDB.Use(otel.NewPlugin()); err != nil {
 		return nil, errors.Join(fmt.Errorf("error setting up tracing: %w", err), sqlDB.Close())
 	}
 
