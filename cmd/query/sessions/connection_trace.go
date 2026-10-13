@@ -11,7 +11,7 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
-	"github.com/flanksource/commons-db/query/providers"
+	"github.com/flanksource/commons-db/tracing/sqlserver/xeprovider"
 	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 )
@@ -80,7 +80,7 @@ func (h *sessionHandler) startConnectionTrace(w http.ResponseWriter, r *http.Req
 		// The server-side session carries the same name this connection's trace
 		// profile does, so a DBA reading sys.dm_xe_sessions can tell which
 		// connection asked for it.
-		Provider: query.ProviderConfig{Type: providers.SQLXEventProviderType, Connection: reference,
+		Provider: query.ProviderConfig{Type: xeprovider.SQLXEventProviderType, Connection: reference,
 			Options: input.providerOptions(connectionTraceProfile(conn.ID))},
 		Trace: &query.TraceSpec{MaxDuration: types.Duration{Duration: duration}},
 	}

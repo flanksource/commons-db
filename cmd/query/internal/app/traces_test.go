@@ -16,7 +16,7 @@ import (
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 type beatParams struct{}
@@ -33,7 +33,7 @@ func (beats) Schema() recordresults.ResultType[beat] {
 	return recordresults.ResultType[beat]{Title: "Beats", TimeColumn: "at"}
 }
 
-func (beats) Handle(ctx dbcontext.Context, _ beatParams, _ traces.Emitter[beat], _ traces.Records[beat]) error {
+func (beats) Handle(ctx dbcontext.Context, _ beatParams, _ tracing.Emitter[beat], _ tracing.Records[beat]) error {
 	<-ctx.Done()
 	return nil
 }
@@ -59,8 +59,8 @@ func TestTracePluginsChangeNothingBeforeTheyOpen(t *testing.T) {
 
 func TestTracePluginsServeTheirResultProfilesOnceOpen(t *testing.T) {
 	var plugins tracePlugins
-	kinds := traces.NewKinds()
-	require.NoError(t, kinds.RegisterKind("beats", traces.NewHandler[beatParams, beat](beats{}, traces.Capabilities{Live: true})))
+	kinds := tracing.NewKinds()
+	require.NoError(t, kinds.RegisterKind("beats", tracing.NewHandler[beatParams, beat](beats{}, tracing.Capabilities{Live: true})))
 	runtime, closeTraces, err := plugins.open(t.TempDir(), time.Hour, kinds)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, closeTraces()) })

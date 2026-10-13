@@ -25,7 +25,7 @@ import (
 	"github.com/flanksource/commons-db/recordstore/probe"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/recordstore/recordresults/recordresultstest"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 type pingParams struct {
@@ -53,7 +53,7 @@ func (pings) Schema() recordresults.ResultType[ping] {
 	return recordresults.ResultType[ping]{Title: "Pings", TimeColumn: "at"}
 }
 
-func (pings) Handle(ctx dbcontext.Context, p pingParams, records traces.Emitter[ping], _ traces.Records[ping]) error {
+func (pings) Handle(ctx dbcontext.Context, p pingParams, records tracing.Emitter[ping], _ tracing.Records[ping]) error {
 	for n := 1; n <= p.Count; n++ {
 		if err := records.Emit(ctx, ping{At: time.Now().UTC(), N: n}); err != nil {
 			return err
@@ -76,11 +76,11 @@ func (lockedOut) Schema() recordresults.ResultType[ping] {
 	return recordresults.ResultType[ping]{Title: "Locked out", TimeColumn: "at"}
 }
 
-func (lockedOut) Prepare(ctx dbcontext.Context, _ pingParams, _ traces.Emitter[ping]) (dbcontext.Context, func() error, error) {
+func (lockedOut) Prepare(ctx dbcontext.Context, _ pingParams, _ tracing.Emitter[ping]) (dbcontext.Context, func() error, error) {
 	return ctx, nil, fmt.Errorf("prepare: %w", loginDenied{login: "oipa"})
 }
 
-func (lockedOut) Handle(dbcontext.Context, pingParams, traces.Emitter[ping], traces.Records[ping]) error {
+func (lockedOut) Handle(dbcontext.Context, pingParams, tracing.Emitter[ping], tracing.Records[ping]) error {
 	return nil
 }
 
@@ -94,10 +94,10 @@ type traceHarness struct {
 }
 
 // newTraceHarness serves the pings kind, and whatever kinds extra registers.
-func newTraceHarness(extra ...func(*traces.Kinds)) *traceHarness {
+func newTraceHarness(extra ...func(*tracing.Kinds)) *traceHarness {
 	h := &traceHarness{refused: map[string]Action{}}
-	kinds := traces.NewKinds()
-	Expect(kinds.RegisterKind("pings", traces.NewHandler[pingParams, ping](pings{}, traces.Capabilities{Live: true}))).To(Succeed())
+	kinds := tracing.NewKinds()
+	Expect(kinds.RegisterKind("pings", tracing.NewHandler[pingParams, ping](pings{}, tracing.Capabilities{Live: true}))).To(Succeed())
 	for _, register := range extra {
 		register(kinds)
 	}
@@ -105,7 +105,7 @@ func newTraceHarness(extra ...func(*traces.Kinds)) *traceHarness {
 		Prefix: "traces", ConnectionName: "traces",
 		Settings: recordresultstest.LocalSettings(recordstore.BackendSQLite), Register: kinds.RegisterResultTypes,
 	})
-	runtime := &traces.Runtime{
+	runtime := &tracing.Runtime{
 		Kinds: kinds, Results: h.results, Probes: probe.NewManager(probe.ManagerOptions{}), PollEvery: 20 * time.Millisecond,
 	}
 	h.registry = query.NewSessionRegistry(query.RegistryOptions{})
@@ -150,7 +150,7 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 		h := newTraceHarness()
 		response := h.do(http.MethodGet, "/api/v1/traces/kinds", "")
 		Expect(response.Code).To(Equal(http.StatusOK))
-		var kinds []traces.KindInfo
+		var kinds []tracing.KindInfo
 		Expect(json.Unmarshal(response.Body.Bytes(), &kinds)).To(Succeed())
 		Expect(kinds).To(HaveLen(1))
 		Expect(kinds[0].Name).To(Equal("pings"))
@@ -221,8 +221,8 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 	)
 
 	ginkgo.It("answers a refused start as the host describes the refusal", func() {
-		h := newTraceHarness(func(kinds *traces.Kinds) {
-			Expect(kinds.RegisterKind("locked_out", traces.NewHandler[pingParams, ping](lockedOut{}, traces.Capabilities{Live: true}))).To(Succeed())
+		h := newTraceHarness(func(kinds *tracing.Kinds) {
+			Expect(kinds.RegisterKind("locked_out", tracing.NewHandler[pingParams, ping](lockedOut{}, tracing.Capabilities{Live: true}))).To(Succeed())
 		})
 		response := h.do(http.MethodPost, "/api/v1/traces/locked_out/sessions", `{}`)
 		Expect(response.Code).To(Equal(http.StatusForbidden), response.Body.String())

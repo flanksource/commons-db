@@ -23,7 +23,7 @@ import (
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/spf13/cobra"
@@ -165,7 +165,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		MaxSessions: options.MaxSessions, MaxDuration: options.MaxSessionDuration,
 		Store: sessionStore, Events: sessionStore,
 		BeforeRead: traceRuntime.Results.Registry.BeforeRead,
-		Restarters: map[string]query.RestartFunc{traces.ProfilePrefix: traceRuntime.Restarter(a.Runtime.Context)},
+		Restarters: map[string]query.RestartFunc{tracing.ProfilePrefix: traceRuntime.Restarter(a.Runtime.Context)},
 	})
 	traceRuntime.Sessions = sessionRegistry
 	sessionStore.BindResolver(sessionRegistry.Get)

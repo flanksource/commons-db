@@ -16,11 +16,11 @@ import (
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/recordstore/probe"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
-	"github.com/flanksource/commons-db/tracing/traces"
-	"github.com/flanksource/commons-db/tracing/traces/httptraffic"
-	"github.com/flanksource/commons-db/tracing/traces/opensearchtraces"
-	"github.com/flanksource/commons-db/tracing/traces/sqlstatements"
-	"github.com/flanksource/commons-db/tracing/traces/xevent"
+	"github.com/flanksource/commons-db/tracing"
+	"github.com/flanksource/commons-db/tracing/http"
+	"github.com/flanksource/commons-db/tracing/opensearch"
+	"github.com/flanksource/commons-db/tracing/sqlserver/xevent"
+	"github.com/flanksource/commons-db/tracing/sqlstatements"
 )
 
 // tracesPrefix names the trace results store: its <prefix>/<kind> profiles and
@@ -28,11 +28,11 @@ import (
 const tracesPrefix = "traces"
 
 // traceKinds is the trace plugin kinds a server serves.
-func traceKinds() (*traces.Kinds, error) {
-	kinds := traces.NewKinds()
-	for name, plugin := range map[string]traces.TracePlugin{
-		"http":                httptraffic.Kind(),
-		"opensearch":          opensearchtraces.Kind(),
+func traceKinds() (*tracing.Kinds, error) {
+	kinds := tracing.NewKinds()
+	for name, plugin := range map[string]tracing.TracePlugin{
+		"http":                http.Kind(),
+		"opensearch":          opensearch.Kind(),
 		sqlstatements.RowKind: sqlstatements.Kind(),
 		"sql_xevent":          xevent.Kind(),
 	} {
@@ -48,13 +48,13 @@ func traceKinds() (*traces.Kinds, error) {
 // command that never serves never opens a trace store.
 type tracePlugins struct {
 	mu      sync.RWMutex
-	runtime *traces.Runtime
+	runtime *tracing.Runtime
 }
 
 // open opens the trace results store under configDir, declaring kinds' result
 // types, and returns the runtime that starts their captures with the close
 // that stops using the store.
-func (t *tracePlugins) open(configDir string, retention time.Duration, kinds *traces.Kinds) (*traces.Runtime, func() error, error) {
+func (t *tracePlugins) open(configDir string, retention time.Duration, kinds *tracing.Kinds) (*tracing.Runtime, func() error, error) {
 	dir := filepath.Join(configDir, "traces")
 	results, err := recordresults.Open(recordresults.OpenOptions{
 		Prefix: tracesPrefix, ConnectionName: tracesPrefix,
@@ -64,7 +64,7 @@ func (t *tracePlugins) open(configDir string, retention time.Duration, kinds *tr
 	if err != nil {
 		return nil, nil, err
 	}
-	runtime := &traces.Runtime{
+	runtime := &tracing.Runtime{
 		Kinds: kinds, Results: results, Probes: probe.NewManager(probe.ManagerOptions{LockDir: filepath.Join(dir, "locks")}),
 	}
 	t.mu.Lock()
@@ -74,7 +74,7 @@ func (t *tracePlugins) open(configDir string, retention time.Duration, kinds *tr
 }
 
 // current is the open runtime, or nil before serve opens one.
-func (t *tracePlugins) current() *traces.Runtime {
+func (t *tracePlugins) current() *tracing.Runtime {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.runtime

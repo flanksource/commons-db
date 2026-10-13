@@ -124,7 +124,7 @@ The app uses an ephemeral profile internally to reuse session limits and result
 retention. Saved trace-profile authoring and OIPA profile migration are separate
 features, not part of this connection playground.
 
-The provider uses `tracing/xetrace`, migrated from OIPA's capture implementation.
+The provider (`tracing/sqlserver/xeprovider`) uses `tracing/sqlserver/xetrace`, migrated from OIPA's capture implementation.
 It captures statement, RPC, batch-completion, and error events by default;
 `sp_statement_completed` is opt-in via `events`. Database/user/application/host
 patterns support `*` and `!` exclusions; with no database the capture scopes to

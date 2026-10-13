@@ -13,8 +13,7 @@ require (
 	github.com/flanksource/commons v1.59.1
 	github.com/flanksource/commons-db v0.1.45
 	github.com/flanksource/commons-db/recordstore v0.1.45
-	github.com/flanksource/commons-db/tracing/sqltrace v0.1.45 // indirect
-	github.com/flanksource/commons-db/tracing/traces v0.1.45
+	github.com/flanksource/commons-db/tracing v0.1.45
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -420,6 +419,4 @@ replace github.com/flanksource/commons-db => ../..
 
 replace github.com/flanksource/commons-db/recordstore => ../../recordstore
 
-replace github.com/flanksource/commons-db/tracing/sqltrace => ../../tracing/sqltrace
-
-replace github.com/flanksource/commons-db/tracing/traces => ../../tracing/traces
+replace github.com/flanksource/commons-db/tracing => ../../tracing
