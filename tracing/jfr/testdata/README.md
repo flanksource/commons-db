@@ -2,7 +2,7 @@
 
 | Fixture | Recorded by | Events |
 |---|---|---|
-| `jdk-profile.jfr.gz` | JDK 21.0.5 Flight Recorder, `settings=profile` | cpu (`jdk.ExecutionSample`), alloc (`jdk.ObjectAllocationSample`), lock (`jdk.JavaMonitorEnter`), park (`jdk.ThreadPark`) |
+| `jdk-profile.jfr.gz` | JDK 21.0.5 Flight Recorder, `settings=profile`, scrubbed to the decoded events | cpu (`jdk.ExecutionSample`), alloc (`jdk.ObjectAllocationSample`), lock (`jdk.JavaMonitorEnter`), park (`jdk.ThreadPark`) |
 | `async-profiler-cpu-lock-alloc.jfr.gz` | async-profiler 2.9, `event=cpu,alloc=0,lock=0` | cpu, alloc (`jdk.ObjectAllocationInNewTLAB` + `jdk.ObjectAllocationOutsideTLAB`), lock, park |
 | `async-profiler-wall.jfr.gz` | async-profiler 4.0, `event=wall` | wall (`profiler.WallClockSample`) |
 
@@ -12,12 +12,13 @@
 
 ## Recording `jdk-profile.jfr.gz`
 
-`gen/Workload.java` runs one thread burning CPU (`burner`), one allocating (`allocator`), two contending on a monitor (`contender-1`, `contender-2`) and one parking (`parker`) for two seconds. From this directory:
+`gen/Workload.java` runs one thread burning CPU (`burner`), one allocating (`allocator`), two contending on a monitor (`contender-1`, `contender-2`) and one parking (`parker`) for two seconds. `make -C tracing jfr-record` (or `task tracing:jfr-record`) compiles it and records it into `.tmp/jfr/jdk-profile.jfr`; `JFR_SETTINGS`, `JFR_MILLIS` and `JFR_OUT` override the settings, duration and output.
 
-```sh
-java -XX:StartFlightRecording=settings=profile,filename=jdk-profile.jfr gen/Workload.java 2000
-gzip -9 jdk-profile.jfr
-```
+`make -C tracing jfr-fixture` (or `task tracing:jfr-fixture`) writes that recording to the fixture, recording it first unless it exists. `jfr scrub --include-events` keeps only the events the decoder reads (the four above, the TLAB allocation events and `jdk.ActiveSetting`) with the constant pools they reference, then `gzip -9` compresses it. A `settings=profile` recording is mostly GC, flag and environment events: the fixture went from 1.2 MB to 61 KB scrubbed, with every kept event, and so every expectation below, unchanged. A new recording replaces the fixture only together with those expectations, which are this recording's counts.
+
+## Compression
+
+`make -C tracing jfr-compression` records the workload unless `.tmp/jfr/jdk-profile.jfr` exists, then runs `BenchmarkCompression` on it: per codec (gzip, zstd, brotli, s2, lz4, xz at several levels) the compressed size and ratio, and compress and decompress throughput. `JFR_FILE=<path>` benchmarks another recording, `.jfr` or `.jfr.gz`; `JFR_FILE=` benchmarks every fixture in this directory. `JFR_BENCHTIME` sets the iterations (default `5x`).
 
 ## Expectations
 

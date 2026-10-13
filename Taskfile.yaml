@@ -105,6 +105,21 @@ tasks:
     cmds:
       - make -C tracing test
 
+  tracing:jfr-record:
+    desc: Record a JDK Flight Recording of the jfr fixture workload into .tmp/jfr (JFR_SETTINGS, JFR_MILLIS, JFR_OUT)
+    cmds:
+      - make -C tracing jfr-record
+
+  tracing:jfr-fixture:
+    desc: Write the recording in .tmp/jfr (recorded unless present) to the jdk-profile.jfr.gz fixture, scrubbed down to the events the decoder reads
+    cmds:
+      - make -C tracing jfr-fixture
+
+  tracing:jfr-compression:
+    desc: Benchmark codecs (gzip, zstd, brotli, s2, lz4, xz) on a JFR recording; JFR_FILE= benchmarks the testdata fixtures
+    cmds:
+      - make -C tracing jfr-compression
+
   query:schema:
     desc: Generate per-type/provider source schemas and bundled Clicky UI schemas into schemas/
     dir: cmd/query
