@@ -4,15 +4,19 @@ go 1.26.1
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
+	github.com/andybalholm/brotli v1.2.0
 	github.com/flanksource/clicky v1.21.70
 	github.com/flanksource/commons v1.59.1
 	github.com/flanksource/commons-db v0.1.45
 	github.com/flanksource/commons-db/recordstore v0.1.45
 	github.com/google/uuid v1.6.0
 	github.com/grafana/jfr-parser v0.19.0
+	github.com/klauspost/compress v1.18.7
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/onsi/ginkgo/v2 v2.32.1
 	github.com/onsi/gomega v1.42.1
+	github.com/pierrec/lz4/v4 v4.1.26
+	github.com/ulikunitz/xz v0.5.15
 	golang.org/x/text v0.40.0
 	gorm.io/gorm v1.31.2
 )
@@ -56,7 +60,6 @@ require (
 	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
 	github.com/alecthomas/chroma/v2 v2.23.1 // indirect
 	github.com/alpkeskin/gotoon v0.1.1 // indirect
-	github.com/andybalholm/brotli v1.2.0 // indirect
 	github.com/antchfx/xmlquery v1.5.1 // indirect
 	github.com/antchfx/xpath v1.3.6 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
@@ -202,7 +205,6 @@ require (
 	github.com/jmespath/go-jmespath v0.4.1-0.20220621161143-b0104c826a24 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/kevinburke/ssh_config v1.4.0 // indirect
-	github.com/klauspost/compress v1.18.7 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/kr/fs v0.1.0 // indirect
 	github.com/kr/pretty v0.3.1 // indirect
@@ -245,7 +247,6 @@ require (
 	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
 	github.com/paulmach/orb v0.12.0 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
-	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
@@ -287,7 +288,6 @@ require (
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/ugorji/go/codec v1.3.1 // indirect
-	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/vadimi/go-http-ntlm v1.0.3 // indirect
 	github.com/vadimi/go-http-ntlm/v2 v2.5.0 // indirect
 	github.com/vadimi/go-ntlm v1.2.1 // indirect
