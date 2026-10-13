@@ -105,14 +105,14 @@ var listStopKeywords = map[string]struct{}{
 	"INNER": {}, "LEFT": {}, "RIGHT": {}, "FULL": {}, "CROSS": {}, "OUTER": {},
 }
 
-// classifyStatement returns the StatementType of a SQL statement by finding the
+// ClassifyStatement returns the StatementType of a SQL statement by finding the
 // first DML verb at parenthesis depth 0. This naturally resolves CTEs
 // (`WITH x AS (SELECT …) SELECT …` → SELECT, since the inner SELECT is nested)
 // and `INSERT … SELECT` (→ INSERT, the first top-level verb), and skips leading
 // comments/parens via the tokenizer. A leading DDL verb wins before that scan,
 // since a DDL body may itself contain DML. Unrecognized leading verbs →
 // StmtOther.
-func classifyStatement(sql string) StatementType {
+func ClassifyStatement(sql string) StatementType {
 	tokens := tokenizeSQL(sql)
 	if len(tokens) > 0 {
 		if _, ok := ddlKeywords[strings.ToUpper(tokens[0])]; ok {
@@ -141,7 +141,7 @@ func classifyStatement(sql string) StatementType {
 	return StmtOther
 }
 
-// extractTables returns the distinct table/object names referenced after FROM /
+// ExtractTables returns the distinct table/object names referenced after FROM /
 // JOIN / INTO / UPDATE / MERGE / USING / EXEC keywords. It is a best-effort parse
 // of the SQL text — the only structured source XE exposes for a completed
 // statement.
@@ -162,7 +162,7 @@ func classifyStatement(sql string) StatementType {
 // a table name. Names are schema- and bracket-stripped and de-duplicated
 // case-insensitively, preserving the first-seen casing; an exotic shape (dynamic
 // SQL, table-valued functions in a comma list) may still under-extract.
-func extractTables(sql string) []string {
+func ExtractTables(sql string) []string {
 	var out []string
 	seen := map[string]struct{}{}
 	add := func(tok string) {

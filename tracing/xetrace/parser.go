@@ -352,11 +352,11 @@ func deriveFromStatement(e *Event) {
 // whatever its batch opens with: the event itself reports a committed schema
 // change.
 func deriveFromSQL(e *Event) {
-	e.StatementType = classifyStatement(e.SQL)
+	e.StatementType = ClassifyStatement(e.SQL)
 	if isObjectEvent(e.Name) {
 		e.StatementType = StmtDDL
 	}
-	e.Tables = extractTables(e.SQL)
+	e.Tables = ExtractTables(e.SQL)
 	e.ParamsUnavailable = hasUnboundParams(e.SQL)
 }
 

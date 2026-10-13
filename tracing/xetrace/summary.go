@@ -247,7 +247,7 @@ func p95Index(n int) int {
 //	12.4s elapsed · 8.1s cpu (65%) · 4.2M reads (32 GB) · 12K physical · 1.9K writes · 220 rows · avg 9.7ms p95 84ms max 1.2s
 func (s Summary) Pretty() api.Text {
 	t := api.Text{}.
-		Add(api.Human(s.Duration, durationStyle(s.Duration))).
+		Add(api.Human(s.Duration, DurationStyle(s.Duration))).
 		AddText(" elapsed", "text-muted")
 
 	if s.CPUTime > 0 {
@@ -283,8 +283,8 @@ func (s Summary) Pretty() api.Text {
 	if s.AvgDuration > 0 {
 		t = t.AddText(" · ", "text-muted").
 			AddText("avg ", "text-muted").Add(api.Human(s.AvgDuration, "text-muted")).
-			AddText(" p95 ", "text-muted").Add(api.Human(s.P95Duration, durationStyle(s.P95Duration))).
-			AddText(" max ", "text-muted").Add(api.Human(s.MaxDuration, durationStyle(s.MaxDuration)))
+			AddText(" p95 ", "text-muted").Add(api.Human(s.P95Duration, DurationStyle(s.P95Duration))).
+			AddText(" max ", "text-muted").Add(api.Human(s.MaxDuration, DurationStyle(s.MaxDuration)))
 	}
 
 	if s.Nested > 0 {

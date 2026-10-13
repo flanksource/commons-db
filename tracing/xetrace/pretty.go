@@ -140,7 +140,7 @@ func (r ReplayResult) Pretty() api.Text {
 		AddText("→ ", "text-muted").
 		Add(api.CodeBlock("text/x-sql", firstN(r.SQL, 200))).
 		Space().
-		Add(api.Human(r.Duration, durationStyle(r.Duration)))
+		Add(api.Human(r.Duration, DurationStyle(r.Duration)))
 
 	if r.Error != "" {
 		return api.Text{Children: []api.Textable{
@@ -226,7 +226,11 @@ func eventMarkerGlyph(name string) (string, string) {
 	}
 }
 
-func durationStyle(d time.Duration) string {
+// DurationStyle is the tone a statement's duration renders in: muted under
+// 1ms, then yellow, orange from 10ms, red from 100ms and bold red from 1s.
+// Every SQL trace type styles its durations with it, so a slow statement
+// reads the same whichever capture recorded it.
+func DurationStyle(d time.Duration) string {
 	switch {
 	case d >= 1*time.Second:
 		return "text-red-500 font-bold"
@@ -277,7 +281,7 @@ func (e Event) Row() map[string]any {
 	}
 
 	if e.Duration > 0 {
-		row["duration"] = api.Human(e.Duration, durationStyle(e.Duration))
+		row["duration"] = api.Human(e.Duration, DurationStyle(e.Duration))
 	}
 	if e.CPUTime > 0 {
 		row["cpu"] = api.Human(e.CPUTime, "text-muted")
@@ -439,7 +443,7 @@ func StreamLine(e Event, opts StreamLineOptions) api.Text {
 		t = t.AddText(e.ObjectType+" ", "text-orange-500").AddText(e.ObjectName, "font-bold").Space()
 	}
 	t = t.Add(statementCell(e, widthClass)).Space().
-		Add(api.Human(e.Duration, durationStyle(e.Duration)))
+		Add(api.Human(e.Duration, DurationStyle(e.Duration)))
 
 	if e.ParamsUnavailable {
 		t = t.Space().Add(paramsUnavailableNote())

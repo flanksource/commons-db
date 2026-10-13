@@ -38,8 +38,8 @@ func TestClassifyStatement(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyStatement(tc.sql); got != tc.want {
-				t.Errorf("classifyStatement(%q) = %q, want %q", tc.sql, got, tc.want)
+			if got := ClassifyStatement(tc.sql); got != tc.want {
+				t.Errorf("ClassifyStatement(%q) = %q, want %q", tc.sql, got, tc.want)
 			}
 		})
 	}
@@ -85,8 +85,8 @@ func TestExtractTables(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := extractTables(tc.sql); !reflect.DeepEqual(got, tc.want) {
-				t.Errorf("extractTables(%q) = %#v, want %#v", tc.sql, got, tc.want)
+			if got := ExtractTables(tc.sql); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("ExtractTables(%q) = %#v, want %#v", tc.sql, got, tc.want)
 			}
 		})
 	}
@@ -94,7 +94,7 @@ func TestExtractTables(t *testing.T) {
 
 // ev builds an event with the derived fields populated as toEvent would.
 func ev(sql string) Event {
-	return Event{SQL: sql, StatementType: classifyStatement(sql), Tables: extractTables(sql)}
+	return Event{SQL: sql, StatementType: ClassifyStatement(sql), Tables: ExtractTables(sql)}
 }
 
 func TestEventFilterMatch(t *testing.T) {
@@ -123,7 +123,7 @@ func TestEventFilterMatch(t *testing.T) {
 		{"type and table combined", EventFilter{Types: []string{"DML"}, Tables: []string{"AsActivity"}}, []Event{sel, upd, ins}, []Event{upd}},
 		// A multi-table join must be matched on EITHER referenced table for
 		// include and dropped when ANY referenced table is excluded — the
-		// behaviour that depends on extractTables finding both names.
+		// behaviour that depends on ExtractTables finding both names.
 		{"include matches a joined table", EventFilter{Tables: []string{"AsClient"}}, []Event{join, sel}, []Event{join}},
 		{"exclude drops a join touching the excluded table", EventFilter{Tables: []string{"!AsClient"}}, []Event{join, sel}, []Event{sel}},
 		// A stored-procedure call must be reachable by name and by type;
@@ -156,7 +156,7 @@ func TestEventFilterMatch(t *testing.T) {
 }
 
 // TestFilterableTypesCoversEveryToken guards the option set a UI offers against
-// the tokens the filter actually matches: every StatementType classifyStatement
+// the tokens the filter actually matches: every StatementType ClassifyStatement
 // can produce, plus the virtual DML group, must be offerable, and nothing that
 // is not a real token may be offered. Adding a StatementType without extending
 // FilterableTypes fails here rather than silently hiding a filter from the form.
