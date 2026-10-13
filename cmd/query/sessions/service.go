@@ -14,7 +14,7 @@ import (
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 type ProfileStoreProvider func() (profilestore.Store, error)
@@ -81,7 +81,7 @@ type Options struct {
 
 	// Traces starts trace plugin captures, each authorized as its profile
 	// traces/<kind>. Nil serves no trace routes.
-	Traces *traces.Runtime
+	Traces *tracing.Runtime
 
 	// TraceStartError answers a trace start the runtime refused, when the host
 	// recognises the refusal and can describe it better than its error text
@@ -143,7 +143,7 @@ type sessionHandler struct {
 	records   EventRecords
 	authorize AuthorizeFunc
 	principal func(r *http.Request) string
-	traces    *traces.Runtime
+	traces    *tracing.Runtime
 	// traceStartError answers a refused trace start the host describes.
 	traceStartError func(w http.ResponseWriter, r *http.Request, err error) bool
 	next            http.Handler
@@ -159,7 +159,7 @@ type sessionHandlerOptions struct {
 	Records   EventRecords
 	Authorize AuthorizeFunc
 	Principal func(r *http.Request) string
-	Traces    *traces.Runtime
+	Traces    *tracing.Runtime
 	// TraceStartError answers a refused trace start the host describes.
 	TraceStartError func(w http.ResponseWriter, r *http.Request, err error) bool
 	Next            http.Handler
