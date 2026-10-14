@@ -13,7 +13,11 @@ func FieldBatches(fields []string, size int) [][]string {
 	if size <= 0 {
 		panic("inspection field batch size must be positive")
 	}
-	batches := make([][]string, 0, (len(fields)+size-1)/size)
+	count := len(fields) / size
+	if len(fields)%size != 0 {
+		count++
+	}
+	batches := make([][]string, 0, count)
 	for start := 0; start < len(fields); start += size {
 		batches = append(batches, fields[start:min(start+size, len(fields))])
 	}
