@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons-db/logs/k8s"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -129,7 +130,7 @@ func (p k8sLogsProvider) cursorPages(
 				Truncated: target.truncated || capped,
 			}
 			if result.HasMore && len(rows) > 0 {
-				keys, err := orderKeys(rows[len(rows)-1], req.Order)
+				keys, err := providerkit.OrderKeys(rows[len(rows)-1], req.Order)
 				if err != nil {
 					yield(query.Page{}, err)
 					return
