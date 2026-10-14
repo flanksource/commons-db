@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/commons-db/tracing/http"
 	"github.com/flanksource/commons-db/tracing/opensearch"
+	"github.com/flanksource/commons-db/tracing/process"
 	"github.com/flanksource/commons-db/tracing/sqlserver/xevent"
 	"github.com/flanksource/commons-db/tracing/sqlstatements"
 )
@@ -30,11 +31,14 @@ const tracesPrefix = "traces"
 // traceKinds is the trace plugin kinds a server serves.
 func traceKinds() (*tracing.Kinds, error) {
 	kinds := tracing.NewKinds()
+	sampler := process.NewSampler()
 	for name, plugin := range map[string]tracing.TracePlugin{
 		"http":                http.Kind(),
 		"opensearch":          opensearch.Kind(),
 		sqlstatements.RowKind: sqlstatements.Kind(),
 		"sql_xevent":          xevent.Kind(),
+		process.TreeKind:      process.NewTreeKind(sampler, process.TreeOptions{}),
+		process.SamplesKind:   process.NewSamplesKind(sampler),
 	} {
 		if err := kinds.RegisterKind(name, plugin); err != nil {
 			return nil, err
