@@ -113,10 +113,17 @@ var _ = Describe("process_tree", func() {
 		env := newEnv()
 		managed := start(env, process.TreeKind, root)
 		Expect(env.Runtime.Checkpoint(context.Background(), managed)).To(Succeed())
-		Expect(nodes(env, managed.Session())).To(HaveKeyWithValue("sleep 30", And(
-			HaveKeyWithValue("stackError", ContainSubstring("only be dumped for the host process")),
-			HaveKeyWithValue("stack", BeNil()),
-		)))
+		// Whether sh execs its only command (bash) or forks it (dash), the
+		// root is the process at root's pid.
+		var rootRow recordstore.Row
+		for _, row := range nodes(env, managed.Session()) {
+			if row["isRoot"] == true {
+				rootRow = row
+			}
+		}
+		Expect(rootRow).To(HaveKeyWithValue("pid", int64(root)))
+		Expect(rootRow).To(HaveKeyWithValue("stackError", ContainSubstring("only be dumped for the host process")))
+		Expect(rootRow).To(HaveKeyWithValue("stack", BeNil()))
 	})
 
 	DescribeTable("refuses params it cannot capture under before a session exists",
