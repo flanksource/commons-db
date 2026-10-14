@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 func init() {
@@ -58,7 +59,7 @@ func (jaegerProvider) Execute(ctx context.Context, req query.ProviderRequest) ([
 
 	base := opts.URL
 	if base != "" {
-		base, err = resolveInlineURL(ctx, base, "jaeger")
+		base, err = providerkit.ResolveInlineURL(ctx, base, "jaeger")
 		if err != nil {
 			return nil, err
 		}

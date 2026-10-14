@@ -6,6 +6,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 // awsConfigForRequest hydrates an AWS connection and returns the SDK config
@@ -21,7 +22,7 @@ func awsConfigForRequest(ctx context.Context, connectionName, region, endpoint s
 	}
 
 	if endpoint != "" {
-		resolved, err := resolveInlineURL(ctx, endpoint, models.ConnectionTypeAWS)
+		resolved, err := providerkit.ResolveInlineURL(ctx, endpoint, models.ConnectionTypeAWS)
 		if err != nil {
 			return aws.Config{}, "", err
 		}
