@@ -17,7 +17,7 @@ import (
 	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
-	"github.com/flanksource/commons-db/query/providers"
+	"github.com/flanksource/commons-db/query/providers/sqlite"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/commons-db/tracing/sqlstatements"
@@ -40,7 +40,7 @@ var _ = Describe("sql trace kind", func() {
 	})
 
 	read := func(connection, statement string) {
-		_, err := providers.ReadSQLPage(context.Background(), database, models.ConnectionTypeSQLite, providers.SQLPageRequest{
+		_, err := sqlite.ReadSQLPage(context.Background(), database, models.ConnectionTypeSQLite, sqlite.SQLPageRequest{
 			Connection: connection, Query: statement, Page: query.PageRequest{Limit: 10},
 		})
 		Expect(err).ToNot(HaveOccurred())
@@ -152,7 +152,7 @@ var _ = Describe("sql trace kind", func() {
 				read("events-db", first)
 				read("events-db", second)
 				read("events-db", notes)
-				_, err := providers.ReadSQLPage(context.Background(), database, models.ConnectionTypeSQLite, providers.SQLPageRequest{
+				_, err := sqlite.ReadSQLPage(context.Background(), database, models.ConnectionTypeSQLite, sqlite.SQLPageRequest{
 					Connection: "events-db", Query: missing, Page: query.PageRequest{Limit: 10},
 				})
 				Expect(err).To(MatchError(ContainSubstring("no such table")))

@@ -133,7 +133,7 @@ type indexProvider interface {
 func sqliteProvider() (indexProvider, error) {
 	provider, err := query.GetProvider(indexProviderType)
 	if err != nil {
-		return nil, fmt.Errorf("%s provider: %w; link github.com/flanksource/commons-db/query/providers", ProviderType, err)
+		return nil, fmt.Errorf("%s provider: %w; link github.com/flanksource/commons-db/query/providers/sqlite", ProviderType, err)
 	}
 	index, ok := provider.(indexProvider)
 	if !ok {
