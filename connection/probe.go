@@ -2,6 +2,7 @@ package connection
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -111,8 +112,8 @@ func probeAccount(ctx context.Context, model models.Connection) (ProbeResult, er
 		return ProbeResult{}, fmt.Errorf("%s API URL is required", model.Type)
 	}
 	endpoint, err := url.Parse(base)
-	if err != nil || (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.Host == "" {
-		return ProbeResult{}, fmt.Errorf("%s API URL must be an HTTP URL", model.Type)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" {
+		return ProbeResult{}, fmt.Errorf("%s API URL must be an HTTPS URL", model.Type)
 	}
 	if strings.TrimSpace(model.Password) == "" {
 		return ProbeResult{}, fmt.Errorf("%s access token is required", model.Type)
@@ -137,7 +138,16 @@ func probeAccount(ctx context.Context, model models.Connection) (ProbeResult, er
 	} else {
 		request.Header.Set("Authorization", "Bearer "+model.Password)
 	}
-	response, err := (&http.Client{Timeout: 15 * time.Second}).Do(request)
+	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(next *http.Request, _ []*http.Request) error {
+		if next.URL.Scheme != "https" {
+			return fmt.Errorf("%s API redirected to a non-HTTPS URL", model.Type)
+		}
+		return nil
+	}}
+	if model.InsecureTLS {
+		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return ProbeResult{}, fmt.Errorf("%s API request failed: %w", model.Type, err)
 	}
@@ -163,9 +173,14 @@ func probeS3(ctx dbcontext.Context, model models.Connection) (ProbeResult, error
 		if connection.Endpoint != "" {
 			options.BaseEndpoint = aws.String(connection.Endpoint)
 		}
+		options.UsePathStyle = model.Properties["usePathStyle"] == "true"
 	})
-	if _, err := client.ListBuckets(ctx, &s3.ListBucketsInput{}); err != nil {
-		return ProbeResult{}, fmt.Errorf("s3 list buckets failed: %w", err)
+	if bucket := strings.TrimSpace(model.Properties["bucket"]); bucket != "" {
+		if _, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)}); err != nil {
+			return ProbeResult{}, fmt.Errorf("s3 head bucket %q failed: %w", bucket, err)
+		}
+	} else if _, err := client.ListBuckets(ctx, &s3.ListBucketsInput{}); err != nil {
+		return ProbeResult{}, fmt.Errorf("s3 list buckets failed (requires ListAllMyBuckets permission): %w", err)
 	}
 	return ProbeResult{OK: true}, nil
 }
