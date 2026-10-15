@@ -38,6 +38,10 @@ var _ = ginkgo.Describe("Trace plugin OpenAPI", func() {
 		Expect(body.Properties["params"].Properties).To(HaveKey("count"))
 		Expect(body.Properties["params"].Properties["count"].Default).To(BeEquivalentTo(1))
 		Expect(body.Properties["duration"].Type).To(Equal("string"))
+
+		export := spec.Paths["/api/v1/traces/pings/export"]["get"]
+		Expect(export.OperationID).To(Equal("export-pings-trace"))
+		Expect(export.Parameters).To(ContainElement(HaveField("Schema.Enum", []any{"ndjson"})))
 	})
 
 	ginkgo.It("describes nothing before the server serves trace kinds", func() {

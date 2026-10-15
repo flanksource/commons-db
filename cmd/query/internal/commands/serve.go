@@ -35,6 +35,7 @@ func newServe(application *app.App) *cobra.Command {
 	flags.IntVar(&options.MaxSessions, "max-sessions", options.MaxSessions, "Maximum concurrently running trace/top sessions")
 	flags.DurationVar(&options.MaxSessionDuration, "max-session-duration", options.MaxSessionDuration, "Upper bound on any trace/top session; profiles can only lower it")
 	flags.DurationVar(&options.SessionRetention, "session-retention", options.SessionRetention, "How long finished sessions and their events are kept in PostgreSQL")
+	flags.StringVar(&options.TracesDir, "traces-dir", options.TracesDir, "Trace results store to open, such as a gavel run's .gavel/traces/<run>; empty opens <config-dir>/traces")
 	flags.DurationVar(&options.ReconcileSnapshotMaxAge, "reconcile-snapshot-max-age", options.ReconcileSnapshotMaxAge, "Maximum idle age of reconciliation snapshots; individual runs may shorten it")
 	return command
 }

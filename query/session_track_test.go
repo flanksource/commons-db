@@ -118,6 +118,35 @@ var _ = Describe("SessionRegistry.Track", func() {
 		}, `"sql" twice`),
 	)
 
+	It("records the env the host exports once armed, through to the stopped record", func() {
+		session := track(reg, stdcontext.Background(), jvmTrackOptions())
+		exports := map[string]string{"HTTPS_PROXY": "http://127.0.0.1:41234", "NO_PROXY": "localhost"}
+		Expect(session.Running(query.RunningUpdate{Handle: "t", Exports: exports})).To(Succeed())
+		finishOnStop(session)
+		session.Stop("stopped by admin")
+		waitDone(session)
+
+		encoded, err := json.Marshal(store.status(session.ID()))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(map[string]any{"snapshot": session.Snapshot().Exports, "stored": store.status(session.ID()).Exports, "json": string(encoded)}).To(
+			MatchAllKeys(Keys{
+				"snapshot": Equal(exports), "stored": Equal(exports),
+				"json": ContainSubstring(`"exports":{"HTTPS_PROXY":"http://127.0.0.1:41234","NO_PROXY":"localhost"}`),
+			}))
+	})
+
+	DescribeTable("refuses an export whose name is not an environment variable name",
+		func(name string) {
+			session := track(reg, stdcontext.Background(), jvmTrackOptions())
+			Expect(session.Running(query.RunningUpdate{Exports: map[string]string{name: "x"}})).To(MatchError(ContainSubstring("environment variable name")))
+			Expect(session.Snapshot()).To(And(HaveField("State", query.SessionStarting), HaveField("Exports", BeEmpty())))
+		},
+		Entry("an empty name", ""),
+		Entry("a name starting with a digit", "1PROXY"),
+		Entry("a name holding a dash", "HTTP-PROXY"),
+		Entry("a name holding an equals sign", "A=B"),
+	)
+
 	It("completes when the deadline elapses", func() {
 		stopAt := time.Now().Add(50 * time.Millisecond)
 		opts := jvmTrackOptions()
