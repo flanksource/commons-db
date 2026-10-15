@@ -196,3 +196,21 @@ func TestLocalFS_WriteClosesTheFile(t *testing.T) {
 		t.Errorf("20 writes left %d files open", leaked)
 	}
 }
+
+func TestLocalFS_Delete(t *testing.T) {
+	localFS := fs.NewLocalFS(t.TempDir())
+	ctx := context.Background()
+	if _, err := localFS.Write(ctx, "dir/file.txt", strings.NewReader("data")); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	if err := localFS.Delete(ctx, "dir/file.txt"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	if _, err := localFS.Stat("dir/file.txt"); !os.IsNotExist(err) {
+		t.Errorf("Stat after Delete: got %v, want a not-exist error", err)
+	}
+	if err := localFS.Delete(ctx, "dir/file.txt"); err != nil {
+		t.Errorf("deleting a missing file: got %v, want nil", err)
+	}
+}
