@@ -170,8 +170,12 @@ type AzureDevopsProvider struct {
 	Password types.EnvVar `json:"password" clicky:"title=Personal Access Token,format=password,required,order=5"`
 }
 
-// S3Provider uses AWS credentials and region for account-level access.
-type S3Provider struct{ AWSProvider }
+// S3Provider uses AWS credentials and region, optionally scoped to a bucket.
+type S3Provider struct {
+	AWSProvider
+	Bucket       string `json:"bucket" clicky:"property=bucket,title=Bucket,order=7,desc=Optional bucket for scoped access"`
+	UsePathStyle bool   `json:"usePathStyle" clicky:"property=usePathStyle,title=Use path-style requests,order=8"`
+}
 
 // tailoredProviders binds each connection type to the struct that drives its
 // form. Types without an entry fall back to the base fields (name/namespace/

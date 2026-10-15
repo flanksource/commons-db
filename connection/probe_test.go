@@ -20,7 +20,8 @@ import (
 var _ = Describe("model connection probes", func() {
 	DescribeTable("tests an account API without a repository",
 		func(connectionType, basePath, expectedPath string) {
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				defer GinkgoRecover()
 				Expect(r.URL.Path).To(Equal(expectedPath))
 				if connectionType == models.ConnectionTypeAzureDevops {
 					_, token, ok := r.BasicAuth()
@@ -32,7 +33,7 @@ var _ = Describe("model connection probes", func() {
 				w.WriteHeader(http.StatusOK)
 			}))
 			defer server.Close()
-			result, err := connection.ProbeModel(context.Background(), models.Connection{Type: connectionType, URL: server.URL + basePath, Password: "test-token"})
+			result, err := connection.ProbeModel(context.Background(), models.Connection{Type: connectionType, URL: server.URL + basePath, Password: "test-token", InsecureTLS: true})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(result.OK).To(BeTrue())
 		},
@@ -40,6 +41,21 @@ var _ = Describe("model connection probes", func() {
 		Entry("GitLab", models.ConnectionTypeGitlab, "/gitlab", "/gitlab/api/v4/user"),
 		Entry("Azure DevOps", models.ConnectionTypeAzureDevops, "/org", "/org/_apis/projects"),
 	)
+
+	It("rejects an account token sent over HTTP", func(ctx SpecContext) {
+		_, err := connection.ProbeModel(ctx, models.Connection{Type: models.ConnectionTypeGithub, URL: "http://example.invalid", Password: "test-token"})
+		Expect(err).To(MatchError(ContainSubstring("HTTPS URL")))
+	})
+
+	It("rejects a redirect from HTTPS to HTTP", func(ctx SpecContext) {
+		server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			http.Redirect(w, r, "http://example.invalid/unsafe", http.StatusFound)
+		}))
+		defer server.Close()
+		_, err := connection.ProbeModel(ctx, models.Connection{Type: models.ConnectionTypeGithub, URL: server.URL, Password: "test-token", InsecureTLS: true})
+		Expect(err).To(MatchError(ContainSubstring("non-HTTPS URL")))
+	})
 
 	It("pings SQLite", func(ctx SpecContext) {
 		path := filepath.Join(GinkgoT().TempDir(), "catalog.db")
@@ -66,6 +82,7 @@ var _ = Describe("model connection probes", func() {
 
 	It("lists S3 buckets using a saved endpoint and credentials", func(ctx SpecContext) {
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
 			Expect(r.Method).To(Equal(http.MethodGet))
 			Expect(r.URL.Path).To(Equal("/"))
 			Expect(r.Header.Get("Authorization")).To(ContainSubstring("test-access"))
@@ -76,6 +93,20 @@ var _ = Describe("model connection probes", func() {
 		defer server.Close()
 		result, err := connection.ProbeModel(ctx, models.Connection{Type: models.ConnectionTypeS3, URL: server.URL,
 			Username: "test-access", Password: "test-secret", Properties: types.JSONStringMap{"region": "us-east-1"}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.OK).To(BeTrue())
+	})
+
+	It("tests a scoped S3 bucket without account-wide list permission", func(ctx SpecContext) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			defer GinkgoRecover()
+			Expect(r.Method).To(Equal(http.MethodHead))
+			Expect(r.URL.Path).To(Equal("/source-bucket"))
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer server.Close()
+		result, err := connection.ProbeModel(ctx, models.Connection{Type: models.ConnectionTypeS3, URL: server.URL,
+			Username: "test-access", Password: "test-secret", Properties: types.JSONStringMap{"region": "us-east-1", "bucket": "source-bucket", "usePathStyle": "true"}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.OK).To(BeTrue())
 	})

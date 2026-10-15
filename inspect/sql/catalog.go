@@ -15,6 +15,7 @@ import (
 const (
 	DefaultMaxRelations       = 5000
 	DefaultMaxColumns         = 50000
+	DefaultMaxMetadata        = 50000
 	DefaultMaxRoutines        = 2000
 	DefaultMaxDefinitionBytes = 4 * 1024 * 1024
 )
@@ -22,6 +23,7 @@ const (
 type Limits struct {
 	MaxRelations       int
 	MaxColumns         int
+	MaxMetadata        int
 	MaxRoutines        int
 	MaxDefinitionBytes int
 }
@@ -32,6 +34,9 @@ func (l Limits) withDefaults() Limits {
 	}
 	if l.MaxColumns <= 0 {
 		l.MaxColumns = DefaultMaxColumns
+	}
+	if l.MaxMetadata <= 0 {
+		l.MaxMetadata = DefaultMaxMetadata
 	}
 	if l.MaxRoutines <= 0 {
 		l.MaxRoutines = DefaultMaxRoutines

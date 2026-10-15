@@ -23,13 +23,14 @@ var _ = Describe("account connection schemas", func() {
 		Entry("Azure DevOps", models.ConnectionTypeAzureDevops, true),
 	)
 
-	It("scopes S3 to an AWS service rather than a bucket", func() {
+	It("allows an optional bucket for scoped S3 access", func() {
 		component := schema.ConnectionComponents()[models.ConnectionTypeS3]
 		fields := component["properties"].(schema.Schema)
 		Expect(fields).To(HaveKey("username"))
 		Expect(fields).To(HaveKey("password"))
 		properties := fields["properties"].(schema.Schema)["properties"].(schema.Schema)
 		Expect(properties).To(HaveKey("region"))
-		Expect(properties).NotTo(HaveKey("bucket"))
+		Expect(properties).To(HaveKey("bucket"))
+		Expect(properties).To(HaveKey("usePathStyle"))
 	})
 })
