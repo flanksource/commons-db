@@ -28,4 +28,6 @@ type FilesystemRW interface {
 	Filesystem
 	Read(ctx context.Context, path string) (io.ReadCloser, error)
 	Write(ctx context.Context, path string, data io.Reader) (os.FileInfo, error)
+	// Delete removes the file at path. A missing file is not an error.
+	Delete(ctx context.Context, path string) error
 }

@@ -58,10 +58,7 @@ func TestGCSFilesystem_WriteAndRead(t *testing.T) {
 }
 
 func TestGCSFilesystem_Delete(t *testing.T) {
-	filesystem, ok := gcsTestFilesystem(t).(deletableFS)
-	if !ok {
-		t.Fatal("the GCS filesystem can't delete")
-	}
+	filesystem := gcsTestFilesystem(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	key := fmt.Sprintf("commons-db-test/%d/delete.txt", time.Now().UnixNano())

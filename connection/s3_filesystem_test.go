@@ -17,12 +17,6 @@ import (
 	"github.com/flanksource/commons-db/types"
 )
 
-// deletableFS is a filesystem that can delete what it wrote.
-type deletableFS interface {
-	fs.FilesystemRW
-	Delete(ctx context.Context, path string) error
-}
-
 // s3TestFilesystem opens the S3 filesystem for the test server, or skips without one.
 func s3TestFilesystem(t *testing.T) fs.FilesystemRW {
 	t.Helper()
@@ -73,10 +67,7 @@ func TestS3Filesystem_UsesTheConnectionEndpoint(t *testing.T) {
 }
 
 func TestS3Filesystem_Delete(t *testing.T) {
-	filesystem, ok := s3TestFilesystem(t).(deletableFS)
-	if !ok {
-		t.Fatal("the S3 filesystem can't delete")
-	}
+	filesystem := s3TestFilesystem(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	key := fmt.Sprintf("commons-db-test/%d/delete.txt", time.Now().UnixNano())

@@ -19,7 +19,7 @@ import (
 // openSMBFS connects to the test share, or skips without a server. The share
 // (COMMONS_DB_SMB_TEST_SHARE, default Data) must accept COMMONS_DB_SMB_TEST_USER and
 // COMMONS_DB_SMB_TEST_PASSWORD (default samba/secret).
-func openSMBFS(t *testing.T) deletableFS {
+func openSMBFS(t *testing.T) fs.FilesystemRW {
 	t.Helper()
 	server := os.Getenv("COMMONS_DB_SMB_TEST_SERVER")
 	if server == "" {

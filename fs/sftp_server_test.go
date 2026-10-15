@@ -103,13 +103,7 @@ func serveSFTP(conn net.Conn, config *ssh.ServerConfig, root string) {
 	}
 }
 
-// deletableFS is a filesystem that can delete what it wrote.
-type deletableFS interface {
-	fs.FilesystemRW
-	Delete(ctx context.Context, path string) error
-}
-
-func openSFTPFS(t *testing.T) (deletableFS, string) {
+func openSFTPFS(t *testing.T) (fs.FilesystemRW, string) {
 	t.Helper()
 	root := t.TempDir()
 	sftpFS, err := fs.NewSFTPFS(startSFTPServer(t, root), sftpTestUser, sftpTestPassword)
