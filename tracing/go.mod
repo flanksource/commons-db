@@ -5,12 +5,14 @@ go 1.26.1
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/andybalholm/brotli v1.2.0
+	github.com/elazarl/goproxy v1.7.2
 	github.com/flanksource/clicky v1.21.70
 	github.com/flanksource/commons v1.59.1
 	github.com/flanksource/commons-db v0.1.45
 	github.com/flanksource/commons-db/recordstore v0.1.45
 	github.com/google/uuid v1.6.0
 	github.com/grafana/jfr-parser v0.19.0
+	github.com/jackc/pgx/v5 v5.10.0
 	github.com/klauspost/compress v1.18.7
 	github.com/microsoft/go-mssqldb v1.10.0
 	github.com/onsi/ginkgo/v2 v2.32.1
@@ -196,7 +198,6 @@ require (
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6 // indirect
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
-	github.com/jackc/pgx/v5 v5.10.0 // indirect
 	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/jbenet/go-context v0.0.0-20150711004518-d14ea06fba99 // indirect
 	github.com/jeremywohl/flatten v1.0.1 // indirect

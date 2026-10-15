@@ -22,6 +22,9 @@ type KindInfo struct {
 	Capabilities Capabilities       `json:"capabilities"`
 	Params       *rpc.OpenAPISchema `json:"params"`
 	Columns      []query.ColumnDef  `json:"columns"`
+	// ExportFormats are the formats a window of the kind's records downloads
+	// in, NDJSON first.
+	ExportFormats []ExportFormat `json:"exportFormats"`
 }
 
 // Kinds is the trace plugins a host serves, by kind name.
@@ -50,6 +53,9 @@ func (k *Kinds) RegisterKind(name string, plugin TracePlugin) error {
 		return fmt.Errorf("trace kind %q: %w", name, err)
 	}
 	if _, err := plugin.Schema(name); err != nil {
+		return fmt.Errorf("trace kind %q: %w", name, err)
+	}
+	if err := validateFormats(plugin.ExportFormats()); err != nil {
 		return fmt.Errorf("trace kind %q: %w", name, err)
 	}
 	k.mu.Lock()
@@ -86,9 +92,25 @@ func (k *Kinds) List() ([]KindInfo, error) {
 		}
 		infos = append(infos, KindInfo{
 			Name: name, Title: plugin.Title(), Capabilities: plugin.Capabilities(), Params: params, Columns: schema.Columns,
+			ExportFormats: plugin.ExportFormats(),
 		})
 	}
 	return infos, nil
+}
+
+// Format is the export format named format of kind, refusing an unknown kind
+// (ErrUnknownKind) and a format the kind does not offer (ErrUnknownFormat).
+func (k *Kinds) Format(kind, format string) (ExportFormat, error) {
+	plugin, ok := k.Get(kind)
+	if !ok {
+		return ExportFormat{}, fmt.Errorf("%w %q", ErrUnknownKind, kind)
+	}
+	for _, offered := range plugin.ExportFormats() {
+		if offered.Name == format {
+			return offered, nil
+		}
+	}
+	return ExportFormat{}, fmt.Errorf("%w %q for trace kind %q", ErrUnknownFormat, format, kind)
 }
 
 // RegisterResultTypes declares every kind's result type into registry, which

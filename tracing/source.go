@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"sync"
 
@@ -74,6 +75,11 @@ type source struct {
 	warnings []string
 	handle   string
 	metadata []query.SessionMetadata
+	// exports are what Prepare exported, closed to more once it returns;
+	// exportErr is why one it exported cannot be handed to a process.
+	exports       map[string]string
+	exportsClosed bool
+	exportErr     error
 
 	ctx     dbcontext.Context
 	capture func(dbcontext.Context) error
@@ -242,7 +248,39 @@ func (s *source) describe(handle string, metadata []query.SessionMetadata) {
 	s.mu.Unlock()
 }
 
-// described overlays the handle and metadata the kind described onto status.
+// export records name for the processes the capture observes while Prepare
+// runs; once it has returned, the export is left out and warns the session.
+func (s *source) export(name, value string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, taken := s.exports[name]
+	invalid := query.ValidateEnvName(name)
+	switch {
+	case s.exportsClosed:
+		s.warnings = append(s.warnings, fmt.Sprintf("export %q left out: a capture exports only from Prepare", name))
+	case invalid != nil:
+		s.exportErr = errors.Join(s.exportErr, fmt.Errorf("export: %w", invalid))
+	case taken:
+		s.exportErr = errors.Join(s.exportErr, fmt.Errorf("export: %q twice", name))
+	default:
+		if s.exports == nil {
+			s.exports = map[string]string{}
+		}
+		s.exports[name] = value
+	}
+}
+
+// closeExports ends the exports once Prepare has returned, with the error of
+// any it could not take.
+func (s *source) closeExports() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.exportsClosed = true
+	return s.exportErr
+}
+
+// described overlays the handle, metadata and exports the kind described onto
+// status.
 func (s *source) described(status query.ManagedStatus) query.ManagedStatus {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -251,6 +289,9 @@ func (s *source) described(status query.ManagedStatus) query.ManagedStatus {
 	}
 	if len(s.metadata) > 0 {
 		status.Metadata = s.metadata
+	}
+	if len(s.exports) > 0 {
+		status.Exports = maps.Clone(s.exports)
 	}
 	return status
 }

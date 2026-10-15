@@ -79,6 +79,24 @@ type Exchange struct {
 	DurationMs float64      `json:"durationMs" pretty:"label=Duration,type=duration,unit=ms" sort:"durationMs"`
 	Request    har.Request  `json:"request" pretty:"hide"`
 	Response   har.Response `json:"response" pretty:"hide"`
+	// Error is why the exchange got no response, such as a refused connection.
+	Error string `json:"error,omitempty" filter:"text"`
+	// Timings break DurationMs down where the capture measured the phases; a
+	// phase it did not measure is -1.
+	Timings         har.Timings `json:"timings" pretty:"hide"`
+	ServerIPAddress string      `json:"serverIPAddress,omitempty" pretty:"label=Server IP"`
+	// Tunnelled marks a CONNECT tunnel a proxy relayed without decrypting it:
+	// there is no method, path, status or body inside it to record, only the
+	// bytes that crossed it, in from the server and out from the client.
+	Tunnelled bool  `json:"tunnelled,omitempty"`
+	BytesIn   int64 `json:"bytesIn,omitempty" pretty:"label=Bytes in"`
+	BytesOut  int64 `json:"bytesOut,omitempty" pretty:"label=Bytes out"`
+	// Encoding is the response content's encoding: base64 for a body that is
+	// not UTF-8 text.
+	Encoding string `json:"encoding,omitempty" pretty:"hide"`
+	// Comment says what the capture left out of the exchange, such as a body
+	// it cut or an event stream still open when it ended.
+	Comment string `json:"comment,omitempty" filter:"text"`
 }
 
 // FromEntry is the exchange feature's transport captured as entry.
@@ -87,6 +105,7 @@ func FromEntry(feature string, entry har.Entry) Exchange {
 	exchange := Exchange{
 		StartedAt: startedAt, Feature: feature, Method: entry.Request.Method, URL: entry.Request.URL,
 		Status: entry.Response.Status, DurationMs: entry.Time, Request: entry.Request, Response: entry.Response,
+		Error: entry.Error, Timings: entry.Timings,
 	}
 	if parsed, err := url.Parse(entry.Request.URL); err == nil {
 		exchange.Host = parsed.Host

@@ -11,6 +11,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -92,6 +93,21 @@ var _ = Describe("process_tree", func() {
 		for command, row := range nodes(env, session) {
 			Expect(row).To(HaveKeyWithValue("exitedAt", Not(BeNil())), "%s exited with its root", command)
 		}
+	})
+
+	It("summarizes the tree as the processes still live and exited, and their peaks", func() {
+		root := spawnTree("sleep 1 & sleep 30 & wait")
+		env := newEnv()
+		managed := start(env, process.TreeKind, root)
+		Eventually(func() map[string]recordstore.Row { return nodes(env, managed.Session()) }).WithTimeout(5 * time.Second).
+			Should(HaveKeyWithValue("sleep 1", HaveKeyWithValue("exitedAt", Not(BeNil()))))
+		stream := managed.Session().Snapshot().Events.Stream
+		summary, err := env.Runtime.Summarize(context.Background(), tracing.TraceRef{Kind: process.TreeKind, Stream: stream})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(summary).To(MatchAllKeys(Keys{
+			"count": Equal(3), "live": Equal(2), "exited": Equal(1),
+			"peak_cpu_percent": BeNumerically(">=", 0), "peak_rss_bytes": BeNumerically(">", 0),
+		}))
 	})
 
 	It("dumps the host's goroutines onto its root node at a checkpoint", func() {
