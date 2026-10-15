@@ -1,12 +1,13 @@
+import { mountPath } from "./mount";
 import type { ChatLayerProps } from "@flanksource/clicky-ui";
 
 /** Query-specific chat policy; clicky-ui owns operation discovery and windows. */
 export const queryChatConfig = {
   title: "Query Assistant",
-  sessionsApi: "/api/chat/sessions",
+  sessionsApi: `${mountPath}/api/chat/sessions`,
   chat: {
-    api: "/api/chat",
-    modelsApi: "/api/chat/models",
+    api: `${mountPath}/api/chat`,
+    modelsApi: `${mountPath}/api/chat/models`,
     suggestions: [
       "List configured connections",
       "Show available query profiles",

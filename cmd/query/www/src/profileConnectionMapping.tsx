@@ -1,3 +1,4 @@
+import { mountPath } from "./mount";
 import {
   Button,
   Modal,
@@ -163,7 +164,7 @@ function ProfileConnectionMappingDialogs({
     enabled: pending != null,
     queryFn: () =>
       client.lookupFilterOptions(
-        "/api/v1/connection",
+        `${mountPath}/api/v1/connection`,
         "GET",
         "connection",
         "",

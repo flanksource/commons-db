@@ -1,3 +1,4 @@
+import { mountPath } from "./mount";
 // Shared types and pure helpers for the connection form "Test"/"Resolve"
 // actions. Kept in a non-component module so the sibling component files can
 // each export exactly one component (react-doctor's only-export-components).
@@ -20,7 +21,7 @@ export type ActionOutcome =
   | { action: "test" | "resolve"; elapsedMs: number; error: string };
 
 export async function postConnection(action: "test" | "resolve", value: unknown): Promise<unknown> {
-  const res = await fetch(`/api/v1/connection/${action}`, {
+  const res = await fetch(`${mountPath}/api/v1/connection/${action}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(value),
