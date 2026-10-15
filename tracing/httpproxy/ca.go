@@ -86,6 +86,26 @@ func (a *authority) writeCert() (dir, path string, err error) {
 	return dir, path, nil
 }
 
+// upstreamRoots are the authorities the proxy verifies a real server against
+// under mitm: the system roots (nil), plus those in the PEM file at path.
+func upstreamRoots(path string) (*x509.CertPool, error) {
+	if path == "" {
+		return nil, nil
+	}
+	roots, err := x509.SystemCertPool()
+	if err != nil {
+		return nil, fmt.Errorf("system roots: %w", err)
+	}
+	pemBytes, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("upstreamCA: %w", err)
+	}
+	if !roots.AppendCertsFromPEM(pemBytes) {
+		return nil, fmt.Errorf("upstreamCA %s holds no PEM certificate", path)
+	}
+	return roots, nil
+}
+
 // trustEnv points a process's TLS stack at the CA at path. No one variable
 // works everywhere, hence the list, and nothing guarantees a given binary
 // reads any of them. SSL_CERT_FILE and CURL_CA_BUNDLE replace the system
