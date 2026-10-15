@@ -135,3 +135,12 @@ func (t *gcsFS) Write(ctx context.Context, path string, data io.Reader) (os.File
 
 	return t.Stat(path)
 }
+
+// Delete removes the object at path. A missing object is not an error.
+func (t *gcsFS) Delete(ctx context.Context, path string) error {
+	err := t.Client.Bucket(t.Bucket).Object(path).Delete(ctx)
+	if errors.Is(err, gcs.ErrObjectNotExist) {
+		return nil
+	}
+	return err
+}
