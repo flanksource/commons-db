@@ -8,7 +8,7 @@ require (
 	// Kept in lockstep with the root module's clicky pin (see ../../go.mod):
 	// a workspace build resolves one clicky for both modules.
 	github.com/flanksource/clicky v1.21.78
-	github.com/flanksource/clicky/aichat v1.21.77
+	github.com/flanksource/clicky/aichat v1.21.78
 	github.com/flanksource/clicky/valkey v1.21.78
 	github.com/flanksource/commons v1.60.1
 	github.com/flanksource/commons-db v0.1.50
@@ -393,6 +393,7 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	gorm.io/driver/postgres v1.6.0 // indirect
+	gorm.io/driver/sqlserver v1.6.4 // indirect
 	k8s.io/apiextensions-apiserver v0.36.1 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
