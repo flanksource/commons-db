@@ -6,6 +6,7 @@ package sqlstatements
 import (
 	"cmp"
 	"fmt"
+	"iter"
 	"maps"
 	"slices"
 	"time"
@@ -148,6 +149,37 @@ func Summarize(rows []StatementRow) Summary {
 		a.Add(row)
 	}
 	return a.Result()
+}
+
+// maxSummaryQueries caps the statements a window's summary lists; its counts
+// are always over every statement.
+const maxSummaryQueries = 200
+
+// Summarize is a window's statements as WindowVars summarizes them.
+func (statements) Summarize(rows iter.Seq[StatementRow]) (map[string]any, error) {
+	return WindowVars(rows), nil
+}
+
+// WindowVars are a window's statements as the variables a fixture asserts on:
+// their count, failures, total duration, ops and tables, and the first
+// maxSummaryQueries of them. Every kind storing StatementRows summarizes with it.
+func WindowVars(rows iter.Seq[StatementRow]) map[string]any {
+	accumulator := NewAccumulator()
+	queries := []map[string]any{}
+	for row := range rows {
+		accumulator.Add(row)
+		if len(queries) < maxSummaryQueries {
+			queries = append(queries, map[string]any{
+				"sql": row.SQL, "op": row.Op, "tables": row.Tables, "rows": row.Rows,
+				"duration_ms": row.DurationMs, "error": row.Error,
+			})
+		}
+	}
+	summary := accumulator.Result()
+	return map[string]any{
+		"statements": summary.Statements, "errors": summary.Errors, "duration_ms": summary.DurationMs,
+		"by_op": summary.ByOp, "tables": summary.Tables, "queries": queries,
+	}
 }
 
 // Pretty renders the summary as one line, its durations toned as an xevent

@@ -5,6 +5,7 @@ package tracing
 
 import (
 	"context"
+	"fmt"
 	"sync"
 
 	"github.com/flanksource/commons/logger"
@@ -64,6 +65,8 @@ func (e *emitter[R]) Describe(handle string, metadata ...query.SessionMetadata) 
 	e.source.describe(handle, metadata)
 }
 
+func (e *emitter[R]) Export(name, value string) { e.source.export(name, value) }
+
 // reserve claims record's dedup key, counting a record its window already
 // admitted. Every record is admitted when the kind deduplicates nothing.
 func (e *emitter[R]) reserve(record R) (string, bool) {
@@ -115,12 +118,22 @@ type storedRecords[R any] struct {
 // stored: masked and truncated values come back masked and truncated, and
 // parsed JSON comes back as its text, re-encoded.
 func (r storedRecords[R]) Scan(ctx context.Context, afterSeq int64, fn func(seq int64, record R) error) error {
-	return r.store.Scan(ctx, r.stream, afterSeq, func(seq int64, row recordstore.Row) error {
+	return r.store.Scan(ctx, r.stream, afterSeq, r.decoded(fn))
+}
+
+// scanWindow decodes the rows of ref's window as Scan does.
+func (r storedRecords[R]) scanWindow(ctx context.Context, ref TraceRef, fn func(seq int64, record R) error) error {
+	return scanWindow(ctx, r.store, ref, r.decoded(fn))
+}
+
+// decoded hands fn each row as its record, its parsed JSON as text again.
+func (r storedRecords[R]) decoded(fn func(seq int64, record R) error) func(seq int64, row recordstore.Row) error {
+	return func(seq int64, row recordstore.Row) error {
 		jsonAsText(row, r.jsonPaths)
 		var record R
 		if err := roundTrip(row, &record); err != nil {
-			return err
+			return fmt.Errorf("decode %s record at seq %d: %w", r.stream, seq, err)
 		}
 		return fn(seq, record)
-	})
+	}
 }

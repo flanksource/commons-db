@@ -82,6 +82,14 @@ type Emitter[R any] interface {
 	// with the statements or settings that set it up. A session records them
 	// once, as it starts running, so only a Preparer's Prepare describes it.
 	Describe(handle string, metadata ...query.SessionMetadata)
+	// Export hands the processes the capture observes an environment
+	// variable, such as the address of a proxy it listens on. A session
+	// records its exports once, as it starts running, so only a Preparer's
+	// Prepare exports: a name that is no environment variable name, or one
+	// exported twice, refuses the start, and an export once the capture runs
+	// is left out and warns the session. A host reads them from the session's
+	// status (query.SessionStatus.Exports) as soon as Runtime.Start returns.
+	Export(name, value string)
 }
 
 // Records reads back the records a session has committed.
@@ -108,9 +116,16 @@ type TracePlugin interface {
 	// ValidateParams decodes params as a session start would, refusing what
 	// the session would refuse.
 	ValidateParams(params json.RawMessage) error
+	// ExportFormats are the formats the kind's records download in: NDJSON,
+	// then those of a kind that is an Exporter.
+	ExportFormats() []ExportFormat
 
 	register(registry *recordresults.Registry, kind string) error
 	open(ctx dbcontext.Context, options openOptions) (*source, error)
+	export(ctx context.Context, store scanner, ref TraceRef, format string, w io.Writer) error
+	summarize(ctx context.Context, store scanner, ref TraceRef) (map[string]any, error)
+	recordType() reflect.Type
+	jsonFields() []string
 }
 
 // openOptions are what a session gives the capture it opens.
@@ -360,6 +375,9 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 		if prepareRelease != nil {
 			release = prepareRelease
 		}
+	}
+	if err := src.closeExports(); err != nil {
+		return nil, errors.Join(fmt.Errorf("prepare: %w", err), release())
 	}
 	if checkpointer, ok := h.handler.(Checkpointer[P, R]); ok {
 		src.checkpoint = func(ctx context.Context) error {
