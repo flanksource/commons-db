@@ -325,6 +325,8 @@ github.com/flanksource/is-healthy v1.0.92 h1:15lC+p1RmyO1kOdZdpHdheqysgIK+hQD2ft
 github.com/flanksource/is-healthy v1.0.92/go.mod h1:Gm46NfdDQsK9yDZNUNvkCm7jNnbl8R5vfcUYG3BgPXg=
 github.com/flanksource/kubectl-neat v1.0.4 h1:t5/9CqgE84oEtB0KitgJ2+WIeLfD+RhXSxYrqb4X8yI=
 github.com/flanksource/kubectl-neat v1.0.4/go.mod h1:Un/Voyh3cmiZNKQrW/TkAl28nAA7vwnwDGVjRErKjOw=
+github.com/flanksource/sqlglot-go v0.4.0-flanksource.2 h1:Zaev2mdzTK+O9U/KprDN274y8vCq5m7ntZvwy8Ed+Ug=
+github.com/flanksource/sqlglot-go v0.4.0-flanksource.2/go.mod h1:M7sGnJGwh3FGsexQdxFI20JQcmT2jHTpBbYYinVxEJI=
 github.com/fortytw2/leaktest v1.3.0 h1:u8491cBMTQ8ft8aeV+adlcytMZylmA5nnwwkRZjI8vw=
 github.com/fortytw2/leaktest v1.3.0/go.mod h1:jDsjWgpAGjm2CA7WthBh/CdZYEPF31XHquHwclZch5g=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
