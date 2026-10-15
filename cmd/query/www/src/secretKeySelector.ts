@@ -1,3 +1,4 @@
+import { mountPath } from "./mount";
 import {
   createSecretFormExtensions,
   type KeyPreview,
@@ -43,25 +44,25 @@ function namespaceQuery(namespace: string): string {
 const loaders: SecretFormLoaders = {
   loadResources: (kind: SecretKind, namespace: string) =>
     fetchJSON<SecretResource[]>(
-      `/api/v1/secrets?kind=${kind}${namespaceQuery(namespace)}`,
+      `${mountPath}/api/v1/secrets?kind=${kind}${namespaceQuery(namespace)}`,
     ),
   loadKeyPreview: (kind: SecretKind, name: string, namespace: string) =>
     fetchJSON<KeyPreview[]>(
-      `/api/v1/secrets/preview?kind=${kind}&name=${encodeURIComponent(name)}${namespaceQuery(namespace)}`,
+      `${mountPath}/api/v1/secrets/preview?kind=${kind}&name=${encodeURIComponent(name)}${namespaceQuery(namespace)}`,
     ),
   loadServiceAccounts: (namespace: string) =>
     fetchJSON<SecretResource[]>(
-      `/api/v1/secrets?kind=serviceaccount${namespaceQuery(namespace)}`,
+      `${mountPath}/api/v1/secrets?kind=serviceaccount${namespaceQuery(namespace)}`,
     ),
   loadOnePasswordVaults: () =>
-    fetchJSON<OnePasswordVault[]>("/api/v1/secrets/onepassword/vaults"),
+    fetchJSON<OnePasswordVault[]>(`${mountPath}/api/v1/secrets/onepassword/vaults`),
   loadOnePasswordItems: (vaultID: string) =>
     fetchJSON<OnePasswordItem[]>(
-      `/api/v1/secrets/onepassword/items?vault=${encodeURIComponent(vaultID)}`,
+      `${mountPath}/api/v1/secrets/onepassword/items?vault=${encodeURIComponent(vaultID)}`,
     ),
   loadOnePasswordFields: (vaultID: string, itemID: string) =>
     fetchJSON<OnePasswordField[]>(
-      `/api/v1/secrets/onepassword/fields?vault=${encodeURIComponent(vaultID)}&item=${encodeURIComponent(itemID)}`,
+      `${mountPath}/api/v1/secrets/onepassword/fields?vault=${encodeURIComponent(vaultID)}&item=${encodeURIComponent(itemID)}`,
     ),
   loadWorkloads: (namespace: string, kinds: WorkloadKind[]) => {
     if (!namespace) {
@@ -75,7 +76,7 @@ const loaders: SecretFormLoaders = {
       } satisfies Record<WorkloadKind, WorkloadResource[]>);
     }
     return fetchJSON<Record<WorkloadKind, WorkloadResource[]>>(
-      `/api/v1/workloads?namespace=${encodeURIComponent(namespace)}&kinds=${kinds.join(",")}`,
+      `${mountPath}/api/v1/workloads?namespace=${encodeURIComponent(namespace)}&kinds=${kinds.join(",")}`,
     );
   },
 };

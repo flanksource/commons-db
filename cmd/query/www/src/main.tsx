@@ -26,12 +26,14 @@ import "./styles.css";
 import "@flanksource/clicky-ui/styles.css";
 import { App, formExtensions } from "./App";
 import { FlanksourceIcon } from "./iconProvider";
+import { mountPath } from "./mount";
 
 // The profile editor ships in clicky-ui, but the schema it renders is generated
 // from this repo's Go types — so we hand it ours rather than let the library
 // carry a copy that would drift from what the server validates against. The
-// mount point is the default /api/v1, so basePath is left alone.
+// API is /api/v1 under the path the server mounted the app at.
 configureProfiles({
+  basePath: `${mountPath}/api/v1`,
   schema: profileSchemaDocument as unknown as ProfileSchema,
   formExtensions,
 });
