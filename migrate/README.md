@@ -1,6 +1,6 @@
 # HCL migrations
 
-`migrate.Apply` is the single filesystem-backed migration seam for PostgreSQL and SQLite. The connection string selects the target, while callers pass the same embedded Atlas HCL bundle and options.
+`migrate.Apply` is the single filesystem-backed migration seam for PostgreSQL, SQLite and SQL Server. The connection string selects the target, while callers pass the same embedded Atlas HCL bundle and options. SQL Server bundles are SQL Server-shaped rather than portable; see [SQL Server](#sql-server).
 
 ```go
 err := migrate.Apply(ctx, dsn, schemaFS,
@@ -19,6 +19,8 @@ SQLite accepts `sqlite://` URLs and plain file paths ending in `.db`:
 err := migrate.Apply(ctx, "sqlite://state/runtime.sqlite", schemaFS, migrate.WithDir("migrations"))
 err := migrate.Apply(ctx, "/var/lib/example/runtime.db", schemaFS, migrate.WithDir("migrations"))
 ```
+
+SQL Server accepts `sqlserver://` URLs in the go-mssqldb form, e.g. `sqlserver://user:password@host:1433?database=app`. `mssql://` is rejected so that one spelling reaches the migrator.
 
 Relative SQLite paths are resolved from the process working directory. SQLite is always file-backed; `:memory:` and `mode=memory` are rejected. The normalized connection enables foreign keys, a 5-second busy timeout, and WAL while preserving caller-supplied query parameters and unmanaged pragmas.
 
@@ -253,3 +255,58 @@ if err := sqlitemigrate.ReconcileTables(ctx, tx, sqlitemigrate.ReconcileOptions{
 ```
 
 The record store uses this lower-level API to add newly declared columns to tables that may already contain rows. New filesystem-backed migrations should call the target-aware parent `migrate.Apply` instead.
+
+## SQL Server
+
+`sqlserver://` targets reconcile through the Atlas SQL Server driver in `atlas/sqlserver`, which commons-db ships because Atlas OSS has none. A bundle declares tables in SQL Server-shaped HCL and stored procedures and functions as plain `.sql` files:
+
+```go
+//go:embed db
+var bundle embed.FS
+
+err := migrate.Apply(ctx, "sqlserver://app:secret@db:1433?database=acme", bundle,
+    migrate.WithDir("db"),
+    migrate.WithRoutines("db/routines"),
+    migrate.WithName("acme/orders"),
+)
+```
+
+### Routines come from `.sql` files
+
+`WithRoutines(dir)` declares one routine per `.sql` file under `dir`. Each file holds exactly one `CREATE [OR ALTER] PROCEDURE|FUNCTION` batch, optionally followed by `GO`, and is named after the routine it creates (`acme_count_orders.sql` creates `acme_count_orders`). The file is the routine's only source: there are no procedure or function HCL blocks. It runs as written in SSMS or sqlcmd, and migrate runs the same text, with `CREATE` rewritten to `CREATE OR ALTER` and every other byte kept, as its own batch.
+
+A routine is compared with the live `sys.sql_modules` definition through sqlglot's canonical T-SQL: comments, whitespace, keyword case, `[brackets]` and `OR ALTER` do not count as changes, while a literal or any other token does and produces one `CREATE OR ALTER`. A definition, declared or live, that sqlglot cannot parse is an error naming the routine, never a guessed change. Routine files are never hash-gated SQL scripts.
+
+A routine that is removed from the bundle is left in the database; migrate never drops procedures or functions.
+
+### Tables from HCL
+
+`.hcl` files under `WithDir` are optional when the bundle has routines. They declare exactly `schema "dbo" {}` and its tables:
+
+| Block | Supported form |
+| --- | --- |
+| `column` | `type`, `null`, `default` (a number, a string, or `sql("getdate()")`), and an `identity { seed, increment }` block |
+| `primary_key` | `columns`, optional name, `clustered = false` for a nonclustered key (clustered by default) |
+| `index` | `columns` (with `desc` parts), `unique`, `clustered = true` (nonclustered by default), `include = [column.x]`, `where = "..."` |
+| `foreign_key` | `columns`, `ref_columns`, `on_delete`, `on_update` |
+| `check` | `expr` |
+
+Types: `bit`, `tinyint`, `smallint`, `int`, `bigint`, `decimal(p,s)`, `numeric(p,s)`, `money`, `smallmoney`, `float(n)` (stored as `real` up to 24 bits), `real`, `char(n)`, `varchar(n)`, `nchar(n)`, `nvarchar(n)`, `text`, `ntext`, `binary(n)`, `varbinary(n)`, `image`, `date`, `time(p)`, `datetime`, `datetime2(p)`, `smalldatetime`, `datetimeoffset(p)`, `uniqueidentifier`, `xml`, `sql_variant` and `rowversion` (`timestamp`). A `(max)` size is written with `sql()`: `type = sql("nvarchar(max)")`. Defaults are named `DF_<table>_<column>`; changing one drops the live default constraint, whatever its name, and adds the new one. String defaults on `nchar`/`nvarchar`/`ntext` columns are written as `N'...'`.
+
+### Scoped inspection
+
+An OIPA-sized database holds thousands of objects, so migrate inspects only the tables and routines the bundle names. Undeclared objects are never read, and so never changed. Inside declared tables, columns, keys, foreign keys and checks are reconciled to the declaration, but indexes the bundle does not declare are kept, so tuning indexes added by a DBA survive. An apply that finds nothing to change runs no DDL. Every apply holds a session `sp_getapplock` named after `WithName` (one-minute wait), so concurrent applies of one bundle serialize.
+
+### Compatibility level 100
+
+Generated DDL and the catalog queries avoid syntax newer than compatibility level 100 (no `STRING_AGG`, `OPENJSON` or `DROP ... IF EXISTS`). `CREATE OR ALTER` depends on the engine version (2016 SP1+), not the database's compatibility level.
+
+### Refused on SQL Server
+
+These fail with an error instead of being ignored:
+
+- hash-gated pre/post `.sql` scripts outside the routine directory;
+- `WithSchema` other than `dbo`, `WithDrops` and `WithRebuilds`;
+- `role` and `permission` blocks;
+- `view`, `trigger`, `sequence`, `function` and `procedure` HCL blocks, computed columns, user-defined and alias types (including `sysname`), and any unknown column, index or table attribute;
+- declared tables that the database has partitioned or carries triggers on, and IDENTITY changes on an existing column.
