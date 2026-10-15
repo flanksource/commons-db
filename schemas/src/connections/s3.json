@@ -128,8 +128,9 @@
           "x-clicky-order": 7
         },
         "usePathStyle": {
+          "description": "Set to true for path-style S3 endpoints",
           "title": "Use path-style requests",
-          "type": "boolean",
+          "type": "string",
           "x-clicky-order": 8
         }
       },

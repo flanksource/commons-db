@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -159,6 +160,14 @@ func probeAccount(ctx context.Context, model models.Connection) (ProbeResult, er
 }
 
 func probeS3(ctx dbcontext.Context, model models.Connection) (ProbeResult, error) {
+	usePathStyle := false
+	if raw := model.Properties["usePathStyle"]; raw != "" {
+		var err error
+		usePathStyle, err = strconv.ParseBool(raw)
+		if err != nil {
+			return ProbeResult{}, fmt.Errorf("invalid S3 usePathStyle %q: %w", raw, err)
+		}
+	}
 	var connection AWSConnection
 	connection.FromModel(model)
 	connection.ConnectionName = ""
@@ -173,7 +182,7 @@ func probeS3(ctx dbcontext.Context, model models.Connection) (ProbeResult, error
 		if connection.Endpoint != "" {
 			options.BaseEndpoint = aws.String(connection.Endpoint)
 		}
-		options.UsePathStyle = model.Properties["usePathStyle"] == "true"
+		options.UsePathStyle = usePathStyle
 	})
 	if bucket := strings.TrimSpace(model.Properties["bucket"]); bucket != "" {
 		if _, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)}); err != nil {

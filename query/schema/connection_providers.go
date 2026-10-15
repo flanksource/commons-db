@@ -174,7 +174,7 @@ type AzureDevopsProvider struct {
 type S3Provider struct {
 	AWSProvider
 	Bucket       string `json:"bucket" clicky:"property=bucket,title=Bucket,order=7,desc=Optional bucket for scoped access"`
-	UsePathStyle bool   `json:"usePathStyle" clicky:"property=usePathStyle,title=Use path-style requests,order=8"`
+	UsePathStyle string `json:"usePathStyle" clicky:"property=usePathStyle,title=Use path-style requests,order=8,desc=Set to true for path-style S3 endpoints"`
 }
 
 // tailoredProviders binds each connection type to the struct that drives its
