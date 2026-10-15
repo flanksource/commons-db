@@ -88,6 +88,38 @@ jobs:
           echo "::add-mask::$url"
           echo "COMMONS_DB_URL=$url" >> "$GITHUB_ENV"
 
+      # The fs and connection storage tests skip unless these name a server.
+      # adobe/s3mock stands in for S3 (MinIO's images can no longer be pulled
+      # anonymously), fake-gcs-server for GCS, and Samba for SMB. SFTP runs
+      # against an in-process server and needs nothing here.
+      - name: Start storage servers
+        run: |
+          set -euo pipefail
+          docker run -d --name test-s3 -p 127.0.0.1:19090:9090 \
+            -e COM_ADOBE_TESTING_S3MOCK_STORE_INITIAL_BUCKETS=commons-db-test adobe/s3mock:4.7.0
+          docker run -d --name test-gcs -p 127.0.0.1:14443:4443 fsouza/fake-gcs-server:1.52.2 \
+            -scheme http -backend memory -public-host 127.0.0.1:14443
+          docker run -d --name test-smb -p 127.0.0.1:1445:445 \
+            -e NAME=Data -e USER=samba -e PASS=secret dockurr/samba:4.21
+          wait_for() {
+            for _ in $(seq 1 60); do
+              if "$@" >/dev/null 2>&1; then return 0; fi
+              sleep 1
+            done
+            echo "timed out waiting for: $*" >&2
+            return 1
+          }
+          wait_for curl -sf http://127.0.0.1:19090/
+          wait_for curl -sf http://127.0.0.1:14443/storage/v1/b
+          wait_for bash -c 'exec 3<>/dev/tcp/127.0.0.1/1445'
+          curl -sf -X POST -H 'Content-Type: application/json' -d '{"name":"commons-db-test"}' \
+            "http://127.0.0.1:14443/storage/v1/b?project=test" >/dev/null
+          {
+            echo "COMMONS_DB_S3_TEST_ENDPOINT=http://127.0.0.1:19090"
+            echo "COMMONS_DB_GCS_TEST_ENDPOINT=http://127.0.0.1:14443/storage/v1/"
+            echo "COMMONS_DB_SMB_TEST_SERVER=127.0.0.1:1445"
+          } >> "$GITHUB_ENV"
+
       # ./e2e is owned by e2e.yml, which also provisions opensearch and valkey.
       # gavel auto-runs -bench=. for packages whose plain go test files hold only
       # Benchmark* funcs; recordstore/recordresults is one, and its matrix (datasets
@@ -106,7 +138,9 @@ jobs:
 
       - name: Stop services
         if: always()
-        run: deps-start stop --all || true
+        run: |
+          deps-start stop --all || true
+          docker rm -f test-s3 test-gcs test-smb || true
 
   # Same multi-root discovery: golangci-lint runs once per discovered go.mod (so
   # ., recordstore, tracing/sqltrace, tracing/traces and cmd/query) and tsc anchors at the nearest tsconfig.json. No database —
