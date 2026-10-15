@@ -198,7 +198,13 @@ func inspect(ctx context.Context, db *sql.DB, driver string, limits Limits) (Cat
 	if err := rows.Err(); err != nil {
 		return Catalog{}, fmt.Errorf("iterate sql catalog: %w", err)
 	}
-	return buildCatalog(driver, database, defaultSchema, databases, schemas, items, limits, capabilities), nil
+	catalog := buildCatalog(driver, database, defaultSchema, databases, schemas, items, limits, capabilities)
+	if driver == "sqlite" {
+		if err := enrichSQLite(ctx, db, &catalog, limits); err != nil {
+			return Catalog{}, err
+		}
+	}
+	return catalog, nil
 }
 
 // ListDatabases returns databases accessible to the current connection user.

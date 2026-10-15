@@ -151,6 +151,28 @@ type GitProvider struct {
 	Certificate types.EnvVar `json:"certificate" clicky:"type=k8s-secret-selector,title=SSH Private Key,source=secret,order=6"`
 }
 
+// GithubProvider uses a token against the GitHub API. The endpoint is optional
+// for github.com and can be set for an enterprise installation.
+type GithubProvider struct {
+	URL      types.EnvVar `json:"url" clicky:"title=API URL,order=2,desc=Defaults to https://api.github.com"`
+	Password types.EnvVar `json:"password" clicky:"title=Access Token,format=password,required,order=5"`
+}
+
+// GitlabProvider uses a token against a GitLab instance.
+type GitlabProvider struct {
+	URL      types.EnvVar `json:"url" clicky:"title=Instance URL,required,order=2"`
+	Password types.EnvVar `json:"password" clicky:"title=Access Token,format=password,required,order=5"`
+}
+
+// AzureDevopsProvider uses a personal access token against an organization.
+type AzureDevopsProvider struct {
+	URL      types.EnvVar `json:"url" clicky:"title=Organization URL,required,order=2"`
+	Password types.EnvVar `json:"password" clicky:"title=Personal Access Token,format=password,required,order=5"`
+}
+
+// S3Provider uses AWS credentials and region for account-level access.
+type S3Provider struct{ AWSProvider }
+
 // tailoredProviders binds each connection type to the struct that drives its
 // form. Types without an entry fall back to the base fields (name/namespace/
 // properties). Covers the query-provider backends plus the form-shaped backends
@@ -181,6 +203,10 @@ var tailoredProviders = map[string]any{
 	models.ConnectionTypeGCS:           GCSProvider{},
 	models.ConnectionTypeGCPKMS:        GCPKMSProvider{},
 	models.ConnectionTypeGit:           GitProvider{},
+	models.ConnectionTypeGithub:        GithubProvider{},
+	models.ConnectionTypeGitlab:        GitlabProvider{},
+	models.ConnectionTypeAzureDevops:   AzureDevopsProvider{},
+	models.ConnectionTypeS3:            S3Provider{},
 }
 
 // TailoredProviderTypes returns the set of connection types that get a tailored
