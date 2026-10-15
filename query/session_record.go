@@ -3,6 +3,7 @@ package query
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"slices"
 	"time"
 )
@@ -111,6 +112,28 @@ func validateSessionMetadata(metadata []SessionMetadata) error {
 	return nil
 }
 
+// envName is what a process environment accepts as a variable name.
+var envName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidateEnvName refuses a name a child process could not be given as an
+// environment variable.
+func ValidateEnvName(name string) error {
+	if !envName.MatchString(name) {
+		return fmt.Errorf("%q is not an environment variable name", name)
+	}
+	return nil
+}
+
+// validateSessionExports refuses an export a child process could not be given.
+func validateSessionExports(exports map[string]string) error {
+	for name := range exports {
+		if err := ValidateEnvName(name); err != nil {
+			return fmt.Errorf("session export: %w", err)
+		}
+	}
+	return nil
+}
+
 // SessionStatus is overwritten on every change by the owner, or by Sweep when
 // the owner is gone.
 type SessionStatus struct {
@@ -130,6 +153,10 @@ type SessionStatus struct {
 	// Metadata is what the capture reported about itself once armed; it is
 	// written by Running and kept for the rest of the session.
 	Metadata []SessionMetadata `json:"metadata,omitempty"`
+	// Exports is the environment the capture hands the processes it observes,
+	// such as a proxy address, by variable name. Like Metadata it is written
+	// by Running and kept for the rest of the session.
+	Exports map[string]string `json:"exports,omitempty"`
 }
 
 // SessionRecord is what a SessionStore persists and returns.

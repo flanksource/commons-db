@@ -41,6 +41,9 @@ type ServeOptions struct {
 	MaxSessionDuration      time.Duration
 	SessionRetention        time.Duration
 	ReconcileSnapshotMaxAge time.Duration
+	// TracesDir is the trace results store to open, such as a gavel run's;
+	// empty opens <config dir>/traces.
+	TracesDir string
 }
 
 func DefaultServeOptions() ServeOptions {
@@ -155,7 +158,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	if err != nil {
 		return err
 	}
-	traceRuntime, closeTraces, err := a.traces.open(configDir, options.SessionRetention, kinds)
+	traceRuntime, closeTraces, err := a.traces.open(tracesDir(configDir, options.TracesDir), options.SessionRetention, kinds)
 	if err != nil {
 		return fmt.Errorf("open trace results: %w", err)
 	}

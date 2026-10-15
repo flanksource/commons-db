@@ -37,7 +37,34 @@ func AddTracesOpenAPI(current func() *tracing.Runtime) profiles.OpenAPIExtension
 		}}
 		for _, kind := range kinds {
 			spec.Paths[tracesPath+"/"+kind.Name+"/sessions"] = rpc.OpenAPIPath{"post": traceStartOperation(kind)}
+			spec.Paths[tracesPath+"/"+kind.Name+"/export"] = rpc.OpenAPIPath{"get": traceExportOperation(kind)}
 		}
+	}
+}
+
+func traceExportOperation(kind tracing.KindInfo) rpc.OpenAPIOperation {
+	formats := make([]any, 0, len(kind.ExportFormats))
+	for _, format := range kind.ExportFormats {
+		formats = append(formats, format.Name)
+	}
+	seq := func(name, description string) rpc.OpenAPIParameter {
+		return rpc.OpenAPIParameter{Name: name, In: "query", Description: description, Schema: &rpc.OpenAPISchema{Type: "integer"}}
+	}
+	return rpc.OpenAPIOperation{
+		OperationID: "export-" + kind.Name + "-trace",
+		Summary:     "Export a " + kind.Title + " trace",
+		Description: "Download the records of a session's events.stream after afterSeq through toSeq as an attachment",
+		Parameters: []rpc.OpenAPIParameter{
+			{Name: "stream", In: "query", Required: true, Description: "The session's events.stream", Schema: &rpc.OpenAPISchema{Type: "string"}},
+			{Name: "format", In: "query", Required: true, Description: "The format to download in", Schema: &rpc.OpenAPISchema{Type: "string", Enum: formats}},
+			seq("afterSeq", "Export the records after this seq; 0 starts at the first"),
+			seq("toSeq", "Export the records through this seq; 0 runs to the last"),
+		},
+		Responses: map[string]rpc.OpenAPIResponse{
+			"200": {Description: "The window in the format asked"},
+			"400": {Description: "No stream, a format the kind lacks, or a window that is not one"},
+			"404": {Description: "No such trace kind or stream"},
+		},
 	}
 }
 
