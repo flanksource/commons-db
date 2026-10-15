@@ -624,6 +624,12 @@
           "x-clicky-component": "k8s-namespace-selector",
           "x-clicky-order": 1
         },
+        "password": {
+          "format": "password",
+          "title": "Personal Access Token",
+          "type": "string",
+          "x-clicky-order": 5
+        },
         "properties": {
           "additionalProperties": {
             "type": "string"
@@ -636,11 +642,18 @@
           "const": "azure_devops",
           "title": "Type",
           "type": "string"
+        },
+        "url": {
+          "title": "Organization URL",
+          "type": "string",
+          "x-clicky-order": 2
         }
       },
       "required": [
         "name",
-        "type"
+        "type",
+        "url",
+        "password"
       ],
       "title": "Connection: azure_devops",
       "type": "object"
@@ -2512,6 +2525,12 @@
           "x-clicky-component": "k8s-namespace-selector",
           "x-clicky-order": 1
         },
+        "password": {
+          "format": "password",
+          "title": "Access Token",
+          "type": "string",
+          "x-clicky-order": 5
+        },
         "properties": {
           "additionalProperties": {
             "type": "string"
@@ -2524,11 +2543,18 @@
           "const": "github",
           "title": "Type",
           "type": "string"
+        },
+        "url": {
+          "description": "Defaults to https://api.github.com",
+          "title": "API URL",
+          "type": "string",
+          "x-clicky-order": 2
         }
       },
       "required": [
         "name",
-        "type"
+        "type",
+        "password"
       ],
       "title": "Connection: github",
       "type": "object"
@@ -2629,6 +2655,12 @@
           "x-clicky-component": "k8s-namespace-selector",
           "x-clicky-order": 1
         },
+        "password": {
+          "format": "password",
+          "title": "Access Token",
+          "type": "string",
+          "x-clicky-order": 5
+        },
         "properties": {
           "additionalProperties": {
             "type": "string"
@@ -2641,11 +2673,18 @@
           "const": "gitlab",
           "title": "Type",
           "type": "string"
+        },
+        "url": {
+          "title": "Instance URL",
+          "type": "string",
+          "x-clicky-order": 2
         }
       },
       "required": [
         "name",
-        "type"
+        "type",
+        "url",
+        "password"
       ],
       "title": "Connection: gitlab",
       "type": "object"
@@ -7412,6 +7451,11 @@
     },
     "s3": {
       "properties": {
+        "insecure_tls": {
+          "title": "Insecure TLS",
+          "type": "boolean",
+          "x-clicky-order": 3
+        },
         "logging": {
           "additionalProperties": false,
           "description": "Choose which sanitized connection activity is emitted at each log level.",
@@ -7506,18 +7550,60 @@
           "x-clicky-component": "k8s-namespace-selector",
           "x-clicky-order": 1
         },
+        "password": {
+          "format": "password",
+          "title": "Secret Access Key",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-default-source": "secret",
+          "x-clicky-order": 5
+        },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "assumeRole": {
+              "title": "Assume Role ARN",
+              "type": "string",
+              "x-clicky-order": 8
+            },
+            "bucket": {
+              "description": "Optional bucket for scoped access",
+              "title": "Bucket",
+              "type": "string",
+              "x-clicky-order": 7
+            },
+            "region": {
+              "title": "Region",
+              "type": "string",
+              "x-clicky-order": 7
+            },
+            "usePathStyle": {
+              "title": "Use path-style requests",
+              "type": "boolean",
+              "x-clicky-order": 8
+            }
           },
           "title": "Properties",
-          "type": "object",
-          "x-clicky-order": 7
+          "type": "object"
         },
         "type": {
           "const": "s3",
           "title": "Type",
           "type": "string"
+        },
+        "url": {
+          "description": "Overrides the region's AWS endpoint",
+          "title": "Endpoint",
+          "type": "string",
+          "x-clicky-component": "k8s-url-selector",
+          "x-clicky-default-source": "value",
+          "x-clicky-order": 2
+        },
+        "username": {
+          "title": "Access Key ID",
+          "type": "string",
+          "x-clicky-component": "k8s-secret-selector",
+          "x-clicky-default-source": "value",
+          "x-clicky-order": 4
         }
       },
       "required": [
