@@ -176,7 +176,7 @@ var _ = Describe("pg_proxy trace kind", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(exports).To(And(
 			HaveKeyWithValue("PGSSLMODE", "disable"), HaveKeyWithValue("PGDATABASE", "fixtures"),
-			HaveLen(6),
+			HaveKeyWithValue("PGUSER", "tester"), HaveLen(7),
 		))
 		for _, key := range []string{"GAVEL_DB_DSN", "DATABASE_URL"} {
 			parsed, err := url.Parse(exports[key])
@@ -303,7 +303,8 @@ var _ = Describe("pg_proxy trace kind", func() {
 		},
 		Entry("no upstream anywhere", `{}`, "GAVEL_DB_DSN"),
 		Entry("a non-postgres scheme", `{"dsn": "mysql://localhost/db"}`, "postgres://"),
-		Entry("an unset $VAR", `{"dsn": "$PG_PROXY_UNSET_VAR"}`, "GAVEL_DB_DSN"),
+		Entry("an unset $VAR", `{"dsn": "$PG_PROXY_UNSET_VAR"}`, "$PG_PROXY_UNSET_VAR is not set"),
+		Entry("an unset $VAR inside the DSN", `{"dsn": "postgres://u@127.0.0.1:${PG_PROXY_UNSET_PORT}/db"}`, "$PG_PROXY_UNSET_PORT is not set"),
 		Entry("a blank connection label", `{"dsn": "postgres://h/db", "connection": " "}`, "connection"),
 		Entry("a non-positive maxStatements", `{"dsn": "postgres://h/db", "maxStatements": -1}`, "maxStatements"),
 	)

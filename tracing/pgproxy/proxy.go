@@ -95,6 +95,10 @@ func (p *proxy) childEnv() (map[string]string, error) {
 	if database := strings.TrimPrefix(rewritten.Path, "/"); database != "" {
 		env["PGDATABASE"] = database
 	}
+	// libpq otherwise logs in as the OS user, a role the upstream rarely has.
+	if user := rewritten.User.Username(); user != "" {
+		env["PGUSER"] = user
+	}
 	return env, nil
 }
 

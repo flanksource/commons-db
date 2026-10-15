@@ -47,9 +47,21 @@ func (p Params) Validate() error {
 
 // resolveDSN expands `$VAR` references and falls back to the environment when
 // declared is unset. It fails loudly rather than recording nothing: a proxy
-// with no upstream is the silent-empty-capture failure to prevent.
+// with no upstream is the silent-empty-capture failure to prevent, and a
+// reference to an unset variable would otherwise blank a port to 5432 or the
+// whole DSN to DATABASE_URL — another postgres than the one declared.
 func resolveDSN(declared string) (*url.URL, error) {
-	raw := strings.TrimSpace(os.ExpandEnv(declared))
+	var unset []string
+	raw := strings.TrimSpace(os.Expand(declared, func(name string) string {
+		value, ok := os.LookupEnv(name)
+		if !ok || value == "" {
+			unset = append(unset, "$"+name)
+		}
+		return value
+	}))
+	if len(unset) > 0 {
+		return nil, fmt.Errorf("pg_proxy dsn: %s is not set", strings.Join(unset, ", "))
+	}
 	if raw == "" {
 		for _, key := range dsnEnvKeys {
 			if value := strings.TrimSpace(os.Getenv(key)); value != "" {

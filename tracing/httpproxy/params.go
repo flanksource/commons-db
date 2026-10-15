@@ -49,6 +49,10 @@ type Params struct {
 	// NoProxy are host:port addresses the processes reach directly, such as a
 	// server the host started, beside the proxy itself.
 	NoProxy []string `json:"noProxy,omitempty" clicky:"title=No proxy"`
+	// UpstreamCA is a PEM file of authorities the proxy trusts beside the
+	// system roots when, under mitm, it connects to the real server, such as a
+	// local test server's own certificate. It is read when the capture starts.
+	UpstreamCA string `json:"upstreamCA,omitempty" clicky:"title=Upstream CA file"`
 }
 
 func (p Params) Validate() error {
@@ -57,6 +61,12 @@ func (p Params) Validate() error {
 	}
 	if _, err := p.bodyLimit(); err != nil {
 		return err
+	}
+	if p.UpstreamCA != "" && strings.TrimSpace(p.UpstreamCA) == "" {
+		return errors.New("upstreamCA must not be blank")
+	}
+	if p.UpstreamCA != "" && p.Mode != ModeMITM {
+		return fmt.Errorf("upstreamCA applies only to mode %q: a %q tunnel is verified by its client", ModeMITM, p.Mode)
 	}
 	return errors.Join(globs("hosts", p.Hosts), globs("paths", p.Paths), names("redact", p.Redact), names("noProxy", p.NoProxy))
 }

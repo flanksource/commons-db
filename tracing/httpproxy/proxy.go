@@ -2,12 +2,15 @@ package httpproxy
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"path"
+	"strings"
 	"sync"
 	"time"
 
@@ -49,6 +52,10 @@ type recorder struct {
 // listen starts a recorder on a loopback port it keeps, so nothing can take
 // the port between choosing and binding it.
 func listen(params Params, rules policy, ca *authority, emit func(tracehttp.Exchange), warn func(string)) (*recorder, error) {
+	roots, err := upstreamRoots(params.UpstreamCA)
+	if err != nil {
+		return nil, err
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("http proxy listen: %w", err)
@@ -59,6 +66,9 @@ func listen(params Params, rules policy, ca *authority, emit func(tracehttp.Exch
 	}
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.Logger = silentLogger{}
+	// goproxy's own transport skips verifying the server, which under mitm
+	// would hand a client trusting the capture's CA an unverified connection.
+	proxy.Tr = &http.Transport{Proxy: http.ProxyFromEnvironment, TLSClientConfig: &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12}}
 	r.upstream, proxy.ConnectDial = proxy.ConnectDial, nil
 	proxy.OnRequest().HandleConnectFunc(r.handleConnect)
 	proxy.OnRequest().DoFunc(r.onRequest)
@@ -110,6 +120,7 @@ func (r *recorder) handleConnect(host string, ctx *goproxy.ProxyCtx) (*goproxy.C
 		return goproxy.OkConnect, host
 	}
 	if r.ca != nil {
+		ctx.RoundTripper = goproxy.RoundTripperFunc(roundTripMITM)
 		return &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: goproxy.TLSConfigFromCA(&r.ca.cert)}, host
 	}
 	started := time.Now()
@@ -122,6 +133,24 @@ func (r *recorder) handleConnect(host string, ctx *goproxy.ProxyCtx) (*goproxy.C
 		return r.track(newCountingConn(conn, r, host, started)), nil
 	}
 	return goproxy.OkConnect, host
+}
+
+// roundTripMITM relays a decrypted request. goproxy drops the client's
+// connection when that fails, before any response handler runs, so the
+// exchange would go unrecorded and the client see only a reset: the failure is
+// kept on ctx for onResponse and the client answered 502 with its cause.
+func roundTripMITM(req *http.Request, ctx *goproxy.ProxyCtx) (*http.Response, error) {
+	resp, err := ctx.Proxy.Tr.RoundTrip(req)
+	if err == nil {
+		return resp, nil
+	}
+	ctx.Error = err
+	text := fmt.Sprintf("http proxy: %s: %v", req.URL.Host, err)
+	return &http.Response{
+		StatusCode: http.StatusBadGateway, Status: "502 Bad Gateway", Proto: "HTTP/1.1", ProtoMajor: 1, ProtoMinor: 1,
+		Header: http.Header{"Content-Type": {"text/plain; charset=utf-8"}}, Body: io.NopCloser(strings.NewReader(text)),
+		ContentLength: int64(len(text)), Request: req,
+	}, nil
 }
 
 func (r *recorder) dial(network, addr string) (net.Conn, error) {
@@ -150,7 +179,11 @@ func (r *recorder) onResponse(resp *http.Response, ctx *goproxy.ProxyCtx) *http.
 	if !ok {
 		state = exchangeState{started: time.Now(), comment: "request start not observed"}
 	}
-	exchange, stream := exchangeOf(r.rules, ctx.Req, resp, state, ctx.Error)
+	relayed := resp
+	if ctx.Error != nil {
+		relayed = nil // the proxy's own answer, not the server's
+	}
+	exchange, stream := exchangeOf(r.rules, ctx.Req, relayed, state, ctx.Error)
 	if stream == nil {
 		r.add(exchange)
 		return resp
