@@ -23,6 +23,17 @@ var _ = Describe("database target DSNs", func() {
 		Entry("keyword DSN whose database ends in db", "host=localhost dbname=example.db sslmode=disable"),
 	)
 
+	DescribeTable("classifies SQL Server without rewriting its DSN",
+		func(dsn string) {
+			target, err := dbtarget.Parse(dsn)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(target).To(Equal(dbtarget.Target{Dialect: dbtarget.SQLServer, DSN: dsn}))
+		},
+		Entry("sqlserver URL with database query", "sqlserver://sa:secret@localhost:1433?database=oipa"),
+		Entry("upper-case scheme", "SQLServer://sa:secret@localhost?database=oipa"),
+		Entry("credentials with escaped special characters", "sqlserver://app%40corp:p%40ss%3Aw%2Frd%23@db.example:1433/instance?database=x&encrypt=disable"),
+	)
+
 	DescribeTable("classifies and normalizes SQLite",
 		func(dsn, expectedPath string) {
 			target, err := dbtarget.Parse(dsn)
@@ -58,6 +69,7 @@ var _ = Describe("database target DSNs", func() {
 		},
 		Entry("empty", " ", "DSN is required"),
 		Entry("unknown URL scheme", "mysql://localhost/app", `unsupported database scheme "mysql"`),
+		Entry("mssql alias scheme", "mssql://sa:secret@localhost?database=oipa", `use sqlserver://`),
 		Entry("explicit memory database", "sqlite://:memory:", "file-backed"),
 		Entry("file URI memory database", "sqlite://file::memory:?cache=shared", "file-backed"),
 		Entry("upper-case file URI scheme memory database", "sqlite://FILE::memory:", "file-backed"),

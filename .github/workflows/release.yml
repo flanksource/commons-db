@@ -33,21 +33,13 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         run: git push origin "recordstore/${{ steps.version.outputs.next }}"
 
-      - name: Tag the sqltrace module
+      - name: Tag the tracing module
         if: steps.version.outputs.changed == 'true'
-        run: git tag "tracing/sqltrace/${{ steps.version.outputs.next }}"
+        run: git tag "tracing/${{ steps.version.outputs.next }}"
 
-      - name: Publish the sqltrace module tag
+      - name: Publish the tracing module tag
         if: steps.version.outputs.changed == 'true'
-        run: git push origin "tracing/sqltrace/${{ steps.version.outputs.next }}"
-
-      - name: Tag the traces module
-        if: steps.version.outputs.changed == 'true'
-        run: git tag "tracing/traces/${{ steps.version.outputs.next }}"
-
-      - name: Publish the traces module tag
-        if: steps.version.outputs.changed == 'true'
-        run: git push origin "tracing/traces/${{ steps.version.outputs.next }}"
+        run: git push origin "tracing/${{ steps.version.outputs.next }}"
 
       - name: Tag the query module
         if: steps.version.outputs.changed == 'true'

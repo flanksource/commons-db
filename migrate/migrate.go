@@ -1,4 +1,6 @@
-// Package migrate applies declarative Atlas HCL schemas to PostgreSQL and SQLite databases.
+// Package migrate applies declarative Atlas HCL schemas to PostgreSQL, SQLite
+// and SQL Server databases, and on SQL Server also the stored procedures and
+// functions declared as .sql files (WithRoutines).
 package migrate
 
 import (
@@ -25,6 +27,8 @@ type options struct {
 	dir           string
 	name          string
 	schema        string
+	schemaSet     bool
+	routines      string
 	exclude       []string
 	allowDrops    bool
 	allowRebuilds bool
@@ -46,9 +50,10 @@ func WithName(name string) Option {
 }
 
 // WithSchema selects the PostgreSQL schema used for the complete migration lifecycle.
-// SQLite accepts only the default public schema declared by portable HCL bundles.
+// SQLite accepts only the default public schema declared by portable HCL bundles,
+// and SQL Server only dbo.
 func WithSchema(name string) Option {
-	return func(o *options) { o.schema = name }
+	return func(o *options) { o.schema, o.schemaSet = name, true }
 }
 
 // WithVariables supplies values for HCL variable blocks and security expressions.
@@ -83,6 +88,10 @@ func WithRebuilds() Option {
 // PostgreSQL supports the complete HCL, SQL, security, and destructive-change
 // lifecycle. SQLite projects portable PostgreSQL-shaped HCL to tables,
 // columns, and indexes, with compatible rebuilds available by opt-in.
+// SQL Server (sqlserver:// DSNs) reconciles SQL Server HCL tables and the
+// stored procedures and functions declared with WithRoutines, inspecting only
+// the objects the bundle names; it refuses SQL scripts, security blocks,
+// drops, rebuilds and schemas other than dbo.
 func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Option) error {
 	if strings.TrimSpace(connection) == "" {
 		return errors.New("connection string is empty")
@@ -92,10 +101,16 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 		return err
 	}
 	config := resolveOptions(opts)
-	if target.Dialect == dbtarget.SQLite {
+	switch target.Dialect {
+	case dbtarget.SQLite:
 		return applySQLite(ctx, target.DSN, schemaFS, config)
+	case dbtarget.SQLServer:
+		return applySQLServer(ctx, target.DSN, schemaFS, config)
+	case dbtarget.Postgres:
+		return applyPostgres(ctx, target.DSN, schemaFS, config)
+	default:
+		return fmt.Errorf("unsupported migration dialect %q", target.Dialect)
 	}
-	return applyPostgres(ctx, target.DSN, schemaFS, config)
 }
 
 func resolveOptions(opts []Option) options {
@@ -137,6 +152,9 @@ func applyPostgres(ctx context.Context, connection string, schemaFS fs.FS, cfg o
 	}
 	if err := ValidateSchemaName(cfg.schema); err != nil {
 		return fmt.Errorf("migration schema: %w", err)
+	}
+	if err := refuseRoutines(cfg, "PostgreSQL"); err != nil {
+		return err
 	}
 
 	scripts, err := loadScripts(schemaFS, cfg.dir)
@@ -258,7 +276,9 @@ func applyPostgres(ctx context.Context, connection string, schemaFS fs.FS, cfg o
 // alongside table drops because the two are load-bearing together: a bundle that
 // declares neither a table nor the enum typing one of its columns emits both a
 // DropTable and a DropObject, and keeping only the former leaves the column
-// behind to block the DROP TYPE with "other objects depend on it".
+// behind to block the DROP TYPE with "other objects depend on it". Procedure
+// and function drops are filtered too: a routine missing from the bundle is
+// left in place.
 func withoutDrops(changes []schema.Change) []schema.Change {
 	log := logger.GetLogger("migrate")
 	filtered := make([]schema.Change, 0, len(changes))
@@ -268,6 +288,10 @@ func withoutDrops(changes []schema.Change) []schema.Change {
 			log.Tracef("Skipping drop table of %s", drop.T.Name)
 		case *schema.DropObject:
 			log.Tracef("Skipping drop of %s", objectDescription(drop.O))
+		case *schema.DropProc:
+			log.Tracef("Skipping drop procedure of %s", drop.P.Name)
+		case *schema.DropFunc:
+			log.Tracef("Skipping drop function of %s", drop.F.Name)
 		default:
 			filtered = append(filtered, change)
 		}

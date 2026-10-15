@@ -1,0 +1,4 @@
+{"version":2,"width":80,"height":24,"duration":1.5,"command":"/bin/sh -c echo hi","_gavel":{"exit_code":3,"snapshots":[[500,"hi"],[1500,"hi\nhi\nbye"]],"final":"hi\nhi\nbye","duplicates":[{"count":2,"text":"hi"}],"truncated":true}}
+[0.01,"o","hi\r\n"]
+[0.75,"o","\u001b[32mhi\u001b[0m \"quoted\" \u003cé\u003e\r\n"]
+[1.2,"o","bye\r\n"]

@@ -14,7 +14,7 @@ import (
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 type ProfileStoreProvider func() (profilestore.Store, error)
@@ -81,7 +81,7 @@ type Options struct {
 
 	// Traces starts trace plugin captures, each authorized as its profile
 	// traces/<kind>. Nil serves no trace routes.
-	Traces *traces.Runtime
+	Traces *tracing.Runtime
 
 	// TraceStartError answers a trace start the runtime refused, when the host
 	// recognises the refusal and can describe it better than its error text
@@ -126,11 +126,13 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 //	POST {prefix}/connection/{id}/trace/sessions start a connection trace
 //	GET  {prefix}/traces/kinds                   the trace plugin kinds served
 //	POST {prefix}/traces/{kind}/sessions         start a trace plugin capture
+//	GET  {prefix}/traces/{kind}/export           download a window (?stream, ?afterSeq, ?toSeq, ?format)
 //	GET  {prefix}/sessions                       list (filters, window, sort, paging, ?__lookup=filters)
 //	GET  {prefix}/sessions/{id}                  info
 //	POST {prefix}/sessions/{id}/stop             stop a live session
 //	POST {prefix}/sessions/{id}/extend           move a live session's deadline (?duration)
 //	POST {prefix}/sessions/{id}/restart          start a new session from an ended one (?duration)
+//	POST {prefix}/sessions/{id}/checkpoint       have a running trace capture take a reading and commit
 //	GET  {prefix}/sessions/{id}/events           SSE, resumable via Last-Event-ID (?format=ndjson exports)
 //	GET  {prefix}/sessions/{id}/result           materialized rows, or the recorded result
 type sessionHandler struct {
@@ -143,7 +145,7 @@ type sessionHandler struct {
 	records   EventRecords
 	authorize AuthorizeFunc
 	principal func(r *http.Request) string
-	traces    *traces.Runtime
+	traces    *tracing.Runtime
 	// traceStartError answers a refused trace start the host describes.
 	traceStartError func(w http.ResponseWriter, r *http.Request, err error) bool
 	next            http.Handler
@@ -159,7 +161,7 @@ type sessionHandlerOptions struct {
 	Records   EventRecords
 	Authorize AuthorizeFunc
 	Principal func(r *http.Request) string
-	Traces    *traces.Runtime
+	Traces    *tracing.Runtime
 	// TraceStartError answers a refused trace start the host describes.
 	TraceStartError func(w http.ResponseWriter, r *http.Request, err error) bool
 	Next            http.Handler
@@ -186,6 +188,8 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.traceKinds(w, r)
 	case h.traces != nil && post && len(parts) == 3 && parts[0] == "traces" && parts[2] == "sessions":
 		h.startTrace(w, r, parts[1])
+	case h.traces != nil && get && len(parts) == 3 && parts[0] == "traces" && parts[2] == "export":
+		h.exportTrace(w, r, parts[1])
 	case parts[0] != "sessions":
 		h.next.ServeHTTP(w, r)
 	case get && len(parts) == 1:
@@ -198,6 +202,8 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.extend(w, r, parts[1])
 	case post && len(parts) == 3 && parts[2] == "restart":
 		h.restart(w, r, parts[1])
+	case h.traces != nil && post && len(parts) == 3 && parts[2] == "checkpoint":
+		h.checkpoint(w, r, parts[1])
 	case get && len(parts) == 3 && parts[2] == "events":
 		h.events(w, r, parts[1])
 	case get && len(parts) == 3 && parts[2] == "result":

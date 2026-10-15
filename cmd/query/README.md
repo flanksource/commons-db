@@ -124,7 +124,7 @@ The app uses an ephemeral profile internally to reuse session limits and result
 retention. Saved trace-profile authoring and OIPA profile migration are separate
 features, not part of this connection playground.
 
-The provider uses `tracing/xetrace`, migrated from OIPA's capture implementation.
+The provider (`tracing/sqlserver/xeprovider`) uses `tracing/sqlserver/xetrace`, migrated from OIPA's capture implementation.
 It captures statement, RPC, batch-completion, and error events by default;
 `sp_statement_completed` is opt-in via `events`. Database/user/application/host
 patterns support `*` and `!` exclusions; with no database the capture scopes to
@@ -134,6 +134,45 @@ report the required grants without applying them. Stop drains pending events
 and drops the server session before the query session becomes terminal; cleanup
 errors remain visible. This is server-scoped XEvents, not Azure SQL Database's
 database-scoped sessions.
+
+## Embedding a trace store (`traceserve`)
+
+`traceserve` serves one trace results store — the explorer UI, its profile API,
+and the sessions API — from inside another program, with no database. gavel
+mounts each test run's store this way at `/query/`.
+
+```go
+runtime, closeStore, err := traceserve.Open(traceserve.OpenOptions{
+	Dir: storeDir, Kinds: kinds, Retention: 7 * 24 * time.Hour,
+})
+defer closeStore()
+handler, err := traceserve.Handler(traceserve.Options{Runtime: runtime, Authorize: traceserve.ReadOnly})
+mux.Handle("/query/", http.StripPrefix("/query", handler))
+```
+
+`Open` opens (or creates) the SQLite-backed store in `Dir` and returns the
+`tracing.Runtime` that starts captures into it. `Handler` serves, relative to
+where it is mounted:
+
+| Route | Purpose |
+| --- | --- |
+| `GET /api/v1/profile/traces%2F{kind}` | A window of a stream (`stream`, `afterSeq`, `toSeq`) |
+| `GET /api/v1/traces/{kind}/export` | The window downloaded (`format`: `ndjson`, and the kind's own, such as `har` or `cast`) |
+| `POST /api/v1/sessions/{id}/checkpoint` | Commit a running capture's reading now (`409` when the session has no running capture) |
+| `/api/v1/sessions...` | The sessions API over the store's captures |
+| `GET /api/openapi.json` | The result profiles and session routes |
+| `GET /traces/{kind}` | Redirects to the explorer's page for a window, keeping `stream`/`afterSeq`/`toSeq` |
+| `GET /...` | The explorer app |
+
+The checkpoint is `sessions.ActionCheckpoint`: a caller allowed to read a
+session but not to checkpoint it is answered `403`. `traceserve.ReadOnly`
+allows reads and checkpoints and refuses `ActionControl` (start, stop, extend,
+restart); a nil
+`Authorize` allows everything.
+
+The app works under any mount path: the served `index.html` carries
+`<base href>` set to the path it was reached under, and the app prefixes its
+API calls and routes with that path (`www/src/mount.ts`).
 
 ## Architecture
 

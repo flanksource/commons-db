@@ -25,7 +25,7 @@ import (
 	"github.com/flanksource/commons-db/recordstore/probe"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/recordstore/recordresults/recordresultstest"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 type pingParams struct {
@@ -53,7 +53,7 @@ func (pings) Schema() recordresults.ResultType[ping] {
 	return recordresults.ResultType[ping]{Title: "Pings", TimeColumn: "at"}
 }
 
-func (pings) Handle(ctx dbcontext.Context, p pingParams, records traces.Emitter[ping], _ traces.Records[ping]) error {
+func (pings) Handle(ctx dbcontext.Context, p pingParams, records tracing.Emitter[ping], _ tracing.Records[ping]) error {
 	for n := 1; n <= p.Count; n++ {
 		if err := records.Emit(ctx, ping{At: time.Now().UTC(), N: n}); err != nil {
 			return err
@@ -76,11 +76,11 @@ func (lockedOut) Schema() recordresults.ResultType[ping] {
 	return recordresults.ResultType[ping]{Title: "Locked out", TimeColumn: "at"}
 }
 
-func (lockedOut) Prepare(ctx dbcontext.Context, _ pingParams, _ traces.Emitter[ping]) (dbcontext.Context, func() error, error) {
+func (lockedOut) Prepare(ctx dbcontext.Context, _ pingParams, _ tracing.Emitter[ping]) (dbcontext.Context, func() error, error) {
 	return ctx, nil, fmt.Errorf("prepare: %w", loginDenied{login: "oipa"})
 }
 
-func (lockedOut) Handle(dbcontext.Context, pingParams, traces.Emitter[ping], traces.Records[ping]) error {
+func (lockedOut) Handle(dbcontext.Context, pingParams, tracing.Emitter[ping], tracing.Records[ping]) error {
 	return nil
 }
 
@@ -94,10 +94,10 @@ type traceHarness struct {
 }
 
 // newTraceHarness serves the pings kind, and whatever kinds extra registers.
-func newTraceHarness(extra ...func(*traces.Kinds)) *traceHarness {
+func newTraceHarness(extra ...func(*tracing.Kinds)) *traceHarness {
 	h := &traceHarness{refused: map[string]Action{}}
-	kinds := traces.NewKinds()
-	Expect(kinds.RegisterKind("pings", traces.NewHandler[pingParams, ping](pings{}, traces.Capabilities{Live: true}))).To(Succeed())
+	kinds := tracing.NewKinds()
+	Expect(kinds.RegisterKind("pings", tracing.NewHandler[pingParams, ping](pings{}, tracing.Capabilities{Live: true}))).To(Succeed())
 	for _, register := range extra {
 		register(kinds)
 	}
@@ -105,7 +105,7 @@ func newTraceHarness(extra ...func(*traces.Kinds)) *traceHarness {
 		Prefix: "traces", ConnectionName: "traces",
 		Settings: recordresultstest.LocalSettings(recordstore.BackendSQLite), Register: kinds.RegisterResultTypes,
 	})
-	runtime := &traces.Runtime{
+	runtime := &tracing.Runtime{
 		Kinds: kinds, Results: h.results, Probes: probe.NewManager(probe.ManagerOptions{}), PollEvery: 20 * time.Millisecond,
 	}
 	h.registry = query.NewSessionRegistry(query.RegistryOptions{})
@@ -132,7 +132,7 @@ func newTraceHarness(extra ...func(*traces.Kinds)) *traceHarness {
 func (h *traceHarness) authorize(_ *http.Request, profile string, action Action) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if refused, ok := h.refused[profile]; ok && (refused == ActionRead || action == ActionControl) {
+	if refused, ok := h.refused[profile]; ok && (refused == ActionRead || action == refused) {
 		return fmt.Errorf("profile %q is not %s-able by this caller", profile, action)
 	}
 	return nil
@@ -150,12 +150,13 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 		h := newTraceHarness()
 		response := h.do(http.MethodGet, "/api/v1/traces/kinds", "")
 		Expect(response.Code).To(Equal(http.StatusOK))
-		var kinds []traces.KindInfo
+		var kinds []tracing.KindInfo
 		Expect(json.Unmarshal(response.Body.Bytes(), &kinds)).To(Succeed())
 		Expect(kinds).To(HaveLen(1))
 		Expect(kinds[0].Name).To(Equal("pings"))
 		Expect(kinds[0].Params.Properties).To(HaveKey("count"))
 		Expect(kinds[0].Columns).ToNot(BeEmpty())
+		Expect(kinds[0].ExportFormats).To(Equal([]tracing.ExportFormat{tracing.NDJSON}))
 	})
 
 	ginkgo.It("leaves out the kinds a caller may not read", func() {
@@ -221,8 +222,8 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 	)
 
 	ginkgo.It("answers a refused start as the host describes the refusal", func() {
-		h := newTraceHarness(func(kinds *traces.Kinds) {
-			Expect(kinds.RegisterKind("locked_out", traces.NewHandler[pingParams, ping](lockedOut{}, traces.Capabilities{Live: true}))).To(Succeed())
+		h := newTraceHarness(func(kinds *tracing.Kinds) {
+			Expect(kinds.RegisterKind("locked_out", tracing.NewHandler[pingParams, ping](lockedOut{}, tracing.Capabilities{Live: true}))).To(Succeed())
 		})
 		response := h.do(http.MethodPost, "/api/v1/traces/locked_out/sessions", `{}`)
 		Expect(response.Code).To(Equal(http.StatusForbidden), response.Body.String())
@@ -234,6 +235,86 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 		response := h.do(http.MethodPost, "/api/v1/traces/pings/sessions", `{"params": {"count": -1}}`)
 		Expect(response.Code).To(Equal(http.StatusBadRequest))
 		Expect(response.Body.String()).To(ContainSubstring("must not be negative"))
+	})
+
+	ginkgo.Context("exporting a window of a capture", func() {
+		var h *traceHarness
+		var stream string
+
+		ginkgo.BeforeEach(func() {
+			h = newTraceHarness()
+			response := h.do(http.MethodPost, "/api/v1/traces/pings/sessions", `{"params": {"count": 2}}`)
+			Expect(response.Code).To(Equal(http.StatusCreated), response.Body.String())
+			var info query.SessionInfo
+			Expect(json.Unmarshal(response.Body.Bytes(), &info)).To(Succeed())
+			session, _ := h.registry.Get(info.ID)
+			Eventually(func() int64 { return session.Snapshot().EventCount }).WithTimeout(5 * time.Second).Should(Equal(int64(2)))
+			stream = info.Events.Stream
+		})
+
+		ginkgo.It("downloads the window as an attachment named for its kind and stream", func() {
+			response := h.do(http.MethodGet, "/api/v1/traces/pings/export?format=ndjson&afterSeq=1&stream="+stream, "")
+			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+			Expect(response.Header().Get("Content-Type")).To(Equal("application/x-ndjson"))
+			Expect(response.Header().Get("Content-Disposition")).To(Equal(`attachment; filename="pings-` + stream + `.ndjson"`))
+			var row map[string]any
+			Expect(json.Unmarshal(response.Body.Bytes(), &row)).To(Succeed(), "one row: the window after seq 1")
+			Expect(row).To(HaveKeyWithValue("n", float64(2)))
+		})
+
+		ginkgo.DescribeTable("refuses an export it cannot serve",
+			func(path func(stream string) string, refuse string, status int) {
+				if refuse != "" {
+					h.refused[refuse] = ActionRead
+				}
+				Expect(h.do(http.MethodGet, path(stream), "").Code).To(Equal(status))
+			},
+			ginkgo.Entry("an unknown kind", func(s string) string { return "/api/v1/traces/nope/export?format=ndjson&stream=" + s }, "", http.StatusNotFound),
+			ginkgo.Entry("no stream", func(string) string { return "/api/v1/traces/pings/export?format=ndjson" }, "", http.StatusBadRequest),
+			ginkgo.Entry("a stream that does not exist", func(string) string { return "/api/v1/traces/pings/export?format=ndjson&stream=nope" }, "", http.StatusNotFound),
+			ginkgo.Entry("a format the kind lacks", func(s string) string { return "/api/v1/traces/pings/export?format=har&stream=" + s }, "", http.StatusBadRequest),
+			ginkgo.Entry("no format", func(s string) string { return "/api/v1/traces/pings/export?stream=" + s }, "", http.StatusBadRequest),
+			ginkgo.Entry("a seq that is not one", func(s string) string { return "/api/v1/traces/pings/export?format=ndjson&toSeq=x&stream=" + s }, "", http.StatusBadRequest),
+			ginkgo.Entry("a kind the caller may not read", func(s string) string { return "/api/v1/traces/pings/export?format=ndjson&stream=" + s }, "traces/pings", http.StatusForbidden),
+		)
+	})
+
+	ginkgo.Context("checkpointing a running capture", func() {
+		var h *traceHarness
+		var info query.SessionInfo
+
+		ginkgo.BeforeEach(func() {
+			h = newTraceHarness()
+			response := h.do(http.MethodPost, "/api/v1/traces/pings/sessions", `{"params": {"count": 2}}`)
+			Expect(response.Code).To(Equal(http.StatusCreated), response.Body.String())
+			Expect(json.Unmarshal(response.Body.Bytes(), &info)).To(Succeed())
+		})
+
+		ginkgo.It("commits what the capture emitted before it answers with the session", func() {
+			response := h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "")
+			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+			var checkpointed query.SessionInfo
+			Expect(json.Unmarshal(response.Body.Bytes(), &checkpointed)).To(Succeed())
+			Expect(checkpointed.ID).To(Equal(info.ID))
+			Eventually(func() int64 {
+				Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "").Code).To(Equal(http.StatusOK))
+				session, _ := h.registry.Get(info.ID)
+				return session.Snapshot().EventCount
+			}).WithTimeout(5 * time.Second).Should(Equal(int64(2)))
+		})
+
+		ginkgo.It("refuses a checkpoint the caller may not take, though it may stop the capture", func() {
+			h.refused["traces/pings"] = ActionCheckpoint
+			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "").Code).To(Equal(http.StatusForbidden))
+			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/stop", "").Code).To(Equal(http.StatusOK))
+		})
+
+		ginkgo.It("answers a checkpoint of an ended capture as a conflict", func() {
+			session, _ := h.registry.Get(info.ID)
+			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/stop", "").Code).To(Equal(http.StatusOK))
+			Eventually(session.Done()).WithTimeout(10 * time.Second).Should(BeClosed())
+			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "").Code).To(Equal(http.StatusConflict))
+		})
 	})
 
 	ginkgo.It("refuses a start the caller may not control", func() {

@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -16,7 +17,7 @@ import (
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 type beatParams struct{}
@@ -33,7 +34,7 @@ func (beats) Schema() recordresults.ResultType[beat] {
 	return recordresults.ResultType[beat]{Title: "Beats", TimeColumn: "at"}
 }
 
-func (beats) Handle(ctx dbcontext.Context, _ beatParams, _ traces.Emitter[beat], _ traces.Records[beat]) error {
+func (beats) Handle(ctx dbcontext.Context, _ beatParams, _ tracing.Emitter[beat], _ tracing.Records[beat]) error {
 	<-ctx.Done()
 	return nil
 }
@@ -59,8 +60,8 @@ func TestTracePluginsChangeNothingBeforeTheyOpen(t *testing.T) {
 
 func TestTracePluginsServeTheirResultProfilesOnceOpen(t *testing.T) {
 	var plugins tracePlugins
-	kinds := traces.NewKinds()
-	require.NoError(t, kinds.RegisterKind("beats", traces.NewHandler[beatParams, beat](beats{}, traces.Capabilities{Live: true})))
+	kinds := tracing.NewKinds()
+	require.NoError(t, kinds.RegisterKind("beats", tracing.NewHandler[beatParams, beat](beats{}, tracing.Capabilities{Live: true})))
 	runtime, closeTraces, err := plugins.open(t.TempDir(), time.Hour, kinds)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, closeTraces()) })
@@ -83,6 +84,20 @@ func TestTracePluginsServeTheirResultProfilesOnceOpen(t *testing.T) {
 	require.NotNil(t, connection)
 }
 
+func TestServeOpensTheTraceStoreTheHostNames(t *testing.T) {
+	require.Equal(t, filepath.Join("/etc/query", "traces"), tracesDir("/etc/query", ""), "under the config dir by default")
+	require.Equal(t, "/work/.gavel/traces/run-1", tracesDir("/etc/query", "/work/.gavel/traces/run-1"))
+
+	var plugins tracePlugins
+	kinds := tracing.NewKinds()
+	require.NoError(t, kinds.RegisterKind("beats", tracing.NewHandler[beatParams, beat](beats{}, tracing.Capabilities{Live: true})))
+	dir := filepath.Join(t.TempDir(), "elsewhere")
+	_, closeTraces, err := plugins.open(dir, time.Hour, kinds)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeTraces()) })
+	require.DirExists(t, dir)
+}
+
 func TestServeServesTheTraceKinds(t *testing.T) {
 	kinds, err := traceKinds()
 	require.NoError(t, err)
@@ -92,5 +107,5 @@ func TestServeServesTheTraceKinds(t *testing.T) {
 	for _, info := range infos {
 		names = append(names, info.Name)
 	}
-	require.Equal(t, []string{"http", "opensearch", "sql", "sql_xevent"}, names)
+	require.Equal(t, []string{"http", "http_proxy", "opensearch", "pg_proxy", "process_samples", "process_tree", "sql_statements", "sql_xevent", "terminal"}, names)
 }

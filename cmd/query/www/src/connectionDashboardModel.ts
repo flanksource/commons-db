@@ -1,3 +1,4 @@
+import { mountPath } from "./mount";
 /**
  * The connection dashboard's pure shapes and derivations: what the API returns,
  * how connections group into namespace lanes, and the dashboard URL a result
@@ -76,7 +77,7 @@ export function groupConnectionDashboardLanes(
     });
 }
 
-export const connectionHealthUrl = "/api/v1/connections/health";
+export const connectionHealthUrl = `${mountPath}/api/v1/connections/health`;
 
 export function connectionDashboardUrl(requestUrl?: string): string {
   const target = new URL("/api/v1/connections/dashboard", "http://query.local");
@@ -87,5 +88,5 @@ export function connectionDashboardUrl(requestUrl?: string): string {
       if (value) target.searchParams.set(key, value);
     }
   }
-  return target.pathname + target.search;
+  return mountPath + target.pathname + target.search;
 }

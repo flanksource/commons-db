@@ -1,0 +1,156 @@
+package xesession
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/flanksource/commons-db/recordstore"
+	"github.com/flanksource/commons-db/tracing/sqlserver/xetrace"
+	"github.com/flanksource/commons/properties"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
+)
+
+var _ = Describe("DecodeEvent", func() {
+	It("is a statement's row as FromEvent builds it", func() {
+		event := xetrace.Event{Name: xetrace.EventSQLStatementCompleted, Timestamp: capturedAt, Statement: "SELECT 1"}
+		Expect(DecodeEvent(context.Background(), nil, event)).To(Equal(FromEvent(event)))
+	})
+
+	It("decodes a deadlock report, resolving its indexes through db", func() {
+		connection, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(connection.Close()).To(Succeed())
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+		mock.ExpectQuery("SELECT DB_ID()").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(5))
+		mock.ExpectClose()
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/><process id="p2" currentdbname="tenant_b"/></process-list><resource-list/></deadlock>`
+
+		row := DecodeEvent(context.Background(), connection, xetrace.Event{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report})
+		Expect(row.Deadlock).NotTo(BeNil())
+		Expect(row.Database).To(Equal("tenant_a"))
+		Expect(row.ErrorMessage).To(BeEmpty())
+	})
+
+	It("keeps a deadlock it cannot resolve without a database, naming why", func() {
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/></process-list><resource-list/></deadlock>`
+		row := DecodeEvent(context.Background(), nil, xetrace.Event{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report})
+		Expect(row.Deadlock).NotTo(BeNil())
+		Expect(row.ErrorMessage).To(Equal("resolve deadlock indexes: no database lease"))
+	})
+})
+
+var _ = Describe("captured deadlock rows", func() {
+	It("stores a decoded graph and its XML in the sql_xevent stream", func() {
+		connection, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(connection.Close()).To(Succeed())
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+		mock.ExpectQuery("SELECT DB_ID()").WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(5))
+		mock.ExpectClose()
+
+		env := newEnvironment(nil)
+		appender := recordAppender{store: env.store(), ctx: env.ctx(), stream: "deadlock-capture", db: connection}
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/><process id="p2" currentdbname="tenant_b"/></process-list><resource-list/></deadlock>`
+		_, _, err = appender.Append([]xetrace.Event{{Name: xetrace.EventXMLDeadlockReport, Timestamp: time.Date(2026, 9, 24, 10, 11, 12, 0, time.UTC), DeadlockReportXML: report}})
+		Expect(err).NotTo(HaveOccurred())
+		var rows []recordstore.Row
+		Expect(env.backend.Scan(env.ctx(), "deadlock-capture", 0, func(_ int64, row recordstore.Row) error {
+			rows = append(rows, row)
+			return nil
+		})).To(Succeed())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]).To(HaveKey("deadlock"))
+		Expect(rows[0]["deadlock"]).To(HaveKeyWithValue("xml", report))
+		Expect(rows[0]["database"]).To(Equal("tenant_a"))
+	})
+
+	It("stores a graph it cannot decode as a row naming the failure, and keeps the rest of the chunk", func() {
+		env := newEnvironment(nil)
+		appender := recordAppender{store: env.store(), ctx: env.ctx(), stream: "bad-deadlock"}
+		_, _, err := appender.Append([]xetrace.Event{
+			{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: "<deadlock/>"},
+			{Name: xetrace.EventSQLStatementCompleted, Timestamp: capturedAt, Statement: "SELECT 1"},
+		})
+		Expect(err).NotTo(HaveOccurred(), "one unreadable report must not end the capture's recording")
+		var rows []recordstore.Row
+		Expect(env.backend.Scan(env.ctx(), "bad-deadlock", 0, func(_ int64, row recordstore.Row) error {
+			rows = append(rows, row)
+			return nil
+		})).To(Succeed())
+		Expect(rows).To(HaveLen(2))
+		Expect(rows[0]["deadlock"]).To(BeNil())
+		Expect(rows[0]["errorMessage"]).To(ContainSubstring("lists no processes"))
+		Expect(rows[0]["rawStatement"]).To(Equal("<deadlock/>"), "the report is kept to be read by hand")
+		Expect(rows[1]["rawStatement"]).To(Equal("SELECT 1"))
+	})
+
+	It("stores a graph whose indexes cannot be looked up, unresolved and naming the failure", func() {
+		connection, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() {
+			Expect(connection.Close()).To(Succeed())
+			Expect(mock.ExpectationsWereMet()).To(Succeed())
+		})
+		mock.ExpectQuery("SELECT DB_ID()").WillReturnError(errors.New("login failed"))
+		mock.ExpectClose()
+
+		env := newEnvironment(nil)
+		appender := recordAppender{store: env.store(), ctx: env.ctx(), stream: "unresolved-deadlock", db: connection}
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/></process-list><resource-list/></deadlock>`
+		_, _, err = appender.Append([]xetrace.Event{{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report}})
+		Expect(err).NotTo(HaveOccurred())
+		var rows []recordstore.Row
+		Expect(env.backend.Scan(env.ctx(), "unresolved-deadlock", 0, func(_ int64, row recordstore.Row) error {
+			rows = append(rows, row)
+			return nil
+		})).To(Succeed())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]["deadlock"]).To(HaveKeyWithValue("xml", report))
+		Expect(rows[0]["database"]).To(Equal("tenant_a"))
+		Expect(rows[0]["errorMessage"]).To(ContainSubstring("login failed"))
+	})
+
+	It("stops waiting on an index lookup after the poll timeout and stores the graph unresolved", func() {
+		properties.Set("sqltrace.poll.timeout", "50ms")
+		DeferCleanup(func() { properties.Set("sqltrace.poll.timeout", "") })
+		connection, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(connection.Close()).To(Succeed()) })
+		mock.ExpectQuery("SELECT DB_ID()").WillDelayFor(time.Minute).WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(5))
+		mock.ExpectClose()
+
+		env := newEnvironment(nil)
+		appender := recordAppender{store: env.store(), ctx: env.ctx(), stream: "blocked-deadlock", db: connection}
+		report := `<deadlock><victim-list><victimProcess id="p1"/></victim-list><process-list><process id="p1" currentdbname="tenant_a"/></process-list><resource-list/></deadlock>`
+		started := time.Now()
+		_, _, err = appender.Append([]xetrace.Event{{Name: xetrace.EventXMLDeadlockReport, Timestamp: capturedAt, DeadlockReportXML: report}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(time.Since(started)).To(BeNumerically("<", 5*time.Second))
+		var rows []recordstore.Row
+		Expect(env.backend.Scan(env.ctx(), "blocked-deadlock", 0, func(_ int64, row recordstore.Row) error {
+			rows = append(rows, row)
+			return nil
+		})).To(Succeed())
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]["deadlock"]).To(HaveKeyWithValue("xml", report))
+		Expect(rows[0]["errorMessage"]).To(ContainSubstring("resolve deadlock indexes"))
+	})
+
+	It("stores no graph for ordinary SQL rows", func() {
+		env := newEnvironment(nil)
+		appender := recordAppender{store: env.store(), ctx: env.ctx(), stream: "statement-capture"}
+		_, _, err := appender.Append([]xetrace.Event{{Name: xetrace.EventSQLStatementCompleted, Timestamp: capturedAt, Statement: "SELECT 1"}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(env.backend.Scan(env.ctx(), "statement-capture", 0, func(_ int64, row recordstore.Row) error {
+			Expect(row["deadlock"]).To(BeNil())
+			return nil
+		})).To(Succeed())
+	})
+})

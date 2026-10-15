@@ -1,0 +1,26 @@
+This directory contains code copied from Atlas (https://github.com/ariga/atlas).
+
+  Upstream path: ariga.io/atlas/sql/internal/sqlx
+  Upstream version: ariga.io/atlas v0.38.0
+  Copyright 2021-present The Atlas Authors. All rights reserved.
+  License: Apache License 2.0 (see LICENSE.atlas)
+
+Ported files (verbatim, upstream license headers kept):
+  atlas/internal/sqlx/sqlx.go
+  atlas/internal/sqlx/sqlx_oss.go
+  atlas/internal/sqlx/diff.go
+  atlas/internal/sqlx/plan.go
+  atlas/internal/sqlx/dev.go
+  atlas/internal/sqlx/sqlx_test.go
+  atlas/internal/sqlx/plan_test.go
+  atlas/internal/sqlx/dev_test.go
+
+  Upstream path: ariga.io/atlas/sql/internal/specutil
+  Upstream version: ariga.io/atlas v0.38.0
+
+Ported files (upstream license headers kept; the only edit is the import of
+ariga.io/atlas/sql/internal/sqlx, rewritten to the port above and re-sorted by
+gofmt):
+  atlas/internal/specutil/convert.go
+  atlas/internal/specutil/spec.go
+  atlas/internal/specutil/convert_test.go
