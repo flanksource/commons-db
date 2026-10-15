@@ -3,13 +3,14 @@ package dbtest
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/lib/pq"
 )
@@ -22,50 +23,36 @@ var (
 	scratchSeq    atomic.Uint64
 )
 
-// createScratch carves a fresh database out of the server adminURL points at,
-// and returns a DSN for it plus a closure that drops it.
+// createLeasedDatabase carves a fresh managed test database out of the server
+// adminURL points at, and returns a DSN for it plus a closure that drops it.
 //
+// The lease session locks the name before the database exists and holds it
+// until cleanup, so a sweeper treats an unheld lock as an abandoned database.
 // adminURL is used only as a maintenance connection; the database it names is
 // never modified. The returned DSN is adminURL with its path replaced, so every
 // other connection parameter (sslmode, credentials, options) is preserved.
-func createScratch(adminURL, name, unique string) (string, func() error, error) {
-	dbName := scratchName(name, unique)
-
-	admin, err := sql.Open("postgres", adminURL)
-	if err != nil {
-		return "", nil, fmt.Errorf("open %s: %w", redact(adminURL), err)
-	}
-	defer admin.Close() //nolint:errcheck
-
-	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
-	defer cancel()
-
-	quoted := pq.QuoteIdentifier(dbName)
-	if _, err := admin.ExecContext(ctx, `DROP DATABASE IF EXISTS `+quoted+` WITH (FORCE)`); err != nil {
-		return "", nil, fmt.Errorf("drop stale database %s: %w", dbName, err)
-	}
-	if _, err := admin.ExecContext(ctx, `CREATE DATABASE `+quoted); err != nil {
-		return "", nil, fmt.Errorf("create database %s: %w", dbName, err)
-	}
-
-	dsn, err := withDatabase(adminURL, dbName)
+func createLeasedDatabase(
+	ctx context.Context,
+	adminURL, name, unique string,
+	now time.Time,
+) (string, *databaseLease, error) {
+	session, err := openPoolSession(ctx, adminURL)
 	if err != nil {
 		return "", nil, err
 	}
-
-	return dsn, func() error {
-		cleanup, err := sql.Open("postgres", adminURL)
-		if err != nil {
-			return fmt.Errorf("open %s to drop %s: %w", redact(adminURL), dbName, err)
-		}
-		defer cleanup.Close() //nolint:errcheck
-		dropCtx, dropCancel := context.WithTimeout(context.Background(), connectTimeout)
-		defer dropCancel()
-		if _, err := cleanup.ExecContext(dropCtx, `DROP DATABASE IF EXISTS `+quoted+` WITH (FORCE)`); err != nil {
-			return fmt.Errorf("drop database %s: %w", dbName, err)
-		}
-		return nil
-	}, nil
+	dbName := managedDatabaseName(testDatabasePrefix, now.UTC().Truncate(time.Second), unique, name)
+	if err := session.lock(ctx, dbName); err != nil {
+		return "", nil, errors.Join(err, session.close())
+	}
+	if _, err := session.conn.ExecContext(ctx, "CREATE DATABASE "+pq.QuoteIdentifier(dbName)); err != nil {
+		return "", nil, errors.Join(fmt.Errorf("create database %s: %w", dbName, err), session.close())
+	}
+	lease := &databaseLease{session: session, name: dbName}
+	dsn, err := withDatabase(adminURL, dbName)
+	if err != nil {
+		return "", nil, errors.Join(err, lease.release())
+	}
+	return dsn, lease, nil
 }
 
 // withDatabase returns dsn pointing at database instead of whatever it named.
@@ -81,17 +68,6 @@ func withDatabase(dsn, database string) (string, error) {
 	}
 	u.Path = "/" + database
 	return u.String(), nil
-}
-
-// scratchName builds a unique, legal database identifier. When the combined
-// name would exceed PostgreSQL's limit the *base* is truncated, never the
-// unique suffix — trimming the tail is what makes two concurrent runs collide.
-func scratchName(base, unique string) string {
-	name := sanitize(base)
-	if room := maxIdentifier - len(unique) - 1; len(name) > room {
-		name = name[:room]
-	}
-	return name + "_" + unique
 }
 
 // sanitize reduces s to lowercase alphanumerics and underscores, so it is a

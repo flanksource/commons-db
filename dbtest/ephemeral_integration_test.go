@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"os/exec"
 	"sort"
 	"strings"
 	"time"
@@ -44,12 +45,12 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(dropManagedDatabases, adminURL, poolPrefix, testPrefix)
 
-		leases := make([]func() error, 0, poolBatchSize+1)
+		leases := make([]*databaseLease, 0, poolBatchSize+1)
 		databases := make([]string, 0, poolBatchSize+1)
 		for i := 0; i < poolBatchSize+1; i++ {
-			dsn, cleanup, err := pool.acquire(ctx, "Migration Runner", fmt.Sprintf("lease_%d", i))
+			dsn, lease, err := pool.acquire(ctx, "Migration Runner", fmt.Sprintf("lease_%d", i))
 			Expect(err).NotTo(HaveOccurred())
-			leases = append(leases, cleanup)
+			leases = append(leases, lease)
 			databases = append(databases, databaseFromDSN(dsn))
 
 			if i == 0 {
@@ -63,8 +64,8 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 		Expect(databases).To(HaveLen(poolBatchSize + 1))
 		Expect(uniqueStrings(databases)).To(HaveLen(poolBatchSize + 1))
 
-		for _, cleanup := range leases {
-			Expect(cleanup()).To(Succeed())
+		for _, lease := range leases {
+			Expect(lease.release()).To(Succeed())
 		}
 		Expect(databaseCount(ctx, adminURL, testPrefix)).To(BeZero())
 	})
@@ -84,31 +85,31 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(dropManagedDatabases, adminURL, poolPrefix, testPrefix)
 
-		type lease struct {
-			dsn     string
-			cleanup func() error
+		type checkout struct {
+			dsn   string
+			lease *databaseLease
 		}
-		leases := make([]lease, poolBatchSize*2)
+		checkouts := make([]checkout, poolBatchSize*2)
 		group, groupContext := errgroup.WithContext(ctx)
-		for i := range leases {
+		for i := range checkouts {
 			group.Go(func() error {
-				dsn, cleanup, err := pool.acquire(
+				dsn, lease, err := pool.acquire(
 					groupContext,
 					"Concurrent Runner",
 					fmt.Sprintf("lease_%d", i),
 				)
-				leases[i] = lease{dsn: dsn, cleanup: cleanup}
+				checkouts[i] = checkout{dsn: dsn, lease: lease}
 				return err
 			})
 		}
 		Expect(group.Wait()).To(Succeed())
 
-		databases := make([]string, 0, len(leases))
-		for _, lease := range leases {
-			databases = append(databases, databaseFromDSN(lease.dsn))
-			Expect(lease.cleanup()).To(Succeed())
+		databases := make([]string, 0, len(checkouts))
+		for _, checkout := range checkouts {
+			databases = append(databases, databaseFromDSN(checkout.dsn))
+			Expect(checkout.lease.release()).To(Succeed())
 		}
-		Expect(uniqueStrings(databases)).To(HaveLen(len(leases)))
+		Expect(uniqueStrings(databases)).To(HaveLen(len(checkouts)))
 		Expect(databaseCount(ctx, adminURL, testPrefix)).To(BeZero())
 	})
 
@@ -130,21 +131,111 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(dropManagedDatabases, adminURL, poolPrefix, testPrefix)
 
-		activeDSN, activeCleanup, err := pool.acquire(ctx, "active", "lease_active")
+		activeDSN, activeLease, err := pool.acquire(ctx, "active", "lease_active")
 		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(activeCleanup()).To(Succeed()) })
+		DeferCleanup(func() { Expect(activeLease.release()).To(Succeed()) })
 		activeDatabase := databaseFromDSN(activeDSN)
 
 		abandonedDatabase := managedDatabaseName(testPrefix, old, "lease_abandoned", "abandoned")
 		Expect(createDatabase(ctx, adminURL, abandonedDatabase)).To(Succeed())
 
 		clock = now
-		_, triggerCleanup, err := pool.acquire(ctx, "trigger", "lease_trigger")
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(triggerCleanup()).To(Succeed()) })
+		Expect(pool.sweep(ctx)).To(Succeed())
 
 		Expect(databaseExists(ctx, adminURL, activeDatabase)).To(BeTrue())
 		Expect(databaseExists(ctx, adminURL, abandonedDatabase)).To(BeFalse())
+	})
+
+	It("sweeps an unlocked test database once the grace period passes, without waiting for retention", func(ctx SpecContext) {
+		namespace := fmt.Sprintf("cdb_%x_", time.Now().UnixNano())
+		poolPrefix := namespace + "pool_"
+		testPrefix := namespace + "test_"
+		now := time.Now().UTC().Truncate(time.Second)
+		pool, err := newEphemeralPool(ephemeralPoolConfig{
+			AdminURL:   adminURL,
+			PoolPrefix: poolPrefix,
+			TestPrefix: testPrefix,
+			BatchSize:  poolBatchSize,
+			MaxAge:     staleDatabaseAge,
+			Now:        func() time.Time { return now },
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(dropManagedDatabases, adminURL, poolPrefix, testPrefix)
+
+		abandoned := managedDatabaseName(testPrefix, now.Add(-abandonedDatabaseGrace-time.Minute), "lease_abandoned", "abandoned")
+		withinGrace := managedDatabaseName(testPrefix, now.Add(-time.Minute), "lease_recent", "recent")
+		Expect(createDatabase(ctx, adminURL, abandoned)).To(Succeed())
+		Expect(createDatabase(ctx, adminURL, withinGrace)).To(Succeed())
+
+		Expect(pool.sweep(ctx)).To(Succeed())
+
+		Expect(databaseExists(ctx, adminURL, abandoned)).To(BeFalse())
+		Expect(databaseExists(ctx, adminURL, withinGrace)).To(BeTrue())
+	})
+
+	It("removes expired free pool databases only while no checkout holds the pool", func(ctx SpecContext) {
+		namespace := fmt.Sprintf("cdb_%x_", time.Now().UnixNano())
+		poolPrefix := namespace + "pool_"
+		testPrefix := namespace + "test_"
+		now := time.Now().UTC().Truncate(time.Second)
+		pool, err := newEphemeralPool(ephemeralPoolConfig{
+			AdminURL:   adminURL,
+			PoolPrefix: poolPrefix,
+			TestPrefix: testPrefix,
+			BatchSize:  poolBatchSize,
+			MaxAge:     staleDatabaseAge,
+			Now:        func() time.Time { return now },
+		})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(dropManagedDatabases, adminURL, poolPrefix, testPrefix)
+
+		expired := managedDatabaseName(poolPrefix, now.Add(-staleDatabaseAge-time.Hour), "free_expired", "")
+		fresh := managedDatabaseName(poolPrefix, now.Add(-time.Hour), "free_fresh", "")
+		Expect(createDatabase(ctx, adminURL, expired)).To(Succeed())
+		Expect(createDatabase(ctx, adminURL, fresh)).To(Succeed())
+
+		checkout, err := openPoolSession(ctx, adminURL)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(checkout.close()).To(Succeed()) })
+		Expect(checkout.lock(ctx, pool.globalLock())).To(Succeed())
+		Expect(pool.sweep(ctx)).To(Succeed())
+		Expect(databaseExists(ctx, adminURL, expired)).To(BeTrue())
+
+		Expect(checkout.unlock(ctx, pool.globalLock())).To(Succeed())
+		Expect(pool.sweep(ctx)).To(Succeed())
+		Expect(databaseExists(ctx, adminURL, expired)).To(BeFalse())
+		Expect(databaseExists(ctx, adminURL, fresh)).To(BeTrue())
+	})
+
+	It("completes a background drop after the releasing process exits", func(ctx SpecContext) {
+		command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestReleaseInBackgroundHelper$")
+		command.Env = append(os.Environ(), releaseHelperAdminURLEnv+"="+adminURL)
+		output, err := command.Output()
+		Expect(err).NotTo(HaveOccurred())
+		database := strings.TrimSpace(string(output))
+		Expect(database).To(HavePrefix(testDatabasePrefix))
+		DeferCleanup(dropManagedDatabases, adminURL, database, database)
+
+		Eventually(func() bool { return databaseExists(ctx, adminURL, database) }).
+			WithTimeout(10 * time.Second).
+			Should(BeFalse())
+	})
+
+	It("leases a managed database on a configured server and drops it on cleanup", func(ctx SpecContext) {
+		dsn, lease, err := createConfiguredScratch(ctx, adminURL, Options{Name: "Configured Runner"}, uniqueSuffix())
+		Expect(err).NotTo(HaveOccurred())
+		database := databaseFromDSN(dsn)
+		DeferCleanup(dropManagedDatabases, adminURL, database, database)
+
+		Expect(database).To(HavePrefix(testDatabasePrefix))
+		Expect(database).To(ContainSubstring("configured_runner"))
+		probe, err := openPoolSession(ctx, adminURL)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(probe.close()).To(Succeed()) })
+		Expect(probe.tryLock(ctx, database)).To(BeFalse(), "a live lease must hold its lock")
+
+		Expect(lease.release()).To(Succeed())
+		Expect(databaseExists(ctx, adminURL, database)).To(BeFalse())
 	})
 })
 

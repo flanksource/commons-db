@@ -87,22 +87,6 @@ var _ = Describe("ephemeral database configuration", func() {
 		Entry("missing timestamp", poolDatabasePrefix+"not-a-time_"+testUnique),
 	)
 
-	It("marks only databases older than the 24-hour retention as stale", func() {
-		name := managedDatabaseName(testDatabasePrefix, created, testUnique, testName)
-
-		stale, err := managedDatabaseStale(name, created.Add(staleDatabaseAge), staleDatabaseAge)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(stale).To(BeFalse())
-
-		stale, err = managedDatabaseStale(
-			name,
-			created.Add(staleDatabaseAge+time.Second),
-			staleDatabaseAge,
-		)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(stale).To(BeTrue())
-	})
-
 	It("uses batches of exactly five databases", func() {
 		Expect(poolBatchSize).To(Equal(5))
 	})

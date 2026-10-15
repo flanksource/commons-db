@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/lib/pq"
@@ -71,11 +72,18 @@ func databaseByName(
 	return &database, nil
 }
 
-func (m templateManager) cleanupStaleTemplates(
+// sweepStaleTemplates drops templates other than currentName that are older
+// than the retention window and not locked by a provisioning caller.
+func sweepStaleTemplates(
 	ctx context.Context,
-	session *poolSession,
-	currentName string,
+	adminURL, currentName string,
+	now time.Time,
 ) error {
+	session, err := openPoolSession(ctx, adminURL)
+	if err != nil {
+		return err
+	}
+	defer session.close() //nolint:errcheck
 	databases, err := listTemplateDatabases(ctx, session)
 	if err != nil {
 		return err
@@ -98,11 +106,11 @@ func (m templateManager) cleanupStaleTemplates(
 			templateDatabasePrefix,
 			templateDatabasePrefix,
 		)
-		if err != nil || created.After(m.now) {
+		if err != nil || created.After(now) {
 			logger.Warnf("dbtest: skipping database template %q with invalid timestamp", database.name)
 			continue
 		}
-		if m.now.Sub(created) <= staleDatabaseAge {
+		if now.Sub(created) <= staleDatabaseAge {
 			continue
 		}
 		lockName := templateLockNamespace + key
@@ -114,7 +122,7 @@ func (m templateManager) cleanupStaleTemplates(
 		if !locked {
 			continue
 		}
-		err = m.dropStaleTemplate(ctx, session, database)
+		err = dropStaleTemplate(ctx, session, database)
 		err = errors.Join(err, session.unlock(ctx, lockName))
 		if err != nil {
 			failures = errors.Join(failures, err)
@@ -123,7 +131,7 @@ func (m templateManager) cleanupStaleTemplates(
 	return failures
 }
 
-func (m templateManager) dropStaleTemplate(
+func dropStaleTemplate(
 	ctx context.Context,
 	session *poolSession,
 	expected templateDatabase,
