@@ -1,6 +1,7 @@
 package httpproxy
 
 import (
+	"errors"
 	"io"
 	"sync"
 	"unicode/utf8"
@@ -16,12 +17,14 @@ const streamOpenComment = "event stream still open when recorded"
 // or with whatever has passed when the capture ends first. Every byte counts
 // toward the content's size, past the bodies cap that bounds its text.
 type streamCapture struct {
-	mu     sync.Mutex
-	limit  int
-	kept   []byte
-	total  int64
+	mu    sync.Mutex
+	limit int
+	kept  []byte
+	total int64
+	// closed is set once the server's side ended; a body closed before that
+	// was cut, by its client going away or the capture ending.
 	closed bool
-	// ended is called once, when the stream ends.
+	// ended is called once, when the stream ends or is cut.
 	ended func(*streamCapture)
 	once  sync.Once
 }
@@ -35,9 +38,9 @@ func (c *streamCapture) record(chunk []byte) {
 	}
 }
 
-func (c *streamCapture) finish() {
+func (c *streamCapture) finish(serverEnded bool) {
 	c.mu.Lock()
-	c.closed = true
+	c.closed = c.closed || serverEnded
 	c.mu.Unlock()
 	c.once.Do(func() { c.ended(c) })
 }
@@ -82,12 +85,12 @@ func (t teeStream) Read(p []byte) (int, error) {
 	n, err := t.ReadCloser.Read(p)
 	t.capture.record(p[:n])
 	if err != nil {
-		t.capture.finish()
+		t.capture.finish(errors.Is(err, io.EOF))
 	}
 	return n, err
 }
 
 func (t teeStream) Close() error {
-	t.capture.finish()
+	t.capture.finish(false)
 	return t.ReadCloser.Close()
 }

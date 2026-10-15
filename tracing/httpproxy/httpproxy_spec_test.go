@@ -281,6 +281,8 @@ var _ = Describe("http_proxy trace kind", func() {
 
 	Describe("in mitm mode", func() {
 		var upstream *httptest.Server
+		// trusted are mitm params trusting the upstream's own certificate.
+		var trusted string
 
 		BeforeEach(func() {
 			upstream = httptest.NewTLSServer(nethttp.HandlerFunc(func(w nethttp.ResponseWriter, r *nethttp.Request) {
@@ -288,10 +290,50 @@ var _ = Describe("http_proxy trace kind", func() {
 				_, _ = io.WriteString(w, `{"path":"`+r.URL.Path+`"}`)
 			}))
 			DeferCleanup(upstream.Close)
+			upstreamCA := filepath.Join(GinkgoT().TempDir(), "upstream.pem")
+			Expect(os.WriteFile(upstreamCA, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: upstream.Certificate().Raw}), 0o600)).To(Succeed())
+			encoded, err := json.Marshal(map[string]string{"mode": "mitm", "upstreamCA": upstreamCA})
+			Expect(err).ToNot(HaveOccurred())
+			trusted = string(encoded)
+		})
+
+		trustingCA := func(managed *query.ManagedSession) *tls.Config {
+			pemBytes, err := os.ReadFile(managed.Status().Exports["SSL_CERT_FILE"])
+			Expect(err).ToNot(HaveOccurred())
+			pool := x509.NewCertPool()
+			Expect(pool.AppendCertsFromPEM(pemBytes)).To(BeTrue())
+			return &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12}
+		}
+
+		It("verifies the upstream: one it does not trust is recorded as failed and answered 502, never relayed", func() {
+			managed := start(`{"mode": "mitm"}`)
+			proxied, _ := client(managed, trustingCA(managed))
+			response, err := proxied.Get(upstream.URL + "/v1/secrets")
+			Expect(err).ToNot(HaveOccurred())
+			Expect(response.StatusCode).To(Equal(nethttp.StatusBadGateway))
+			Expect(read(response, nil)).ToNot(ContainSubstring(`"path"`))
+
+			recorded := stop(managed)
+			Expect(recorded).To(HaveLen(1))
+			Expect(recorded[0]).To(MatchFields(IgnoreExtras, Fields{
+				"Method": Equal(nethttp.MethodGet), "URL": ContainSubstring("/v1/secrets"),
+				"Status": Equal(0), "Error": ContainSubstring("certificate"),
+			}))
+		})
+
+		It("refuses to start with an upstreamCA it cannot read a certificate from", func() {
+			notPEM := filepath.Join(GinkgoT().TempDir(), "not.pem")
+			Expect(os.WriteFile(notPEM, []byte("not a certificate"), 0o600)).To(Succeed())
+			for path, problem := range map[string]string{notPEM: "no PEM certificate", notPEM + ".missing": "no such file"} {
+				_, err := env.Runtime.Start(dbcontext.New(), tracing.StartRequest{
+					Kind: httpproxy.Kind, Params: json.RawMessage(`{"mode": "mitm", "upstreamCA": "` + path + `"}`),
+				})
+				Expect(err).To(MatchError(ContainSubstring(problem)), path)
+			}
 		})
 
 		It("decrypts an HTTPS exchange for a client trusting the exported CA, which only the capture's life outlives", func() {
-			managed := start(`{"mode": "mitm"}`)
+			managed := start(trusted)
 			exports := managed.Status().Exports
 			caPath := exports["SSL_CERT_FILE"]
 			for _, name := range trustEnv {
@@ -396,15 +438,17 @@ var _ = Describe("http_proxy trace kind", func() {
 		plugin := httpproxy.NewKind()
 		Expect(plugin.ValidateParams(json.RawMessage(`{"bodies": "4MiB", "mode": "mitm"}`))).To(Succeed())
 		for params, problem := range map[string]string{
-			`{"mode": "transparent"}`: "mode",
-			`{"mode": ""}`:            "mode",
-			`{"bodies": "lots"}`:      "bodies",
-			`{"bodies": "-1"}`:        "bodies",
-			`{"bodies": "5MiB"}`:      "bodies",
-			`{"hosts": ["["]}`:        "hosts",
-			`{"paths": ["/api/["]}`:   "paths",
-			`{"redact": [" "]}`:       "redact",
-			`{"noProxy": [""]}`:       "noProxy",
+			`{"mode": "transparent"}`:             "mode",
+			`{"mode": ""}`:                        "mode",
+			`{"bodies": "lots"}`:                  "bodies",
+			`{"bodies": "-1"}`:                    "bodies",
+			`{"bodies": "5MiB"}`:                  "bodies",
+			`{"hosts": ["["]}`:                    "hosts",
+			`{"paths": ["/api/["]}`:               "paths",
+			`{"redact": [" "]}`:                   "redact",
+			`{"noProxy": [""]}`:                   "noProxy",
+			`{"upstreamCA": " ", "mode": "mitm"}`: "upstreamCA",
+			`{"upstreamCA": "ca.pem"}`:            "upstreamCA",
 		} {
 			Expect(plugin.ValidateParams(json.RawMessage(params))).To(MatchError(ContainSubstring(problem)), params)
 		}
