@@ -144,6 +144,14 @@ var _ = Describe("a trace store served through query", func() {
 		Expect(column(records, "data")).To(Equal([]any{"two\r\n", "three\r\n"}), "the export holds the columns the profile hides")
 	})
 
+	It("reads a window whose records are older than a day, with no time range named", func() {
+		const oldStream = "cast-old"
+		_, err := recordstore.AppendTyped(context.Background(), store.runtime.Results.Backend, oldStream, terminal.Kind, castEvents(time.Now().UTC().Add(-72*time.Hour)))
+		Expect(err).ToNot(HaveOccurred())
+		rows := store.rows(terminal.Kind, "stream="+oldStream+"&toSeq=3&limit=100")
+		Expect(column(rows, "seq")).To(ConsistOf(float64(1), float64(2), float64(3)), "the window is not clipped to a default time range")
+	})
+
 	It("downloads a window in the kind's own format", func() {
 		status, body, header := store.do(http.MethodGet, "/api/v1/traces/terminal/export?format=cast&stream="+castStream+"&afterSeq=1")
 		Expect(status).To(Equal(http.StatusOK), body)
