@@ -16,10 +16,10 @@ import (
 // {prefix}/profile/{name}.
 const profileFamilyName = "profile"
 
-// profileSurfaceKey is the identity a profile carries everywhere outside the
+// SurfaceKey is the identity a profile carries everywhere outside the
 // store — the OpenAPI path's last segment, the x-clicky surface key, and the
 // frontend route. findProfile maps it back to the stored name.
-func profileSurfaceKey(name string) string { return "profile-" + slugify(name) }
+func SurfaceKey(name string) string { return "profile-" + slugify(name) }
 
 // RegisterFamily routes every profile — including one created a moment ago — at
 // {prefix}/profile/{name}.
@@ -91,7 +91,7 @@ func (s *Service) listSurfaces(ctx context.Context) ([]entity.DynamicEntitySpec,
 	}
 	claimed := make(map[string][]string, len(stored))
 	for _, profile := range stored {
-		key := profileSurfaceKey(profile.Name)
+		key := SurfaceKey(profile.Name)
 		claimed[key] = append(claimed[key], profile.Name)
 		if len(claimed[key]) > 1 {
 			return nil, surfaceConflict(key, claimed[key])
@@ -132,7 +132,7 @@ func (s *Service) profileSurface(p query.Profile) (entity.DynamicEntitySpec, err
 	}
 	name := p.Name
 	return entity.DynamicEntitySpec{
-		Name:    profileSurfaceKey(p.Name),
+		Name:    SurfaceKey(p.Name),
 		Parent:  profileSurfaceParent,
 		Icon:    profileIcon(p),
 		Path:    profileSurfacePath(p.Name),

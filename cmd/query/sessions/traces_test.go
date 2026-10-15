@@ -132,7 +132,7 @@ func newTraceHarness(extra ...func(*tracing.Kinds)) *traceHarness {
 func (h *traceHarness) authorize(_ *http.Request, profile string, action Action) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if refused, ok := h.refused[profile]; ok && (refused == ActionRead || action == ActionControl) {
+	if refused, ok := h.refused[profile]; ok && (refused == ActionRead || action == refused) {
 		return fmt.Errorf("profile %q is not %s-able by this caller", profile, action)
 	}
 	return nil
@@ -277,6 +277,44 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 			ginkgo.Entry("a seq that is not one", func(s string) string { return "/api/v1/traces/pings/export?format=ndjson&toSeq=x&stream=" + s }, "", http.StatusBadRequest),
 			ginkgo.Entry("a kind the caller may not read", func(s string) string { return "/api/v1/traces/pings/export?format=ndjson&stream=" + s }, "traces/pings", http.StatusForbidden),
 		)
+	})
+
+	ginkgo.Context("checkpointing a running capture", func() {
+		var h *traceHarness
+		var info query.SessionInfo
+
+		ginkgo.BeforeEach(func() {
+			h = newTraceHarness()
+			response := h.do(http.MethodPost, "/api/v1/traces/pings/sessions", `{"params": {"count": 2}}`)
+			Expect(response.Code).To(Equal(http.StatusCreated), response.Body.String())
+			Expect(json.Unmarshal(response.Body.Bytes(), &info)).To(Succeed())
+		})
+
+		ginkgo.It("commits what the capture emitted before it answers with the session", func() {
+			response := h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "")
+			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+			var checkpointed query.SessionInfo
+			Expect(json.Unmarshal(response.Body.Bytes(), &checkpointed)).To(Succeed())
+			Expect(checkpointed.ID).To(Equal(info.ID))
+			Eventually(func() int64 {
+				Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "").Code).To(Equal(http.StatusOK))
+				session, _ := h.registry.Get(info.ID)
+				return session.Snapshot().EventCount
+			}).WithTimeout(5 * time.Second).Should(Equal(int64(2)))
+		})
+
+		ginkgo.It("refuses a checkpoint the caller may not take, though it may stop the capture", func() {
+			h.refused["traces/pings"] = ActionCheckpoint
+			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "").Code).To(Equal(http.StatusForbidden))
+			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/stop", "").Code).To(Equal(http.StatusOK))
+		})
+
+		ginkgo.It("answers a checkpoint of an ended capture as a conflict", func() {
+			session, _ := h.registry.Get(info.ID)
+			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/stop", "").Code).To(Equal(http.StatusOK))
+			Eventually(session.Done()).WithTimeout(10 * time.Second).Should(BeClosed())
+			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "").Code).To(Equal(http.StatusConflict))
+		})
 	})
 
 	ginkgo.It("refuses a start the caller may not control", func() {
