@@ -1,3 +1,4 @@
+import { mountPath } from "./mount";
 import { fetchJSON } from "@flanksource/clicky-ui/profiles";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -21,7 +22,7 @@ export function ConnectionInfoHeader({
     queryKey: ["connection-info", id],
     queryFn: () =>
       fetchJSON<ConnectionInfo>(
-        `/api/v1/connection/${encodeURIComponent(id)}/info`,
+        `${mountPath}/api/v1/connection/${encodeURIComponent(id)}/info`,
       ),
     retry: 0,
     staleTime: 30_000,

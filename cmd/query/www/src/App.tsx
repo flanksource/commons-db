@@ -5,11 +5,12 @@ import {
   ThemeProvider,
   createUnitFormExtensions,
   createOperationsApiClient,
-  useBrowserRouter,
   useRouter,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { MonacoProvider } from "@flanksource/clicky-ui/monaco";
+import { mountPath } from "./mount";
+import { useMountedBrowserRouter } from "./mountedRouter";
 import {
   DebugConsoleButton,
   DebugConsoleDock,
@@ -101,7 +102,7 @@ configureProfileConnectionForm({
 // wrapper is applied here rather than to `window.fetch` so it captures this
 // app's API traffic and not Vite's HMR socket or the chat stream.
 const baseClient = createOperationsApiClient({
-  baseUrl: "",
+  baseUrl: mountPath,
   openApiPath: "/api/openapi.json",
   fetch: withDebugFetch(),
 });
@@ -198,7 +199,7 @@ function Explorer() {
 }
 
 export function App() {
-  const router = useBrowserRouter();
+  const router = useMountedBrowserRouter();
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>
