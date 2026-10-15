@@ -96,6 +96,12 @@
       "x-clicky-component": "k8s-namespace-selector",
       "x-clicky-order": 1
     },
+    "password": {
+      "format": "password",
+      "title": "Personal Access Token",
+      "type": "string",
+      "x-clicky-order": 5
+    },
     "properties": {
       "additionalProperties": {
         "type": "string"
@@ -108,11 +114,18 @@
       "const": "azure_devops",
       "title": "Type",
       "type": "string"
+    },
+    "url": {
+      "title": "Organization URL",
+      "type": "string",
+      "x-clicky-order": 2
     }
   },
   "required": [
     "name",
-    "type"
+    "type",
+    "url",
+    "password"
   ],
   "title": "Connection: azure_devops",
   "type": "object"
