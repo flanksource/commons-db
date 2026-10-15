@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"iter"
 	"sync"
 	"time"
 
@@ -252,6 +253,23 @@ func (t tree) Checkpoint(ctx dbcontext.Context, _ Params, records tracing.Emitte
 		root.Stack = stack
 	}
 	return records.Emit(ctx, *root)
+}
+
+// Summarize is a window of the tree as the processes in it still live and
+// those that exited, and the highest CPU and RSS any of them reached.
+func (tree) Summarize(rows iter.Seq[Node]) (map[string]any, error) {
+	live, exited := 0, 0
+	var peakCPU float64
+	var peakRSS uint64
+	for node := range rows {
+		if node.ExitedAt == nil {
+			live++
+		} else {
+			exited++
+		}
+		peakCPU, peakRSS = max(peakCPU, node.PeakCPUPercent), max(peakRSS, node.PeakRSSBytes)
+	}
+	return map[string]any{"live": live, "exited": exited, "peak_cpu_percent": peakCPU, "peak_rss_bytes": peakRSS}, nil
 }
 
 // NewTreeKind is the process_tree kind over sampler: each process stored

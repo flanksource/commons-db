@@ -4,6 +4,7 @@
 package http_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -13,9 +14,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
+
+	"github.com/flanksource/commons/har"
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/query"
@@ -34,6 +39,10 @@ var _ = Describe("http trace kind", func() {
 	BeforeEach(func() {
 		server = httptest.NewServer(netHTTP.HandlerFunc(func(w netHTTP.ResponseWriter, r *netHTTP.Request) {
 			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/missing" {
+				w.WriteHeader(netHTTP.StatusNotFound)
+				return
+			}
 			if r.URL.Path == "/large" {
 				_, _ = w.Write([]byte(`"` + strings.Repeat("x", 2<<20) + `"`))
 				return
@@ -146,6 +155,88 @@ var _ = Describe("http trace kind", func() {
 		info := tracingtest.Ended(session)
 		send("prometheus", "GET", "/api", "")
 		Expect(env.Rows(info)).To(BeEmpty())
+	})
+
+	window := func(info query.SessionInfo) tracing.TraceRef {
+		return tracing.TraceRef{Kind: "http", Stream: info.Events.Stream}
+	}
+
+	refused := func() {
+		client := &netHTTP.Client{Transport: connection.ApplyHTTPObservability(context.Background(), "http", nil, nil)}
+		_, err := client.Get("http://127.0.0.1:1/refused")
+		Expect(err).To(HaveOccurred())
+	}
+
+	It("exports a window as a HAR 1.2 file holding each exchange as it was made", func() {
+		info, _ := capture(`{"features": ["http"]}`, func() {
+			send("http", "POST", "/api", `{"q": 1}`)
+			send("http", "GET", "/missing", "")
+		})
+		var out bytes.Buffer
+		Expect(env.Runtime.Export(context.Background(), window(info), "har", &out)).To(Succeed())
+		var file har.File
+		Expect(json.Unmarshal(out.Bytes(), &file)).To(Succeed())
+		Expect(file.Log.Version).To(Equal("1.2"))
+		Expect(file.Log.Entries).To(HaveLen(2))
+		posted := file.Log.Entries[0]
+		Expect(posted.Request.Method).To(Equal("POST"))
+		Expect(posted.Request.URL).To(Equal(server.URL + "/api"))
+		Expect(posted.Request.PostData.Text).To(MatchJSON(`{"q": 1}`))
+		Expect(posted.Response.Content.Text).To(MatchJSON(`{"ok": true, "items": [1, 2]}`))
+		Expect(time.Parse(time.RFC3339, posted.StartedDateTime)).To(BeTemporally("~", time.Now(), time.Minute))
+		Expect(file.Log.Entries[1].Response.Status).To(Equal(netHTTP.StatusNotFound))
+	})
+
+	It("exports what an exchange observed beyond har.Entry: timings, server IP, a tunnel's bytes, encoding and comment", func() {
+		started := time.Date(2026, 8, 2, 10, 30, 0, 500*int(time.Millisecond), time.UTC)
+		exchange := http.Exchange{
+			StartedAt: started, Method: netHTTP.MethodConnect, URL: "https://api.example.com:443", Status: netHTTP.StatusOK,
+			Request:    har.Request{Method: netHTTP.MethodConnect, URL: "https://api.example.com:443"},
+			Response:   har.Response{Status: netHTTP.StatusOK},
+			DurationMs: 250, Timings: har.Timings{Send: -1, Wait: -1, Receive: 250}, ServerIPAddress: "192.0.2.10",
+			Tunnelled: true, BytesIn: 4096, BytesOut: 512, Encoding: "base64", Comment: "event stream still open when recorded",
+		}
+		encoded, err := json.Marshal(http.ToEntry(exchange))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(encoded).To(MatchJSON(`{
+			"startedDateTime": "2026-08-02T10:30:00.5Z", "time": 250,
+			"request": {"method": "CONNECT", "url": "https://api.example.com:443", "httpVersion": "", "cookies": null,
+				"headers": null, "queryString": null, "headersSize": 0, "bodySize": 0},
+			"response": {"status": 200, "statusText": "", "httpVersion": "", "cookies": null, "headers": null,
+				"content": {"size": 0}, "redirectURL": "", "headersSize": 0, "bodySize": 0},
+			"cache": {}, "timings": {"send": -1, "wait": -1, "receive": 250},
+			"serverIPAddress": "192.0.2.10", "comment": "event stream still open when recorded",
+			"_tunnelled": true, "_bytesIn": 4096, "_bytesOut": 512, "_encoding": "base64"
+		}`))
+	})
+
+	It("summarizes a window as the variables a fixture asserts on", func() {
+		info, _ := capture(`{"features": ["http"]}`, func() {
+			send("http", "POST", "/api", `{"q": 1}`)
+			send("http", "GET", "/missing", "")
+			refused()
+		})
+		summary, err := env.Runtime.Summarize(context.Background(), window(info))
+		Expect(err).ToNot(HaveOccurred())
+		host := strings.Split(strings.TrimPrefix(server.URL, "http://"), ":")[0]
+		Expect(summary).To(MatchAllKeys(Keys{
+			"count": Equal(3), "entries": Equal(3), "errors": Equal(2),
+			"hosts":    Equal([]string{host}),
+			"methods":  Equal(map[string]int{"POST": 1, "GET": 2}),
+			"statuses": Equal(map[string]int{"200": 1, "404": 1, "0": 1}),
+			"requests": ConsistOf(
+				MatchAllKeys(Keys{"method": Equal("POST"), "url": Equal(server.URL + "/api"), "host": Equal(host), "path": Equal("/api"),
+					"status": Equal(200), "duration_ms": BeNumerically(">=", 0), "error": BeEmpty(),
+					"mime": Equal("application/json"), "tunnelled": BeFalse(),
+					"request_headers": Not(BeNil()), "response_headers": HaveKeyWithValue("Content-Type", "application/json"),
+					"query": BeEmpty(), "body": MatchJSON(`{"q": 1}`),
+					"response_size": BeNumerically(">", 0), "response_body": MatchJSON(`{"ok": true, "items": [1, 2]}`),
+					"response_json": Equal(map[string]any{"ok": true, "items": []any{float64(1), float64(2)}}),
+				}),
+				HaveKeyWithValue("status", 404),
+				HaveKeyWithValue("error", Not(BeEmpty())),
+			),
+		}))
 	})
 
 	It("refuses params naming no feature, or a dedup window that is not a duration", func() {

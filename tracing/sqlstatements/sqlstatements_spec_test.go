@@ -12,6 +12,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
 	"gorm.io/gorm"
 
 	"github.com/flanksource/commons-db/db"
@@ -189,6 +190,23 @@ var _ = Describe("sql trace kind", func() {
 				HaveKeyWithValue("repeatKey", sqlstatements.RepeatKey(rows[0]["sql"].(string))),
 				HaveKeyWithValue("runs", BeNumerically("==", 2)),
 			))
+		})
+
+		It("summarizes a window of its statements as the variables a fixture asserts on", func() {
+			summary, err := env.Runtime.Summarize(context.Background(), tracing.TraceRef{Kind: sqlstatements.RowKind, Stream: info.Events.Stream, AfterSeq: 1})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(summary).To(MatchAllKeys(Keys{
+				"count": Equal(3), "statements": Equal(3), "errors": Equal(1),
+				"duration_ms": BeNumerically(">=", 0),
+				"by_op":       Equal(map[string]int{"SELECT": 3}),
+				"tables":      ContainElements("events", "missing", "notes"),
+				"queries": HaveExactElements(
+					MatchAllKeys(Keys{"sql": ContainSubstring(second), "op": Equal("SELECT"), "tables": ContainElement("events"),
+						"rows": BeEquivalentTo(1), "duration_ms": BeNumerically(">=", 0), "error": BeEmpty()}),
+					HaveKeyWithValue("tables", ContainElement("notes")),
+					HaveKeyWithValue("error", ContainSubstring("no such table")),
+				),
+			}))
 		})
 
 		It("reports the summary of the statements it stored as the session ends", func() {
