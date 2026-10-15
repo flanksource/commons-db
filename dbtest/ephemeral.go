@@ -91,20 +91,6 @@ func managedDatabaseCreatedWithPrefixes(name, poolPrefix, testPrefix string) (ti
 	return time.Unix(seconds, 0).UTC(), nil
 }
 
-func managedDatabaseStale(name string, now time.Time, maxAge time.Duration) (bool, error) {
-	if maxAge <= 0 {
-		return false, errors.New("managed database retention must be positive")
-	}
-	created, err := managedDatabaseCreated(name)
-	if err != nil {
-		return false, err
-	}
-	if created.After(now) {
-		return false, fmt.Errorf("managed database name %q has a future timestamp", name)
-	}
-	return now.Sub(created) > maxAge, nil
-}
-
 func newEphemeralPool(config ephemeralPoolConfig) (*ephemeralPool, error) {
 	if config.AdminURL == "" {
 		return nil, errors.New("ephemeral pool admin URL is required")
@@ -148,19 +134,23 @@ func acquirePooledScratch(
 	ctx context.Context,
 	adminURL, name, unique string,
 	now time.Time,
-) (string, func() error, error) {
-	pool, err := newEphemeralPool(ephemeralPoolConfig{
+) (string, *databaseLease, error) {
+	pool, err := newEphemeralPool(defaultPoolConfig(adminURL, func() time.Time { return now }))
+	if err != nil {
+		return "", nil, err
+	}
+	return pool.acquire(ctx, name, unique)
+}
+
+func defaultPoolConfig(adminURL string, now func() time.Time) ephemeralPoolConfig {
+	return ephemeralPoolConfig{
 		AdminURL:   adminURL,
 		PoolPrefix: poolDatabasePrefix,
 		TestPrefix: testDatabasePrefix,
 		BatchSize:  poolBatchSize,
 		MaxAge:     staleDatabaseAge,
-		Now:        func() time.Time { return now },
-	})
-	if err != nil {
-		return "", nil, err
+		Now:        now,
 	}
-	return pool.acquire(ctx, name, unique)
 }
 
 func startSharedEmbedded(dataDir string) (string, error) {
