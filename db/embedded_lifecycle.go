@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	embeddedpostgres "github.com/fergusstrange/embedded-postgres"
@@ -187,7 +188,11 @@ func (r *embeddedRuntime) resolveLockedConfig() error {
 func (r *embeddedRuntime) reuseRunningServer(dsn string) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), embeddedProbeTimeout)
 	defer cancel()
-	if !portIsListening(ctx, r.port) {
+	listening, err := portIsListening(ctx, r.port)
+	if err != nil {
+		return false, err
+	}
+	if !listening {
 		return false, nil
 	}
 	if err := r.validateServer(dsn); err != nil {
@@ -324,14 +329,27 @@ func (r *embeddedRuntime) dsn() string {
 	)
 }
 
-func portIsListening(ctx context.Context, port uint32) bool {
+// loopbackAddress is the address the probe dials for port: an IP, never the name
+// "localhost", whose lookup can go through a DNS service (systemd-resolved, on hosts whose
+// nsswitch asks it before /etc/hosts) and outlast the probe on a loaded machine.
+func loopbackAddress(port uint32) string {
+	return net.JoinHostPort("127.0.0.1", strconv.FormatUint(uint64(port), 10))
+}
+
+// portIsListening reports whether a server accepts connections on the loopback port. Only
+// a refused connection means the port is free; any other failure means the probe can't
+// tell, which is an error rather than a reason to start a second server on the port.
+func portIsListening(ctx context.Context, port uint32) (bool, error) {
 	var dialer net.Dialer
-	conn, err := dialer.DialContext(ctx, "tcp", fmt.Sprintf("localhost:%d", port))
+	conn, err := dialer.DialContext(ctx, "tcp", loopbackAddress(port))
+	if errors.Is(err, syscall.ECONNREFUSED) {
+		return false, nil
+	}
 	if err != nil {
-		return false
+		return false, fmt.Errorf("can't tell whether port %d is in use: %w", port, err)
 	}
 	_ = conn.Close()
-	return true
+	return true, nil
 }
 
 func noOpEmbeddedStop() error {
