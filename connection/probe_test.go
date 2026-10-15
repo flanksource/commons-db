@@ -110,4 +110,10 @@ var _ = Describe("model connection probes", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.OK).To(BeTrue())
 	})
+
+	It("rejects an invalid S3 path-style setting", func(ctx SpecContext) {
+		_, err := connection.ProbeModel(ctx, models.Connection{Type: models.ConnectionTypeS3,
+			Properties: types.JSONStringMap{"usePathStyle": "sometimes"}})
+		Expect(err).To(MatchError(ContainSubstring("invalid S3 usePathStyle")))
+	})
 })
