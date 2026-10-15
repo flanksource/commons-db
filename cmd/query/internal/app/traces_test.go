@@ -5,6 +5,7 @@ package app
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -83,6 +84,20 @@ func TestTracePluginsServeTheirResultProfilesOnceOpen(t *testing.T) {
 	require.NotNil(t, connection)
 }
 
+func TestServeOpensTheTraceStoreTheHostNames(t *testing.T) {
+	require.Equal(t, filepath.Join("/etc/query", "traces"), tracesDir("/etc/query", ""), "under the config dir by default")
+	require.Equal(t, "/work/.gavel/traces/run-1", tracesDir("/etc/query", "/work/.gavel/traces/run-1"))
+
+	var plugins tracePlugins
+	kinds := tracing.NewKinds()
+	require.NoError(t, kinds.RegisterKind("beats", tracing.NewHandler[beatParams, beat](beats{}, tracing.Capabilities{Live: true})))
+	dir := filepath.Join(t.TempDir(), "elsewhere")
+	_, closeTraces, err := plugins.open(dir, time.Hour, kinds)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeTraces()) })
+	require.DirExists(t, dir)
+}
+
 func TestServeServesTheTraceKinds(t *testing.T) {
 	kinds, err := traceKinds()
 	require.NoError(t, err)
@@ -92,5 +107,5 @@ func TestServeServesTheTraceKinds(t *testing.T) {
 	for _, info := range infos {
 		names = append(names, info.Name)
 	}
-	require.Equal(t, []string{"http", "opensearch", "process_samples", "process_tree", "sql_statements", "sql_xevent"}, names)
+	require.Equal(t, []string{"http", "http_proxy", "opensearch", "pg_proxy", "process_samples", "process_tree", "sql_statements", "sql_xevent", "terminal"}, names)
 }

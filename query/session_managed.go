@@ -18,6 +18,8 @@ type ManagedStatus struct {
 	Summary    any
 	// Metadata is recorded once, when the run is armed (see RunningUpdate).
 	Metadata []SessionMetadata
+	// Exports is recorded once, when the run is armed (see RunningUpdate).
+	Exports map[string]string
 }
 
 // ManagedFinish is the terminal state returned by ManagedRun.Stop or Detach.
@@ -152,7 +154,7 @@ func (r *SessionRegistry) manageTracked(ctx context.Context, session *Session, o
 	r.registerManaged(managed)
 	session.OnStop(managed.stopForSession)
 	status := run.Status()
-	if err := session.Running(RunningUpdate{Handle: status.Handle, Events: status.Events, Metadata: status.Metadata}); err != nil {
+	if err := session.Running(RunningUpdate{Handle: status.Handle, Events: status.Events, Metadata: status.Metadata, Exports: status.Exports}); err != nil {
 		_, stopErr := managed.Stop(context.Background())
 		r.forgetManaged(managed)
 		return nil, errors.Join(err, stopErr)

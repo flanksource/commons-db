@@ -18,10 +18,13 @@ import (
 	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/commons-db/tracing/http"
+	"github.com/flanksource/commons-db/tracing/httpproxy"
 	"github.com/flanksource/commons-db/tracing/opensearch"
+	"github.com/flanksource/commons-db/tracing/pgproxy"
 	"github.com/flanksource/commons-db/tracing/process"
 	"github.com/flanksource/commons-db/tracing/sqlserver/xevent"
 	"github.com/flanksource/commons-db/tracing/sqlstatements"
+	"github.com/flanksource/commons-db/tracing/terminal"
 )
 
 // tracesPrefix names the trace results store: its <prefix>/<kind> profiles and
@@ -39,6 +42,12 @@ func traceKinds() (*tracing.Kinds, error) {
 		"sql_xevent":          xevent.Kind(),
 		process.TreeKind:      process.NewTreeKind(sampler, process.TreeOptions{}),
 		process.SamplesKind:   process.NewSamplesKind(sampler),
+		httpproxy.Kind:        httpproxy.NewKind(),
+		pgproxy.Kind:          pgproxy.NewKind(),
+		// A terminal capture records only what a host feeds it, which serve
+		// never does; it is served so the streams of a host's store
+		// (--traces-dir) read and export.
+		terminal.Kind: terminal.NewKind(),
 	} {
 		if err := kinds.RegisterKind(name, plugin); err != nil {
 			return nil, err
@@ -55,11 +64,19 @@ type tracePlugins struct {
 	runtime *tracing.Runtime
 }
 
-// open opens the trace results store under configDir, declaring kinds' result
-// types, and returns the runtime that starts their captures with the close
-// that stops using the store.
-func (t *tracePlugins) open(configDir string, retention time.Duration, kinds *tracing.Kinds) (*tracing.Runtime, func() error, error) {
-	dir := filepath.Join(configDir, "traces")
+// tracesDir is the trace results store a server opens: the one the host names,
+// such as a gavel run's, or else the one under its config dir.
+func tracesDir(configDir, named string) string {
+	if named != "" {
+		return named
+	}
+	return filepath.Join(configDir, "traces")
+}
+
+// open opens the trace results store in dir, declaring kinds' result types,
+// and returns the runtime that starts their captures with the close that
+// stops using the store.
+func (t *tracePlugins) open(dir string, retention time.Duration, kinds *tracing.Kinds) (*tracing.Runtime, func() error, error) {
 	results, err := recordresults.Open(recordresults.OpenOptions{
 		Prefix: tracesPrefix, ConnectionName: tracesPrefix,
 		Settings: recordstore.Settings{Prefix: tracesPrefix, Backend: recordstore.BackendSQLite, Dir: dir, TTL: retention},

@@ -126,6 +126,7 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 //	POST {prefix}/connection/{id}/trace/sessions start a connection trace
 //	GET  {prefix}/traces/kinds                   the trace plugin kinds served
 //	POST {prefix}/traces/{kind}/sessions         start a trace plugin capture
+//	GET  {prefix}/traces/{kind}/export           download a window (?stream, ?afterSeq, ?toSeq, ?format)
 //	GET  {prefix}/sessions                       list (filters, window, sort, paging, ?__lookup=filters)
 //	GET  {prefix}/sessions/{id}                  info
 //	POST {prefix}/sessions/{id}/stop             stop a live session
@@ -186,6 +187,8 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.traceKinds(w, r)
 	case h.traces != nil && post && len(parts) == 3 && parts[0] == "traces" && parts[2] == "sessions":
 		h.startTrace(w, r, parts[1])
+	case h.traces != nil && get && len(parts) == 3 && parts[0] == "traces" && parts[2] == "export":
+		h.exportTrace(w, r, parts[1])
 	case parts[0] != "sessions":
 		h.next.ServeHTTP(w, r)
 	case get && len(parts) == 1:
