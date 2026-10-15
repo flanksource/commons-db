@@ -10,12 +10,10 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/cmd/query/traceserve"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query/profilestore"
-	"github.com/flanksource/commons-db/recordstore"
-	"github.com/flanksource/commons-db/recordstore/probe"
-	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/tracing"
 	"github.com/flanksource/commons-db/tracing/http"
 	"github.com/flanksource/commons-db/tracing/httpproxy"
@@ -26,10 +24,6 @@ import (
 	"github.com/flanksource/commons-db/tracing/sqlstatements"
 	"github.com/flanksource/commons-db/tracing/terminal"
 )
-
-// tracesPrefix names the trace results store: its <prefix>/<kind> profiles and
-// its index connection, connection://traces/traces.
-const tracesPrefix = "traces"
 
 // traceKinds is the trace plugin kinds a server serves.
 func traceKinds() (*tracing.Kinds, error) {
@@ -75,23 +69,17 @@ func tracesDir(configDir, named string) string {
 
 // open opens the trace results store in dir, declaring kinds' result types,
 // and returns the runtime that starts their captures with the close that
-// stops using the store.
+// stops using the store. It is the store a host such as gavel serves through
+// traceserve, opened the same way.
 func (t *tracePlugins) open(dir string, retention time.Duration, kinds *tracing.Kinds) (*tracing.Runtime, func() error, error) {
-	results, err := recordresults.Open(recordresults.OpenOptions{
-		Prefix: tracesPrefix, ConnectionName: tracesPrefix,
-		Settings: recordstore.Settings{Prefix: tracesPrefix, Backend: recordstore.BackendSQLite, Dir: dir, TTL: retention},
-		Register: kinds.RegisterResultTypes,
-	})
+	runtime, closeStore, err := traceserve.Open(traceserve.OpenOptions{Dir: dir, Kinds: kinds, Retention: retention})
 	if err != nil {
 		return nil, nil, err
-	}
-	runtime := &tracing.Runtime{
-		Kinds: kinds, Results: results, Probes: probe.NewManager(probe.ManagerOptions{LockDir: filepath.Join(dir, "locks")}),
 	}
 	t.mu.Lock()
 	t.runtime = runtime
 	t.mu.Unlock()
-	return runtime, results.Close, nil
+	return runtime, closeStore, nil
 }
 
 // current is the open runtime, or nil before serve opens one.

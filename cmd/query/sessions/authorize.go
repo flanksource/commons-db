@@ -18,12 +18,16 @@ const (
 	ActionRead Action = "read"
 	// ActionControl starts, stops, extends or restarts a session.
 	ActionControl Action = "control"
+	// ActionCheckpoint has a running trace capture take a reading now and
+	// commit what it emitted, without changing when or whether it ends; a
+	// host serving captures read-only may still allow it.
+	ActionCheckpoint Action = "checkpoint"
 )
 
 // AuthorizeFunc decides whether r may perform action on a session of profile.
 // A non-nil error refuses. On a route naming a session id, a caller who may not
 // read the session is answered 404 exactly as for a session that does not
-// exist; a caller who may read it but not control it gets 403 with the error.
+// exist; a caller who may read it but not control or checkpoint it gets 403 with the error.
 // Where the caller named the profile itself, a refusal is 403 with the error.
 type AuthorizeFunc func(r *http.Request, profile string, action Action) error
 
@@ -88,7 +92,7 @@ func (h *sessionHandler) authorizedSession(w http.ResponseWriter, r *http.Reques
 	}
 	if refusal := h.refusal(r, resolved.Info.Profile, action); refusal != nil {
 		status, body := http.StatusNotFound, errSessionNotFound(id).Error()
-		if action == ActionControl && h.authorize(r, resolved.Info.Profile, ActionRead) == nil {
+		if action != ActionRead && h.authorize(r, resolved.Info.Profile, ActionRead) == nil {
 			status, body = http.StatusForbidden, refusal.Error()
 		}
 		http.Error(w, body, status)

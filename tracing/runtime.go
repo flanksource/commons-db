@@ -26,6 +26,9 @@ const ProfilePrefix = "traces/"
 var (
 	ErrUnknownKind   = errors.New("unknown trace kind")
 	ErrInvalidParams = errors.New("invalid trace params")
+	// ErrNoCapture is a session id that names no capture the runtime is
+	// running: unknown, ended, or not a trace capture.
+	ErrNoCapture = errors.New("no running trace capture")
 )
 
 // Runtime starts captures of the kinds it serves.
@@ -114,7 +117,7 @@ func (r *Runtime) Start(ctx dbcontext.Context, request StartRequest) (*query.Man
 	if src == nil {
 		return managed, nil
 	}
-	r.sources.Store(session.ID(), src)
+	r.sources.Store(session.ID(), runningCapture{source: src, managed: managed})
 	go func() {
 		<-session.Done()
 		r.sources.Delete(session.ID())
@@ -122,18 +125,35 @@ func (r *Runtime) Start(ctx dbcontext.Context, request StartRequest) (*query.Man
 	return managed, nil
 }
 
+// runningCapture is a capture Start began and its session has not ended.
+type runningCapture struct {
+	source  *source
+	managed *query.ManagedSession
+}
+
 // Checkpoint marks a checkpoint in a running capture: a kind that is a
 // Checkpointer takes its reading, and the session is then sampled, so the
 // reading and anything the capture emitted before it are committed when
 // Checkpoint returns. The session's background polls are not checkpoints.
 func (r *Runtime) Checkpoint(ctx context.Context, managed *query.ManagedSession) error {
-	if src, ok := r.sources.Load(managed.Session().ID()); ok {
-		if err := src.(*source).takeCheckpoint(ctx); err != nil {
+	if running, ok := r.sources.Load(managed.Session().ID()); ok {
+		if err := running.(runningCapture).source.takeCheckpoint(ctx); err != nil {
 			return fmt.Errorf("checkpoint: %w", err)
 		}
 	}
 	_, err := managed.Sample(ctx)
 	return err
+}
+
+// CheckpointSession is Checkpoint for the running capture of session id, for
+// a host that holds only the id, such as a client of the sessions API. An id
+// that names no capture this runtime is running is ErrNoCapture.
+func (r *Runtime) CheckpointSession(ctx context.Context, id string) error {
+	running, ok := r.sources.Load(id)
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrNoCapture, id)
+	}
+	return r.Checkpoint(ctx, running.(runningCapture).managed)
 }
 
 // Restarter re-arms an ended trace session as a new capture of its kind with

@@ -98,9 +98,9 @@ func (s *OverlayStore) assertSurfaceFree(ctx context.Context, name string) error
 	if err != nil {
 		return fmt.Errorf("check profile %q against virtual profiles: %w", name, err)
 	}
-	key := profileSurfaceKey(name)
+	key := SurfaceKey(name)
 	for _, profile := range virtual {
-		if profileSurfaceKey(profile.Name) == key {
+		if SurfaceKey(profile.Name) == key {
 			return fmt.Errorf("profile %q would take the surface %q of virtual profile %q; choose another name", name, key, profile.Name)
 		}
 	}

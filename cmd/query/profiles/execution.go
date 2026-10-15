@@ -348,7 +348,7 @@ func StoredProfileName(ctx stdcontext.Context, store profilestore.Store, name st
 	}
 	var claimed []string
 	for _, profile := range stored {
-		if profileSurfaceKey(profile.Name) == name {
+		if SurfaceKey(profile.Name) == name {
 			claimed = append(claimed, profile.Name)
 		}
 	}

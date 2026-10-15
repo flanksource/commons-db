@@ -132,6 +132,7 @@ func (s *Service) Handler(prefix string, next http.Handler) (http.Handler, error
 //	POST {prefix}/sessions/{id}/stop             stop a live session
 //	POST {prefix}/sessions/{id}/extend           move a live session's deadline (?duration)
 //	POST {prefix}/sessions/{id}/restart          start a new session from an ended one (?duration)
+//	POST {prefix}/sessions/{id}/checkpoint       have a running trace capture take a reading and commit
 //	GET  {prefix}/sessions/{id}/events           SSE, resumable via Last-Event-ID (?format=ndjson exports)
 //	GET  {prefix}/sessions/{id}/result           materialized rows, or the recorded result
 type sessionHandler struct {
@@ -201,6 +202,8 @@ func (h *sessionHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.extend(w, r, parts[1])
 	case post && len(parts) == 3 && parts[2] == "restart":
 		h.restart(w, r, parts[1])
+	case h.traces != nil && post && len(parts) == 3 && parts[2] == "checkpoint":
+		h.checkpoint(w, r, parts[1])
 	case get && len(parts) == 3 && parts[2] == "events":
 		h.events(w, r, parts[1])
 	case get && len(parts) == 3 && parts[2] == "result":
