@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"path"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -48,11 +49,16 @@ type script struct {
 	hash          []byte
 }
 
-func loadScripts(schemaFS fs.FS, dir string) (map[string]*script, error) {
+// loadScripts reads the hash-gated SQL scripts under dir, skipping the
+// directories in skip (the WithRoutines directory).
+func loadScripts(schemaFS fs.FS, dir string, skip ...string) (map[string]*script, error) {
 	scripts := map[string]*script{}
 	err := fs.WalkDir(schemaFS, dir, func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
+		}
+		if entry.IsDir() && slices.Contains(skip, name) {
+			return fs.SkipDir
 		}
 		if entry.IsDir() || strings.ToLower(path.Ext(name)) != ".sql" {
 			return nil

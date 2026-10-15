@@ -10,8 +10,9 @@ import (
 type Dialect string
 
 const (
-	Postgres Dialect = "postgres"
-	SQLite   Dialect = "sqlite"
+	Postgres  Dialect = "postgres"
+	SQLite    Dialect = "sqlite"
+	SQLServer Dialect = "sqlserver"
 )
 
 type Target struct {
@@ -34,6 +35,10 @@ func Parse(raw string) (Target, error) {
 		switch scheme {
 		case "postgres", "postgresql":
 			return Target{Dialect: Postgres, DSN: dsn}, nil
+		case "sqlserver":
+			return Target{Dialect: SQLServer, DSN: dsn}, nil
+		case "mssql":
+			return Target{}, fmt.Errorf("unsupported database scheme %q; use sqlserver:// for SQL Server", scheme)
 		default:
 			return Target{}, fmt.Errorf("unsupported database scheme %q", scheme)
 		}
