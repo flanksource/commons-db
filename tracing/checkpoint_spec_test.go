@@ -87,6 +87,24 @@ var _ = Describe("a capture's checkpoint", func() {
 		Expect(numbers(env.Rows(tracingtest.Ended(managed.Session())))).To(Equal([]string{"1", "2"}))
 	})
 
+	It("checkpoints a running capture named by its session id, and refuses an id that names none", func() {
+		taken := &atomic.Int64{}
+		env := tracingtest.NewEnv(map[string]tracing.TracePlugin{
+			"readings": tracing.NewHandler[tickParams, tick](readings{taken: taken}, tracing.Capabilities{Live: true}),
+		})
+		managed, err := env.Runtime.Start(dbcontext.New(), tracing.StartRequest{Kind: "readings"})
+		Expect(err).ToNot(HaveOccurred())
+		tracingtest.Running(managed.Session())
+
+		Expect(env.Runtime.CheckpointSession(context.Background(), managed.Session().ID())).To(Succeed())
+		Expect(managed.Session().Snapshot().EventCount).To(Equal(int64(1)))
+		Expect(env.Runtime.CheckpointSession(context.Background(), "no-such-session")).To(MatchError(tracing.ErrNoCapture))
+
+		managed.Session().Stop("spec")
+		tracingtest.Ended(managed.Session())
+		Expect(env.Runtime.CheckpointSession(context.Background(), managed.Session().ID())).To(MatchError(tracing.ErrNoCapture), "an ended capture takes no checkpoint")
+	})
+
 	It("only commits what a kind that takes no readings already emitted", func() {
 		env := tracingtest.NewEnv(map[string]tracing.TracePlugin{"ticks": liveTicks()})
 		managed, err := env.Runtime.Start(dbcontext.New(), tracing.StartRequest{Kind: "ticks", Params: []byte(`{"count": 2}`)})
