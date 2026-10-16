@@ -30,7 +30,7 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 		Expect(err).NotTo(HaveOccurred())
 	})
 
-	It("checks out distinct databases and replenishes only in batches of five", func(ctx SpecContext) {
+	It("creates the first lease directly and refills the pool to its batch size in the background", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("cdb_%x_", time.Now().UnixNano())
 		poolPrefix := namespace + "pool_"
 		testPrefix := namespace + "test_"
@@ -38,31 +38,34 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 			AdminURL:   adminURL,
 			PoolPrefix: poolPrefix,
 			TestPrefix: testPrefix,
-			BatchSize:  poolBatchSize,
+			BatchSize:  minPoolBatchSize,
 			MaxAge:     staleDatabaseAge,
 			Now:        time.Now,
 		})
 		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(dropManagedDatabases, adminURL, poolPrefix, testPrefix)
+		DeferCleanup(dropPoolDatabases, pool)
 
-		leases := make([]*databaseLease, 0, poolBatchSize+1)
-		databases := make([]string, 0, poolBatchSize+1)
-		for i := 0; i < poolBatchSize+1; i++ {
+		leases := make([]*databaseLease, 0, minPoolBatchSize+1)
+		databases := make([]string, 0, minPoolBatchSize+1)
+		acquire := func(i int) {
 			dsn, lease, err := pool.acquire(ctx, "Migration Runner", fmt.Sprintf("lease_%d", i))
 			Expect(err).NotTo(HaveOccurred())
 			leases = append(leases, lease)
 			databases = append(databases, databaseFromDSN(dsn))
-
-			if i == 0 {
-				Expect(databaseCount(ctx, adminURL, poolPrefix)).To(Equal(poolBatchSize - 1))
-			}
-			if i == poolBatchSize-1 {
-				Expect(databaseCount(ctx, adminURL, poolPrefix)).To(BeZero())
-			}
 		}
-		Expect(databaseCount(ctx, adminURL, poolPrefix)).To(Equal(poolBatchSize - 1))
-		Expect(databases).To(HaveLen(poolBatchSize + 1))
-		Expect(uniqueStrings(databases)).To(HaveLen(poolBatchSize + 1))
+
+		acquire(0)
+		Expect(databases[0]).To(HavePrefix(testPrefix))
+		Eventually(func() int { return databaseCount(ctx, adminURL, poolPrefix) }).
+			WithTimeout(connectTimeout).Should(Equal(minPoolBatchSize))
+		waitForRefill(pool)
+
+		for i := 1; i <= minPoolBatchSize; i++ {
+			acquire(i)
+		}
+		Expect(uniqueStrings(databases)).To(HaveLen(minPoolBatchSize + 1))
+		Eventually(func() int { return databaseCount(ctx, adminURL, poolPrefix) }).
+			WithTimeout(connectTimeout).Should(Equal(minPoolBatchSize))
 
 		for _, lease := range leases {
 			Expect(lease.release()).To(Succeed())
@@ -70,7 +73,7 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 		Expect(databaseCount(ctx, adminURL, testPrefix)).To(BeZero())
 	})
 
-	It("hands out distinct databases to concurrent callers", func(ctx SpecContext) {
+	It("hands concurrent callers on an empty pool distinct databases within connectTimeout, never creating one under the pool lock", func(ctx SpecContext) {
 		namespace := fmt.Sprintf("cdb_%x_", time.Now().UnixNano())
 		poolPrefix := namespace + "pool_"
 		testPrefix := namespace + "test_"
@@ -78,32 +81,41 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 			AdminURL:   adminURL,
 			PoolPrefix: poolPrefix,
 			TestPrefix: testPrefix,
-			BatchSize:  poolBatchSize,
+			BatchSize:  minPoolBatchSize,
 			MaxAge:     staleDatabaseAge,
 			Now:        time.Now,
 		})
 		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(dropManagedDatabases, adminURL, poolPrefix, testPrefix)
+		DeferCleanup(dropPoolDatabases, pool)
+
+		expectLockVisibleToProbe(ctx, adminURL, pool.globalLock())
+		probeContext, stopProbe := context.WithCancel(ctx)
+		probe := make(chan createProbe, 1)
+		go func() { probe <- probeCreatesUnderLock(probeContext, adminURL, pool.globalLock(), namespace) }()
 
 		type checkout struct {
 			dsn   string
 			lease *databaseLease
 		}
-		checkouts := make([]checkout, poolBatchSize*2)
-		group, groupContext := errgroup.WithContext(ctx)
+		checkouts := make([]checkout, minPoolBatchSize*2)
+		acquireContext, cancel := context.WithTimeout(ctx, connectTimeout)
+		defer cancel()
+		group, groupContext := errgroup.WithContext(acquireContext)
 		for i := range checkouts {
 			group.Go(func() error {
-				dsn, lease, err := pool.acquire(
-					groupContext,
-					"Concurrent Runner",
-					fmt.Sprintf("lease_%d", i),
-				)
+				dsn, lease, err := pool.acquire(groupContext, "Concurrent Runner", fmt.Sprintf("lease_%d", i))
 				checkouts[i] = checkout{dsn: dsn, lease: lease}
 				return err
 			})
 		}
 		Expect(group.Wait()).To(Succeed())
+		waitForRefill(pool)
+		stopProbe()
+		observed := <-probe
 
+		Expect(observed.err).NotTo(HaveOccurred())
+		Expect(observed.creates).To(BeNumerically(">", 0), "the probe must see creates to prove anything")
+		Expect(observed.createsUnderLock).To(BeZero())
 		databases := make([]string, 0, len(checkouts))
 		for _, checkout := range checkouts {
 			databases = append(databases, databaseFromDSN(checkout.dsn))
@@ -124,12 +136,12 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 			AdminURL:   adminURL,
 			PoolPrefix: poolPrefix,
 			TestPrefix: testPrefix,
-			BatchSize:  poolBatchSize,
+			BatchSize:  minPoolBatchSize,
 			MaxAge:     staleDatabaseAge,
 			Now:        func() time.Time { return clock },
 		})
 		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(dropManagedDatabases, adminURL, poolPrefix, testPrefix)
+		DeferCleanup(dropPoolDatabases, pool)
 
 		activeDSN, activeLease, err := pool.acquire(ctx, "active", "lease_active")
 		Expect(err).NotTo(HaveOccurred())
@@ -139,6 +151,7 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 		abandonedDatabase := managedDatabaseName(testPrefix, old, "lease_abandoned", "abandoned")
 		Expect(createDatabase(ctx, adminURL, abandonedDatabase)).To(Succeed())
 
+		waitForRefill(pool)
 		clock = now
 		Expect(pool.sweep(ctx)).To(Succeed())
 
@@ -155,7 +168,7 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 			AdminURL:   adminURL,
 			PoolPrefix: poolPrefix,
 			TestPrefix: testPrefix,
-			BatchSize:  poolBatchSize,
+			BatchSize:  minPoolBatchSize,
 			MaxAge:     staleDatabaseAge,
 			Now:        func() time.Time { return now },
 		})
@@ -182,7 +195,7 @@ var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, fu
 			AdminURL:   adminURL,
 			PoolPrefix: poolPrefix,
 			TestPrefix: testPrefix,
-			BatchSize:  poolBatchSize,
+			BatchSize:  minPoolBatchSize,
 			MaxAge:     staleDatabaseAge,
 			Now:        func() time.Time { return now },
 		})
@@ -312,6 +325,71 @@ func dropManagedDatabases(adminURL string, prefixes ...string) {
 		_, err := admin.ExecContext(ctx, "DROP DATABASE "+pq.QuoteIdentifier(name)+" WITH (FORCE)")
 		Expect(err).NotTo(HaveOccurred())
 	}
+}
+
+// waitForRefill blocks until no background refill of pool is running, so a
+// test's databases are not recreated after it drops them.
+func waitForRefill(pool *ephemeralPool) {
+	Eventually(pool.refillState().running.Load).WithTimeout(sweepTimeout).Should(BeFalse())
+}
+
+func dropPoolDatabases(pool *ephemeralPool) {
+	waitForRefill(pool)
+	dropManagedDatabases(pool.config.AdminURL, pool.config.PoolPrefix, pool.config.TestPrefix)
+}
+
+// advisoryLockHeld is true when the backend whose pid fills %s holds the
+// advisory lock named $1.
+const advisoryLockHeld = `EXISTS (
+	SELECT 1 FROM pg_locks l
+	WHERE l.pid = %s AND l.locktype = 'advisory' AND l.granted AND l.objsubid = 1
+	  AND l.classid::bigint = (hashtextextended($1, 0) >> 32) & 4294967295
+	  AND l.objid::bigint = hashtextextended($1, 0) & 4294967295)`
+
+// expectLockVisibleToProbe proves the probe's lock decoding by holding lock and
+// finding it in pg_locks.
+func expectLockVisibleToProbe(ctx context.Context, adminURL, lock string) {
+	session, err := openPoolSession(ctx, adminURL)
+	Expect(err).NotTo(HaveOccurred())
+	defer session.close() //nolint:errcheck
+	Expect(session.lock(ctx, lock)).To(Succeed())
+	var held bool
+	Expect(session.conn.QueryRowContext(ctx, "SELECT "+fmt.Sprintf(advisoryLockHeld, "pg_backend_pid()"), lock).Scan(&held)).To(Succeed())
+	Expect(held).To(BeTrue())
+	Expect(session.unlock(ctx, lock)).To(Succeed())
+}
+
+type createProbe struct {
+	creates, createsUnderLock int
+	err                       error
+}
+
+// probeCreatesUnderLock samples active CREATE DATABASE statements for names
+// containing namespace until ctx ends, counting those whose backend holds the
+// advisory lock named lock. pg_advisory_lock(bigint) stores the key's high and
+// low 32 bits in classid and objid, with objsubid 1.
+func probeCreatesUnderLock(ctx context.Context, adminURL, lock, namespace string) createProbe {
+	admin, err := sql.Open("postgres", adminURL)
+	if err != nil {
+		return createProbe{err: err}
+	}
+	defer admin.Close() //nolint:errcheck
+	var result createProbe
+	for ctx.Err() == nil {
+		var creates, underLock int
+		err := admin.QueryRowContext(ctx, `
+			SELECT count(*), count(*) FILTER (WHERE `+fmt.Sprintf(advisoryLockHeld, "a.pid")+`)
+			FROM pg_stat_activity a
+			WHERE a.state = 'active' AND a.query ILIKE 'CREATE DATABASE%' AND strpos(a.query, $2) > 0`,
+			lock, namespace,
+		).Scan(&creates, &underLock)
+		if err != nil && ctx.Err() == nil {
+			return createProbe{err: err}
+		}
+		result.creates += creates
+		result.createsUnderLock += underLock
+	}
+	return result
 }
 
 func uniqueStrings(values []string) []string {

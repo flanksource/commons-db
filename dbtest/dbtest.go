@@ -11,7 +11,21 @@
 //
 // When COMMONS_DB_URL is unset, dbtest starts or reuses the persistent embedded
 // PostgreSQL server under $TMPDIR/commons-db and checks out an isolated
-// database from its cross-process pool.
+// database from its cross-process pool. The server is sized to the host's CPU
+// and memory limits (commonsdb.ScaledTestingParameters); a reused server
+// started with lower settings logs a warning naming the command that stops it.
+// Where it lives is configurable:
+//
+//	COMMONS_DB_DATA_DIR       "tmpfs" puts the cluster in RAM: /dev/shm on
+//	                          Linux, a RAM disk volume /Volumes/commons-db on
+//	                          macOS; any other value is a literal path
+//	COMMONS_DB_TMPFS_SIZE     RAM the tmpfs cluster requires (default 2GB)
+//	COMMONS_DB_BIN_DIR        PostgreSQL binaries (default
+//	                          $TMPDIR/commons-db/bin); never put on tmpfs
+//
+// An empty pool never makes a caller wait for more than one CREATE DATABASE:
+// checkout creates its own database outside the pool lock and a background
+// refill tops the pool up to max(5, GOMAXPROCS) free databases.
 //
 // Supplying Options.Provisioner replaces the empty-database pool with a
 // content-addressed PostgreSQL template. The first matching request prepares
@@ -63,7 +77,8 @@ type Options struct {
 	// Name seeds the database name. Required.
 	Name string
 	// DataDir overrides where an embedded server keeps its cluster. Ignored
-	// when COMMONS_DB_URL is set. Defaults to $TMPDIR/commons-db.
+	// when COMMONS_DB_URL is set, and takes precedence over
+	// COMMONS_DB_DATA_DIR. Defaults to $TMPDIR/commons-db.
 	DataDir string
 	// LogName labels the gorm SQL logger. Defaults to Name.
 	LogName string

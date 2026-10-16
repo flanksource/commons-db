@@ -257,10 +257,7 @@ func (m templateManager) createInstance(
 	session *poolSession,
 	templateName, instanceName string,
 ) error {
-	if _, err := session.conn.ExecContext(
-		ctx,
-		"CREATE DATABASE "+pq.QuoteIdentifier(instanceName)+" WITH TEMPLATE "+pq.QuoteIdentifier(templateName),
-	); err != nil {
+	if err := session.createDatabase(ctx, instanceName, templateName); err != nil {
 		return fmt.Errorf("clone database template %s into %s: %w", templateName, instanceName, err)
 	}
 	return nil
