@@ -37,9 +37,9 @@ require (
 	github.com/emersion/go-smtp v0.25.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.78
+	github.com/flanksource/clicky v1.21.80
 	github.com/flanksource/commons v1.60.1
-	github.com/flanksource/deps v1.0.45
+	github.com/flanksource/deps v1.0.46
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92
 	github.com/fxamacker/cbor/v2 v2.9.0
@@ -115,7 +115,7 @@ require (
 )
 
 require (
-	github.com/flanksource/sqlglot-go v0.4.0-flanksource.2
+	github.com/flanksource/sqlglot-go v1.0.0
 	gorm.io/driver/sqlserver v1.6.4
 )
 
@@ -180,7 +180,6 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834 // indirect
 	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
-	github.com/charmbracelet/x/conpty v0.1.1 // indirect
 	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
