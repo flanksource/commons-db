@@ -4,9 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -16,7 +15,7 @@ import (
 
 const (
 	embeddedPort       = 7432
-	poolBatchSize      = 5
+	minPoolBatchSize   = 5
 	staleDatabaseAge   = 24 * time.Hour
 	poolDatabasePrefix = "commons_db_pool_"
 	testDatabasePrefix = "commons_db_test_"
@@ -35,13 +34,6 @@ type ephemeralPoolConfig struct {
 
 type ephemeralPool struct {
 	config ephemeralPoolConfig
-}
-
-func embeddedDataDir(dataDir string) string {
-	if dataDir == "" {
-		return filepath.Join(os.TempDir(), "commons-db")
-	}
-	return dataDir
 }
 
 func managedDatabaseName(prefix string, created time.Time, unique, name string) string {
@@ -91,20 +83,6 @@ func managedDatabaseCreatedWithPrefixes(name, poolPrefix, testPrefix string) (ti
 	return time.Unix(seconds, 0).UTC(), nil
 }
 
-func managedDatabaseStale(name string, now time.Time, maxAge time.Duration) (bool, error) {
-	if maxAge <= 0 {
-		return false, errors.New("managed database retention must be positive")
-	}
-	created, err := managedDatabaseCreated(name)
-	if err != nil {
-		return false, err
-	}
-	if created.After(now) {
-		return false, fmt.Errorf("managed database name %q has a future timestamp", name)
-	}
-	return now.Sub(created) > maxAge, nil
-}
-
 func newEphemeralPool(config ephemeralPoolConfig) (*ephemeralPool, error) {
 	if config.AdminURL == "" {
 		return nil, errors.New("ephemeral pool admin URL is required")
@@ -148,29 +126,38 @@ func acquirePooledScratch(
 	ctx context.Context,
 	adminURL, name, unique string,
 	now time.Time,
-) (string, func() error, error) {
-	pool, err := newEphemeralPool(ephemeralPoolConfig{
-		AdminURL:   adminURL,
-		PoolPrefix: poolDatabasePrefix,
-		TestPrefix: testDatabasePrefix,
-		BatchSize:  poolBatchSize,
-		MaxAge:     staleDatabaseAge,
-		Now:        func() time.Time { return now },
-	})
+) (string, *databaseLease, error) {
+	pool, err := newEphemeralPool(defaultPoolConfig(adminURL, func() time.Time { return now }))
 	if err != nil {
 		return "", nil, err
 	}
 	return pool.acquire(ctx, name, unique)
 }
 
+func defaultPoolConfig(adminURL string, now func() time.Time) ephemeralPoolConfig {
+	return ephemeralPoolConfig{
+		AdminURL:   adminURL,
+		PoolPrefix: poolDatabasePrefix,
+		TestPrefix: testDatabasePrefix,
+		BatchSize:  max(minPoolBatchSize, runtime.GOMAXPROCS(0)),
+		MaxAge:     staleDatabaseAge,
+		Now:        now,
+	}
+}
+
 func startSharedEmbedded(dataDir string) (string, error) {
-	dataDir = embeddedDataDir(dataDir)
+	dirs, err := resolveEmbeddedDirs(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve shared embedded PostgreSQL directory: %w", err)
+	}
 	dsn, _, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:     dataDir,
-		Database:    "postgres",
-		Port:        embeddedPort,
-		KeepRunning: true,
-		FastTesting: true,
+		DataDir:      dirs.DataDir,
+		BinariesDir:  dirs.BinariesDir,
+		RAMDiskBytes: dirs.RAMDiskBytes,
+		Database:     "postgres",
+		Port:         embeddedPort,
+		KeepRunning:  true,
+		FastTesting:  true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("start shared embedded PostgreSQL: %w", err)

@@ -48,6 +48,9 @@ func sqliteTables(schemaFS fs.FS, config options) ([]*schema.Table, error) {
 	if config.allowDrops {
 		return nil, errors.New("SQLite migrations do not support destructive changes")
 	}
+	if err := refuseRoutines(config, "SQLite"); err != nil {
+		return nil, err
+	}
 	scripts, err := loadScripts(schemaFS, config.dir)
 	if err != nil {
 		return nil, err

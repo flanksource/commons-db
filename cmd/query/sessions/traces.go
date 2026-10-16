@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 // traceStartInput is the body of a trace start: the kind's params, how long
@@ -29,9 +29,9 @@ func (h *sessionHandler) traceKinds(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	allowed := make([]traces.KindInfo, 0, len(kinds))
+	allowed := make([]tracing.KindInfo, 0, len(kinds))
 	for _, kind := range kinds {
-		if h.refusal(r, traces.ProfilePrefix+kind.Name, ActionRead) == nil {
+		if h.refusal(r, tracing.ProfilePrefix+kind.Name, ActionRead) == nil {
 			allowed = append(allowed, kind)
 		}
 	}
@@ -40,7 +40,7 @@ func (h *sessionHandler) traceKinds(w http.ResponseWriter, r *http.Request) {
 
 // startTrace starts a capture of kind, authorized as its profile traces/<kind>.
 func (h *sessionHandler) startTrace(w http.ResponseWriter, r *http.Request, kind string) {
-	if !h.authorized(w, r, traces.ProfilePrefix+kind, ActionControl) {
+	if !h.authorized(w, r, tracing.ProfilePrefix+kind, ActionControl) {
 		return
 	}
 	var input traceStartInput
@@ -50,7 +50,7 @@ func (h *sessionHandler) startTrace(w http.ResponseWriter, r *http.Request, kind
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	request := traces.StartRequest{Kind: kind, Params: input.Params, Labels: input.Labels}
+	request := tracing.StartRequest{Kind: kind, Params: input.Params, Labels: input.Labels}
 	if input.Duration != "" {
 		duration, err := time.ParseDuration(input.Duration)
 		if err != nil || duration <= 0 {
@@ -65,7 +65,7 @@ func (h *sessionHandler) startTrace(w http.ResponseWriter, r *http.Request, kind
 	}
 	managed, err := h.traces.Start(h.sessionContext(r), request)
 	switch {
-	case errors.Is(err, traces.ErrUnknownKind):
+	case errors.Is(err, tracing.ErrUnknownKind):
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
 	case err != nil && h.traceStartError != nil && h.traceStartError(w, r, err):

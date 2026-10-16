@@ -655,6 +655,16 @@ func resultParams(timeColumn, defaultFrom string) []query.ParamDef {
 	})
 }
 
+// WindowParams are the params of a result profile that read stream's rows
+// after seq afterSeq through seq toSeq; a toSeq of 0 reads to the end.
+func WindowParams(stream string, afterSeq, toSeq int64) map[string]any {
+	params := map[string]any{streamParam: stream, afterSeqParam: afterSeq}
+	if toSeq > 0 {
+		params[toSeqParam] = toSeq
+	}
+	return params
+}
+
 func (r *Registry) connectionReference() string {
 	return "connection://" + r.connection.Namespace + "/" + r.connection.Name
 }

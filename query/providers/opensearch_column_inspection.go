@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 var openSearchColumnStatsCache = inspection.NewMemo(inspection.MemoOptions[map[string]int64]{
@@ -93,7 +94,7 @@ func inspectOpenSearchColumnStats(
 	req query.ProviderRequest,
 	fields []string,
 ) (map[string]int64, inspection.CacheMetadata, error) {
-	key, err := inspectionRequestKey("opensearch-column-stats:"+searcher.InspectionKey(), req, fields)
+	key, err := providerkit.InspectionRequestKey("opensearch-column-stats:"+searcher.InspectionKey(), req, fields)
 	if err != nil {
 		return nil, inspection.CacheMetadata{}, err
 	}
@@ -113,7 +114,7 @@ func inspectOpenSearchColumnStats(
 				}
 			}
 			counts := make(map[string]int64, len(fields))
-			for _, batch := range fieldBatches(fields, openSearchColumnStatsBatchSize) {
+			for _, batch := range providerkit.FieldBatches(fields, openSearchColumnStatsBatchSize) {
 				request, err := source.Build(timeFieldMapping)
 				if err != nil {
 					return nil, err
@@ -211,7 +212,7 @@ func openSearchFilterSuggestions(
 	}
 	suggestions := make(map[string]*query.ColumnFilterDef)
 	for _, column := range columns {
-		name := inspectedColumnField(column)
+		name := column.InspectedField()
 		field, exists := mappings[name]
 		if !exists || field.Conflicting || !field.Searchable || len(field.Types) != 1 {
 			suggestions[column.Name] = &query.ColumnFilterDef{Disabled: true}
@@ -256,7 +257,7 @@ func openSearchFilterSuggestions(
 func openSearchInspectionFields(columns []query.ColumnDef) []string {
 	names := map[string]struct{}{}
 	for _, column := range columns {
-		name := inspectedColumnField(column)
+		name := column.InspectedField()
 		names[name] = struct{}{}
 		names[name+".keyword"] = struct{}{}
 		for cut := strings.LastIndex(name, "."); cut > 0; cut = strings.LastIndex(name[:cut], ".") {
@@ -278,7 +279,7 @@ func openSearchStatFields(columns []query.ColumnDef, fields []opensearchinspect.
 	}
 	unique := map[string]struct{}{}
 	for _, column := range columns {
-		name := inspectedColumnField(column)
+		name := column.InspectedField()
 		field, exists := mappings[name]
 		if !exists || field.Conflicting || field.Nested() || len(field.Types) != 1 {
 			continue

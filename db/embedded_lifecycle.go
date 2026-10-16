@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -33,6 +34,9 @@ type embeddedRuntime struct {
 	dataPath string
 	version  embeddedpostgres.PostgresVersion
 	logger   io.Writer
+	// scaledTesting is ScaledTestingParameters for this host; nil unless
+	// FastTesting is on.
+	scaledTesting map[string]string
 }
 
 // StartEmbedded launches PostgreSQL under cfg.DataDir. Reused servers and
@@ -54,20 +58,31 @@ func newEmbeddedRuntime(cfg EmbeddedConfig) (*embeddedRuntime, error) {
 		return nil, err
 	}
 
-	dataPath := filepath.Join(cfg.DataDir, "data")
+	var scaledTesting map[string]string
+	if cfg.FastTesting {
+		limits, err := DetectHostLimits()
+		if err != nil {
+			return nil, fmt.Errorf("size fast-testing PostgreSQL: %w", err)
+		}
+		scaledTesting = ScaledTestingParameters(limits, cfg.RAMDiskBytes)
+	}
 	pgLog := cfg.Logger
 	if pgLog == nil {
 		pgLog = os.Stderr
 	}
 	return &embeddedRuntime{
-		config:   cfg,
-		port:     cfg.Port,
-		dataPath: dataPath,
-		logger:   pgLog,
+		config:        cfg,
+		port:          cfg.Port,
+		dataPath:      filepath.Join(cfg.DataDir, "data"),
+		logger:        pgLog,
+		scaledTesting: scaledTesting,
 	}, nil
 }
 
 func applyEmbeddedDefaults(cfg *EmbeddedConfig) {
+	if cfg.BinariesDir == "" {
+		cfg.BinariesDir = filepath.Join(cfg.DataDir, "bin")
+	}
 	if cfg.Database == "" {
 		cfg.Database = "postgres"
 	}
@@ -226,7 +241,7 @@ func (r *embeddedRuntime) validateServer(dsn string) error {
 		return err
 	}
 	if r.config.FastTesting {
-		if err := validateFastTestingServer(ctx, conn); err != nil {
+		if err := validateFastTestingServer(ctx, conn, r.stopCommand(), r.scaledTesting); err != nil {
 			return err
 		}
 	}
@@ -236,6 +251,11 @@ func (r *embeddedRuntime) validateServer(dsn string) error {
 		}
 	}
 	return nil
+}
+
+func (r *embeddedRuntime) stopCommand() string {
+	pgCtl := filepath.Join(r.config.BinariesDir, string(r.version), "bin", "pg_ctl")
+	return pgCtl + " stop -D " + r.dataPath
 }
 
 func validateEmbeddedDataDirectory(ctx context.Context, conn *pgx.Conn, expected string) error {
@@ -252,43 +272,12 @@ func validateEmbeddedDataDirectory(ctx context.Context, conn *pgx.Conn, expected
 		return fmt.Errorf("resolve active PostgreSQL data directory %s: %w", actual, err)
 	}
 	if actualPath != expectedPath {
-		return fmt.Errorf("expected PostgreSQL data_directory %s, got %s", expectedPath, actualPath)
+		return fmt.Errorf(
+			"expected PostgreSQL data_directory %s, got %s; stop the running server first with `pg_ctl stop -D %s`",
+			expectedPath, actualPath, actualPath,
+		)
 	}
 	return nil
-}
-
-func validateFastTestingServer(ctx context.Context, conn *pgx.Conn) error {
-	var fsync, synchronousCommit, fullPageWrites string
-	if err := conn.QueryRow(ctx, "SHOW fsync").Scan(&fsync); err != nil {
-		return fmt.Errorf("read fsync: %w", err)
-	}
-	if err := conn.QueryRow(ctx, "SHOW synchronous_commit").Scan(&synchronousCommit); err != nil {
-		return fmt.Errorf("read synchronous_commit: %w", err)
-	}
-	if err := conn.QueryRow(ctx, "SHOW full_page_writes").Scan(&fullPageWrites); err != nil {
-		return fmt.Errorf("read full_page_writes: %w", err)
-	}
-	maxConnections, err := showInt(ctx, conn, "max_connections")
-	if err != nil {
-		return err
-	}
-	return validateFastTestingSettings(fsync, synchronousCommit, fullPageWrites, maxConnections)
-}
-
-// showInt reads a numeric server setting. SHOW always reports text (OID 25)
-// regardless of the underlying GUC type, so the value has to be parsed rather
-// than scanned straight into an int. setting is always a package-level literal;
-// SHOW takes no bind parameters.
-func showInt(ctx context.Context, conn *pgx.Conn, setting string) (int, error) {
-	var raw string
-	if err := conn.QueryRow(ctx, "SHOW "+setting).Scan(&raw); err != nil {
-		return 0, fmt.Errorf("read %s: %w", setting, err)
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, fmt.Errorf("parse %s %q: %w", setting, raw, err)
-	}
-	return value, nil
 }
 
 func (r *embeddedRuntime) serverConfig() embeddedpostgres.Config {
@@ -296,26 +285,25 @@ func (r *embeddedRuntime) serverConfig() embeddedpostgres.Config {
 		Port(r.port).
 		DataPath(r.dataPath).
 		RuntimePath(filepath.Join(r.config.DataDir, "runtime")).
-		BinariesPath(filepath.Join(r.config.DataDir, "bin", string(r.version))).
+		BinariesPath(filepath.Join(r.config.BinariesDir, string(r.version))).
 		Version(r.version).
 		Username(r.config.Username).
 		Password(r.config.Password).
 		Database(r.config.Database).
 		Logger(r.logger)
-	if parameters := embeddedStartParameters(r.config); len(parameters) > 0 {
+	if parameters := embeddedStartParameters(r.config, r.scaledTesting); len(parameters) > 0 {
 		config = config.StartParameters(parameters)
 	}
 	return config
 }
 
-func embeddedStartParameters(cfg EmbeddedConfig) map[string]string {
-	parameters := fastTestingStartParameters(cfg.FastTesting)
-	for key, value := range performanceDiagnosticStartParameters(cfg.PerformanceDiagnostics) {
-		if parameters == nil {
-			parameters = make(map[string]string)
-		}
-		parameters[key] = value
+func embeddedStartParameters(cfg EmbeddedConfig, scaledTesting map[string]string) map[string]string {
+	parameters := make(map[string]string)
+	if cfg.FastTesting {
+		maps.Copy(parameters, fastTestingDurabilityParameters)
+		maps.Copy(parameters, scaledTesting)
 	}
+	maps.Copy(parameters, performanceDiagnosticStartParameters(cfg.PerformanceDiagnostics))
 	return parameters
 }
 

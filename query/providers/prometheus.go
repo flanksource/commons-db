@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 func init() {
@@ -86,7 +87,7 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 	conn := connection.PrometheusConnection{}
 	conn.ConnectionName = req.Connection
 	if opts.URL != "" {
-		conn.URL, err = resolveInlineURL(ctx, opts.URL, "prometheus")
+		conn.URL, err = providerkit.ResolveInlineURL(ctx, opts.URL, "prometheus")
 		if err != nil {
 			return nil, err
 		}

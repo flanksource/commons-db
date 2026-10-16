@@ -3,7 +3,7 @@ title: Trace plugins
 description: Write a trace kind — its params form, its record schema and its capture — and run it as a managed session that commits to a record store.
 ---
 
-`github.com/flanksource/commons-db/tracing/traces` runs **trace plugins**. Each kind of capture declares three things:
+`github.com/flanksource/commons-db/tracing` runs **trace plugins**. Each kind of capture declares three things:
 
 - a **params form**: the JSON schema a client renders to start it;
 - a **record schema**: the columns and filters its records are stored and read under;
@@ -41,7 +41,7 @@ func (heartbeats) Schema() recordresults.ResultType[Heartbeat] {
 
 // Handle emits until ctx is done. store reads back what it already committed.
 func (heartbeats) Handle(ctx dbcontext.Context, p HeartbeatParams,
-	records traces.Emitter[Heartbeat], store traces.Records[Heartbeat]) error {
+	records tracing.Emitter[Heartbeat], store tracing.Records[Heartbeat]) error {
 	every, err := time.ParseDuration(p.Every)
 	if err != nil {
 		return err
@@ -76,7 +76,7 @@ A capture can say more about itself than its records, through the same `Emitter`
 | `Warn(message)` | Adds a warning the session ends with, after the runtime's own (dropped or unencodable records). |
 | `Describe(handle, metadata...)` | Names the session by what the capture set up on its source, such as an XE session, with the statements that set it up. A session records these once, as it starts running, so call it from `Prepare`. |
 
-A kind that keeps data apart from its records, such as HTTP bodies served only on request, writes it to a companion stream named after its own: `traces.StreamOf(ctx)` is that stream, under the context `Prepare` and `Handle` run with.
+A kind that keeps data apart from its records, such as HTTP bodies served only on request, writes it to a companion stream named after its own: `tracing.StreamOf(ctx)` is that stream, under the context `Prepare` and `Handle` run with.
 
 ### Setup that must finish before the session runs
 
@@ -121,7 +121,7 @@ Options on the `Handler` process each record in this fixed order, after deduplic
 | Option | Effect |
 | --- | --- |
 | `WithDeduplication(key, window)` | Drops a record whose key the session already emitted within the window its params give. It is off unless configured, and a window of zero keeps everything. |
-| `WithTruncation(maxBytes)` | Cuts every text or JSON string longer than `maxBytes` and lists the cut paths in a `truncated` column. The record must embed `traces.Truncation`. |
+| `WithTruncation(maxBytes)` | Cuts every text or JSON string longer than `maxBytes` and lists the cut paths in a `truncated` column. The record must embed `tracing.Truncation`. |
 | `WithJSONProcessor(paths...)` | Parses the text fields at `paths` (dotted JSON names such as `response.content.text`) when they hold a JSON object or array, so they are stored, masked and filtered as structure. Each path must name a string field of the record, or the kind is refused. `Records.Scan` hands that JSON back as text, re-encoded, so key order and spacing can differ from what was emitted. |
 | `WithSecretMasking(keep...)` | Masks sensitive keys and HAR name/value pairs, and strips secrets from every other string. Keys named in `keep` are never masked. |
 
@@ -132,20 +132,20 @@ Two more ways a kind can avoid duplicates:
 ## Serving kinds
 
 ```go
-kinds := traces.NewKinds()
-kinds.RegisterKind("heartbeat", traces.NewHandler(heartbeats{}, traces.Capabilities{Live: true}))
+kinds := tracing.NewKinds()
+kinds.RegisterKind("heartbeat", tracing.NewHandler(heartbeats{}, tracing.Capabilities{Live: true}))
 
 results, _ := recordresults.Open(recordresults.OpenOptions{
 	Prefix: "traces", ConnectionName: "traces", Settings: settings,
 	Register: kinds.RegisterResultTypes, // declares every kind's result type
 })
-runtime := &traces.Runtime{Kinds: kinds, Results: results, Probes: probe.NewManager(probe.ManagerOptions{LockDir: lockDir})}
+runtime := &tracing.Runtime{Kinds: kinds, Results: results, Probes: probe.NewManager(probe.ManagerOptions{LockDir: lockDir})}
 runtime.Sessions = query.NewSessionRegistry(query.RegistryOptions{
 	BeforeRead: results.Registry.BeforeRead,
-	Restarters: map[string]query.RestartFunc{traces.ProfilePrefix: runtime.Restarter(baseContext)},
+	Restarters: map[string]query.RestartFunc{tracing.ProfilePrefix: runtime.Restarter(baseContext)},
 })
 
-managed, err := runtime.Start(ctx, traces.StartRequest{Kind: "heartbeat", Params: json.RawMessage(`{"every": "5s"}`)})
+managed, err := runtime.Start(ctx, tracing.StartRequest{Kind: "heartbeat", Params: json.RawMessage(`{"every": "5s"}`)})
 ```
 
 - **Errors.** `Start` refuses an unknown kind with `ErrUnknownKind` and params the kind refuses with `ErrInvalidParams`.
@@ -162,7 +162,7 @@ managed, err := runtime.Start(ctx, traces.StartRequest{Kind: "heartbeat", Params
 | --- | --- |
 | `http` | Outbound HTTP exchanges of chosen features (`prometheus`, `loki`, `http`, ...), one HAR entry each. |
 | `sql` | SQL statements commons-db runs on the connections it names. `"*"` names every connection and `"self"` the server's own database; `"*"` does not include `"self"`, and naming none is refused. |
-| `sql_xevent` | SQL Server Extended Events, as `sqltrace` event rows, deadlock reports decoded (`sqltrace.DecodeEvent`). The session is named after its XE session, reports an `xetrace.Summary` and warns of events it lost. A host with its own params form serves it with `xevent.NewKindFor`, over a params type whose `XEventOptions()` names the connection, the XE session and its drain. |
+| `sql_xevent` | SQL Server Extended Events, as `sqlserver/xesession` event rows, deadlock reports decoded (`xesession.DecodeEvent`). The session is named after its XE session, reports an `xetrace.Summary` and warns of events it lost. A host with its own params form serves it with `xevent.NewKindFor`, over a params type whose `XEventOptions()` names the connection, the XE session and its drain. |
 | `opensearch` | Span documents of an opentelemetry connection's index, over a window and optionally followed. |
 
 Its routes:

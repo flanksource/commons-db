@@ -1,3 +1,4 @@
+import { mountPath } from "./mount";
 import { useQuery } from "@tanstack/react-query";
 import type { ProfileDocument } from "./reconcileModel";
 
@@ -24,7 +25,7 @@ export function asProfiles(payload: unknown): ProfileDocument[] {
 }
 
 export async function fetchProfiles(): Promise<ProfileDocument[]> {
-  const response = await fetch("/api/v1/profiles", {
+  const response = await fetch(`${mountPath}/api/v1/profiles`, {
     headers: { Accept: "application/json" },
   });
   if (!response.ok) throw new Error(`Unable to list profiles: ${response.status}`);

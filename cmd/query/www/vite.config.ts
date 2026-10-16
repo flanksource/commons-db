@@ -35,6 +35,7 @@ export function clickyUIDevAliases(command: ConfigEnv["command"], mode: ConfigEn
       "chat",
       "clicky",
       "components",
+      "connections",
       "data",
       "devtools",
       "hooks",
@@ -57,6 +58,10 @@ export function clickyUIDevAliases(command: ConfigEnv["command"], mode: ConfigEn
 }
 
 export default defineConfig(({ command, mode }) => ({
+  // A built app resolves its assets against the <base> the server rewrites to
+  // its mount path (www.Handler), so the same build serves at / or under a
+  // host's prefix; the dev server serves it at /.
+  base: command === "build" ? "./" : "/",
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: clickyUIDevAliases(command, mode),

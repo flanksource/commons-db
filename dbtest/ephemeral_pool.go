@@ -6,10 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/jackc/pgerrcode"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/lib/pq"
 )
 
@@ -32,7 +35,7 @@ type databaseLease struct {
 func (p *ephemeralPool) acquire(
 	ctx context.Context,
 	name, unique string,
-) (string, func() error, error) {
+) (string, *databaseLease, error) {
 	if name == "" {
 		return "", nil, errors.New("ephemeral database name is required")
 	}
@@ -44,34 +47,28 @@ func (p *ephemeralPool) acquire(
 		return "", nil, err
 	}
 
-	globalLock := poolLockNamespace + p.config.PoolPrefix + p.config.TestPrefix
-	if err := session.lock(ctx, globalLock); err != nil {
-		return "", nil, errors.Join(err, session.close())
-	}
+	// Closing the session releases every advisory lock it holds; a database
+	// checkout renamed or created before failing is left unlocked for the sweep.
 	leaseName, err := p.checkout(ctx, session, name, unique)
 	if err != nil {
-		return "", nil, errors.Join(err, session.unlock(ctx, globalLock), session.close())
+		return "", nil, errors.Join(err, session.close())
 	}
-	if err := session.lock(ctx, leaseName); err != nil {
-		dropErr := session.dropDatabase(ctx, leaseName, true)
-		return "", nil, errors.Join(err, dropErr, session.unlock(ctx, globalLock), session.close())
-	}
-	if err := session.unlock(ctx, globalLock); err != nil {
-		lease := &databaseLease{session: session, name: leaseName}
-		return "", nil, errors.Join(err, lease.cleanup())
-	}
+	lease := &databaseLease{session: session, name: leaseName}
+	p.refillInBackground()
 
 	dsn, err := withDatabase(p.config.AdminURL, leaseName)
 	if err != nil {
-		lease := &databaseLease{session: session, name: leaseName}
-		return "", nil, errors.Join(err, lease.cleanup())
+		return "", nil, errors.Join(err, lease.release())
 	}
-	lease := &databaseLease{session: session, name: leaseName}
-	return dsn, lease.cleanup, nil
+	return dsn, lease, nil
+}
+
+func (p *ephemeralPool) globalLock() string {
+	return poolLockNamespace + p.config.PoolPrefix + p.config.TestPrefix
 }
 
 func openPoolSession(ctx context.Context, adminURL string) (*poolSession, error) {
-	db, err := sql.Open("postgres", adminURL)
+	db, err := sql.Open("pgx", adminURL)
 	if err != nil {
 		return nil, fmt.Errorf("open ephemeral database pool %s: %w", redact(adminURL), err)
 	}
@@ -129,57 +126,136 @@ func (s *poolSession) close() error {
 	return errors.Join(s.conn.Close(), s.db.Close())
 }
 
+// checkout renames a free pool database to the lease name or, when the pool is
+// empty, creates the lease database itself. Only the rename runs under the
+// pool lock: a database being created is invisible to other sessions until it
+// commits, so creation never makes concurrent callers queue.
 func (p *ephemeralPool) checkout(
 	ctx context.Context,
 	session *poolSession,
 	name, unique string,
 ) (string, error) {
 	now := p.config.Now().UTC().Truncate(time.Second)
-	if err := p.cleanupStale(ctx, session, now); err != nil {
-		return "", err
-	}
-	free, err := p.freeDatabases(ctx, session)
-	if err != nil {
-		return "", err
-	}
-	if len(free) == 0 {
-		if err := p.createBatch(ctx, session, now); err != nil {
-			return "", err
-		}
-		free, err = p.freeDatabases(ctx, session)
-		if err != nil {
-			return "", err
-		}
-	}
-	if len(free) == 0 {
-		return "", errors.New("ephemeral database batch creation produced no free databases")
-	}
-
+	// The lease is locked before it exists, so a sweeper can treat an unheld
+	// lock on any test database as proof that its owner is gone.
 	leaseName := managedDatabaseName(p.config.TestPrefix, now, unique, name)
-	if _, err := session.conn.ExecContext(
-		ctx,
-		"ALTER DATABASE "+pq.QuoteIdentifier(free[0])+" RENAME TO "+pq.QuoteIdentifier(leaseName),
-	); err != nil {
-		return "", fmt.Errorf("check out ephemeral database %s: %w", leaseName, err)
+	if err := session.lock(ctx, leaseName); err != nil {
+		return "", err
+	}
+	claimed, err := p.claimFree(ctx, session, leaseName)
+	if err != nil || claimed {
+		return leaseName, err
+	}
+	if err := session.createDatabase(ctx, leaseName, ""); err != nil {
+		return "", fmt.Errorf("create ephemeral database %s: %w", leaseName, err)
 	}
 	return leaseName, nil
 }
 
-func (p *ephemeralPool) createBatch(
-	ctx context.Context,
-	session *poolSession,
-	now time.Time,
-) error {
-	for i := 0; i < p.config.BatchSize; i++ {
-		name := managedDatabaseName(p.config.PoolPrefix, now, uniqueSuffix(), "")
-		if _, err := session.conn.ExecContext(
+// claimFree renames a free pool database to leaseName under the pool lock and
+// reports whether there was one.
+func (p *ephemeralPool) claimFree(ctx context.Context, session *poolSession, leaseName string) (bool, error) {
+	if err := session.lock(ctx, p.globalLock()); err != nil {
+		return false, err
+	}
+	free, err := p.freeDatabases(ctx, session)
+	if err == nil && len(free) > 0 {
+		_, err = session.conn.ExecContext(
 			ctx,
-			"CREATE DATABASE "+pq.QuoteIdentifier(name),
-		); err != nil {
+			"ALTER DATABASE "+pq.QuoteIdentifier(free[0])+" RENAME TO "+pq.QuoteIdentifier(leaseName),
+		)
+		if err != nil {
+			err = fmt.Errorf("check out ephemeral database %s: %w", leaseName, err)
+		}
+	}
+	return err == nil && len(free) > 0, errors.Join(err, session.unlock(ctx, p.globalLock()))
+}
+
+// poolRefills holds a *refillState per pool and server, so each process runs
+// at most one refill per pool at a time.
+var poolRefills sync.Map
+
+type refillState struct {
+	running, requested atomic.Bool
+}
+
+func (p *ephemeralPool) refillState() *refillState {
+	key := redact(p.config.AdminURL) + " " + p.config.PoolPrefix
+	state, _ := poolRefills.LoadOrStore(key, &refillState{})
+	return state.(*refillState)
+}
+
+// refillInBackground tops the pool up to BatchSize free databases outside the
+// pool lock. A request that arrives while a refill is finishing starts another
+// pass, so a checkout is never left uncompensated.
+func (p *ephemeralPool) refillInBackground() {
+	state := p.refillState()
+	state.requested.Store(true)
+	if !state.running.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		for {
+			state.requested.Store(false)
+			ctx, cancel := context.WithTimeout(context.Background(), sweepTimeout)
+			if err := p.refill(ctx); err != nil {
+				logger.Warnf("dbtest: refill pool %s: %v", p.config.PoolPrefix, err)
+			}
+			cancel()
+			if state.requested.Load() {
+				continue
+			}
+			state.running.Store(false)
+			if !state.requested.Load() || !state.running.CompareAndSwap(false, true) {
+				return
+			}
+		}
+	}()
+}
+
+// refill creates pool databases one at a time until BatchSize are free,
+// recounting after each so checkouts made meanwhile are replaced too.
+func (p *ephemeralPool) refill(ctx context.Context) error {
+	session, err := openPoolSession(ctx, p.config.AdminURL)
+	if err != nil {
+		return err
+	}
+	defer session.close() //nolint:errcheck
+	for {
+		free, err := p.freeDatabases(ctx, session)
+		if err != nil || len(free) >= p.config.BatchSize {
+			return err
+		}
+		now := p.config.Now().UTC().Truncate(time.Second)
+		name := managedDatabaseName(p.config.PoolPrefix, now, uniqueSuffix(), "")
+		if err := session.createDatabase(ctx, name, ""); err != nil {
 			return fmt.Errorf("create pooled database %s: %w", name, err)
 		}
 	}
-	return nil
+}
+
+// createDatabase creates name as a copy of template, or of template1 when
+// template is empty. On PostgreSQL 15+ with fsync off it copies with STRATEGY
+// FILE_COPY, which skips writing the copy to WAL; its checkpoint costs little
+// without fsync. Measured against the WAL_LOG default on a 50MB template, it
+// was about 2x faster serially and 2-4x faster with 8 concurrent creates.
+func (s *poolSession) createDatabase(ctx context.Context, name, template string) error {
+	var fileCopy bool
+	if err := s.conn.QueryRowContext(
+		ctx,
+		"SELECT current_setting('server_version_num')::int >= 150000 AND current_setting('fsync') = 'off'",
+	).Scan(&fileCopy); err != nil {
+		return fmt.Errorf("choose CREATE DATABASE strategy: %w", err)
+	}
+	statement := "CREATE DATABASE " + pq.QuoteIdentifier(name)
+	if template != "" {
+		statement += " WITH TEMPLATE " + pq.QuoteIdentifier(template)
+	}
+	if fileCopy {
+		statement += " STRATEGY FILE_COPY"
+	}
+	_, err := s.conn.ExecContext(ctx, statement)
+	return err
 }
 
 func (p *ephemeralPool) freeDatabases(
@@ -208,43 +284,6 @@ func (p *ephemeralPool) freeDatabases(
 		return nil, fmt.Errorf("list pooled databases: %w", err)
 	}
 	return names, nil
-}
-
-func (p *ephemeralPool) cleanupStale(
-	ctx context.Context,
-	session *poolSession,
-	now time.Time,
-) error {
-	names, err := p.managedDatabases(ctx, session)
-	if err != nil {
-		return err
-	}
-	for _, name := range names {
-		// An unparseable or future-dated entry is skipped rather than fatal.
-		// cleanupStale runs under the pool-wide advisory lock, so aborting here
-		// would wedge every checkout for this prefix pair until someone cleaned
-		// up by hand - and a clock step-back is enough to produce one.
-		created, err := managedDatabaseCreatedWithPrefixes(
-			name,
-			p.config.PoolPrefix,
-			p.config.TestPrefix,
-		)
-		if err != nil {
-			logger.Warnf("dbtest: skipping unrecognised managed database %q: %v", name, err)
-			continue
-		}
-		if created.After(now) {
-			logger.Warnf("dbtest: skipping managed database %q with a future timestamp %s", name, created)
-			continue
-		}
-		if now.Sub(created) <= p.config.MaxAge {
-			continue
-		}
-		if err := p.cleanupStaleDatabase(ctx, session, name); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (p *ephemeralPool) managedDatabases(
@@ -280,37 +319,6 @@ func (p *ephemeralPool) managedDatabases(
 	return names, nil
 }
 
-func (p *ephemeralPool) cleanupStaleDatabase(
-	ctx context.Context,
-	session *poolSession,
-	name string,
-) error {
-	leaseLocked := false
-	if len(name) >= len(p.config.TestPrefix) &&
-		name[:len(p.config.TestPrefix)] == p.config.TestPrefix {
-		var err error
-		leaseLocked, err = session.tryLock(ctx, name)
-		if err != nil {
-			return err
-		}
-		if !leaseLocked {
-			return nil
-		}
-	}
-
-	active, err := session.databaseHasConnections(ctx, name)
-	if err == nil && !active {
-		err = session.dropDatabase(ctx, name, false)
-	}
-	if isObjectInUse(err) {
-		err = nil
-	}
-	if leaseLocked {
-		err = errors.Join(err, session.unlock(ctx, name))
-	}
-	return err
-}
-
 func (s *poolSession) databaseHasConnections(ctx context.Context, name string) (bool, error) {
 	var active bool
 	if err := s.conn.QueryRowContext(
@@ -339,31 +347,75 @@ func (s *poolSession) waitForDatabaseConnectionsToClose(ctx context.Context, nam
 	}
 }
 
+// dropDatabase is never cancelled once sent: PostgreSQL 15+ marks a database
+// whose drop is interrupted as invalid, leaving it unusable until dropped again.
 func (s *poolSession) dropDatabase(ctx context.Context, name string, force bool) error {
 	statement := "DROP DATABASE IF EXISTS " + pq.QuoteIdentifier(name)
 	if force {
 		statement += " WITH (FORCE)"
 	}
-	if _, err := s.conn.ExecContext(ctx, statement); err != nil {
+	if _, err := s.conn.ExecContext(context.WithoutCancel(ctx), statement); err != nil {
 		return fmt.Errorf("drop database %s: %w", name, err)
 	}
 	return nil
 }
 
-func (l *databaseLease) cleanup() error {
-	l.once.Do(func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-		l.err = errors.Join(
-			l.session.dropDatabase(ctx, l.name, true),
-			l.session.unlock(ctx, l.name),
-			l.session.close(),
-		)
-	})
+// release drops the leased database and waits for the result.
+func (l *databaseLease) release() error {
+	l.once.Do(func() { l.err = l.drop(nil) })
 	return l.err
 }
 
+// releaseInBackground returns as soon as DROP DATABASE has been written to the
+// server and finishes the drop in a goroutine. The drop runs outside a
+// transaction, so the server completes it even if this process exits before the
+// result arrives (unless the server sets client_connection_check_interval);
+// a drop that never reaches the server leaves an unlocked database for the
+// next sweep.
+func (l *databaseLease) releaseInBackground() {
+	sent := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		l.once.Do(func() { l.err = l.drop(sent) })
+		if l.err != nil {
+			logger.Warnf("dbtest: drop database %s: %v", l.name, l.err)
+		}
+	}()
+	select {
+	case <-sent:
+	case <-done:
+	}
+}
+
+// drop closes sent, when given, once the statement is flushed to the server.
+func (l *databaseLease) drop(sent chan<- struct{}) error {
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+	statement := "DROP DATABASE IF EXISTS " + pq.QuoteIdentifier(l.name) + " WITH (FORCE)"
+	dropErr := l.session.conn.Raw(func(driverConn any) error {
+		conn, ok := driverConn.(*stdlib.Conn)
+		if !ok {
+			return fmt.Errorf("unexpected database driver connection %T", driverConn)
+		}
+		// Not cancellable for the same reason as poolSession.dropDatabase.
+		result := conn.Conn().PgConn().Exec(context.WithoutCancel(ctx), statement)
+		if sent != nil {
+			close(sent)
+		}
+		results, err := result.ReadAll()
+		for _, r := range results {
+			err = errors.Join(err, r.Err)
+		}
+		return err
+	})
+	if dropErr != nil {
+		dropErr = fmt.Errorf("drop database %s: %w", l.name, dropErr)
+	}
+	return errors.Join(dropErr, l.session.unlock(ctx, l.name), l.session.close())
+}
+
 func isObjectInUse(err error) bool {
-	var pqErr *pq.Error
-	return errors.As(err, &pqErr) && string(pqErr.Code) == pgerrcode.ObjectInUse
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == pgerrcode.ObjectInUse
 }

@@ -14,21 +14,21 @@ import (
 	"github.com/flanksource/commons-db/recordstore/probe"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/recordstore/recordresults/recordresultstest"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 var _ = ginkgo.Describe("Trace plugin OpenAPI", func() {
 	ginkgo.It("describes the kinds list and a start operation per kind taking its params form", func() {
-		kinds := traces.NewKinds()
-		Expect(kinds.RegisterKind("pings", traces.NewHandler[pingParams, ping](pings{}, traces.Capabilities{Live: true}))).To(Succeed())
+		kinds := tracing.NewKinds()
+		Expect(kinds.RegisterKind("pings", tracing.NewHandler[pingParams, ping](pings{}, tracing.Capabilities{Live: true}))).To(Succeed())
 		results := recordresultstest.OpenResults(recordresults.OpenOptions{
 			Prefix: "traces", ConnectionName: "traces",
 			Settings: recordresultstest.LocalSettings(recordstore.BackendSQLite), Register: kinds.RegisterResultTypes,
 		})
-		runtime := &traces.Runtime{Kinds: kinds, Results: results, Probes: probe.NewManager(probe.ManagerOptions{}), PollEvery: time.Second}
+		runtime := &tracing.Runtime{Kinds: kinds, Results: results, Probes: probe.NewManager(probe.ManagerOptions{}), PollEvery: time.Second}
 
 		spec := &rpc.OpenAPISpec{}
-		AddTracesOpenAPI(func() *traces.Runtime { return runtime })(spec)
+		AddTracesOpenAPI(func() *tracing.Runtime { return runtime })(spec)
 
 		Expect(spec.Paths).To(HaveKey("/api/v1/traces/kinds"))
 		start := spec.Paths["/api/v1/traces/pings/sessions"]["post"]
@@ -38,11 +38,15 @@ var _ = ginkgo.Describe("Trace plugin OpenAPI", func() {
 		Expect(body.Properties["params"].Properties).To(HaveKey("count"))
 		Expect(body.Properties["params"].Properties["count"].Default).To(BeEquivalentTo(1))
 		Expect(body.Properties["duration"].Type).To(Equal("string"))
+
+		export := spec.Paths["/api/v1/traces/pings/export"]["get"]
+		Expect(export.OperationID).To(Equal("export-pings-trace"))
+		Expect(export.Parameters).To(ContainElement(HaveField("Schema.Enum", []any{"ndjson"})))
 	})
 
 	ginkgo.It("describes nothing before the server serves trace kinds", func() {
 		spec := &rpc.OpenAPISpec{}
-		AddTracesOpenAPI(func() *traces.Runtime { return nil })(spec)
+		AddTracesOpenAPI(func() *tracing.Runtime { return nil })(spec)
 		Expect(spec.Paths).To(BeEmpty())
 	})
 })
