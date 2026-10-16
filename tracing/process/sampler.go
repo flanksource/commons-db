@@ -142,6 +142,16 @@ func Key(p clickyprocess.Process) string {
 	return strconv.Itoa(p.PID) + "@" + strconv.FormatInt(p.StartedAt.Unix(), 10)
 }
 
+// ParseKey is the pid a Key names.
+func ParseKey(key string) (int, error) {
+	pid, _, _ := strings.Cut(key, "@")
+	parsed, err := strconv.Atoi(pid)
+	if err != nil || parsed <= 0 {
+		return 0, fmt.Errorf("process key %q is not <pid>@<start>", key)
+	}
+	return parsed, nil
+}
+
 // name is the base name of the program p runs.
 func name(command string) string {
 	program, _, _ := strings.Cut(strings.TrimSpace(command), " ")

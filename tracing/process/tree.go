@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"iter"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -23,8 +22,8 @@ const (
 	SamplesKind = "process_samples"
 )
 
-// maxStackBytes cuts a stored stack longer than this.
-const maxStackBytes = 1 << 20
+// maxValueBytes cuts a stored command or environment value longer than this.
+const maxValueBytes = 64 << 10
 
 // Node is one process of the tree as last seen: its stream holds each process
 // once, replaced as it changes, and keeps it after it exits.
@@ -49,38 +48,47 @@ type Node struct {
 	RSSBytes       uint64   `json:"rssBytes" pretty:"label=RSS,type=bytes" sort:"rssBytes"`
 	PeakCPUPercent *float64 `json:"peakCpuPercent,omitempty" pretty:"label=Peak CPU %" sort:"peakCpuPercent"`
 	PeakRSSBytes   uint64   `json:"peakRssBytes" pretty:"label=Peak RSS,type=bytes" sort:"peakRssBytes"`
-	// Stack is the process's stacks at the latest checkpoint that dumped them
-	// (CheckpointRequest), StackError why that dump failed, and StackReason
-	// why it was asked for.
-	Stack            string     `json:"stack,omitempty" pretty:"hide" filter:"none"`
-	StackCollectedAt *time.Time `json:"stackCollectedAt,omitempty" pretty:"hide"`
-	StackError       string     `json:"stackError,omitempty" pretty:"hide"`
-	StackReason      string     `json:"stackReason,omitempty" pretty:"hide"`
-	// CaptureModes are the CaptureModes its stacks can be dumped with.
-	CaptureModes []string `json:"captureModes,omitempty" pretty:"hide"`
+	// StackTransports are the stack dump transports (the stacks kind's) its
+	// stacks can be dumped with.
+	StackTransports []StackTransport `json:"stackTransports,omitempty" pretty:"hide"`
+	// Environment is the process's environment as its node was created, its
+	// secrets masked, when the capture reads it (TreeParams.Environment);
+	// EnvironmentError is why it could not be read.
+	Environment      map[string]string `json:"environment,omitempty" pretty:"hide" filter:"none"`
+	EnvironmentError string            `json:"environmentError,omitempty" pretty:"hide"`
+}
+
+// StackTransport is a transport a process's stacks can be dumped with, and
+// whether dumping with it kills the process.
+type StackTransport struct {
+	Transport   string `json:"transport"`
+	Destructive bool   `json:"destructive"`
+}
+
+// TransportLister lists the stack transports that can dump pid, as the
+// stacks kind's Dumpers do.
+type TransportLister interface {
+	Transports(pid int) []StackTransport
 }
 
 // TreeOptions are the host's choices for the process_tree kind.
 type TreeOptions struct {
-	// LookPath finds the OS's native stack sampler; nil is exec.LookPath.
-	LookPath func(file string) (string, error)
-	// Run runs the native stack sampler at path, its output the stacks it
-	// dumped; nil runs it as a child process.
-	Run func(ctx context.Context, path string, args ...string) (string, error)
+	// Dumpers list the stack transports of each node; nil lists none.
+	Dumpers TransportLister
 }
 
 type tree struct {
 	sampler *Sampler
-	native  nativeSampler
+	dumpers TransportLister
 }
 
-func (tree) Params() Params { return Params{} }
+func (tree) Params() TreeParams { return TreeParams{} }
 
 func (tree) Schema() recordresults.ResultType[Node] {
 	return recordresults.ResultType[Node]{
 		Title: "Process tree", TimeColumn: "startedAt", KeyColumn: "key", OnConflict: recordstore.OnConflictReplace,
-		Hierarchy:  &recordresults.HierarchyColumns{ID: "key", Parent: "parentKey"},
-		Compressed: []string{"stack"}, SearchColumns: []string{"name", "command"},
+		Hierarchy:     &recordresults.HierarchyColumns{ID: "key", Parent: "parentKey"},
+		SearchColumns: []string{"name", "command"},
 	}
 }
 
@@ -89,20 +97,24 @@ type treeRunKey struct{}
 // treeRun is a capture's view of the tree: the processes alive at its latest
 // tick, and those that exited, by key.
 type treeRun struct {
-	mu       sync.Mutex
-	root     int
-	interval time.Duration
-	live     map[string]*Node
-	exited   map[string]*Node
+	mu          sync.Mutex
+	root        int
+	interval    time.Duration
+	environment *EnvironmentParams
+	live        map[string]*Node
+	exited      map[string]*Node
 }
 
 // Prepare refuses a root that is not running, before the session starts.
-func (t tree) Prepare(ctx dbcontext.Context, params Params, _ tracing.Emitter[Node]) (dbcontext.Context, func() error, error) {
+func (t tree) Prepare(ctx dbcontext.Context, params TreeParams, _ tracing.Emitter[Node]) (dbcontext.Context, func() error, error) {
 	interval, err := params.interval()
 	if err != nil {
 		return ctx, nil, err
 	}
-	run := &treeRun{root: params.root(), interval: interval, live: map[string]*Node{}, exited: map[string]*Node{}}
+	run := &treeRun{
+		root: params.root(), interval: interval, environment: params.Environment,
+		live: map[string]*Node{}, exited: map[string]*Node{},
+	}
 	processes, _, err := t.sampler.subtree(ctx, run.root)
 	if err != nil {
 		return ctx, nil, err
@@ -115,12 +127,17 @@ func (t tree) Prepare(ctx dbcontext.Context, params Params, _ tracing.Emitter[No
 
 // Handle observes the tree every interval until the capture stops or its root
 // exits, then once more under a context the stop does not cancel.
-func (t tree) Handle(ctx dbcontext.Context, _ Params, records tracing.Emitter[Node], _ tracing.Records[Node]) error {
+func (t tree) Handle(ctx dbcontext.Context, _ TreeParams, records tracing.Emitter[Node], _ tracing.Records[Node]) error {
 	run := ctx.Value(treeRunKey{}).(*treeRun)
 	ticker := time.NewTicker(run.interval)
 	defer ticker.Stop()
 	for {
-		if err := t.observe(ctx, run, records); err != nil {
+		err := t.observe(ctx, run, records)
+		if ctx.Err() != nil {
+			// Stopped, possibly mid-tick: the final observation records how the tree ended.
+			return t.finalObserve(ctx, run, records)
+		}
+		if err != nil {
 			if errors.Is(err, errRootGone) {
 				return nil
 			}
@@ -128,14 +145,28 @@ func (t tree) Handle(ctx dbcontext.Context, _ Params, records tracing.Emitter[No
 		}
 		select {
 		case <-ctx.Done():
-			err := t.observe(context.WithoutCancel(ctx), run, records)
-			if errors.Is(err, errRootGone) {
-				return nil
-			}
-			return err
+			return t.finalObserve(ctx, run, records)
 		case <-ticker.C:
 		}
 	}
+}
+
+func (t tree) finalObserve(ctx dbcontext.Context, run *treeRun, records tracing.Emitter[Node]) error {
+	err := t.observe(context.WithoutCancel(ctx), run, records)
+	if errors.Is(err, errRootGone) {
+		return nil
+	}
+	return err
+}
+
+// Checkpoint observes the tree, so every change since the previous tick is
+// committed with the checkpoint.
+func (t tree) Checkpoint(ctx dbcontext.Context, _ TreeParams, records tracing.Emitter[Node]) error {
+	err := t.observe(ctx, ctx.Value(treeRunKey{}).(*treeRun), records)
+	if errors.Is(err, errRootGone) {
+		return nil
+	}
+	return err
 }
 
 // observe emits every process that started or changed since the previous
@@ -190,7 +221,7 @@ func (t tree) observe(ctx context.Context, run *treeRun, records tracing.Emitter
 }
 
 // start emits the processes seen for the first time, with their working
-// directories, which are read only once.
+// directories, stack transports and environments, which are read only once.
 func (t tree) start(ctx context.Context, run *treeRun, started []observed, keys map[int]string, listedAt time.Time, records tracing.Emitter[Node]) error {
 	if len(started) == 0 {
 		return nil
@@ -206,13 +237,30 @@ func (t tree) start(ctx context.Context, run *treeRun, started []observed, keys 
 		withDir, _ := withCWD.Get(p.PID)
 		p.CWD = withDir.CWD
 		node := newNode(p, keys[p.PPID], p.PID == run.root, listedAt)
-		node.CaptureModes = t.captureModes(p.PID)
+		t.describe(ctx, run, node)
 		run.live[node.Key] = node
 		if err := records.Emit(ctx, *node); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// describe reads what a node keeps from its creation on: the transports its
+// stacks can be dumped with and, when the capture reads it, its environment.
+func (t tree) describe(ctx context.Context, run *treeRun, node *Node) {
+	if t.dumpers != nil {
+		node.StackTransports = t.dumpers.Transports(node.PID)
+	}
+	if run.environment == nil {
+		return
+	}
+	environment, err := clickyprocess.Environment(ctx, node.PID, run.environment.options())
+	if err != nil {
+		node.EnvironmentError = err.Error()
+		return
+	}
+	node.Environment = environment
 }
 
 func newNode(p observed, parentKey string, isRoot bool, listedAt time.Time) *Node {
@@ -273,16 +321,9 @@ func (tree) Summarize(rows iter.Seq[Node]) (map[string]any, error) {
 }
 
 // NewTreeKind is the process_tree kind over sampler: each process stored
-// once and replaced as it changes, its stacks cut at 1MiB. The native
-// stack sampler is looked up once, here.
-func NewTreeKind(sampler *Sampler, options TreeOptions) *tracing.Handler[Params, Node] {
-	lookPath, run := options.LookPath, options.Run
-	if lookPath == nil {
-		lookPath = exec.LookPath
-	}
-	if run == nil {
-		run = runCommand
-	}
-	return tracing.NewHandler[Params, Node](tree{sampler: sampler, native: findNativeSampler(lookPath, run)}, tracing.Capabilities{Live: true}).
-		WithTruncation(maxStackBytes)
+// once and replaced as it changes, its secrets masked and its values cut at
+// 64KiB.
+func NewTreeKind(sampler *Sampler, options TreeOptions) *tracing.Handler[TreeParams, Node] {
+	return tracing.NewHandler[TreeParams, Node](tree{sampler: sampler, dumpers: options.Dumpers}, tracing.Capabilities{Live: true}).
+		WithSecretMasking("key").WithTruncation(maxValueBytes)
 }

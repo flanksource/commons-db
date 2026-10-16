@@ -12,7 +12,15 @@ import (
 	// The specs open results stores, whose profiles page through the sqlite
 	// provider.
 	_ "github.com/flanksource/commons-db/query/providers/sqlite"
+	"github.com/flanksource/commons-db/tracing/tracingtest"
 )
+
+// goChild is the Go child binary the facet specs observe.
+var goChild string
+
+var _ = BeforeSuite(func() {
+	goChild = tracingtest.GoChildBinary(GinkgoT().TempDir())
+})
 
 func TestProcess(t *testing.T) {
 	RegisterFailHandler(Fail)

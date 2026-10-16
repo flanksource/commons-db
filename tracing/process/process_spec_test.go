@@ -3,7 +3,6 @@ package process_test
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"os/exec"
 	"strconv"
 	"syscall"
@@ -12,6 +11,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
+	"github.com/onsi/gomega/types"
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -35,14 +35,10 @@ func spawnTree(script string) int {
 	return pid
 }
 
-func newEnv(options ...process.TreeOptions) tracingtest.Env {
+func newEnv() tracingtest.Env {
 	sampler := process.NewSampler()
-	var treeOptions process.TreeOptions
-	if len(options) > 0 {
-		treeOptions = options[0]
-	}
 	return tracingtest.NewEnv(map[string]tracing.TracePlugin{
-		process.TreeKind:    process.NewTreeKind(sampler, treeOptions),
+		process.TreeKind:    process.NewTreeKind(sampler, process.TreeOptions{}),
 		process.SamplesKind: process.NewSamplesKind(sampler),
 	})
 }
@@ -115,38 +111,37 @@ var _ = Describe("process_tree", func() {
 		}), "the CPU peak appears once a process was rated over a full second")
 	})
 
-	It("dumps the host's goroutines onto its root node at a checkpoint", func() {
-		env := newEnv()
-		managed := start(env, process.TreeKind, os.Getpid())
-		Expect(env.Runtime.Checkpoint(context.Background(), managed)).To(Succeed())
-		var root recordstore.Row
-		for _, row := range nodes(env, managed.Session()) {
-			if row["isRoot"] == true {
-				root = row
-			}
-		}
-		Expect(root).To(HaveKeyWithValue("stack", ContainSubstring("goroutine ")))
-		Expect(root).To(HaveKeyWithValue("stackCollectedAt", Not(BeNil())))
-		Expect(root).To(HaveKeyWithValue("captureModes", ContainElement("inprocess")))
-	})
+	DescribeTable("reads each process's environment once, limited by the environment param and its secrets masked",
+		func(environment string, want types.GomegaMatcher) {
+			cmd := exec.Command("sleep", "30")
+			cmd.Env = []string{"ACME_API_TOKEN=s3cr3t-value", "ACME_REGION=eu-west-1", "OTHER=kept-out"}
+			cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+			Expect(cmd.Start()).To(Succeed())
+			DeferCleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+			env := newEnv()
+			managed, err := env.Runtime.Start(dbcontext.New(), tracing.StartRequest{
+				Kind:   process.TreeKind,
+				Params: json.RawMessage(`{"rootPid": ` + strconv.Itoa(cmd.Process.Pid) + `, "interval": ` + interval + environment + `}`),
+			})
+			Expect(err).ToNot(HaveOccurred())
+			Eventually(func() map[string]recordstore.Row { return nodes(env, managed.Session()) }).WithTimeout(5 * time.Second).
+				Should(HaveKeyWithValue("sleep 30", want))
+		},
+		Entry("absent reads none", ``, And(HaveKeyWithValue("environment", BeNil()), HaveKeyWithValue("environmentError", BeNil()))),
+		Entry("prefixes read the variables they name", `, "environment": {"prefixes": ["ACME_"]}`,
+			HaveKeyWithValue("environment", Equal(map[string]any{"ACME_API_TOKEN": "****", "ACME_REGION": "eu-west-1"}))),
+		Entry("empty reads all of it", `, "environment": {}`,
+			HaveKeyWithValue("environment", And(HaveKeyWithValue("OTHER", "kept-out"), HaveKeyWithValue("ACME_API_TOKEN", "****")))),
+	)
 
-	It("records why another process's stacks cannot be dumped without a native sampler", func() {
-		root := spawnTree("sleep 30")
-		env := newEnv(process.TreeOptions{LookPath: func(string) (string, error) { return "", exec.ErrNotFound }})
+	It("re-observes the tree at a checkpoint, refusing params it never reads", func() {
+		root := spawnTree("sleep 30 & wait")
+		env := newEnv()
 		managed := start(env, process.TreeKind, root)
 		Expect(env.Runtime.Checkpoint(context.Background(), managed)).To(Succeed())
-		// Whether sh execs its only command (bash) or forks it (dash), the
-		// root is the process at root's pid.
-		var rootRow recordstore.Row
-		for _, row := range nodes(env, managed.Session()) {
-			if row["isRoot"] == true {
-				rootRow = row
-			}
-		}
-		Expect(rootRow).To(HaveKeyWithValue("pid", int64(root)))
-		Expect(rootRow).To(HaveKeyWithValue("stackError", And(ContainSubstring("not the host process"), ContainSubstring(nativeTool()))))
-		Expect(rootRow).To(HaveKeyWithValue("stack", BeNil()))
-		Expect(rootRow).To(HaveKeyWithValue("captureModes", BeNil()))
+		Expect(nodes(env, managed.Session())).To(HaveKey("sleep 30"), "committed by the checkpoint")
+		err := env.Runtime.Checkpoint(tracing.WithCheckpointParams(context.Background(), json.RawMessage(`{"key": "1@1"}`)), managed)
+		Expect(err).To(MatchError(tracing.ErrCheckpointParams))
 	})
 
 	DescribeTable("refuses params it cannot capture under before a session exists",
