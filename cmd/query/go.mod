@@ -7,9 +7,9 @@ require (
 	github.com/flanksource/captain v0.0.69
 	// Kept in lockstep with the root module's clicky pin (see ../../go.mod):
 	// a workspace build resolves one clicky for both modules.
-	github.com/flanksource/clicky v1.21.78
-	github.com/flanksource/clicky/aichat v1.21.78
-	github.com/flanksource/clicky/valkey v1.21.78
+	github.com/flanksource/clicky v1.21.80
+	github.com/flanksource/clicky/aichat v1.21.80
+	github.com/flanksource/clicky/valkey v1.21.80
 	github.com/flanksource/commons v1.60.1
 	github.com/flanksource/commons-db v0.1.50
 	github.com/flanksource/commons-db/recordstore v0.1.45
@@ -162,7 +162,7 @@ require (
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
-	github.com/flanksource/sqlglot-go v0.4.0-flanksource.2 // indirect
+	github.com/flanksource/sqlglot-go v1.0.0 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
