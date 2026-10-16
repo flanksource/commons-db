@@ -87,8 +87,20 @@ func (a *attachment) start() {
 		return
 	}
 	a.started = true
-	a.w.Header().Set("Content-Type", a.format.MIME)
+	// A plugin's format must not turn captured bytes into an active browser document.
+	switch a.format.MIME {
+	case "application/x-ndjson":
+		a.w.Header().Set("Content-Type", "application/x-ndjson")
+	case "application/json":
+		a.w.Header().Set("Content-Type", "application/json")
+	case "application/x-asciicast":
+		a.w.Header().Set("Content-Type", "application/x-asciicast")
+	default:
+		a.w.Header().Set("Content-Type", "application/octet-stream")
+	}
 	a.w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", a.filename))
+	a.w.Header().Set("X-Content-Type-Options", "nosniff")
+	a.w.Header().Set("Content-Security-Policy", "sandbox")
 	a.w.WriteHeader(http.StatusOK)
 }
 

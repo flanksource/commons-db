@@ -256,6 +256,8 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 			response := h.do(http.MethodGet, "/api/v1/traces/pings/export?format=ndjson&afterSeq=1&stream="+stream, "")
 			Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 			Expect(response.Header().Get("Content-Type")).To(Equal("application/x-ndjson"))
+			Expect(response.Header().Get("X-Content-Type-Options")).To(Equal("nosniff"))
+			Expect(response.Header().Get("Content-Security-Policy")).To(Equal("sandbox"))
 			Expect(response.Header().Get("Content-Disposition")).To(Equal(`attachment; filename="pings-` + stream + `.ndjson"`))
 			var row map[string]any
 			Expect(json.Unmarshal(response.Body.Bytes(), &row)).To(Succeed(), "one row: the window after seq 1")

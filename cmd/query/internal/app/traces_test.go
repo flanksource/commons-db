@@ -107,5 +107,5 @@ func TestServeServesTheTraceKinds(t *testing.T) {
 	for _, info := range infos {
 		names = append(names, info.Name)
 	}
-	require.Equal(t, []string{"http", "http_proxy", "opensearch", "pg_proxy", "process_samples", "process_tree", "sql_statements", "sql_xevent", "terminal"}, names)
+	require.Equal(t, []string{"goprof", "http", "http_proxy", "opensearch", "pg_proxy", "process_samples", "process_tree", "sql_statements", "sql_xevent", "stacks", "terminal"}, names)
 }

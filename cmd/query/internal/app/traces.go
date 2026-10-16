@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/flanksource/commons-db/tracing"
+	"github.com/flanksource/commons-db/tracing/goprof"
 	"github.com/flanksource/commons-db/tracing/http"
 	"github.com/flanksource/commons-db/tracing/httpproxy"
 	"github.com/flanksource/commons-db/tracing/opensearch"
@@ -22,6 +23,7 @@ import (
 	"github.com/flanksource/commons-db/tracing/process"
 	"github.com/flanksource/commons-db/tracing/sqlserver/xevent"
 	"github.com/flanksource/commons-db/tracing/sqlstatements"
+	"github.com/flanksource/commons-db/tracing/stacks"
 	"github.com/flanksource/commons-db/tracing/terminal"
 )
 
@@ -29,15 +31,23 @@ import (
 func traceKinds() (*tracing.Kinds, error) {
 	kinds := tracing.NewKinds()
 	sampler := process.NewSampler()
+	dumpers, err := stacks.NewDumpers(stacks.InProcess(), stacks.Native(stacks.NativeOptions{}))
+	if err != nil {
+		return nil, err
+	}
 	for name, plugin := range map[string]tracing.TracePlugin{
 		"http":                http.Kind(),
 		"opensearch":          opensearch.Kind(),
 		sqlstatements.RowKind: sqlstatements.Kind(),
 		"sql_xevent":          xevent.Kind(),
-		process.TreeKind:      process.NewTreeKind(sampler, process.TreeOptions{}),
+		process.TreeKind:      process.NewTreeKind(sampler, process.TreeOptions{Dumpers: dumpers}),
 		process.SamplesKind:   process.NewSamplesKind(sampler),
-		httpproxy.Kind:        httpproxy.NewKind(),
-		pgproxy.Kind:          pgproxy.NewKind(),
+		stacks.Kind:           stacks.NewKind(dumpers),
+		// Serve knows no process's pprof or gops address: it reads profile
+		// files, and the goprof streams of a host's store.
+		goprof.Kind:    goprof.NewKind(nil),
+		httpproxy.Kind: httpproxy.NewKind(),
+		pgproxy.Kind:   pgproxy.NewKind(),
 		// A terminal capture records only what a host feeds it, which serve
 		// never does; it is served so the streams of a host's store
 		// (--traces-dir) read and export.
