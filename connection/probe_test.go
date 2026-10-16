@@ -4,10 +4,15 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/types"
+	git "github.com/go-git/go-git/v5"
+	"github.com/go-git/go-git/v5/plumbing/object"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -41,5 +46,37 @@ var _ = Describe("model connection probes", func() {
 		result, err := connection.ProbeModel(ctx, models.Connection{Type: models.ConnectionTypeSQLite, URL: path})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result).To(Equal(connection.ProbeResult{OK: true}))
+	})
+
+	It("lists references from a saved Git repository", func(ctx SpecContext) {
+		repositoryPath := filepath.Join(GinkgoT().TempDir(), "source")
+		repository, err := git.PlainInit(repositoryPath, false)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(os.WriteFile(filepath.Join(repositoryPath, "README.md"), []byte("example\n"), 0600)).To(Succeed())
+		worktree, err := repository.Worktree()
+		Expect(err).ToNot(HaveOccurred())
+		_, err = worktree.Add("README.md")
+		Expect(err).ToNot(HaveOccurred())
+		_, err = worktree.Commit("Initial commit", &git.CommitOptions{Author: &object.Signature{Name: "Example", Email: "example@example.org", When: time.Now()}})
+		Expect(err).ToNot(HaveOccurred())
+		result, err := connection.ProbeModel(ctx, models.Connection{Type: models.ConnectionTypeGit, URL: repositoryPath})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.OK).To(BeTrue())
+	})
+
+	It("lists S3 buckets using a saved endpoint and credentials", func(ctx SpecContext) {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			Expect(r.Method).To(Equal(http.MethodGet))
+			Expect(r.URL.Path).To(Equal("/"))
+			Expect(r.Header.Get("Authorization")).To(ContainSubstring("test-access"))
+			w.Header().Set("Content-Type", "application/xml")
+			_, err := w.Write([]byte(`<ListAllMyBucketsResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><Buckets></Buckets></ListAllMyBucketsResult>`))
+			Expect(err).ToNot(HaveOccurred())
+		}))
+		defer server.Close()
+		result, err := connection.ProbeModel(ctx, models.Connection{Type: models.ConnectionTypeS3, URL: server.URL,
+			Username: "test-access", Password: "test-secret", Properties: types.JSONStringMap{"region": "us-east-1"}})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.OK).To(BeTrue())
 	})
 })
