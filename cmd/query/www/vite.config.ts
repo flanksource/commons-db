@@ -35,6 +35,7 @@ export function clickyUIDevAliases(command: ConfigEnv["command"], mode: ConfigEn
       "chat",
       "clicky",
       "components",
+      "connections",
       "data",
       "devtools",
       "hooks",
