@@ -17,6 +17,7 @@ import {
   setFallbackIconProvider,
 } from "@flanksource/clicky-ui";
 import { clickyIconProvider } from "@flanksource/clicky-ui/icons";
+import { FlanksourceIcon } from "@flanksource/clicky-ui/connections";
 import {
   configureProfiles,
   type ProfileSchema,
@@ -25,7 +26,6 @@ import profileSchemaDocument from "../../../../schemas/profile.json";
 import "./styles.css";
 import "@flanksource/clicky-ui/styles.css";
 import { App, formExtensions } from "./App";
-import { FlanksourceIcon } from "./iconProvider";
 import { mountPath } from "./mount";
 
 // The profile editor ships in clicky-ui, but the schema it renders is generated

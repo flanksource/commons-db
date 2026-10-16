@@ -18,12 +18,15 @@ import {
 } from "@flanksource/clicky-ui/devtools";
 import { ChatButton, ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import {
+  connectionLoggingFormExtensions,
+  createConnectionDashboardResultRenderer,
+  createConnectionFormActions,
+} from "@flanksource/clicky-ui/connections";
 import { secretFormExtensions } from "./secretKeySelector";
 import { namespaceFormExtensions } from "./namespacePicker";
-import { connectionFormActions } from "./connectionActions";
 import { logsResultRenderer, useLogsSurfaces } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
-import { connectionDashboardResultRenderer } from "./connectionDashboardRenderer";
 import { getMonacoWorker } from "./monacoWorkers";
 import { queryChatConfig } from "./chatWidget";
 import { isQueryChatOperation } from "./chatOperations";
@@ -36,7 +39,6 @@ import {
 } from "@flanksource/clicky-ui/profiles";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
 import { jsonPathFormExtensions } from "./jsonPathPicker";
-import { connectionLoggingFormExtensions } from "./connectionLogging";
 import { BuildProfileButton } from "./buildProfileAction";
 import { EditProfileButton, ProfileEditorPage } from "./editProfileAction";
 import { isProfileSurface } from "./profileUpdateOperation";
@@ -51,6 +53,11 @@ import {
 } from "./profileConnectionMapping";
 
 const unitFormExtensions = createUnitFormExtensions();
+
+// The connections service is mounted at /api/v1 under the path the server
+// mounted the app at.
+const connectionsApiBase = `${mountPath}/api/v1`;
+const connectionFormActions = createConnectionFormActions({ apiBase: connectionsApiBase });
 
 // Compose the form extensions: the namespace picker, the secret/workload url
 // selector (which reads the selected namespace from the form's root value), the
@@ -116,13 +123,18 @@ const queryClient = new QueryClient();
 // the result renderer so `render: logs` profiles present via clicky-ui LogsTable.
 function Explorer() {
 	const { client, dialog } = useProfileConnectionMapping(baseClient);
-  const pathname = useRouter().pathname;
+  const { pathname, renderLink } = useRouter();
   const editingProfile = profileEditSurfaceKey(pathname);
   const reconcilingProfile = reconcileSurfaceKey(pathname);
   const logsSurfaces = useLogsSurfaces();
   const renderLogsResult = logsResultRenderer(logsSurfaces);
+  const renderConnectionDashboard = createConnectionDashboardResultRenderer({
+    apiBase: connectionsApiBase,
+    renderConnectionLink: (connection, link) =>
+      renderLink({ ...link, to: `/connection/${encodeURIComponent(connection.id)}` }),
+  });
   const renderResult = (context: ResultRenderContext) => {
-    const connectionResult = connectionDashboardResultRenderer(context);
+    const connectionResult = renderConnectionDashboard(context);
     if (connectionResult !== context.defaultView) return connectionResult;
     const defaultResult = renderLogsResult(context);
     const result =
