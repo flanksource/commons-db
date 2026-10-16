@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strconv"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/fs"
 	"github.com/flanksource/commons-db/models"
@@ -86,5 +88,10 @@ func (c *S3Connection) Filesystem(ctx context.Context) (fs.FilesystemRW, error) 
 	if err != nil {
 		return nil, err
 	}
-	return fs.NewS3FS(ctx, c.Bucket, cfg), nil
+	return fs.NewS3FS(ctx, c.Bucket, cfg, func(o *s3.Options) {
+		if c.Endpoint != "" {
+			o.BaseEndpoint = aws.String(c.Endpoint)
+		}
+		o.UsePathStyle = c.UsePathStyle
+	}), nil
 }

@@ -2,9 +2,11 @@ package fs_test
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 
@@ -167,5 +169,48 @@ func TestLocalFS_ConcurrentWrites(t *testing.T) {
 
 	if len(entries) != numGoroutines {
 		t.Errorf("Expected %d files, got %d", numGoroutines, len(entries))
+	}
+}
+
+func TestLocalFS_WriteClosesTheFile(t *testing.T) {
+	if _, err := os.Stat("/proc/self/fd"); err != nil {
+		t.Skip("counting open files needs /proc/self/fd")
+	}
+	// A leaked *os.File is closed by its finalizer, so keep the GC from hiding the leak.
+	defer debug.SetGCPercent(debug.SetGCPercent(-1))
+	openFiles := func() int {
+		entries, err := os.ReadDir("/proc/self/fd")
+		if err != nil {
+			t.Fatalf("list open files: %v", err)
+		}
+		return len(entries)
+	}
+	localFS := fs.NewLocalFS(t.TempDir())
+	before := openFiles()
+	for i := range 20 {
+		if _, err := localFS.Write(context.Background(), fmt.Sprintf("file-%d.txt", i), strings.NewReader("data")); err != nil {
+			t.Fatalf("Write failed: %v", err)
+		}
+	}
+	if leaked := openFiles() - before; leaked > 0 {
+		t.Errorf("20 writes left %d files open", leaked)
+	}
+}
+
+func TestLocalFS_Delete(t *testing.T) {
+	localFS := fs.NewLocalFS(t.TempDir())
+	ctx := context.Background()
+	if _, err := localFS.Write(ctx, "dir/file.txt", strings.NewReader("data")); err != nil {
+		t.Fatalf("Write failed: %v", err)
+	}
+
+	if err := localFS.Delete(ctx, "dir/file.txt"); err != nil {
+		t.Fatalf("Delete failed: %v", err)
+	}
+	if _, err := localFS.Stat("dir/file.txt"); !os.IsNotExist(err) {
+		t.Errorf("Stat after Delete: got %v, want a not-exist error", err)
+	}
+	if err := localFS.Delete(ctx, "dir/file.txt"); err != nil {
+		t.Errorf("deleting a missing file: got %v, want nil", err)
 	}
 }

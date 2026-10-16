@@ -100,12 +100,19 @@ func (s *smbFS) Write(ctx context.Context, path string, data io.Reader) (os.File
 		return nil, err
 	}
 
-	_, err = io.Copy(f, data)
-	if err != nil {
+	if _, err := io.Copy(f, data); err != nil {
+		_ = f.Close()
 		return nil, fmt.Errorf("error writing file: %w", err)
 	}
 
-	return f.Stat()
+	info, err := f.Stat()
+	if closeErr := f.Close(); closeErr != nil && err == nil {
+		err = fmt.Errorf("error closing %s: %w", path, closeErr)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return info, nil
 }
 
 func (t *smbFS) ReadDir(name string) ([]FileInfo, error) {
@@ -145,4 +152,12 @@ func (t *smbFS) ReadDirGlob(name string) ([]FileInfo, error) {
 	}
 
 	return output, nil
+}
+
+// Delete removes the file at path. A missing file is not an error.
+func (s *smbFS) Delete(ctx context.Context, path string) error {
+	if err := s.SMBSession.Share.Remove(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }

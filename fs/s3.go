@@ -65,10 +65,12 @@ type s3FS struct {
 	Bucket string
 }
 
-func NewS3FS(ctx context.Context, bucket string, cfg aws.Config) *s3FS {
+// NewS3FS returns a filesystem over bucket. optFns adjust the S3 client, e.g. its
+// endpoint or path-style addressing.
+func NewS3FS(ctx context.Context, bucket string, cfg aws.Config, optFns ...func(*s3.Options)) *s3FS {
 	client := &s3FS{
 		maxObjects: 50 * 10_000,
-		Client:     s3.NewFromConfig(cfg),
+		Client:     s3.NewFromConfig(cfg, optFns...),
 		Bucket:     strings.TrimPrefix(bucket, "s3://"),
 	}
 
@@ -179,4 +181,13 @@ func (t *s3FS) Write(ctx context.Context, path string, data io.Reader) (os.FileI
 	}
 
 	return t.Stat(path)
+}
+
+// Delete removes the object at key. A missing object is not an error.
+func (t *s3FS) Delete(ctx context.Context, key string) error {
+	_, err := t.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
+		Bucket: aws.String(t.Bucket),
+		Key:    aws.String(key),
+	})
+	return err
 }

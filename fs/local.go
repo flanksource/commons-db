@@ -101,10 +101,22 @@ func (t *localFS) Write(ctx context.Context, path string, data io.Reader) (os.Fi
 		return nil, err
 	}
 
-	_, err = io.Copy(f, data)
-	if err != nil {
+	if _, err := io.Copy(f, data); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 
+	if err := f.Close(); err != nil {
+		return nil, fmt.Errorf("error closing %s: %w", fullpath, err)
+	}
+
 	return t.Stat(path)
+}
+
+// Delete removes the file at path. A missing file is not an error.
+func (t *localFS) Delete(ctx context.Context, path string) error {
+	if err := os.Remove(filepath.Join(t.base, path)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
 }
