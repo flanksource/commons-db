@@ -3,6 +3,7 @@ package sessions
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -48,18 +49,32 @@ func (h *sessionHandler) stop(w http.ResponseWriter, r *http.Request, id string)
 	h.writeLive(w, r, http.StatusOK, session)
 }
 
-// checkpoint has the running trace capture of session id take a reading and
-// commit what it emitted, then answers the session. A session that is no
-// running capture of this server's trace runtime is a conflict.
+// maxCheckpointBody bounds a checkpoint's params, which can carry a stack
+// dumped elsewhere.
+const maxCheckpointBody = 8 << 20
+
+// checkpoint has the running trace capture of session id take a reading,
+// with the params its JSON body gives the kind, and commit what it emitted,
+// then answers the session. A session that is no running capture of this
+// server's trace runtime is a conflict; params its kind refuses or does not
+// read are a bad request.
 func (h *sessionHandler) checkpoint(w http.ResponseWriter, r *http.Request, id string) {
 	session, ok := h.liveFor(w, r, id, "checkpoint", ActionCheckpoint)
 	if !ok {
 		return
 	}
-	if err := h.traces.CheckpointSession(r.Context(), id); err != nil {
+	params, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCheckpointBody))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("checkpoint session %s: read params: %v", id, err), http.StatusBadRequest)
+		return
+	}
+	if err := h.traces.CheckpointSession(tracing.WithCheckpointParams(r.Context(), params), id); err != nil {
 		status := http.StatusInternalServerError
-		if errors.Is(err, tracing.ErrNoCapture) {
+		switch {
+		case errors.Is(err, tracing.ErrNoCapture):
 			status = http.StatusConflict
+		case errors.Is(err, tracing.ErrCheckpointParams):
+			status = http.StatusBadRequest
 		}
 		http.Error(w, err.Error(), status)
 		return

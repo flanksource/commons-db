@@ -135,6 +135,8 @@ type runningCapture struct {
 // Checkpointer takes its reading, and the session is then sampled, so the
 // reading and anything the capture emitted before it are committed when
 // Checkpoint returns. The session's background polls are not checkpoints.
+// Params ctx carries (WithCheckpointParams) go to the kind's reading; ones it
+// refuses or never reads are ErrCheckpointParams.
 func (r *Runtime) Checkpoint(ctx context.Context, managed *query.ManagedSession) error {
 	if running, ok := r.sources.Load(managed.Session().ID()); ok {
 		if err := running.(runningCapture).source.takeCheckpoint(ctx); err != nil {

@@ -379,11 +379,13 @@ func (h *Handler[P, R]) open(ctx dbcontext.Context, options openOptions) (*sourc
 	if err := src.closeExports(); err != nil {
 		return nil, errors.Join(fmt.Errorf("prepare: %w", err), release())
 	}
+	var read func(context.Context) error
 	if checkpointer, ok := h.handler.(Checkpointer[P, R]); ok {
-		src.checkpoint = func(ctx context.Context) error {
+		read = func(ctx context.Context) error {
 			return checkpointer.Checkpoint(captureCtx.Wrap(checkpointContext{Context: ctx, capture: captureCtx}), params, emitter)
 		}
 	}
+	src.checkpoint = func(ctx context.Context) error { return takeCheckpointReading(ctx, options.kind, read) }
 	records := storedRecords[R]{store: options.store, stream: options.stream, jsonPaths: h.jsonPaths}
 	src.prepare(captureCtx, func(capture dbcontext.Context) error {
 		return h.handler.Handle(capture, params, emitter, records)
@@ -432,13 +434,8 @@ func (h *Handler[P, R]) decodeParams(params json.RawMessage) (P, error) {
 	}
 	trimmed := bytes.TrimSpace(params)
 	if len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
-		decoder := json.NewDecoder(bytes.NewReader(trimmed))
-		decoder.DisallowUnknownFields()
-		if err := decoder.Decode(&decoded); err != nil {
+		if err := decodeStrict(trimmed, &decoded); err != nil {
 			return decoded, fmt.Errorf("params: %w", err)
-		}
-		if _, err := decoder.Token(); !errors.Is(err, io.EOF) {
-			return decoded, errors.New("params: trailing data after the params object")
 		}
 	}
 	if validator, ok := any(decoded).(Validator); ok {

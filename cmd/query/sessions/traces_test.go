@@ -303,6 +303,12 @@ var _ = ginkgo.Describe("Trace plugin routes", func() {
 			}).WithTimeout(5 * time.Second).Should(Equal(int64(2)))
 		})
 
+		ginkgo.It("refuses checkpoint params the capture's kind does not read as a bad request", func() {
+			response := h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", `{"key": "1@1", "reason": "manual"}`)
+			Expect(response.Code).To(Equal(http.StatusBadRequest), response.Body.String())
+			Expect(response.Body.String()).To(ContainSubstring("reads no checkpoint params"))
+		})
+
 		ginkgo.It("refuses a checkpoint the caller may not take, though it may stop the capture", func() {
 			h.refused["traces/pings"] = ActionCheckpoint
 			Expect(h.do(http.MethodPost, "/api/v1/sessions/"+info.ID+"/checkpoint", "").Code).To(Equal(http.StatusForbidden))
