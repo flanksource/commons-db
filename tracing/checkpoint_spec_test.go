@@ -5,6 +5,7 @@ package tracing_test
 
 import (
 	"context"
+	"encoding/json"
 	"sync/atomic"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
 	"github.com/flanksource/commons-db/tracing"
 
@@ -51,7 +53,48 @@ func (r preparedReadings) Checkpoint(ctx dbcontext.Context, _ tickParams, record
 	return records.Emit(ctx, tick{At: time.Now().UTC(), N: base + int(r.taken.Add(1))})
 }
 
+// labelledReadings labels each reading with the label its checkpoint's params
+// give.
+type labelledReadings struct{ readings }
+
+func (r labelledReadings) Checkpoint(ctx dbcontext.Context, _ tickParams, records tracing.Emitter[tick]) error {
+	var request struct {
+		Label string `json:"label"`
+	}
+	if _, err := tracing.DecodeCheckpointParams(ctx, &request); err != nil {
+		return err
+	}
+	return records.Emit(ctx, tick{At: time.Now().UTC(), N: int(r.taken.Add(1)), Label: request.Label})
+}
+
 var _ = Describe("a capture's checkpoint", func() {
+	It("hands a kind the params its host checkpoints with, and refuses params no kind reads", func() {
+		env := tracingtest.NewEnv(map[string]tracing.TracePlugin{
+			"labelled": tracing.NewHandler[tickParams, tick](labelledReadings{readings{taken: &atomic.Int64{}}}, tracing.Capabilities{Live: true}),
+			"readings": tracing.NewHandler[tickParams, tick](readings{taken: &atomic.Int64{}}, tracing.Capabilities{Live: true}),
+			"ticks":    liveTicks(),
+		})
+		managed := map[string]*query.ManagedSession{}
+		for _, kind := range []string{"labelled", "readings", "ticks"} {
+			started, err := env.Runtime.Start(dbcontext.New(), tracing.StartRequest{Kind: kind, Params: []byte(`{"count": 0}`)})
+			Expect(err).ToNot(HaveOccurred())
+			tracingtest.Running(started.Session())
+			managed[kind] = started
+		}
+		labelled := tracing.WithCheckpointParams(context.Background(), json.RawMessage(`{"label": "timeout"}`))
+
+		Expect(env.Runtime.Checkpoint(labelled, managed["labelled"])).To(Succeed())
+		Expect(env.Runtime.Checkpoint(tracing.WithCheckpointParams(context.Background(), json.RawMessage(`{"nope": 1}`)), managed["labelled"])).
+			To(MatchError(tracing.ErrCheckpointParams), "a field the kind does not read")
+		Expect(env.Runtime.Checkpoint(labelled, managed["readings"])).To(MatchError(tracing.ErrCheckpointParams), "a reading that ignores them")
+		Expect(env.Runtime.Checkpoint(labelled, managed["ticks"])).To(MatchError(tracing.ErrCheckpointParams), "a kind that takes no readings")
+
+		managed["labelled"].Session().Stop("spec")
+		rows := env.Rows(tracingtest.Ended(managed["labelled"].Session()))
+		Expect(rows).To(HaveLen(1))
+		Expect(rows[0]).To(HaveKeyWithValue("label", "timeout"))
+	})
+
 	It("reads under what Prepare set up, bounded by the host's context", func() {
 		env := tracingtest.NewEnv(map[string]tracing.TracePlugin{
 			"readings": tracing.NewHandler[tickParams, tick](preparedReadings{readings{taken: &atomic.Int64{}}}, tracing.Capabilities{Live: true}),

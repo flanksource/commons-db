@@ -83,8 +83,8 @@ type source struct {
 
 	ctx     dbcontext.Context
 	capture func(dbcontext.Context) error
-	// checkpoint takes the kind's reading at a checkpoint; nil for a kind
-	// that takes none.
+	// checkpoint takes the kind's reading at a checkpoint, refusing params
+	// it leaves unread, as every one a kind that takes no readings is given.
 	checkpoint func(context.Context) error
 	release    func() error
 	cancel     context.CancelFunc
@@ -415,7 +415,7 @@ func (s *source) wait(ctx context.Context) error {
 }
 
 // takeCheckpoint takes the kind's reading while the capture runs; a capture
-// that ended, or a kind that takes no readings, takes none.
+// that ended takes none.
 func (s *source) takeCheckpoint(ctx context.Context) error {
 	s.mu.Lock()
 	running := s.running

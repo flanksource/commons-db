@@ -35,10 +35,14 @@ func spawnTree(script string) int {
 	return pid
 }
 
-func newEnv() tracingtest.Env {
+func newEnv(options ...process.TreeOptions) tracingtest.Env {
 	sampler := process.NewSampler()
+	var treeOptions process.TreeOptions
+	if len(options) > 0 {
+		treeOptions = options[0]
+	}
 	return tracingtest.NewEnv(map[string]tracing.TracePlugin{
-		process.TreeKind:    process.NewTreeKind(sampler, process.TreeOptions{}),
+		process.TreeKind:    process.NewTreeKind(sampler, treeOptions),
 		process.SamplesKind: process.NewSamplesKind(sampler),
 	})
 }
@@ -102,12 +106,13 @@ var _ = Describe("process_tree", func() {
 		Eventually(func() map[string]recordstore.Row { return nodes(env, managed.Session()) }).WithTimeout(5 * time.Second).
 			Should(HaveKeyWithValue("sleep 1", HaveKeyWithValue("exitedAt", Not(BeNil()))))
 		stream := managed.Session().Snapshot().Events.Stream
-		summary, err := env.Runtime.Summarize(context.Background(), tracing.TraceRef{Kind: process.TreeKind, Stream: stream})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(summary).To(MatchAllKeys(Keys{
+		summarize := func() (map[string]any, error) {
+			return env.Runtime.Summarize(context.Background(), tracing.TraceRef{Kind: process.TreeKind, Stream: stream})
+		}
+		Eventually(summarize).WithTimeout(5*time.Second).Should(MatchAllKeys(Keys{
 			"count": Equal(3), "live": Equal(2), "exited": Equal(1),
 			"peak_cpu_percent": BeNumerically(">=", 0), "peak_rss_bytes": BeNumerically(">", 0),
-		}))
+		}), "the CPU peak appears once a process was rated over a full second")
 	})
 
 	It("dumps the host's goroutines onto its root node at a checkpoint", func() {
@@ -122,11 +127,12 @@ var _ = Describe("process_tree", func() {
 		}
 		Expect(root).To(HaveKeyWithValue("stack", ContainSubstring("goroutine ")))
 		Expect(root).To(HaveKeyWithValue("stackCollectedAt", Not(BeNil())))
+		Expect(root).To(HaveKeyWithValue("captureModes", ContainElement("inprocess")))
 	})
 
-	It("records why another process's stacks cannot be dumped", func() {
+	It("records why another process's stacks cannot be dumped without a native sampler", func() {
 		root := spawnTree("sleep 30")
-		env := newEnv()
+		env := newEnv(process.TreeOptions{LookPath: func(string) (string, error) { return "", exec.ErrNotFound }})
 		managed := start(env, process.TreeKind, root)
 		Expect(env.Runtime.Checkpoint(context.Background(), managed)).To(Succeed())
 		// Whether sh execs its only command (bash) or forks it (dash), the
@@ -138,8 +144,9 @@ var _ = Describe("process_tree", func() {
 			}
 		}
 		Expect(rootRow).To(HaveKeyWithValue("pid", int64(root)))
-		Expect(rootRow).To(HaveKeyWithValue("stackError", ContainSubstring("only be dumped for the host process")))
+		Expect(rootRow).To(HaveKeyWithValue("stackError", And(ContainSubstring("not the host process"), ContainSubstring(nativeTool()))))
 		Expect(rootRow).To(HaveKeyWithValue("stack", BeNil()))
+		Expect(rootRow).To(HaveKeyWithValue("captureModes", BeNil()))
 	})
 
 	DescribeTable("refuses params it cannot capture under before a session exists",
@@ -187,5 +194,32 @@ var _ = Describe("process_samples", func() {
 			Expect(treeKeys).To(HaveKey(key))
 			Expect(len(seen)).To(BeNumerically(">=", 2), "%s sampled at two ticks or more", key)
 		}
+	})
+
+	It("rates a busy process's CPU once a second has passed since its first observation, never as a fake 0", func() {
+		const busy = 50.0
+		root := spawnTree("while :; do :; done")
+		env := newEnv()
+		tree := start(env, process.TreeKind, root).Session()
+		samples := start(env, process.SamplesKind, root).Session()
+		rootNode := func() recordstore.Row {
+			for _, row := range nodes(env, tree) {
+				if row["isRoot"] == true {
+					return row
+				}
+			}
+			return nil
+		}
+		Eventually(rootNode).WithTimeout(10 * time.Second).Should(And(
+			HaveKeyWithValue("cpuPercent", BeNumerically(">", busy)),
+			HaveKeyWithValue("peakCpuPercent", BeNumerically(">", busy)),
+		))
+		samples.Stop("spec")
+		byTick := map[int64]any{}
+		for _, row := range env.Rows(tracingtest.Ended(samples)) {
+			byTick[row["tick"].(int64)] = row["cpuPercent"]
+		}
+		Expect(byTick).To(HaveKeyWithValue(int64(1), BeNil()), "unknown at the first observation")
+		Expect(byTick).To(ContainElement(BeNumerically(">", busy)))
 	})
 })

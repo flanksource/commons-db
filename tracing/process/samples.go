@@ -15,13 +15,15 @@ import (
 // Sample is one process's usage at one tick: Key is its node's key in the
 // process_tree stream of the same root.
 type Sample struct {
-	SampledAt     time.Time `json:"sampledAt" pretty:"label=Sampled" sort:"sampledAt"`
-	Tick          int64     `json:"tick" sort:"tick"`
-	Key           string    `json:"key" pretty:"hide" filter:"exact"`
-	PID           int       `json:"pid" pretty:"label=PID" filter:"terms"`
-	CPUPercent    float64   `json:"cpuPercent" pretty:"label=CPU %" sort:"cpuPercent"`
-	MemoryPercent float64   `json:"memoryPercent" pretty:"label=Memory %" sort:"memoryPercent"`
-	RSSBytes      uint64    `json:"rssBytes" pretty:"label=RSS,type=bytes" sort:"rssBytes"`
+	SampledAt time.Time `json:"sampledAt" pretty:"label=Sampled" sort:"sampledAt"`
+	Tick      int64     `json:"tick" sort:"tick"`
+	Key       string    `json:"key" pretty:"hide" filter:"exact"`
+	PID       int       `json:"pid" pretty:"label=PID" filter:"terms"`
+	// CPUPercent is the CPU% over the process's latest window of at least a
+	// second, per core; nil until that window has passed.
+	CPUPercent    *float64 `json:"cpuPercent,omitempty" pretty:"label=CPU %" sort:"cpuPercent"`
+	MemoryPercent float64  `json:"memoryPercent" pretty:"label=Memory %" sort:"memoryPercent"`
+	RSSBytes      uint64   `json:"rssBytes" pretty:"label=RSS,type=bytes" sort:"rssBytes"`
 }
 
 type samples struct {
@@ -39,7 +41,7 @@ func (samples) Schema() recordresults.ResultType[Sample] {
 
 // Prepare refuses a root that is not running, before the session starts.
 func (s samples) Prepare(ctx dbcontext.Context, params Params, _ tracing.Emitter[Sample]) (dbcontext.Context, func() error, error) {
-	processes, _, err := s.sampler.Subtree(ctx, params.root())
+	processes, _, err := s.sampler.subtree(ctx, params.root())
 	if err != nil {
 		return ctx, nil, err
 	}
@@ -74,7 +76,7 @@ func (s samples) Handle(ctx dbcontext.Context, params Params, records tracing.Em
 }
 
 func (s samples) sample(ctx context.Context, root int, tick int64, records tracing.Emitter[Sample]) error {
-	processes, listedAt, err := s.sampler.Subtree(ctx, root)
+	processes, listedAt, err := s.sampler.subtree(ctx, root)
 	if err != nil {
 		return err
 	}
@@ -83,8 +85,8 @@ func (s samples) sample(ctx context.Context, root int, tick int64, records traci
 	}
 	for _, p := range processes {
 		if err := records.Emit(ctx, Sample{
-			SampledAt: listedAt, Tick: tick, Key: Key(p), PID: p.PID,
-			CPUPercent: p.CPUPercent, MemoryPercent: p.MemoryPercent, RSSBytes: p.RSSBytes,
+			SampledAt: listedAt, Tick: tick, Key: Key(p.Process), PID: p.PID,
+			CPUPercent: p.cpuPercent, MemoryPercent: p.MemoryPercent, RSSBytes: p.RSSBytes,
 		}); err != nil {
 			return err
 		}
