@@ -158,7 +158,7 @@ where it is mounted:
 | --- | --- |
 | `GET /api/v1/profile/traces%2F{kind}` | A window of a stream (`stream`, `afterSeq`, `toSeq`) |
 | `GET /api/v1/traces/{kind}/export` | The window downloaded (`format`: `ndjson`, and the kind's own, such as `har` or `cast`) |
-| `POST /api/v1/sessions/{id}/checkpoint` | Commit a running capture's reading now, with the kind's checkpoint params as an optional JSON body, such as `process_tree`'s `{"key", "pid", "mode", "reason", "stack"}` (`409` when the session has no running capture, `400` for params its kind refuses or does not read) |
+| `POST /api/v1/sessions/{id}/checkpoint` | Commit a running capture's reading now, with the kind's checkpoint params as an optional JSON body, such as `stacks`' `{"key", "pid", "transport", "reason", "dump"}` or `process_samples`' `{"key"}` (`409` when the session has no running capture, `400` for params its kind refuses or does not read) |
 | `/api/v1/sessions...` | The sessions API over the store's captures |
 | `GET /api/openapi.json` | The result profiles and session routes |
 | `GET /traces/{kind}` | Redirects to the explorer's page for a window, keeping `stream`/`afterSeq`/`toSeq` |

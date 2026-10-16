@@ -24,7 +24,7 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/tracing"
-	"github.com/flanksource/commons-db/tracing/process"
+	"github.com/flanksource/commons-db/tracing/stacks"
 	"github.com/flanksource/commons-db/tracing/terminal"
 )
 
@@ -47,9 +47,10 @@ func castEvents(started time.Time) []terminal.Event {
 
 func storeKinds() *tracing.Kinds {
 	kinds := tracing.NewKinds()
-	sampler := process.NewSampler()
+	dumpers, err := stacks.NewDumpers(stacks.InProcess())
+	Expect(err).ToNot(HaveOccurred())
 	Expect(kinds.RegisterKind(terminal.Kind, terminal.NewKind())).To(Succeed())
-	Expect(kinds.RegisterKind(process.TreeKind, process.NewTreeKind(sampler, process.TreeOptions{}))).To(Succeed())
+	Expect(kinds.RegisterKind(stacks.Kind, stacks.NewKind(dumpers))).To(Succeed())
 	return kinds
 }
 
@@ -190,11 +191,11 @@ var _ = Describe("a trace store served through query", func() {
 	})
 
 	It("refuses to start or stop a capture, but checkpoints a running one into its records", func() {
-		status, _, _ := store.do(http.MethodPost, "/api/v1/traces/"+process.TreeKind+"/sessions")
+		status, _, _ := store.do(http.MethodPost, "/api/v1/traces/"+stacks.Kind+"/sessions")
 		Expect(status).To(Equal(http.StatusForbidden))
 
 		managed, err := store.runtime.Start(dbcontext.New(), tracing.StartRequest{
-			Kind: process.TreeKind, Params: json.RawMessage(fmt.Sprintf(`{"rootPid": %d}`, os.Getpid())),
+			Kind: stacks.Kind, Params: json.RawMessage(fmt.Sprintf(`{"rootPid": %d}`, os.Getpid())),
 		})
 		Expect(err).ToNot(HaveOccurred())
 		session := managed.Session()
@@ -203,14 +204,10 @@ var _ = Describe("a trace store served through query", func() {
 		status, _, _ = store.do(http.MethodPost, "/api/v1/sessions/"+session.ID()+"/stop")
 		Expect(status).To(Equal(http.StatusForbidden))
 
-		var root map[string]any
-		for _, record := range store.records(process.TreeKind, "stream="+session.Snapshot().Events.Stream) {
-			if record["isRoot"] == true {
-				root = record
-			}
-		}
-		Expect(root).ToNot(BeNil())
-		Expect(root["stack"]).To(ContainSubstring("goroutine"), "the checkpoint dumped the host's goroutines onto its root")
+		records := store.records(stacks.Kind, "stream="+session.Snapshot().Events.Stream)
+		Expect(records).To(ContainElement(And(
+			HaveKeyWithValue("transport", stacks.TransportInProcess), HaveKeyWithValue("raw", HavePrefix("goroutine ")),
+		)), "the checkpoint dumped the host's goroutines")
 	})
 
 	It("reopens the store a closed host left, with its records", func() {
