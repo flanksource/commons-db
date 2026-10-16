@@ -21,6 +21,13 @@ type EmbeddedConfig struct {
 	// DataDir is the root for the data, runtime, and bin subdirectories.
 	// The caller owns this choice; StartEmbedded does not pick a default path.
 	DataDir string
+	// BinariesDir holds the extracted PostgreSQL binaries, one subdirectory per
+	// version. Defaults to DataDir/bin; set it to keep binaries on persistent
+	// disk when DataDir is RAM-backed.
+	BinariesDir string
+	// RAMDiskBytes is the size of the RAM-backed filesystem DataDir lives on,
+	// or zero when it is on disk. FastTesting caps WAL to a quarter of it.
+	RAMDiskBytes uint64
 	// Database created on first start. Defaults to "postgres" when blank.
 	Database string
 	// Port to bind. Zero picks a free port via FreePort().
@@ -38,8 +45,9 @@ type EmbeddedConfig struct {
 	// KeepRunning leaves a server started by this call running when stop is
 	// invoked. Reused servers are always left running.
 	KeepRunning bool
-	// FastTesting trades durability for speed and raises the connection ceiling.
-	// It is only suitable for disposable local test data.
+	// FastTesting trades durability for speed and sizes the server to the host
+	// (see ScaledTestingParameters). It is only suitable for disposable local
+	// test data.
 	FastTesting bool
 }
 
