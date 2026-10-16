@@ -11,8 +11,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
-
-	"github.com/lib/pq"
 )
 
 // maxIdentifier is PostgreSQL's identifier length limit (NAMEDATALEN - 1).
@@ -44,7 +42,7 @@ func createLeasedDatabase(
 	if err := session.lock(ctx, dbName); err != nil {
 		return "", nil, errors.Join(err, session.close())
 	}
-	if _, err := session.conn.ExecContext(ctx, "CREATE DATABASE "+pq.QuoteIdentifier(dbName)); err != nil {
+	if err := session.createDatabase(ctx, dbName, ""); err != nil {
 		return "", nil, errors.Join(fmt.Errorf("create database %s: %w", dbName, err), session.close())
 	}
 	lease := &databaseLease{session: session, name: dbName}

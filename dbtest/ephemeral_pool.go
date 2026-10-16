@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/commons/logger"
@@ -46,19 +47,14 @@ func (p *ephemeralPool) acquire(
 		return "", nil, err
 	}
 
-	// Closing the session releases every advisory lock it holds, and checkout
-	// renames nothing unless it returns a lease, so failures only close it.
-	if err := session.lock(ctx, p.globalLock()); err != nil {
-		return "", nil, errors.Join(err, session.close())
-	}
+	// Closing the session releases every advisory lock it holds; a database
+	// checkout renamed or created before failing is left unlocked for the sweep.
 	leaseName, err := p.checkout(ctx, session, name, unique)
 	if err != nil {
 		return "", nil, errors.Join(err, session.close())
 	}
 	lease := &databaseLease{session: session, name: leaseName}
-	if err := session.unlock(ctx, p.globalLock()); err != nil {
-		return "", nil, errors.Join(err, lease.release())
-	}
+	p.refillInBackground()
 
 	dsn, err := withDatabase(p.config.AdminURL, leaseName)
 	if err != nil {
@@ -130,59 +126,136 @@ func (s *poolSession) close() error {
 	return errors.Join(s.conn.Close(), s.db.Close())
 }
 
+// checkout renames a free pool database to the lease name or, when the pool is
+// empty, creates the lease database itself. Only the rename runs under the
+// pool lock: a database being created is invisible to other sessions until it
+// commits, so creation never makes concurrent callers queue.
 func (p *ephemeralPool) checkout(
 	ctx context.Context,
 	session *poolSession,
 	name, unique string,
 ) (string, error) {
 	now := p.config.Now().UTC().Truncate(time.Second)
-	free, err := p.freeDatabases(ctx, session)
-	if err != nil {
-		return "", err
-	}
-	if len(free) == 0 {
-		if err := p.createBatch(ctx, session, now); err != nil {
-			return "", err
-		}
-		free, err = p.freeDatabases(ctx, session)
-		if err != nil {
-			return "", err
-		}
-	}
-	if len(free) == 0 {
-		return "", errors.New("ephemeral database batch creation produced no free databases")
-	}
-
 	// The lease is locked before it exists, so a sweeper can treat an unheld
 	// lock on any test database as proof that its owner is gone.
 	leaseName := managedDatabaseName(p.config.TestPrefix, now, unique, name)
 	if err := session.lock(ctx, leaseName); err != nil {
 		return "", err
 	}
-	if _, err := session.conn.ExecContext(
-		ctx,
-		"ALTER DATABASE "+pq.QuoteIdentifier(free[0])+" RENAME TO "+pq.QuoteIdentifier(leaseName),
-	); err != nil {
-		return "", fmt.Errorf("check out ephemeral database %s: %w", leaseName, err)
+	claimed, err := p.claimFree(ctx, session, leaseName)
+	if err != nil || claimed {
+		return leaseName, err
+	}
+	if err := session.createDatabase(ctx, leaseName, ""); err != nil {
+		return "", fmt.Errorf("create ephemeral database %s: %w", leaseName, err)
 	}
 	return leaseName, nil
 }
 
-func (p *ephemeralPool) createBatch(
-	ctx context.Context,
-	session *poolSession,
-	now time.Time,
-) error {
-	for i := 0; i < p.config.BatchSize; i++ {
-		name := managedDatabaseName(p.config.PoolPrefix, now, uniqueSuffix(), "")
-		if _, err := session.conn.ExecContext(
+// claimFree renames a free pool database to leaseName under the pool lock and
+// reports whether there was one.
+func (p *ephemeralPool) claimFree(ctx context.Context, session *poolSession, leaseName string) (bool, error) {
+	if err := session.lock(ctx, p.globalLock()); err != nil {
+		return false, err
+	}
+	free, err := p.freeDatabases(ctx, session)
+	if err == nil && len(free) > 0 {
+		_, err = session.conn.ExecContext(
 			ctx,
-			"CREATE DATABASE "+pq.QuoteIdentifier(name),
-		); err != nil {
+			"ALTER DATABASE "+pq.QuoteIdentifier(free[0])+" RENAME TO "+pq.QuoteIdentifier(leaseName),
+		)
+		if err != nil {
+			err = fmt.Errorf("check out ephemeral database %s: %w", leaseName, err)
+		}
+	}
+	return err == nil && len(free) > 0, errors.Join(err, session.unlock(ctx, p.globalLock()))
+}
+
+// poolRefills holds a *refillState per pool and server, so each process runs
+// at most one refill per pool at a time.
+var poolRefills sync.Map
+
+type refillState struct {
+	running, requested atomic.Bool
+}
+
+func (p *ephemeralPool) refillState() *refillState {
+	key := redact(p.config.AdminURL) + " " + p.config.PoolPrefix
+	state, _ := poolRefills.LoadOrStore(key, &refillState{})
+	return state.(*refillState)
+}
+
+// refillInBackground tops the pool up to BatchSize free databases outside the
+// pool lock. A request that arrives while a refill is finishing starts another
+// pass, so a checkout is never left uncompensated.
+func (p *ephemeralPool) refillInBackground() {
+	state := p.refillState()
+	state.requested.Store(true)
+	if !state.running.CompareAndSwap(false, true) {
+		return
+	}
+	go func() {
+		for {
+			state.requested.Store(false)
+			ctx, cancel := context.WithTimeout(context.Background(), sweepTimeout)
+			if err := p.refill(ctx); err != nil {
+				logger.Warnf("dbtest: refill pool %s: %v", p.config.PoolPrefix, err)
+			}
+			cancel()
+			if state.requested.Load() {
+				continue
+			}
+			state.running.Store(false)
+			if !state.requested.Load() || !state.running.CompareAndSwap(false, true) {
+				return
+			}
+		}
+	}()
+}
+
+// refill creates pool databases one at a time until BatchSize are free,
+// recounting after each so checkouts made meanwhile are replaced too.
+func (p *ephemeralPool) refill(ctx context.Context) error {
+	session, err := openPoolSession(ctx, p.config.AdminURL)
+	if err != nil {
+		return err
+	}
+	defer session.close() //nolint:errcheck
+	for {
+		free, err := p.freeDatabases(ctx, session)
+		if err != nil || len(free) >= p.config.BatchSize {
+			return err
+		}
+		now := p.config.Now().UTC().Truncate(time.Second)
+		name := managedDatabaseName(p.config.PoolPrefix, now, uniqueSuffix(), "")
+		if err := session.createDatabase(ctx, name, ""); err != nil {
 			return fmt.Errorf("create pooled database %s: %w", name, err)
 		}
 	}
-	return nil
+}
+
+// createDatabase creates name as a copy of template, or of template1 when
+// template is empty. On PostgreSQL 15+ with fsync off it copies with STRATEGY
+// FILE_COPY, which skips writing the copy to WAL; its checkpoint costs little
+// without fsync. Measured against the WAL_LOG default on a 50MB template, it
+// was about 2x faster serially and 2-4x faster with 8 concurrent creates.
+func (s *poolSession) createDatabase(ctx context.Context, name, template string) error {
+	var fileCopy bool
+	if err := s.conn.QueryRowContext(
+		ctx,
+		"SELECT current_setting('server_version_num')::int >= 150000 AND current_setting('fsync') = 'off'",
+	).Scan(&fileCopy); err != nil {
+		return fmt.Errorf("choose CREATE DATABASE strategy: %w", err)
+	}
+	statement := "CREATE DATABASE " + pq.QuoteIdentifier(name)
+	if template != "" {
+		statement += " WITH TEMPLATE " + pq.QuoteIdentifier(template)
+	}
+	if fileCopy {
+		statement += " STRATEGY FILE_COPY"
+	}
+	_, err := s.conn.ExecContext(ctx, statement)
+	return err
 }
 
 func (p *ephemeralPool) freeDatabases(

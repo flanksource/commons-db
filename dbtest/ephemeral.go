@@ -4,9 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -16,7 +15,7 @@ import (
 
 const (
 	embeddedPort       = 7432
-	poolBatchSize      = 5
+	minPoolBatchSize   = 5
 	staleDatabaseAge   = 24 * time.Hour
 	poolDatabasePrefix = "commons_db_pool_"
 	testDatabasePrefix = "commons_db_test_"
@@ -35,13 +34,6 @@ type ephemeralPoolConfig struct {
 
 type ephemeralPool struct {
 	config ephemeralPoolConfig
-}
-
-func embeddedDataDir(dataDir string) string {
-	if dataDir == "" {
-		return filepath.Join(os.TempDir(), "commons-db")
-	}
-	return dataDir
 }
 
 func managedDatabaseName(prefix string, created time.Time, unique, name string) string {
@@ -147,20 +139,25 @@ func defaultPoolConfig(adminURL string, now func() time.Time) ephemeralPoolConfi
 		AdminURL:   adminURL,
 		PoolPrefix: poolDatabasePrefix,
 		TestPrefix: testDatabasePrefix,
-		BatchSize:  poolBatchSize,
+		BatchSize:  max(minPoolBatchSize, runtime.GOMAXPROCS(0)),
 		MaxAge:     staleDatabaseAge,
 		Now:        now,
 	}
 }
 
 func startSharedEmbedded(dataDir string) (string, error) {
-	dataDir = embeddedDataDir(dataDir)
+	dirs, err := resolveEmbeddedDirs(dataDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve shared embedded PostgreSQL directory: %w", err)
+	}
 	dsn, _, err := commonsdb.StartEmbedded(commonsdb.EmbeddedConfig{
-		DataDir:     dataDir,
-		Database:    "postgres",
-		Port:        embeddedPort,
-		KeepRunning: true,
-		FastTesting: true,
+		DataDir:      dirs.DataDir,
+		BinariesDir:  dirs.BinariesDir,
+		RAMDiskBytes: dirs.RAMDiskBytes,
+		Database:     "postgres",
+		Port:         embeddedPort,
+		KeepRunning:  true,
+		FastTesting:  true,
 	})
 	if err != nil {
 		return "", fmt.Errorf("start shared embedded PostgreSQL: %w", err)
