@@ -15,7 +15,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
-	"github.com/flanksource/commons-db/query/providers"
+	"github.com/flanksource/commons-db/query/providers/sqlite"
 )
 
 func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Request, conn *models.Connection) {
@@ -194,7 +194,7 @@ func (h *connectionBrowserHandler) executeSQL(
 		return browserQueryResult{AffectedRows: &affected, Message: "Statement executed successfully"}, nil
 	}
 
-	page, err := providers.ReadSQLPage(r.Context(), client, conn.Type, providers.SQLPageRequest{
+	page, err := sqlite.ReadSQLPage(r.Context(), client, conn.Type, sqlite.SQLPageRequest{
 		Connection: conn.ID.String(), Query: statement, Filters: filters, Page: pageRequest, Diagnostics: request.diagnostics,
 	})
 	if err != nil {

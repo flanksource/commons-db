@@ -1,3 +1,4 @@
+import { mountPath } from "./mount";
 import { browserBaseUrl, useInspection } from "@flanksource/clicky-ui/profiles";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -53,7 +54,7 @@ async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
 
 async function stopSession(sessionID: string): Promise<void> {
   const response = await fetch(
-    `/api/v1/sessions/${encodeURIComponent(sessionID)}/stop`,
+    `${mountPath}/api/v1/sessions/${encodeURIComponent(sessionID)}/stop`,
     { method: "POST" },
   );
   if (!response.ok)
@@ -152,14 +153,14 @@ export function ConnectionTrace({
     const poll = async () => {
       try {
         const next = await requestJSON<SessionInfo>(
-          `/api/v1/sessions/${encodeURIComponent(sessionID)}`,
+          `${mountPath}/api/v1/sessions/${encodeURIComponent(sessionID)}`,
         );
         if (canceled || sessionRef.current !== sessionID) return;
         setSession(next);
 
         const terminal = TERMINAL_STATES.has(next.state.toLowerCase());
         const result = await requestJSON<TraceRow[]>(
-          `/api/v1/sessions/${encodeURIComponent(sessionID)}/result`,
+          `${mountPath}/api/v1/sessions/${encodeURIComponent(sessionID)}/result`,
         );
         if (canceled || sessionRef.current !== sessionID) return;
         setRows(result);
@@ -208,7 +209,7 @@ export function ConnectionTrace({
     setRows([]);
     try {
       const created = await requestJSON<SessionInfo>(
-        `/api/v1/connection/${encodeURIComponent(id)}/trace/sessions`,
+        `${mountPath}/api/v1/connection/${encodeURIComponent(id)}/trace/sessions`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },

@@ -2,8 +2,6 @@ package dbtest
 
 import (
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,21 +12,10 @@ import (
 
 var _ = Describe("ephemeral database configuration", func() {
 	const (
-		testTempDir = "/var/tmp"
-		testUnique  = "7_a1b2c3d4"
-		testName    = "Migration Runner"
+		testUnique = "7_a1b2c3d4"
+		testName   = "Migration Runner"
 	)
 	created := time.Date(2026, time.July, 27, 10, 30, 0, 0, time.UTC)
-
-	It("defaults the shared PostgreSQL cluster to a fixed directory below the system temp directory", func() {
-		root := embeddedDataDir("")
-		Expect(root).To(Equal(filepath.Join(os.TempDir(), "commons-db")))
-		Expect(filepath.Join(root, "data")).To(Equal(
-			filepath.Join(os.TempDir(), "commons-db", "data"),
-		))
-		Expect(embeddedDataDir(testTempDir)).To(Equal(testTempDir))
-		Expect(embeddedPort).To(Equal(7432))
-	})
 
 	It("creates parseable pool and checked-out database names", func() {
 		poolName := managedDatabaseName(poolDatabasePrefix, created, testUnique, "")
@@ -87,32 +74,12 @@ var _ = Describe("ephemeral database configuration", func() {
 		Entry("missing timestamp", poolDatabasePrefix+"not-a-time_"+testUnique),
 	)
 
-	It("marks only databases older than the 24-hour retention as stale", func() {
-		name := managedDatabaseName(testDatabasePrefix, created, testUnique, testName)
-
-		stale, err := managedDatabaseStale(name, created.Add(staleDatabaseAge), staleDatabaseAge)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(stale).To(BeFalse())
-
-		stale, err = managedDatabaseStale(
-			name,
-			created.Add(staleDatabaseAge+time.Second),
-			staleDatabaseAge,
-		)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(stale).To(BeTrue())
-	})
-
-	It("uses batches of exactly five databases", func() {
-		Expect(poolBatchSize).To(Equal(5))
-	})
-
 	It("accepts lowercase managed prefixes with separators", func() {
 		pool, err := newEphemeralPool(ephemeralPoolConfig{
 			AdminURL:   "postgres://postgres:postgres@localhost:7432/postgres?sslmode=disable",
 			PoolPrefix: poolDatabasePrefix,
 			TestPrefix: testDatabasePrefix,
-			BatchSize:  poolBatchSize,
+			BatchSize:  minPoolBatchSize,
 			MaxAge:     staleDatabaseAge,
 			Now:        func() time.Time { return created },
 		})
@@ -122,7 +89,7 @@ var _ = Describe("ephemeral database configuration", func() {
 			"AdminURL":   Equal("postgres://postgres:postgres@localhost:7432/postgres?sslmode=disable"),
 			"PoolPrefix": Equal(poolDatabasePrefix),
 			"TestPrefix": Equal(testDatabasePrefix),
-			"BatchSize":  Equal(poolBatchSize),
+			"BatchSize":  Equal(minPoolBatchSize),
 			"MaxAge":     Equal(staleDatabaseAge),
 			"Now":        Not(BeNil()),
 		}))
@@ -133,7 +100,7 @@ var _ = Describe("ephemeral database configuration", func() {
 			AdminURL:   "postgres://postgres:postgres@localhost:7432/postgres?sslmode=disable",
 			PoolPrefix: "commons_db_",
 			TestPrefix: testDatabasePrefix,
-			BatchSize:  poolBatchSize,
+			BatchSize:  minPoolBatchSize,
 			MaxAge:     staleDatabaseAge,
 			Now:        func() time.Time { return created },
 		})

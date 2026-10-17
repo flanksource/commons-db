@@ -416,7 +416,7 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
 			})
 		}
-		builder := entity.NewDynamicEntity(profileSurfaceKey(name), schemaJSON)
+		builder := entity.NewDynamicEntity(SurfaceKey(name), schemaJSON)
 		// A param filters on an input the rows never carry, so it has no schema
 		// property to bind through; it is offered by key instead.
 		for _, binding := range inputBindings {

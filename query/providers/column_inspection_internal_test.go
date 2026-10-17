@@ -5,46 +5,22 @@ import (
 
 	opensearchinspect "github.com/flanksource/commons-db/inspect/opensearch"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
 var _ = Describe("column filter statistics", func() {
-	It("counts all SQL string outputs in one wrapped statement", func() {
-		statement, err := buildColumnStatsSQL(dialectPostgres, ordersQuery, []string{"message", "region"})
-		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).To(Equal(
-			"WITH \"__cdb_base\" AS (\n" + ordersQuery + "\n)\n" +
-				`SELECT COUNT(DISTINCT "message"), COUNT(DISTINCT "region")` + "\n" +
-				`FROM "__cdb_base"`))
-	})
-
-	It("caps metadata probes to backend-safe field batches", func() {
+	It("caps OpenSearch metadata probes to backend-safe field batches", func() {
 		fields := make([]string, 126)
 		for index := range fields {
 			fields[index] = fmt.Sprintf("field_%d", index)
 		}
-		sqlBatches := fieldBatches(fields, sqlColumnStatsBatchSize)
-		Expect(sqlBatches).To(HaveLen(6))
-		for _, batch := range sqlBatches {
-			Expect(len(batch)).To(BeNumerically("<=", sqlColumnStatsBatchSize))
-		}
-		openSearchBatches := fieldBatches(fields, openSearchColumnStatsBatchSize)
-		Expect(openSearchBatches).To(HaveLen(3))
-		for _, batch := range openSearchBatches {
+		batches := providerkit.FieldBatches(fields, openSearchColumnStatsBatchSize)
+		Expect(batches).To(HaveLen(3))
+		for _, batch := range batches {
 			Expect(len(batch)).To(BeNumerically("<=", openSearchColumnStatsBatchSize))
 		}
-	})
-
-	It("offers lists only for proven low-cardinality strings", func() {
-		columns := []query.ColumnDef{
-			{Name: "region", Type: query.ColumnTypeString},
-			{Name: "message", Type: query.ColumnTypeString},
-		}
-		Expect(sqlFilterSuggestions(columns, map[string]int64{"region": 12, "message": 51})).To(Equal(
-			map[string]*query.ColumnFilterDef{
-				"message": {Kind: query.ColumnFilterKindText},
-			}))
 	})
 
 	It("maps OpenTelemetry output columns back to their configured index fields", func() {

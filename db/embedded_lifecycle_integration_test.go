@@ -2,9 +2,10 @@ package db
 
 import (
 	"context"
+	"maps"
 	"os"
 	"path/filepath"
-	"time"
+	"slices"
 
 	"github.com/jackc/pgx/v5"
 	. "github.com/onsi/ginkgo/v2"
@@ -12,23 +13,50 @@ import (
 )
 
 var _ = Describe("embedded PostgreSQL lifecycle", Label("integration"), func() {
-	It("reuses a fixed-port fast server from the same data directory", func() {
+	const staleWorkMem = "4MB"
+
+	BeforeEach(func() {
 		if os.Getenv("COMMONS_DB_EMBEDDED_TEST") == "" {
 			Skip("set COMMONS_DB_EMBEDDED_TEST=1 to run embedded PostgreSQL lifecycle tests")
 		}
+	})
 
+	newConfig := func(fastTesting bool) EmbeddedConfig {
 		port, err := FreePort()
 		Expect(err).NotTo(HaveOccurred())
-
-		config := EmbeddedConfig{
+		return EmbeddedConfig{
 			DataDir:     GinkgoT().TempDir(),
 			Database:    "postgres",
 			Port:        uint32(port), //nolint:gosec // FreePort always returns a valid TCP port
-			FastTesting: true,
+			FastTesting: fastTesting,
 		}
-		dsn, stopOwner, err := StartEmbedded(config)
+	}
+
+	// startStale starts a fast server the way an older release would have:
+	// with a lower work_mem than this host's scaled settings ask for.
+	startStale := func(config EmbeddedConfig) (string, map[string]string) {
+		runtime, err := newEmbeddedRuntime(config)
 		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(func() { Expect(stopOwner()).To(Succeed()) })
+		scaled := maps.Clone(runtime.scaledTesting)
+		runtime.scaledTesting["work_mem"] = staleWorkMem
+		dsn, stop, err := runtime.withStartupLock(runtime.startOrReuse)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+		return dsn, scaled
+	}
+
+	settings := func(ctx context.Context, dsn string, names []string) map[string]serverSetting {
+		conn, err := pgx.Connect(ctx, dsn)
+		Expect(err).NotTo(HaveOccurred())
+		defer conn.Close(context.Background()) //nolint:errcheck
+		have, err := readServerSettings(ctx, conn, names)
+		Expect(err).NotTo(HaveOccurred())
+		return have
+	}
+
+	It("reuses a server with stale scaled settings in place, reporting the drift instead of failing", func(ctx SpecContext) {
+		config := newConfig(true)
+		dsn, scaled := startStale(config)
 		postmasterBefore, err := os.ReadFile(filepath.Join(config.DataDir, "data", "postmaster.pid"))
 		Expect(err).NotTo(HaveOccurred())
 
@@ -36,34 +64,28 @@ var _ = Describe("embedded PostgreSQL lifecycle", Label("integration"), func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(reusedDSN).To(Equal(dsn))
 		Expect(stopReuser()).To(Succeed())
+
 		postmasterAfter, err := os.ReadFile(filepath.Join(config.DataDir, "data", "postmaster.pid"))
 		Expect(err).NotTo(HaveOccurred())
 		Expect(postmasterAfter).To(Equal(postmasterBefore))
 
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		conn, err := pgx.Connect(ctx, reusedDSN)
-		Expect(err).NotTo(HaveOccurred())
-		defer conn.Close(context.Background()) //nolint:errcheck
-
-		var dataDirectory, fsync, synchronousCommit, fullPageWrites string
-		Expect(conn.QueryRow(ctx, "SHOW data_directory").Scan(&dataDirectory)).To(Succeed())
-		Expect(conn.QueryRow(ctx, "SHOW fsync").Scan(&fsync)).To(Succeed())
-		Expect(conn.QueryRow(ctx, "SHOW synchronous_commit").Scan(&synchronousCommit)).To(Succeed())
-		Expect(conn.QueryRow(ctx, "SHOW full_page_writes").Scan(&fullPageWrites)).To(Succeed())
-		maxConnections, err := showInt(ctx, conn, "max_connections")
-		Expect(err).NotTo(HaveOccurred())
-
+		names := slices.Concat(slices.Collect(maps.Keys(scaled)), []string{"fsync", "synchronous_commit", "full_page_writes", "data_directory"})
+		have := settings(ctx, dsn, names)
 		expectedDataDirectory, err := filepath.EvalSymlinks(filepath.Join(config.DataDir, "data"))
 		Expect(err).NotTo(HaveOccurred())
-		actualDataDirectory, err := filepath.EvalSymlinks(dataDirectory)
+		Expect(filepath.EvalSymlinks(have["data_directory"].Setting)).To(Equal(expectedDataDirectory))
+		Expect(validateFastTestingSettings(have["fsync"].Setting, have["synchronous_commit"].Setting, have["full_page_writes"].Setting)).To(Succeed())
+		Expect(testingSettingDrift(scaled, have)).To(Equal([]string{"work_mem: have " + staleWorkMem + ", want 8MB"}))
+	})
+
+	It("refuses to reuse a durable server as a fast one", func() {
+		config := newConfig(false)
+		_, stop, err := StartEmbedded(config)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(actualDataDirectory).To(Equal(expectedDataDirectory))
-		Expect(validateFastTestingSettings(
-			fsync,
-			synchronousCommit,
-			fullPageWrites,
-			maxConnections,
-		)).To(Succeed())
+		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+
+		config.FastTesting = true
+		_, _, err = StartEmbedded(config)
+		Expect(err).To(MatchError(ContainSubstring("fsync=off")))
 	})
 })

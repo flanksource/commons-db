@@ -72,22 +72,6 @@ func TestSanitize(t *testing.T) {
 	}
 }
 
-func TestScratchNameKeepsSuffixWhenTruncating(t *testing.T) {
-	const unique = "12345_7"
-	name := scratchName(strings.Repeat("a", 100), unique)
-
-	assert.LessOrEqual(t, len(name), maxIdentifier)
-	// Truncating the tail instead of the base is what makes two concurrent
-	// runs resolve to the same database.
-	assert.True(t, strings.HasSuffix(name, "_"+unique), "got %q", name)
-}
-
-func TestScratchNameIsUniquePerBase(t *testing.T) {
-	first := scratchName("runner", uniqueSuffix())
-	second := scratchName("runner", uniqueSuffix())
-	assert.NotEqual(t, first, second)
-}
-
 func TestRedactMasksPassword(t *testing.T) {
 	got := redact("postgres://user:hunter2@localhost:5432/db?sslmode=disable")
 	assert.NotContains(t, got, "hunter2")

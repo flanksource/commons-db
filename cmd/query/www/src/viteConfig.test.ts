@@ -25,7 +25,7 @@ describe("clicky-ui development resolution", () => {
   it("maps every sub-path the app imports", () => {
     const aliases = clickyUIDevAliases("serve", "development");
 
-    for (const entrypoint of ["ai", "data", "devtools", "monaco", "profiles", "rpc"]) {
+    for (const entrypoint of ["ai", "connections", "data", "devtools", "monaco", "profiles", "rpc"]) {
       expect(aliases).toContainEqual({
         find: `@flanksource/clicky-ui/${entrypoint}`,
         replacement: expect.stringContaining(`/clicky-ui/packages/ui/src/${entrypoint}.ts`),

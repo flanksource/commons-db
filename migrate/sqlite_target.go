@@ -16,18 +16,23 @@ import (
 	sqlitemigrate "github.com/flanksource/commons-db/migrate/sqlite"
 )
 
-func applySQLite(ctx context.Context, connection string, schemaFS fs.FS, config options) (returnErr error) {
+// openSQLite opens the single-connection handle a DSN-driven SQLite migration
+// runs on.
+func openSQLite(connection string) (*sql.DB, error) {
+	database, err := sql.Open("sqlite", connection)
+	if err != nil {
+		return nil, fmt.Errorf("open SQLite migration database: %w", err)
+	}
+	database.SetMaxOpenConns(1)
+	database.SetMaxIdleConns(1)
+	return database, nil
+}
+
+func applySQLite(ctx context.Context, database *sql.DB, schemaFS fs.FS, config options) error {
 	tables, err := sqliteTables(schemaFS, config)
 	if err != nil {
 		return err
 	}
-	database, err := sql.Open("sqlite", connection)
-	if err != nil {
-		return fmt.Errorf("open SQLite migration database: %w", err)
-	}
-	defer func() { returnErr = errors.Join(returnErr, database.Close()) }()
-	database.SetMaxOpenConns(1)
-	database.SetMaxIdleConns(1)
 	if err := database.PingContext(ctx); err != nil {
 		return fmt.Errorf("connect SQLite migration database: %w", err)
 	}
@@ -47,6 +52,9 @@ func sqliteTables(schemaFS fs.FS, config options) ([]*schema.Table, error) {
 	}
 	if config.allowDrops {
 		return nil, errors.New("SQLite migrations do not support destructive changes")
+	}
+	if err := refuseRoutines(config, "SQLite"); err != nil {
+		return nil, err
 	}
 	scripts, err := loadScripts(schemaFS, config.dir)
 	if err != nil {

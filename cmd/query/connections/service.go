@@ -133,9 +133,9 @@ func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	browser.ctx = ctx
 	browser.next = newConnectionActionsHandler(prefix, ctx, next)
 	health := newConnectionHealthHandler(prefix, ctx, browser)
-	return newConnectionDashboardHandler(connectionDashboardHandlerOptions{
+	return newConnectionSchemaHandler(browser.prefix, newConnectionDashboardHandler(connectionDashboardHandlerOptions{
 		Prefix: prefix, Context: ctx, Profiles: s.profiles, Next: health,
-	})
+	}))
 }
 
 func (s *Service) List(options ListOptions) ([]*models.Connection, error) {
@@ -172,9 +172,6 @@ func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Conn
 	if err != nil {
 		return nil, err
 	}
-	if body["type"] == models.ConnectionTypeSQLite {
-		return nil, fmt.Errorf("sqlite connections are internal read-only snapshots")
-	}
 	return createConnection(db, body)
 }
 
@@ -192,7 +189,7 @@ func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*
 	}
 	updated, err := updateConnection(db, id, body)
 	if err != nil {
-		return nil, err
+		return nil, classifyReferenceConflict(err, "update", id)
 	}
 	forgetConnectionHealth(updated.ID.String())
 	return updated, nil
@@ -213,7 +210,7 @@ func (s *Service) Delete(id string) error {
 		return err
 	}
 	if err := deleteConnection(db, existing.ID.String()); err != nil {
-		return err
+		return classifyReferenceConflict(err, "delete", existing.Name)
 	}
 	forgetConnectionHealth(existing.ID.String())
 	return nil

@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 const (
@@ -60,7 +61,7 @@ func (httpProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 		return nil, fmt.Errorf("failed to hydrate http connection: %w", err)
 	}
 	if opts.URL != "" {
-		hydrated.URL, err = resolveInlineURL(ctx, opts.URL, "http")
+		hydrated.URL, err = providerkit.ResolveInlineURL(ctx, opts.URL, "http")
 		if err != nil {
 			return nil, err
 		}

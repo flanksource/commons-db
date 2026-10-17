@@ -34,7 +34,7 @@ var _ = Describe("the session start a profile's OpenAPI document offers", func()
 	sessionStart := func(profile query.Profile) (rpc.OpenAPIOperation, bool) {
 		spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
 		Expect(addProfileToSpec(spec, profile)).To(Succeed())
-		operation, ok := spec.Paths["/api/v1/profile/"+profileSurfaceKey(profile.Name)+"/sessions"]["post"]
+		operation, ok := spec.Paths["/api/v1/profile/"+SurfaceKey(profile.Name)+"/sessions"]["post"]
 		return operation, ok
 	}
 
