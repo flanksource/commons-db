@@ -83,11 +83,23 @@ func opener(ctx context.Context, u *url.URL) (*sqlclient.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	drv, err := open(ctx, db)
+	client, err := OpenClient(ctx, db)
 	if err != nil {
 		return nil, errors.Join(err, db.Close())
 	}
-	return &sqlclient.Client{Name: DriverName, DB: db, URL: ur, Driver: drv}, nil
+	client.URL = ur
+	return client, nil
+}
+
+// OpenClient wraps an open database/sql handle, whatever DSN form it was
+// opened with (URL, ADO or ODBC), in an Atlas client. Closing the client closes
+// db.
+func OpenClient(ctx context.Context, db *sql.DB) (*sqlclient.Client, error) {
+	drv, err := open(ctx, db)
+	if err != nil {
+		return nil, err
+	}
+	return &sqlclient.Client{Name: DriverName, DB: db, Driver: drv}, nil
 }
 
 // Open opens a new SQL Server driver, reading the engine version and the

@@ -2,6 +2,7 @@ package migrate
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,16 +30,16 @@ const (
 // against the dbo schema. It inspects only the objects the bundle names, never
 // drops a routine or an index the bundle does not declare, and runs no DDL
 // when the database already matches.
-func applySQLServer(ctx context.Context, connection string, schemaFS fs.FS, cfg options) (returnErr error) {
+// The caller owns db: closing the Atlas client would close it.
+func applySQLServer(ctx context.Context, db *sql.DB, schemaFS fs.FS, cfg options) (returnErr error) {
 	desired, err := sqlServerDesired(schemaFS, cfg)
 	if err != nil {
 		return err
 	}
-	client, err := sqlclient.Open(ctx, connection)
+	client, err := sqlserver.OpenClient(ctx, db)
 	if err != nil {
 		return fmt.Errorf("open SQL Server migration database: %w", err)
 	}
-	defer func() { returnErr = errors.Join(returnErr, client.Close()) }()
 	unlock, err := client.Driver.Lock(ctx, "commons-db/migrate:"+cfg.name, sqlServerLockWait)
 	if err != nil {
 		return fmt.Errorf("lock SQL Server migration %q: %w", cfg.name, err)

@@ -19,8 +19,10 @@ import (
 	"ariga.io/atlas/sql/sqlclient"
 	"github.com/flanksource/commons-db/internal/dbtarget"
 	"github.com/flanksource/commons/logger"
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
+	mssql "github.com/microsoft/go-mssqldb"
 	"github.com/zclconf/go-cty/cty"
+	"modernc.org/sqlite"
 )
 
 type options struct {
@@ -33,6 +35,7 @@ type options struct {
 	allowDrops    bool
 	allowRebuilds bool
 	input         map[string]cty.Value
+	db            *sql.DB
 }
 
 // Option configures an HCL migration.
@@ -84,15 +87,32 @@ func WithRebuilds() Option {
 	return func(o *options) { o.allowRebuilds = true }
 }
 
-// Apply resolves the database target from connection and reconciles HCL schemas.
+// WithDB runs the migration on an already open SQL Server or SQLite handle,
+// with Apply's connection string left empty; the dialect comes from the
+// handle's driver. Apply never closes db and never changes its pool settings.
+// PostgreSQL handles are refused: those migrations scope search_path and
+// lock_timeout on connections they open themselves.
+func WithDB(db *sql.DB) Option {
+	return func(o *options) { o.db = db }
+}
+
+// Apply resolves the database target from connection, or from the WithDB
+// handle, and reconciles HCL schemas.
 // PostgreSQL supports the complete HCL, SQL, security, and destructive-change
 // lifecycle. SQLite projects portable PostgreSQL-shaped HCL to tables,
 // columns, and indexes, with compatible rebuilds available by opt-in.
-// SQL Server (sqlserver:// DSNs) reconciles SQL Server HCL tables and the
+// SQL Server (sqlserver:// URLs, ADO and odbc: strings) reconciles SQL Server HCL tables and the
 // stored procedures and functions declared with WithRoutines, inspecting only
 // the objects the bundle names; it refuses SQL scripts, security blocks,
 // drops, rebuilds and schemas other than dbo.
-func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Option) error {
+func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Option) (returnErr error) {
+	config := resolveOptions(opts)
+	if config.db != nil {
+		if strings.TrimSpace(connection) != "" {
+			return errors.New("pass a connection string or WithDB, not both")
+		}
+		return applyDB(ctx, config.db, schemaFS, config)
+	}
 	if strings.TrimSpace(connection) == "" {
 		return errors.New("connection string is empty")
 	}
@@ -100,16 +120,39 @@ func Apply(ctx context.Context, connection string, schemaFS fs.FS, opts ...Optio
 	if err != nil {
 		return err
 	}
-	config := resolveOptions(opts)
 	switch target.Dialect {
 	case dbtarget.SQLite:
-		return applySQLite(ctx, target.DSN, schemaFS, config)
+		db, err := openSQLite(target.DSN)
+		if err != nil {
+			return err
+		}
+		defer func() { returnErr = errors.Join(returnErr, db.Close()) }()
+		return applySQLite(ctx, db, schemaFS, config)
 	case dbtarget.SQLServer:
-		return applySQLServer(ctx, target.DSN, schemaFS, config)
+		db, err := sql.Open("sqlserver", target.DSN)
+		if err != nil {
+			return fmt.Errorf("open SQL Server migration database: %w", err)
+		}
+		defer func() { returnErr = errors.Join(returnErr, db.Close()) }()
+		return applySQLServer(ctx, db, schemaFS, config)
 	case dbtarget.Postgres:
 		return applyPostgres(ctx, target.DSN, schemaFS, config)
 	default:
 		return fmt.Errorf("unsupported migration dialect %q", target.Dialect)
+	}
+}
+
+// applyDB dispatches a WithDB handle on its driver.
+func applyDB(ctx context.Context, db *sql.DB, schemaFS fs.FS, config options) error {
+	switch driver := db.Driver().(type) {
+	case *mssql.Driver:
+		return applySQLServer(ctx, db, schemaFS, config)
+	case *sqlite.Driver:
+		return applySQLite(ctx, db, schemaFS, config)
+	case *pq.Driver:
+		return errors.New("WithDB does not support PostgreSQL: its migrations scope search_path and lock_timeout on connections they open, so pass a connection string")
+	default:
+		return fmt.Errorf("WithDB does not support database driver %T; use a SQL Server or SQLite handle", driver)
 	}
 }
 

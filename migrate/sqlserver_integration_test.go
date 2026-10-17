@@ -130,12 +130,14 @@ var _ = Describe("SQL Server migrations", Ordered, Label("integration"), func() 
 	})
 
 	DescribeTable("reconcile tables and routines idempotently",
-		func(ctx SpecContext, compatibilityLevel int) {
+		func(ctx SpecContext, compatibilityLevel int, via connectionForm) {
 			dsn, db := sqlServerDatabase(ctx, adminURL, compatibilityLevel)
-			reconcileScenario(ctx, dsn, db)
+			reconcileScenario(ctx, sqlServerApplier(dsn, db, via), dsn, db)
 		},
-		Entry("at the engine's default compatibility level", 0),
-		Entry("at compatibility level 100", 100),
+		Entry("at the engine's default compatibility level", 0, viaURL),
+		Entry("at compatibility level 100", 100, viaURL),
+		Entry("through an ADO connection string", 0, viaADO),
+		Entry("through WithDB on the caller's handle, which stays open", 0, viaHandle),
 	)
 
 	It("reads the migrated database through the catalog inspector", func(ctx SpecContext) {
@@ -145,10 +147,48 @@ var _ = Describe("SQL Server migrations", Ordered, Label("integration"), func() 
 	})
 })
 
-func reconcileScenario(ctx context.Context, dsn string, db *sql.DB) {
+// connectionForm is how a spec hands the database to Apply.
+type connectionForm string
+
+const (
+	viaURL    connectionForm = "sqlserver:// URL"
+	viaADO    connectionForm = "ADO connection string"
+	viaHandle connectionForm = "WithDB handle"
+)
+
+// sqlServerApplier applies a bundle to the database at dsn, whose open
+// handle is db, in the given connection form.
+func sqlServerApplier(dsn string, db *sql.DB, via connectionForm) func(context.Context, fstest.MapFS) error {
+	return func(ctx context.Context, bundle fstest.MapFS) error {
+		switch via {
+		case viaADO:
+			return Apply(ctx, adoConnectionString(dsn), bundle, integrationOptions...)
+		case viaHandle:
+			return Apply(ctx, "", bundle, append([]Option{WithDB(db)}, integrationOptions...)...)
+		default:
+			return Apply(ctx, dsn, bundle, integrationOptions...)
+		}
+	}
+}
+
+// adoConnectionString rewrites a sqlserver:// URL as the equivalent ADO
+// key=value connection string.
+func adoConnectionString(dsn string) string {
+	u, err := url.Parse(dsn)
+	Expect(err).ToNot(HaveOccurred())
+	password, _ := u.User.Password()
+	pairs := []string{"server=" + u.Hostname(), "user id=" + u.User.Username(), "password=" + password,
+		"database=" + u.Query().Get("database")}
+	if port := u.Port(); port != "" {
+		pairs = append(pairs, "port="+port)
+	}
+	return strings.Join(pairs, ";")
+}
+
+func reconcileScenario(ctx context.Context, apply func(context.Context, fstest.MapFS) error, dsn string, db *sql.DB) {
 	bundle := integrationBundle()
 	By("applying a table, an index, a foreign key and two routines")
-	Expect(Apply(ctx, dsn, bundle, integrationOptions...)).To(Succeed())
+	Expect(apply(ctx, bundle)).To(Succeed())
 	Expect(pendingSQLServerChanges(ctx, dsn, bundle)).To(BeEmpty())
 	_, err := db.ExecContext(ctx, "CREATE INDEX IX_dba_tuning ON dbo.acme_orders (created_at)")
 	Expect(err).ToNot(HaveOccurred())
@@ -157,14 +197,14 @@ func reconcileScenario(ctx context.Context, dsn string, db *sql.DB) {
 
 	By("re-applying the same bundle, which changes nothing")
 	Expect(pendingSQLServerChanges(ctx, dsn, bundle)).To(BeEmpty())
-	Expect(Apply(ctx, dsn, bundle, integrationOptions...)).To(Succeed())
+	Expect(apply(ctx, bundle)).To(Succeed())
 	Expect(modifyDates(ctx, db)).To(Equal(before))
 	Expect(objectExists(ctx, db, "IX_dba_tuning")).To(BeTrue(), "an index the bundle does not declare is kept")
 
 	By("editing one routine's body, which alters exactly that routine")
 	bundle["db/routines/acme_order_total.sql"] = file(strings.Replace(integrationOrderTotal, "RETURN (SELECT total", "RETURN (SELECT total * 2", 1))
 	Expect(changeKinds(pendingSQLServerChanges(ctx, dsn, bundle))).To(Equal([]string{"*schema.ModifyFunc"}))
-	Expect(Apply(ctx, dsn, bundle, integrationOptions...)).To(Succeed())
+	Expect(apply(ctx, bundle)).To(Succeed())
 	after := modifyDates(ctx, db)
 	Expect(after["acme_order_total"]).To(BeTemporally(">", before["acme_order_total"]))
 	delete(after, "acme_order_total")
@@ -174,7 +214,7 @@ func reconcileScenario(ctx context.Context, dsn string, db *sql.DB) {
 
 	By("removing a routine from the bundle, which leaves it in place")
 	delete(bundle, "db/routines/acme_count_orders.sql")
-	Expect(Apply(ctx, dsn, bundle, integrationOptions...)).To(Succeed())
+	Expect(apply(ctx, bundle)).To(Succeed())
 	Expect(objectExists(ctx, db, "acme_count_orders")).To(BeTrue())
 }
 

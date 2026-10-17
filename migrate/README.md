@@ -20,11 +20,24 @@ err := migrate.Apply(ctx, "sqlite://state/runtime.sqlite", schemaFS, migrate.Wit
 err := migrate.Apply(ctx, "/var/lib/example/runtime.db", schemaFS, migrate.WithDir("migrations"))
 ```
 
-SQL Server accepts `sqlserver://` URLs in the go-mssqldb form, e.g. `sqlserver://user:password@host:1433?database=app`. `mssql://` is rejected so that one spelling reaches the migrator.
+SQL Server accepts `sqlserver://` URLs in the go-mssqldb form, e.g. `sqlserver://user:password@host:1433?database=app`. `mssql://` is rejected so that one spelling reaches the migrator. ADO connection strings (`;`-separated pairs that name the server with `server`, `data source`, `address`, `addr` or `network address`, e.g. `server=db;user id=app;password=secret;database=acme`) and `odbc:` connection strings are SQL Server too, and are passed to go-mssqldb unchanged.
+
+### Existing connections
+
+`WithDB` runs a SQL Server or SQLite migration on a `*sql.DB` the caller already holds, with the connection string left empty. The dialect comes from the handle's driver. Apply neither closes the handle nor changes its pool settings:
+
+```go
+err := migrate.Apply(ctx, "", bundle,
+	migrate.WithDB(writeDB),
+	migrate.WithRoutines("routines"),
+	migrate.WithName("acme/routines"))
+```
+
+Passing both a connection string and `WithDB` is an error. A PostgreSQL handle is refused, because PostgreSQL migrations scope `search_path` and `lock_timeout` on connections they open themselves.
 
 Relative SQLite paths are resolved from the process working directory. SQLite is always file-backed; `:memory:` and `mode=memory` are rejected. The normalized connection enables foreign keys, a 5-second busy timeout, and WAL while preserving caller-supplied query parameters and unmanaged pragmas.
 
-Unknown URI schemes written as `scheme://...` fail instead of being passed to PostgreSQL accidentally. Scheme-like strings without `://` are treated as PostgreSQL DSNs unless their path ends in `.db`; use one of the explicit forms above rather than relying on that ambiguity. A PostgreSQL keyword DSN remains PostgreSQL even when its `dbname` ends in `.db`.
+Unknown URI schemes written as `scheme://...` fail instead of being passed to PostgreSQL accidentally. Scheme-like strings without `://` are treated as PostgreSQL DSNs unless they are SQL Server ADO/ODBC strings or their path ends in `.db`; use one of the explicit forms above rather than relying on that ambiguity. A PostgreSQL keyword DSN remains PostgreSQL even when its `dbname` ends in `.db`.
 
 `db.NewGorm` uses the same DSN resolver, so migration and application connections cannot disagree about the target.
 

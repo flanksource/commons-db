@@ -31,6 +31,9 @@ func Parse(raw string) (Target, error) {
 	if strings.HasPrefix(strings.ToLower(dsn), "sqlite://") {
 		return parseSQLite(dsn[len("sqlite://"):])
 	}
+	if isSQLServerKeywordDSN(dsn) {
+		return Target{Dialect: SQLServer, DSN: dsn}, nil
+	}
 	if scheme := explicitScheme(dsn); scheme != "" {
 		switch scheme {
 		case "postgres", "postgresql":
@@ -110,6 +113,30 @@ func explicitScheme(dsn string) string {
 func pathWithoutQuery(dsn string) string {
 	path, _, _ := strings.Cut(dsn, "?")
 	return path
+}
+
+// isSQLServerKeywordDSN reports whether dsn is a go-mssqldb ODBC DSN or an ADO
+// DSN: ';'-separated key=value pairs naming the server by one of the address
+// keys msdsn.Parse reads. A space-separated PostgreSQL keyword DSN never
+// matches.
+func isSQLServerKeywordDSN(dsn string) bool {
+	if strings.HasPrefix(strings.ToLower(dsn), "odbc:") {
+		return true
+	}
+	if isPostgresKeywordDSN(dsn) {
+		return false
+	}
+	for _, pair := range strings.Split(dsn, ";") {
+		key, _, found := strings.Cut(pair, "=")
+		if !found {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(key)) {
+		case "server", "data source", "address", "addr", "network address":
+			return true
+		}
+	}
+	return false
 }
 
 func isPostgresKeywordDSN(dsn string) bool {
