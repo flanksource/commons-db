@@ -20,8 +20,21 @@ func (e *CherryPickConflictError) Error() string {
 	return fmt.Sprintf("cherry-pick %s conflicts in %s", e.Commit, strings.Join(e.Files, ", "))
 }
 
+// CherryPickEmptyError is a ChangeRequest.CherryPick commit whose changes are
+// already on Base (its patch was applied there before): the cherry-pick was
+// aborted and nothing was pushed.
+type CherryPickEmptyError struct {
+	Commit string
+	Base   string
+}
+
+func (e *CherryPickEmptyError) Error() string {
+	return fmt.Sprintf("cherry-pick %s is empty: its changes are already on %s (set AllowEmpty to skip it)", e.Commit, e.Base)
+}
+
 // cherryPick replays request.CherryPick in order onto the worktree's branch
-// with git cherry-pick -x and returns the commits skipped as already applied.
+// with git cherry-pick -x, appending request.Trailers to each replayed commit,
+// and returns the commits skipped as already applied.
 func (w *Worktree) cherryPick(ctx context.Context, request ChangeRequest) ([]string, error) {
 	if len(request.CherryPick) == 0 {
 		return nil, nil
@@ -45,9 +58,12 @@ func (w *Worktree) cherryPick(ctx context.Context, request ChangeRequest) ([]str
 		}
 		_, pickErr := run(ctx, command{dir: w.Dir, env: env, args: append(args, "--end-of-options", sha)})
 		if pickErr == nil {
+			if err := w.appendTrailers(ctx, env, request.Trailers); err != nil {
+				return nil, fmt.Errorf("cherry-pick %s: %w", sha, err)
+			}
 			continue
 		}
-		if err := w.cherryPickFailed(ctx, sha, request.AllowEmpty, pickErr); err != nil {
+		if err := w.cherryPickFailed(ctx, sha, request, pickErr); err != nil {
 			return nil, err
 		}
 		skipped = append(skipped, sha)
@@ -98,7 +114,7 @@ func (w *Worktree) mergeCommits(ctx context.Context, shas []string, mainline int
 // cherryPickFailed classifies a failed cherry-pick: a conflict or any other
 // failure aborts it, an empty one (already applied) is skipped only when
 // allowEmpty is set.
-func (w *Worktree) cherryPickFailed(ctx context.Context, sha string, allowEmpty bool, pickErr error) error {
+func (w *Worktree) cherryPickFailed(ctx context.Context, sha string, request ChangeRequest, pickErr error) error {
 	unmerged, err := run(ctx, command{dir: w.Dir, args: []string{"-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=U"}})
 	if err != nil {
 		return errors.Join(pickErr, err, w.abortCherryPick(ctx))
@@ -109,11 +125,24 @@ func (w *Worktree) cherryPickFailed(ctx context.Context, sha string, allowEmpty 
 	if !w.cherryPickEmpty(ctx) {
 		return errors.Join(fmt.Errorf("cherry-pick %s: %w", sha, pickErr), w.abortCherryPick(ctx))
 	}
-	if !allowEmpty {
-		return errors.Join(fmt.Errorf("cherry-pick %s is empty: its changes are already on the base (set AllowEmpty to skip it)", sha),
-			w.abortCherryPick(ctx))
+	if !request.AllowEmpty {
+		return errors.Join(&CherryPickEmptyError{Commit: sha, Base: request.Base}, w.abortCherryPick(ctx))
 	}
 	_, err = run(ctx, command{dir: w.Dir, args: []string{"cherry-pick", "--skip"}})
+	return err
+}
+
+// appendTrailers amends the commit just replayed to carry trailers, keeping
+// its author and committing as env's committer.
+func (w *Worktree) appendTrailers(ctx context.Context, env []string, trailers []string) error {
+	if len(trailers) == 0 {
+		return nil
+	}
+	args := []string{"commit", "--amend", "--no-edit", "--no-verify"}
+	for _, trailer := range trailers {
+		args = append(args, "--trailer", trailer)
+	}
+	_, err := run(ctx, command{dir: w.Dir, env: env, args: args})
 	return err
 }
 

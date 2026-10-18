@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 )
+
+// trailerPattern is one git trailer line: a token key, ": ", a value.
+var trailerPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]*: [^\r\n]*\S$`)
 
 // FileChange writes Content to Path, or deletes Path when Delete is set.
 type FileChange struct {
@@ -25,7 +29,10 @@ type FileChange struct {
 // are committed; Files may then be empty. A conflict aborts with
 // *CherryPickConflictError, a merge commit needs CherryPickMainline (the
 // 1-based parent to replay it against), and a commit already on the base is
-// an error unless AllowEmpty skips it. Nothing is pushed on any failure.
+// *CherryPickEmptyError unless AllowEmpty skips it. Trailers ("Key: value"
+// lines) are appended to every replayed commit's message, after its origin
+// line; Message is the message of the Files commit only. Nothing is pushed on
+// any failure.
 type ChangeRequest struct {
 	Base               string
 	BaseSHA            string
@@ -35,6 +42,7 @@ type ChangeRequest struct {
 	CherryPick         []string
 	CherryPickMainline int
 	AllowEmpty         bool
+	Trailers           []string
 	Files              []FileChange
 	PullRequest        *PullRequestRequest
 	Tag                *TagOptions
@@ -135,6 +143,11 @@ func (r ChangeRequest) validate() error {
 	}
 	if r.CherryPickMainline < 0 {
 		return fmt.Errorf("invalid cherry-pick mainline %d", r.CherryPickMainline)
+	}
+	for _, trailer := range r.Trailers {
+		if !trailerPattern.MatchString(trailer) {
+			return fmt.Errorf("cherry-pick trailer %q must be one \"Key: value\" line", trailer)
+		}
 	}
 	if r.Tag != nil {
 		return ValidateTagName(r.Tag.Name)

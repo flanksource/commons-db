@@ -62,9 +62,35 @@ var _ = Describe("Cache.Apply with CherryPick", func() {
 		Expect(gitFixture(fixture.Path, "ls-tree", "--name-only", "-r", result.CommitSHA)).To(Equal("README.md\nside.txt"))
 	})
 
+	It("appends the trailers to every picked commit's message, after its origin", func(ctx SpecContext) {
+		second := fixture.commitOn("feature", "", "other.txt", "x\n", "other")
+		change := promote(fixture.Feature, second)
+		change.Trailers = []string{"Requested-by: ada"}
+
+		result, err := cache.Apply(ctx, repo, change)
+		Expect(err).ToNot(HaveOccurred())
+		for _, rev := range []string{result.CommitSHA, result.CommitSHA + "^"} {
+			Expect(gitFixture(fixture.Path, "log", "-1", "--format=%(trailers:key=Requested-by,valueonly)%an|%cn", rev)).To(Equal("ada\nFixture|Apply Bot"))
+		}
+		Expect(gitFixture(fixture.Path, "log", "-1", "--format=%b", result.CommitSHA)).To(ContainSubstring("cherry picked from commit " + second))
+	})
+
+	It("refuses a trailer that is not one Key: value line, before pushing", func(ctx SpecContext) {
+		for _, trailer := range []string{"Requested-by ada", "Requested-by: ada\nSigned-off-by: eve", ": ada"} {
+			change := promote(fixture.Feature)
+			change.Trailers = []string{trailer}
+			_, err := cache.Apply(ctx, repo, change)
+			Expect(err).To(MatchError(ContainSubstring("trailer")), "trailer %q", trailer)
+		}
+		Expect(branchExists()).To(BeEmpty())
+	})
+
 	It("refuses an already applied commit unless AllowEmpty skips it", func(ctx SpecContext) {
 		_, err := cache.Apply(ctx, repo, promote(fixture.Main))
-		Expect(err).To(MatchError(And(ContainSubstring(fixture.Main), ContainSubstring("set AllowEmpty"))))
+		var empty *git.CherryPickEmptyError
+		Expect(errors.As(err, &empty)).To(BeTrue(), "%v", err)
+		Expect(*empty).To(Equal(git.CherryPickEmptyError{Commit: fixture.Main, Base: "main"}))
+		Expect(err).To(MatchError(ContainSubstring("set AllowEmpty")))
 		Expect(branchExists()).To(BeEmpty())
 
 		change := promote(fixture.Main, fixture.Feature)
