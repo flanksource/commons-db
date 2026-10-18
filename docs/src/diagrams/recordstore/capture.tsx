@@ -57,7 +57,7 @@ export function SampleRows({ table, columns, rows }: { table: string; columns: s
         </thead>
         <tbody>
           {rows.map((row) => (
-            <tr key={row.join('|')} style={unskinned}>{row.map((value, index) => <td key={index} style={cell}>{value}</td>)}</tr>
+            <tr key={row.join('|')} style={unskinned}>{columns.map((column, at) => <td key={column} style={cell}>{row[at]}</td>)}</tr>
           ))}
         </tbody>
       </table>

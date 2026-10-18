@@ -3,6 +3,7 @@
 // numbered step list an engine box uses to show one call's path.
 import React from 'react';
 import { BoxNode, COLORS } from '@flanksource/facet';
+import { HiBell, HiMagnifyingGlass } from 'react-icons/hi2';
 
 export type IconComponent = React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
 
@@ -63,6 +64,25 @@ export function Facts({ title, items }: { title: string; items: string[] }) {
       {items.map((item) => (
         <div key={item} className="text-[10px] leading-snug" style={{ color: COLORS.accent }}>{item}</div>
       ))}
+    </div>
+  );
+}
+
+// AppendScanNodes is a store's two callers, the appending writer above the
+// scanning reader, with what each store says about them.
+export function AppendScanNodes({ id, writer, reader }: {
+  id: (name: string) => string; writer: string[]; reader: string[];
+}) {
+  return (
+    <div className="flex flex-col gap-24">
+      <BoxNode id={id('append')} title={<HeaderTitle icon={HiBell}>Notifier.Append</HeaderTitle>}
+        headerColor={COLORS.primary} bodyColor={COLORS.background} compact minWidth="190px">
+        <Facts title="Writer" items={writer} />
+      </BoxNode>
+      <BoxNode id={id('scan')} title={<HeaderTitle icon={HiMagnifyingGlass}>Scan / Tail</HeaderTitle>}
+        headerColor={COLORS.muted} bodyColor={COLORS.background} borderColor={COLORS.muted} compact minWidth="190px">
+        <Facts title="Reader" items={reader} />
+      </BoxNode>
     </div>
   );
 }

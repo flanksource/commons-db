@@ -4,8 +4,8 @@
 import React from 'react';
 import { Diagram, BoxNode, Arrow, NodeSection, COLORS } from '@flanksource/facet';
 import { Redis, Valkey } from '@flanksource/icons/mi';
-import { HiBell, HiMagnifyingGlass, HiLockClosed, HiQueueList, HiCircleStack } from 'react-icons/hi2';
-import { HeaderTitle, IconNode, StepList, Facts, EntityBox, RelLabel, FlowLabel } from './parts';
+import { HiLockClosed, HiQueueList, HiCircleStack } from 'react-icons/hi2';
+import { AppendScanNodes, HeaderTitle, IconNode, StepList, Facts, EntityBox, RelLabel, FlowLabel } from './parts';
 
 export function KVAppendFlow() {
   return (
@@ -13,16 +13,9 @@ export function KVAppendFlow() {
       {(id) => (
         <>
           <div className="flex items-center justify-center gap-5">
-            <div className="flex flex-col gap-24">
-              <BoxNode id={id('append')} title={<HeaderTitle icon={HiBell}>Notifier.Append</HeaderTitle>}
-                headerColor={COLORS.primary} bodyColor={COLORS.background} compact minWidth="190px">
-                <Facts title="Writer" items={['one process per stream', 'wakes followers on commit']} />
-              </BoxNode>
-              <BoxNode id={id('scan')} title={<HeaderTitle icon={HiMagnifyingGlass}>Scan / Tail</HeaderTitle>}
-                headerColor={COLORS.muted} bodyColor={COLORS.background} borderColor={COLORS.muted} compact minWidth="190px">
-                <Facts title="Reader" items={['server, Indexer.Ensure', 'resumes after a seq']} />
-              </BoxNode>
-            </div>
+            <AppendScanNodes id={id}
+              writer={['one process per stream', 'wakes followers on commit']}
+              reader={['server, Indexer.Ensure', 'resumes after a seq']} />
 
             <div className="flex flex-col items-center gap-2" style={{ minWidth: '150px' }}>
               <IconNode id={id('locks')} icon={HiLockClosed} label="StreamLocks" caption="serialize appends" />

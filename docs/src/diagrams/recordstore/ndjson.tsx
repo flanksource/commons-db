@@ -3,8 +3,8 @@
 // no shared store is configured.
 import React from 'react';
 import { Diagram, BoxNode, Arrow, NodeSection, COLORS } from '@flanksource/facet';
-import { HiBell, HiMagnifyingGlass, HiLockClosed, HiArrowPath, HiFolder, HiDocumentText, HiCodeBracket } from 'react-icons/hi2';
-import { HeaderTitle, IconNode, StepList, Facts, EntityBox, FieldRow, RelLabel, FlowLabel } from './parts';
+import { HiLockClosed, HiArrowPath, HiFolder, HiDocumentText, HiCodeBracket } from 'react-icons/hi2';
+import { AppendScanNodes, HeaderTitle, IconNode, StepList, Facts, EntityBox, FieldRow, RelLabel, FlowLabel } from './parts';
 
 export function NDJSONAppendFlow() {
   return (
@@ -12,16 +12,9 @@ export function NDJSONAppendFlow() {
       {(id) => (
         <>
           <div className="flex items-center justify-center gap-5">
-            <div className="flex flex-col gap-24">
-              <BoxNode id={id('append')} title={<HeaderTitle icon={HiBell}>Notifier.Append</HeaderTitle>}
-                headerColor={COLORS.primary} bodyColor={COLORS.background} compact minWidth="190px">
-                <Facts title="Writer" items={['a CLI run, no shared store', 'wakes followers on commit']} />
-              </BoxNode>
-              <BoxNode id={id('scan')} title={<HeaderTitle icon={HiMagnifyingGlass}>Scan / Tail</HeaderTitle>}
-                headerColor={COLORS.muted} bodyColor={COLORS.background} borderColor={COLORS.muted} compact minWidth="190px">
-                <Facts title="Reader" items={['Indexer.Ensure → index.sqlite', 'resumes after a seq']} />
-              </BoxNode>
-            </div>
+            <AppendScanNodes id={id}
+              writer={['a CLI run, no shared store', 'wakes followers on commit']}
+              reader={['Indexer.Ensure → index.sqlite', 'resumes after a seq']} />
 
             <div className="flex flex-col items-center gap-2" style={{ minWidth: '150px' }}>
               <IconNode id={id('locks')} icon={HiLockClosed} label="StreamLocks" caption="serialize appends" />
