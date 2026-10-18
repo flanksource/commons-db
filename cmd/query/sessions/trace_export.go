@@ -41,7 +41,8 @@ func (h *sessionHandler) exportTrace(w http.ResponseWriter, r *http.Request, kin
 	case err != nil:
 		http.Error(w, err.Error(), traceExportErrorStatus(err))
 	default:
-		download.start()
+		// An empty export is still answered as a download; an empty write cannot fail.
+		_, _ = download.Write(nil)
 	}
 }
 
@@ -82,29 +83,31 @@ type attachment struct {
 	started  bool
 }
 
-func (a *attachment) start() {
-	if a.started {
-		return
-	}
-	a.started = true
-	// A plugin's format must not turn captured bytes into an active browser document.
-	switch a.format.MIME {
-	case "application/x-ndjson":
-		a.w.Header().Set("Content-Type", "application/x-ndjson")
-	case "application/json":
-		a.w.Header().Set("Content-Type", "application/json")
-	case "application/x-asciicast":
-		a.w.Header().Set("Content-Type", "application/x-asciicast")
-	default:
-		a.w.Header().Set("Content-Type", "application/octet-stream")
-	}
-	a.w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", a.filename))
-	a.w.Header().Set("X-Content-Type-Options", "nosniff")
-	a.w.Header().Set("Content-Security-Policy", "sandbox")
-	a.w.WriteHeader(http.StatusOK)
-}
-
+// Write sets the download headers on the same writer it writes the body to, so
+// the non-HTML content type is visibly bound to the untrusted bytes it carries.
 func (a *attachment) Write(p []byte) (int, error) {
-	a.start()
-	return a.w.Write(p)
+	w := a.w
+	if !a.started {
+		a.started = true
+		header := w.Header()
+		// A plugin's format must not turn captured bytes into an active browser document.
+		switch a.format.MIME {
+		case "application/x-ndjson":
+			header.Set("Content-Type", "application/x-ndjson")
+		case "application/json":
+			header.Set("Content-Type", "application/json")
+		case "application/x-asciicast":
+			header.Set("Content-Type", "application/x-asciicast")
+		default:
+			header.Set("Content-Type", "application/octet-stream")
+		}
+		header.Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", a.filename))
+		header.Set("X-Content-Type-Options", "nosniff")
+		header.Set("Content-Security-Policy", "sandbox")
+		w.WriteHeader(http.StatusOK)
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return w.Write(p)
 }
