@@ -126,7 +126,8 @@ func (h *Handler) arm(w http.ResponseWriter, r *http.Request) (http.ResponseWrit
 		return w, r, nil, true
 	}
 
-	tracked := &statusWriter{ResponseWriter: StampID(w, recorder.ID())}
+	StampID(w.Header(), recorder.ID())
+	tracked := &statusWriter{ResponseWriter: w}
 	armed := RequestWithRecorder(r, recorder)
 	return tracked, armed, func() {
 		status := tracked.status

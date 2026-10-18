@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/commons-db/cmd/query/internal/sse"
 	inspection "github.com/flanksource/commons-db/inspect"
 	"github.com/flanksource/commons-db/observability"
@@ -274,7 +275,7 @@ func (e errAfter) Error() string {
 
 func setDevtoolsCORS(w http.ResponseWriter) {
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Expose-Headers", IDHeader)
+	entity.ExposeHeaders(w.Header(), IDHeader)
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

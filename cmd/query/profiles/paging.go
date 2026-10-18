@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/api"
+	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/rpc"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -413,7 +414,7 @@ func exportResponseHeaders() map[string]rpc.OpenAPIHeader {
 func setCORSHeaders(w http.ResponseWriter) {
 	header := w.Header()
 	header.Set("Access-Control-Allow-Origin", "*")
-	header.Set("Access-Control-Expose-Headers", strings.Join(exportHeaders, ", "))
+	entity.ExposeHeaders(header, exportHeaders...)
 }
 
 func setExportHeaders(w http.ResponseWriter, r *http.Request, profileName string, request exportRequest, response exportResponse) {

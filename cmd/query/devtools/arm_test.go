@@ -7,6 +7,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/commons/logger"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -84,53 +85,27 @@ var _ = Describe("Arm", func() {
 })
 
 var _ = Describe("StampID", func() {
-	It("does not wrap the writer when there is no record to name", func() {
-		recorder := httptest.NewRecorder()
-		Expect(devtools.StampID(recorder, "")).To(BeIdenticalTo(http.ResponseWriter(recorder)))
+	It("names nothing when there is no record", func() {
+		header := http.Header{}
+		devtools.StampID(header, "")
+		Expect(header).To(BeEmpty())
 	})
 
-	// The handlers downstream call setCORSHeaders while producing the response,
-	// which replaces whatever expose list was set up front. Appending at write
-	// time is the only point after that.
-	It("survives a downstream handler replacing the expose list", func() {
-		recorder := httptest.NewRecorder()
-		w := devtools.StampID(recorder, "rec-1")
+	It("writes the id and exposes it to a browser", func() {
+		header := http.Header{}
+		devtools.StampID(header, "rec-1")
 
-		w.Header().Set("Access-Control-Expose-Headers", "X-Total-Count, X-Has-More")
-		w.WriteHeader(http.StatusOK)
-
-		Expect(recorder.Header().Get(devtools.IDHeader)).To(Equal("rec-1"))
-		Expect(recorder.Header().Get("Access-Control-Expose-Headers")).
-			To(Equal("X-Total-Count, X-Has-More, " + devtools.IDHeader))
+		Expect(header.Get(devtools.IDHeader)).To(Equal("rec-1"))
+		Expect(header.Get("Access-Control-Expose-Headers")).To(Equal(devtools.IDHeader))
 	})
 
-	It("exposes the header when the downstream handler set no list at all", func() {
-		recorder := httptest.NewRecorder()
-		w := devtools.StampID(recorder, "rec-1")
-		_, _ = w.Write([]byte("rows"))
+	// Downstream handlers add their own headers to the expose list rather than
+	// replacing it, so the id exposed up front stays readable.
+	It("survives a downstream handler exposing its own headers", func() {
+		header := http.Header{}
+		devtools.StampID(header, "rec-1")
+		entity.ExposeHeaders(header, "X-Total-Count", "x-debug-id")
 
-		Expect(recorder.Header().Get("Access-Control-Expose-Headers")).To(Equal(devtools.IDHeader))
-	})
-
-	It("does not name the header twice when it is already listed", func() {
-		recorder := httptest.NewRecorder()
-		w := devtools.StampID(recorder, "rec-1")
-
-		w.Header().Set("Access-Control-Expose-Headers", "x-debug-id, X-Total-Count")
-		w.WriteHeader(http.StatusOK)
-
-		Expect(recorder.Header().Get("Access-Control-Expose-Headers")).To(Equal("x-debug-id, X-Total-Count"))
-	})
-
-	// An unflushable stream reads as a hung request, which is far harder to
-	// diagnose than a missing header.
-	It("forwards Flush so a wrapped stream keeps streaming", func() {
-		recorder := httptest.NewRecorder()
-		w := devtools.StampID(recorder, "rec-1")
-
-		flusher, ok := w.(http.Flusher)
-		Expect(ok).To(BeTrue())
-		flusher.Flush()
-		Expect(recorder.Flushed).To(BeTrue())
+		Expect(header.Get("Access-Control-Expose-Headers")).To(Equal(devtools.IDHeader + ", X-Total-Count"))
 	})
 })
