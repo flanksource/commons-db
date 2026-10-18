@@ -1,7 +1,7 @@
 // Specs for the HTTP traffic tap: collectors observing a feature receive every
 // exchange its transports make, regardless of the feature's HAR level.
 
-package connection
+package observability
 
 import (
 	"context"

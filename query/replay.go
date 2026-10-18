@@ -18,6 +18,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/observability"
 )
 
 const (
@@ -303,7 +304,7 @@ func ExecuteReplay(ctx context.Context, preview *ReplayPreview) (*ReplayExecuteR
 	if err != nil {
 		return nil, fmt.Errorf("create replay http client: %w", err)
 	}
-	connection.ApplyHTTPClientObservability(ctx, "query-replay", client, nil)
+	observability.ApplyHTTPClientObservability(ctx, "query-replay", client, nil)
 
 	request := client.R(ctx)
 	for name, value := range preview.headers {

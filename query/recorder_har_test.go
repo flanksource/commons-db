@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 
-	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
 	commons "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/har"
@@ -28,7 +28,7 @@ func (p *harProvider) Type() string { return p.typ }
 func (p *harProvider) Execute(ctx dbcontext.Context, req query.ProviderRequest) ([]query.Row, error) {
 	req.Diagnostics.RecordRequest(req.Query, nil, nil)
 	client := &http.Client{
-		Transport: dbconnection.ApplyHTTPObservability(ctx, p.typ, http.DefaultTransport, nil),
+		Transport: observability.ApplyHTTPObservability(ctx, p.typ, http.DefaultTransport, nil),
 	}
 	response, err := client.Get(p.url)
 	if err != nil {

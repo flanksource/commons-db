@@ -19,6 +19,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
+	"github.com/flanksource/commons-db/observability"
 )
 
 type lokiSearcher struct {
@@ -52,7 +53,7 @@ func (t *lokiSearcher) Search(ctx context.Context, request Request) (*logs.LogRe
 		return nil, fmt.Errorf("failed to create http client: %w", err)
 	}
 	// Maintain HAR capture / HTTP logging for the "loki" feature.
-	connection.ApplyHTTPClientObservability(ctx, "loki", client, nil)
+	observability.ApplyHTTPClientObservability(ctx, "loki", client, nil)
 
 	resp, err := client.R(ctx).Get(apiURL.String())
 	if err != nil {
