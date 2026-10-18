@@ -30,6 +30,9 @@ func (p sqlProvider) LookupFilterValues(
 	if limit <= 0 {
 		return nil, nil, fmt.Errorf("filter value lookup needs a positive limit")
 	}
+	if limit > query.MaxFilterLookupLimit {
+		return nil, nil, fmt.Errorf("filter value lookup limit must be at most %d, got %d", query.MaxFilterLookupLimit, limit)
+	}
 	opts, err := query.DecodeOptions[sqlOptions](req.Options)
 	if err != nil {
 		return nil, nil, err

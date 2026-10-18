@@ -1,10 +1,21 @@
 package sqlite
 
 import (
+	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+var _ = Describe("sqlProvider.LookupFilterValues", func() {
+	DescribeTable("refuses a limit outside 1..MaxFilterLookupLimit before connecting", func(limit int, message string) {
+		_, _, err := sqlProvider{}.LookupFilterValues(context.New(), query.ProviderRequest{Query: ordersQuery}, query.ColumnFilterBinding{}, "", limit)
+		Expect(err).To(MatchError(ContainSubstring(message)))
+	},
+		Entry("zero", 0, "positive limit"),
+		Entry("above the ceiling", query.MaxFilterLookupLimit+1, "at most"),
+	)
+})
 
 var _ = Describe("buildLookupSQL", func() {
 	regionBinding := query.ColumnFilterBinding{
