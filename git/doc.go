@@ -15,6 +15,7 @@
 //   - log.go reads the commits between two refs (Cache.Log, Cache.Compare)
 //     from the mirror; pullrequest.go opens a pull request between two
 //     existing branches (Repository.OpenPullRequest).
+//   - ignore.go lists tracked and unignored paths in a local checkout.
 //   - provider*.go and rest.go talk to the hosting provider's REST API.
 //   - factory.go builds a Client from a hydrated models.Connection.
 //
