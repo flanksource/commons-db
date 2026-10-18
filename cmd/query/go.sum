@@ -327,8 +327,8 @@ github.com/flanksource/kubectl-neat v1.0.4 h1:t5/9CqgE84oEtB0KitgJ2+WIeLfD+RhXSx
 github.com/flanksource/kubectl-neat v1.0.4/go.mod h1:Un/Voyh3cmiZNKQrW/TkAl28nAA7vwnwDGVjRErKjOw=
 github.com/flanksource/sandbox-runtime v1.0.2 h1:dEaVyUpeaCAn3GOiWcNDrPguaey1Gx9eTsPAc27W3Eg=
 github.com/flanksource/sandbox-runtime v1.0.2/go.mod h1:x5Ywc1MrP3lTgmj0VUCeFJzrDZ3mBhBV4Gdc/ioV76M=
-github.com/flanksource/sqlglot-go v1.0.1 h1:qBVPjt6UPXDM4flmH85US/yuUJF5ECMe+Xx3HNAJ918=
-github.com/flanksource/sqlglot-go v1.0.1/go.mod h1:M7sGnJGwh3FGsexQdxFI20JQcmT2jHTpBbYYinVxEJI=
+github.com/flanksource/sqlglot-go v1.0.3 h1:Wi+4pETCXOX95Y55VWI0BYBPj/OJAAV8vriOdpcgkX4=
+github.com/flanksource/sqlglot-go v1.0.3/go.mod h1:M7sGnJGwh3FGsexQdxFI20JQcmT2jHTpBbYYinVxEJI=
 github.com/frankban/quicktest v1.14.6 h1:7Xjx+VpznH+oBnejlPUj8oUpdxnVs4f8XU8WnHkI4W8=
 github.com/frankban/quicktest v1.14.6/go.mod h1:4ptaffx2x8+WTWXmUCuVU6aPUX1/Mz7zb5vbUoiM6w0=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
