@@ -47,21 +47,24 @@ const logRecord = "\x1e"
 
 var logFormat = "--format=" + logRecord + strings.Join([]string{"%H", "%h", "%P", "%an", "%ae", "%aI", "%s", "%b"}, "%x00") + "%x00"
 
-// Log returns the commits reachable from head and not from base (git log
-// base..head), oldest first: parents before children (--topo-order), so a
-// merge commit follows every commit it merges. base and head resolve like
-// Checkout refs; both are fetched into the mirror first.
+// Log returns the commits reachable from head and not from base, oldest
+// first: parents before children (--topo-order), so a merge commit follows
+// every commit it merges. A commit whose patch base already carries (a
+// cherry-pick of it, by patch-id) is omitted: git log --cherry-pick
+// --right-only base...head. Merge commits are kept. base and head resolve
+// like Checkout refs; both are fetched into the mirror first.
 func (c *Cache) Log(ctx context.Context, repo *Repository, base, head string, options LogOptions) ([]Commit, error) {
 	if options.Limit < 0 {
 		return nil, fmt.Errorf("invalid log limit %d", options.Limit)
 	}
-	args := []string{"-c", "core.quotePath=false", "log", "--topo-order", "--reverse", "--no-renames", "--name-only", logFormat}
+	args := []string{"-c", "core.quotePath=false", "log", "--cherry-pick", "--right-only", "--topo-order", "--reverse",
+		"--no-renames", "--name-only", logFormat}
 	if options.Limit > 0 {
 		args = append(args, "--max-count="+strconv.Itoa(options.Limit))
 	}
 	var out string
 	err := c.withRange(ctx, repo, base, head, func(mirror, baseSHA, headSHA string) (err error) {
-		args = append(args, "--end-of-options", baseSHA+".."+headSHA, "--")
+		args = append(args, "--end-of-options", baseSHA+"..."+headSHA, "--")
 		out, err = run(ctx, command{dir: mirror, args: append(args, options.Paths...)})
 		return err
 	})
