@@ -96,14 +96,15 @@ func (ref Ref) refspec() string {
 }
 
 // fetch fetches ref from repo into the repository at dir and returns the
-// fetched commit, which may be newer than the SHA ls-remote reported.
-func fetch(ctx context.Context, dir string, repo *Repository, ref Ref, depth int) (string, error) {
+// fetched commit, which may be newer than the SHA ls-remote reported. flags
+// are extra fetch options (e.g. --unshallow).
+func fetch(ctx context.Context, dir string, repo *Repository, ref Ref, depth int, flags ...string) (string, error) {
 	env, cleanup, err := commandEnv(repo)
 	if err != nil {
 		return "", err
 	}
 	defer cleanup()
-	args := []string{"fetch", "--quiet", "--no-tags"}
+	args := append([]string{"fetch", "--quiet", "--no-tags"}, flags...)
 	if depth > 0 {
 		args = append(args, fmt.Sprintf("--depth=%d", depth))
 	}

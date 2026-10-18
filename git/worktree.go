@@ -39,6 +39,15 @@ func (s Signature) env() ([]string, error) {
 		"GIT_COMMITTER_NAME=" + s.Name, "GIT_COMMITTER_EMAIL=" + s.Email}, nil
 }
 
+// committerEnv is the isolated environment with s as committer only, so a
+// replayed commit (cherry-pick) keeps its original author.
+func (s Signature) committerEnv() ([]string, error) {
+	if _, err := s.env(); err != nil {
+		return nil, err
+	}
+	return append(baseEnv(), "GIT_COMMITTER_NAME="+s.Name, "GIT_COMMITTER_EMAIL="+s.Email), nil
+}
+
 // CommitOptions configures Worktree.Commit.
 type CommitOptions struct {
 	Message string
