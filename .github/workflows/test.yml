@@ -187,6 +187,7 @@ jobs:
           corepack enable pnpm
           corepack prepare pnpm@11.22.0 --activate
           pnpm --dir cmd/query/www install --frozen-lockfile
+          pnpm --dir docs install --frozen-lockfile
 
       # Each module must tidy on its own, the way a consumer resolves it, so the
       # check runs without the workspace.
