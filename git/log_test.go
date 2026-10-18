@@ -44,6 +44,18 @@ var _ = Describe("Cache.Log and Cache.Compare", func() {
 		}))
 	})
 
+	It("omits a head commit whose patch is already on base, as a cherry-pick put it there", func(ctx SpecContext) {
+		gitFixture(fixture.work(), "checkout", "-q", "main")
+		gitFixture(fixture.work(), "cherry-pick", fixture.Feature)
+		gitFixture(fixture.work(), "push", "-q", fixture.Path, "main")
+		later := fixture.commitOn("feature", "", "later.txt", "later\n", "later")
+
+		commits, err := cache.Log(ctx, repo, "main", "feature", git.LogOptions{})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(summary(commits)).To(Equal([]git.Commit{{SHA: later, Subject: "later",
+			Author: git.Signature{Name: "Fixture", Email: "fixture@example.org"}, Parents: []string{fixture.Feature}, Files: []string{"later.txt"}}}))
+	})
+
 	It("keeps the newest Limit commits and filters by path", func(ctx SpecContext) {
 		second := fixture.commitOn("feature", "", "other.txt", "x\n", "other")
 		third := fixture.commitOn("feature", "", "feature.txt", "changed\n", "feature again")
