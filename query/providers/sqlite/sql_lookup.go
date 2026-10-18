@@ -3,12 +3,11 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
-	"strings"
 	"time"
 
-	"github.com/Masterminds/squirrel"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/sqlglot-go/sqlglot"
 )
 
 // LookupFilterValues answers "what can this column be filtered to" from the
@@ -49,21 +48,26 @@ func (p sqlProvider) LookupFilterValues(
 		return nil, nil, err
 	}
 
-	statement, args, err := buildLookupSQL(dialect, req.Query, binding, req.Filters, search, limit)
+	built, err := buildLookupSQL(dialect, sqlLookupRequest{
+		Query:    sqlQuery{Text: req.Query, Args: req.QueryArgs, Identifiers: req.QueryIdentifiers},
+		Binding:  binding,
+		Siblings: req.Filters,
+		Search:   search,
+		Limit:    limit,
+	})
 	if err != nil {
 		return nil, nil, err
 	}
-	statement, err = materializeSQLParams(dialect, statement, req.QueryArgs, req.QueryIdentifiers)
+	statement, args, err := built.render()
 	if err != nil {
 		return nil, nil, err
 	}
-	args = append(append([]any{}, req.QueryArgs...), args...)
 	started := time.Now()
 	req.Diagnostics.RecordRequest(statement, args, map[string]any{
 		"dialect": string(dialect), "operation": "filter-values",
 	})
 
-	options, total, err := readFilterValues(ctx, client, statement, args, limit)
+	options, total, err := readFilterValues(ctx, client, statement, driverArgs(dialect, args), limit)
 	publishSQLStatement(req.Connection, dialect, statement, args, started, len(options), err)
 	if err != nil {
 		return nil, nil, err
@@ -109,69 +113,72 @@ func readFilterValues(ctx context.Context, client *sql.DB, statement string, arg
 // author's query twice at two different snapshots, and a probe can only ever
 // say "and 1 more" when the truth might be "and 4,000 more" — a number a reader
 // would take at face value.
-func buildLookupSQL(
-	dialect sqlDialect,
-	statement string,
-	binding query.ColumnFilterBinding,
-	siblings []query.ColumnFilterValue,
-	search string,
-	limit int,
-) (string, []any, error) {
-	baseArgCount, err := sqlParamCount(statement)
+func buildLookupSQL(dialect sqlDialect, request sqlLookupRequest) (*sqlStatement, error) {
+	if !request.Binding.Kind.Lookupable() {
+		return nil, fmt.Errorf("filter %q is a %s filter and has no values to list",
+			request.Binding.Key, request.Binding.Kind.Normalized())
+	}
+	column, err := fieldColumn(request.Binding.Field)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	if !binding.Kind.Lookupable() {
-		return "", nil, fmt.Errorf(
-			"filter %q is a %s filter and has no values to list", binding.Key, binding.Kind.Normalized())
-	}
-	if binding.Array {
-		return buildArrayLookupSQL(dialect, statement, baseArgCount, binding, siblings, search, limit)
-	}
-	column, err := dialect.quote(binding.Field)
+	statement, err := newSQLStatement(dialect)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-
-	conditions := squirrel.And{}
-	active := make([]query.ColumnFilterValue, 0, len(siblings))
-	for _, sibling := range siblings {
-		if !sibling.IsZero() {
-			active = append(active, sibling)
-		}
+	base, err := statement.parseBase(request.Query)
+	if err != nil {
+		return nil, err
 	}
-	if len(active) > 0 {
-		predicate, err := sqlPredicates(dialect, active)
-		if err != nil {
-			return "", nil, err
+	scope, err := statement.filterPredicate(request.Siblings)
+	if err != nil {
+		return nil, err
+	}
+	selection, value, member := scalarLookupSelect(dialect, column), column, sqlNode(nil)
+	if request.Binding.Array {
+		if selection, value, member, err = arrayLookupSelect(dialect, column); err != nil {
+			return nil, fmt.Errorf("field %q is an array: %w", request.Binding.Field, err)
 		}
-		conditions = append(conditions, predicate)
+		// The siblings scope the rows before they are numbered and expanded.
+		rows, _ := selection.Args["from_"].(sqlNode)
+		rows.This().This().Set("where", whereOf(scope))
+		scope = nil
 	}
 	// NULL is not a value anyone can select, so it is not offered as one.
-	conditions = append(conditions, squirrel.Expr(column+" IS NOT NULL"))
-	if search != "" {
-		predicate, pattern := dialect.likeMatch(column, search)
-		conditions = append(conditions, squirrel.Expr(predicate, pattern))
+	conditions := sqlNodes(scope, member, isNotNull(value))
+	if request.Search != "" {
+		conditions = append(conditions, statement.likeMatch(value, request.Search))
 	}
+	selection.Set("where", whereOf(conjunction("And", conditions)))
+	selection.Set("order", sqlglot.New("Order", kv("expressions", sqlNodes(
+		ordered(number(2), true, defaultNullsFirst(dialect, true)),
+		ordered(number(1), false, defaultNullsFirst(dialect, false))))))
+	setPageTail(dialect, selection, request.Limit, 0)
+	if err := wrapAsBaseCTE(base, selection); err != nil {
+		return nil, err
+	}
+	statement.tree = selection
+	return statement, nil
+}
 
-	where, args, err := renderClause(dialect, unwrapSingle(conditions))
-	if err != nil {
-		return "", nil, err
-	}
-	where = offsetPlaceholders(dialect, where, baseArgCount)
+// sqlLookupRequest is what a distinct-values lookup is built from: the
+// author's query, the filter being looked up, every other active selection,
+// and the typed search.
+type sqlLookupRequest struct {
+	Query    sqlQuery
+	Binding  query.ColumnFilterBinding
+	Siblings []query.ColumnFilterValue
+	Search   string
+	Limit    int
+}
 
-	wrapped, err := wrapAsBaseCTE(dialect, statement, func(base string) string {
-		return strings.Join([]string{
-			fmt.Sprintf("SELECT %s AS value, COUNT(*) AS count, COUNT(*) OVER () AS total", column),
-			fmt.Sprintf("FROM %s", base),
-			fmt.Sprintf("WHERE %s", where),
-			fmt.Sprintf("GROUP BY %s", column),
-			"ORDER BY 2 DESC, 1 ASC",
-			dialect.limitTail(limit),
-		}, "\n")
-	})
-	if err != nil {
-		return "", nil, err
-	}
-	return wrapped, args, nil
+// scalarLookupSelect counts each value of column over the wrapped base.
+func scalarLookupSelect(dialect sqlDialect, column sqlNode) sqlNode {
+	return sqlglot.New("Select",
+		kv("expressions", sqlNodes(
+			aliased(column.Copy(), bareIdentifier("value")),
+			aliased(countOf(dialect, sqlglot.New("Star")), bareIdentifier("count")),
+			aliased(totalOver(dialect), bareIdentifier("total")))),
+		kv("from_", fromItem(baseTable())),
+		kv("group", sqlglot.New("Group", kv("expressions", sqlNodes(column.Copy())))))
 }

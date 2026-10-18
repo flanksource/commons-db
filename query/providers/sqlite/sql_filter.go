@@ -4,55 +4,33 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
-	"strings"
 	"time"
 
-	"github.com/Masterminds/squirrel"
 	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/sqlglot-go/sqlglot"
 	"github.com/timberio/go-datemath"
 )
 
-// sqlBaseCTE is the name the author's statement is wrapped under. A collision
-// is an error rather than a rename, because a query that silently referred to
-// someone else's CTE would be a different query.
 const (
-	sqlBaseCTE = "__cdb_base"
-
 	// sqlTotalColumn carries COUNT(*) OVER () on every paged row. It is stripped
 	// before the row reaches a caller — it is the server's bookkeeping, not a
 	// column anyone selected.
 	sqlTotalColumn = "__cdb_total"
+
+	// sqlPageAlias names the counted page a total-bearing read selects from.
+	sqlPageAlias = "__cdb_page"
 )
 
-// FilterSQL wraps an operator-authored statement so the given selections narrow
-// its result rather than its text, for a caller that runs its own SQL rather
-// than a stored profile — the connection browser.
-//
-// It exists so there is one CTE wrapper and one predicate builder in the
-// codebase: a second implementation would be a second set of quoting and
-// binding rules to keep correct, and the two would disagree on the day one of
-// them was fixed.
-//
-// driver is the connection type (models.ConnectionType*), not a registry key.
-func FilterSQL(driver, statement string, filters []query.ColumnFilterValue) (string, []any, error) {
-	return buildFilteredSQL(sqlDialect(driver), statement, filters)
-}
-
-// buildFilteredSQL wraps the author's statement so the filters apply to its
-// result rather than to its text.
-//
-// The statement becomes a CTE and the predicate applies to the CTE's output
-// columns, which is what makes an aliased expression filterable by the name the
-// table already displays — filtering the underlying table would mean knowing
-// which table an alias came from, which no amount of inference can answer.
-//
-// With no active filter it returns the statement and no args, byte for byte: an
-// unfiltered profile runs exactly the statement it has always run, so turning
-// filtering on cannot change what an untouched profile returns.
 // buildPagedSQL builds the statement a page is read from: the author's query,
 // filtered, plus — unless the caller waived it — the size of the whole filtered
 // result on every row.
+//
+// The author's statement becomes a CTE and the predicate applies to the CTE's
+// output columns, which is what makes an aliased expression filterable by the
+// name the table already displays — filtering the underlying table would mean
+// knowing which table an alias came from, which no amount of inference can
+// answer.
 //
 // The count comes from COUNT(*) OVER () on the wrapped statement rather than a
 // second SELECT COUNT(*). A second statement would run the author's query twice
@@ -72,165 +50,149 @@ func FilterSQL(driver, statement string, filters []query.ColumnFilterValue) (str
 // The order is restated on the wrapper. Selecting out of a CTE does not
 // guarantee the CTE's own ORDER BY survives, and an order that silently stops
 // applying is exactly the instability paging cannot tolerate.
-func buildPagedSQL(
-	dialect sqlDialect,
-	statement string,
-	filters []query.ColumnFilterValue,
-	order query.Order,
-	position query.CursorPosition,
-	page query.PageRequest,
-) (string, []any, error) {
-	baseArgCount, err := sqlParamCount(statement)
+func buildPagedSQL(dialect sqlDialect, request SQLPageRequest) (*sqlStatement, error) {
+	statement, err := newSQLStatement(dialect)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	where, args, err := filterClause(dialect, filters)
+	base, err := statement.parseBase(request.sqlQuery())
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	where = offsetPlaceholders(dialect, where, baseArgCount)
-	resume, resumeArgs, err := keysetClause(dialect, order, position)
+	where, err := statement.filterPredicate(request.Filters)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	resume = offsetPlaceholders(dialect, resume, baseArgCount+len(args))
-	args = append(args, resumeArgs...)
-	total, err := dialect.quote(sqlTotalColumn)
+	resume, err := statement.keysetPredicate(request.Order, request.Position)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	pageAlias, err := dialect.quote("__cdb_page")
+	terms, err := orderTerms(dialect, request.Order)
 	if err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	ordering, err := orderClause(dialect, order)
-	if err != nil {
-		return "", nil, err
+	if len(terms) == 0 && dialect == dialectSQLServer {
+		terms = sqlNodes(arbitraryOrder())
 	}
-	wrapped, err := wrapAsBaseCTE(dialect, statement, func(base string) string {
-		selection := fmt.Sprintf("SELECT %s.* FROM %s", base, base)
-		if where != "" {
-			selection += "\nWHERE " + where
-		}
-		if !page.SkipTotal {
-			selection = fmt.Sprintf(
-				"SELECT %s.* FROM (\nSELECT %s.*, COUNT(*) OVER () AS %s FROM %s%s\n) AS %s",
-				pageAlias,
-				base,
-				total,
-				base,
-				whereTail(where),
-				pageAlias,
-			)
-		}
-		clauses := []string{selection}
-		if resume != "" {
-			if page.SkipTotal && where != "" {
-				clauses[len(clauses)-1] += "\nAND " + resume
-			} else {
-				clauses = append(clauses, "WHERE "+resume)
-			}
-		}
-		if ordering != "" {
-			clauses = append(clauses, "ORDER BY "+ordering)
-		} else if dialect == dialectSQLServer {
-			clauses = append(clauses, "ORDER BY (SELECT NULL)")
-		}
-		fetch := page.Limit + 1
-		if page.Ceiling > 0 && page.Ceiling < page.Limit {
-			fetch = page.Ceiling + 1
-		}
-		clauses = append(clauses, dialect.pageTail(fetch, page.Offset))
-		return strings.Join(clauses, "\n")
-	})
-	if err != nil {
-		return "", nil, err
+	page := pagedSelect(dialect, where, resume, request.Page.SkipTotal)
+	if len(terms) > 0 {
+		page.Set("order", sqlglot.New("Order", kv("expressions", terms)))
 	}
-	return wrapped, args, nil
+	fetch := request.Page.Limit + 1
+	if request.Page.Ceiling > 0 && request.Page.Ceiling < request.Page.Limit {
+		fetch = request.Page.Ceiling + 1
+	}
+	setPageTail(dialect, page, fetch, request.Page.Offset)
+	if err := wrapAsBaseCTE(base, page); err != nil {
+		return nil, err
+	}
+	statement.tree = page
+	return statement, nil
 }
 
-func whereTail(where string) string {
-	if where == "" {
-		return ""
+// pagedSelect selects the filtered base, resumed past the cursor. With a total
+// wanted, the filtered rows are counted first and the cursor applies to the
+// counted set, so the total describes the whole result rather than what is
+// left of it.
+func pagedSelect(dialect sqlDialect, where, resume sqlNode, skipTotal bool) sqlNode {
+	if skipTotal {
+		narrowed := where
+		if where != nil && resume != nil {
+			narrowed = binary("And", where, resume)
+		} else if resume != nil {
+			narrowed = resume
+		}
+		return sqlglot.New("Select", kv("expressions", sqlNodes(allColumnsOf(sqlBaseCTE))),
+			kv("from_", fromItem(baseTable())), kv("where", whereOf(narrowed)))
 	}
-	return "\nWHERE " + where
+	counted := sqlglot.New("Select",
+		kv("expressions", sqlNodes(allColumnsOf(sqlBaseCTE), aliased(totalOver(dialect), identifier(sqlTotalColumn)))),
+		kv("from_", fromItem(baseTable())), kv("where", whereOf(where)))
+	return sqlglot.New("Select", kv("expressions", sqlNodes(allColumnsOf(sqlPageAlias))),
+		kv("from_", fromItem(subqueryAs(counted, sqlPageAlias))), kv("where", whereOf(resume)))
 }
 
-// keysetClause resumes strictly after position under orderClause's ordering,
+func (r SQLPageRequest) sqlQuery() sqlQuery {
+	return sqlQuery{Text: r.Query, Args: r.QueryArgs, Identifiers: r.QueryIdentifiers}
+}
+
+// keysetPredicate resumes strictly after position under orderTerms' ordering,
 // where nulls sort last in both directions. Alternative i holds the columns
 // before i equal to their keys (a null key as IS NULL) and column i strictly
 // after its key: past a value, a later value or a null; past a null, nothing,
 // so that alternative is dropped.
-func keysetClause(dialect sqlDialect, order query.Order, position query.CursorPosition) (string, []any, error) {
+func (s *sqlStatement) keysetPredicate(order query.Order, position query.CursorPosition) (sqlNode, error) {
 	if position.IsZero() {
-		return "", nil, nil
+		return nil, nil
 	}
 	if err := order.ValidatePosition(position.Keys); err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	columns := make([]string, len(order))
+	columns := make([]sqlNode, len(order))
 	for index, by := range order {
-		column, err := dialect.quote(by.Column)
+		column, err := fieldColumn(by.Column)
 		if err != nil {
-			return "", nil, err
+			return nil, err
 		}
 		columns[index] = column
 	}
-	alternatives := squirrel.Or{}
+	alternatives := []sqlNode{}
 	for index, by := range order {
 		key := position.Keys[index]
 		if key == nil {
 			continue
 		}
-		conditions := squirrel.And{}
+		conditions := []sqlNode{}
 		for prefix := 0; prefix < index; prefix++ {
-			conditions = append(conditions, squirrel.Eq{columns[prefix]: position.Keys[prefix]})
+			conditions = append(conditions, s.equalTo(columns[prefix], position.Keys[prefix]))
 		}
-		var after squirrel.Sqlizer = squirrel.Gt{columns[index]: key}
+		after := "GT"
 		if by.Desc {
-			after = squirrel.Lt{columns[index]: key}
+			after = "LT"
 		}
-		conditions = append(conditions, squirrel.Or{after, squirrel.Eq{columns[index]: nil}})
-		alternatives = append(alternatives, unwrapSingle(conditions))
+		conditions = append(conditions, conjunction("Or", sqlNodes(
+			binary(after, columns[index].Copy(), s.bind(key)), isNull(columns[index]))))
+		alternatives = append(alternatives, conjunction("And", conditions))
 	}
-	if len(alternatives) == 1 {
-		return renderClause(dialect, alternatives[0])
-	}
-	return renderClause(dialect, alternatives)
+	return conjunction("Or", alternatives), nil
 }
 
-// orderClause renders a declared order for the wrapper, nulls last in both
+// equalTo is column = key, or column IS NULL for a null key.
+func (s *sqlStatement) equalTo(column sqlNode, key any) sqlNode {
+	if key == nil {
+		return isNull(column)
+	}
+	return binary("EQ", column.Copy(), s.bind(key))
+}
+
+// orderTerms renders a declared order for the wrapper, nulls last in both
 // directions. An undeclared order renders nothing, leaving whatever the
 // author's statement does.
 //
 // SQL Server and MySQL have no NULLS LAST, so a leading IS NULL term puts the
-// nulls after every value there; the other dialects spell it out, because
-// their defaults disagree (SQLite and SQL Server put nulls first ascending,
-// Postgres last).
-func orderClause(dialect sqlDialect, order query.Order) (string, error) {
-	terms := make([]string, 0, len(order))
+// nulls after every value there; the other dialects state it, and the
+// generator writes NULLS LAST wherever it is not already their default
+// (SQLite puts nulls first ascending, postgres first descending).
+func orderTerms(dialect sqlDialect, order query.Order) ([]sqlNode, error) {
+	terms := make([]sqlNode, 0, len(order))
 	for _, by := range order {
-		column, err := dialect.quote(by.Column)
+		column, err := fieldColumn(by.Column)
 		if err != nil {
-			return "", err
-		}
-		direction := "ASC"
-		if by.Desc {
-			direction = "DESC"
+			return nil, err
 		}
 		switch dialect {
 		case dialectSQLServer, dialectMySQL:
-			terms = append(terms, fmt.Sprintf("CASE WHEN %s IS NULL THEN 1 ELSE 0 END, %s %s", column, column, direction))
+			terms = append(terms, nullsLastKey(column), ordered(column, by.Desc, defaultNullsFirst(dialect, by.Desc)))
 		default:
-			terms = append(terms, fmt.Sprintf("%s %s NULLS LAST", column, direction))
+			terms = append(terms, ordered(column, by.Desc, false))
 		}
 	}
-	return strings.Join(terms, ", "), nil
+	return terms, nil
 }
 
-// filterClause renders the active selections as one WHERE body, or "" when
+// filterPredicate is the active selections as one predicate, or nil when
 // nothing is selected.
-func filterClause(dialect sqlDialect, filters []query.ColumnFilterValue) (string, []any, error) {
+func (s *sqlStatement) filterPredicate(filters []query.ColumnFilterValue) (sqlNode, error) {
 	active := make([]query.ColumnFilterValue, 0, len(filters))
 	for _, filter := range filters {
 		if !filter.IsZero() {
@@ -238,92 +200,9 @@ func filterClause(dialect sqlDialect, filters []query.ColumnFilterValue) (string
 		}
 	}
 	if len(active) == 0 {
-		return "", nil, nil
+		return nil, nil
 	}
-	predicate, err := sqlPredicates(dialect, active)
-	if err != nil {
-		return "", nil, err
-	}
-	return renderClause(dialect, predicate)
-}
-
-func buildFilteredSQL(dialect sqlDialect, statement string, filters []query.ColumnFilterValue) (string, []any, error) {
-	active := make([]query.ColumnFilterValue, 0, len(filters))
-	for _, filter := range filters {
-		if !filter.IsZero() {
-			active = append(active, filter)
-		}
-	}
-	if len(active) == 0 {
-		return statement, nil, nil
-	}
-	predicate, err := sqlPredicates(dialect, active)
-	if err != nil {
-		return "", nil, err
-	}
-	where, args, err := renderClause(dialect, predicate)
-	if err != nil {
-		return "", nil, err
-	}
-	wrapped, err := wrapAsBaseCTE(dialect, statement, func(base string) string {
-		return fmt.Sprintf("SELECT * FROM %s WHERE %s", base, where)
-	})
-	if err != nil {
-		return "", nil, err
-	}
-	return wrapped, args, nil
-}
-
-// wrapAsBaseCTE builds the WITH form and hands tail the quoted CTE name to
-// select from, hoisting any CTEs the author already wrote into the same list
-// rather than nesting them.
-//
-// Nesting is not an option: SQL Server rejects a WITH inside a CTE body
-// outright. Hoisting is legal in every dialect, so there is one shape to build
-// and one shape to test.
-func wrapAsBaseCTE(dialect sqlDialect, statement string, tail func(base string) string) (string, error) {
-	if err := assertNoPlaceholders(dialect, statement); err != nil {
-		return "", err
-	}
-	spans := scanSQL(statement)
-	for i := len(spans) - 1; i >= 0; i-- {
-		span := spans[i]
-		text := statement[span.start:span.end]
-		if span.literal {
-			if strings.HasPrefix(text, "--") || strings.HasPrefix(text, "/*") {
-				continue
-			}
-			break
-		}
-		text = strings.TrimRight(text, " \t\r\n")
-		if text == "" {
-			continue
-		}
-		if strings.HasSuffix(text, ";") {
-			at := span.start + len(text) - 1
-			statement = statement[:at] + statement[at+1:]
-		}
-		break
-	}
-	prefix, body, cteNames, err := splitWithPrefix(statement)
-	if err != nil {
-		return "", err
-	}
-	for _, name := range cteNames {
-		if strings.EqualFold(name, sqlBaseCTE) {
-			return "", fmt.Errorf(
-				"the query already defines a CTE named %q, which is the name column filters wrap it in; rename it", sqlBaseCTE)
-		}
-	}
-	base, err := dialect.quote(sqlBaseCTE)
-	if err != nil {
-		return "", err
-	}
-	head := "WITH "
-	if prefix != "" {
-		head = strings.TrimSuffix(prefix, ",") + ", "
-	}
-	return fmt.Sprintf("%s%s AS (\n%s\n)\n%s", head, base, body, tail(base)), nil
+	return s.sqlPredicates(active)
 }
 
 // sqlPredicates turns the resolved selections into one conjunction.
@@ -332,7 +211,28 @@ func wrapAsBaseCTE(dialect sqlDialect, statement string, tail func(base string) 
 // one equality per value would AND them and match nothing. Distinct fields stay
 // ANDed, and two filters bound to the same backend field (a column filter and a
 // list param, say) merge into one clause.
-func sqlPredicates(dialect sqlDialect, filters []query.ColumnFilterValue) (squirrel.Sqlizer, error) {
+func (s *sqlStatement) sqlPredicates(filters []query.ColumnFilterValue) (sqlNode, error) {
+	order, byField, err := mergeFieldFilters(filters)
+	if err != nil {
+		return nil, err
+	}
+	conditions := []sqlNode{}
+	for _, field := range order {
+		clause, err := s.sqlFieldPredicate(*byField[field])
+		if err != nil {
+			return nil, err
+		}
+		conditions = append(conditions, clause)
+	}
+	predicate := conjunction("And", conditions)
+	if predicate == nil {
+		return nil, fmt.Errorf("no filter produced a predicate")
+	}
+	return predicate, nil
+}
+
+// mergeFieldFilters groups filters by backend field, in first-seen order.
+func mergeFieldFilters(filters []query.ColumnFilterValue) ([]string, map[string]*query.ColumnFilterValue, error) {
 	order := make([]string, 0, len(filters))
 	byField := make(map[string]*query.ColumnFilterValue, len(filters))
 	for _, filter := range filters {
@@ -356,42 +256,19 @@ func sqlPredicates(dialect sqlDialect, filters []query.ColumnFilterValue) (squir
 		// message keeps the declared kinds, so an operator reads back the words
 		// from their own profile.
 		if merged.Kind.CompilesAs() != filter.Kind.CompilesAs() {
-			return nil, fmt.Errorf("field %q is filtered as both %s and %s",
+			return nil, nil, fmt.Errorf("field %q is filtered as both %s and %s",
 				filter.Field, merged.Kind.Normalized(), filter.Kind.Normalized())
 		}
 		if merged.Array != filter.Array {
-			return nil, fmt.Errorf("field %q is filtered both as an array and as a value", filter.Field)
+			return nil, nil, fmt.Errorf("field %q is filtered both as an array and as a value", filter.Field)
 		}
 		merged.Include = append(merged.Include, filter.Include...)
 		merged.Exclude = append(merged.Exclude, filter.Exclude...)
 		if err := mergeRange(merged, filter); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
-
-	conditions := squirrel.And{}
-	for _, field := range order {
-		clause, err := sqlFieldPredicate(dialect, *byField[field])
-		if err != nil {
-			return nil, err
-		}
-		if clause != nil {
-			conditions = append(conditions, clause)
-		}
-	}
-	if len(conditions) == 0 {
-		return nil, fmt.Errorf("no filter produced a predicate")
-	}
-	return unwrapSingle(conditions), nil
-}
-
-// unwrapSingle drops a conjunction of one, so a single filter renders as its own
-// predicate rather than nested in parentheses that say nothing.
-func unwrapSingle(conditions squirrel.And) squirrel.Sqlizer {
-	if len(conditions) == 1 {
-		return conditions[0]
-	}
-	return conditions
+	return order, byField, nil
 }
 
 func mergeRange(into *query.ColumnFilterValue, next query.ColumnFilterValue) error {
@@ -416,8 +293,8 @@ func mergeRange(into *query.ColumnFilterValue, next query.ColumnFilterValue) err
 	return nil
 }
 
-// sqlFieldPredicate is the clause one backend field contributes.
-func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squirrel.Sqlizer, error) {
+// sqlFieldPredicate is the clause one backend field contributes, or nil.
+func (s *sqlStatement) sqlFieldPredicate(filter query.ColumnFilterValue) (sqlNode, error) {
 	// A SQL result is rows of columns; there is no entry inside a row to scope a
 	// selection to. Dropping the container silently would widen the selection to
 	// the whole row, which is the wrong rows rather than fewer of them.
@@ -425,111 +302,108 @@ func sqlFieldPredicate(dialect sqlDialect, filter query.ColumnFilterValue) (squi
 		return nil, fmt.Errorf(
 			"field %q is scoped to nested %q, which SQL has no equivalent of", filter.Field, filter.Nested)
 	}
-	column, err := dialect.quote(filter.Field)
+	column, err := fieldColumn(filter.Field)
 	if err != nil {
 		return nil, err
 	}
 	if filter.Array {
-		return sqlArrayPredicate(dialect, column, filter)
+		return s.sqlArrayPredicate(column, filter)
 	}
-	conditions := squirrel.And{}
 	// Every kind compiles through the clause its family compiles through: an
 	// exact match as terms, a duration as a range, a date as a time. See
 	// ColumnFilterKind.CompilesAs.
 	switch kind := filter.Kind.CompilesAs(); kind {
 	case query.ColumnFilterKindTerms, query.ColumnFilterKindBoolean:
-		args, err := sqlFilterArgs(kind, filter)
-		if err != nil {
-			return nil, err
-		}
-		if len(args.include) > 0 {
-			conditions = append(conditions, squirrel.Eq{column: args.include})
-		}
-		if len(args.exclude) > 0 {
-			// A row with no value was not one of the excluded values, so the
-			// exclusion must keep it — which is also what OpenSearch's
-			// must_not:terms does, and the two backends must not disagree about
-			// what excluding a value means.
-			conditions = append(conditions, squirrel.Or{
-				squirrel.Eq{column: nil},
-				squirrel.NotEq{column: args.exclude},
-			})
-		}
+		return s.termsPredicate(column, kind, filter)
 	case query.ColumnFilterKindText:
+		conditions := []sqlNode{}
 		for _, needle := range filter.Include {
-			predicate, pattern := dialect.likeMatch(column, needle)
-			conditions = append(conditions, squirrel.Expr(predicate, pattern))
+			conditions = append(conditions, s.likeMatch(column, needle))
 		}
 		for _, needle := range filter.Exclude {
-			predicate, pattern := dialect.likeMatch(column, needle)
-			conditions = append(conditions, squirrel.Or{
-				squirrel.Eq{column: nil},
-				squirrel.Expr("NOT ("+predicate+")", pattern),
-			})
+			conditions = append(conditions, excluding(column, s.likeMatch(column, needle)))
 		}
+		return conjunction("And", conditions), nil
 	case query.ColumnFilterKindMatch:
-		// collections.MatchItem: a row matching any exclusion is out, then one
-		// matching any inclusion is in; with exclusions alone, everything they
-		// leave is in. A row with no value was not one of the excluded values,
-		// as for terms.
-		included := squirrel.Or{}
-		for _, pattern := range filter.Include {
-			predicate, args := dialect.globMatch(column, query.ParseMatchPattern(pattern))
-			included = append(included, squirrel.Expr(predicate, args...))
-		}
-		if len(included) > 0 {
-			conditions = append(conditions, included)
-		}
-		for _, pattern := range filter.Exclude {
-			predicate, args := dialect.globMatch(column, query.ParseMatchPattern(pattern))
-			conditions = append(conditions, squirrel.Or{
-				squirrel.Eq{column: nil},
-				squirrel.Expr("NOT ("+predicate+")", args...),
-			})
-		}
+		return s.matchPredicate(column, filter), nil
 	case query.ColumnFilterKindRange, query.ColumnFilterKindTime:
-		if filter.Range == nil {
-			return nil, nil
-		}
-		// The comparisons are squirrel's typed clauses rather than a hand-built
-		// "col op ?" string, so the column never has to be concatenated into a
-		// SQL fragment to be compared against a bound value.
-		for _, edge := range []struct {
-			bound  *query.FilterBound
-			closed func(any) squirrel.Sqlizer
-			open   func(any) squirrel.Sqlizer
-		}{
-			{
-				bound:  filter.Range.Min,
-				closed: func(v any) squirrel.Sqlizer { return squirrel.GtOrEq{column: v} },
-				open:   func(v any) squirrel.Sqlizer { return squirrel.Gt{column: v} },
-			},
-			{
-				bound:  filter.Range.Max,
-				closed: func(v any) squirrel.Sqlizer { return squirrel.LtOrEq{column: v} },
-				open:   func(v any) squirrel.Sqlizer { return squirrel.Lt{column: v} },
-			},
-		} {
-			if edge.bound == nil {
-				continue
-			}
-			value, err := sqlBoundValue(dialect, kind, edge.bound.Value)
-			if err != nil {
-				return nil, err
-			}
-			compare := edge.open
-			if edge.bound.Inclusive {
-				compare = edge.closed
-			}
-			conditions = append(conditions, compare(value))
-		}
+		return s.rangePredicate(column, kind, filter.Range)
 	default:
 		return nil, fmt.Errorf("field %q has no SQL compiler for a %s filter", filter.Field, filter.Kind.Normalized())
 	}
-	if len(conditions) == 0 {
+}
+
+// excluding keeps a row the predicate does not match. A row with no value was
+// not one of the excluded values, so the exclusion must keep it — which is also
+// what OpenSearch's must_not:terms does, and the two backends must not
+// disagree about what excluding a value means.
+func excluding(column, predicate sqlNode) sqlNode {
+	return conjunction("Or", sqlNodes(isNull(column), negate(paren(predicate))))
+}
+
+func (s *sqlStatement) termsPredicate(column sqlNode, kind query.ColumnFilterKind, filter query.ColumnFilterValue) (sqlNode, error) {
+	values, err := sqlFilterArgs(kind, filter)
+	if err != nil {
+		return nil, err
+	}
+	conditions := []sqlNode{}
+	if len(values.include) > 0 {
+		conditions = append(conditions, inList(column.Copy(), s.bindAll(values.include)))
+	}
+	if len(values.exclude) > 0 {
+		conditions = append(conditions, conjunction("Or", sqlNodes(
+			isNull(column), negate(inList(column.Copy(), s.bindAll(values.exclude))))))
+	}
+	return conjunction("And", conditions), nil
+}
+
+// matchPredicate is collections.MatchItem: a row matching any exclusion is
+// out, then one matching any inclusion is in; with exclusions alone, everything
+// they leave is in. A row with no value was not one of the excluded values, as
+// for terms.
+func (s *sqlStatement) matchPredicate(column sqlNode, filter query.ColumnFilterValue) sqlNode {
+	included := []sqlNode{}
+	for _, pattern := range filter.Include {
+		included = append(included, s.globMatch(column, query.ParseMatchPattern(pattern)))
+	}
+	conditions := sqlNodes(conjunction("Or", included))
+	for _, pattern := range filter.Exclude {
+		conditions = append(conditions, excluding(column, s.globMatch(column, query.ParseMatchPattern(pattern))))
+	}
+	return conjunction("And", conditions)
+}
+
+func (s *sqlStatement) rangePredicate(column sqlNode, kind query.ColumnFilterKind, span *query.FilterRange) (sqlNode, error) {
+	if span == nil {
 		return nil, nil
 	}
-	return unwrapSingle(conditions), nil
+	conditions := []sqlNode{}
+	for _, edge := range []struct {
+		bound        *query.FilterBound
+		closed, open string
+	}{{span.Min, "GTE", "GT"}, {span.Max, "LTE", "LT"}} {
+		if edge.bound == nil {
+			continue
+		}
+		value, err := sqlBoundValue(s.dialect, kind, edge.bound.Value)
+		if err != nil {
+			return nil, err
+		}
+		compare := edge.open
+		if edge.bound.Inclusive {
+			compare = edge.closed
+		}
+		conditions = append(conditions, binary(compare, column.Copy(), s.bind(value)))
+	}
+	return conjunction("And", conditions), nil
+}
+
+func (s *sqlStatement) bindAll(values []any) []sqlNode {
+	markers := make([]sqlNode, len(values))
+	for index, value := range values {
+		markers[index] = s.bind(value)
+	}
+	return markers
 }
 
 // sqlFilterValues are the bound operands one field collected, in the Go types
@@ -600,23 +474,4 @@ func sqlBoundValue(dialect sqlDialect, kind query.ColumnFilterKind, value any) (
 		return sqlitetable.FormatTime(resolved), nil
 	}
 	return resolved, nil
-}
-
-// renderClause formats one predicate for dialect.
-//
-// Only the predicate is ever rendered. A PlaceholderFormat rewrites every "?"
-// in whatever string it is handed with no idea which are inside a literal, so
-// handing it the author's statement would silently renumber a jsonb "?"
-// operator into a bind marker. The author's statement sits untouched inside the
-// CTE and this function never sees it.
-func renderClause(dialect sqlDialect, clause squirrel.Sqlizer) (string, []any, error) {
-	rendered, args, err := clause.ToSql()
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to build column filter predicate: %w", err)
-	}
-	rendered, err = dialect.placeholders().ReplacePlaceholders(rendered)
-	if err != nil {
-		return "", nil, fmt.Errorf("failed to bind column filter values: %w", err)
-	}
-	return rendered, args, nil
 }

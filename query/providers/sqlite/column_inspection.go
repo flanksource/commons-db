@@ -5,12 +5,12 @@ import (
 	"database/sql"
 	"fmt"
 	"sort"
-	"strings"
 
 	querycontext "github.com/flanksource/commons-db/context"
 	inspection "github.com/flanksource/commons-db/inspect"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
+	"github.com/flanksource/sqlglot-go/sqlglot"
 )
 
 var sqlColumnStatsCache = inspection.NewMemo(inspection.MemoOptions[map[string]int64]{
@@ -53,15 +53,16 @@ func (p sqlProvider) InspectColumnFilters(
 			defer client.Close()
 			counts := make(map[string]int64, len(fields))
 			for _, batch := range providerkit.FieldBatches(fields, sqlColumnStatsBatchSize) {
-				statement, err := buildColumnStatsSQL(dialect, req.Query, batch)
+				built, err := buildColumnStatsSQL(dialect,
+					sqlQuery{Text: req.Query, Args: req.QueryArgs, Identifiers: req.QueryIdentifiers}, batch)
 				if err != nil {
 					return nil, err
 				}
-				statement, err = materializeSQLParams(dialect, statement, req.QueryArgs, req.QueryIdentifiers)
+				statement, args, err := built.render()
 				if err != nil {
 					return nil, err
 				}
-				batchCounts, err := readColumnStats(fillContext, client, statement, req.QueryArgs, batch)
+				batchCounts, err := readColumnStats(fillContext, client, statement, driverArgs(dialect, args), batch)
 				if err != nil {
 					return nil, err
 				}
@@ -91,18 +92,31 @@ func sqlInspectionIdentity(ctx querycontext.Context, req query.ProviderRequest) 
 	return identity, nil
 }
 
-func buildColumnStatsSQL(dialect sqlDialect, statement string, fields []string) (string, error) {
-	counts := make([]string, 0, len(fields))
+// buildColumnStatsSQL counts the distinct values of every field over the
+// wrapped base in one statement.
+func buildColumnStatsSQL(dialect sqlDialect, base sqlQuery, fields []string) (*sqlStatement, error) {
+	counts := make([]sqlNode, 0, len(fields))
 	for _, field := range fields {
-		quoted, err := dialect.quote(field)
+		column, err := fieldColumn(field)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		counts = append(counts, "COUNT(DISTINCT "+quoted+")")
+		counts = append(counts, countDistinct(dialect, column))
 	}
-	return wrapAsBaseCTE(dialect, statement, func(base string) string {
-		return "SELECT " + strings.Join(counts, ", ") + "\nFROM " + base
-	})
+	statement, err := newSQLStatement(dialect)
+	if err != nil {
+		return nil, err
+	}
+	tree, err := statement.parseBase(base)
+	if err != nil {
+		return nil, err
+	}
+	selection := sqlglot.New("Select", kv("expressions", counts), kv("from_", fromItem(baseTable())))
+	if err := wrapAsBaseCTE(tree, selection); err != nil {
+		return nil, err
+	}
+	statement.tree = selection
+	return statement, nil
 }
 
 func readColumnStats(ctx context.Context, client *sql.DB, statement string, args []any, fields []string) (map[string]int64, error) {

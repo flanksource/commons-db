@@ -4,232 +4,214 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Masterminds/squirrel"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/sqlglot-go/sqlglot"
 )
 
+// The slots of an array template: names a template is written with where a
+// node built from the request goes once the template is parsed.
 const (
-	sqlArrayItem   = "__cdb_item"
-	sqlArrayMember = "__cdb_value"
-	sqlArrayRows   = "__cdb_rows"
-	sqlArrayRow    = "__cdb_row"
-	sqlArrayValue  = "__cdb_array"
+	sqlArraySlot  = "__cdb_slot_array"
+	sqlColumnSlot = "__cdb_slot_column"
+	sqlValuesSlot = "__cdb_slot_values"
 )
 
-type sqlArrayExpansion struct {
-	from         string
-	value        string
-	stringMember string
+// sqlArrayShape is how one dialect expands a JSON array into one row per
+// member, as SQL fragments in that dialect: from expands the array in the
+// __cdb_slot_array slot under the alias __cdb_item, value is a member's text,
+// member holds for a string member, and join is how a lookup joins the
+// expansion to the rows it came from.
+//
+// The fragments are constants written here and parsed into a tree, never text
+// joined to a request: what the request supplies — the column, the values —
+// replaces a slot as a node after parsing. The provider's own names are
+// written bare and quoted structurally (see quoteProviderNames).
+type sqlArrayShape struct {
+	from, value, member, join string
 }
 
-func sqlArrayExpansionFor(dialect sqlDialect, array string) (sqlArrayExpansion, error) {
-	item := dialect.quoteValidatedIdentifier(sqlArrayItem)
-	member := dialect.quoteValidatedIdentifier(sqlArrayMember)
-	switch dialect {
-	case dialectSQLite:
-		return sqlArrayExpansion{
-			from:         fmt.Sprintf("json_each(%s) AS %s", array, item),
-			value:        item + ".value",
-			stringMember: item + ".type = 'text'",
-		}, nil
-	case dialectPostgres:
-		jsonValue := item + "." + member
-		return sqlArrayExpansion{
-			from: fmt.Sprintf(
-				"jsonb_array_elements(COALESCE(NULLIF(to_jsonb(%s), 'null'::jsonb), '[]'::jsonb)) AS %s(%s)",
-				array, item, member),
-			value:        "(" + jsonValue + " #>> '{}')",
-			stringMember: "jsonb_typeof(" + jsonValue + ") = 'string'",
-		}, nil
-	case dialectMySQL:
-		jsonValue := item + "." + member
-		return sqlArrayExpansion{
-			from: fmt.Sprintf(
-				"JSON_TABLE(IF(JSON_TYPE(%s) = 'ARRAY', %s, JSON_ARRAY()), '$[*]' COLUMNS (%s JSON PATH '$')) AS %s",
-				array, array, member, item),
-			value:        "JSON_UNQUOTE(" + jsonValue + ")",
-			stringMember: "JSON_TYPE(" + jsonValue + ") = 'STRING'",
-		}, nil
-	case dialectSQLServer:
-		return sqlArrayExpansion{
-			from:         fmt.Sprintf("OPENJSON(COALESCE(CONVERT(nvarchar(max), %s), N'[]')) AS %s", array, item),
-			value:        item + ".[value]",
-			stringMember: item + ".[type] = 1",
-		}, nil
-	default:
-		return sqlArrayExpansion{}, fmt.Errorf("the %s dialect has no array expansion", dialect)
+var sqlArrayShapes = map[sqlDialect]sqlArrayShape{
+	dialectSQLite: {
+		from:   "json_each(" + sqlArraySlot + ") AS __cdb_item",
+		value:  "__cdb_item.value",
+		member: "__cdb_item.type = 'text'",
+		join:   "CROSS JOIN",
+	},
+	dialectPostgres: {
+		from: "jsonb_array_elements(COALESCE(NULLIF(to_jsonb(" + sqlArraySlot +
+			"), 'null'::jsonb), '[]'::jsonb)) AS __cdb_item(__cdb_value)",
+		value:  "(__cdb_item.__cdb_value #>> '{}')",
+		member: "jsonb_typeof(__cdb_item.__cdb_value) = 'string'",
+		join:   "CROSS JOIN LATERAL",
+	},
+	dialectMySQL: {
+		from: "JSON_TABLE(IF(JSON_TYPE(" + sqlArraySlot + ") = 'ARRAY', " + sqlArraySlot +
+			", JSON_ARRAY()), '$[*]' COLUMNS (__cdb_value JSON PATH '$')) AS __cdb_item",
+		value:  "JSON_UNQUOTE(__cdb_item.__cdb_value)",
+		member: "JSON_TYPE(__cdb_item.__cdb_value) = 'STRING'",
+		join:   "CROSS JOIN",
+	},
+	dialectSQLServer: {
+		from:   "OPENJSON(COALESCE(CONVERT(nvarchar(max), " + sqlArraySlot + "), N'[]')) AS __cdb_item",
+		value:  "__cdb_item.[value]",
+		member: "__cdb_item.[type] = 1",
+		join:   "CROSS APPLY",
+	},
+}
+
+func sqlArrayShapeFor(dialect sqlDialect) (sqlArrayShape, error) {
+	shape, ok := sqlArrayShapes[dialect]
+	if !ok {
+		return sqlArrayShape{}, fmt.Errorf("the %s dialect has no array expansion", dialect)
 	}
+	return shape, nil
+}
+
+// parseTemplate parses one of the provider's constant SQL templates in the
+// dialect and quotes the provider's own names in it.
+func parseTemplate(dialect sqlDialect, template string) (sqlNode, error) {
+	glot, err := dialect.glot()
+	if err != nil {
+		return nil, err
+	}
+	tree, err := sqlglot.ParseOne(template, glot)
+	if err != nil {
+		return nil, fmt.Errorf("the %s array template does not parse: %w", glot, err)
+	}
+	quoteProviderNames(tree)
+	return tree, nil
+}
+
+// quoteProviderNames quotes every __cdb_ name, which the templates write bare
+// so one spelling serves every dialect's quote characters.
+func quoteProviderNames(tree sqlNode) {
+	for _, name := range tree.FindAll("Identifier") {
+		if strings.HasPrefix(name.Name(), "__cdb_") {
+			name.Set("quoted", true)
+		}
+	}
+}
+
+// fillSlot replaces every column named slot with a fresh node from fill.
+func fillSlot(tree sqlNode, slot string, fill func() sqlNode) error {
+	for _, column := range tree.FindAll("Column") {
+		if column.Name() != slot || column.Args["table"] != nil {
+			continue
+		}
+		if err := replaceNode(column, fill()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sqlArrayPredicate keeps a row whose array holds any included string, and
 // drops one whose array holds any excluded string. SQL NULL and an empty array
 // hold no values, so exclusion keeps both. JSON backends deliberately ignore
 // non-string members because filter values have a string identity.
-func sqlArrayPredicate(dialect sqlDialect, column string, filter query.ColumnFilterValue) (squirrel.Sqlizer, error) {
+func (s *sqlStatement) sqlArrayPredicate(column sqlNode, filter query.ColumnFilterValue) (sqlNode, error) {
 	if kind := filter.Kind.CompilesAs(); kind != query.ColumnFilterKindTerms {
 		return nil, fmt.Errorf("field %q is an array, which only a value selection compares; got a %s filter",
 			filter.Field, filter.Kind.Normalized())
 	}
-	if dialect == dialectClickHouse {
-		return clickHouseArrayPredicate(column, filter), nil
+	if s.dialect == dialectClickHouse {
+		return s.clickHouseArrayPredicate(column, filter), nil
 	}
-	expansion, err := sqlArrayExpansionFor(dialect, column)
+	shape, err := sqlArrayShapeFor(s.dialect)
 	if err != nil {
 		return nil, fmt.Errorf("field %q is an array: %w", filter.Field, err)
 	}
-	conditions := squirrel.And{}
+	conditions := []sqlNode{}
 	for _, side := range []struct {
-		values []string
-		prefix string
-	}{{filter.Include, "EXISTS"}, {filter.Exclude, "NOT EXISTS"}} {
+		values  []string
+		exclude bool
+	}{{filter.Include, false}, {filter.Exclude, true}} {
 		if len(side.values) == 0 {
 			continue
 		}
-		args := make([]any, len(side.values))
-		for index, value := range side.values {
-			args[index] = value
+		members, err := s.arrayMembers(shape, column, side.values)
+		if err != nil {
+			return nil, err
 		}
-		markers := strings.TrimRight(strings.Repeat("?,", len(args)), ",")
-		members := fmt.Sprintf("SELECT 1 FROM %s WHERE (%s AND %s IN (%s))",
-			expansion.from, expansion.stringMember, expansion.value, markers)
-		conditions = append(conditions, squirrel.Expr(side.prefix+" ("+members+")", args...))
+		exists := sqlglot.New("Exists", kv("this", members))
+		if side.exclude {
+			exists = negate(exists)
+		}
+		conditions = append(conditions, exists)
 	}
-	if len(conditions) == 0 {
-		return nil, nil
-	}
-	return unwrapSingle(conditions), nil
+	return conjunction("And", conditions), nil
 }
 
-func clickHouseArrayPredicate(column string, filter query.ColumnFilterValue) squirrel.Sqlizer {
-	conditions := squirrel.And{}
-	if len(filter.Include) > 0 {
-		included := squirrel.Or{}
-		for _, value := range filter.Include {
-			included = append(included, squirrel.Expr("has("+column+", ?)", value))
-		}
-		if len(included) == 1 {
-			conditions = append(conditions, included[0])
-		} else {
-			conditions = append(conditions, included)
-		}
+// arrayMembers is `SELECT 1 FROM <expansion> WHERE (<string member> AND
+// <member> IN (values))`, the members of column's array among values.
+func (s *sqlStatement) arrayMembers(shape sqlArrayShape, column sqlNode, values []string) (sqlNode, error) {
+	members, err := parseTemplate(s.dialect, "SELECT 1 FROM "+shape.from+
+		" WHERE ("+shape.member+" AND "+shape.value+" IN ("+sqlValuesSlot+"))")
+	if err != nil {
+		return nil, err
 	}
+	if err := fillSlot(members, sqlArraySlot, column.Copy); err != nil {
+		return nil, err
+	}
+	for _, list := range members.FindAll("In") {
+		bound := make([]any, len(values))
+		for index, value := range values {
+			bound[index] = value
+		}
+		list.Set("expressions", s.bindAll(bound))
+	}
+	return members, nil
+}
+
+func (s *sqlStatement) clickHouseArrayPredicate(column sqlNode, filter query.ColumnFilterValue) sqlNode {
+	included := []sqlNode{}
+	for _, value := range filter.Include {
+		included = append(included, binary("ArrayContains", column.Copy(), s.bind(value)))
+	}
+	conditions := sqlNodes(conjunction("Or", included))
 	for _, value := range filter.Exclude {
-		conditions = append(conditions, squirrel.Expr("NOT has("+column+", ?)", value))
+		conditions = append(conditions, negate(binary("ArrayContains", column.Copy(), s.bind(value))))
 	}
-	return unwrapSingle(conditions)
+	return conjunction("And", conditions)
 }
 
-func buildArrayLookupSQL(
-	dialect sqlDialect,
-	statement string,
-	baseArgCount int,
-	binding query.ColumnFilterBinding,
-	siblings []query.ColumnFilterValue,
-	search string,
-	limit int,
-) (string, []any, error) {
-	column, err := dialect.quote(binding.Field)
+// arrayLookupSelect is the lookup over an array column: each member a value,
+// counted once per row that holds it — however many times that row's array
+// repeats it. Rows are numbered first, so COUNT(DISTINCT) can tell them apart.
+// It returns the select, the member value its predicates compare, and the
+// string-member test (nil on ClickHouse, whose arrays are typed).
+func arrayLookupSelect(dialect sqlDialect, column sqlNode) (sqlNode, sqlNode, sqlNode, error) {
+	template := "SELECT __cdb_item AS value, COUNT(*) AS count, COUNT(*) OVER () AS total" +
+		" FROM (SELECT " + sqlColumnSlot + " AS __cdb_array FROM " + sqlBaseCTE + ") AS __cdb_rows" +
+		" ARRAY JOIN arrayDistinct(__cdb_rows.__cdb_array) AS __cdb_item GROUP BY __cdb_item"
+	if dialect != dialectClickHouse {
+		shape, err := sqlArrayShapeFor(dialect)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		template = "SELECT " + shape.value + " AS value, COUNT(DISTINCT __cdb_rows.__cdb_row) AS count, COUNT(*) OVER () AS total" +
+			" FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS __cdb_row, " + sqlColumnSlot +
+			" AS __cdb_array FROM " + sqlBaseCTE + ") AS __cdb_rows " + shape.join + " " + shape.from +
+			" WHERE " + shape.member + " GROUP BY " + shape.value
+	}
+	selection, err := parseTemplate(dialect, template)
 	if err != nil {
-		return "", nil, err
+		return nil, nil, nil, err
 	}
-	scope, args, err := filterClause(dialect, siblings)
-	if err != nil {
-		return "", nil, err
+	if err := fillSlot(selection, sqlColumnSlot, column.Copy); err != nil {
+		return nil, nil, nil, err
 	}
-	scope = offsetPlaceholders(dialect, scope, baseArgCount)
-	if scope != "" {
-		scope = " WHERE " + scope
+	rowsArray := func() sqlNode {
+		return sqlglot.New("Column", kv("this", identifier("__cdb_array")), kv("table", identifier("__cdb_rows")))
 	}
-	if dialect == dialectClickHouse {
-		return buildClickHouseArrayLookupSQL(dialect, statement, column, scope, args, baseArgCount, search, limit)
+	if err := fillSlot(selection, sqlArraySlot, rowsArray); err != nil {
+		return nil, nil, nil, err
 	}
-	rows := dialect.quoteValidatedIdentifier(sqlArrayRows)
-	row := dialect.quoteValidatedIdentifier(sqlArrayRow)
-	array := dialect.quoteValidatedIdentifier(sqlArrayValue)
-	expansion, err := sqlArrayExpansionFor(dialect, rows+"."+array)
-	if err != nil {
-		return "", nil, fmt.Errorf("field %q is an array: %w", binding.Field, err)
+	expressions, _ := selection.Args["expressions"].([]sqlNode)
+	value := expressions[0].This()
+	var member sqlNode
+	if where, _ := selection.Args["where"].(sqlNode); where != nil {
+		member = where.This()
 	}
-	where, searchArgs, err := arrayLookupWhere(dialect, expansion, search, baseArgCount+len(args))
-	if err != nil {
-		return "", nil, err
-	}
-	join := "CROSS JOIN "
-	switch dialect {
-	case dialectPostgres:
-		join = "CROSS JOIN LATERAL "
-	case dialectSQLServer:
-		join = "CROSS APPLY "
-	}
-	wrapped, err := wrapAsBaseCTE(dialect, statement, func(base string) string {
-		return strings.Join([]string{
-			fmt.Sprintf("SELECT %s AS value, COUNT(DISTINCT %s.%s) AS count, COUNT(*) OVER () AS total", expansion.value, rows, row),
-			fmt.Sprintf("FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS %s, %s AS %s FROM %s%s) AS %s %s%s",
-				row, column, array, base, scope, rows, join, expansion.from),
-			"WHERE " + where,
-			"GROUP BY " + expansion.value,
-			"ORDER BY 2 DESC, 1 ASC",
-			dialect.limitTail(limit),
-		}, "\n")
-	})
-	if err != nil {
-		return "", nil, err
-	}
-	return wrapped, append(args, searchArgs...), nil
-}
-
-func arrayLookupWhere(
-	dialect sqlDialect,
-	expansion sqlArrayExpansion,
-	search string,
-	placeholderOffset int,
-) (string, []any, error) {
-	conditions := squirrel.And{
-		squirrel.Expr(expansion.stringMember),
-		squirrel.Expr(expansion.value + " IS NOT NULL"),
-	}
-	if search != "" {
-		predicate, pattern := dialect.likeMatch(expansion.value, search)
-		conditions = append(conditions, squirrel.Expr(predicate, pattern))
-	}
-	where, args, err := renderClause(dialect, unwrapSingle(conditions))
-	return offsetPlaceholders(dialect, where, placeholderOffset), args, err
-}
-
-func buildClickHouseArrayLookupSQL(
-	dialect sqlDialect,
-	statement, column, scope string,
-	args []any,
-	baseArgCount int,
-	search string,
-	limit int,
-) (string, []any, error) {
-	rows := dialect.quoteValidatedIdentifier(sqlArrayRows)
-	array := dialect.quoteValidatedIdentifier(sqlArrayValue)
-	item := dialect.quoteValidatedIdentifier(sqlArrayItem)
-	conditions := squirrel.And{squirrel.Expr(item + " IS NOT NULL")}
-	if search != "" {
-		predicate, pattern := dialect.likeMatch(item, search)
-		conditions = append(conditions, squirrel.Expr(predicate, pattern))
-	}
-	where, searchArgs, err := renderClause(dialect, unwrapSingle(conditions))
-	if err != nil {
-		return "", nil, err
-	}
-	where = offsetPlaceholders(dialect, where, baseArgCount+len(args))
-	wrapped, err := wrapAsBaseCTE(dialect, statement, func(base string) string {
-		return strings.Join([]string{
-			fmt.Sprintf("SELECT %s AS value, COUNT(*) AS count, COUNT(*) OVER () AS total", item),
-			fmt.Sprintf("FROM (SELECT %s AS %s FROM %s%s) AS %s ARRAY JOIN arrayDistinct(%s.%s) AS %s",
-				column, array, base, scope, rows, rows, array, item),
-			"WHERE " + where,
-			"GROUP BY " + item,
-			"ORDER BY 2 DESC, 1 ASC",
-			dialect.limitTail(limit),
-		}, "\n")
-	})
-	if err != nil {
-		return "", nil, err
-	}
-	return wrapped, append(args, searchArgs...), nil
+	return selection, value, member, nil
 }

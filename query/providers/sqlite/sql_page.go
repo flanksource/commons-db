@@ -78,22 +78,14 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		request.Diagnostics.RecordResponse(started, len(result.Rows), details)
 	}()
 
-	statement, args, err := buildPagedSQL(
-		dialect,
-		request.Query,
-		request.Filters,
-		request.Order,
-		request.Position,
-		request.Page,
-	)
+	built, err := buildPagedSQL(dialect, request)
 	if err != nil {
 		return SQLPageResult{}, err
 	}
-	statement, err = materializeSQLParams(dialect, statement, request.QueryArgs, request.QueryIdentifiers)
+	statement, args, err := built.render()
 	if err != nil {
 		return SQLPageResult{}, err
 	}
-	args = append(append([]any{}, request.QueryArgs...), args...)
 	requestDetails := map[string]any{
 		"dialect": string(dialect),
 		"paging": map[string]any{
@@ -122,14 +114,12 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		err = query.WithDiagnostics(err, failure)
 	}()
 
-	// Nothing request-supplied reaches this statement as raw text: filter and
-	// order values travel as bound args, and every identifier is rebuilt byte by
-	// byte out of a constant alphabet by sqlDialect.quote / quoteIdentifierPath
-	// before it is quoted. The statement itself is the operator's own SQL — the
-	// connection browser gates it on readOnlyStatementError.
-	// CodeQL still reports go/sql-injection here (alert 76); GitHub code scanning
-	// honours no in-source suppression, so it has to be dismissed in the UI.
-	rows, err := client.QueryContext(queryContext, statement, args...) // lgtm[go/sql-injection]
+	// The statement is the dialect generator's output for a tree: the operator's
+	// own SQL parsed (the connection browser gates it on
+	// readOnlyStatementError), wrapped by nodes, with every request-supplied
+	// value a bind node whose value travels in args and every identifier an
+	// Identifier node the generator quotes.
+	rows, err := client.QueryContext(queryContext, statement, driverArgs(dialect, args)...)
 	if err != nil {
 		return SQLPageResult{}, sqlExecError(dialect, request.Filters, err)
 	}

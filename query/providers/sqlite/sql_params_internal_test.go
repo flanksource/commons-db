@@ -48,13 +48,14 @@ var _ = Describe("SQL profile parameters", func() {
 		Expect(parameterized.Args).To(Equal([]any{"prod' OR TRUE --"}))
 		Expect(parameterized.UsedParams).To(Equal([]string{"column", "environment", "table"}))
 
-		statement, err := materializeSQLParams(
-			dialectPostgres, parameterized.Query, parameterized.Args, parameterized.Identifiers,
-		)
+		statement, args, err := rendered(buildColumnStatsSQL(dialectPostgres, sqlQuery{
+			Text: parameterized.Query, Args: parameterized.Args, Identifiers: parameterized.Identifiers,
+		}, []string{"region"}))
 		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).To(Equal(
-			`SELECT "region" FROM "analytics"."orders" WHERE env = $1`,
+		Expect(statement).To(HavePrefix(
+			`WITH "__cdb_base" AS (SELECT "region" FROM "analytics"."orders" WHERE env = $1)`,
 		))
+		Expect(args).To(Equal([]any{"prod' OR TRUE --"}))
 	})
 
 	It("rejects an unsafe identifier before opening a connection", func() {
@@ -78,23 +79,33 @@ var _ = Describe("SQL profile parameters", func() {
 		Entry("through a template function", `SELECT {{ join .params.ids "," }}`, "only direct, unquoted"),
 	)
 
+	// stats is the column-stats statement over base, the smallest wrapper that
+	// materializes the author's params.
+	stats := func(dialect sqlDialect, base sqlQuery) (string, []any, error) {
+		return rendered(buildColumnStatsSQL(dialect, base, []string{"id"}))
+	}
+
 	DescribeTable("materializes the driver's placeholder spelling",
 		func(dialect sqlDialect, expected string) {
-			statement, err := materializeSQLParams(dialect, "SELECT "+sqlParamMarker(0), []any{"value"}, nil)
+			statement, args, err := stats(dialect, sqlQuery{Text: "SELECT " + sqlParamMarker(0) + " AS id", Args: []any{"value"}})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(statement).To(Equal("SELECT " + expected))
+			Expect(statement).To(ContainSubstring("(SELECT " + expected + " AS id)"))
+			Expect(args).To(Equal([]any{"value"}))
 		},
 		Entry("postgres", dialectPostgres, "$1"),
 		Entry("sqlserver", dialectSQLServer, "@p1"),
 		Entry("mysql", dialectMySQL, "?"),
-		Entry("clickhouse", dialectClickHouse, "?"),
+		Entry("sqlite", dialectSQLite, "?"),
+		Entry("clickhouse", dialectClickHouse, "@cdb_p1"),
 	)
 
 	DescribeTable("quotes identifier paths for the connected dialect",
 		func(dialect sqlDialect, identifier, expected string) {
-			quoted, err := dialect.quoteIdentifierPath(identifier)
+			statement, _, err := stats(dialect, sqlQuery{
+				Text: "SELECT id FROM " + sqlIdentifierMarker(0), Identifiers: []string{identifier},
+			})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(quoted).To(Equal(expected))
+			Expect(statement).To(ContainSubstring(" FROM " + expected + ")"))
 		},
 		Entry("postgres schema and table", dialectPostgres, "analytics.orders", `"analytics"."orders"`),
 		Entry("sqlserver database, schema, and table", dialectSQLServer, "warehouse.analytics.orders", `[warehouse].[analytics].[orders]`),
@@ -102,9 +113,26 @@ var _ = Describe("SQL profile parameters", func() {
 		Entry("clickhouse database and table", dialectClickHouse, "analytics.orders", `"analytics"."orders"`),
 	)
 
+	It("qualifies a column by an identifier path", func() {
+		statement, _, err := stats(dialectPostgres, sqlQuery{
+			Text:        "SELECT " + sqlIdentifierMarker(0) + ".id FROM orders",
+			Identifiers: []string{"analytics.orders"},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).To(ContainSubstring(`(SELECT "analytics"."orders".id FROM orders)`))
+	})
+
+	It("refuses an identifier path where only a single name can stand", func() {
+		_, _, err := stats(dialectPostgres, sqlQuery{
+			Text:        "SELECT id AS " + sqlIdentifierMarker(0) + " FROM orders",
+			Identifiers: []string{"analytics.orders"},
+		})
+		Expect(err).To(MatchError(ContainSubstring("dotted path")))
+	})
+
 	DescribeTable("rejects unsafe identifier paths",
 		func(identifier string) {
-			_, err := dialectPostgres.quoteIdentifierPath(identifier)
+			_, err := validateSQLIdentifierPath(identifier)
 			Expect(err).To(MatchError(ContainSubstring("is not a valid SQL identifier")))
 		},
 		Entry("statement separator", "orders; DROP TABLE users"),
@@ -113,22 +141,25 @@ var _ = Describe("SQL profile parameters", func() {
 	)
 
 	It("numbers filter and cursor values after the profile arguments", func() {
-		base := "SELECT id, region, env FROM orders WHERE env = " + sqlParamMarker(0)
-		statement, generated, err := buildPagedSQL(
-			dialectPostgres,
-			base,
-			[]query.ColumnFilterValue{terms("region", []string{"eu"}, nil)},
-			query.Order{{Column: "id", Unique: true}},
-			query.CursorPosition{Keys: []any{int64(10)}},
-			query.PageRequest{Limit: 20, Strategy: query.PagingCursor},
-		)
+		statement, args, err := rendered(buildPagedSQL(dialectPostgres, SQLPageRequest{
+			Query:     "SELECT id, region, env FROM orders WHERE env = " + sqlParamMarker(0),
+			QueryArgs: []any{"prod"},
+			Filters:   []query.ColumnFilterValue{terms("region", []string{"eu"}, nil)},
+			Order:     query.Order{{Column: "id", Unique: true}},
+			Position:  query.CursorPosition{Keys: []any{int64(10)}},
+			Page:      query.PageRequest{Limit: 20, Strategy: query.PagingCursor},
+		}))
 		Expect(err).ToNot(HaveOccurred())
-		statement, err = materializeSQLParams(dialectPostgres, statement, []any{"prod"}, nil)
-		Expect(err).ToNot(HaveOccurred())
-
 		Expect(statement).To(ContainSubstring("env = $1"))
 		Expect(statement).To(ContainSubstring(`"region" IN ($2)`))
 		Expect(statement).To(ContainSubstring(`"id" > $3`))
-		Expect(append([]any{"prod"}, generated...)).To(Equal([]any{"prod", "eu", int64(10)}))
+		Expect(args).To(Equal([]any{"prod", "eu", int64(10)}))
+	})
+
+	It("refuses a param marker that survived inside a literal", func() {
+		_, _, err := stats(dialectPostgres, sqlQuery{
+			Text: "SELECT '" + sqlParamMarker(0) + "' AS id", Args: []any{"value"},
+		})
+		Expect(err).To(MatchError(ContainSubstring("is missing")))
 	})
 })

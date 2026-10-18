@@ -3,10 +3,12 @@ package sqlite
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/sqlglot-go/sqlglot"
 )
 
 const (
@@ -16,9 +18,12 @@ const (
 
 var sqlParamReference = regexp.MustCompile(`(?s)\{\{\s*(?:\.params\.([A-Za-z_][A-Za-z0-9_]*)|index\s+\.params\s+"([^"]+)")\s*\}\}|\$\(\s*\.params\.([A-Za-z_][A-Za-z0-9_]*)\s*\)`)
 
-func (sqlProvider) ParameterizeQuery(request query.QueryParameterizationRequest) (query.ParameterizedQuery, error) {
+// ParameterizeQuery replaces each params reference with a marker the dialect's
+// parser reads as a plain name, so the query parses into a tree in which every
+// reference is a node; the markers become bind nodes or identifiers when the
+// statement is built (see materializeParams and materializeIdentifiers).
+func (p sqlProvider) ParameterizeQuery(request query.QueryParameterizationRequest) (query.ParameterizedQuery, error) {
 	statement := request.Query
-	params := request.Params
 	for _, prefix := range []string{sqlParamMarkerPrefix, sqlIdentifierMarkerPrefix} {
 		if strings.Contains(statement, prefix) {
 			return query.ParameterizedQuery{}, fmt.Errorf("query contains reserved parameter marker %q", prefix)
@@ -32,61 +37,98 @@ func (sqlProvider) ParameterizeQuery(request query.QueryParameterizationRequest)
 		}
 		return query.ParameterizedQuery{Query: statement}, nil
 	}
-	args := []any{}
-	identifiers := []string{}
 	identifierParams := make(map[string]bool, len(request.Definitions))
 	for _, def := range request.Definitions {
 		identifierParams[def.Name] = def.Type == query.ParamTypeIdentifier
 	}
+	result := query.ParameterizedQuery{}
+	references := map[string]string{}
 	used := map[string]bool{}
 	var parameterized strings.Builder
-	var err error
 	cursor := 0
 	for _, match := range matches {
 		parameterized.WriteString(statement[cursor:match[0]])
 		reference := statement[match[0]:match[1]]
-		if !isBareOffset(statement, match[0]) {
-			return query.ParameterizedQuery{}, fmt.Errorf("SQL parameter reference %q must not be quoted or commented", reference)
-		}
 		name := sqlParamName(statement, match)
-		value, ok := params[name]
+		value, ok := request.Params[name]
 		if !ok {
 			return query.ParameterizedQuery{}, fmt.Errorf("references param %q, which has no value", name)
 		}
 		used[name] = true
-		if identifierParams[name] {
-			identifier, ok := value.(string)
-			if !ok {
-				return query.ParameterizedQuery{}, fmt.Errorf("identifier param %q must resolve to a string, got %T", name, value)
-			}
-			if _, err := validateSQLIdentifierPath(identifier); err != nil {
-				return query.ParameterizedQuery{}, fmt.Errorf("identifier param %q: %w", name, err)
-			}
-			parameterized.WriteString(sqlIdentifierMarker(len(identifiers)))
-			identifiers = append(identifiers, identifier)
-		} else {
-			var markers string
-			args, markers, err = appendSQLParamMarkers(args, name, value)
-			if err != nil {
-				return query.ParameterizedQuery{}, err
-			}
-			parameterized.WriteString(markers)
+		markers, err := appendSQLReference(&result, name, value, identifierParams[name])
+		if err != nil {
+			return query.ParameterizedQuery{}, err
 		}
+		for _, marker := range markers {
+			references[marker] = reference
+		}
+		parameterized.WriteString(strings.Join(markers, ", "))
 		cursor = match[1]
 	}
 	parameterized.WriteString(statement[cursor:])
-	result := parameterized.String()
-	if strings.Contains(result, "{{") || strings.Contains(result, "$(") {
+	result.Query = parameterized.String()
+	if strings.Contains(result.Query, "{{") || strings.Contains(result.Query, "$(") {
 		return query.ParameterizedQuery{}, fmt.Errorf("SQL query templates support only direct, unquoted params references")
 	}
-	names := make([]string, 0, len(used))
-	for name := range used {
-		names = append(names, name)
+	if err := p.assertBareMarkers(result.Query, references); err != nil {
+		return query.ParameterizedQuery{}, err
 	}
-	sort.Strings(names)
-	return query.ParameterizedQuery{
-		Query: result, Args: args, Identifiers: identifiers, UsedParams: names,
-	}, nil
+	for name := range used {
+		result.UsedParams = append(result.UsedParams, name)
+	}
+	sort.Strings(result.UsedParams)
+	return result, nil
+}
+
+// appendSQLReference records what one reference stands for on result and
+// returns the markers that replace it: one identifier marker, or one value
+// marker per value.
+func appendSQLReference(result *query.ParameterizedQuery, name string, value any, isIdentifier bool) ([]string, error) {
+	if !isIdentifier {
+		var markers []string
+		var err error
+		result.Args, markers, err = appendSQLParamMarkers(result.Args, name, value)
+		return markers, err
+	}
+	identifier, ok := value.(string)
+	if !ok {
+		return nil, fmt.Errorf("identifier param %q must resolve to a string, got %T", name, value)
+	}
+	if _, err := validateSQLIdentifierPath(identifier); err != nil {
+		return nil, fmt.Errorf("identifier param %q: %w", name, err)
+	}
+	marker := sqlIdentifierMarker(len(result.Identifiers))
+	result.Identifiers = append(result.Identifiers, identifier)
+	return []string{marker}, nil
+}
+
+// assertBareMarkers refuses a reference written inside a literal, a quoted
+// name or a comment: there it is text, not a node, and binding it would change
+// what the literal says. Each marker must be a token of its own.
+func (p sqlProvider) assertBareMarkers(statement string, references map[string]string) error {
+	glot := ""
+	if p.connType != "" {
+		var err error
+		if glot, err = sqlDialect(p.connType).glot(); err != nil {
+			return err
+		}
+	}
+	tokenizer, err := sqlglot.NewTokenizer(glot)
+	if err != nil {
+		return err
+	}
+	tokens, err := tokenizer.Tokenize(statement)
+	if err != nil {
+		return fmt.Errorf("SQL query cannot be tokenized: %w", err)
+	}
+	for marker, reference := range references {
+		if !slices.ContainsFunc(tokens, func(token sqlglot.Token) bool {
+			return token.Type == sqlglot.TokVAR && token.Text == marker
+		}) {
+			return fmt.Errorf("SQL parameter reference %q must not be quoted or commented", reference)
+		}
+	}
+	return nil
 }
 
 func sqlParamName(statement string, match []int) string {
@@ -98,11 +140,11 @@ func sqlParamName(statement string, match []int) string {
 	panic("SQL parameter reference matched without a name")
 }
 
-func appendSQLParamMarkers(args []any, name string, value any) ([]any, string, error) {
+func appendSQLParamMarkers(args []any, name string, value any) ([]any, []string, error) {
 	values := []any{value}
 	if list, ok := value.([]string); ok {
 		if len(list) == 0 {
-			return nil, "", fmt.Errorf("list param %q has no values", name)
+			return nil, nil, fmt.Errorf("list param %q has no values", name)
 		}
 		values = make([]any, len(list))
 		for i := range list {
@@ -114,7 +156,7 @@ func appendSQLParamMarkers(args []any, name string, value any) ([]any, string, e
 		markers[i] = sqlParamMarker(len(args))
 		args = append(args, item)
 	}
-	return args, strings.Join(markers, ", "), nil
+	return args, markers, nil
 }
 
 func sqlParamMarker(index int) string {
@@ -125,45 +167,113 @@ func sqlIdentifierMarker(index int) string {
 	return fmt.Sprintf("%s%d__", sqlIdentifierMarkerPrefix, index)
 }
 
-func materializeSQLParams(dialect sqlDialect, statement string, args []any, identifiers []string) (string, error) {
-	for index, identifier := range identifiers {
-		marker := sqlIdentifierMarker(index)
-		if !strings.Contains(statement, marker) {
-			return "", fmt.Errorf("SQL query identifier marker %q is missing", marker)
+// materializeParams replaces each value marker with a bind node for its
+// value, bound in marker order so the author's values number first.
+func (s *sqlStatement) materializeParams(tree sqlNode, args []any) error {
+	markers := map[string]sqlNode{}
+	for _, column := range tree.FindAll("Column") {
+		name := column.Name()
+		if !strings.HasPrefix(name, sqlParamMarkerPrefix) || column.Args["table"] != nil {
+			continue
 		}
-		quoted, err := dialect.quoteIdentifierPath(identifier)
-		if err != nil {
-			return "", fmt.Errorf("SQL query identifier %d: %w", index+1, err)
+		if _, seen := markers[name]; seen {
+			return fmt.Errorf("SQL query parameter marker %q appears twice", name)
 		}
-		statement = strings.ReplaceAll(statement, marker, quoted)
+		markers[name] = column
 	}
-	if strings.Contains(statement, sqlIdentifierMarkerPrefix) {
-		return "", fmt.Errorf("SQL query contains an unbound identifier marker")
-	}
-	for index := range args {
+	for index, value := range args {
 		marker := sqlParamMarker(index)
-		if !strings.Contains(statement, marker) {
-			return "", fmt.Errorf("SQL query parameter marker %q is missing", marker)
+		column, ok := markers[marker]
+		if !ok {
+			return fmt.Errorf("SQL query parameter marker %q is missing", marker)
 		}
-		statement = strings.ReplaceAll(statement, marker, dialect.placeholder(index+1))
+		delete(markers, marker)
+		if err := replaceNode(column, s.bind(value)); err != nil {
+			return err
+		}
 	}
-	if strings.Contains(statement, sqlParamMarkerPrefix) {
-		return "", fmt.Errorf("SQL query contains an unbound parameter marker")
-	}
-	return statement, nil
+	return assertNoMarker(tree, sqlParamMarkerPrefix, "parameter")
 }
 
-func sqlParamCount(statement string) (int, error) {
-	count := 0
-	remaining := statement
-	for strings.Contains(remaining, sqlParamMarker(count)) {
-		remaining = strings.ReplaceAll(remaining, sqlParamMarker(count), "")
-		count++
+// identifierSlots are the parts of a Column and a Table an identifier path
+// fills, innermost first: "analytics.orders" names table orders in db
+// analytics.
+var identifierSlots = map[string][]string{
+	"Column": {"this", "table", "db", "catalog"},
+	"Table":  {"this", "db", "catalog"},
+}
+
+// materializeIdentifiers replaces each identifier marker with the quoted path
+// it names, part by part.
+func materializeIdentifiers(tree sqlNode, identifiers []string) error {
+	for index, identifier := range identifiers {
+		marker := sqlIdentifierMarker(index)
+		parts, err := validateSQLIdentifierPath(identifier)
+		if err != nil {
+			return fmt.Errorf("SQL query identifier %d: %w", index+1, err)
+		}
+		found := 0
+		for _, node := range tree.FindAll("Identifier") {
+			if node.Name() != marker {
+				continue
+			}
+			found++
+			if err := spliceIdentifierPath(node, parts); err != nil {
+				return fmt.Errorf("SQL query identifier %d: %w", index+1, err)
+			}
+		}
+		if found == 0 {
+			return fmt.Errorf("SQL query identifier marker %q is missing", marker)
+		}
 	}
-	if strings.Contains(remaining, sqlParamMarkerPrefix) {
-		return 0, fmt.Errorf("SQL query contains an invalid parameter marker")
+	return assertNoMarker(tree, sqlIdentifierMarkerPrefix, "identifier")
+}
+
+// spliceIdentifierPath writes parts into the slots marker and its qualifiers
+// hold. A path of one part may stand wherever a name may; a longer one only
+// for a table or a column, whose qualifiers it must not overwrite.
+func spliceIdentifierPath(marker sqlNode, parts []string) error {
+	parent := marker.Parent
+	if parent == nil {
+		return fmt.Errorf("an identifier marker is the whole statement")
 	}
-	return count, nil
+	slots := identifierSlots[parent.Class]
+	at := slices.IndexFunc(slots, func(key string) bool { return parent.Args[key] == any(marker) })
+	if at < 0 {
+		if len(parts) > 1 {
+			return fmt.Errorf("%q is a dotted path, which only a table or a column can be", strings.Join(parts, "."))
+		}
+		return replaceNode(marker, identifier(parts[0]))
+	}
+	if at+len(parts) > len(slots) {
+		return fmt.Errorf("%q has more parts than a %s name", strings.Join(parts, "."), strings.ToLower(parent.Class))
+	}
+	for offset := range parts {
+		key := slots[at+offset]
+		if offset > 0 && parent.Args[key] != nil {
+			return fmt.Errorf("%q is already qualified", strings.Join(parts, "."))
+		}
+		parent.Set(key, identifier(parts[len(parts)-1-offset]))
+	}
+	return nil
+}
+
+// assertNoMarker refuses a tree in which a marker survived as text — inside a
+// literal, say — rather than as the node it was replaced at.
+func assertNoMarker(tree sqlNode, prefix, kind string) error {
+	leaked := false
+	tree.Walk(func(node sqlNode) bool {
+		for _, value := range node.Args {
+			if text, ok := value.(string); ok && strings.Contains(text, prefix) {
+				leaked = true
+			}
+		}
+		return !leaked
+	})
+	if leaked {
+		return fmt.Errorf("SQL query contains an unbound %s marker", kind)
+	}
+	return nil
 }
 
 var _ query.QueryParameterizer = sqlProvider{}

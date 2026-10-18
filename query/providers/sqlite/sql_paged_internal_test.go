@@ -15,7 +15,7 @@ import (
 // PARTITION BY is a whole-partition window aggregate, and Postgres' WindowAgg
 // must buffer its entire input into a tuplestore before it emits the first row.
 // Asserting the text alone would not notice a planner that materialized anyway.
-var _ = Describe("buildPagedSQL against postgres", Ordered, func() {
+var _ = Describe("paged SQL against postgres", Ordered, func() {
 	var explain func(statement string) string
 
 	pageOrder := query.Order{{Column: "id", Unique: true}}
@@ -49,8 +49,9 @@ var _ = Describe("buildPagedSQL against postgres", Ordered, func() {
 	const wideQuery = "SELECT id, region FROM wide"
 
 	It("materializes the whole result to state an exact total", func() {
-		statement, _, err := buildPagedSQL(dialectPostgres, wideQuery, nil, pageOrder, query.CursorPosition{},
-			query.PageRequest{Limit: 50})
+		statement, _, err := rendered(buildPagedSQL(dialectPostgres, SQLPageRequest{
+			Query: wideQuery, Order: pageOrder, Page: query.PageRequest{Limit: 50},
+		}))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(explain(statement)).To(ContainSubstring("WindowAgg"))
 	})
@@ -59,8 +60,9 @@ var _ = Describe("buildPagedSQL against postgres", Ordered, func() {
 	// down, the plan has no buffering aggregate and the server stops where the
 	// export stops instead of scanning past it into rows nobody receives.
 	It("neither buffers nor overruns the ceiling when the total is waived", func() {
-		statement, _, err := buildPagedSQL(dialectPostgres, wideQuery, nil, pageOrder, query.CursorPosition{},
-			query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100})
+		statement, _, err := rendered(buildPagedSQL(dialectPostgres, SQLPageRequest{
+			Query: wideQuery, Order: pageOrder, Page: query.PageRequest{Limit: 50, SkipTotal: true, Ceiling: 100},
+		}))
 		Expect(err).ToNot(HaveOccurred())
 
 		plan := explain(statement)

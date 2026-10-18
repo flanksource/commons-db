@@ -11,12 +11,21 @@ import (
 
 var _ = Describe("SQL column filter statistics", func() {
 	It("counts all SQL string outputs in one wrapped statement", func() {
-		statement, err := buildColumnStatsSQL(dialectPostgres, ordersQuery, []string{"message", "region"})
+		statement, args, err := rendered(buildColumnStatsSQL(dialectPostgres, sqlQuery{Text: ordersQuery}, []string{"message", "region"}))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(statement).To(Equal(basePrefix(`"__cdb_base"`) +
+			`SELECT COUNT(DISTINCT "message"), COUNT(DISTINCT "region") FROM "__cdb_base"`))
+		Expect(args).To(BeEmpty())
+	})
+
+	It("binds the author's params into the counted base", func() {
+		statement, args, err := rendered(buildColumnStatsSQL(dialectSQLServer, sqlQuery{
+			Text: "SELECT region FROM orders WHERE env = " + sqlParamMarker(0), Args: []any{"prod"},
+		}, []string{"region"}))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).To(Equal(
-			"WITH \"__cdb_base\" AS (\n" + ordersQuery + "\n)\n" +
-				`SELECT COUNT(DISTINCT "message"), COUNT(DISTINCT "region")` + "\n" +
-				`FROM "__cdb_base"`))
+			"WITH [__cdb_base] AS (SELECT region AS region FROM orders WHERE env = @p1) SELECT COUNT(DISTINCT [region]) FROM [__cdb_base]"))
+		Expect(args).To(Equal([]any{"prod"}))
 	})
 
 	It("caps metadata probes to backend-safe field batches", func() {

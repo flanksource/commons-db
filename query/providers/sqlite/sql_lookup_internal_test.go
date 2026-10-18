@@ -17,38 +17,42 @@ var _ = Describe("sqlProvider.LookupFilterValues", func() {
 	)
 })
 
+// lookupSQL is the distinct-values statement for binding over base.
+func lookupSQL(dialect sqlDialect, base sqlQuery, binding query.ColumnFilterBinding,
+	siblings []query.ColumnFilterValue, search string) (string, []any, error) {
+	return rendered(buildLookupSQL(dialect, sqlLookupRequest{
+		Query: base, Binding: binding, Siblings: siblings, Search: search, Limit: 20,
+	}))
+}
+
 var _ = Describe("buildLookupSQL", func() {
+	orders := sqlQuery{Text: ordersQuery}
 	regionBinding := query.ColumnFilterBinding{
 		Column: "region", Key: "filter.region", Field: "region",
 		Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true,
 	}
 
 	It("counts distinct values over the wrapped base", func() {
-		statement, args, err := buildLookupSQL(dialectPostgres, ordersQuery, regionBinding, nil, "", 20)
+		statement, args, err := lookupSQL(dialectPostgres, orders, regionBinding, nil, "")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).To(Equal(
-			"WITH \"__cdb_base\" AS (\n" + ordersQuery + "\n)\n" +
-				`SELECT "region" AS value, COUNT(*) AS count, COUNT(*) OVER () AS total` + "\n" +
-				`FROM "__cdb_base"` + "\n" +
-				`WHERE "region" IS NOT NULL` + "\n" +
-				`GROUP BY "region"` + "\n" +
-				"ORDER BY 2 DESC, 1 ASC\n" +
-				"LIMIT 20"))
+		Expect(statement).To(Equal(basePrefix(`"__cdb_base"`) +
+			`SELECT "region" AS value, COUNT(*) AS count, COUNT(*) OVER () AS total FROM "__cdb_base" ` +
+			`WHERE NOT "region" IS NULL GROUP BY "region" ORDER BY 2 DESC, 1 ASC LIMIT 20`))
 		Expect(args).To(BeEmpty())
 	})
 
 	// The options offered must be the options the table can actually show, so
 	// every other active selection still scopes the question.
 	It("applies the sibling filters", func() {
-		statement, args, err := buildLookupSQL(dialectPostgres, ordersQuery, regionBinding,
-			[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "", 20)
+		statement, args, err := lookupSQL(dialectPostgres, orders, regionBinding,
+			[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).To(ContainSubstring(`WHERE ("env" IN ($1) AND "region" IS NOT NULL)`))
+		Expect(statement).To(ContainSubstring(`WHERE ("env" IN ($1) AND NOT "region" IS NULL)`))
 		Expect(args).To(Equal([]any{"prod"}))
 	})
 
 	It("matches a search term case-insensitively", func() {
-		statement, args, err := buildLookupSQL(dialectPostgres, ordersQuery, regionBinding, nil, "US", 20)
+		statement, args, err := lookupSQL(dialectPostgres, orders, regionBinding, nil, "US")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).To(ContainSubstring(`LOWER("region") LIKE $1 ESCAPE '!'`))
 		Expect(args).To(Equal([]any{"%us%"}))
@@ -57,7 +61,7 @@ var _ = Describe("buildLookupSQL", func() {
 	// Someone typing "50%" is looking for a literal "50%", not for everything.
 	DescribeTable("neutralises the wildcards in a typed search term",
 		func(dialect sqlDialect, search, pattern string) {
-			_, args, err := buildLookupSQL(dialect, ordersQuery, regionBinding, nil, search, 20)
+			_, args, err := lookupSQL(dialect, orders, regionBinding, nil, search)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(args).To(Equal([]any{pattern}))
 		},
@@ -70,7 +74,7 @@ var _ = Describe("buildLookupSQL", func() {
 
 	DescribeTable("takes the head of the set the way each dialect spells it",
 		func(dialect sqlDialect, tail string) {
-			statement, _, err := buildLookupSQL(dialect, ordersQuery, regionBinding, nil, "", 20)
+			statement, _, err := lookupSQL(dialect, orders, regionBinding, nil, "")
 			Expect(err).ToNot(HaveOccurred())
 			Expect(statement).To(HaveSuffix(tail))
 		},
@@ -81,9 +85,9 @@ var _ = Describe("buildLookupSQL", func() {
 	)
 
 	It("has no ESCAPE clause on clickhouse, whose LIKE takes none", func() {
-		statement, _, err := buildLookupSQL(dialectClickHouse, ordersQuery, regionBinding, nil, "us", 20)
+		statement, _, err := lookupSQL(dialectClickHouse, orders, regionBinding, nil, "us")
 		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).To(ContainSubstring(`lower("region") LIKE ?`))
+		Expect(statement).To(ContainSubstring(`LOWER("region") LIKE @cdb_p1`))
 		Expect(statement).ToNot(ContainSubstring("ESCAPE"))
 	})
 
@@ -97,62 +101,52 @@ var _ = Describe("buildLookupSQL", func() {
 		// many times that row's array repeats it.
 		DescribeTable("lists string array members with row counts in every SQL dialect",
 			func(dialect sqlDialect, expected string) {
-				statement, args, err := buildLookupSQL(dialect, ordersQuery, tablesBinding,
-					[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "Pol", 20)
+				statement, args, err := lookupSQL(dialect, orders, tablesBinding,
+					[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "Pol")
 				Expect(err).ToNot(HaveOccurred())
 				Expect(statement).To(Equal(expected))
 				Expect(args).To(Equal([]any{"prod", "%pol%"}))
 			},
-			Entry("sqlite JSON", dialectSQLite,
-				"WITH \"__cdb_base\" AS (\n"+ordersQuery+"\n)\n"+
-					`SELECT "__cdb_item".value AS value, COUNT(DISTINCT "__cdb_rows"."__cdb_row") AS count, COUNT(*) OVER () AS total`+"\n"+
-					`FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "__cdb_row", "tables" AS "__cdb_array" FROM "__cdb_base" WHERE "env" IN (?)) AS "__cdb_rows" CROSS JOIN json_each("__cdb_rows"."__cdb_array") AS "__cdb_item"`+"\n"+
-					`WHERE ("__cdb_item".type = 'text' AND "__cdb_item".value IS NOT NULL AND LOWER("__cdb_item".value) LIKE ? ESCAPE '!')`+"\n"+
-					`GROUP BY "__cdb_item".value`+"\n"+
-					"ORDER BY 2 DESC, 1 ASC\nLIMIT 20"),
-			Entry("postgres native arrays, json, and jsonb", dialectPostgres,
-				"WITH \"__cdb_base\" AS (\n"+ordersQuery+"\n)\n"+
-					`SELECT ("__cdb_item"."__cdb_value" #>> '{}') AS value, COUNT(DISTINCT "__cdb_rows"."__cdb_row") AS count, COUNT(*) OVER () AS total`+"\n"+
-					`FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "__cdb_row", "tables" AS "__cdb_array" FROM "__cdb_base" WHERE "env" IN ($1)) AS "__cdb_rows" CROSS JOIN LATERAL jsonb_array_elements(COALESCE(NULLIF(to_jsonb("__cdb_rows"."__cdb_array"), 'null'::jsonb), '[]'::jsonb)) AS "__cdb_item"("__cdb_value")`+"\n"+
-					`WHERE (jsonb_typeof("__cdb_item"."__cdb_value") = 'string' AND ("__cdb_item"."__cdb_value" #>> '{}') IS NOT NULL AND LOWER(("__cdb_item"."__cdb_value" #>> '{}')) LIKE $2 ESCAPE '!')`+"\n"+
-					`GROUP BY ("__cdb_item"."__cdb_value" #>> '{}')`+"\n"+
-					"ORDER BY 2 DESC, 1 ASC\nLIMIT 20"),
-			Entry("mysql JSON", dialectMySQL,
-				"WITH `__cdb_base` AS (\n"+ordersQuery+"\n)\n"+
-					"SELECT JSON_UNQUOTE(`__cdb_item`.`__cdb_value`) AS value, COUNT(DISTINCT `__cdb_rows`.`__cdb_row`) AS count, COUNT(*) OVER () AS total\n"+
-					"FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS `__cdb_row`, `tables` AS `__cdb_array` FROM `__cdb_base` WHERE `env` IN (?)) AS `__cdb_rows` CROSS JOIN JSON_TABLE(IF(JSON_TYPE(`__cdb_rows`.`__cdb_array`) = 'ARRAY', `__cdb_rows`.`__cdb_array`, JSON_ARRAY()), '$[*]' COLUMNS (`__cdb_value` JSON PATH '$')) AS `__cdb_item`\n"+
-					"WHERE (JSON_TYPE(`__cdb_item`.`__cdb_value`) = 'STRING' AND JSON_UNQUOTE(`__cdb_item`.`__cdb_value`) IS NOT NULL AND LOWER(JSON_UNQUOTE(`__cdb_item`.`__cdb_value`)) LIKE ? ESCAPE '!')\n"+
-					"GROUP BY JSON_UNQUOTE(`__cdb_item`.`__cdb_value`)\nORDER BY 2 DESC, 1 ASC\nLIMIT 20"),
+			Entry("sqlite JSON", dialectSQLite, basePrefix(`"__cdb_base"`)+
+				`SELECT "__cdb_item".value AS value, COUNT(DISTINCT "__cdb_rows"."__cdb_row") AS count, COUNT(*) OVER () AS total `+
+				`FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "__cdb_row", "tables" AS "__cdb_array" FROM "__cdb_base" WHERE "env" IN (?)) AS "__cdb_rows" CROSS JOIN JSON_EACH("__cdb_rows"."__cdb_array") AS "__cdb_item" `+
+				`WHERE ("__cdb_item".type = 'text' AND NOT "__cdb_item".value IS NULL AND LOWER("__cdb_item".value) LIKE ? ESCAPE '!') `+
+				`GROUP BY "__cdb_item".value ORDER BY 2 DESC, 1 ASC LIMIT 20`),
+			Entry("postgres native arrays, json, and jsonb", dialectPostgres, basePrefix(`"__cdb_base"`)+
+				`SELECT ("__cdb_item"."__cdb_value" #>> '{}') AS value, COUNT(DISTINCT "__cdb_rows"."__cdb_row") AS count, COUNT(*) OVER () AS total `+
+				`FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS "__cdb_row", "tables" AS "__cdb_array" FROM "__cdb_base" WHERE "env" IN ($1)) AS "__cdb_rows" CROSS JOIN LATERAL JSONB_ARRAY_ELEMENTS(COALESCE(NULLIF(TO_JSONB("__cdb_rows"."__cdb_array"), CAST('null' AS JSONB)), CAST('[]' AS JSONB))) AS "__cdb_item"("__cdb_value") `+
+				`WHERE (JSONB_TYPEOF("__cdb_item"."__cdb_value") = 'string' AND NOT ("__cdb_item"."__cdb_value" #>> '{}') IS NULL AND LOWER(("__cdb_item"."__cdb_value" #>> '{}')) LIKE $2 ESCAPE '!') `+
+				`GROUP BY ("__cdb_item"."__cdb_value" #>> '{}') ORDER BY 2 DESC, 1 ASC LIMIT 20`),
+			Entry("mysql JSON", dialectMySQL, basePrefix("`__cdb_base`")+
+				"SELECT JSON_UNQUOTE(`__cdb_item`.`__cdb_value`) AS value, COUNT(DISTINCT `__cdb_rows`.`__cdb_row`) AS count, COUNT(*) OVER () AS total "+
+				"FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS `__cdb_row`, `tables` AS `__cdb_array` FROM `__cdb_base` WHERE `env` IN (?)) AS `__cdb_rows` CROSS JOIN JSON_TABLE(CASE WHEN JSON_TYPE(`__cdb_rows`.`__cdb_array`) = 'ARRAY' THEN `__cdb_rows`.`__cdb_array` ELSE JSON_ARRAY() END, '$[*]' COLUMNS(`__cdb_value` JSON PATH '$')) AS `__cdb_item` "+
+				"WHERE (JSON_TYPE(`__cdb_item`.`__cdb_value`) = 'STRING' AND NOT JSON_UNQUOTE(`__cdb_item`.`__cdb_value`) IS NULL AND LOWER(JSON_UNQUOTE(`__cdb_item`.`__cdb_value`)) LIKE ? ESCAPE '!') "+
+				"GROUP BY JSON_UNQUOTE(`__cdb_item`.`__cdb_value`) ORDER BY 2 DESC, 1 ASC LIMIT 20"),
 			Entry("sqlserver JSON text and ntext", dialectSQLServer,
-				"WITH [__cdb_base] AS (\n"+ordersQuery+"\n)\n"+
-					`SELECT [__cdb_item].[value] AS value, COUNT(DISTINCT [__cdb_rows].[__cdb_row]) AS count, COUNT(*) OVER () AS total`+"\n"+
-					`FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS [__cdb_row], [tables] AS [__cdb_array] FROM [__cdb_base] WHERE [env] IN (@p1)) AS [__cdb_rows] CROSS APPLY OPENJSON(COALESCE(CONVERT(nvarchar(max), [__cdb_rows].[__cdb_array]), N'[]')) AS [__cdb_item]`+"\n"+
-					`WHERE ([__cdb_item].[type] = 1 AND [__cdb_item].[value] IS NOT NULL AND LOWER([__cdb_item].[value]) LIKE @p2 ESCAPE '!')`+"\n"+
-					`GROUP BY [__cdb_item].[value]`+"\n"+
-					"ORDER BY 2 DESC, 1 ASC\nOFFSET 0 ROWS FETCH NEXT 20 ROWS ONLY"),
-			Entry("clickhouse native string arrays", dialectClickHouse,
-				"WITH \"__cdb_base\" AS (\n"+ordersQuery+"\n)\n"+
-					`SELECT "__cdb_item" AS value, COUNT(*) AS count, COUNT(*) OVER () AS total`+"\n"+
-					`FROM (SELECT "tables" AS "__cdb_array" FROM "__cdb_base" WHERE "env" IN (?)) AS "__cdb_rows" ARRAY JOIN arrayDistinct("__cdb_rows"."__cdb_array") AS "__cdb_item"`+"\n"+
-					`WHERE ("__cdb_item" IS NOT NULL AND lower("__cdb_item") LIKE ?)`+"\n"+
-					`GROUP BY "__cdb_item"`+"\n"+
-					"ORDER BY 2 DESC, 1 ASC\nLIMIT 20"),
+				"WITH [__cdb_base] AS (SELECT id AS id, region AS region, env AS env, latency_ms AS latency_ms FROM orders) "+
+					`SELECT [__cdb_item].[value] AS value, COUNT(DISTINCT [__cdb_rows].[__cdb_row]) AS count, COUNT(*) OVER () AS total `+
+					`FROM (SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS [__cdb_row], [tables] AS [__cdb_array] FROM [__cdb_base] WHERE [env] IN (@p1)) AS [__cdb_rows] CROSS APPLY OPENJSON(COALESCE(CONVERT(NVARCHAR(MAX), [__cdb_rows].[__cdb_array]), N'[]')) AS [__cdb_item] `+
+					`WHERE ([__cdb_item].[type] = 1 AND NOT [__cdb_item].[value] IS NULL AND LOWER([__cdb_item].[value]) LIKE @p2 ESCAPE '!') `+
+					`GROUP BY [__cdb_item].[value] ORDER BY 2 DESC, 1 ASC OFFSET 0 ROWS FETCH NEXT 20 ROWS ONLY`),
+			Entry("clickhouse native string arrays", dialectClickHouse, basePrefix(`"__cdb_base"`)+
+				`SELECT "__cdb_item" AS value, COUNT(*) AS count, COUNT(*) OVER () AS total `+
+				`FROM (SELECT "tables" AS "__cdb_array" FROM "__cdb_base" WHERE "env" IN (@cdb_p1)) AS "__cdb_rows" ARRAY JOIN arrayDistinct("__cdb_rows"."__cdb_array") AS "__cdb_item" `+
+				`WHERE (NOT ("__cdb_item" IS NULL) AND LOWER("__cdb_item") LIKE @cdb_p2) `+
+				`GROUP BY "__cdb_item" ORDER BY 2 DESC, 1 ASC LIMIT 20`),
 		)
 
-		DescribeTable("offsets sibling and search placeholders after authored parameters",
+		DescribeTable("numbers sibling and search placeholders after authored parameters",
 			func(dialect sqlDialect, authoredPlaceholder, siblingPlaceholder, searchPlaceholder string) {
-				authored := "SELECT id, env, tables FROM orders WHERE id = " + sqlParamMarker(0)
-				statement, args, err := buildLookupSQL(dialect, authored, tablesBinding,
-					[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "Pol", 20)
-				Expect(err).ToNot(HaveOccurred())
-				statement, err = materializeSQLParams(dialect, statement, []any{int64(7)}, nil)
+				authored := sqlQuery{Text: "SELECT id, env, tables FROM orders WHERE id = " + sqlParamMarker(0), Args: []any{int64(7)}}
+				statement, args, err := lookupSQL(dialect, authored, tablesBinding,
+					[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "Pol")
 				Expect(err).ToNot(HaveOccurred())
 				Expect(statement).To(And(
 					ContainSubstring("WHERE id = "+authoredPlaceholder),
 					ContainSubstring(siblingPlaceholder),
 					ContainSubstring(searchPlaceholder),
 				))
-				Expect(args).To(Equal([]any{"prod", "%pol%"}))
+				Expect(args).To(Equal([]any{int64(7), "prod", "%pol%"}))
 			},
 			Entry("postgres", dialectPostgres, "$1", `WHERE "env" IN ($2)`, `LIKE $3 ESCAPE '!'`),
 			Entry("sqlserver", dialectSQLServer, "@p1", `WHERE [env] IN (@p2)`, `LIKE @p3 ESCAPE '!'`),
@@ -161,9 +155,9 @@ var _ = Describe("buildLookupSQL", func() {
 
 	// A range and a toggle are typed, not picked, so there is no list to offer.
 	It("refuses a lookup on a filter with no values to list", func() {
-		_, _, err := buildLookupSQL(dialectPostgres, ordersQuery, query.ColumnFilterBinding{
+		_, _, err := lookupSQL(dialectPostgres, orders, query.ColumnFilterBinding{
 			Key: "filter.latency_ms", Field: "latency_ms", Kind: query.ColumnFilterKindRange,
-		}, nil, "", 20)
+		}, nil, "")
 		Expect(err).To(MatchError(ContainSubstring("has no values to list")))
 	})
 })

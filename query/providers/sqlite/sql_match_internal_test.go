@@ -21,7 +21,7 @@ func match(field string, include, exclude []string) query.ColumnFilterValue {
 var _ = Describe("match filters in SQL", func() {
 	DescribeTable("compiles each pattern into a case-insensitive comparison",
 		func(filter query.ColumnFilterValue, clause string, args []any) {
-			statement, bound, err := buildFilteredSQL(dialectPostgres, ordersQuery, []query.ColumnFilterValue{filter})
+			statement, bound, err := filteredSQL(dialectPostgres, ordersQuery, []query.ColumnFilterValue{filter})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(statement).To(ContainSubstring(clause))
 			Expect(bound).To(Equal(args))
@@ -37,9 +37,9 @@ var _ = Describe("match filters in SQL", func() {
 	)
 
 	It("selects everything for a lone star, binding nothing", func() {
-		statement, args, err := buildFilteredSQL(dialectPostgres, ordersQuery, []query.ColumnFilterValue{match("name", []string{"*"}, nil)})
+		statement, args, err := filteredSQL(dialectPostgres, ordersQuery, []query.ColumnFilterValue{match("name", []string{"*"}, nil)})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(statement).To(ContainSubstring("1=1"))
+		Expect(statement).To(ContainSubstring("WHERE 1 = 1"))
 		Expect(args).To(BeEmpty())
 	})
 
@@ -74,7 +74,7 @@ var _ = Describe("match filters in SQL", func() {
 						include = append(include, pattern)
 					}
 				}
-				statement, args, err := buildFilteredSQL(dialectSQLite, "SELECT value FROM names", []query.ColumnFilterValue{match("value", include, exclude)})
+				statement, args, err := filteredSQL(dialectSQLite, "SELECT value FROM names", []query.ColumnFilterValue{match("value", include, exclude)})
 				Expect(err).ToNot(HaveOccurred())
 				rows, err := database.Query(statement, args...)
 				Expect(err).ToNot(HaveOccurred())
