@@ -11,23 +11,17 @@ import {
   Button,
   Icon,
   Modal,
-  useOperations,
   type OperationsApiClient,
   type OperationResultFilterConfig,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { UiColumns } from "@flanksource/clicky-ui/icons";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { isValidElement, useMemo, useState, type ReactNode } from "react";
-import { findProfileUpdateOperation } from "./profileUpdateOperation";
-import {
-  loadProfileDocument,
-  profileColumns,
-  promoteProfileColumns,
-} from "./profileColumnPromotion";
+import { loadProfileDocument, profileColumns } from "./profileColumnPromotion";
 import { ProfileJsonFieldPicker } from "./profileJsonFieldPicker";
 import { discoverJsonFieldCandidates } from "./profileJsonFields";
-import { PROFILES_QUERY_KEY } from "./profilesQuery";
+import { useColumnPromotion, type ColumnPromotion } from "./useColumnPromotion";
 import type { ProfileColumn } from "@flanksource/clicky-ui/profiles";
 
 type ClickyTableNode = ClickyNode & {
@@ -137,17 +131,53 @@ function ProfileRowDetailsTable({
   client: OperationsApiClient;
   surfaceKey: string;
 }) {
-  const queryClient = useQueryClient();
-  const { operations, isLoading: operationsLoading } = useOperations(client);
-  const updateAction = findProfileUpdateOperation(operations);
   const [detailRow, setDetailRow] = useState<ClickyRow | null>(null);
+  return (
+    <>
+      <Clicky
+        data={table}
+        {...remoteProps}
+        onTableRowClick={setDetailRow}
+        externalFilters={filterConfig?.filters}
+        search={filterConfig?.search}
+        timeRange={filterConfig?.timeRange}
+        cellFilters={filterConfig?.cellFilters}
+        onCellFilterChange={filterConfig?.onCellFilterChange}
+        className="flex min-h-0 flex-1 flex-col"
+      />
+      <RowDetailsModal
+        columns={table.columns}
+        detailRow={detailRow}
+        client={client}
+        surfaceKey={surfaceKey}
+        onClose={() => setDetailRow(null)}
+      />
+    </>
+  );
+}
+
+function RowDetailsModal({
+  columns,
+  detailRow,
+  client,
+  surfaceKey,
+  onClose,
+}: {
+  columns: ClickyColumn[];
+  detailRow: ClickyRow | null;
+  client: OperationsApiClient;
+  surfaceKey: string;
+  onClose: () => void;
+}) {
   const [promotionOpen, setPromotionOpen] = useState(false);
-  const [promotionError, setPromotionError] = useState<string>();
-  const [saving, setSaving] = useState(false);
-  const [success, setSuccess] = useState<string>();
+  const promotion = useColumnPromotion({
+    client,
+    surfaceKey,
+    onSaved: () => setPromotionOpen(false),
+  });
   const candidates = useMemo(
-    () => detailRow ? discoverJsonFieldCandidates(table.columns, detailRow) : [],
-    [detailRow, table.columns],
+    () => (detailRow ? discoverJsonFieldCandidates(columns, detailRow) : []),
+    [detailRow, columns],
   );
   const profile = useQuery({
     queryKey: ["profile-json-fields", surfaceKey],
@@ -158,105 +188,107 @@ function ProfileRowDetailsTable({
     },
     retry: 0,
   });
-
   const closeDetails = () => {
-    setDetailRow(null);
     setPromotionOpen(false);
-    setPromotionError(undefined);
-    setSuccess(undefined);
+    promotion.reset();
+    onClose();
   };
-
-  const saveColumns = async (additions: ProfileColumn[]) => {
-    if (!updateAction) {
-      setPromotionError("Profile update operations are unavailable");
-      return;
-    }
-    setSaving(true);
-    setPromotionError(undefined);
-    try {
-      await promoteProfileColumns({ client, updateAction, surfaceKey, additions });
-      setPromotionOpen(false);
-      setSuccess(`Added ${additions.length} ${additions.length === 1 ? "column" : "columns"}`);
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: ["openapi-spec"] }),
-        queryClient.invalidateQueries({ queryKey: ["operation-list"] }),
-        queryClient.invalidateQueries({ queryKey: ["profile-editor", surfaceKey] }),
-        queryClient.invalidateQueries({ queryKey: ["profile-json-fields", surfaceKey] }),
-        queryClient.invalidateQueries({ queryKey: ["logs-entity-names"] }),
-        queryClient.invalidateQueries({ queryKey: PROFILES_QUERY_KEY }),
-      ]);
-    } catch (cause) {
-      setPromotionError(cause instanceof Error ? cause.message : "Profile update failed");
-    } finally {
-      setSaving(false);
-    }
-  };
-
+  const title = promotionOpen
+    ? "Add JSON fields as columns"
+    : detailRow
+      ? profileRowDetailTitle(detailRow)
+      : "Row details";
   return (
-    <>
-      <Clicky
-        data={table}
-        {...remoteProps}
-        onTableRowClick={(row) => {
-          setDetailRow(row);
-          setPromotionOpen(false);
-          setPromotionError(undefined);
-          setSuccess(undefined);
-        }}
-        externalFilters={filterConfig?.filters}
-        search={filterConfig?.search}
-        timeRange={filterConfig?.timeRange}
-        cellFilters={filterConfig?.cellFilters}
-        onCellFilterChange={filterConfig?.onCellFilterChange}
-        className="flex min-h-0 flex-1 flex-col"
+    <Modal open={detailRow != null} onClose={closeDetails} title={title} size="2xl">
+      {detailRow ? (
+        <RowDetailsBody
+          detailRow={detailRow}
+          columns={columns}
+          candidates={candidates}
+          promotionOpen={promotionOpen}
+          onPromotionOpenChange={setPromotionOpen}
+          profile={profile}
+          promotion={promotion}
+        />
+      ) : null}
+    </Modal>
+  );
+}
+
+function RowDetailsBody({
+  detailRow,
+  columns,
+  candidates,
+  promotionOpen,
+  onPromotionOpenChange,
+  profile,
+  promotion,
+}: {
+  detailRow: ClickyRow;
+  columns: ClickyColumn[];
+  candidates: ReturnType<typeof discoverJsonFieldCandidates>;
+  promotionOpen: boolean;
+  onPromotionOpenChange: (open: boolean) => void;
+  profile: { isLoading: boolean; isError: boolean; error: unknown; data?: ProfileColumn[] };
+  promotion: ColumnPromotion;
+}) {
+  if (promotionOpen && profile.isLoading) {
+    return <div className="text-sm text-muted-foreground">Loading profile…</div>;
+  }
+  if (promotionOpen && profile.isError) {
+    return (
+      <div className="space-y-4">
+        <div className="text-sm text-destructive">
+          {profile.error instanceof Error ? profile.error.message : "Unable to load profile"}
+        </div>
+        <Button type="button" variant="outline" onClick={() => onPromotionOpenChange(false)}>Back</Button>
+      </div>
+    );
+  }
+  if (promotionOpen && profile.data) {
+    return (
+      <ProfileJsonFieldPicker
+        candidates={candidates}
+        existingColumns={profile.data}
+        saving={promotion.saving}
+        error={promotion.error}
+        onCancel={() => onPromotionOpenChange(false)}
+        onSave={promotion.save}
       />
-      <Modal
-        open={detailRow != null}
-        onClose={closeDetails}
-        title={promotionOpen ? "Add JSON fields as columns" : detailRow ? profileRowDetailTitle(detailRow) : "Row details"}
-        size="2xl"
-      >
-        {promotionOpen && profile.isLoading ? (
-          <div className="text-sm text-muted-foreground">Loading profile…</div>
-        ) : promotionOpen && profile.isError ? (
-          <div className="space-y-4">
-            <div className="text-sm text-destructive">
-              {profile.error instanceof Error ? profile.error.message : "Unable to load profile"}
-            </div>
-            <Button type="button" variant="outline" onClick={() => setPromotionOpen(false)}>Back</Button>
-          </div>
-        ) : promotionOpen && profile.data ? (
-          <ProfileJsonFieldPicker
-            candidates={candidates}
-            existingColumns={profile.data}
-            saving={saving}
-            error={promotionError}
-            onCancel={() => setPromotionOpen(false)}
-            onSave={saveColumns}
-          />
-        ) : detailRow ? (
-          <div className="space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              {success ? <div className="text-sm text-green-700">{success}</div> : <span />}
-              {candidates.length > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  disabled={operationsLoading || !updateAction}
-                  title={updateAction ? "Add fields from JSON columns" : "Profile updates are unavailable"}
-                  onClick={() => setPromotionOpen(true)}
-                >
-                  <Icon icon={UiColumns} className="size-4" />
-                  Add JSON fields
-                </Button>
-              ) : null}
-            </div>
-            <ClickyNodeView node={profileRowDetailNode(detailRow, table.columns)} />
-          </div>
+    );
+  }
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {promotion.success ? <div className="text-sm text-green-700">{promotion.success}</div> : <span />}
+        {candidates.length > 0 ? (
+          <AddJsonFieldsButton onClick={() => onPromotionOpenChange(true)} promotion={promotion} />
         ) : null}
-      </Modal>
-    </>
+      </div>
+      <ClickyNodeView node={profileRowDetailNode(detailRow, columns)} />
+    </div>
+  );
+}
+
+function AddJsonFieldsButton({
+  onClick,
+  promotion,
+}: {
+  onClick: () => void;
+  promotion: ColumnPromotion;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={promotion.operationsLoading || !promotion.updateAction}
+      title={promotion.updateAction ? "Add fields from JSON columns" : "Profile updates are unavailable"}
+      onClick={onClick}
+    >
+      <Icon icon={UiColumns} className="size-4" />
+      Add JSON fields
+    </Button>
   );
 }
 

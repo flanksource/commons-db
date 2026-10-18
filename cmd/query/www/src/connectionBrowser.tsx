@@ -33,6 +33,8 @@ export function connectionDetailBodyRenderer(
   );
 }
 
+type BrowserTab = "browser" | "trace";
+
 function ConnectionBrowser({
   id,
   connectionName,
@@ -59,18 +61,6 @@ function ConnectionBrowser({
     },
     retry: 0,
   });
-  // The target the browser is pointed at, so "Build profile" starts where the
-  // author left off. It is reported by the browser rather than picked here —
-  // the picker lives in the browser's navigator.
-  const [selectedOptions, setSelectedOptions] = useState<
-    Record<string, unknown>
-  >({});
-  const [selectedQuery, setSelectedQuery] = useState<string>();
-  const [activeTab, setActiveTab] = useState<"browser" | "trace">("browser");
-  const profileOptions = useMemo(
-    () => connectionProfileTargetOptions(descriptor.data, selectedOptions),
-    [descriptor.data, selectedOptions],
-  );
 
   if (descriptor.isLoading) {
     return (
@@ -98,12 +88,49 @@ function ConnectionBrowser({
       </div>
     );
   }
-  const profileQuery = selectedQuery ?? descriptor.data.defaultQuery;
+  return (
+    <ConnectionBrowserBody
+      id={id}
+      baseUrl={baseUrl}
+      connectionName={connectionName}
+      descriptor={descriptor.data}
+      renderProfileAction={renderProfileAction}
+    />
+  );
+}
+
+function ConnectionBrowserBody({
+  id,
+  baseUrl,
+  connectionName,
+  descriptor,
+  renderProfileAction,
+}: {
+  id: string;
+  baseUrl: string;
+  connectionName: string;
+  descriptor: BrowserDescriptor;
+  renderProfileAction?: ConnectionProfileActionRenderer;
+}) {
+  // The target the browser is pointed at, so "Build profile" starts where the
+  // author left off. It is reported by the browser rather than picked here —
+  // the picker lives in the browser's navigator.
+  const [selectedOptions, setSelectedOptions] = useState<
+    Record<string, unknown>
+  >({});
+  const [selectedQuery, setSelectedQuery] = useState<string>();
+  const [activeTab, setActiveTab] = useState<BrowserTab>("browser");
+  const profileOptions = useMemo(
+    () => connectionProfileTargetOptions(descriptor, selectedOptions),
+    [descriptor, selectedOptions],
+  );
+  const hasTraceTab = descriptor.provider === "sqlserver";
+  const profileQuery = selectedQuery ?? descriptor.defaultQuery;
   const profileAction =
-    descriptor.data.provider && renderProfileAction
+    descriptor.provider && renderProfileAction
       ? renderProfileAction({
           connectionName,
-          providerType: descriptor.data.provider,
+          providerType: descriptor.provider,
           ...(profileOptions ? { providerOptions: profileOptions } : {}),
           ...(profileQuery ? { profileQuery } : {}),
         })
@@ -113,46 +140,58 @@ function ConnectionBrowser({
       {profileAction ? (
         <div className="flex flex-wrap items-center gap-2">{profileAction}</div>
       ) : null}
-      {descriptor.data.provider === "sqlserver" ? (
-        <div
-          className="flex gap-1 border-b"
-          role="tablist"
-          aria-label="Connection tools"
-        >
-          {(["browser", "trace"] as const).map((tab) => (
-            <button
-              key={tab}
-              role="tab"
-              aria-selected={activeTab === tab}
-              className={`border-b-2 px-3 py-2 text-sm font-medium capitalize ${activeTab === tab ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
-              onClick={() => setActiveTab(tab)}
-            >
-              {tab}
-            </button>
-          ))}
-        </div>
+      {hasTraceTab ? (
+        <ConnectionToolTabs activeTab={activeTab} onSelect={setActiveTab} />
       ) : null}
       <div hidden={activeTab !== "browser"}>
         <ConnectionQueryBrowser
           id={id}
           baseUrl={baseUrl}
-          descriptor={descriptor.data}
+          descriptor={descriptor}
           onOptionsChange={setSelectedOptions}
           onQueryChange={setSelectedQuery}
         />
       </div>
-      {descriptor.data.provider === "sqlserver" ? (
+      {hasTraceTab ? (
         <div hidden={activeTab !== "trace"}>
           <ConnectionTrace
             id={id}
             defaultDatabase={
-              typeof descriptor.data.initialOptions?.database === "string"
-                ? descriptor.data.initialOptions.database
+              typeof descriptor.initialOptions?.database === "string"
+                ? descriptor.initialOptions.database
                 : undefined
             }
           />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function ConnectionToolTabs({
+  activeTab,
+  onSelect,
+}: {
+  activeTab: BrowserTab;
+  onSelect: (tab: BrowserTab) => void;
+}) {
+  return (
+    <div
+      className="flex gap-1 border-b"
+      role="tablist"
+      aria-label="Connection tools"
+    >
+      {(["browser", "trace"] as const).map((tab) => (
+        <button
+          key={tab}
+          role="tab"
+          aria-selected={activeTab === tab}
+          className={`border-b-2 px-3 py-2 text-sm font-medium capitalize ${activeTab === tab ? "border-primary text-foreground" : "border-transparent text-muted-foreground"}`}
+          onClick={() => onSelect(tab)}
+        >
+          {tab}
+        </button>
+      ))}
     </div>
   );
 }

@@ -25,7 +25,8 @@ import {
 import profileSchemaDocument from "../../../../schemas/profile.json";
 import "./styles.css";
 import "@flanksource/clicky-ui/styles.css";
-import { App, formExtensions } from "./App";
+import { App } from "./App";
+import { formExtensions } from "./appFormExtensions";
 import { mountPath } from "./mount";
 
 // The profile editor ships in clicky-ui, but the schema it renders is generated

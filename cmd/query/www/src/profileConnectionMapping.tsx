@@ -153,12 +153,47 @@ function ProfileConnectionMappingDialogs({
   onCreate: () => void;
   onCreateClose: () => void;
 }) {
+  const { operations } = useOperations(client);
+  const createAction = findConnectionCreateOperation(operations);
+  return (
+    <>
+      <ConnectTraceProfileModal
+        client={client}
+        pending={pending}
+        createAction={createAction}
+        onClose={onClose}
+        onMapped={onMapped}
+        onCreate={onCreate}
+      />
+      {createOpen && createAction ? (
+        <AddConnectionForm
+          client={client}
+          action={createAction}
+          onClose={onCreateClose}
+        />
+      ) : null}
+    </>
+  );
+}
+
+function ConnectTraceProfileModal({
+  client,
+  pending,
+  createAction,
+  onClose,
+  onMapped,
+  onCreate,
+}: {
+  client: SharedOperationsApiClient;
+  pending: PendingMapping | null;
+  createAction: ResolvedOperation | undefined;
+  onClose: () => void;
+  onMapped: (response: ExecutionResponse) => void;
+  onCreate: () => void;
+}) {
   const [selected, setSelected] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-  const queryClient = useQueryClient();
-  const { operations } = useOperations(client);
-  const createAction = findConnectionCreateOperation(operations);
   const connections = useQuery({
     queryKey: ["profile-opentelemetry-connections"],
     enabled: pending != null,
@@ -190,86 +225,127 @@ function ProfileConnectionMappingDialogs({
   };
 
   return (
-    <>
-      <Modal
-        open={pending != null}
-        onClose={onClose}
-        title="Connect trace profile"
-        subtitle={
-          pending
-            ? `${pending.required.profile} inherits its trace backend from ${pending.required.mappingProfile}.`
-            : undefined
-        }
-        footer={
-          <div className="flex items-center justify-end gap-2">
-            {error ? <span className="mr-auto text-sm text-red-600">{error}</span> : null}
-            <Button variant="ghost" disabled={saving} onClick={onClose}>
-              Cancel
+    <Modal
+      open={pending != null}
+      onClose={onClose}
+      title="Connect trace profile"
+      subtitle={
+        pending
+          ? `${pending.required.profile} inherits its trace backend from ${pending.required.mappingProfile}.`
+          : undefined
+      }
+      footer={
+        <div className="flex items-center justify-end gap-2">
+          {error ? <span className="mr-auto text-sm text-red-600">{error}</span> : null}
+          <Button variant="ghost" disabled={saving} onClick={onClose}>
+            Cancel
+          </Button>
+          {connections.isError ? (
+            <Button onClick={() => void connections.refetch()}>Retry</Button>
+          ) : options.length === 0 && !connections.isLoading ? (
+            <Button disabled={!createAction} onClick={onCreate}>
+              Add OpenTelemetry Connection
             </Button>
-            {connections.isError ? (
-              <Button onClick={() => void connections.refetch()}>Retry</Button>
-            ) : options.length === 0 && !connections.isLoading ? (
-              <Button disabled={!createAction} onClick={onCreate}>
-                Add OpenTelemetry Connection
-              </Button>
-            ) : (
-              <Button disabled={!selected || saving} onClick={() => void mapAndRetry()}>
-                {saving ? "Connecting…" : "Connect and run"}
-              </Button>
-            )}
-          </div>
-        }
-      >
-        {connections.isLoading ? (
-          <div className="text-sm text-muted-foreground">Loading OpenTelemetry connections…</div>
-        ) : connections.isError ? (
-          <div className="text-sm text-red-600">
-            Unable to load OpenTelemetry connections:{" "}
-            {connections.error instanceof Error ? connections.error.message : String(connections.error)}
-          </div>
-        ) : options.length > 0 ? (
-          <Select
-            value={selected}
-            onChange={(event) => setSelected(event.target.value)}
-            options={options}
-            placeholder="Select an OpenTelemetry connection"
-          />
-        ) : (
-          <div className="text-sm text-muted-foreground">
-            No OpenTelemetry connection exists yet. Add one backed by an OpenSearch connection,
-            then run the profile again.
-          </div>
-        )}
-      </Modal>
-
-      {createOpen && createAction ? (
-        <SchemaActionForm
-          client={client}
-          action={createAction}
-          initialValue={{ type: "opentelemetry" }}
-          submitLabel="Save Connection"
-          formPre={connectionFormPre}
-          formPost={connectionFormPost}
-          footerActions={connectionFooterActions}
-          onSuccess={async () => {
-            onCreateClose();
-            await queryClient.invalidateQueries({ queryKey: ["operation-list"] });
-          }}
-          renderLayout={({ body, footer }) => (
-            <Modal
-              open
-              onClose={onCreateClose}
-              title="Add OpenTelemetry Connection"
-              size="lg"
-              {...(footer ? { footer } : {})}
-            >
-              {body}
-            </Modal>
+          ) : (
+            <Button disabled={!selected || saving} onClick={() => void mapAndRetry()}>
+              {saving ? "Connecting…" : "Connect and run"}
+            </Button>
           )}
-          fallback={<div className="text-sm text-muted-foreground">Connection form unavailable.</div>}
-        />
-      ) : null}
-    </>
+        </div>
+      }
+    >
+      <ConnectionChoice
+        isLoading={connections.isLoading}
+        error={connections.isError ? connections.error : undefined}
+        isError={connections.isError}
+        options={options}
+        selected={selected}
+        onSelect={setSelected}
+      />
+    </Modal>
+  );
+}
+
+function ConnectionChoice({
+  isLoading,
+  isError,
+  error,
+  options,
+  selected,
+  onSelect,
+}: {
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+  options: Array<{ value: string; label: string }>;
+  selected: string;
+  onSelect: (value: string) => void;
+}) {
+  if (isLoading) {
+    return <div className="text-sm text-muted-foreground">Loading OpenTelemetry connections…</div>;
+  }
+  if (isError) {
+    return (
+      <div className="text-sm text-red-600">
+        Unable to load OpenTelemetry connections:{" "}
+        {error instanceof Error ? error.message : String(error)}
+      </div>
+    );
+  }
+  if (options.length === 0) {
+    return (
+      <div className="text-sm text-muted-foreground">
+        No OpenTelemetry connection exists yet. Add one backed by an OpenSearch connection,
+        then run the profile again.
+      </div>
+    );
+  }
+  return (
+    <Select
+      value={selected}
+      onChange={(event) => onSelect(event.target.value)}
+      options={options}
+      placeholder="Select an OpenTelemetry connection"
+    />
+  );
+}
+
+function AddConnectionForm({
+  client,
+  action,
+  onClose,
+}: {
+  client: SharedOperationsApiClient;
+  action: ResolvedOperation;
+  onClose: () => void;
+}) {
+  const queryClient = useQueryClient();
+  return (
+    <SchemaActionForm
+      client={client}
+      action={action}
+      initialValue={{ type: "opentelemetry" }}
+      submitLabel="Save Connection"
+      formPre={connectionFormPre}
+      formPost={connectionFormPost}
+      footerActions={connectionFooterActions}
+      onSuccess={async () => {
+        onClose();
+        await queryClient.invalidateQueries({ queryKey: ["operation-list"] });
+      }}
+      renderLayout={({ body, footer }) => (
+        <Modal
+          open
+          onClose={onClose}
+          title="Add OpenTelemetry Connection"
+          size="lg"
+          {...(footer ? { footer } : {})}
+        >
+          {body}
+        </Modal>
+      )}
+      fallback={<div className="text-sm text-muted-foreground">Connection form unavailable.</div>}
+    />
   );
 }
 

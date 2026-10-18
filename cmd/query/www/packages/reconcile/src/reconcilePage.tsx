@@ -14,59 +14,42 @@
  * back from the server rather than restated in the query string.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useState } from "react";
 import {
   Button,
   Icon,
-  useOperations,
   type OperationsApiClient,
   type ResolvedOperation,
 } from "@flanksource/clicky-ui";
 import { UiArrowLeft } from "@flanksource/clicky-ui/icons";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { findProfileUpdateOperation } from "./profileUpdateOperation";
 import { ReconcileBench, type BenchState } from "./reconcileBench";
 import { ReconcileResults } from "./reconcileResults";
 import {
   benchQueryForConfig,
-  celForPairings,
   classifySnapshotError,
-  filterFlagValue,
   findProfileRunOperation,
-  findReconcileAction,
-  findReconcileMaterializeAction,
-  findReconcileSnapshotAction,
   initialLane,
-  initialReconcileFilters,
-  loadReconcileSnapshot,
-  parseReconcileQuery,
-  parseResultsView,
   reconcileQueryString,
-  reconcileSnapshotQueryKey,
   RESULTS_PAGE_SIZE,
   resultsViewQueryString,
-  storedConfig,
   type ProfileDocument,
   type ReconcileQuery,
   type ReconcileSnapshot,
   type ResultsView,
 } from "./reconcileModel";
-
-/** Bench state seeded from the profile's stored reconcile, then from the URL. */
-function initialState(document: ProfileDocument | undefined, search: string): BenchState {
-  const query = parseReconcileQuery(search);
-  const stored = document?.reconcile;
-  const cel = query.cel ?? stored?.key?.cel ?? "";
-  return {
-    dest: query.dest ?? stored?.dest ?? "",
-    pairings: [],
-    mode: cel ? "cel" : "mapped",
-    cel,
-    snapshotAge: query.snapshotAge ?? "1h",
-    ...initialReconcileFilters(stored, query),
-  };
-}
+import {
+  benchKeyExpression,
+  useBenchState,
+  useDestinations,
+  useReconcileOperations,
+  useReconcileProfiles,
+  useReconcileSnapshot,
+  useResultsView,
+  useRunReconcile,
+  useSaveReconcile,
+  type ReconcileOperations,
+} from "./reconcileSession";
 
 export interface ReconcileNavigation {
   search: string;
@@ -88,82 +71,62 @@ export interface ReconcilePageProps {
   onProfileSaved?: () => void | Promise<void>;
 }
 
-/** Mount under a QueryClientProvider scoped to one server and authentication context. */
-export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryKey, navigation, onProfileSaved }: ReconcilePageProps) {
-  const { view, search } = navigation;
-  const queryClient = useQueryClient();
-  const { operations, isLoading: operationsLoading } = useOperations(client);
-  const updateAction = findProfileUpdateOperation(operations);
-  const reconcileAction = findReconcileAction(operations);
-  const materializeAction = findReconcileMaterializeAction(operations);
-  const snapshotAction = findReconcileSnapshotAction(operations);
+type Blocked = { message: string; error: boolean };
 
-  // One list serves the source document, the destination picker and the
-  // destination's fields — and it is the endpoint that returns documents rather
-  // than executing anything.
-  const profiles = useQuery({ queryKey: profilesQueryKey, queryFn: loadProfiles });
-  const sourceDocument = useMemo(
-    () => (profiles.data ?? []).find((document) => document.profile === sourceName),
-    [profiles.data, sourceName],
-  );
+/** Why the page cannot show the bench or the results yet, or null when it can. */
+function reconcileBlocked({
+  profiles,
+  sourceDocument,
+  sourceName,
+  ops,
+}: {
+  profiles: { isError: boolean; isLoading: boolean; error: unknown };
+  sourceDocument: ProfileDocument | undefined;
+  sourceName: string;
+  ops: ReconcileOperations;
+}): Blocked | null {
+  // The failure branch comes first: a profile that fails to load leaves the
+  // bench state null, which would otherwise read as "still loading" forever.
+  if (profiles.isError || (!profiles.isLoading && sourceDocument == null)) {
+    return {
+      error: true,
+      message: profiles.error instanceof Error
+        ? profiles.error.message
+        : `No stored profile matches ${sourceName}`,
+    };
+  }
+  if (!ops.operationsLoading && !ops.reconcileAction) {
+    return { error: true, message: "Reconciling is unavailable — the profiles reconcile action was not found" };
+  }
+  if (!ops.operationsLoading && !ops.materializeAction) {
+    return { error: true, message: "Exporting is unavailable — the reconcile materialize action was not found" };
+  }
+  if (!ops.operationsLoading && !ops.snapshotAction) {
+    return { error: true, message: "Reading a reconciliation is unavailable — the reconcile-snapshot action was not found" };
+  }
+  if (ops.operationsLoading || profiles.isLoading) {
+    return { error: false, message: "Loading profile…" };
+  }
+  return null;
+}
 
-  const [state, setState] = useState<BenchState | null>(null);
-  // The last run this tab produced, so the bench can offer a way back to it.
-  // The snapshot itself lives in the query cache, not here — one source of
-  // truth for both a fresh run and a cold load.
-  const [lastRunId, setLastRunId] = useState("");
-  // Keep immediate interactions responsive even when a host router publishes
-  // query-string changes asynchronously; location updates also restore Back.
-  const [resultsView, setResultsView] = useState<ResultsView | null>(null);
-
-  const snapshotId = view === "results" ? navigation.snapshotId ?? "" : lastRunId;
-  const snapshot = useQuery({
-    queryKey: reconcileSnapshotQueryKey(snapshotId),
-    queryFn: () => loadReconcileSnapshot(client, snapshotAction!, sourceName, snapshotId),
-    enabled: snapshotId !== "" && snapshotAction != null && sourceName !== "",
-    // A snapshot is immutable for its whole life, so a cache hit is never stale
-    // and a run navigating to its own results never refetches.
-    staleTime: Infinity,
-    retry: 0,
-  });
-
-  // The bench opens on what the profile already stores, so a saved reconcile
-  // runs without being retyped. Gated on the bench route: on a cold results
-  // load this would otherwise fill the bench from the profile's stored block a
-  // tick later and quietly outrank the snapshot's own config.
-  useEffect(() => {
-    if (view !== "bench" || state != null || sourceDocument == null) return;
-    setState(initialState(sourceDocument, search));
-  }, [sourceDocument, state, view, search]);
-
-  // The lane a link asks for, falling back to the one the run would open on —
-  // which is only knowable once the snapshot has been read.
-  useEffect(() => {
-    if (view !== "results" || snapshot.data == null) return;
-    setResultsView(parseResultsView(search, initialLane(snapshot.data.stats)));
-  }, [snapshot.data, search, view]);
-
-  const destDocument = useMemo(
-    () => (profiles.data ?? []).find((document) => document.profile === state?.dest),
-    [profiles.data, state?.dest],
-  );
-  const destNames = useMemo(() => {
-    const names: string[] = [];
-    for (const document of profiles.data ?? []) {
-      const name = document.profile ?? "";
-      if (name !== "" && name !== sourceName) names.push(name);
-    }
-    return names.sort();
-  }, [profiles.data, sourceName]);
-
-  const keyExpression = state == null ? "" : state.mode === "cel" ? state.cel : celForPairings(state.pairings);
-  const sourceRunOperation = findProfileRunOperation(operations, sourceName);
-  const destRunOperation = findProfileRunOperation(operations, state?.dest ?? "");
-
-  // A live bench wins; otherwise the join the snapshot recorded, so Back
-  // reopens the run that was read rather than whatever the profile stores now.
-  // With neither — an expired snapshot — the bench falls back to the profile's
-  // own `reconcile:` block.
+/**
+ * A live bench wins; otherwise the join the snapshot recorded, so Back
+ * reopens the run that was read rather than whatever the profile stores now.
+ * With neither — an expired snapshot — the bench falls back to the profile's
+ * own `reconcile:` block.
+ */
+function benchHrefFor({
+  benchHref,
+  state,
+  keyExpression,
+  snapshot,
+}: {
+  benchHref: string;
+  state: BenchState | null;
+  keyExpression: string;
+  snapshot: ReconcileSnapshot | undefined;
+}): string {
   const benchQuery: ReconcileQuery = state
     ? {
         dest: state.dest,
@@ -172,12 +135,36 @@ export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryK
         sourceFilters: state.sourceFilters,
         destFilters: state.destFilters,
       }
-    : benchQueryForConfig(snapshot.data?.reconcile?.config, snapshot.data?.idle_age);
-  const benchHref = withQuery(
-    navigation.benchHref,
-    reconcileQueryString(benchQuery),
-    ["dest", "cel", "snapshot-age", "source-filter", "dest-filter"],
-  );
+    : benchQueryForConfig(snapshot?.reconcile?.config, snapshot?.idle_age);
+  return withQuery(benchHref, reconcileQueryString(benchQuery), [
+    "dest",
+    "cel",
+    "snapshot-age",
+    "source-filter",
+    "dest-filter",
+  ]);
+}
+
+/** Mount under a QueryClientProvider scoped to one server and authentication context. */
+export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryKey, navigation, onProfileSaved }: ReconcilePageProps) {
+  const { view, search } = navigation;
+  const ops = useReconcileOperations(client);
+  const { profiles, sourceDocument } = useReconcileProfiles({ profilesQueryKey, loadProfiles, sourceName });
+  const [state, setState] = useBenchState({ view, sourceDocument, search });
+  // The last run this tab produced, so the bench can offer a way back to it.
+  // The snapshot itself lives in the query cache, not here — one source of
+  // truth for both a fresh run and a cold load.
+  const [lastRunId, setLastRunId] = useState("");
+  const snapshotId = view === "results" ? navigation.snapshotId ?? "" : lastRunId;
+  const snapshot = useReconcileSnapshot({ client, snapshotAction: ops.snapshotAction, sourceName, snapshotId });
+  const [resultsView, setResultsView] = useResultsView({ view, snapshot: snapshot.data, search });
+  const { destDocument, destNames } = useDestinations({
+    documents: profiles.data,
+    sourceName,
+    destName: state?.dest,
+  });
+  const keyExpression = benchKeyExpression(state);
+
   const showResults = (next: ResultsView, id: string, replace: boolean) => {
     setResultsView(next);
     navigation.navigate(withQuery(
@@ -187,136 +174,53 @@ export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryK
     ), { replace });
   };
 
-  const run = useMutation({
-    mutationFn: async (): Promise<ReconcileSnapshot> => {
-      if (!reconcileAction) throw new Error("The reconcile action is unavailable");
-      if (!state) throw new Error("The bench is still loading");
-      const idParam = reconcileAction.operation["x-clicky"]?.idParam ?? "id";
-      const params: Record<string, string> = {
-        [idParam]: sourceName,
-        dest: state.dest,
-        "key-cel": keyExpression,
-      };
-      if (state.snapshotAge.trim()) params["snapshot-age"] = state.snapshotAge.trim();
-      const sourceFilters = filterFlagValue(state.sourceFilters);
-      const destFilters = filterFlagValue(state.destFilters);
-      if (sourceFilters) params["source-filter"] = sourceFilters;
-      if (destFilters) params["dest-filter"] = destFilters;
-
-      const response = await client.executeCommand(reconcileAction.path, reconcileAction.method, params, {
-        Accept: "application/json",
-      });
-      if (!response.success) {
-        throw new Error(response.error ?? response.message ?? "The reconcile failed");
-      }
-      const parsed = response.parsed as Partial<ReconcileSnapshot> | undefined;
-      if (!parsed || typeof parsed.id !== "string" || typeof parsed.profile !== "string" || !Array.isArray(parsed.columns)) {
-        throw new Error("The reconcile returned no snapshot profile");
-      }
-      return parsed as ReconcileSnapshot;
-    },
-    onSuccess: async (reconciled) => {
-      // Seeded before navigating, so the results page renders from cache on its
-      // first paint instead of re-reading a snapshot already in hand.
-      queryClient.setQueryData(reconcileSnapshotQueryKey(reconciled.id), reconciled);
-      setLastRunId(reconciled.id);
-      // The engine resolved both profile documents server-side, so refresh the
-      // cached copies the results view renders against — otherwise a stale
-      // definition would describe a run that used a newer one.
-      await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
-      // Pushed rather than replaced: the bench is where Back goes.
+  const run = useRunReconcile({
+    client,
+    reconcileAction: ops.reconcileAction,
+    sourceName,
+    state,
+    keyExpression,
+    profilesQueryKey,
+    onSeeded: (reconciled) => setLastRunId(reconciled.id),
+    // Pushed rather than replaced: the bench is where Back goes.
+    onReconciled: (reconciled) =>
       showResults(
         { lane: initialLane(reconciled.stats), page: 0, pageSize: RESULTS_PAGE_SIZE },
         reconciled.id,
         false,
-      );
-    },
+      ),
+  });
+  const save = useSaveReconcile({
+    client,
+    updateAction: ops.updateAction,
+    sourceDocument,
+    sourceName,
+    state,
+    keyExpression,
+    profilesQueryKey,
+    onProfileSaved,
   });
 
-  const save = useMutation({
-    mutationFn: async () => {
-      if (!updateAction) throw new Error("Profile updates are unavailable");
-      if (!state || !sourceDocument) throw new Error("The bench is still loading");
-      if (!client.submitForm) throw new Error("Profile updates are unavailable");
-      const document = sourceDocument;
-      const idParam = updateAction.operation["x-clicky"]?.idParam ?? "id";
-      const response = await client.submitForm(
-        updateAction.path,
-        updateAction.method,
-        {
-          ...document,
-          reconcile: storedConfig({
-            dest: state.dest,
-            cel: keyExpression,
-            sourceFilters: state.sourceFilters,
-            destFilters: state.destFilters,
-          }),
-          [idParam]: sourceName,
-        },
-        { Accept: "application/json+clicky" },
-      );
-      if (!response.success) {
-        throw new Error(response.error ?? response.message ?? "Saving the reconcile failed");
-      }
-    },
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: profilesQueryKey });
-      await onProfileSaved?.();
-    },
-  });
-
-  // The failure branch comes first: a profile that fails to load leaves the
-  // bench state null, which would otherwise read as "still loading" forever.
-  if (profiles.isError || (!profiles.isLoading && sourceDocument == null)) {
-    return (
-      <Message error>
-        {profiles.error instanceof Error
-          ? profiles.error.message
-          : `No stored profile matches ${sourceName}`}
-      </Message>
-    );
-  }
-  if (!operationsLoading && !reconcileAction) {
-    return <Message error>Reconciling is unavailable — the profiles reconcile action was not found</Message>;
-  }
-  if (!operationsLoading && !materializeAction) {
-    return <Message error>Exporting is unavailable — the reconcile materialize action was not found</Message>;
-  }
-  if (!operationsLoading && !snapshotAction) {
-    return <Message error>Reading a reconciliation is unavailable — the reconcile-snapshot action was not found</Message>;
-  }
-  if (operationsLoading || profiles.isLoading) {
-    return <Message>Loading profile…</Message>;
-  }
-
-  const failure = [run.error, save.error, profiles.error].find((error): error is Error => error instanceof Error);
+  const blocked = reconcileBlocked({ profiles, sourceDocument, sourceName, ops });
+  if (blocked) return <Message error={blocked.error}>{blocked.message}</Message>;
 
   if (view === "results") {
     return (
-      <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4">
-        {/* Above every branch below, so Back works even when the run cannot be
-            read — an expired snapshot still needs a way out. */}
-        <PageHeader
-          onBack={() => navigation.navigate(benchHref)}
-          backLabel="Back to bench"
-          title={
-            snapshot.data
-              ? `${snapshot.data.source} → ${snapshot.data.dest}`
-              : `Reconcile ${sourceName}`
-          }
-          description="What crossed, what didn't, and how late it was."
-        />
-        <ResultsBody
-          snapshot={snapshot.data}
-          loading={snapshot.isLoading}
-          error={snapshot.error}
-          view={resultsView}
-          onView={(next) => showResults(next, snapshotId, true)}
-          client={client}
-          materializeAction={materializeAction!}
-          virtualProfileHref={navigation.virtualProfileHref}
-        />
-      </div>
+      <ResultsPage
+        sourceName={sourceName}
+        snapshot={snapshot}
+        resultsView={resultsView}
+        onView={(next) => showResults(next, snapshotId, true)}
+        onBack={() => navigation.navigate(benchHrefFor({
+          benchHref: navigation.benchHref,
+          state,
+          keyExpression,
+          snapshot: snapshot.data,
+        }))}
+        client={client}
+        materializeAction={ops.materializeAction!}
+        virtualProfileHref={navigation.virtualProfileHref}
+      />
     );
   }
 
@@ -324,6 +228,7 @@ export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryK
     return <Message>Loading profile…</Message>;
   }
 
+  const failure = [run.error, save.error, profiles.error].find((error): error is Error => error instanceof Error);
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4">
       <PageHeader
@@ -343,8 +248,8 @@ export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryK
         dest={destDocument}
         destNames={destNames}
         client={client}
-        sourceOperation={sourceRunOperation}
-        destOperation={destRunOperation}
+        sourceOperation={findProfileRunOperation(ops.operations, sourceName)}
+        destOperation={findProfileRunOperation(ops.operations, state.dest)}
         onRun={() => run.mutate()}
         onSave={() => save.mutate()}
         running={run.isPending}
@@ -355,10 +260,8 @@ export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryK
       {/* The bench still knows the run it produced, so returning to it does not
           strand the snapshot behind a re-run. Editing the bench clears it. */}
       {lastRunId !== "" && snapshot.data && (
-        <Button
-          variant="outline"
-          size="sm"
-          className="self-start"
+        <ViewResultsButton
+          snapshot={snapshot.data}
           onClick={() =>
             showResults(
               resultsView ?? { lane: initialLane(snapshot.data!.stats), page: 0, pageSize: RESULTS_PAGE_SIZE },
@@ -366,10 +269,63 @@ export function ReconcilePage({ client, sourceName, loadProfiles, profilesQueryK
               false,
             )
           }
-        >
-          View results ({snapshot.data.row_count} rows)
-        </Button>
+        />
       )}
+    </div>
+  );
+}
+
+function ViewResultsButton({ snapshot, onClick }: { snapshot: ReconcileSnapshot; onClick: () => void }) {
+  return (
+    <Button variant="outline" size="sm" className="self-start" onClick={onClick}>
+      View results ({snapshot.row_count} rows)
+    </Button>
+  );
+}
+
+function ResultsPage({
+  sourceName,
+  snapshot,
+  resultsView,
+  onView,
+  onBack,
+  client,
+  materializeAction,
+  virtualProfileHref,
+}: {
+  sourceName: string;
+  snapshot: { data: ReconcileSnapshot | undefined; isLoading: boolean; error: unknown };
+  resultsView: ResultsView | null;
+  onView: (view: ResultsView) => void;
+  onBack: () => void;
+  client: OperationsApiClient;
+  materializeAction: ResolvedOperation;
+  virtualProfileHref: ReconcileNavigation["virtualProfileHref"];
+}) {
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4">
+      {/* Above every branch below, so Back works even when the run cannot be
+          read — an expired snapshot still needs a way out. */}
+      <PageHeader
+        onBack={onBack}
+        backLabel="Back to bench"
+        title={
+          snapshot.data
+            ? `${snapshot.data.source} → ${snapshot.data.dest}`
+            : `Reconcile ${sourceName}`
+        }
+        description="What crossed, what didn't, and how late it was."
+      />
+      <ResultsBody
+        snapshot={snapshot.data}
+        loading={snapshot.isLoading}
+        error={snapshot.error}
+        view={resultsView}
+        onView={onView}
+        client={client}
+        materializeAction={materializeAction}
+        virtualProfileHref={virtualProfileHref}
+      />
     </div>
   );
 }

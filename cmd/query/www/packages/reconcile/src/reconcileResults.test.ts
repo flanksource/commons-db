@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   prepareSnapshotDownload,
   snapshotPageParams,
-} from "./reconcileResults";
+} from "./reconcileSnapshotQuery";
 import type { ReconcileSnapshot } from "./reconcileModel";
 
 const snapshot = {
