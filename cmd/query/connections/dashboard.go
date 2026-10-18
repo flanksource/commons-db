@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,9 +23,12 @@ const (
 type ProfileProvider func(context.Context) ([]query.Profile, error)
 
 type connectionDashboardHandlerOptions struct {
-	Prefix   string
+	Prefix string
+	// Context carries the connection store; a context without a database means
+	// the host has none and the dashboard lists only the Virtual connections.
 	Context  dbcontext.Context
 	Profiles ProfileProvider
+	Virtual  VirtualConnectionProvider
 	Next     http.Handler
 }
 
@@ -32,12 +36,15 @@ type connectionDashboardHandler struct {
 	path     string
 	ctx      dbcontext.Context
 	profiles ProfileProvider
+	virtual  VirtualConnectionProvider
 	next     http.Handler
 }
 
 type connectionDashboardResponse struct {
 	Connections []connectionDashboardItem `json:"connections"`
 	GeneratedAt time.Time                 `json:"generatedAt"`
+	// ReadOnly reports that there is no connection store, so nothing can be added.
+	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
 type connectionDashboardItem struct {
@@ -54,6 +61,7 @@ type connectionDashboardItem struct {
 	Health       *connectionDashboardHealth `json:"health,omitempty"`
 	ProfileCount int                        `json:"profileCount"`
 	UpdatedAt    time.Time                  `json:"updatedAt"`
+	ReadOnly     bool                       `json:"readOnly,omitempty"`
 }
 
 type dashboardEndpoint struct {
@@ -74,6 +82,7 @@ func newConnectionDashboardHandler(options connectionDashboardHandlerOptions) ht
 		path:     strings.TrimRight(options.Prefix, "/") + "/connections/dashboard",
 		ctx:      options.Context,
 		profiles: options.Profiles,
+		virtual:  options.Virtual,
 		next:     options.Next,
 	}
 }
@@ -103,25 +112,36 @@ func (h *connectionDashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 	writeJSON(w, connectionDashboardResponse{
 		Connections: dashboardItems(connections, profileUsageCounts(profiles)),
 		GeneratedAt: time.Now().UTC(),
+		ReadOnly:    h.ctx.DB() == nil,
 	})
 }
 
 func (h *connectionDashboardHandler) listConnections(ctx context.Context, options ListOptions) ([]*models.Connection, error) {
-	query := h.ctx.DB().WithContext(ctx).Model(&models.Connection{})
-	if types := connectionTypeFilter(options); len(types) > 0 {
-		query = query.Where("type IN ?", types)
-	}
 	var connections []*models.Connection
-	if err := query.Order("name").Find(&connections).Error; err != nil {
-		return nil, fmt.Errorf("list dashboard connections: %w", err)
+	if db := h.ctx.DB(); db != nil {
+		query := db.WithContext(ctx).Model(&models.Connection{})
+		if types := connectionTypeFilter(options); len(types) > 0 {
+			query = query.Where("type IN ?", types)
+		}
+		if err := query.Order("name").Find(&connections).Error; err != nil {
+			return nil, fmt.Errorf("list dashboard connections: %w", err)
+		}
+	}
+	virtual, err := virtualConnections(h.virtual, options)
+	if err != nil {
+		return nil, err
+	}
+	if len(virtual) > 0 {
+		connections = append(connections, virtual...)
+		slices.SortStableFunc(connections, func(a, b *models.Connection) int { return strings.Compare(a.Name, b.Name) })
 	}
 	return connections, nil
 }
 
-// dashboardItems builds the inventory from the DB rows alone. It performs no
-// network I/O and no secret hydration: health is attached only where a probe
-// already ran, so listing a fleet of unreachable connections is as fast as
-// listing a healthy one.
+// dashboardItems builds the inventory from the stored and virtual connections
+// as they are held. It performs no network I/O and no secret hydration: health
+// is attached only where a probe already ran, so listing a fleet of unreachable
+// connections is as fast as listing a healthy one.
 func dashboardItems(connections []*models.Connection, usage map[string]int) []connectionDashboardItem {
 	items := make([]connectionDashboardItem, len(connections))
 	for index, connection := range connections {
@@ -132,6 +152,7 @@ func dashboardItems(connections []*models.Connection, usage map[string]int) []co
 			InlineCredential: hasInlineConnectionCredential(connection.URL),
 			InsecureTLS:      connection.InsecureTLS,
 			ProfileCount:     dashboardProfileCount(connection, usage), UpdatedAt: connection.UpdatedAt,
+			ReadOnly: connection.ReadOnly || connection.Virtual,
 		}
 		if cached, ok := cachedConnectionHealth(connection.ID.String(), connection.UpdatedAt); ok {
 			items[index].Health = healthSummary(cached)
@@ -278,12 +299,14 @@ func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 		"type": {Type: "string"}, "endpoint": {Type: "object"}, "secretCount": {Type: "integer"},
 		"inlineCredential": {Type: "boolean"}, "insecureTLS": {Type: "boolean"},
 		"health": {Type: "object"}, "profileCount": {Type: "integer"},
-		"updatedAt": {Type: "string", Format: "date-time"},
+		"updatedAt": {Type: "string", Format: "date-time"}, "readOnly": {Type: "boolean"},
 	}}
 	spec.Paths[connectionDashboardPath] = rpc.OpenAPIPath{"get": {
 		Tags: []string{"Connections"}, Summary: "List connection inventory",
 		Description: "Returns the profile-aware connection fleet for the namespace-lane dashboard. " +
-			"Reads the database only — health is attached only where a prior check is still cached.",
+			"Reads the connection store and the host's virtual connections only — health is attached only " +
+			"where a prior check is still cached. A row is readOnly when it is virtual or read-only; the " +
+			"response is readOnly when there is no connection store.",
 		OperationID: "listConnectionInventory",
 		Parameters: []rpc.OpenAPIParameter{
 			{Name: "type", In: "query", Schema: &rpc.OpenAPISchema{Type: "string"}},
@@ -295,6 +318,7 @@ func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 				Type: "object", Properties: map[string]*rpc.OpenAPISchema{
 					"connections": {Type: "array", Items: item},
 					"generatedAt": {Type: "string", Format: "date-time"},
+					"readOnly":    {Type: "boolean"},
 				},
 			}}},
 		}},

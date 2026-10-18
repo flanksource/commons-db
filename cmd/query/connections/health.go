@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -231,12 +232,13 @@ func healthSummary(result connectionHealthResult) *connectionDashboardHealth {
 // opt-in trigger. Listing connections never probes; this is the only batch entry
 // point, and the connection info header is the only single-connection one.
 type connectionHealthHandler struct {
-	path string
-	ctx  dbcontext.Context
-	next http.Handler
+	path    string
+	ctx     dbcontext.Context
+	virtual VirtualConnectionProvider
+	next    http.Handler
 }
 
-func newConnectionHealthHandler(prefix string, ctx dbcontext.Context, next http.Handler) http.Handler {
+func newConnectionHealthHandler(prefix string, ctx dbcontext.Context, next http.Handler) *connectionHealthHandler {
 	return &connectionHealthHandler{
 		path: strings.TrimRight(prefix, "/") + "/connections/health",
 		ctx:  ctx,
@@ -282,7 +284,7 @@ func (h *connectionHealthHandler) ServeHTTP(w http.ResponseWriter, r *http.Reque
 		http.Error(w, fmt.Sprintf("ids exceeds the %d connection batch limit", maxHealthBatch), http.StatusBadRequest)
 		return
 	}
-	connections, err := listConnectionsByIDs(h.ctx.DB().WithContext(r.Context()), request.IDs)
+	connections, err := h.connectionsByIDs(r.Context(), request.IDs)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -330,13 +332,45 @@ func (h *connectionHealthHandler) probeAll(
 	return items
 }
 
-// listConnectionsByIDs fails fast on an unknown id: the UI always sources ids
-// from the inventory response, so a miss is a programming error rather than a
-// condition to paper over.
-func listConnectionsByIDs(db *gorm.DB, ids []string) ([]*models.Connection, error) {
+// connectionsByIDs answers each id from the virtual connections first and the
+// store after, so a batch may mix both. It fails fast on an unknown id: the UI
+// always sources ids from the inventory response, so a miss is a programming
+// error rather than a condition to paper over.
+func (h *connectionHealthHandler) connectionsByIDs(ctx gocontext.Context, ids []string) ([]*models.Connection, error) {
 	var connections []*models.Connection
-	if err := db.Model(&models.Connection{}).Where("id IN ?", ids).Order("name").Find(&connections).Error; err != nil {
-		return nil, fmt.Errorf("list connections for health check: %w", err)
+	var stored []string
+	for _, id := range ids {
+		virtual, err := resolveVirtualConnection(h.ctx, h.virtual, id)
+		if err != nil {
+			return nil, fmt.Errorf("resolve virtual connection %q: %w", id, err)
+		}
+		if virtual != nil {
+			connections = append(connections, virtual)
+		} else {
+			stored = append(stored, id)
+		}
+	}
+	if len(stored) == 0 {
+		return connections, nil
+	}
+	rows, err := listConnectionsByIDs(ctx, h.ctx.DB(), stored)
+	if err != nil || len(connections) == 0 {
+		return rows, err
+	}
+	connections = append(connections, rows...)
+	slices.SortStableFunc(connections, func(a, b *models.Connection) int { return strings.Compare(a.Name, b.Name) })
+	return connections, nil
+}
+
+// listConnectionsByIDs reads the stored connections for ids; a nil db means the
+// host has no store, so every id is unknown.
+func listConnectionsByIDs(ctx gocontext.Context, db *gorm.DB, ids []string) ([]*models.Connection, error) {
+	var connections []*models.Connection
+	if db != nil {
+		if err := db.WithContext(ctx).Model(&models.Connection{}).Where("id IN ?", ids).Order("name").
+			Find(&connections).Error; err != nil {
+			return nil, fmt.Errorf("list connections for health check: %w", err)
+		}
 	}
 	found := make(map[string]struct{}, len(connections))
 	for _, connection := range connections {

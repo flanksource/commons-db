@@ -28,6 +28,7 @@ import (
 type connectionBrowserHandler struct {
 	prefix           string
 	ctx              dbcontext.Context
+	virtual          VirtualConnectionProvider
 	next             http.Handler
 	kubernetesClient func(context.Context, *models.Connection) (kubernetes.Interface, error)
 	openSQLClient    func(context.Context, dbconnection.SQLConnection) (*sql.DB, error)
@@ -205,7 +206,7 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	tail := strings.TrimPrefix(resource, "browser")
-	conn, err := findConnectionMust(h.ctx, id)
+	conn, err := h.hydratedConnection(id)
 	if err != nil {
 		status := http.StatusNotFound
 		if errors.Is(err, dbcontext.ErrConnectionExpired) {
@@ -245,6 +246,24 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	default:
 		h.next.ServeHTTP(w, r)
 	}
+}
+
+// hydratedConnection resolves a virtual connection from the host's provider
+// before the context's own resolution, so a host whose catalog is virtual needs
+// no context-level connection resolver to browse it.
+func (h *connectionBrowserHandler) hydratedConnection(id string) (*models.Connection, error) {
+	virtual, err := resolveVirtualConnection(h.ctx, h.virtual, id)
+	if err != nil {
+		return nil, fmt.Errorf("connection %q not found: %w", id, err)
+	}
+	if virtual == nil {
+		return findConnectionMust(h.ctx, id)
+	}
+	resolved, err := dbcontext.HydrateConnection(h.ctx, cloneConnection(virtual))
+	if err != nil {
+		return nil, fmt.Errorf("resolve connection %q: %s", virtual.Name, sanitizeConnectionError(err, virtual))
+	}
+	return resolved, nil
 }
 
 func findConnectionMust(ctx dbcontext.Context, id string) (*models.Connection, error) {

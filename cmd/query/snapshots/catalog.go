@@ -76,7 +76,7 @@ func (m *Manager) IsVirtual(name string) bool {
 	return found || wasVirtual
 }
 
-func (m *Manager) ListConnections() []*models.Connection {
+func (m *Manager) ListConnections() ([]*models.Connection, error) {
 	m.prune()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -87,7 +87,7 @@ func (m *Manager) ListConnections() []*models.Connection {
 		connections = append(connections, &connection)
 	}
 	sort.Slice(connections, func(i, j int) bool { return connections[i].Name < connections[j].Name })
-	return connections
+	return connections, nil
 }
 
 func (m *Manager) ResolveConnection(_ dbcontext.Context, reference string) (*models.Connection, error) {

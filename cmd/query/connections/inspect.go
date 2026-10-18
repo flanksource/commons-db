@@ -177,15 +177,11 @@ func (result *ConnectionInspection) Pretty() api.Text {
 }
 
 func (s *Service) Inspect(ctx context.Context, id string, options InspectFlags) (*ConnectionInspection, error) {
-	database, err := s.database()
-	if err != nil {
-		return nil, err
-	}
 	// Resolved before the inspection deadline starts: a secret store can take
 	// several seconds per lookup, and that budget belongs to hydration, not to
 	// the catalog request it precedes.
 	raw, connection, err := s.resolveConnection(resolveConnectionOptions{
-		Context: ctx, Database: database, ID: id, RefreshSecrets: options.Refresh,
+		Context: ctx, ID: id, RefreshSecrets: options.Refresh,
 	})
 	if err != nil {
 		return nil, err

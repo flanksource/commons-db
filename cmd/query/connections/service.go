@@ -24,7 +24,9 @@ type ContextProvider func() dbcontext.Context
 type BodyDecoder func(context.Context, map[string]any) (map[string]any, error)
 
 type VirtualConnectionProvider interface {
-	ListConnections() []*models.Connection
+	// ListConnections fails when the host cannot read its catalog, rather than
+	// listing it as empty.
+	ListConnections() ([]*models.Connection, error)
 	// ResolveConnection takes the context for the same reason
 	// dbcontext.ConnectionResolver does: a reference alone does not always
 	// identify a connection, and the same provider answers it here and there.
@@ -32,6 +34,8 @@ type VirtualConnectionProvider interface {
 }
 
 type Options struct {
+	// Database is the connection store. Without one the service serves only the
+	// Virtual connections and refuses every write as read-only.
 	Database   DatabaseProvider
 	Context    ContextProvider
 	DecodeBody BodyDecoder
@@ -49,8 +53,8 @@ type Service struct {
 }
 
 func New(options Options) (*Service, error) {
-	if options.Database == nil {
-		return nil, fmt.Errorf("database provider is required")
+	if options.Database == nil && options.Virtual == nil {
+		return nil, fmt.Errorf("database provider or virtual connection provider is required")
 	}
 	if options.Context == nil {
 		return nil, fmt.Errorf("context provider is required")
@@ -88,29 +92,8 @@ type ListOptions struct {
 // resolves lazily because entities register before the database exists.
 func (s *Service) RegisterClicky() {
 	clicky.NewEntity[*models.Connection, ListOptions, *models.Connection]("connection").
-		List(func(o ListOptions) ([]*models.Connection, error) {
-			db, err := s.database()
-			if err != nil {
-				return nil, err
-			}
-			stored, err := listConnections(db, o)
-			if err != nil {
-				return nil, err
-			}
-			return s.withVirtual(stored, o), nil
-		}).
-		Get(func(id string) (*models.Connection, error) {
-			db, err := s.database()
-			if err != nil {
-				return nil, err
-			}
-			c, err := s.findConnection(db, id)
-			if err != nil {
-				return nil, err
-			}
-			redactConnection(c)
-			return c, nil
-		}).
+		List(s.List).
+		Get(s.Get).
 		CreateWithContext(func(ctx context.Context, body map[string]any) (*models.Connection, error) {
 			return s.Create(ctx, body)
 		}).
@@ -131,40 +114,43 @@ func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	browser := s.browser
 	browser.prefix = strings.TrimRight(prefix, "/")
 	browser.ctx = ctx
-	browser.next = newConnectionActionsHandler(prefix, ctx, next)
+	browser.virtual = s.virtual
+	actions := newConnectionActionsHandler(prefix, ctx, next)
+	actions.virtual = s.virtual
+	browser.next = actions
 	health := newConnectionHealthHandler(prefix, ctx, browser)
+	health.virtual = s.virtual
 	return newConnectionSchemaHandler(browser.prefix, newConnectionDashboardHandler(connectionDashboardHandlerOptions{
-		Prefix: prefix, Context: ctx, Profiles: s.profiles, Next: health,
+		Prefix: prefix, Context: ctx, Profiles: s.profiles, Virtual: s.virtual, Next: health,
 	}))
 }
 
 func (s *Service) List(options ListOptions) ([]*models.Connection, error) {
-	db, err := s.database()
+	db, err := s.optionalStore()
 	if err != nil {
 		return nil, err
 	}
-	stored, err := listConnections(db, options)
-	if err != nil {
-		return nil, err
+	var stored []*models.Connection
+	if db != nil {
+		if stored, err = listConnections(db, options); err != nil {
+			return nil, err
+		}
 	}
-	return s.withVirtual(stored, options), nil
+	return s.withVirtual(stored, options)
 }
 
 func (s *Service) Get(id string) (*models.Connection, error) {
-	db, err := s.database()
+	connection, err := s.findConnection(id)
 	if err != nil {
 		return nil, err
 	}
-	connection, err := s.findConnection(db, id)
-	if err != nil {
-		return nil, err
-	}
+	connection = cloneConnection(connection)
 	redactConnection(connection)
 	return connection, nil
 }
 
 func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Connection, error) {
-	db, err := s.database()
+	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
@@ -176,10 +162,7 @@ func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Conn
 }
 
 func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*models.Connection, error) {
-	if virtual, _ := s.resolveVirtual(id); virtual != nil {
-		return nil, fmt.Errorf("virtual connection %q is read-only", id)
-	}
-	db, err := s.database()
+	db, err := s.writableStore(id)
 	if err != nil {
 		return nil, err
 	}
@@ -196,10 +179,7 @@ func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*
 }
 
 func (s *Service) Delete(id string) error {
-	if virtual, _ := s.resolveVirtual(id); virtual != nil {
-		return fmt.Errorf("virtual connection %q is read-only", id)
-	}
-	db, err := s.database()
+	db, err := s.writableStore(id)
 	if err != nil {
 		return err
 	}
@@ -216,42 +196,104 @@ func (s *Service) Delete(id string) error {
 	return nil
 }
 
-func (s *Service) withVirtual(stored []*models.Connection, options ListOptions) []*models.Connection {
-	if s.virtual == nil {
-		return stored
+// store returns the connection store a write needs, refusing as read-only when
+// the host configured none: its whole catalog is virtual.
+func (s *Service) store() (*gorm.DB, error) {
+	if s.database == nil {
+		return nil, entity.NewStatusError(http.StatusMethodNotAllowed, "read_only",
+			"connections are read-only: no connection store is configured")
 	}
-	types := connectionTypeFilter(options)
-	for _, connection := range s.virtual.ListConnections() {
-		if len(types) > 0 && !slices.Contains(types, connection.Type) {
-			continue
-		}
+	return s.database()
+}
+
+// optionalStore returns the connection store for a read, or nil when the host
+// configured none and only its virtual connections exist.
+func (s *Service) optionalStore() (*gorm.DB, error) {
+	if s.database == nil {
+		return nil, nil
+	}
+	return s.database()
+}
+
+// writableStore refuses a virtual id before it reaches the store: a virtual
+// connection is the host's configuration, never a row this service may change.
+func (s *Service) writableStore(id string) (*gorm.DB, error) {
+	virtual, err := resolveVirtualConnection(s.context(), s.virtual, id)
+	if err != nil {
+		return nil, err
+	}
+	if virtual != nil {
+		return nil, entity.NewStatusErrorf(http.StatusMethodNotAllowed, "read_only", "virtual connection %q is read-only", id)
+	}
+	return s.store()
+}
+
+func (s *Service) withVirtual(stored []*models.Connection, options ListOptions) ([]*models.Connection, error) {
+	virtual, err := virtualConnections(s.virtual, options)
+	if err != nil {
+		return nil, err
+	}
+	for _, connection := range virtual {
+		connection = cloneConnection(connection)
 		redactConnection(connection)
 		stored = append(stored, connection)
 	}
 	slices.SortFunc(stored, func(a, b *models.Connection) int { return strings.Compare(a.Name, b.Name) })
-	return stored
+	return stored, nil
 }
 
-func (s *Service) resolveVirtual(id string) (*models.Connection, error) {
-	if s.virtual == nil {
+// virtualConnections returns the provider's connections that match the list's
+// type filter, as the provider holds them.
+func virtualConnections(provider VirtualConnectionProvider, options ListOptions) ([]*models.Connection, error) {
+	if provider == nil {
 		return nil, nil
 	}
-	return s.virtual.ResolveConnection(s.context(), id)
+	listed, err := provider.ListConnections()
+	if err != nil {
+		return nil, fmt.Errorf("list virtual connections: %w", err)
+	}
+	types := connectionTypeFilter(options)
+	var matched []*models.Connection
+	for _, connection := range listed {
+		if len(types) == 0 || slices.Contains(types, connection.Type) {
+			matched = append(matched, connection)
+		}
+	}
+	return matched, nil
 }
 
-func (s *Service) findConnection(db *gorm.DB, id string) (*models.Connection, error) {
-	if virtual, err := s.resolveVirtual(id); err != nil {
-		return nil, err
-	} else if virtual != nil {
-		return virtual, nil
+func resolveVirtualConnection(ctx dbcontext.Context, provider VirtualConnectionProvider, id string) (*models.Connection, error) {
+	if provider == nil {
+		return nil, nil
+	}
+	return provider.ResolveConnection(ctx, id)
+}
+
+// lookupConnection resolves an id the way every connection surface does: the
+// host's virtual connections first, then the store when there is one (db nil
+// means there is none).
+func lookupConnection(ctx dbcontext.Context, provider VirtualConnectionProvider, db *gorm.DB, id string) (*models.Connection, error) {
+	virtual, err := resolveVirtualConnection(ctx, provider, id)
+	if err != nil || virtual != nil {
+		return virtual, err
+	}
+	if db == nil {
+		return nil, entity.NewStatusErrorf(http.StatusNotFound, "not_found", "connection %q not found", id)
 	}
 	return findConnection(db, id)
 }
 
+func (s *Service) findConnection(id string) (*models.Connection, error) {
+	db, err := s.optionalStore()
+	if err != nil {
+		return nil, err
+	}
+	return lookupConnection(s.context(), s.virtual, db, id)
+}
+
 type resolveConnectionOptions struct {
-	Context  context.Context
-	Database *gorm.DB
-	ID       string
+	Context context.Context
+	ID      string
 	// RefreshSecrets drops the cached env values the connection resolves through,
 	// so a rotated secret is read again instead of being served from the env
 	// cache for the rest of its TTL.
@@ -270,7 +312,7 @@ type resolveConnectionOptions struct {
 // Service.findConnection so a virtual connection resolves from s.virtual rather
 // than requiring a context-level connection resolver.
 func (s *Service) resolveConnection(options resolveConnectionOptions) (*models.Connection, *models.Connection, error) {
-	raw, err := s.findConnection(options.Database, options.ID)
+	raw, err := s.findConnection(options.ID)
 	if err != nil {
 		return nil, nil, err
 	}

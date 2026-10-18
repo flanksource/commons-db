@@ -36,12 +36,8 @@ func (filter inspectDatabaseFilter) Lookup(options *InspectFlags) (map[string]ap
 	if options.context == nil {
 		return nil, fmt.Errorf("connection inspection lookup requires a request context")
 	}
-	database, err := filter.service.database()
-	if err != nil {
-		return nil, err
-	}
 	raw, connection, err := filter.service.resolveConnection(resolveConnectionOptions{
-		Context: options.context, Database: database, ID: options.connectionID, RefreshSecrets: options.Refresh,
+		Context: options.context, ID: options.connectionID, RefreshSecrets: options.Refresh,
 	})
 	if err != nil {
 		return nil, err

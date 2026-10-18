@@ -15,8 +15,8 @@ import (
 // app's snapshot manager does.
 type snapshotProvider struct{ snapshot *models.Connection }
 
-func (p snapshotProvider) ListConnections() []*models.Connection {
-	return []*models.Connection{p.snapshot}
+func (p snapshotProvider) ListConnections() ([]*models.Connection, error) {
+	return []*models.Connection{p.snapshot}, nil
 }
 
 func (p snapshotProvider) ResolveConnection(_ dbcontext.Context, id string) (*models.Connection, error) {
@@ -42,19 +42,19 @@ var _ = Describe("sqlite connections", func() {
 		Expect(stored.Virtual).To(BeFalse())
 	})
 
-	It("keeps a virtual snapshot connection read-only on update and delete", func() {
+	It("refuses update and delete of a virtual snapshot connection with 405 read_only", func() {
 		snapshot := &models.Connection{
 			ID: uuid.New(), Name: "snapshot-orders", Type: models.ConnectionTypeSQLite,
 			URL: "file:orders.db?mode=ro", Virtual: true, ReadOnly: true,
 		}
 		service := newConflictTestService(newConnectionTestDB(nil))
 		service.SetVirtual(snapshotProvider{snapshot: snapshot})
-		readOnly := `virtual connection "snapshot-orders" is read-only`
 
 		_, err := service.Update(context.Background(), snapshot.Name, map[string]any{
 			"name": snapshot.Name, "type": models.ConnectionTypeSQLite, "url": "file:other.db",
 		})
-		Expect(err).To(MatchError(readOnly))
-		Expect(service.Delete(snapshot.Name)).To(MatchError(readOnly))
+		expectReadOnly(err)
+		Expect(err).To(MatchError(ContainSubstring(`virtual connection "snapshot-orders" is read-only`)))
+		expectReadOnly(service.Delete(snapshot.ID.String()))
 	})
 })
