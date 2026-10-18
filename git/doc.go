@@ -13,7 +13,9 @@
 //     request (Cache.Apply), optionally cherry-picking commits onto the base
 //     first (cherrypick.go).
 //   - log.go reads the commits between two refs (Cache.Log, Cache.Compare)
-//     from the mirror; pullrequest.go opens a pull request between two
+//     and one ref's path history with per-file changes (Cache.History) from
+//     the mirror; show.go reads a file at a commit (Cache.Show), with
+//     ErrPathNotFound for a path absent there; pullrequest.go opens a pull request between two
 //     existing branches (Repository.OpenPullRequest).
 //   - ignore.go lists tracked and unignored paths in a local checkout.
 //   - provider*.go and rest.go talk to the hosting provider's REST API.

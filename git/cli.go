@@ -73,8 +73,17 @@ func requireGit(ctx context.Context) error {
 // run executes git and returns its trimmed stdout. A failure names the
 // subcommand and carries git's stderr with URL user info redacted.
 func run(ctx context.Context, c command) (string, error) {
+	out, err := runBytes(ctx, c)
+	// Only trailing whitespace is trimmed: porcelain status lines start with a
+	// significant space.
+	return strings.TrimRight(string(out), " \r\n"), err
+}
+
+// runBytes executes git like run and returns its stdout untouched, for blob
+// content whose trailing whitespace is significant.
+func runBytes(ctx context.Context, c command) ([]byte, error) {
 	if err := requireGit(ctx); err != nil {
-		return "", err
+		return nil, err
 	}
 	cmd := exec.CommandContext(ctx, "git", c.args...)
 	cmd.Dir = c.dir
@@ -88,11 +97,9 @@ func run(ctx context.Context, c command) (string, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s: %w: %s", strings.Join(c.args, " "), err, Redact(strings.TrimSpace(stderr.String())))
+		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(c.args, " "), err, Redact(strings.TrimSpace(stderr.String())))
 	}
-	// Only trailing whitespace is trimmed: porcelain status lines start with a
-	// significant space.
-	return strings.TrimRight(stdout.String(), " \r\n"), nil
+	return stdout.Bytes(), nil
 }
 
 // baseEnv is the process environment minus inherited git steering, with

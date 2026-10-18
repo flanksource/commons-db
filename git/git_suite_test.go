@@ -83,6 +83,7 @@ func newBareRepo(name string) bareRepo {
 
 func writeFixtureFile(dir, name, content string) {
 	GinkgoHelper()
+	Expect(os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755)).To(Succeed())
 	Expect(os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644)).To(Succeed())
 }
 

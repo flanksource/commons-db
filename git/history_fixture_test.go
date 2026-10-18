@@ -26,6 +26,17 @@ func (b bareRepo) commitOn(branch, from, path, content, message string) string {
 	return gitFixture(b.work(), "rev-parse", "HEAD")
 }
 
+// changeOn runs `git change...` (a mv or rm) on branch in the work checkout,
+// commits it, pushes the branch and returns the new commit SHA.
+func (b bareRepo) changeOn(branch, message string, change ...string) string {
+	GinkgoHelper()
+	gitFixture(b.work(), "checkout", "-q", branch)
+	gitFixture(b.work(), change...)
+	gitFixture(b.work(), "commit", "-q", "-m", message)
+	gitFixture(b.work(), "push", "-q", b.Path, branch)
+	return gitFixture(b.work(), "rev-parse", "HEAD")
+}
+
 // mergeInto merges source into branch with a merge commit, pushes branch and
 // returns the merge commit SHA.
 func (b bareRepo) mergeInto(branch, source string) string {

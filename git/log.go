@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Commit is one commit as Cache.Log reads it. Files are the paths it changed
-// against its first parent; a merge commit (len(Parents) > 1) lists none.
+// Commit is one commit as Cache.Log or Cache.History reads it. Files are the
+// paths it changed against its first parent (a rename lists its new path); a
+// merge commit (len(Parents) > 1) lists none. Status and Renames are filled
+// by History only: how each of Files changed, and which renamed from what.
 type Commit struct {
 	SHA      string
 	ShortSHA string
@@ -21,16 +24,49 @@ type Commit struct {
 	Date     time.Time
 	Parents  []string
 	Files    []string
+	Status   map[string]FileStatus
+	Renames  []Rename
+}
+
+// FileStatus is git's --name-status letter for one changed path.
+type FileStatus string
+
+const (
+	FileAdded       FileStatus = "A"
+	FileModified    FileStatus = "M"
+	FileDeleted     FileStatus = "D"
+	FileRenamed     FileStatus = "R"
+	FileCopied      FileStatus = "C"
+	FileTypeChanged FileStatus = "T"
+)
+
+// Rename is a path a commit moved From one name To another.
+type Rename struct {
+	From string
+	To   string
 }
 
 // IsMerge reports whether the commit has more than one parent.
 func (c Commit) IsMerge() bool { return len(c.Parents) > 1 }
 
 // LogOptions configures Cache.Log. Limit > 0 keeps only the newest Limit
-// commits; Paths keeps only the commits that touch them.
+// commits; Paths (matched literally, never as globs) keeps only the commits
+// that touch them.
 type LogOptions struct {
 	Limit int
 	Paths []string
+}
+
+// HistoryOptions configures Cache.History. Paths (matched literally, never as
+// globs) keeps only the commits that touch them; Follow continues one path's
+// history past its renames (git log --follow, so exactly one path); Limit > 0
+// keeps the newest Limit commits; Since is a git date (--since) bounding how
+// far back to read.
+type HistoryOptions struct {
+	Paths  []string
+	Follow bool
+	Limit  int
+	Since  string
 }
 
 // Comparison is how head relates to base: Ahead commits on head not on base,
@@ -57,28 +93,61 @@ func (c *Cache) Log(ctx context.Context, repo *Repository, base, head string, op
 	if options.Limit < 0 {
 		return nil, fmt.Errorf("invalid log limit %d", options.Limit)
 	}
-	args := []string{"-c", "core.quotePath=false", "log", "--cherry-pick", "--right-only", "--topo-order", "--reverse",
+	args := []string{"-c", "core.quotePath=false", "--literal-pathspecs", "log", "--cherry-pick", "--right-only", "--topo-order", "--reverse",
 		"--no-renames", "--name-only", logFormat}
 	if options.Limit > 0 {
 		args = append(args, "--max-count="+strconv.Itoa(options.Limit))
 	}
 	var out string
-	err := c.withRange(ctx, repo, base, head, func(mirror, baseSHA, headSHA string) (err error) {
-		args = append(args, "--end-of-options", baseSHA+"..."+headSHA, "--")
+	err := c.withRefs(ctx, repo, []string{base, head}, func(mirror string, shas []string) (err error) {
+		args = append(args, "--end-of-options", shas[0]+"..."+shas[1], "--")
 		out, err = run(ctx, command{dir: mirror, args: append(args, options.Paths...)})
 		return err
 	})
 	if err != nil {
 		return nil, err
 	}
-	return parseLog(out)
+	return parseLog(out, parseNameOnly)
+}
+
+// History returns the commits reachable from ref, newest first
+// (--topo-order), with each commit's per-file changes (--name-status, renames
+// detected). ref resolves like a Checkout ref and its full history is fetched
+// into the mirror, unshallowing it when needed.
+func (c *Cache) History(ctx context.Context, repo *Repository, ref string, options HistoryOptions) ([]Commit, error) {
+	if options.Limit < 0 {
+		return nil, fmt.Errorf("invalid history limit %d", options.Limit)
+	}
+	if options.Follow && len(options.Paths) != 1 {
+		return nil, fmt.Errorf("history with Follow needs exactly one path, got %d", len(options.Paths))
+	}
+	args := []string{"-c", "core.quotePath=false", "--literal-pathspecs", "log", "--topo-order", "--find-renames", "--name-status", logFormat}
+	if options.Follow {
+		args = append(args, "--follow")
+	}
+	if options.Limit > 0 {
+		args = append(args, "--max-count="+strconv.Itoa(options.Limit))
+	}
+	if options.Since != "" {
+		args = append(args, "--since="+options.Since)
+	}
+	var out string
+	err := c.withRefs(ctx, repo, []string{ref}, func(mirror string, shas []string) (err error) {
+		out, err = run(ctx, command{dir: mirror, args: slices.Concat(args, []string{"--end-of-options", shas[0], "--"}, options.Paths)})
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return parseLog(out, parseNameStatus)
 }
 
 // Compare counts the commits head is ahead of and behind base and finds
 // their merge base; refs without a common ancestor are an error.
 func (c *Cache) Compare(ctx context.Context, repo *Repository, base, head string) (Comparison, error) {
 	var comparison Comparison
-	err := c.withRange(ctx, repo, base, head, func(mirror, baseSHA, headSHA string) error {
+	err := c.withRefs(ctx, repo, []string{base, head}, func(mirror string, shas []string) error {
+		baseSHA, headSHA := shas[0], shas[1]
 		counts, err := run(ctx, command{dir: mirror, args: []string{"rev-list", "--left-right", "--count",
 			"--end-of-options", baseSHA + "..." + headSHA}})
 		if err != nil {
@@ -96,9 +165,10 @@ func (c *Cache) Compare(ctx context.Context, repo *Repository, base, head string
 	return comparison, err
 }
 
-// withRange resolves base and head with one ls-remote, fetches both into the
-// mirror and runs fn on their commits, all under the mirror lock.
-func (c *Cache) withRange(ctx context.Context, repo *Repository, base, head string, fn func(mirror, baseSHA, headSHA string) error) (err error) {
+// withRefs resolves names with one ls-remote, fetches each with its full
+// history into the mirror and runs fn on their commits (in names order), all
+// under the mirror lock.
+func (c *Cache) withRefs(ctx context.Context, repo *Repository, names []string, fn func(mirror string, shas []string) error) error {
 	if c.Root == "" {
 		return errors.New("git cache root is required")
 	}
@@ -106,11 +176,28 @@ func (c *Cache) withRange(ctx context.Context, repo *Repository, base, head stri
 	if err != nil {
 		return err
 	}
-	resolved := make([]Ref, 2)
-	for i, name := range []string{base, head} {
+	resolved := make([]Ref, len(names))
+	for i, name := range names {
 		if resolved[i], err = refs.Resolve(name); err != nil {
 			return fmt.Errorf("%s: %w", repo.URL.Redacted(), err)
 		}
+	}
+	return c.withMirror(ctx, repo, func(mirror string) (err error) {
+		shas := make([]string, len(resolved))
+		for i, ref := range resolved {
+			if shas[i], err = fetchHistory(ctx, mirror, repo, ref); err != nil {
+				return err
+			}
+		}
+		return fn(mirror, shas)
+	})
+}
+
+// withMirror runs fn on repo's bare mirror, created when missing, under the
+// mirror lock.
+func (c *Cache) withMirror(ctx context.Context, repo *Repository, fn func(mirror string) error) (err error) {
+	if c.Root == "" {
+		return errors.New("git cache root is required")
 	}
 	dir := filepath.Join(c.Root, repo.URL.CacheKey())
 	mirror := filepath.Join(dir, "mirror.git")
@@ -122,12 +209,7 @@ func (c *Cache) withRange(ctx context.Context, repo *Repository, base, head stri
 	if err := ensureMirror(ctx, mirror); err != nil {
 		return err
 	}
-	for i := range resolved {
-		if resolved[i].SHA, err = fetchHistory(ctx, mirror, repo, resolved[i]); err != nil {
-			return err
-		}
-	}
-	return fn(mirror, resolved[0].SHA, resolved[1].SHA)
+	return fn(mirror)
 }
 
 // fetchHistory makes ref's commit and its full history present in the
@@ -147,7 +229,9 @@ func fetchHistory(ctx context.Context, mirror string, repo *Repository, ref Ref)
 	return fetch(ctx, mirror, repo, ref, 0)
 }
 
-func parseLog(out string) ([]Commit, error) {
+// parseLog splits logFormat output into commits; parseFiles reads the file
+// list that follows each commit's header (--name-only or --name-status).
+func parseLog(out string, parseFiles func(commit *Commit, files string) error) ([]Commit, error) {
 	var commits []Commit
 	for _, record := range strings.Split(out, logRecord)[1:] {
 		fields := strings.SplitN(record, "\x00", 9)
@@ -158,11 +242,47 @@ func parseLog(out string) ([]Commit, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parse commit %s date %q: %w", fields[0], fields[5], err)
 		}
-		commits = append(commits, Commit{SHA: fields[0], ShortSHA: fields[1], Parents: strings.Fields(fields[2]),
+		commit := Commit{SHA: fields[0], ShortSHA: fields[1], Parents: strings.Fields(fields[2]),
 			Author: Signature{Name: fields[3], Email: fields[4]}, Date: date, Subject: fields[6],
-			Body: strings.TrimSpace(fields[7]), Files: lines(fields[8])})
+			Body: strings.TrimSpace(fields[7])}
+		if err := parseFiles(&commit, fields[8]); err != nil {
+			return nil, err
+		}
+		commits = append(commits, commit)
 	}
 	return commits, nil
+}
+
+func parseNameOnly(commit *Commit, files string) error {
+	commit.Files = lines(files)
+	return nil
+}
+
+// parseNameStatus reads --name-status lines: "<status>\t<path>", or
+// "<R|C><score>\t<from>\t<to>" for a rename or copy.
+func parseNameStatus(commit *Commit, files string) error {
+	for _, line := range lines(files) {
+		parts := strings.Split(line, "\t")
+		status := FileStatus(strings.TrimRight(parts[0], "0123456789"))
+		var path string
+		switch {
+		case len(parts) == 3 && (status == FileRenamed || status == FileCopied):
+			path = parts[2]
+			if status == FileRenamed {
+				commit.Renames = append(commit.Renames, Rename{From: parts[1], To: path})
+			}
+		case len(parts) == 2 && slices.Contains([]FileStatus{FileAdded, FileModified, FileDeleted, FileTypeChanged}, status):
+			path = parts[1]
+		default:
+			return fmt.Errorf("parse git log --name-status line %q of commit %s", line, commit.SHA)
+		}
+		if commit.Status == nil {
+			commit.Status = map[string]FileStatus{}
+		}
+		commit.Files = append(commit.Files, path)
+		commit.Status[path] = status
+	}
+	return nil
 }
 
 // lines splits newline-separated output, dropping empty lines.
