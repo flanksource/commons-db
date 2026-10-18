@@ -92,9 +92,9 @@ func (p matchPattern) matches(item string) bool {
 // predicate on field: case-insensitive equality for an exact value, or a
 // case-insensitive LIKE for a prefix/suffix wildcard, whose literal part has
 // its LIKE metacharacters bracket-escaped.
-func (p matchPattern) comparator(field string) string {
+func (p matchPattern) comparator(field xeName) ddlNode {
 	if !p.wildcard() {
-		return fmt.Sprintf("sqlserver.equal_i_sql_unicode_string(%s, N'%s')", field, escapeSQLStringLiteral(p.value))
+		return xeCall("equal_i_sql_unicode_string", field.column(), national(p.value))
 	}
 	like := escapeLikeLiteral(strings.TrimSuffix(strings.TrimPrefix(p.value, "*"), "*"))
 	if strings.HasPrefix(p.value, "*") {
@@ -103,7 +103,7 @@ func (p matchPattern) comparator(field string) string {
 	if strings.HasSuffix(p.value, "*") {
 		like += "%"
 	}
-	return fmt.Sprintf("sqlserver.like_i_sql_unicode_string(%s, N'%s')", field, escapeSQLStringLiteral(like))
+	return xeCall("like_i_sql_unicode_string", field.column(), national(like))
 }
 
 // escapeLikeLiteral makes every T-SQL LIKE metacharacter in s literal. `[`
@@ -113,34 +113,34 @@ func escapeLikeLiteral(s string) string {
 }
 
 // buildMatchPredicate translates MultiFilter values for one XE field into a
-// CREATE EVENT SESSION WHERE fragment that keeps exactly what
+// CREATE EVENT SESSION WHERE condition that keeps exactly what
 // collections.MatchItems keeps: positives are OR'd, exclusions are AND'd and
-// win, and an exclusion-only set matches everything not excluded. Returns ""
+// win, and an exclusion-only set matches everything not excluded. Returns nil
 // when nothing constrains the field (no values, or a positive `*` with no
 // exclusions).
-func buildMatchPredicate(field string, values []string) (string, error) {
+func buildMatchPredicate(field xeName, values []string) (ddlNode, error) {
 	patterns, err := parseMatchPatterns(values)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	var positives, negatives []string
+	var positives, negatives []ddlNode
 	matchAll := false
 	for _, p := range patterns {
 		switch {
 		case p.negate:
-			negatives = append(negatives, "NOT ("+p.comparator(field)+")")
+			negatives = append(negatives, negate(paren(p.comparator(field))))
 		case p.value == "*":
 			matchAll = true
 		default:
 			positives = append(positives, p.comparator(field))
 		}
 	}
-	var groups []string
+	var groups []ddlNode
 	if len(positives) > 0 && !matchAll {
-		groups = append(groups, "("+strings.Join(positives, " OR ")+")")
+		groups = append(groups, paren(joinConditions("Or", positives)))
 	}
 	if len(negatives) > 0 {
-		groups = append(groups, "("+strings.Join(negatives, " AND ")+")")
+		groups = append(groups, paren(joinConditions("And", negatives)))
 	}
-	return strings.Join(groups, " AND "), nil
+	return joinConditions("And", groups), nil
 }

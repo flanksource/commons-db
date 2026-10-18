@@ -4,6 +4,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/flanksource/sqlglot-go/sqlglot"
 )
 
 func TestBuildCreateSQL_AllEventsScoped(t *testing.T) {
@@ -192,9 +194,13 @@ func TestBuildCreateSQL_EscapesUsername(t *testing.T) {
 // The session predicate must keep exactly the values collections.MatchItems
 // keeps for the same patterns, or the capture and the stored results disagree.
 func TestBuildMatchPredicate(t *testing.T) {
-	const field = "sqlserver.client_hostname"
-	eq := func(v string) string { return "sqlserver.equal_i_sql_unicode_string(" + field + ", N'" + v + "')" }
-	like := func(v string) string { return "sqlserver.like_i_sql_unicode_string(" + field + ", N'" + v + "')" }
+	field := xeName{"sqlserver", "client_hostname"}
+	eq := func(v string) string {
+		return "sqlserver.equal_i_sql_unicode_string(sqlserver.client_hostname, N'" + v + "')"
+	}
+	like := func(v string) string {
+		return "sqlserver.like_i_sql_unicode_string(sqlserver.client_hostname, N'" + v + "')"
+	}
 	cases := []struct {
 		name     string
 		patterns []string
@@ -232,7 +238,7 @@ func TestBuildMatchPredicate(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := buildMatchPredicate(field, tc.patterns)
+			predicate, err := buildMatchPredicate(field, tc.patterns)
 			if tc.err != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.err) {
 					t.Fatalf("buildMatchPredicate(%v) error = %v, want one naming %s", tc.patterns, err, tc.err)
@@ -245,11 +251,31 @@ func TestBuildMatchPredicate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("buildMatchPredicate(%v): %v", tc.patterns, err)
 			}
+			got := eventPredicateSQL(t, predicate)
 			if got != tc.want {
 				t.Errorf("buildMatchPredicate(%v)\n got %q\nwant %q", tc.patterns, got, tc.want)
 			}
 		})
 	}
+}
+
+// eventPredicateSQL writes predicate where it is used, an event's WHERE, which
+// is the only place an XE predicate function stands as a condition on its own.
+func eventPredicateSQL(t *testing.T, predicate ddlNode) string {
+	t.Helper()
+	if predicate == nil {
+		return ""
+	}
+	const head, tail = "ADD EVENT sqlserver.probe (WHERE (", "))"
+	written, err := generateTSQL(sqlglot.New("EventSessionEvent",
+		kv("this", ident("probe")), kv("package", ident("sqlserver")), kv("where", predicate)))
+	if err != nil {
+		t.Fatalf("generate predicate: %v", err)
+	}
+	if !strings.HasPrefix(written, head) || !strings.HasSuffix(written, tail) {
+		t.Fatalf("predicate written outside its WHERE: %s", written)
+	}
+	return strings.TrimSuffix(strings.TrimPrefix(written, head), tail)
 }
 
 func TestBuildCreateSQL_RefusesAPatternSQLServerCannotMatch(t *testing.T) {

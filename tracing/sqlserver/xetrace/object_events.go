@@ -7,6 +7,12 @@ import "slices"
 // Commit or Rollback), outside tempdb (database_id 2, where #temp tables live),
 // and not the statistics SQL Server creates on its own (object_type 21587,
 // STATISTICS). All three are intrinsic fields, so they lead the WHERE.
-var objectEventPredicates = []string{"ddl_phase = 1", "database_id <> 2", "object_type <> 21587"}
+func objectEventPredicates() []ddlNode {
+	return ddlNodes(
+		binary("EQ", eventField("ddl_phase"), number(1)),
+		binary("NEQ", eventField("database_id"), number(2)),
+		binary("NEQ", eventField("object_type"), number(21587)),
+	)
+}
 
 func isObjectEvent(name string) bool { return slices.Contains(ObjectEvents, name) }

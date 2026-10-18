@@ -117,3 +117,9 @@ func appendMissingPermission(report *PermissionReport, permission string, grante
 		fmt.Sprintf("GRANT %s TO %s;", permission, quoteIdent(report.Login)),
 	)
 }
+
+// quoteIdent brackets a login name, escaping an embedded closing bracket, for
+// the GRANT advice a PermissionReport shows a DBA. That text is never executed.
+func quoteIdent(name string) string {
+	return "[" + strings.ReplaceAll(name, "]", "]]") + "]"
+}

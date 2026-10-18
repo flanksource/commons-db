@@ -27,7 +27,7 @@ func TestBuildCreateSQL_ObjectEvents(t *testing.T) {
 	}
 	for _, name := range ObjectEvents {
 		clause := extractEventClause(t, got, name)
-		if head := "ADD EVENT sqlserver." + name + " (\n    SET collect_database_name = (1)\n    ACTION ("; !strings.HasPrefix(clause, head) {
+		if head := "ADD EVENT sqlserver." + name + " (SET collect_database_name = (1) ACTION ("; !strings.HasPrefix(clause, head) {
 			t.Errorf("%s must collect its database name before its actions:\n%s", name, clause)
 		}
 		if want := "WHERE (ddl_phase = 1 AND database_id <> 2 AND object_type <> 21587 AND "; !strings.Contains(clause, want) {

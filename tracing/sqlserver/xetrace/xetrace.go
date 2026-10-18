@@ -307,7 +307,10 @@ func Create(ctx context.Context, pool *sql.DB, opts CreateOptions) (_ *Session, 
 		return nil, fmt.Errorf("create event session %q: %w", opts.Name, err)
 	}
 
-	start := fmt.Sprintf("ALTER EVENT SESSION %s ON SERVER STATE = START", quoteIdent(opts.Name))
+	start, err := buildStartSQL(opts.Name)
+	if err != nil {
+		return nil, err
+	}
 	if _, err := db.ExecContext(ctx, start); err != nil {
 		// An event_file session fails here, not at CREATE, when the directory is
 		// not writable — name it, because the path is on the server and the
@@ -364,7 +367,10 @@ func (s *Session) Drop(parent context.Context) error {
 	ctx, cancel := context.WithTimeout(context.Background(), dropTimeout)
 	defer cancel()
 	_ = parent // retained for signature symmetry; we intentionally do not use it
-	stmt := fmt.Sprintf("DROP EVENT SESSION %s ON SERVER", quoteIdent(s.Name))
+	stmt, err := buildDropSQL(s.Name)
+	if err != nil {
+		return err
+	}
 	if _, err := s.pool.ExecContext(ctx, stmt); err != nil {
 		return fmt.Errorf("drop event session %q: %w", s.Name, err)
 	}
@@ -450,18 +456,26 @@ func (s *Session) reconnect(ctx context.Context) error {
 	}
 	opts := s.opts
 	opts.ExcludeSessionID, err = CurrentSessionID(ctx, db)
+	if err == nil {
+		err = replaceEventPredicates(ctx, db, s.Name, opts)
+	}
 	if err != nil {
 		_ = db.Close()
 		return err
 	}
+	s.db, s.opts = db, opts
+	return nil
+}
+
+// replaceEventPredicates re-adds each of the session's events with the
+// predicates opts describes, one batch per event.
+func replaceEventPredicates(ctx context.Context, db *sql.Conn, session string, opts CreateOptions) error {
 	events, err := NormalizeEvents(opts.Events)
 	if err != nil {
-		_ = db.Close()
 		return err
 	}
 	filters, err := sessionFilters(opts)
 	if err != nil {
-		_ = db.Close()
 		return err
 	}
 	for _, event := range events {
@@ -469,17 +483,14 @@ func (s *Session) reconnect(ctx context.Context) error {
 		if event == EventXMLDeadlockReport {
 			continue
 		}
-		var ddl strings.Builder
-		fmt.Fprintf(&ddl, "IF EXISTS (SELECT 1 FROM sys.server_event_session_events e JOIN sys.server_event_sessions s ON s.event_session_id = e.event_session_id WHERE s.name = N'%s' AND e.name = N'%s')\n", escapeSQLStringLiteral(s.Name), event)
-		fmt.Fprintf(&ddl, "ALTER EVENT SESSION %s ON SERVER DROP EVENT sqlserver.%s;\n", quoteIdent(s.Name), event)
-		fmt.Fprintf(&ddl, "ALTER EVENT SESSION %s ON SERVER ", quoteIdent(s.Name))
-		writeSessionEvent(&ddl, event, opts.MinDurationMicros, filters)
-		if _, err := db.ExecContext(ctx, ddl.String()); err != nil {
-			_ = db.Close()
+		batch, err := buildReplaceEventSQL(session, event, opts.MinDurationMicros, filters)
+		if err != nil {
+			return err
+		}
+		if _, err := db.ExecContext(ctx, batch); err != nil {
 			return fmt.Errorf("update reconnected reader exclusion: %w", err)
 		}
 	}
-	s.db, s.opts = db, opts
 	return nil
 }
 
@@ -500,11 +511,4 @@ func CurrentDatabase(ctx context.Context, db *sql.Conn) (string, error) {
 		return "", fmt.Errorf("query DB_NAME(): %w", err)
 	}
 	return name, nil
-}
-
-// quoteIdent wraps a SQL Server identifier in brackets, escaping any embedded
-// closing bracket. Used for session names, which we generate ourselves but
-// still want to keep safe.
-func quoteIdent(name string) string {
-	return "[" + strings.ReplaceAll(name, "]", "]]") + "]"
 }
