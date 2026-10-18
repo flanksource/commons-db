@@ -129,7 +129,7 @@ jobs:
       # compiles the benchmarks but runs none; --bench=false would instead re-run
       # that package's ginkgo suite under plain go test.
       - name: Test with gavel
-        uses: flanksource/gavel@d3d2d80cd30a04659e6d3cec1df2eea5c3946152 # v0.0.55
+        uses: flanksource/gavel@ce8e88b2ad8b9dc62802ae4230bb086768d3d105 # v0.0.56
         with:
           args: test --ignore ./e2e --bench=^$ --timeout 25m --test-timeout 10m
           artifact-name: gavel-test
@@ -195,7 +195,7 @@ jobs:
         run: make tidy-check
 
       - name: Lint with gavel
-        uses: flanksource/gavel@d3d2d80cd30a04659e6d3cec1df2eea5c3946152 # v0.0.55
+        uses: flanksource/gavel@ce8e88b2ad8b9dc62802ae4230bb086768d3d105 # v0.0.56
         with:
           args: lint --timeout 10m
           artifact-name: gavel-lint
