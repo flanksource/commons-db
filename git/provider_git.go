@@ -36,3 +36,11 @@ func (p *genericProvider) GetPullRequest(context.Context, RepoURL, int) (PullReq
 func (p *genericProvider) ClosePullRequest(context.Context, RepoURL, int) error {
 	return ErrPullRequestsUnsupported
 }
+
+func (p *genericProvider) SetCommitStatus(context.Context, RepoURL, string, CommitStatus) error {
+	return unsupported("git", "commit statuses")
+}
+
+func (p *genericProvider) CommentPullRequest(context.Context, RepoURL, int, string) (string, error) {
+	return "", unsupported("git", "pull request comments")
+}

@@ -109,7 +109,8 @@ var _ = Describe("GitLab provider", func() {
 		pr, err := provider.OpenPullRequest(ctx, repo, git.PullRequestRequest{Title: "T", Body: "B", Head: "apply", Base: "main",
 			Labels: []string{"x", "y"}, Assignees: []string{"alice"}, Reviewers: []string{"bob"}, AutoMerge: true})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(pr).To(Equal(git.PullRequest{Number: 3, URL: "https://gl/mr/3", State: git.PullRequestOpen, Head: "apply", Base: "main", Title: "T"}))
+		Expect(pr).To(Equal(git.PullRequest{Number: 3, URL: "https://gl/mr/3", State: git.PullRequestOpen, Head: "apply", Base: "main", Title: "T",
+			HeadRepository: "acme/platform/cli"}))
 		got, err := provider.GetPullRequest(ctx, repo, 3)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.State).To(Equal(git.PullRequestClosed))
@@ -142,9 +143,9 @@ var _ = Describe("Azure DevOps provider", func() {
 	It("opens with auto-complete, maps state and abandons as close", func(ctx SpecContext) {
 		prPath := "/acme/Platform/_apis/git/repositories/rules/pullrequests"
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
-			"POST " + prPath:         reply(`{"pullRequestId":9,"status":"active","title":"T","sourceRefName":"refs/heads/apply","targetRefName":"refs/heads/main","createdBy":{"id":"u-1"},"repository":{"webUrl":"https://dev.azure.com/acme/Platform/_git/rules"}}`),
+			"POST " + prPath:         reply(`{"pullRequestId":9,"status":"active","title":"T","sourceRefName":"refs/heads/apply","targetRefName":"refs/heads/main","createdBy":{"id":"u-1"},"repository":{"name":"rules","project":{"name":"Platform"},"webUrl":"https://dev.azure.com/acme/Platform/_git/rules"}}`),
 			"PATCH " + prPath + "/9": reply(`{}`),
-			"GET " + prPath + "/9":   reply(`{"pullRequestId":9,"status":"completed","title":"T","sourceRefName":"refs/heads/apply","targetRefName":"refs/heads/main","repository":{"webUrl":"https://dev.azure.com/acme/Platform/_git/rules"}}`),
+			"GET " + prPath + "/9":   reply(`{"pullRequestId":9,"status":"completed","title":"T","sourceRefName":"refs/heads/apply","targetRefName":"refs/heads/main","repository":{"name":"rules","project":{"name":"Platform"},"webUrl":"https://dev.azure.com/acme/Platform/_git/rules"}}`),
 		})
 		provider := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider
 		repo := repoURL("https://dev.azure.com/acme/Platform/_git/rules", "")
@@ -152,7 +153,7 @@ var _ = Describe("Azure DevOps provider", func() {
 			Labels: []string{"oipa"}, Draft: true, AutoMerge: true})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pr).To(Equal(git.PullRequest{Number: 9, URL: "https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9",
-			State: git.PullRequestOpen, Head: "apply", Base: "main", Title: "T"}))
+			State: git.PullRequestOpen, Head: "apply", Base: "main", Title: "T", HeadRepository: "Platform/rules"}))
 		got, err := provider.GetPullRequest(ctx, repo, 9)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.State).To(Equal(git.PullRequestMerged))

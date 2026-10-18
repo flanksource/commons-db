@@ -38,6 +38,9 @@ type gitlabMergeRequest struct {
 	Title        string `json:"title"`
 	SourceBranch string `json:"source_branch"`
 	TargetBranch string `json:"target_branch"`
+	SHA          string `json:"sha"`
+	SourceID     int    `json:"source_project_id"`
+	TargetID     int    `json:"target_project_id"`
 }
 
 func (p *gitlabProvider) Type() string               { return models.ConnectionTypeGitlab }
@@ -114,7 +117,7 @@ func (p *gitlabProvider) OpenPullRequest(ctx context.Context, repo RepoURL, requ
 			return PullRequest{}, fmt.Errorf("merge request %s opened, but enabling auto-merge failed: %w", mr.WebURL, err)
 		}
 	}
-	return mr.toPullRequest()
+	return p.pullRequest(ctx, repo, mr)
 }
 
 func (p *gitlabProvider) userIDs(ctx context.Context, usernames []string) ([]int, error) {
@@ -139,7 +142,7 @@ func (p *gitlabProvider) GetPullRequest(ctx context.Context, repo RepoURL, numbe
 	if _, err := p.api.do(ctx, http.MethodGet, p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), nil, &mr); err != nil {
 		return PullRequest{}, err
 	}
-	return mr.toPullRequest()
+	return p.pullRequest(ctx, repo, mr)
 }
 
 func (p *gitlabProvider) ClosePullRequest(ctx context.Context, repo RepoURL, number int) error {
@@ -148,7 +151,11 @@ func (p *gitlabProvider) ClosePullRequest(ctx context.Context, repo RepoURL, num
 }
 
 func (p *gitlabProvider) mrEndpoint(repo RepoURL, suffix string) string {
-	return p.api.endpoint("/api/v4/projects/"+url.PathEscape(repo.Owner+"/"+repo.Name)+"/merge_requests"+suffix, nil)
+	return p.projectEndpoint(repo, "/merge_requests"+suffix)
+}
+
+func (p *gitlabProvider) projectEndpoint(repo RepoURL, suffix string) string {
+	return p.api.endpoint("/api/v4/projects/"+url.PathEscape(repo.Owner+"/"+repo.Name)+suffix, nil)
 }
 
 func (mr gitlabMergeRequest) toPullRequest() (PullRequest, error) {
@@ -158,5 +165,65 @@ func (mr gitlabMergeRequest) toPullRequest() (PullRequest, error) {
 	if !ok {
 		return PullRequest{}, fmt.Errorf("gitlab merge request !%d has unknown state %q", mr.IID, mr.State)
 	}
-	return PullRequest{Number: mr.IID, URL: mr.WebURL, State: state, Head: mr.SourceBranch, Base: mr.TargetBranch, Title: mr.Title}, nil
+	return PullRequest{Number: mr.IID, URL: mr.WebURL, State: state, Head: mr.SourceBranch, Base: mr.TargetBranch,
+		Title: mr.Title, HeadSHA: mr.SHA}, nil
+}
+
+// pullRequest converts mr, naming its head repository by path_with_namespace:
+// repo's own path when the source project is the target project, else the
+// source (fork) project looked up by id.
+func (p *gitlabProvider) pullRequest(ctx context.Context, repo RepoURL, mr gitlabMergeRequest) (PullRequest, error) {
+	pr, err := mr.toPullRequest()
+	if err != nil {
+		return PullRequest{}, err
+	}
+	if mr.SourceID == mr.TargetID {
+		pr.HeadRepository = repo.Owner + "/" + repo.Name
+		return pr, nil
+	}
+	var source gitlabProject
+	if _, err := p.api.do(ctx, http.MethodGet, p.api.endpoint(fmt.Sprintf("/api/v4/projects/%d", mr.SourceID), nil), nil, &source); err != nil {
+		return PullRequest{}, fmt.Errorf("gitlab merge request !%d source project %d: %w", mr.IID, mr.SourceID, err)
+	}
+	pr.HeadRepository = source.PathWithNamespace
+	return pr, nil
+}
+
+var gitlabCommitStates = map[CommitState]string{CommitStatePending: "pending", CommitStateSuccess: "success",
+	CommitStateFailure: "failed", CommitStateError: "failed"}
+
+func (p *gitlabProvider) SetCommitStatus(ctx context.Context, repo RepoURL, sha string, status CommitStatus) error {
+	state, err := validateCommitStatus(sha, status, gitlabCommitStates)
+	if err != nil {
+		return err
+	}
+	body := status.optionalFields(map[string]any{"state": state, "name": status.Context}, "description", "target_url")
+	_, err = p.api.do(ctx, http.MethodPost, p.projectEndpoint(repo, "/statuses/"+url.PathEscape(sha)), body, nil)
+	return err
+}
+
+// CommentPullRequest adds a merge request note and returns the merge
+// request's web_url with the note's #note_<id> anchor (the notes API returns
+// no web URL of its own).
+func (p *gitlabProvider) CommentPullRequest(ctx context.Context, repo RepoURL, number int, body string) (string, error) {
+	if err := validateComment(number, body); err != nil {
+		return "", err
+	}
+	var mr gitlabMergeRequest
+	if _, err := p.api.do(ctx, http.MethodGet, p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), nil, &mr); err != nil {
+		return "", err
+	}
+	if mr.WebURL == "" {
+		return "", fmt.Errorf("gitlab merge request !%d has no web_url", number)
+	}
+	var note struct {
+		ID int `json:"id"`
+	}
+	if _, err := p.api.do(ctx, http.MethodPost, p.mrEndpoint(repo, fmt.Sprintf("/%d/notes", number)), map[string]any{"body": body}, &note); err != nil {
+		return "", err
+	}
+	if note.ID == 0 {
+		return "", fmt.Errorf("gitlab merge request !%d note created without an id", number)
+	}
+	return fmt.Sprintf("%s#note_%d", mr.WebURL, note.ID), nil
 }

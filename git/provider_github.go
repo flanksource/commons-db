@@ -40,7 +40,11 @@ type githubPull struct {
 	Title    string  `json:"title"`
 	MergedAt *string `json:"merged_at"`
 	Head     struct {
-		Ref string `json:"ref"`
+		Ref  string `json:"ref"`
+		SHA  string `json:"sha"`
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`
@@ -149,5 +153,42 @@ func (pull githubPull) toPullRequest() PullRequest {
 	case pull.State == "closed":
 		state = PullRequestClosed
 	}
-	return PullRequest{Number: pull.Number, URL: pull.HTMLURL, State: state, Head: pull.Head.Ref, Base: pull.Base.Ref, Title: pull.Title}
+	pr := PullRequest{Number: pull.Number, URL: pull.HTMLURL, State: state, Head: pull.Head.Ref, Base: pull.Base.Ref,
+		Title: pull.Title, HeadSHA: pull.Head.SHA}
+	if pull.Head.Repo != nil {
+		pr.HeadRepository = pull.Head.Repo.FullName
+	}
+	return pr
+}
+
+var githubCommitStates = map[CommitState]string{CommitStatePending: "pending", CommitStateSuccess: "success",
+	CommitStateFailure: "failure", CommitStateError: "error"}
+
+func (p *githubProvider) SetCommitStatus(ctx context.Context, repo RepoURL, sha string, status CommitStatus) error {
+	state, err := validateCommitStatus(sha, status, githubCommitStates)
+	if err != nil {
+		return err
+	}
+	body := status.optionalFields(map[string]any{"state": state, "context": status.Context}, "description", "target_url")
+	_, err = p.api.do(ctx, http.MethodPost, p.repoEndpoint(repo, "/statuses/"+url.PathEscape(sha)), body, nil)
+	return err
+}
+
+// CommentPullRequest adds an issue comment (the pull request's conversation)
+// and returns its html_url.
+func (p *githubProvider) CommentPullRequest(ctx context.Context, repo RepoURL, number int, body string) (string, error) {
+	if err := validateComment(number, body); err != nil {
+		return "", err
+	}
+	var comment struct {
+		HTMLURL string `json:"html_url"`
+	}
+	if _, err := p.api.do(ctx, http.MethodPost, p.repoEndpoint(repo, fmt.Sprintf("/issues/%d/comments", number)),
+		map[string]any{"body": body}, &comment); err != nil {
+		return "", err
+	}
+	if comment.HTMLURL == "" {
+		return "", fmt.Errorf("github pull request %d comment created without an html_url", number)
+	}
+	return comment.HTMLURL, nil
 }

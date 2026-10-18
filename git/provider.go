@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 var (
@@ -34,6 +35,11 @@ type Provider interface {
 	OpenPullRequest(ctx context.Context, repo RepoURL, request PullRequestRequest) (PullRequest, error)
 	GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error)
 	ClosePullRequest(ctx context.Context, repo RepoURL, number int) error
+	// SetCommitStatus reports a commit status (a check) on sha.
+	SetCommitStatus(ctx context.Context, repo RepoURL, sha string, status CommitStatus) error
+	// CommentPullRequest adds a comment to the pull request and returns the
+	// comment's web URL.
+	CommentPullRequest(ctx context.Context, repo RepoURL, number int, body string) (string, error)
 }
 
 // ListRepositoriesOptions scopes ListRepositories. Namespace is a GitHub
@@ -93,6 +99,71 @@ type PullRequest struct {
 	Head   string
 	Base   string
 	Title  string
+	// HeadSHA is the commit the head branch points at.
+	HeadSHA string
+	// HeadRepository is the full name (as RepositoryInfo.FullName) of the
+	// repository the head branch lives in: the fork for a fork pull request,
+	// the pull request's own repository otherwise. Empty only when the
+	// provider no longer knows it (GitHub: a deleted fork).
+	HeadRepository string
+}
+
+// CommitState is a provider-neutral commit status state.
+type CommitState string
+
+const (
+	CommitStatePending CommitState = "pending"
+	CommitStateSuccess CommitState = "success"
+	CommitStateFailure CommitState = "failure"
+	CommitStateError   CommitState = "error"
+)
+
+// CommitStatus is a status reported on a commit. Context names the check
+// (statuses with the same context replace each other); TargetURL links to
+// its details.
+type CommitStatus struct {
+	State       CommitState
+	Context     string
+	Description string
+	TargetURL   string
+}
+
+// validateCommitStatus maps status.State through states (the provider's
+// names for the neutral states) after checking sha and context.
+func validateCommitStatus(sha string, status CommitStatus, states map[CommitState]string) (string, error) {
+	if strings.TrimSpace(sha) == "" {
+		return "", fmt.Errorf("commit status needs a commit sha")
+	}
+	if strings.TrimSpace(status.Context) == "" {
+		return "", fmt.Errorf("commit status on %s needs a context", sha)
+	}
+	state, ok := states[status.State]
+	if !ok {
+		return "", fmt.Errorf("commit status on %s: unknown commit state %q (want pending, success, failure or error)", sha, status.State)
+	}
+	return state, nil
+}
+
+// optionalFields adds Description and TargetURL to body under the provider's
+// field names, leaving out the empty ones.
+func (s CommitStatus) optionalFields(body map[string]any, descriptionField, targetURLField string) map[string]any {
+	if s.Description != "" {
+		body[descriptionField] = s.Description
+	}
+	if s.TargetURL != "" {
+		body[targetURLField] = s.TargetURL
+	}
+	return body
+}
+
+func validateComment(number int, body string) error {
+	if number <= 0 {
+		return fmt.Errorf("pull request comment needs a pull request number, got %d", number)
+	}
+	if strings.TrimSpace(body) == "" {
+		return fmt.Errorf("pull request %d comment needs a comment body", number)
+	}
+	return nil
 }
 
 func unsupported(provider, feature string) error {

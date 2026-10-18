@@ -31,6 +31,12 @@ func (p *recordingProvider) GetPullRequest(context.Context, git.RepoURL, int) (g
 	return git.PullRequest{}, nil
 }
 func (p *recordingProvider) ClosePullRequest(context.Context, git.RepoURL, int) error { return nil }
+func (p *recordingProvider) SetCommitStatus(context.Context, git.RepoURL, string, git.CommitStatus) error {
+	return nil
+}
+func (p *recordingProvider) CommentPullRequest(context.Context, git.RepoURL, int, string) (string, error) {
+	return "", nil
+}
 
 var _ = Describe("Cache.Apply", func() {
 	var (
