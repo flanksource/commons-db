@@ -1,235 +1,15 @@
 package connection
 
 import (
-	"crypto/tls"
-	"crypto/x509"
-	"errors"
 	"fmt"
-	netHTTP "net/http"
 	"net/url"
-	"os"
-	"path/filepath"
-	"regexp"
-	"strconv"
-	"strings"
-	"sync"
 
 	"github.com/flanksource/commons-db/context"
+	dbgit "github.com/flanksource/commons-db/git"
+	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/utils"
-	"github.com/samber/lo"
-
-	git "github.com/go-git/go-git/v5"
-
-	"github.com/flanksource/commons-db/types"
-	"github.com/go-git/go-git/v5/plumbing"
-	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
-	"github.com/go-git/go-git/v5/plumbing/transport"
-	gitClient "github.com/go-git/go-git/v5/plumbing/transport/client"
-	gitHTTP "github.com/go-git/go-git/v5/plumbing/transport/http"
-	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
-	ssh2 "golang.org/x/crypto/ssh"
-	"golang.org/x/crypto/ssh/knownhosts"
 )
-
-var gitHTTPTransportMu sync.Mutex
-
-const (
-	ServiceGithub = "github"
-	ServiceGitlab = "gitlab"
-)
-
-type GitClient struct {
-	Auth                transport.AuthMethod
-	URL                 string
-	Owner, Repo, Branch string
-	Depth               int
-	AzureDevops         bool
-	// TLS is the git-over-HTTPS transport config (custom CA, client
-	// certificate, insecure-skip-verify). nil leaves go-git's default TLS.
-	TLS *tls.Config
-}
-
-// RedactedURL returns the URL with userinfo elided, falling back to the raw URL
-// when it doesn't parse.
-func (gitClient GitClient) RedactedURL() string {
-	if uri, err := url.Parse(gitClient.URL); err == nil {
-		return uri.Redacted()
-	}
-	return gitClient.URL
-}
-
-func (gitClient GitClient) GetContext() map[string]any {
-	if uri, err := url.Parse(gitClient.URL); err == nil {
-		return map[string]any{
-			"url":    uri.Redacted(),
-			"branch": gitClient.Branch,
-		}
-	}
-	return map[string]any{
-		"url":    "redacted",
-		"owner":  gitClient.Owner,
-		"repo":   gitClient.Repo,
-		"branch": gitClient.Branch,
-	}
-}
-
-func (gitClient GitClient) GetShortURL() string {
-	u, err := url.Parse(gitClient.URL)
-	if err != nil {
-		return ""
-	}
-	u.Scheme = ""
-	u.RawQuery = ""
-	return strings.TrimLeft(u.Redacted(), "/")
-}
-
-func (gitClient GitClient) LoggerName() string {
-	if gitClient.Branch != "" && gitClient.Branch != "main" {
-		return fmt.Sprintf("%s@%s", gitClient.GetShortURL(), gitClient.Branch)
-	}
-	return gitClient.GetShortURL()
-}
-
-// configureGitHTTPTransport installs an auth/TLS-aware, logging HTTP transport
-// into go-git's process-global protocol registry for the duration of a
-// clone/fetch. It applies the connection's TLS settings (custom CA, client
-// certificate, insecure-skip-verify) and wraps the transport with
-// ApplyHTTPObservability so git-over-HTTP traffic is logged/redacted at the
-// "git" feature's effective level (BasicAuth is applied by go-git from
-// CloneOptions.Auth). It returns a restore func that reinstalls go-git's
-// default HTTP client.
-//
-// The registry is process-wide, so gitHTTPTransportMu serialises concurrent
-// HTTP clones: the lock is held until the returned restore func runs (callers
-// defer it), guaranteeing the default client is put back and never left pointing
-// at one clone's transport for another's request. Non-HTTP schemes
-// (ssh/file/git) need no HTTP transport and get a no-op restore.
-func configureGitHTTPTransport(ctx context.Context, rawURL string, tlsConfig *tls.Config) func() {
-	scheme := "https"
-	if u, err := url.Parse(rawURL); err == nil && u.Scheme != "" {
-		scheme = strings.ToLower(u.Scheme)
-	}
-	if scheme != "http" && scheme != "https" {
-		return func() {}
-	}
-
-	gitHTTPTransportMu.Lock()
-
-	base := netHTTP.DefaultTransport.(*netHTTP.Transport).Clone()
-	if tlsConfig != nil {
-		base.TLSClientConfig = tlsConfig
-	}
-	httpClient := &netHTTP.Client{
-		Transport: ApplyHTTPObservability(ctx, "git", base, nil),
-	}
-	gitClient.InstallProtocol(scheme, gitHTTP.NewClient(httpClient))
-
-	return func() {
-		gitClient.InstallProtocol(scheme, gitHTTP.DefaultClient)
-		gitHTTPTransportMu.Unlock()
-	}
-}
-
-func (gitClient *GitClient) Clone(ctx context.Context, dir string) (map[string]any, error) {
-
-	if gitClient.AzureDevops {
-		transport.UnsupportedCapabilities = []capability.Capability{
-			capability.ThinPack,
-		}
-	}
-
-	ctx = ctx.WithObject(*gitClient)
-	var gitLog logger.Logger = logger.GetLogger("git")
-	if headers, bodies := ctx.HTTPLoggingContent("git"); bodies {
-		gitLog = gitLog.WithV(logger.Trace)
-	} else if headers {
-		gitLog = gitLog.WithV(logger.Debug)
-	}
-	progress := gitLog.V(2)
-	restoreGitTransport := configureGitHTTPTransport(ctx, gitClient.URL, gitClient.TLS)
-	defer restoreGitTransport()
-
-	redactedURL := gitClient.RedactedURL()
-	gitLog.V(1).Infof("clone url=%s branch=%s depth=%d dir=%s", redactedURL, gitClient.Branch, gitClient.Depth, dir)
-	extra := map[string]any{
-		"git": gitClient.GetShortURL(),
-	}
-
-	repo, err := git.PlainCloneContext(ctx, dir, false, &git.CloneOptions{
-		URL:           gitClient.URL,
-		Progress:      progress,
-		Auth:          gitClient.Auth,
-		ReferenceName: plumbing.NewBranchReferenceName(gitClient.Branch),
-		Depth:         gitClient.Depth,
-	})
-
-	if errors.Is(err, git.ErrRepositoryAlreadyExists) {
-		repo, err = git.PlainOpen(dir)
-		if err != nil {
-			return extra, ctx.Oops().Wrapf(err, "unable to open repository")
-		}
-
-		tree, err := repo.Worktree()
-		if err != nil {
-			return extra, ctx.Oops().Wrapf(err, "unable to open worktree")
-		}
-
-		gitLog.V(1).Infof("fetch url=%s branch=%s depth=%d", redactedURL, gitClient.Branch, gitClient.Depth)
-		if err := repo.FetchContext(ctx, &git.FetchOptions{
-			Progress:  progress,
-			RemoteURL: gitClient.URL,
-			Force:     true,
-			Prune:     true,
-			Auth:      gitClient.Auth,
-			Depth:     gitClient.Depth}); err != nil && !errors.Is(err, git.NoErrAlreadyUpToDate) {
-			return extra, ctx.Oops().Wrapf(err, "error during git fetch")
-		}
-
-		refName := plumbing.NewRemoteReferenceName("origin", gitClient.Branch)
-		if remote, err := repo.Remote("origin"); err == nil {
-			list, err := remote.List(&git.ListOptions{
-				Auth: gitClient.Auth,
-			})
-			if err != nil {
-				return extra, ctx.Oops().Wrapf(err, "error during git remote ls")
-			}
-
-			for _, ref := range list {
-				if ref.Name().Short() == gitClient.Branch {
-					refName = ref.Name()
-					gitLog.V(2).Infof("found ref %s matching %s", refName, gitClient.Branch)
-				}
-			}
-
-		}
-
-		if err := tree.Checkout(&git.CheckoutOptions{
-			Branch: refName,
-			Force:  true,
-		}); err != nil {
-			return extra, ctx.Oops().Wrapf(err, "error during git checkout")
-		}
-	} else if err != nil {
-		return extra, ctx.Oops().Wrapf(err, "error during git clone")
-	}
-
-	if commit, err := repo.Head(); err != nil {
-		return extra, ctx.Oops().Wrapf(err, "unable to get HEAD commit")
-	} else {
-		extra["commit"] = commit.Hash().String()
-
-		if iter, err := repo.Log(&git.LogOptions{From: commit.Hash()}); err == nil {
-			if commit, err := iter.Next(); err != nil {
-				return extra, ctx.Oops().Wrapf(err, "unable to get HEAD commit")
-			} else {
-				gitLog.Infof("checked out %s dir=%s", commit.Hash.String()[0:8], dir)
-			}
-		}
-	}
-
-	return extra, nil
-}
 
 // +kubebuilder:object:generate=true
 type GitConnection struct {
@@ -395,144 +175,40 @@ func (c *GitConnection) HydrateConnection(ctx context.Context) error {
 	return nil
 }
 
-func CreateGitConfig(ctx context.Context, conn *GitConnection) (*GitClient, error) {
-	config := &GitClient{
-		URL:    conn.URL,
-		Depth:  lo.Ternary(conn.Depth == nil, 1, lo.FromPtr(conn.Depth)),
-		Branch: lo.CoalesceOrEmpty(conn.Branch, "main"),
+// Repository opens the connection's remote with its credentials. Call
+// HydrateConnection first so every EnvVar holds its resolved value.
+func (c GitConnection) Repository() (*dbgit.Repository, error) {
+	auth := dbgit.Auth{
+		Username:   c.GetUsername().ValueStatic,
+		Password:   c.GetPassword().ValueStatic,
+		PrivateKey: c.GetCertificate().ValueStatic,
+		TLS: dbgit.TLS{CA: c.TLS.CA.ValueStatic, Cert: c.TLS.Cert.ValueStatic, Key: c.TLS.Key.ValueStatic,
+			InsecureSkipVerify: c.TLS.InsecureSkipVerify},
 	}
-
-	if uri, err := url.Parse(conn.URL); err == nil {
-		if ref := uri.Query().Get("ref"); ref != "" {
-			config.Branch = ref
-		}
-		if depth := uri.Query().Get("depth"); depth != "" {
-			depthInt, err := strconv.Atoi(depth)
-			if err != nil {
-				return nil, err
-			}
-			config.Depth = depthInt
-		}
-		// strip of any query parameters
-		uri.RawQuery = ""
-		config.URL = uri.String()
-	}
-
-	if owner, repo, ok := parseGenericRepoURL(conn.URL, "github.com", false); ok {
-		config.Owner = owner
-		config.Repo = repo
-	} else if owner, repo, ok := parseGenericRepoURL(conn.URL, "gitlab.com", conn.Type == ServiceGitlab); ok {
-		config.Owner = owner
-		config.Repo = repo
-	} else if azureOrg, azureProject, repo, ok := parseAzureDevopsRepo(conn.URL); ok {
-		config.Owner = fmt.Sprintf("%s/%s", azureOrg, azureProject)
-		config.Repo = repo
-		config.AzureDevops = true
-	}
-	if strings.HasPrefix(conn.URL, "ssh://") {
-		sshURL := conn.URL[6:]
-		user := strings.Split(sshURL, "@")[0]
-
-		publicKeys, err := ssh.NewPublicKeys(user, []byte(conn.Certificate.ValueStatic), conn.Password.ValueStatic)
-		if err != nil {
-			return nil, ctx.Oops().Wrapf(err, "failed to create public keys")
-		}
-		if conn.TLS.InsecureSkipVerify {
-			publicKeys.HostKeyCallback = ssh2.InsecureIgnoreHostKey()
-		} else if publicKeys.HostKeyCallback, err = gitKnownHostKeyCallback(); err != nil {
-			return nil, ctx.Oops().Wrapf(err, "failed to load SSH known_hosts")
-		}
-		config.Auth = publicKeys
-
-	} else {
-		config.Auth = &gitHTTP.BasicAuth{
-			Username: conn.Username.ValueStatic,
-			Password: conn.Password.ValueStatic,
-		}
-		tlsConfig, err := buildGitHTTPSTLSConfig(conn.TLS)
-		if err != nil {
-			return nil, ctx.Oops().Wrapf(err, "failed to configure git TLS")
-		}
-		config.TLS = tlsConfig
-	}
-
-	return config, nil
-}
-
-// buildGitHTTPSTLSConfig builds a *tls.Config for git-over-HTTPS from the
-// connection's TLS settings: a custom CA (RootCAs), a client certificate for
-// mutual TLS, and/or insecure-skip-verify. Returns nil when no TLS
-// customisation is requested, leaving go-git's default transport in place.
-func buildGitHTTPSTLSConfig(t TLSConfig) (*tls.Config, error) {
-	ca := t.CA.ValueStatic
-	cert := t.Cert.ValueStatic
-	key := t.Key.ValueStatic
-	if !t.InsecureSkipVerify && ca == "" && cert == "" && key == "" {
-		return nil, nil
-	}
-
-	cfg := &tls.Config{InsecureSkipVerify: t.InsecureSkipVerify} //nolint:gosec // insecure is an explicit per-connection opt-in
-
-	if ca != "" {
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM([]byte(ca)) {
-			return nil, fmt.Errorf("invalid PEM CA certificate")
-		}
-		cfg.RootCAs = pool
-	}
-
-	if cert != "" && key != "" {
-		pair, err := tls.X509KeyPair([]byte(cert), []byte(key))
-		if err != nil {
-			return nil, fmt.Errorf("invalid client certificate/key: %w", err)
-		}
-		cfg.Certificates = []tls.Certificate{pair}
-	}
-
-	return cfg, nil
-}
-
-func gitKnownHostKeyCallback() (ssh2.HostKeyCallback, error) {
-	knownHostsPath := os.Getenv("SSH_KNOWN_HOSTS")
-	if knownHostsPath == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, err
-		}
-		knownHostsPath = filepath.Join(home, ".ssh", "known_hosts")
-	}
-	return knownhosts.New(knownHostsPath)
-}
-
-var azureDevopsRepoURLRegexp = regexp.MustCompile(`^https:\/\/[a-zA-Z0-9_-]+@dev\.azure\.com\/([a-zA-Z0-9_-]+)\/([a-zA-Z0-9_-]+)\/_git\/([a-zA-Z0-9_-]+)`)
-
-func parseAzureDevopsRepo(url string) (org, project, repo string, ok bool) {
-	matches := azureDevopsRepoURLRegexp.FindStringSubmatch(url)
-	if len(matches) != 4 {
-		return "", "", "", false
-	}
-
-	return matches[1], matches[2], matches[3], true
-}
-
-// parseGenericRepoURL parses a URL into owner and repo.
-//   - custom: true if the repo has custom domain
-func parseGenericRepoURL(repoURL, host string, custom bool) (owner string, repo string, ok bool) {
-	parsed, err := url.Parse(repoURL)
+	repo, err := dbgit.NewRepository(dbgit.RepositoryOptions{URL: c.URL, Auth: auth, ProviderType: c.Type})
 	if err != nil {
-		return "", "", false
+		return nil, fmt.Errorf("git connection: %w", err)
 	}
+	return repo, nil
+}
 
-	if !custom && parsed.Hostname() != host {
-		return "", "", false
+// CloneOptions is the checkout this connection asks for in dir: the URL's
+// ?ref= beats Branch and ?depth= beats Depth; an unset depth is 1 and an
+// unset ref is the remote HEAD.
+func (c GitConnection) CloneOptions(dir string) (dbgit.CloneOptions, error) {
+	parsed, err := dbgit.ParseRepoURL(c.URL, c.Type)
+	if err != nil {
+		return dbgit.CloneOptions{}, fmt.Errorf("git connection: %w", err)
 	}
-
-	path := strings.TrimSuffix(parsed.Path, ".git")
-	path = strings.TrimPrefix(path, "/")
-	paths := strings.Split(path, "/")
-	if len(paths) != 2 {
-		return "", "", false
+	options := dbgit.CloneOptions{Dir: dir, Ref: c.Branch, Depth: 1}
+	if c.Depth != nil {
+		options.Depth = *c.Depth
 	}
-
-	return paths[0], paths[1], true
+	if parsed.Ref != "" {
+		options.Ref = parsed.Ref
+	}
+	if parsed.Depth != nil {
+		options.Depth = *parsed.Depth
+	}
+	return options, nil
 }

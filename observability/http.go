@@ -1,4 +1,4 @@
-package connection
+package observability
 
 import (
 	netHTTP "net/http"

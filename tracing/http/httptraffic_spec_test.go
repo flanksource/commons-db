@@ -22,7 +22,7 @@ import (
 
 	"github.com/flanksource/commons/har"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 	"github.com/flanksource/commons-db/tracing"
@@ -54,7 +54,7 @@ var _ = Describe("http trace kind", func() {
 	})
 
 	send := func(feature, method, path, body string, header ...string) {
-		client := &netHTTP.Client{Transport: connection.ApplyHTTPObservability(context.Background(), feature, nil, nil)}
+		client := &netHTTP.Client{Transport: observability.ApplyHTTPObservability(context.Background(), feature, nil, nil)}
 		request, err := netHTTP.NewRequest(method, server.URL+path, strings.NewReader(body))
 		Expect(err).ToNot(HaveOccurred())
 		if body != "" {
@@ -162,7 +162,7 @@ var _ = Describe("http trace kind", func() {
 	}
 
 	refused := func() {
-		client := &netHTTP.Client{Transport: connection.ApplyHTTPObservability(context.Background(), "http", nil, nil)}
+		client := &netHTTP.Client{Transport: observability.ApplyHTTPObservability(context.Background(), "http", nil, nil)}
 		_, err := client.Get("http://127.0.0.1:1/refused")
 		Expect(err).To(HaveOccurred())
 	}

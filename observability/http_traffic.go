@@ -1,7 +1,7 @@
 // The HTTP traffic tap: a collector observing a feature receives, as a HAR
 // entry, every exchange the transports of that feature make while it observes.
 
-package connection
+package observability
 
 import (
 	netHTTP "net/http"

@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
@@ -81,7 +82,7 @@ func (jaegerProvider) Execute(ctx context.Context, req query.ProviderRequest) ([
 		return nil, fmt.Errorf("failed to create http client: %w", err)
 	}
 	// Maintain HAR capture / HTTP logging driven by the context's effective level.
-	connection.ApplyHTTPClientObservability(ctx, "jaeger", client, nil)
+	observability.ApplyHTTPClientObservability(ctx, "jaeger", client, nil)
 
 	resp, err := client.R(ctx).Get(endpoint)
 	if err != nil {

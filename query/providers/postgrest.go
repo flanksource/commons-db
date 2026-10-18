@@ -6,6 +6,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
@@ -57,7 +58,7 @@ func (postgrestProvider) Execute(ctx context.Context, req query.ProviderRequest)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create http client: %w", err)
 	}
-	connection.ApplyHTTPClientObservability(ctx, "postgrest", client, nil)
+	observability.ApplyHTTPClientObservability(ctx, "postgrest", client, nil)
 
 	resp, err := client.R(ctx).Header("Accept", "application/json").Get(url)
 	if err != nil {

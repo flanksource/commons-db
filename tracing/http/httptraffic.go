@@ -14,7 +14,6 @@ import (
 
 	"github.com/flanksource/commons/har"
 
-	"github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
@@ -148,7 +147,7 @@ func (traffic) Prepare(ctx dbcontext.Context, params Params, records tracing.Emi
 		collector := har.NewCollectorWithHandler(config, func(entry *har.Entry) {
 			records.TryEmit(FromEntry(feature, *entry))
 		})
-		releases = append(releases, connection.ObserveHTTP(feature, collector))
+		releases = append(releases, observability.ObserveHTTP(feature, collector))
 	}
 	return ctx, func() error {
 		for _, release := range releases {

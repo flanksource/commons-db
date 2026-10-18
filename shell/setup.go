@@ -11,6 +11,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
+	dbgit "github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/hash"
 	"github.com/flanksource/commons/properties"
@@ -423,16 +424,19 @@ func prepareRemoteCheckout(ctx context.Context, baseDir string, checkout *connec
 	}
 	defer lock.Release()
 
-	client, err := connection.CreateGitConfig(ctx, checkout)
+	repo, err := checkout.Repository()
 	if err != nil {
 		return "", nil, err
 	}
-
-	extra, err := client.Clone(ctx, mountPoint)
+	options, err := checkout.CloneOptions(mountPoint)
 	if err != nil {
 		return "", nil, err
 	}
-	return mountPoint, extra, nil
+	ref, err := dbgit.Clone(ctx, repo, options)
+	if err != nil {
+		return "", nil, err
+	}
+	return mountPoint, map[string]any{"git": repo.URL.Short(), "commit": ref.SHA}, nil
 }
 
 func cleanupAll(cleanups ...func() error) func() error {
