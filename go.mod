@@ -37,7 +37,7 @@ require (
 	github.com/emersion/go-smtp v0.25.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.80
+	github.com/flanksource/clicky v1.21.81
 	github.com/flanksource/commons v1.60.1
 	github.com/flanksource/deps v1.0.46
 	github.com/flanksource/gomplate/v3 v3.24.90
