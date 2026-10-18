@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/flanksource/commons-db/models"
@@ -134,6 +135,38 @@ func (p *githubProvider) GetPullRequest(ctx context.Context, repo RepoURL, numbe
 		return PullRequest{}, err
 	}
 	return pull.toPullRequest(), nil
+}
+
+// ListPullRequests lists by GitHub's open or closed state (closed covers
+// merged, told apart by merged_at); a head filter is qualified by repo's owner.
+func (p *githubProvider) ListPullRequests(ctx context.Context, repo RepoURL, options ListPullRequestsOptions) ([]PullRequest, error) {
+	options, err := options.normalize()
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"state": {"closed"}}
+	if options.State == PullRequestOpen {
+		query.Set("state", "open")
+	}
+	if options.Base != "" {
+		query.Set("base", options.Base)
+	}
+	if options.Head != "" {
+		query.Set("head", repo.Owner+":"+options.Head)
+	}
+	return listPullRequestPages(options, func(page, perPage int) ([]PullRequest, int, error) {
+		query.Set("page", strconv.Itoa(page))
+		query.Set("per_page", strconv.Itoa(perPage))
+		var pulls []githubPull
+		if _, err := p.api.do(ctx, http.MethodGet, p.repoEndpoint(repo, "/pulls")+"?"+query.Encode(), nil, &pulls); err != nil {
+			return nil, 0, err
+		}
+		converted := make([]PullRequest, 0, len(pulls))
+		for _, pull := range pulls {
+			converted = append(converted, pull.toPullRequest())
+		}
+		return converted, len(pulls), nil
+	})
 }
 
 func (p *githubProvider) ClosePullRequest(ctx context.Context, repo RepoURL, number int) error {

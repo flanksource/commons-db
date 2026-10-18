@@ -1,6 +1,7 @@
 package git
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -34,6 +35,7 @@ type Provider interface {
 	SupportsPullRequests() bool
 	OpenPullRequest(ctx context.Context, repo RepoURL, request PullRequestRequest) (PullRequest, error)
 	GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error)
+	ListPullRequests(ctx context.Context, repo RepoURL, options ListPullRequestsOptions) ([]PullRequest, error)
 	ClosePullRequest(ctx context.Context, repo RepoURL, number int) error
 	// SetCommitStatus reports a commit status (a check) on sha.
 	SetCommitStatus(ctx context.Context, repo RepoURL, sha string, status CommitStatus) error
@@ -106,6 +108,63 @@ type PullRequest struct {
 	// the pull request's own repository otherwise. Empty only when the
 	// provider no longer knows it (GitHub: a deleted fork).
 	HeadRepository string
+}
+
+const (
+	defaultPullRequestLimit = 100
+	maxPullRequestPageSize  = 100
+)
+
+// ListPullRequestsOptions filters ListPullRequests.
+type ListPullRequestsOptions struct {
+	// Base is the branch the pull requests merge into; empty matches any.
+	Base string
+	// Head is the branch the pull requests merge from; empty matches any.
+	Head string
+	// State is the state to list; the zero value lists open pull requests.
+	State PullRequestState
+	// Limit caps how many pull requests are returned, following pages until
+	// it is reached; <= 0 means 100.
+	Limit int
+}
+
+func (o ListPullRequestsOptions) normalize() (ListPullRequestsOptions, error) {
+	o.State = cmp.Or(o.State, PullRequestOpen)
+	if o.State != PullRequestOpen && o.State != PullRequestClosed && o.State != PullRequestMerged {
+		return o, fmt.Errorf("list pull requests: unknown pull request state %q (want open, closed or merged)", o.State)
+	}
+	if o.Limit <= 0 {
+		o.Limit = defaultPullRequestLimit
+	}
+	return o, nil
+}
+
+// pullRequestPage fetches the 1-based page of perPage pull requests and
+// returns them with the number of entries the provider returned.
+type pullRequestPage func(page, perPage int) ([]PullRequest, int, error)
+
+// listPullRequestPages keeps the pull requests in options.State from
+// successive pages until options.Limit are kept or a page comes back short.
+func listPullRequestPages(options ListPullRequestsOptions, fetch pullRequestPage) ([]PullRequest, error) {
+	perPage := min(options.Limit, maxPullRequestPageSize)
+	var pulls []PullRequest
+	for page := 1; ; page++ {
+		got, returned, err := fetch(page, perPage)
+		if err != nil {
+			return nil, err
+		}
+		for _, pull := range got {
+			if pull.State == options.State {
+				pulls = append(pulls, pull)
+			}
+		}
+		if len(pulls) >= options.Limit {
+			return pulls[:options.Limit], nil
+		}
+		if returned < perPage {
+			return pulls, nil
+		}
+	}
 }
 
 // CommitState is a provider-neutral commit status state.

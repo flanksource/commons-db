@@ -33,6 +33,10 @@ func (p *genericProvider) GetPullRequest(context.Context, RepoURL, int) (PullReq
 	return PullRequest{}, ErrPullRequestsUnsupported
 }
 
+func (p *genericProvider) ListPullRequests(context.Context, RepoURL, ListPullRequestsOptions) ([]PullRequest, error) {
+	return nil, ErrPullRequestsUnsupported
+}
+
 func (p *genericProvider) ClosePullRequest(context.Context, RepoURL, int) error {
 	return ErrPullRequestsUnsupported
 }

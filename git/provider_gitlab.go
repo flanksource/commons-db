@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/flanksource/commons-db/models"
@@ -143,6 +144,39 @@ func (p *gitlabProvider) GetPullRequest(ctx context.Context, repo RepoURL, numbe
 		return PullRequest{}, err
 	}
 	return p.pullRequest(ctx, repo, mr)
+}
+
+var gitlabListStates = map[PullRequestState]string{PullRequestOpen: "opened", PullRequestClosed: "closed", PullRequestMerged: "merged"}
+
+func (p *gitlabProvider) ListPullRequests(ctx context.Context, repo RepoURL, options ListPullRequestsOptions) ([]PullRequest, error) {
+	options, err := options.normalize()
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"state": {gitlabListStates[options.State]}}
+	if options.Base != "" {
+		query.Set("target_branch", options.Base)
+	}
+	if options.Head != "" {
+		query.Set("source_branch", options.Head)
+	}
+	return listPullRequestPages(options, func(page, perPage int) ([]PullRequest, int, error) {
+		query.Set("page", strconv.Itoa(page))
+		query.Set("per_page", strconv.Itoa(perPage))
+		var mrs []gitlabMergeRequest
+		if _, err := p.api.do(ctx, http.MethodGet, p.mrEndpoint(repo, "")+"?"+query.Encode(), nil, &mrs); err != nil {
+			return nil, 0, err
+		}
+		pulls := make([]PullRequest, 0, len(mrs))
+		for _, mr := range mrs {
+			pull, err := p.pullRequest(ctx, repo, mr)
+			if err != nil {
+				return nil, 0, err
+			}
+			pulls = append(pulls, pull)
+		}
+		return pulls, len(mrs), nil
+	})
 }
 
 func (p *gitlabProvider) ClosePullRequest(ctx context.Context, repo RepoURL, number int) error {

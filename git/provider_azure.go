@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/flanksource/commons-db/models"
@@ -52,7 +53,6 @@ type azurePull struct {
 
 type azurePullRepo struct {
 	Name    string `json:"name"`
-	WebURL  string `json:"webUrl"`
 	Project struct {
 		Name string `json:"name"`
 	} `json:"project"`
@@ -124,7 +124,7 @@ func (p *azureProvider) OpenPullRequest(ctx context.Context, repo RepoURL, reque
 			return PullRequest{}, fmt.Errorf("pull request %d opened, but enabling auto-complete failed: %w", pull.ID, err)
 		}
 	}
-	return pull.toPullRequest()
+	return pull.toPullRequest(repo)
 }
 
 func (p *azureProvider) GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error) {
@@ -132,7 +132,42 @@ func (p *azureProvider) GetPullRequest(ctx context.Context, repo RepoURL, number
 	if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), nil, &pull); err != nil {
 		return PullRequest{}, err
 	}
-	return pull.toPullRequest()
+	return pull.toPullRequest(repo)
+}
+
+var azureListStatuses = map[PullRequestState]string{PullRequestOpen: "active", PullRequestClosed: "abandoned", PullRequestMerged: "completed"}
+
+func (p *azureProvider) ListPullRequests(ctx context.Context, repo RepoURL, options ListPullRequestsOptions) ([]PullRequest, error) {
+	options, err := options.normalize()
+	if err != nil {
+		return nil, err
+	}
+	query := url.Values{"searchCriteria.status": {azureListStatuses[options.State]}}
+	if options.Base != "" {
+		query.Set("searchCriteria.targetRefName", "refs/heads/"+options.Base)
+	}
+	if options.Head != "" {
+		query.Set("searchCriteria.sourceRefName", "refs/heads/"+options.Head)
+	}
+	return listPullRequestPages(options, func(page, perPage int) ([]PullRequest, int, error) {
+		query.Set("$top", strconv.Itoa(perPage))
+		query.Set("$skip", strconv.Itoa((page-1)*perPage))
+		var list struct {
+			Value []azurePull `json:"value"`
+		}
+		if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, "")+"&"+query.Encode(), nil, &list); err != nil {
+			return nil, 0, err
+		}
+		pulls := make([]PullRequest, 0, len(list.Value))
+		for _, pull := range list.Value {
+			converted, err := pull.toPullRequest(repo)
+			if err != nil {
+				return nil, 0, err
+			}
+			pulls = append(pulls, converted)
+		}
+		return pulls, len(list.Value), nil
+	})
 }
 
 // ClosePullRequest abandons the pull request.
@@ -149,7 +184,7 @@ func (p *azureProvider) repoEndpoint(repo RepoURL, suffix string) string {
 	return p.endpoint("/" + url.PathEscape(repo.Project) + "/_apis/git/repositories/" + url.PathEscape(repo.Name) + suffix)
 }
 
-func (pull azurePull) toPullRequest() (PullRequest, error) {
+func (pull azurePull) toPullRequest(repo RepoURL) (PullRequest, error) {
 	states := map[string]PullRequestState{"active": PullRequestOpen, "abandoned": PullRequestClosed, "completed": PullRequestMerged}
 	state, ok := states[pull.Status]
 	if !ok {
@@ -162,7 +197,7 @@ func (pull azurePull) toPullRequest() (PullRequest, error) {
 	if head.Name == "" || head.Project.Name == "" {
 		return PullRequest{}, fmt.Errorf("azure DevOps pull request %d has no head repository name and project", pull.ID)
 	}
-	return PullRequest{Number: pull.ID, URL: fmt.Sprintf("%s/pullrequest/%d", pull.Repository.WebURL, pull.ID), State: state,
+	return PullRequest{Number: pull.ID, URL: fmt.Sprintf("%s/pullrequest/%d", repo.azureWebBase(), pull.ID), State: state,
 		Head: strings.TrimPrefix(pull.SourceRefName, "refs/heads/"), Base: strings.TrimPrefix(pull.TargetRefName, "refs/heads/"),
 		Title: pull.Title, HeadSHA: pull.LastMergeSourceCommit.CommitID, HeadRepository: head.fullName()}, nil
 }

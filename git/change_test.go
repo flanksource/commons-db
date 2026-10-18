@@ -30,6 +30,9 @@ func (p *recordingProvider) OpenPullRequest(_ context.Context, repo git.RepoURL,
 func (p *recordingProvider) GetPullRequest(context.Context, git.RepoURL, int) (git.PullRequest, error) {
 	return git.PullRequest{}, nil
 }
+func (p *recordingProvider) ListPullRequests(context.Context, git.RepoURL, git.ListPullRequestsOptions) ([]git.PullRequest, error) {
+	return nil, nil
+}
 func (p *recordingProvider) ClosePullRequest(context.Context, git.RepoURL, int) error { return nil }
 func (p *recordingProvider) SetCommitStatus(context.Context, git.RepoURL, string, git.CommitStatus) error {
 	return nil
