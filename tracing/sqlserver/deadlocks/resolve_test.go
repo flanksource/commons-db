@@ -2,6 +2,7 @@ package deadlocks_test
 
 import (
 	"context"
+	"regexp"
 	"strings"
 
 	"github.com/DATA-DOG/go-sqlmock"
@@ -69,10 +70,12 @@ var _ = Describe("Graph.Pretty", func() {
 		deadlocks.Analyze(&graph.Deadlock)
 
 		text := graph.Pretty().Markdown()
+		// Styled cells render as <span> markup; the checks read the cell text.
+		markup := regexp.MustCompile(`<[^>]+>`)
 		row := func(spid string) string {
 			for _, line := range strings.Split(text, "\n") {
 				if strings.Contains(line, "| "+spid+" ") {
-					return line
+					return markup.ReplaceAllString(line, "")
 				}
 			}
 			return ""
