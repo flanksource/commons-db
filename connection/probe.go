@@ -2,11 +2,7 @@ package connection
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
-	"net/http"
-	"net/url"
-	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -14,11 +10,9 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	dbcontext "github.com/flanksource/commons-db/context"
+	dbgit "github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
-	git "github.com/go-git/go-git/v5"
-	gitconfig "github.com/go-git/go-git/v5/config"
-	"github.com/go-git/go-git/v5/storage/memory"
 )
 
 // ProbeResult is the read-only capability discovered by a connection test.
@@ -38,10 +32,8 @@ func ProbeModel(ctx context.Context, model models.Connection) (ProbeResult, erro
 	switch resolved.Type {
 	case models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeSQLite:
 		return probeSQL(ctx, resolved)
-	case models.ConnectionTypeGit:
-		return probeGit(dbcontext.NewContext(ctx), resolved)
-	case models.ConnectionTypeGithub, models.ConnectionTypeGitlab, models.ConnectionTypeAzureDevops:
-		return probeAccount(ctx, resolved)
+	case models.ConnectionTypeGit, models.ConnectionTypeGithub, models.ConnectionTypeGitlab, models.ConnectionTypeAzureDevops:
+		return probeGitProvider(dbcontext.NewContext(ctx), resolved)
 	case models.ConnectionTypeS3:
 		return probeS3(dbcontext.NewContext(ctx), resolved)
 	default:
@@ -86,75 +78,16 @@ func probeSQL(ctx context.Context, model models.Connection) (ProbeResult, error)
 	return ProbeResult{OK: true}, nil
 }
 
-func probeGit(ctx dbcontext.Context, model models.Connection) (ProbeResult, error) {
-	connection := GitConnection{
-		URL: model.URL, Username: &types.EnvVar{ValueStatic: model.Username},
-		Password: &types.EnvVar{ValueStatic: model.Password}, Certificate: &types.EnvVar{ValueStatic: model.Certificate},
-	}
-	client, err := CreateGitConfig(ctx, &connection)
+// probeGitProvider verifies a git or git-provider connection through its
+// provider: ls-remote for plain git, the authenticated user/projects API for
+// GitHub, GitLab and Azure DevOps.
+func probeGitProvider(ctx dbcontext.Context, model models.Connection) (ProbeResult, error) {
+	client, err := dbgit.FromConnection(ctx, model)
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	remote := git.NewRemote(memory.NewStorage(), &gitconfig.RemoteConfig{Name: "origin", URLs: []string{client.URL}})
-	restore := configureGitHTTPTransport(ctx, client.URL, client.TLS)
-	defer restore()
-	if _, err := remote.ListContext(ctx, &git.ListOptions{Auth: client.Auth}); err != nil {
-		return ProbeResult{}, fmt.Errorf("git remote test failed: %w", err)
-	}
-	return ProbeResult{OK: true}, nil
-}
-
-func probeAccount(ctx context.Context, model models.Connection) (ProbeResult, error) {
-	base := model.URL
-	if base == "" && model.Type == models.ConnectionTypeGithub {
-		base = "https://api.github.com"
-	}
-	if base == "" {
-		return ProbeResult{}, fmt.Errorf("%s API URL is required", model.Type)
-	}
-	endpoint, err := url.Parse(base)
-	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" {
-		return ProbeResult{}, fmt.Errorf("%s API URL must be an HTTPS URL", model.Type)
-	}
-	if strings.TrimSpace(model.Password) == "" {
-		return ProbeResult{}, fmt.Errorf("%s access token is required", model.Type)
-	}
-	switch model.Type {
-	case models.ConnectionTypeGithub:
-		endpoint.Path = path.Join(endpoint.Path, "user")
-	case models.ConnectionTypeGitlab:
-		endpoint.Path = path.Join(endpoint.Path, "api/v4/user")
-	case models.ConnectionTypeAzureDevops:
-		endpoint.Path = path.Join(endpoint.Path, "_apis/projects")
-		query := endpoint.Query()
-		query.Set("api-version", "7.1")
-		endpoint.RawQuery = query.Encode()
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
-	if err != nil {
-		return ProbeResult{}, err
-	}
-	if model.Type == models.ConnectionTypeAzureDevops {
-		request.SetBasicAuth("", model.Password)
-	} else {
-		request.Header.Set("Authorization", "Bearer "+model.Password)
-	}
-	client := &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(next *http.Request, _ []*http.Request) error {
-		if next.URL.Scheme != "https" {
-			return fmt.Errorf("%s API redirected to a non-HTTPS URL", model.Type)
-		}
-		return nil
-	}}
-	if model.InsecureTLS {
-		client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}
-	}
-	response, err := client.Do(request)
-	if err != nil {
-		return ProbeResult{}, fmt.Errorf("%s API request failed: %w", model.Type, err)
-	}
-	defer response.Body.Close()
-	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return ProbeResult{}, fmt.Errorf("%s API returned HTTP %d", model.Type, response.StatusCode)
+	if err := client.Provider.Verify(ctx); err != nil {
+		return ProbeResult{}, fmt.Errorf("%s connection test failed: %w", model.Type, err)
 	}
 	return ProbeResult{OK: true}, nil
 }

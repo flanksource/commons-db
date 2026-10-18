@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
 )
@@ -264,7 +265,7 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 	if backend.Address == "" {
 		return openSearchRuntime{}, fmt.Errorf("opensearch address is required")
 	}
-	transport = dbconnection.ApplyHTTPObservability(ctx, "opensearch", transport, nil)
+	transport = observability.ApplyHTTPObservability(ctx, "opensearch", transport, nil)
 
 	// A debug run watches the wire as well as the body: which URL the search
 	// went to and which headers the connection put on it are half of "where did
@@ -288,7 +289,7 @@ func openSearchClientForConnection(ctx context.Context, conn *models.Connection)
 	if err != nil {
 		return openSearchRuntime{}, err
 	}
-	transport := dbconnection.ApplyHTTPObservability(ctx, "opensearch", httpConnection.Transport(), nil)
+	transport := observability.ApplyHTTPObservability(ctx, "opensearch", httpConnection.Transport(), nil)
 	searcher, err := opensearch.NewWithTransport(ctx, opensearch.Backend{
 		Address: conn.URL, InspectionKey: fmt.Sprintf("%s:connection:%s:%d", ctx.ConnectionCacheScope(), conn.ID, conn.UpdatedAt.UnixNano()),
 	}, nil, transport)

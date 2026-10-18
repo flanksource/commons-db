@@ -13,6 +13,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -97,7 +98,7 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 
 	// Build the Prometheus client with a HAR-instrumented transport so requests
 	// are captured under the "prometheus" feature.
-	transport := connection.ApplyHTTPObservability(ctx, "prometheus", conn.Transport(), nil)
+	transport := observability.ApplyHTTPObservability(ctx, "prometheus", conn.Transport(), nil)
 	apiClient, err := promAPI.NewClient(promAPI.Config{Address: conn.URL, RoundTripper: transport})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prometheus client: %w", err)

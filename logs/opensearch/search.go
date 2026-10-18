@@ -17,9 +17,9 @@ import (
 	"github.com/opensearch-project/opensearch-go/v2/opensearchapi"
 	"github.com/opensearch-project/opensearch-go/v2/opensearchtransport"
 
-	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
+	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons/logger"
 )
 
@@ -67,7 +67,7 @@ func NewWithTransport(ctx context.Context, backend Backend, mappingConfig *logs.
 	cfg := opensearch.Config{
 		Addresses: []string{backend.Address},
 		// Maintain HAR capture / HTTP logging for the "opensearch" feature.
-		Transport: connection.ApplyHTTPObservability(ctx, "opensearch", base, nil),
+		Transport: observability.ApplyHTTPObservability(ctx, "opensearch", base, nil),
 	}
 
 	if ctx.Logger.V(3).Enabled() {
