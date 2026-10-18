@@ -10,7 +10,11 @@
 //   - clone.go, cache.go and worktree.go put a ref on disk with the git binary:
 //     a plain clone for shell checkouts, or a mirror plus leased worktrees.
 //   - change.go composes a worktree into a branch, commit, push and pull
-//     request (Cache.Apply).
+//     request (Cache.Apply), optionally cherry-picking commits onto the base
+//     first (cherrypick.go).
+//   - log.go reads the commits between two refs (Cache.Log, Cache.Compare)
+//     from the mirror; pullrequest.go opens a pull request between two
+//     existing branches (Repository.OpenPullRequest).
 //   - provider*.go and rest.go talk to the hosting provider's REST API.
 //   - factory.go builds a Client from a hydrated models.Connection.
 //

@@ -19,23 +19,35 @@ type FileChange struct {
 // BaseSHA, when set, pins the change to the commit the caller verified Files
 // against: the branch is cut from exactly that commit, and a Base whose head
 // is anywhere else fails with ErrBaseMoved before anything is pushed.
+//
+// CherryPick replays full commit SHAs in order onto the branch (git
+// cherry-pick -x, Author as committer, the original author kept) before Files
+// are committed; Files may then be empty. A conflict aborts with
+// *CherryPickConflictError, a merge commit needs CherryPickMainline (the
+// 1-based parent to replay it against), and a commit already on the base is
+// an error unless AllowEmpty skips it. Nothing is pushed on any failure.
 type ChangeRequest struct {
-	Base        string
-	BaseSHA     string
-	Branch      string
-	Message     string
-	Author      Signature
-	Files       []FileChange
-	PullRequest *PullRequestRequest
-	Tag         *TagOptions
+	Base               string
+	BaseSHA            string
+	Branch             string
+	Message            string
+	Author             Signature
+	CherryPick         []string
+	CherryPickMainline int
+	AllowEmpty         bool
+	Files              []FileChange
+	PullRequest        *PullRequestRequest
+	Tag                *TagOptions
 }
 
-// ChangeResult is what Apply pushed and opened.
+// ChangeResult is what Apply pushed and opened. SkippedCherryPicks are the
+// CherryPick commits AllowEmpty skipped as already applied.
 type ChangeResult struct {
-	Branch      string
-	CommitSHA   string
-	PullRequest *PullRequest
-	Tag         string
+	Branch             string
+	CommitSHA          string
+	PullRequest        *PullRequest
+	Tag                string
+	SkippedCherryPicks []string
 }
 
 // Apply runs a ChangeRequest. Every check that can fail without touching the
@@ -113,8 +125,16 @@ func (r ChangeRequest) validate() error {
 	if r.BaseSHA != "" && !fullSHAPattern.MatchString(r.BaseSHA) {
 		return fmt.Errorf("change base SHA %q must be a full 40-character lowercase commit SHA", r.BaseSHA)
 	}
-	if len(r.Files) == 0 {
-		return errors.New("change has no files")
+	if len(r.Files) == 0 && len(r.CherryPick) == 0 {
+		return errors.New("change has no files and no commits to cherry-pick")
+	}
+	for _, sha := range r.CherryPick {
+		if !fullSHAPattern.MatchString(sha) {
+			return fmt.Errorf("cherry-pick %q must be a full 40-character lowercase commit SHA", sha)
+		}
+	}
+	if r.CherryPickMainline < 0 {
+		return fmt.Errorf("invalid cherry-pick mainline %d", r.CherryPickMainline)
 	}
 	if r.Tag != nil {
 		return ValidateTagName(r.Tag.Name)
@@ -130,21 +150,16 @@ func applyIn(ctx context.Context, worktree *Worktree, request ChangeRequest) (Ch
 	if err := worktree.CreateBranch(ctx, request.Branch); err != nil {
 		return ChangeResult{}, err
 	}
-	for _, file := range request.Files {
-		write := func() error { return worktree.WriteFile(file.Path, file.Content) }
-		if file.Delete {
-			write = func() error { return worktree.DeleteFile(file.Path) }
-		}
-		if err := write(); err != nil {
-			return ChangeResult{}, err
-		}
+	skipped, err := worktree.cherryPick(ctx, request)
+	if err != nil {
+		return ChangeResult{}, err
 	}
-	sha, err := worktree.Commit(ctx, CommitOptions{Message: request.Message, Author: request.Author})
+	sha, err := commitFiles(ctx, worktree, request)
 	if err != nil {
 		return ChangeResult{}, err
 	}
 	push := PushOptions{Branch: request.Branch}
-	result := ChangeResult{Branch: request.Branch, CommitSHA: sha}
+	result := ChangeResult{Branch: request.Branch, CommitSHA: sha, SkippedCherryPicks: skipped}
 	if request.Tag != nil {
 		tag := *request.Tag
 		tag.Tagger = request.Author
@@ -157,4 +172,29 @@ func applyIn(ctx context.Context, worktree *Worktree, request ChangeRequest) (Ch
 		return ChangeResult{}, err
 	}
 	return result, nil
+}
+
+// commitFiles commits request.Files on top of any cherry-picks and returns
+// the branch head, refusing a branch that ended up with nothing on the base.
+func commitFiles(ctx context.Context, worktree *Worktree, request ChangeRequest) (string, error) {
+	for _, file := range request.Files {
+		write := func() error { return worktree.WriteFile(file.Path, file.Content) }
+		if file.Delete {
+			write = func() error { return worktree.DeleteFile(file.Path) }
+		}
+		if err := write(); err != nil {
+			return "", err
+		}
+	}
+	if len(request.Files) > 0 {
+		return worktree.Commit(ctx, CommitOptions{Message: request.Message, Author: request.Author})
+	}
+	head, err := run(ctx, command{dir: worktree.Dir, args: []string{"rev-parse", "--verify", "HEAD"}})
+	if err != nil {
+		return "", err
+	}
+	if head == worktree.Ref.SHA {
+		return "", fmt.Errorf("change %s has nothing to push: every cherry-pick was already on %s", request.Branch, request.Base)
+	}
+	return head, nil
 }
