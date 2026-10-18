@@ -307,6 +307,8 @@ github.com/flanksource/is-healthy v1.0.92 h1:15lC+p1RmyO1kOdZdpHdheqysgIK+hQD2ft
 github.com/flanksource/is-healthy v1.0.92/go.mod h1:Gm46NfdDQsK9yDZNUNvkCm7jNnbl8R5vfcUYG3BgPXg=
 github.com/flanksource/kubectl-neat v1.0.4 h1:t5/9CqgE84oEtB0KitgJ2+WIeLfD+RhXSxYrqb4X8yI=
 github.com/flanksource/kubectl-neat v1.0.4/go.mod h1:Un/Voyh3cmiZNKQrW/TkAl28nAA7vwnwDGVjRErKjOw=
+github.com/flanksource/sqlglot-go v1.0.1 h1:qBVPjt6UPXDM4flmH85US/yuUJF5ECMe+Xx3HNAJ918=
+github.com/flanksource/sqlglot-go v1.0.1/go.mod h1:M7sGnJGwh3FGsexQdxFI20JQcmT2jHTpBbYYinVxEJI=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
 github.com/fsnotify/fsnotify v1.10.1/go.mod h1:TLheqan6HD6GBK6PrDWyDPBaEV8LspOxvPSjC+bVfgo=
 github.com/fxamacker/cbor/v2 v2.9.0 h1:NpKPmjDBgUfBms6tr6JZkTHtfFGcMKsw3eGcmD/sapM=

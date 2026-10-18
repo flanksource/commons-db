@@ -92,6 +92,9 @@ func (p *proxy) childEnv() (map[string]string, error) {
 		"PGPORT":       port,
 		"PGSSLMODE":    "disable",
 	}
+	if p.params.Env != "" {
+		env[p.params.Env] = rewritten.String()
+	}
 	if database := strings.TrimPrefix(rewritten.Path, "/"); database != "" {
 		env["PGDATABASE"] = database
 	}

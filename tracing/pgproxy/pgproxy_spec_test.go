@@ -190,6 +190,18 @@ var _ = Describe("pg_proxy trace kind", func() {
 		Expect(fmt.Sprint(snapshot.Metadata)).To(ContainSubstring(server.listener.Addr().String()))
 	})
 
+	It("reads its upstream from a named env and exports the proxied DSN under that name", func() {
+		const name = "PG_PROXY_SPEC_APP_DSN"
+		GinkgoT().Setenv(name, server.dsn())
+		_, exports := start(`{"env": "` + name + `"}`)
+		Expect(exports).To(HaveLen(8))
+		parsed, err := url.Parse(exports[name])
+		Expect(err).ToNot(HaveOccurred())
+		Expect(parsed.Host).To(Equal(net.JoinHostPort(exports["PGHOST"], exports["PGPORT"])))
+		Expect(exports[name]).To(Equal(exports["DATABASE_URL"]))
+		dialProxy(parsed.Host).query("SELECT 1")
+	})
+
 	It("stores simple, extended and failing statements of a Mark window with their row counts", func() {
 		managed, exports := start(paramsFor(`, "params": true, "connection": "orders"`))
 		client := dialProxy(net.JoinHostPort(exports["PGHOST"], exports["PGPORT"]))
@@ -305,6 +317,8 @@ var _ = Describe("pg_proxy trace kind", func() {
 		Entry("a non-postgres scheme", `{"dsn": "mysql://localhost/db"}`, "postgres://"),
 		Entry("an unset $VAR", `{"dsn": "$PG_PROXY_UNSET_VAR"}`, "$PG_PROXY_UNSET_VAR is not set"),
 		Entry("an unset $VAR inside the DSN", `{"dsn": "postgres://u@127.0.0.1:${PG_PROXY_UNSET_PORT}/db"}`, "$PG_PROXY_UNSET_PORT is not set"),
+		Entry("an unset named env, never replaced by DATABASE_URL", `{"env": "PG_PROXY_UNSET_ENV"}`, "$PG_PROXY_UNSET_ENV is not set"),
+		Entry("an env that is not a variable name", `{"dsn": "postgres://h/db", "env": "FIN-DB"}`, "not an environment variable name"),
 		Entry("a blank connection label", `{"dsn": "postgres://h/db", "connection": " "}`, "connection"),
 		Entry("a non-positive maxStatements", `{"dsn": "postgres://h/db", "maxStatements": -1}`, "maxStatements"),
 	)
@@ -314,12 +328,15 @@ var _ = Describe("pg_proxy trace kind", func() {
 		GinkgoT().Setenv("GAVEL_DB_DSN", "postgresql://primary/db")
 		GinkgoT().Setenv("DATABASE_URL", "postgres://fallback/db")
 		for declared, host := range map[string]string{"$PG_PROXY_SPEC_DSN": "expanded", "": "primary"} {
-			dsn, err := resolveDSN(declared)
+			dsn, err := resolveDSN(Params{DSN: declared})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(dsn.Host).To(Equal(host))
 		}
+		dsn, err := resolveDSN(Params{Env: "PG_PROXY_SPEC_DSN"})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(dsn.Host).To(Equal("expanded"))
 		GinkgoT().Setenv("GAVEL_DB_DSN", "")
-		dsn, err := resolveDSN("")
+		dsn, err = resolveDSN(Params{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(dsn.Host).To(Equal("fallback"))
 		Expect(upstreamAddr(dsn)).To(Equal("fallback:5432"))

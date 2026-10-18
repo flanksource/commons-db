@@ -79,7 +79,7 @@ func (pgProxy) Schema() recordresults.ResultType[sqlstatements.StatementRow] {
 // that points a process at it. The release drops every connection, waits for
 // their pending statements to be stored and reports the final summary.
 func (pgProxy) Prepare(ctx dbcontext.Context, params Params, records tracing.Emitter[sqlstatements.StatementRow]) (dbcontext.Context, func() error, error) {
-	dsn, err := resolveDSN(params.DSN)
+	dsn, err := resolveDSN(params)
 	if err != nil {
 		return ctx, nil, err
 	}

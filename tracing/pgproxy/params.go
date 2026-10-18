@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 )
 
@@ -24,6 +25,10 @@ type Params struct {
 	// DSN is the upstream postgres://, with $VAR references expanded. Empty
 	// falls back to GAVEL_DB_DSN, then DATABASE_URL.
 	DSN string `json:"dsn,omitempty" clicky:"title=Upstream DSN"`
+	// Env names the variable a process reads its DSN from, such as FIN_DB_URL.
+	// When DSN is unset the upstream is read from it, and the proxied DSN is
+	// exported under it so a process that reads only that variable is observed.
+	Env string `json:"env,omitempty" clicky:"title=DSN variable"`
 	// Params keeps bind parameter values in each statement's args. Off by
 	// default: bind values carry row data, the likeliest place for a secret.
 	Params bool `json:"params,omitempty" clicky:"title=Capture bind values"`
@@ -41,16 +46,27 @@ func (p Params) Validate() error {
 	if p.MaxStatements < 1 {
 		return fmt.Errorf("maxStatements %d must be at least 1", p.MaxStatements)
 	}
-	_, err := resolveDSN(p.DSN)
+	if p.Env != "" && !envNamePattern.MatchString(p.Env) {
+		return fmt.Errorf("env %q is not an environment variable name", p.Env)
+	}
+	_, err := resolveDSN(p)
 	return err
 }
 
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
 // resolveDSN expands `$VAR` references and falls back to the environment when
-// declared is unset. It fails loudly rather than recording nothing: a proxy
-// with no upstream is the silent-empty-capture failure to prevent, and a
-// reference to an unset variable would otherwise blank a port to 5432 or the
-// whole DSN to DATABASE_URL — another postgres than the one declared.
-func resolveDSN(declared string) (*url.URL, error) {
+// the DSN is unset: the named Env, else GAVEL_DB_DSN, then DATABASE_URL. It
+// fails loudly rather than recording nothing: a proxy with no upstream is the
+// silent-empty-capture failure to prevent, and a reference to an unset variable
+// would otherwise blank a port to 5432 or the whole DSN to DATABASE_URL —
+// another postgres than the one declared. A named Env that is unset is refused
+// for the same reason, never replaced by the generic fallbacks.
+func resolveDSN(p Params) (*url.URL, error) {
+	declared := p.DSN
+	if strings.TrimSpace(declared) == "" && p.Env != "" {
+		declared = "$" + p.Env
+	}
 	var unset []string
 	raw := strings.TrimSpace(os.Expand(declared, func(name string) string {
 		value, ok := os.LookupEnv(name)
