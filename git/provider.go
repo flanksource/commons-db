@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 var (
@@ -35,6 +36,7 @@ type Provider interface {
 	SupportsPullRequests() bool
 	OpenPullRequest(ctx context.Context, repo RepoURL, request PullRequestRequest) (PullRequest, error)
 	GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error)
+	ListPullRequestActivity(ctx context.Context, repo RepoURL, number int) ([]PullRequestActivity, error)
 	ListPullRequests(ctx context.Context, repo RepoURL, options ListPullRequestsOptions) ([]PullRequest, error)
 	ClosePullRequest(ctx context.Context, repo RepoURL, number int) error
 	// SetCommitStatus reports a commit status (a check) on sha.
@@ -95,12 +97,15 @@ const (
 
 // PullRequest is an opened pull (or merge) request.
 type PullRequest struct {
-	Number int
-	URL    string
-	State  PullRequestState
-	Head   string
-	Base   string
-	Title  string
+	Number    int
+	URL       string
+	State     PullRequestState
+	Head      string
+	Base      string
+	Title     string
+	Author    string
+	Body      string
+	CreatedAt time.Time
 	// HeadSHA is the commit the head branch points at.
 	HeadSHA string
 	// HeadRepository is the full name (as RepositoryInfo.FullName) of the
@@ -108,6 +113,21 @@ type PullRequest struct {
 	// the pull request's own repository otherwise. Empty only when the
 	// provider no longer knows it (GitHub: a deleted fork).
 	HeadRepository string
+}
+
+type PullRequestActivityKind string
+
+const (
+	PullRequestComment PullRequestActivityKind = "comment"
+	PullRequestHistory PullRequestActivityKind = "history"
+)
+
+type PullRequestActivity struct {
+	Kind      PullRequestActivityKind `json:"kind"`
+	Author    string                  `json:"author"`
+	Body      string                  `json:"body"`
+	CreatedAt time.Time               `json:"createdAt"`
+	URL       string                  `json:"url,omitempty"`
 }
 
 const (

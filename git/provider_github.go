@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons-db/models"
 )
@@ -35,10 +36,15 @@ type githubRepo struct {
 }
 
 type githubPull struct {
-	Number   int     `json:"number"`
-	HTMLURL  string  `json:"html_url"`
-	State    string  `json:"state"`
-	Title    string  `json:"title"`
+	Number    int       `json:"number"`
+	HTMLURL   string    `json:"html_url"`
+	State     string    `json:"state"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	CreatedAt time.Time `json:"created_at"`
+	User      struct {
+		Login string `json:"login"`
+	} `json:"user"`
 	MergedAt *string `json:"merged_at"`
 	Head     struct {
 		Ref  string `json:"ref"`
@@ -137,6 +143,61 @@ func (p *githubProvider) GetPullRequest(ctx context.Context, repo RepoURL, numbe
 	return pull.toPullRequest(), nil
 }
 
+func (p *githubProvider) ListPullRequestActivity(ctx context.Context, repo RepoURL, number int) ([]PullRequestActivity, error) {
+	if number <= 0 {
+		return nil, fmt.Errorf("pull request number must be positive")
+	}
+	activity := []PullRequestActivity{}
+	for _, path := range []string{fmt.Sprintf("/issues/%d/comments", number), fmt.Sprintf("/pulls/%d/comments", number)} {
+		next := p.repoEndpoint(repo, path) + "?per_page=100"
+		for next != "" {
+			var comments []struct {
+				Body      string    `json:"body"`
+				HTMLURL   string    `json:"html_url"`
+				CreatedAt time.Time `json:"created_at"`
+				User      struct {
+					Login string `json:"login"`
+				} `json:"user"`
+			}
+			headers, err := p.api.do(ctx, http.MethodGet, next, nil, &comments)
+			if err != nil {
+				return nil, err
+			}
+			for _, comment := range comments {
+				activity = append(activity, PullRequestActivity{Kind: PullRequestComment, Author: comment.User.Login,
+					Body: comment.Body, CreatedAt: comment.CreatedAt, URL: comment.HTMLURL})
+			}
+			next = ""
+			if match := linkNextPattern.FindStringSubmatch(headers.Get("Link")); match != nil {
+				next = match[1]
+			}
+		}
+	}
+	next := p.repoEndpoint(repo, fmt.Sprintf("/issues/%d/events", number)) + "?per_page=100"
+	for next != "" {
+		var events []struct {
+			Event     string    `json:"event"`
+			CreatedAt time.Time `json:"created_at"`
+			Actor     struct {
+				Login string `json:"login"`
+			} `json:"actor"`
+		}
+		headers, err := p.api.do(ctx, http.MethodGet, next, nil, &events)
+		if err != nil {
+			return nil, err
+		}
+		for _, event := range events {
+			activity = append(activity, PullRequestActivity{Kind: PullRequestHistory, Author: event.Actor.Login,
+				Body: strings.ReplaceAll(event.Event, "_", " "), CreatedAt: event.CreatedAt})
+		}
+		next = ""
+		if match := linkNextPattern.FindStringSubmatch(headers.Get("Link")); match != nil {
+			next = match[1]
+		}
+	}
+	return activity, nil
+}
+
 // ListPullRequests lists by GitHub's open or closed state (closed covers
 // merged, told apart by merged_at); a head filter is qualified by repo's owner.
 func (p *githubProvider) ListPullRequests(ctx context.Context, repo RepoURL, options ListPullRequestsOptions) ([]PullRequest, error) {
@@ -187,7 +248,7 @@ func (pull githubPull) toPullRequest() PullRequest {
 		state = PullRequestClosed
 	}
 	pr := PullRequest{Number: pull.Number, URL: pull.HTMLURL, State: state, Head: pull.Head.Ref, Base: pull.Base.Ref,
-		Title: pull.Title, HeadSHA: pull.Head.SHA}
+		Title: pull.Title, Author: pull.User.Login, Body: pull.Body, CreatedAt: pull.CreatedAt, HeadSHA: pull.Head.SHA}
 	if pull.Head.Repo != nil {
 		pr.HeadRepository = pull.Head.Repo.FullName
 	}
