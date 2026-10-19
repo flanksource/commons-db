@@ -8,8 +8,8 @@ require (
 	github.com/elazarl/goproxy v1.7.2
 	github.com/flanksource/clicky v1.21.82
 	github.com/flanksource/commons v1.60.1
-	github.com/flanksource/commons-db v0.1.45
-	github.com/flanksource/commons-db/recordstore v0.1.45
+	github.com/flanksource/commons-db v0.1.60-0.20261019052133-565977fdcb1a
+	github.com/flanksource/commons-db/recordstore v0.1.60-0.20261019052133-565977fdcb1a
 	github.com/flanksource/sqlglot-go v1.0.3
 	github.com/google/gops v0.3.29
 	github.com/google/pprof v0.0.0-20260507013755-92041b743c96

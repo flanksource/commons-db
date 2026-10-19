@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 concurrency:
   group: release-main
@@ -21,6 +22,7 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
+          ref: main
 
       - name: Calculate next version
         id: version
@@ -54,10 +56,14 @@ jobs:
         if: steps.version.outputs.changed == 'true'
         env:
           RELEASE_VERSION: ${{ steps.version.outputs.next }}
+          GOWORK: 'off'
         run: |
           set -euo pipefail
-          GOWORK=off go run ./.github/scripts/release-modules "$RELEASE_VERSION"
+          go test ./.github/scripts/release-modules
+          go run ./.github/scripts/release-modules "$RELEASE_VERSION"
+          make tidy
           make tidy-check
+          go run ./.github/scripts/release-modules --check "$RELEASE_VERSION"
           git diff --check
 
       - name: Commit and publish the module release

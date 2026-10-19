@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"flag"
 	"fmt"
 	"os"
 
@@ -12,6 +14,11 @@ type moduleSpec struct {
 	file         string
 	module       string
 	dependencies []string
+}
+
+type releaseOptions struct {
+	Version string
+	Check   bool
 }
 
 var modules = []moduleSpec{
@@ -68,7 +75,7 @@ func rewriteModuleRequirements(content []byte, version string, module string, de
 	return file.Format()
 }
 
-func prepareRelease(version string) error {
+func prepareRelease(options releaseOptions) error {
 	type update struct {
 		path    string
 		content []byte
@@ -80,9 +87,15 @@ func prepareRelease(version string) error {
 		if err != nil {
 			return fmt.Errorf("read %s: %w", module.file, err)
 		}
-		content, err := rewriteModuleRequirements(original, version, module.module, module.dependencies)
+		content, err := rewriteModuleRequirements(original, options.Version, module.module, module.dependencies)
 		if err != nil {
 			return fmt.Errorf("prepare %s: %w", module.file, err)
+		}
+		if options.Check {
+			if !bytes.Equal(original, content) {
+				return fmt.Errorf("requirements in %s are not aligned with release %s", module.file, options.Version)
+			}
+			continue
 		}
 		info, err := os.Stat(module.file)
 		if err != nil {
@@ -99,11 +112,13 @@ func prepareRelease(version string) error {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: release-modules vX.Y.Z")
+	check := flag.Bool("check", false, "verify sibling requirements without modifying files")
+	flag.Parse()
+	if flag.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: release-modules [--check] vX.Y.Z")
 		os.Exit(2)
 	}
-	if err := prepareRelease(os.Args[1]); err != nil {
+	if err := prepareRelease(releaseOptions{Version: flag.Arg(0), Check: *check}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
