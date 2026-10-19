@@ -15,14 +15,27 @@ permissions: read-all
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Skip the module alignment commit so the workflow doesn't loop on itself.
+    if: "!startsWith(github.event.head_commit.message, 'chore(release):')"
     permissions:
       contents: write
     steps:
+      # Authenticate as a GitHub App so the release commit can be pushed to the
+      # protected main branch. The App must be on the branch ruleset's bypass list
+      # (the default GITHUB_TOKEN is subject to the ruleset and cannot bypass it).
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.FLANKSOURCE_APP_ID }}
+          private-key: ${{ secrets.FLANKSOURCE_APP_SECRET }}
+
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           fetch-depth: 0
           ref: main
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Calculate next version
         id: version
