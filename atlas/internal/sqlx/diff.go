@@ -760,7 +760,7 @@ func Has(elements, target any) bool {
 		panic(fmt.Sprintf("unexpected elements type: %T", elements))
 	}
 	tv := reflect.ValueOf(target)
-	if tv.Kind() != reflect.Ptr || tv.IsNil() {
+	if tv.Kind() != reflect.Pointer || tv.IsNil() {
 		panic("target must be a non-nil pointer")
 	}
 	for i := 0; i < ev.Len(); i++ {
