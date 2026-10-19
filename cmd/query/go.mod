@@ -11,8 +11,8 @@ require (
 	github.com/flanksource/clicky/aichat v1.21.82
 	github.com/flanksource/clicky/valkey v1.21.82
 	github.com/flanksource/commons v1.60.1
-	github.com/flanksource/commons-db v0.1.50
-	github.com/flanksource/commons-db/recordstore v0.1.45
+	github.com/flanksource/commons-db v0.1.60-0.20261019052133-565977fdcb1a
+	github.com/flanksource/commons-db/recordstore v0.1.60-0.20261019052133-565977fdcb1a
 	github.com/flanksource/commons-db/tracing v0.1.45
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
