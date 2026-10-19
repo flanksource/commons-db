@@ -27,7 +27,7 @@ import (
 	dutyGorm "github.com/flanksource/commons-db/gorm"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/models"
-	"github.com/flanksource/commons-db/tracing"
+	"github.com/flanksource/commons-db/otel"
 	"github.com/flanksource/commons-db/types"
 )
 
@@ -372,11 +372,11 @@ func (k Context) Fast(name ...string) Context {
 }
 
 func (k Context) IsTracing() bool {
-	return k.Value(tracing.TracePaused) == nil
+	return k.Value(otel.TracePaused) == nil
 }
 
 func (k Context) WithoutTracing() Context {
-	return k.WithValue(tracing.TracePaused, "true")
+	return k.WithValue(otel.TracePaused, "true")
 }
 
 func (k Context) Transaction(fn func(ctx Context, span trace.Span) error, opts ...any) error {

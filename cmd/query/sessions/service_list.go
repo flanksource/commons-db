@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/datetime"
@@ -60,7 +61,7 @@ func (h *sessionHandler) list(w http.ResponseWriter, r *http.Request) {
 	header.Set("X-Page-Limit", strconv.Itoa(filter.Limit))
 	header.Set("X-Page-Offset", strconv.Itoa(filter.Offset))
 	header.Set("X-Sessions-Shared", strconv.FormatBool(page.Shared))
-	header.Set("Access-Control-Expose-Headers", "X-Total-Count, X-Page-Limit, X-Page-Offset, X-Sessions-Shared")
+	entity.ExposeHeaders(header, "X-Total-Count", "X-Page-Limit", "X-Page-Offset", "X-Sessions-Shared")
 	if format == "clicky-json" {
 		writeSessionTable(w, infos)
 		return

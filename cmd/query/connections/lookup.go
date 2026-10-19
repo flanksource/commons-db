@@ -32,11 +32,7 @@ func (f connectionFilter) Options(opts ListOptions) map[string]api.Textable {
 // name substring query, returning connection://<name> => "<name> (<type>)". total
 // is the full match count so the UI can show "… and N more" past the head limit.
 func (f connectionFilter) OptionsWithQuery(opts ListOptions, query string, limit int) (map[string]api.Textable, int) {
-	db, err := f.service.database()
-	if err != nil {
-		return nil, 0
-	}
-	conns, err := listConnections(db, opts)
+	conns, err := f.service.List(opts)
 	if err != nil {
 		return nil, 0
 	}
@@ -47,7 +43,7 @@ func (f connectionFilter) OptionsWithQuery(opts ListOptions, query string, limit
 // connection://<name> => "<name> (<type>)", filtered by the name substring query
 // and capped at limit (limit <= 0 means no cap). total is the full match count
 // before the cap, so the UI can render "… and N more". Type scoping is applied
-// upstream by listConnections; this is pure so it is unit-testable without a DB.
+// upstream by Service.List; this is pure so it is unit-testable without a DB.
 func connectionOptions(conns []*models.Connection, query string, limit int) (map[string]api.Textable, int) {
 	q := strings.ToLower(strings.TrimSpace(query))
 	options := make(map[string]api.Textable, len(conns))

@@ -9,8 +9,9 @@ const reactRoot = vi.hoisted(() => ({
 }));
 
 vi.mock("react-dom/client", () => ({ createRoot: reactRoot.create }));
-vi.mock("./App", () => ({ App: () => null, formExtensions: [] }));
-vi.mock("./iconProvider", () => ({ FlanksourceIcon: () => null }));
+vi.mock("./App", () => ({ App: () => null }));
+vi.mock("./appFormExtensions", () => ({ formExtensions: [] }));
+vi.mock("@flanksource/clicky-ui/connections", () => ({ FlanksourceIcon: () => null }));
 vi.mock("@flanksource/clicky-ui", () => ({
   ErrorWrapper: function ErrorWrapper() {
     return null;

@@ -121,7 +121,8 @@ var _ = Describe("Rows", func() {
 				}
 			}
 		}
-		for range query.Rows(seq) {
+		for _, err := range query.Rows(seq) {
+			Expect(err).ToNot(HaveOccurred())
 			break
 		}
 		Expect(produced).To(Equal(1))

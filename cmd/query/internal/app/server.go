@@ -23,7 +23,7 @@ import (
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
-	"github.com/flanksource/commons-db/tracing/traces"
+	"github.com/flanksource/commons-db/tracing"
 	flanksourceContext "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/spf13/cobra"
@@ -41,6 +41,9 @@ type ServeOptions struct {
 	MaxSessionDuration      time.Duration
 	SessionRetention        time.Duration
 	ReconcileSnapshotMaxAge time.Duration
+	// TracesDir is the trace results store to open, such as a gavel run's;
+	// empty opens <config dir>/traces.
+	TracesDir string
 }
 
 func DefaultServeOptions() ServeOptions {
@@ -155,7 +158,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	if err != nil {
 		return err
 	}
-	traceRuntime, closeTraces, err := a.traces.open(configDir, options.SessionRetention, kinds)
+	traceRuntime, closeTraces, err := a.traces.open(tracesDir(configDir, options.TracesDir), options.SessionRetention, kinds)
 	if err != nil {
 		return fmt.Errorf("open trace results: %w", err)
 	}
@@ -165,7 +168,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 		MaxSessions: options.MaxSessions, MaxDuration: options.MaxSessionDuration,
 		Store: sessionStore, Events: sessionStore,
 		BeforeRead: traceRuntime.Results.Registry.BeforeRead,
-		Restarters: map[string]query.RestartFunc{traces.ProfilePrefix: traceRuntime.Restarter(a.Runtime.Context)},
+		Restarters: map[string]query.RestartFunc{tracing.ProfilePrefix: traceRuntime.Restarter(a.Runtime.Context)},
 	})
 	traceRuntime.Sessions = sessionRegistry
 	sessionStore.BindResolver(sessionRegistry.Get)

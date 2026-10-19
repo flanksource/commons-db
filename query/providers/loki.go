@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons-db/logs/loki"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 func init() {
@@ -51,7 +52,7 @@ func (lokiProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 
 	conn := connection.Loki{HTTPConnection: connection.HTTPConnection{ConnectionName: req.Connection}}
 	if opts.URL != "" {
-		conn.URL, err = resolveInlineURL(ctx, opts.URL, "loki")
+		conn.URL, err = providerkit.ResolveInlineURL(ctx, opts.URL, "loki")
 		if err != nil {
 			return nil, err
 		}
@@ -91,7 +92,7 @@ func (lokiProvider) Stream(ctx context.Context, req query.ProviderRequest, emit 
 
 	conn := connection.Loki{HTTPConnection: connection.HTTPConnection{ConnectionName: req.Connection}}
 	if opts.URL != "" {
-		conn.URL, err = resolveInlineURL(ctx, opts.URL, "loki")
+		conn.URL, err = providerkit.ResolveInlineURL(ctx, opts.URL, "loki")
 		if err != nil {
 			return err
 		}

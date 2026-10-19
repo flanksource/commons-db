@@ -3,14 +3,13 @@ title: Consuming commons-db
 description: Add commons-db's modules to another Go application, carry the sqlite replace, and develop against a local checkout.
 ---
 
-commons-db ships as **five Go modules** from one repository: the root module for connections and the profile engine, the `recordstore` module for record streams and the result types served over them, the `tracing/sqltrace` module for SQL Server trace capture into a record stream, the `tracing/traces` module for trace plugins, and the `cmd/query` module for the profile HTTP service and the `query` CLI.
+commons-db ships as **four Go modules** from one repository: the root module for connections and the profile engine, the `recordstore` module for record streams and the result types served over them, the `tracing` module for trace plugins and SQL Server capture, and the `cmd/query` module for the profile HTTP service and the `query` CLI.
 
 | Module | Tag format | Brings |
 | --- | --- | --- |
-| `github.com/flanksource/commons-db` | `v0.1.45` | `sqlite`, `db/sqlitetable`, `query` (the profile engine), `query/profilestore`, `tracing` (xetrace, deadlocks), connections, migrations |
+| `github.com/flanksource/commons-db` | `v0.1.45` | `sqlite`, `db/sqlitetable`, `query` (the profile engine), `query/profilestore`, `query/sqltext` (SQL statement classification), `otel` (OpenTelemetry tracing for gorm), connections, migrations |
 | `github.com/flanksource/commons-db/recordstore` | `recordstore/v0.1.45` | `recordstore` and its backends, probes, `recordresults` |
-| `github.com/flanksource/commons-db/tracing/sqltrace` | `tracing/sqltrace/v0.1.45` | `sqltrace` (SQL Server Extended Events capture, committing to a recordstore backend) |
-| `github.com/flanksource/commons-db/tracing/traces` | `tracing/traces/v0.1.45` | `traces` ([trace plugins](../../tracing/plugins/) run as managed sessions) and its kinds: `httptraffic`, `sqlstatements`, `xevent`, `opensearchtraces` |
+| `github.com/flanksource/commons-db/tracing` | `tracing/v0.1.45` | `tracing` ([trace plugins](../../tracing/plugins/) run as managed sessions), `tracingtest`, the kinds `http`, `sqlstatements`, `opensearch` and `jfr` (with its decoder, `jfr/decode`), and SQL Server capture under `sqlserver/`: `xetrace`, `deadlocks`, `xesession`, `xeprovider` and the `xevent` kind |
 | `github.com/flanksource/commons-db/cmd/query` | `cmd/query/v0.1.45` | `profiles` (the profile HTTP service), `sessions` (trace/top sessions), the `query` CLI and its UI |
 
 The modules are released together, so pin every one you use to the **same version**:
@@ -18,16 +17,15 @@ The modules are released together, so pin every one you use to the **same versio
 ```bash
 go get github.com/flanksource/commons-db@v0.1.45
 go get github.com/flanksource/commons-db/recordstore@v0.1.45
-go get github.com/flanksource/commons-db/tracing/sqltrace@v0.1.45
-go get github.com/flanksource/commons-db/tracing/traces@v0.1.45
+go get github.com/flanksource/commons-db/tracing@v0.1.45
 go get github.com/flanksource/commons-db/cmd/query@v0.1.45
 ```
 
 A store-only consumer, such as a CLI that writes streams another process serves, needs only the `recordstore` module, which brings the root module with it.
 
-A trace-capturing consumer needs the `tracing/sqltrace` module, which brings the `recordstore` and root modules with it. `recordstore` does not depend on `tracing/sqltrace`.
+A trace-capturing consumer needs the `tracing` module, which brings the `recordstore` and root modules with it. Neither the root module nor `recordstore` depends on `tracing`.
 
-Never mix the `recordstore` or `tracing/sqltrace` module with a root module at `v0.1.44` or older. Those root releases still contain `recordstore/` and `tracing/sqltrace/` themselves, so every import of them becomes ambiguous.
+Never mix the `tracing` module with a root module released before it. Those root releases still contain the OpenTelemetry package at `github.com/flanksource/commons-db/tracing`, the `tracing` module's own root package path, so every import of it becomes ambiguous. Likewise never mix the `recordstore` module with a root module at `v0.1.44` or older, which still contains `recordstore/` itself.
 
 ## Required: the sqlite driver replace
 
@@ -79,7 +77,7 @@ Use a Go workspace next to your application to build against an unreleased commo
 ```bash
 # in your application's parent directory
 go work init ./acme-app
-go work use ../commons-db ../commons-db/recordstore ../commons-db/tracing/sqltrace ../commons-db/tracing/traces ../commons-db/cmd/query
+go work use ../commons-db ../commons-db/recordstore ../commons-db/tracing ../commons-db/cmd/query
 ```
 
 `go.work` and `go.work.sum` are ignored by commons-db's own `.gitignore`. Keep them out of your application's repository too. When the change is done, fix shared behaviour in commons-db, release it, and bump every commons-db module in your application together.

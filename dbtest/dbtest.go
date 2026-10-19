@@ -11,7 +11,21 @@
 //
 // When COMMONS_DB_URL is unset, dbtest starts or reuses the persistent embedded
 // PostgreSQL server under $TMPDIR/commons-db and checks out an isolated
-// database from its cross-process pool.
+// database from its cross-process pool. The server is sized to the host's CPU
+// and memory limits (commonsdb.ScaledTestingParameters); a reused server
+// started with lower settings logs a warning naming the command that stops it.
+// Where it lives is configurable:
+//
+//	COMMONS_DB_DATA_DIR       "tmpfs" puts the cluster in RAM: /dev/shm on
+//	                          Linux, a RAM disk volume /Volumes/commons-db on
+//	                          macOS; any other value is a literal path
+//	COMMONS_DB_TMPFS_SIZE     RAM the tmpfs cluster requires (default 2GB)
+//	COMMONS_DB_BIN_DIR        PostgreSQL binaries (default
+//	                          $TMPDIR/commons-db/bin); never put on tmpfs
+//
+// An empty pool never makes a caller wait for more than one CREATE DATABASE:
+// checkout creates its own database outside the pool lock and a background
+// refill tops the pool up to max(5, GOMAXPROCS) free databases.
 //
 // Supplying Options.Provisioner replaces the empty-database pool with a
 // content-addressed PostgreSQL template. The first matching request prepares
@@ -20,6 +34,13 @@
 // superseded templates older than 24 hours are removed when they are unlocked.
 // Provisioners require database creation and are rejected when
 // COMMONS_DB_CREATE=false.
+//
+// Every created database is named commons_db_test_<unix>_<unique>_<name> and
+// leased: an advisory lock on its name is held from before it exists until it
+// is dropped. Each resolution starts a background sweep that drops test
+// databases whose lock is no longer held, so databases leaked by a killed or
+// timed-out test process are reclaimed by the next run. ForT and ForGinkgo drop
+// their database in the background and only log teardown failures.
 package dbtest
 
 import (
@@ -33,6 +54,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	commonsdb "github.com/flanksource/commons-db/db"
+	"github.com/flanksource/commons/logger"
 	"github.com/jackc/pgx/v5/pgxpool"
 	_ "github.com/lib/pq" // database/sql driver for the "postgres" DSNs handed out here
 	"gorm.io/gorm"
@@ -55,7 +77,8 @@ type Options struct {
 	// Name seeds the database name. Required.
 	Name string
 	// DataDir overrides where an embedded server keeps its cluster. Ignored
-	// when COMMONS_DB_URL is set. Defaults to $TMPDIR/commons-db.
+	// when COMMONS_DB_URL is set, and takes precedence over
+	// COMMONS_DB_DATA_DIR. Defaults to $TMPDIR/commons-db.
 	DataDir string
 	// LogName labels the gorm SQL logger. Defaults to Name.
 	LogName string
@@ -90,6 +113,9 @@ type DB struct {
 	pool  *pgxpool.Pool
 
 	closers []func() error
+	// lease owns the database Open created; nil when the database was supplied
+	// as-is.
+	lease *databaseLease
 }
 
 // DSN is the connection string for the resolved database.
@@ -193,23 +219,23 @@ func open(ctx context.Context, opts Options) (*DB, func() error, error) {
 		}
 		db.dsn = url
 	case url != "":
-		dsn, drop, err := createConfiguredScratch(ctx, url, opts, db.unique)
+		dsn, lease, err := createConfiguredScratch(ctx, url, opts, db.unique)
 		if err != nil {
 			return nil, nil, err
 		}
-		db.dsn = dsn
-		db.closers = append(db.closers, drop)
+		db.dsn, db.lease = dsn, lease
+		sweepManagedDatabases(url)
 	default:
 		adminURL, err := startSharedEmbedded(opts.DataDir)
 		if err != nil {
 			return nil, nil, err
 		}
-		dsn, drop, err := createEmbeddedScratch(ctx, adminURL, opts, db.unique)
+		dsn, lease, err := createEmbeddedScratch(ctx, adminURL, opts, db.unique)
 		if err != nil {
 			return nil, nil, fmt.Errorf("check out ephemeral database: %w", err)
 		}
-		db.dsn = dsn
-		db.closers = append(db.closers, drop)
+		db.dsn, db.lease = dsn, lease
+		sweepManagedDatabases(adminURL)
 	}
 
 	return db, db.close, nil
@@ -220,11 +246,13 @@ func createConfiguredScratch(
 	adminURL string,
 	opts Options,
 	unique string,
-) (string, func() error, error) {
+) (string, *databaseLease, error) {
 	if opts.Provisioner != nil {
 		return acquireProvisionedScratchWithTimeout(ctx, adminURL, opts, unique)
 	}
-	return createScratch(adminURL, opts.Name, unique)
+	resolutionContext, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	return createLeasedDatabase(resolutionContext, adminURL, opts.Name, unique, time.Now())
 }
 
 func createEmbeddedScratch(
@@ -232,7 +260,7 @@ func createEmbeddedScratch(
 	adminURL string,
 	opts Options,
 	unique string,
-) (string, func() error, error) {
+) (string, *databaseLease, error) {
 	if opts.Provisioner != nil {
 		return acquireProvisionedScratchWithTimeout(ctx, adminURL, opts, unique)
 	}
@@ -246,7 +274,7 @@ func acquireProvisionedScratchWithTimeout(
 	adminURL string,
 	opts Options,
 	unique string,
-) (string, func() error, error) {
+) (string, *databaseLease, error) {
 	provisioningContext, cancel := context.WithTimeout(ctx, provisioningTimeout)
 	defer cancel()
 	return acquireProvisionedScratch(
@@ -259,9 +287,28 @@ func acquireProvisionedScratchWithTimeout(
 	)
 }
 
-// close runs every closer in reverse order, so handles are released before the
-// database they point at is dropped.
+// close releases every handle and then drops the database, so handles are gone
+// before the database they point at is dropped.
 func (d *DB) close() error {
+	err := d.closeHandles()
+	if d.lease != nil {
+		err = errors.Join(err, d.lease.release())
+	}
+	return err
+}
+
+// releaseInBackground closes handles, sends the drop and returns without
+// waiting for it to finish. Teardown never fails a test: errors are logged.
+func (d *DB) releaseInBackground() {
+	if err := d.closeHandles(); err != nil {
+		logger.Warnf("dbtest: close handles for %s: %v", d.opts.Name, err)
+	}
+	if d.lease != nil {
+		d.lease.releaseInBackground()
+	}
+}
+
+func (d *DB) closeHandles() error {
 	d.mu.Lock()
 	closers := d.closers
 	d.closers = nil
@@ -269,9 +316,7 @@ func (d *DB) close() error {
 
 	var errs []error
 	for i := len(closers) - 1; i >= 0; i-- {
-		if err := closers[i](); err != nil {
-			errs = append(errs, err)
-		}
+		errs = append(errs, closers[i]())
 	}
 	return errors.Join(errs...)
 }

@@ -1,3 +1,4 @@
+import { mountPath } from "./mount";
 import { fetchJSON } from "@flanksource/clicky-ui/profiles";
 import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -21,51 +22,76 @@ export function ConnectionInfoHeader({
     queryKey: ["connection-info", id],
     queryFn: () =>
       fetchJSON<ConnectionInfo>(
-        `/api/v1/connection/${encodeURIComponent(id)}/info`,
+        `${mountPath}/api/v1/connection/${encodeURIComponent(id)}/info`,
       ),
     retry: 0,
     staleTime: 30_000,
   });
-  const data = info.data;
-  const name = data?.connection.name ?? fallbackName;
-  const endpoint =
-    data?.connection.resolvedEndpoint ?? data?.connection.configuredEndpoint;
-  const product = data
-    ? [data.server.product, data.server.version].filter(Boolean).join(" ")
-    : "";
   return (
     <h1 className="flex min-w-0 items-center gap-2 text-2xl font-semibold tracking-tight">
       {icon}
-      <span className="shrink-0">{name}</span>
-      {info.isLoading ? (
-        <span className="text-sm font-normal text-muted-foreground">
-          resolving…
-        </span>
-      ) : info.isError ? (
-        <span
-          className="truncate text-sm font-normal text-destructive"
-          title={info.error instanceof Error ? info.error.message : undefined}
-        >
-          {info.error instanceof Error ? info.error.message : "unresolved"}
-        </span>
-      ) : data ? (
-        <span className="flex min-w-0 items-center gap-2 text-sm font-normal text-muted-foreground">
-          {endpoint ? (
-            <>
-              <HeaderDot />
-              <code className="min-w-0 truncate">{endpoint}</code>
-            </>
-          ) : null}
-          {product ? (
-            <>
-              <HeaderDot />
-              <span className="shrink-0">{product}</span>
-            </>
-          ) : null}
-          <HeaderDot />
-          <ServerStatus server={data.server} />
-        </span>
-      ) : null}
+      <span className="shrink-0">{info.data?.connection.name ?? fallbackName}</span>
+      <ConnectionInfoSummary
+        data={info.data}
+        isLoading={info.isLoading}
+        error={info.isError ? info.error : undefined}
+        isError={info.isError}
+      />
     </h1>
+  );
+}
+
+function ConnectionInfoSummary({
+  data,
+  isLoading,
+  isError,
+  error,
+}: {
+  data: ConnectionInfo | undefined;
+  isLoading: boolean;
+  isError: boolean;
+  error: unknown;
+}) {
+  if (isLoading) {
+    return (
+      <span className="text-sm font-normal text-muted-foreground">
+        resolving…
+      </span>
+    );
+  }
+  if (isError) {
+    const message = error instanceof Error ? error.message : undefined;
+    return (
+      <span
+        className="truncate text-sm font-normal text-destructive"
+        title={message}
+      >
+        {message ?? "unresolved"}
+      </span>
+    );
+  }
+  if (!data) return null;
+  const endpoint =
+    data.connection.resolvedEndpoint ?? data.connection.configuredEndpoint;
+  const product = [data.server.product, data.server.version]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <span className="flex min-w-0 items-center gap-2 text-sm font-normal text-muted-foreground">
+      {endpoint ? (
+        <>
+          <HeaderDot />
+          <code className="min-w-0 truncate">{endpoint}</code>
+        </>
+      ) : null}
+      {product ? (
+        <>
+          <HeaderDot />
+          <span className="shrink-0">{product}</span>
+        </>
+      ) : null}
+      <HeaderDot />
+      <ServerStatus server={data.server} />
+    </span>
   );
 }

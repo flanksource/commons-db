@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/flanksource/clicky/entity"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
@@ -159,58 +160,12 @@ func redactedQuery(r *http.Request) string {
 }
 
 // StampID writes the correlation header and makes sure a browser can read it.
-//
-// The expose list has to be appended at write time rather than set here: the
-// handlers downstream call setCORSHeaders while producing the response, which
-// replaces whatever this middleware had already put there.
-func StampID(w http.ResponseWriter, id string) http.ResponseWriter {
+// Handlers downstream add to the expose list with entity.ExposeHeaders rather
+// than replacing it, so exposing the id up front is enough.
+func StampID(header http.Header, id string) {
 	if id == "" {
-		return w
-	}
-	w.Header().Set(IDHeader, id)
-	return &exposeHeaderWriter{ResponseWriter: w}
-}
-
-type exposeHeaderWriter struct {
-	http.ResponseWriter
-	wrote bool
-}
-
-func (w *exposeHeaderWriter) WriteHeader(status int) {
-	w.expose()
-	w.ResponseWriter.WriteHeader(status)
-}
-
-func (w *exposeHeaderWriter) Write(b []byte) (int, error) {
-	w.expose()
-	return w.ResponseWriter.Write(b)
-}
-
-// Flush forwards to the underlying writer so a stream wrapped by this one keeps
-// streaming; a ResponseWriter that swallows Flush turns SSE into a hung request.
-func (w *exposeHeaderWriter) Flush() {
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
-
-func (w *exposeHeaderWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-
-func (w *exposeHeaderWriter) expose() {
-	if w.wrote {
 		return
 	}
-	w.wrote = true
-	header := w.Header()
-	existing := header.Get("Access-Control-Expose-Headers")
-	if existing == "" {
-		header.Set("Access-Control-Expose-Headers", IDHeader)
-		return
-	}
-	for _, name := range strings.Split(existing, ",") {
-		if strings.EqualFold(strings.TrimSpace(name), IDHeader) {
-			return
-		}
-	}
-	header.Set("Access-Control-Expose-Headers", existing+", "+IDHeader)
+	header.Set(IDHeader, id)
+	entity.ExposeHeaders(header, IDHeader)
 }

@@ -6,14 +6,15 @@ import (
 	"fmt"
 
 	"github.com/flanksource/commons-db/internal/dbtarget"
-	"github.com/flanksource/commons-db/tracing"
+	"github.com/flanksource/commons-db/otel"
 	gormsqlite "github.com/glebarez/sqlite"
 	gormpostgres "gorm.io/driver/postgres"
+	gormsqlserver "gorm.io/driver/sqlserver"
 	"gorm.io/gorm"
 	_ "modernc.org/sqlite"
 )
 
-// NewGorm creates a GORM connection for a PostgreSQL or SQLite DSN.
+// NewGorm creates a GORM connection for a PostgreSQL, SQLite or SQL Server DSN.
 func NewGorm(connection string, config *gorm.Config) (*gorm.DB, error) {
 	target, err := dbtarget.Parse(connection)
 	if err != nil {
@@ -27,14 +28,22 @@ func NewGorm(connection string, config *gorm.Config) (*gorm.DB, error) {
 		config = &configured
 	}
 	var sqlDB *sql.DB
+	var dialector gorm.Dialector
 	switch target.Dialect {
 	case dbtarget.Postgres:
-		sqlDB, err = NewDB(target.DSN)
+		if sqlDB, err = NewDB(target.DSN); err == nil {
+			dialector = gormpostgres.New(gormpostgres.Config{Conn: sqlDB})
+		}
 	case dbtarget.SQLite:
-		sqlDB, err = sql.Open("sqlite", target.DSN)
-		if err == nil {
+		if sqlDB, err = sql.Open("sqlite", target.DSN); err == nil {
 			sqlDB.SetMaxOpenConns(1)
 			sqlDB.SetMaxIdleConns(1)
+			dialector = gormsqlite.Dialector{Conn: sqlDB}
+		}
+	case dbtarget.SQLServer:
+		if sqlDB, err = sql.Open("sqlserver", target.DSN); err == nil {
+			DefaultPoolConfig().Apply(sqlDB)
+			dialector = gormsqlserver.New(gormsqlserver.Config{Conn: sqlDB})
 		}
 	default:
 		return nil, fmt.Errorf("unsupported database dialect %q", target.Dialect)
@@ -42,16 +51,12 @@ func NewGorm(connection string, config *gorm.Config) (*gorm.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	dialector := gorm.Dialector(gormpostgres.New(gormpostgres.Config{Conn: sqlDB}))
-	if target.Dialect == dbtarget.SQLite {
-		dialector = gormsqlite.Dialector{Conn: sqlDB}
-	}
 	gormDB, err := gorm.Open(dialector, config)
 	if err != nil {
 		return nil, errors.Join(err, sqlDB.Close())
 	}
 
-	if err := gormDB.Use(tracing.NewPlugin()); err != nil {
+	if err := gormDB.Use(otel.NewPlugin()); err != nil {
 		return nil, errors.Join(fmt.Errorf("error setting up tracing: %w", err), sqlDB.Close())
 	}
 

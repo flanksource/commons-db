@@ -30,9 +30,10 @@ import (
 //
 // Both act on the unsaved form body, so they work before the connection is saved.
 type connectionActionsHandler struct {
-	prefix string
-	ctx    dbcontext.Context
-	next   http.Handler
+	prefix  string
+	ctx     dbcontext.Context
+	virtual VirtualConnectionProvider
+	next    http.Handler
 }
 
 func newConnectionActionsHandler(prefix string, ctx dbcontext.Context, next http.Handler) *connectionActionsHandler {
@@ -112,13 +113,19 @@ func decodeConnectionDraft(r *http.Request) (*models.Connection, string, error) 
 // mergeStoredDraftSecrets mirrors update semantics for edit-form tests. The
 // connection API never returns passwords or certificates, so an unchanged edit
 // draft has blank secret fields even though the stored connection has values.
+// A virtual connection cannot be edited and is listed with its URL redacted
+// too, so its draft is replaced by the stored connection outright.
 func (h *connectionActionsHandler) mergeStoredDraftSecrets(draftID string, draft *models.Connection) error {
-	if draftID == "" || (draft.Password != "" && draft.Certificate != "") {
+	if draftID == "" {
 		return nil
 	}
-	existing, err := findConnection(h.ctx.DB(), draftID)
+	existing, err := lookupConnection(h.ctx, h.virtual, h.ctx.DB(), draftID)
 	if err != nil {
 		return fmt.Errorf("load stored connection for test: %w", err)
+	}
+	if existing.Virtual {
+		*draft = *cloneConnection(existing)
+		return nil
 	}
 	if draft.Password == "" {
 		draft.Password = existing.Password

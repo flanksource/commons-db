@@ -4,9 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   ReconcileProvenancePanel,
   ReconcileResultSettings,
-  materializeParams,
-  snapshotColumnNames,
 } from "./reconcileExport";
+import { materializeParams, snapshotColumnNames } from "./reconcileExportParams";
 import { virtualProfileHref, type ReconcileSnapshot } from "./reconcileModel";
 
 const snapshot: ReconcileSnapshot = {

@@ -3,13 +3,13 @@ import {
   ChatLayer,
   RouterProvider,
   ThemeProvider,
-  createUnitFormExtensions,
   createOperationsApiClient,
-  useBrowserRouter,
   useRouter,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
 import { MonacoProvider } from "@flanksource/clicky-ui/monaco";
+import { mountPath } from "./mount";
+import { useMountedBrowserRouter } from "./mountedRouter";
 import {
   DebugConsoleButton,
   DebugConsoleDock,
@@ -17,25 +17,14 @@ import {
 } from "@flanksource/clicky-ui/devtools";
 import { ChatButton, ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { secretFormExtensions } from "./secretKeySelector";
-import { namespaceFormExtensions } from "./namespacePicker";
-import { connectionFormActions } from "./connectionActions";
+import { createConnectionDashboardResultRenderer } from "@flanksource/clicky-ui/connections";
+import { connectionFormActions, connectionsApiBase, formExtensions } from "./appFormExtensions";
 import { logsResultRenderer, useLogsSurfaces } from "./logsProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
-import { connectionDashboardResultRenderer } from "./connectionDashboardRenderer";
 import { getMonacoWorker } from "./monacoWorkers";
 import { queryChatConfig } from "./chatWidget";
 import { isQueryChatOperation } from "./chatOperations";
-import {
-  celEditorFormExtensions,
-  esQueryBuilderFormExtensions,
-  profileBuilderFormExtensions,
-  profileEditSurfaceKey,
-  processorPipelineFormExtensions,
-} from "@flanksource/clicky-ui/profiles";
-import { esParamOptionsFormExtensions } from "./esParamOptions";
-import { jsonPathFormExtensions } from "./jsonPathPicker";
-import { connectionLoggingFormExtensions } from "./connectionLogging";
+import { profileEditSurfaceKey } from "@flanksource/clicky-ui/profiles";
 import { BuildProfileButton } from "./buildProfileAction";
 import { EditProfileButton, ProfileEditorPage } from "./editProfileAction";
 import { isProfileSurface } from "./profileUpdateOperation";
@@ -44,46 +33,7 @@ import { ReconcileButton } from "./reconcileAction";
 import { ReconcilePage } from "./reconcilePage";
 import { reconcileSurfaceKey } from "./reconcileModel";
 import { ProfileInspectButton } from "./profileInspectAction";
-import {
-  configureProfileConnectionForm,
-  useProfileConnectionMapping,
-} from "./profileConnectionMapping";
-
-const unitFormExtensions = createUnitFormExtensions();
-
-// Compose the form extensions: the namespace picker, the secret/workload url
-// selector (which reads the selected namespace from the form's root value), the
-// profile query builder, and the structured OpenSearch filter builder that
-// mounts on provider.options.search in both the create and the edit form.
-// Exported so main.tsx can hand the same list to configureProfiles: the profile
-// editor renders its own JsonSchemaForms inside clicky-ui, far from this app's
-// EntityExplorerApp, and without them every x-clicky-component in the profile
-// schema — the CEL editor, the processor pipeline, the namespace and secret
-// pickers — falls back to a plain control.
-export const formExtensions = {
-  pre: [
-    ...unitFormExtensions.pre,
-    ...esParamOptionsFormExtensions.pre,
-    ...connectionLoggingFormExtensions.pre,
-  ],
-  post: [
-    ...namespaceFormExtensions.post,
-    ...secretFormExtensions.post,
-    ...profileBuilderFormExtensions.post,
-    ...esQueryBuilderFormExtensions.post,
-    ...esParamOptionsFormExtensions.post,
-    ...jsonPathFormExtensions.post,
-    ...celEditorFormExtensions.post,
-    ...processorPipelineFormExtensions.post,
-    ...connectionLoggingFormExtensions.post,
-  ],
-};
-
-configureProfileConnectionForm({
-  formPre: formExtensions.pre,
-  formPost: formExtensions.post,
-  footerActions: connectionFormActions,
-});
+import { useProfileConnectionMapping } from "./profileConnectionMapping";
 
 // The Go server (query serve) exposes:
 //   - the OpenAPI spec + executor under /api (entity discovery, list/get),
@@ -101,7 +51,7 @@ configureProfileConnectionForm({
 // wrapper is applied here rather than to `window.fetch` so it captures this
 // app's API traffic and not Vite's HMR socket or the chat stream.
 const baseClient = createOperationsApiClient({
-  baseUrl: "",
+  baseUrl: mountPath,
   openApiPath: "/api/openapi.json",
   fetch: withDebugFetch(),
 });
@@ -115,13 +65,18 @@ const queryClient = new QueryClient();
 // the result renderer so `render: logs` profiles present via clicky-ui LogsTable.
 function Explorer() {
 	const { client, dialog } = useProfileConnectionMapping(baseClient);
-  const pathname = useRouter().pathname;
+  const { pathname, renderLink } = useRouter();
   const editingProfile = profileEditSurfaceKey(pathname);
   const reconcilingProfile = reconcileSurfaceKey(pathname);
   const logsSurfaces = useLogsSurfaces();
   const renderLogsResult = logsResultRenderer(logsSurfaces);
+  const renderConnectionDashboard = createConnectionDashboardResultRenderer({
+    apiBase: connectionsApiBase,
+    renderConnectionLink: (connection, link) =>
+      renderLink({ ...link, to: `/connection/${encodeURIComponent(connection.id)}` }),
+  });
   const renderResult = (context: ResultRenderContext) => {
-    const connectionResult = connectionDashboardResultRenderer(context);
+    const connectionResult = renderConnectionDashboard(context);
     if (connectionResult !== context.defaultView) return connectionResult;
     const defaultResult = renderLogsResult(context);
     const result =
@@ -198,7 +153,7 @@ function Explorer() {
 }
 
 export function App() {
-  const router = useBrowserRouter();
+  const router = useMountedBrowserRouter();
   return (
     <QueryClientProvider client={queryClient}>
       <ThemeProvider>

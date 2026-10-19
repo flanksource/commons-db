@@ -2,6 +2,7 @@
 // Verifies ConnectionTrace stops its trace session through the session API's
 // stop route, from the Stop button and when the page unmounts.
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -98,7 +99,11 @@ describe("ConnectionTrace stop", () => {
 
   async function mount() {
     await act(async () => {
-      root.render(<ConnectionTrace id="c1" />);
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <ConnectionTrace id="c1" />
+        </QueryClientProvider>,
+      );
     });
   }
 

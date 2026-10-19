@@ -1,30 +1,12 @@
 import { Button } from "@flanksource/clicky-ui";
 
+import { snapshotColumnNames } from "./reconcileExportParams";
 import {
   formatIdleAge,
   type ReconcileProvenance,
   type ReconcileSideExecution,
   type ReconcileSnapshot,
 } from "./reconcileModel";
-
-export function snapshotColumnNames(snapshot: ReconcileSnapshot): string[] {
-  return snapshot.columns.filter((column) => !column.hidden).map((column) => column.name);
-}
-
-export function materializeParams(
-  snapshot: ReconcileSnapshot,
-  profile: string,
-  columns: string[],
-  cel: string,
-): Record<string, string> {
-  if (columns.length === 0) throw new Error("Choose at least one export column");
-  return {
-    snapshot: snapshot.id,
-    profile,
-    column: csvRecord(columns),
-    ...(cel.trim() ? { cel: cel.trim() } : {}),
-  };
-}
 
 export function ReconcileResultSettings({
   active,
@@ -225,8 +207,4 @@ function filterSummary(filters: Record<string, string> | undefined): string {
 function rangeSummary(range: { from?: string; to?: string } | undefined): string {
   if (!range?.from && !range?.to) return "";
   return `${range.from ?? "…"} → ${range.to ?? "…"}`;
-}
-
-function csvRecord(values: string[]): string {
-  return values.map((value) => /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value).join(",");
 }

@@ -5,15 +5,15 @@ import {
 } from "@flanksource/clicky-ui";
 import { isValidElement, type ComponentProps, type ReactElement } from "react";
 import { describe, expect, it } from "vitest";
+import { LogsSurface } from "./logsFollow";
 import {
   followErrorText,
   followGrouping,
   followRowId,
   followRunIndex,
-  LogsSurface,
   LOGS_SORT,
   TAIL_MAX_ROWS,
-} from "./logsFollow";
+} from "./logsFollowModel";
 import {
   clickyLogsRows,
   clickyLogsWalk,

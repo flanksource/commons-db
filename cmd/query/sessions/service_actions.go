@@ -3,10 +3,12 @@ package sessions
 import (
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 func (h *sessionHandler) info(w http.ResponseWriter, r *http.Request, id string) {
@@ -15,27 +17,27 @@ func (h *sessionHandler) info(w http.ResponseWriter, r *http.Request, id string)
 	}
 }
 
-// liveForControl resolves a session a control action applies to: authorized
-// for control, live in this registry and not ended. It writes the refusal
+// liveFor resolves a session an action applies to: authorized
+// for it, live in this registry and not ended. It writes the refusal
 // itself.
-func (h *sessionHandler) liveForControl(w http.ResponseWriter, r *http.Request, id, action string) (*query.Session, bool) {
-	resolved, ok := h.authorizedSession(w, r, id, ActionControl)
+func (h *sessionHandler) liveFor(w http.ResponseWriter, r *http.Request, id, verb string, action Action) (*query.Session, bool) {
+	resolved, ok := h.authorizedSession(w, r, id, action)
 	switch {
 	case !ok:
 		return nil, false
 	case resolved.Live == nil:
-		http.Error(w, fmt.Sprintf("%s session %s: %v (owner %s, pid %d)", action, id, query.ErrSessionNotLive,
+		http.Error(w, fmt.Sprintf("%s session %s: %v (owner %s, pid %d)", verb, id, query.ErrSessionNotLive,
 			resolved.Info.Owner.Host, resolved.Info.Owner.PID), http.StatusConflict)
 		return nil, false
 	case resolved.Info.State.Terminal():
-		http.Error(w, fmt.Sprintf("%s session %s: it is %s", action, id, resolved.Info.State), http.StatusConflict)
+		http.Error(w, fmt.Sprintf("%s session %s: it is %s", verb, id, resolved.Info.State), http.StatusConflict)
 		return nil, false
 	}
 	return resolved.Live, true
 }
 
 func (h *sessionHandler) stop(w http.ResponseWriter, r *http.Request, id string) {
-	session, ok := h.liveForControl(w, r, id, "stop")
+	session, ok := h.liveFor(w, r, id, "stop", ActionControl)
 	if !ok {
 		return
 	}
@@ -47,6 +49,39 @@ func (h *sessionHandler) stop(w http.ResponseWriter, r *http.Request, id string)
 	h.writeLive(w, r, http.StatusOK, session)
 }
 
+// maxCheckpointBody bounds a checkpoint's params, which can carry a stack
+// dumped elsewhere.
+const maxCheckpointBody = 8 << 20
+
+// checkpoint has the running trace capture of session id take a reading,
+// with the params its JSON body gives the kind, and commit what it emitted,
+// then answers the session. A session that is no running capture of this
+// server's trace runtime is a conflict; params its kind refuses or does not
+// read are a bad request.
+func (h *sessionHandler) checkpoint(w http.ResponseWriter, r *http.Request, id string) {
+	session, ok := h.liveFor(w, r, id, "checkpoint", ActionCheckpoint)
+	if !ok {
+		return
+	}
+	params, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCheckpointBody))
+	if err != nil {
+		http.Error(w, fmt.Sprintf("checkpoint session %s: read params: %v", id, err), http.StatusBadRequest)
+		return
+	}
+	if err := h.traces.CheckpointSession(tracing.WithCheckpointParams(r.Context(), params), id); err != nil {
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, tracing.ErrNoCapture):
+			status = http.StatusConflict
+		case errors.Is(err, tracing.ErrCheckpointParams):
+			status = http.StatusBadRequest
+		}
+		http.Error(w, err.Error(), status)
+		return
+	}
+	h.writeLive(w, r, http.StatusOK, session)
+}
+
 // extend adds ?duration to the session's deadline; the registry clamps it to
 // its maximum duration from the session's start.
 func (h *sessionHandler) extend(w http.ResponseWriter, r *http.Request, id string) {
@@ -55,7 +90,7 @@ func (h *sessionHandler) extend(w http.ResponseWriter, r *http.Request, id strin
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	session, ok := h.liveForControl(w, r, id, "extend")
+	session, ok := h.liveFor(w, r, id, "extend", ActionControl)
 	if !ok {
 		return
 	}

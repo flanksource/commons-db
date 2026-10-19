@@ -315,3 +315,12 @@ func (i *PostgresInspector) GetProcParams(ctx context.Context, schema string) ([
 func (i *PostgresInspector) GetTriggers(ctx context.Context, schema string) ([]*Trigger, error) {
 	return nil, nil
 }
+
+// nullableInt keeps "the catalogue said nothing" distinct from "the catalogue
+// said zero": a non-character column has no width, which is not a width of 0.
+func nullableInt(v sql.NullInt64) *int {
+	if !v.Valid {
+		return nil
+	}
+	return new(int(v.Int64))
+}

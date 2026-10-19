@@ -132,7 +132,7 @@ func (r *SessionRegistry) ResumeTrack(ctx stdcontext.Context, id string, stopAt 
 	now := time.Now()
 	session.rec.SessionStart = previous.SessionStart
 	session.rec.SessionStatus = SessionStatus{State: SessionStarting, UpdatedAt: now, HeartbeatAt: now,
-		Events: previous.Events, EventCount: previous.EventCount, Summary: previous.Summary, Metadata: previous.Metadata}
+		Events: previous.Events, EventCount: previous.EventCount, Summary: previous.Summary, Metadata: previous.Metadata, Exports: previous.Exports}
 	session.seq = previous.EventCount
 	session.durationStart = now
 	run, cancel := stdcontext.WithCancel(stdcontext.WithoutCancel(ctx))

@@ -176,7 +176,7 @@ func advertisesRun(profile query.Profile) bool {
 }
 
 func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
-	entityName := "profile-" + slugify(profile.Name)
+	entityName := SurfaceKey(profile.Name)
 	path := "/api/v1/profile/" + entityName
 	spec.Clicky.Surfaces = append(spec.Clicky.Surfaces, rpc.ClickySurface{
 		Key:         entityName,

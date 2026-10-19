@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"strings"
@@ -35,6 +36,9 @@ type RunningUpdate struct {
 	// Metadata is what the armed capture reports about itself; see
 	// SessionMetadata. Empty leaves the session's metadata as it was.
 	Metadata []SessionMetadata
+	// Exports is the environment the armed capture hands the processes it
+	// observes; see SessionStatus.Exports. Empty leaves it as it was.
+	Exports map[string]string
 }
 
 // ProgressUpdate is a capture's running totals.
@@ -62,6 +66,9 @@ func (s *Session) Running(u RunningUpdate) error {
 	if err := validateSessionMetadata(u.Metadata); err != nil {
 		return fmt.Errorf("session %s: %w", s.ID(), err)
 	}
+	if err := validateSessionExports(u.Exports); err != nil {
+		return fmt.Errorf("session %s: %w", s.ID(), err)
+	}
 	var err error
 	s.mutate(func() bool {
 		if s.rec.State.Terminal() {
@@ -73,6 +80,9 @@ func (s *Session) Running(u RunningUpdate) error {
 		}
 		if len(u.Metadata) > 0 {
 			s.rec.Metadata = slices.Clone(u.Metadata)
+		}
+		if len(u.Exports) > 0 {
+			s.rec.Exports = maps.Clone(u.Exports)
 		}
 		s.recordEventsLocked(u.Events)
 		if u.StopAt != nil {

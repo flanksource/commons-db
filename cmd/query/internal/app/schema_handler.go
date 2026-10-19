@@ -20,9 +20,11 @@ const SchemaContentType = profiles.SchemaContentType
 // (or `?__schema`) to a known resource path returns the generated schema; every
 // other request is delegated to next.
 //
-//   - {prefix}/connection[s]        -> the if/then connection schema
 //   - {prefix}/profile              -> the profile-setup schema
 //   - {prefix}/profile/{name}       -> the per-profile FilterBar+columns schema
+//
+// The connection schema is served by connections.Service.Handler, which every
+// host mounts.
 type schemaHandler struct {
 	prefix string
 	store  profilestore.Store
@@ -69,8 +71,6 @@ func (h *schemaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *schemaHandler) resolve(path string) (schema.Schema, bool, error) {
 	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(path, "/"), h.prefix), "/")
 	switch {
-	case rel == "connection" || rel == "connections":
-		return schema.Connection(), true, nil
 	case rel == "profile" || rel == "profiles":
 		return schema.Profile(), true, nil
 	case strings.HasPrefix(rel, "profile/"):

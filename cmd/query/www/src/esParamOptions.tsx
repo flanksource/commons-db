@@ -109,7 +109,6 @@ function EsParamFields({
     index: target,
     roles: paramRoles(rootValue.params),
   });
-  const name = param.name ?? "";
   const automatic = param.role === "limit" || param.role === "offset";
 
   return (
@@ -119,63 +118,14 @@ function EsParamFields({
           Mapped automatically to the result {param.role}.
         </span>
       ) : (
-        <>
-          {mappings.length ? (
-            <div className="flex flex-wrap gap-1">
-              {mappings.map((mapping) => (
-                <FieldMappingPill
-                  key={`${mapping.path.join(".")}:${mapping.field}`}
-                  field={mapping.field}
-                  onClear={() => {
-                    if (!search || !onRootChange || !name) return;
-                    commitMapping(
-                      rootValue,
-                      removeParamMapping({
-                        search,
-                        params: rootValue.params ?? [],
-                        name,
-                        ...(mapping.structural ? { path: mapping.path } : {}),
-                      }),
-                      onRootChange,
-                    );
-                  }}
-                />
-              ))}
-            </div>
-          ) : null}
-          {search ? (
-            <Combobox
-              ariaLabel={`Map ${name || "parameter"} to a field`}
-              className="min-w-56"
-              value=""
-              options={fields.map((entry) => ({
-                value: entry.name,
-                label: entry.name,
-              }))}
-              placeholder="Map to field…"
-              allowCustomValue
-              disabled={!name || !onRootChange}
-              onChange={(next) => {
-                if (!next || !name || !onRootChange) return;
-                commitMapping(
-                  rootValue,
-                  addParamMapping({
-                    search,
-                    params: rootValue.params ?? [],
-                    name,
-                    field: next,
-                  }),
-                  onRootChange,
-                );
-              }}
-            />
-          ) : (
-            <span className="text-xs text-muted-foreground">
-              Switch Source &amp; Query to Form to map this parameter to a
-              field.
-            </span>
-          )}
-        </>
+        <ParamMappingControls
+          param={param}
+          rootValue={rootValue}
+          search={search}
+          fields={fields.map((entry) => entry.name)}
+          mappings={mappings}
+          onRootChange={onRootChange}
+        />
       )}
       {paramHasOptions(param) ? (
         <>
@@ -196,13 +146,7 @@ function EsParamFields({
             title="Load this parameter's options from a CSV, JSON or text file"
             onValues={(values) => {
               const existing = param.options ?? [];
-              const seen = new Set(existing);
-              const merged = [...existing];
-              for (const value of values) {
-                if (seen.has(value)) continue;
-                seen.add(value);
-                merged.push(value);
-              }
+              const merged = mergeOptionValues(existing, values);
               onOptionsChange(merged);
               return merged.length - existing.length;
             }}
@@ -210,6 +154,90 @@ function EsParamFields({
         </>
       ) : null}
     </div>
+  );
+}
+
+function mergeOptionValues(existing: string[], values: string[]): string[] {
+  const seen = new Set(existing);
+  const merged = [...existing];
+  for (const value of values) {
+    if (seen.has(value)) continue;
+    seen.add(value);
+    merged.push(value);
+  }
+  return merged;
+}
+
+function ParamMappingControls({
+  param,
+  rootValue,
+  search,
+  fields,
+  mappings,
+  onRootChange,
+}: {
+  param: ParamDraft;
+  rootValue: ProfileDraft;
+  search: EsSearch | undefined;
+  fields: string[];
+  mappings: MappingRow[];
+  onRootChange?: (next: Record<string, unknown>) => void;
+}) {
+  const name = param.name ?? "";
+  return (
+    <>
+      {mappings.length ? (
+        <div className="flex flex-wrap gap-1">
+          {mappings.map((mapping) => (
+            <FieldMappingPill
+              key={`${mapping.path.join(".")}:${mapping.field}`}
+              field={mapping.field}
+              onClear={() => {
+                if (!search || !onRootChange || !name) return;
+                commitMapping(
+                  rootValue,
+                  removeParamMapping({
+                    search,
+                    params: rootValue.params ?? [],
+                    name,
+                    ...(mapping.structural ? { path: mapping.path } : {}),
+                  }),
+                  onRootChange,
+                );
+              }}
+            />
+          ))}
+        </div>
+      ) : null}
+      {search ? (
+        <Combobox
+          ariaLabel={`Map ${name || "parameter"} to a field`}
+          className="min-w-56"
+          value=""
+          options={fields.map((field) => ({ value: field, label: field }))}
+          placeholder="Map to field…"
+          allowCustomValue
+          disabled={!name || !onRootChange}
+          onChange={(next) => {
+            if (!next || !name || !onRootChange) return;
+            commitMapping(
+              rootValue,
+              addParamMapping({
+                search,
+                params: rootValue.params ?? [],
+                name,
+                field: next,
+              }),
+              onRootChange,
+            );
+          }}
+        />
+      ) : (
+        <span className="text-xs text-muted-foreground">
+          Switch Source &amp; Query to Form to map this parameter to a field.
+        </span>
+      )}
+    </>
   );
 }
 

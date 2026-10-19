@@ -61,7 +61,7 @@ type serverInfo struct {
 // the connection header and the dashboard share a single cache entry. `id` may
 // be a uuid or a name, so the cache is keyed off the resolved row's ID.
 func (h *connectionBrowserHandler) serveConnectionInfo(w http.ResponseWriter, r *http.Request, id string) {
-	raw, err := findConnection(h.ctx.DB(), id)
+	raw, err := lookupConnection(h.ctx, h.virtual, h.ctx.DB(), id)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return

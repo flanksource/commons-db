@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 func init() {
@@ -233,7 +234,7 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 		return openSearchRuntime{}, err
 	}
 
-	address, err := resolveInlineURL(ctx, opts.Address, "opensearch")
+	address, err := providerkit.ResolveInlineURL(ctx, opts.Address, "opensearch")
 	if err != nil {
 		return openSearchRuntime{}, err
 	}

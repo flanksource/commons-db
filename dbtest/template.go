@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/commons/logger"
 	"github.com/lib/pq"
 )
 
@@ -55,7 +54,7 @@ func acquireProvisionedScratch(
 	adminURL, name, unique string,
 	provisioner Provisioner,
 	now time.Time,
-) (string, func() error, error) {
+) (string, *databaseLease, error) {
 	fingerprint, err := provisioner.Fingerprint(ctx)
 	if err != nil {
 		return "", nil, fmt.Errorf("fingerprint database provisioner: %w", err)
@@ -74,7 +73,7 @@ func acquireProvisionedScratch(
 func (m templateManager) acquire(
 	ctx context.Context,
 	name, unique string,
-) (string, func() error, error) {
+) (string, *databaseLease, error) {
 	if name == "" {
 		return "", nil, errors.New("provisioned database name is required")
 	}
@@ -91,18 +90,20 @@ func (m templateManager) acquire(
 	}
 	templateName, err := m.ensureTemplate(ctx, session)
 	if err == nil {
-		if cleanupErr := m.cleanupStaleTemplates(ctx, session, templateName); cleanupErr != nil {
-			logger.Warnf("dbtest: stale database template cleanup failed: %v", cleanupErr)
-		}
+		sweepInBackground("templates "+redact(m.adminURL), func(ctx context.Context) error {
+			return sweepStaleTemplates(ctx, m.adminURL, templateName, m.now)
+		})
 	}
+	// The clone is locked before it exists, so a sweeper can treat an unheld
+	// lock on any test database as proof that its owner is gone.
 	instanceName := managedDatabaseName(testDatabasePrefix, m.now, unique, name)
+	if err == nil {
+		err = session.lock(ctx, instanceName)
+	}
 	instanceCreated := false
 	if err == nil {
 		err = m.createInstance(ctx, session, templateName, instanceName)
 		instanceCreated = err == nil
-	}
-	if err == nil {
-		err = session.lock(ctx, instanceName)
 	}
 	unlockErr := session.unlock(ctx, lockName)
 	if err != nil || unlockErr != nil {
@@ -112,15 +113,15 @@ func (m templateManager) acquire(
 	lease := &databaseLease{session: session, name: instanceName}
 	dsn, err := withDatabase(m.adminURL, instanceName)
 	if err != nil {
-		return "", nil, errors.Join(err, lease.cleanup())
+		return "", nil, errors.Join(err, lease.release())
 	}
 	if err := m.provisioner.PrepareInstance(ctx, dsn); err != nil {
 		return "", nil, errors.Join(
 			fmt.Errorf("prepare provisioned database instance: %w", err),
-			lease.cleanup(),
+			lease.release(),
 		)
 	}
-	return dsn, lease.cleanup, nil
+	return dsn, lease, nil
 }
 
 func (m templateManager) ensureTemplate(ctx context.Context, session *poolSession) (string, error) {
@@ -190,7 +191,7 @@ func (m templateManager) createTemplate(ctx context.Context, session *poolSessio
 	); err != nil {
 		return "", errors.Join(
 			fmt.Errorf("label database template %s: %w", name, err),
-			dropTemplateDatabase(ctx, session, created),
+			discardTemplate(session, created),
 		)
 	}
 	created.metadata = sql.NullString{String: m.identity.metadata, Valid: true}
@@ -201,7 +202,7 @@ func (m templateManager) createTemplate(ctx context.Context, session *poolSessio
 	if err != nil {
 		return "", errors.Join(
 			fmt.Errorf("prepare database template %s: %w", name, err),
-			dropTemplateDatabase(ctx, session, created),
+			discardTemplate(session, created),
 		)
 	}
 	if _, err := session.conn.ExecContext(
@@ -210,7 +211,7 @@ func (m templateManager) createTemplate(ctx context.Context, session *poolSessio
 	); err != nil {
 		return "", errors.Join(
 			fmt.Errorf("stop connections to database template %s: %w", name, err),
-			dropTemplateDatabase(ctx, session, created),
+			discardTemplate(session, created),
 		)
 	}
 	drainContext, cancel := context.WithTimeout(ctx, connectTimeout)
@@ -218,7 +219,7 @@ func (m templateManager) createTemplate(ctx context.Context, session *poolSessio
 	if err := session.waitForDatabaseConnectionsToClose(drainContext, name); err != nil {
 		return "", errors.Join(
 			fmt.Errorf("database template %s still has active connections after preparation: %w", name, err),
-			dropTemplateDatabase(ctx, session, created),
+			discardTemplate(session, created),
 		)
 	}
 	if _, err := session.conn.ExecContext(
@@ -227,10 +228,18 @@ func (m templateManager) createTemplate(ctx context.Context, session *poolSessio
 	); err != nil {
 		return "", errors.Join(
 			fmt.Errorf("seal database template %s: %w", name, err),
-			dropTemplateDatabase(ctx, session, created),
+			discardTemplate(session, created),
 		)
 	}
 	return name, nil
+}
+
+// discardTemplate drops a template whose construction failed. It uses a fresh
+// context because the failure is often the provisioning deadline expiring.
+func discardTemplate(session *poolSession, database templateDatabase) error {
+	ctx, cancel := context.WithTimeout(context.Background(), connectTimeout)
+	defer cancel()
+	return dropTemplateDatabase(ctx, session, database)
 }
 
 func cleanupProvisioningFailure(session *poolSession, instanceName string, instanceCreated bool) error {
@@ -248,10 +257,7 @@ func (m templateManager) createInstance(
 	session *poolSession,
 	templateName, instanceName string,
 ) error {
-	if _, err := session.conn.ExecContext(
-		ctx,
-		"CREATE DATABASE "+pq.QuoteIdentifier(instanceName)+" WITH TEMPLATE "+pq.QuoteIdentifier(templateName),
-	); err != nil {
+	if err := session.createDatabase(ctx, instanceName, templateName); err != nil {
 		return fmt.Errorf("clone database template %s into %s: %w", templateName, instanceName, err)
 	}
 	return nil
