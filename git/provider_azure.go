@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons-db/models"
 )
@@ -34,13 +35,16 @@ type azureRepo struct {
 }
 
 type azurePull struct {
-	ID            int    `json:"pullRequestId"`
-	Status        string `json:"status"`
-	Title         string `json:"title"`
-	SourceRefName string `json:"sourceRefName"`
-	TargetRefName string `json:"targetRefName"`
+	ID            int       `json:"pullRequestId"`
+	Status        string    `json:"status"`
+	Title         string    `json:"title"`
+	Description   string    `json:"description"`
+	CreationDate  time.Time `json:"creationDate"`
+	SourceRefName string    `json:"sourceRefName"`
+	TargetRefName string    `json:"targetRefName"`
 	CreatedBy     struct {
-		ID string `json:"id"`
+		ID          string `json:"id"`
+		DisplayName string `json:"displayName"`
 	} `json:"createdBy"`
 	LastMergeSourceCommit struct {
 		CommitID string `json:"commitId"`
@@ -135,6 +139,48 @@ func (p *azureProvider) GetPullRequest(ctx context.Context, repo RepoURL, number
 	return pull.toPullRequest(repo)
 }
 
+func (p *azureProvider) ListPullRequestActivity(ctx context.Context, repo RepoURL, number int) ([]PullRequestActivity, error) {
+	if number <= 0 {
+		return nil, fmt.Errorf("pull request number must be positive")
+	}
+	var result struct {
+		Value []struct {
+			ID       int `json:"id"`
+			Comments []struct {
+				Content       string    `json:"content"`
+				CommentType   string    `json:"commentType"`
+				PublishedDate time.Time `json:"publishedDate"`
+				IsDeleted     bool      `json:"isDeleted"`
+				Author        struct {
+					DisplayName string `json:"displayName"`
+				} `json:"author"`
+			} `json:"comments"`
+		} `json:"value"`
+	}
+	if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, fmt.Sprintf("/%d/threads", number)), nil, &result); err != nil {
+		return nil, err
+	}
+	activity := []PullRequestActivity{}
+	for _, thread := range result.Value {
+		for _, comment := range thread.Comments {
+			if comment.IsDeleted {
+				continue
+			}
+			kind := PullRequestHistory
+			switch comment.CommentType {
+			case "text", "unknown":
+				kind = PullRequestComment
+			case "system", "codeChange":
+			default:
+				return nil, fmt.Errorf("azure DevOps pull request %d thread %d has unknown comment type %q", number, thread.ID, comment.CommentType)
+			}
+			activity = append(activity, PullRequestActivity{Kind: kind, Author: comment.Author.DisplayName, Body: comment.Content,
+				CreatedAt: comment.PublishedDate, URL: fmt.Sprintf("%s/pullrequest/%d?discussionId=%d", repo.azureWebBase(), number, thread.ID)})
+		}
+	}
+	return activity, nil
+}
+
 var azureListStatuses = map[PullRequestState]string{PullRequestOpen: "active", PullRequestClosed: "abandoned", PullRequestMerged: "completed"}
 
 func (p *azureProvider) ListPullRequests(ctx context.Context, repo RepoURL, options ListPullRequestsOptions) ([]PullRequest, error) {
@@ -199,7 +245,8 @@ func (pull azurePull) toPullRequest(repo RepoURL) (PullRequest, error) {
 	}
 	return PullRequest{Number: pull.ID, URL: fmt.Sprintf("%s/pullrequest/%d", repo.azureWebBase(), pull.ID), State: state,
 		Head: strings.TrimPrefix(pull.SourceRefName, "refs/heads/"), Base: strings.TrimPrefix(pull.TargetRefName, "refs/heads/"),
-		Title: pull.Title, HeadSHA: pull.LastMergeSourceCommit.CommitID, HeadRepository: head.fullName()}, nil
+		Title: pull.Title, Author: pull.CreatedBy.DisplayName, Body: pull.Description, CreatedAt: pull.CreationDate,
+		HeadSHA: pull.LastMergeSourceCommit.CommitID, HeadRepository: head.fullName()}, nil
 }
 
 var azureCommitStates = map[CommitState]string{CommitStatePending: "pending", CommitStateSuccess: "succeeded",

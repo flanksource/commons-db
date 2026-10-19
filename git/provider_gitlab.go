@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons-db/models"
 )
@@ -33,10 +34,15 @@ type gitlabProject struct {
 }
 
 type gitlabMergeRequest struct {
-	IID          int    `json:"iid"`
-	WebURL       string `json:"web_url"`
-	State        string `json:"state"`
-	Title        string `json:"title"`
+	IID         int       `json:"iid"`
+	WebURL      string    `json:"web_url"`
+	State       string    `json:"state"`
+	Title       string    `json:"title"`
+	Description string    `json:"description"`
+	CreatedAt   time.Time `json:"created_at"`
+	Author      struct {
+		Name string `json:"name"`
+	} `json:"author"`
 	SourceBranch string `json:"source_branch"`
 	TargetBranch string `json:"target_branch"`
 	SHA          string `json:"sha"`
@@ -146,6 +152,50 @@ func (p *gitlabProvider) GetPullRequest(ctx context.Context, repo RepoURL, numbe
 	return p.pullRequest(ctx, repo, mr)
 }
 
+func (p *gitlabProvider) ListPullRequestActivity(ctx context.Context, repo RepoURL, number int) ([]PullRequestActivity, error) {
+	if number <= 0 {
+		return nil, fmt.Errorf("merge request number must be positive")
+	}
+	pull, err := p.GetPullRequest(ctx, repo, number)
+	if err != nil {
+		return nil, err
+	}
+	activity := []PullRequestActivity{}
+	query := url.Values{"per_page": {"100"}}
+	for {
+		var discussions []struct {
+			Notes []struct {
+				ID        int       `json:"id"`
+				Body      string    `json:"body"`
+				System    bool      `json:"system"`
+				CreatedAt time.Time `json:"created_at"`
+				Author    struct {
+					Name string `json:"name"`
+				} `json:"author"`
+			} `json:"notes"`
+		}
+		headers, err := p.api.do(ctx, http.MethodGet, p.mrEndpoint(repo, fmt.Sprintf("/%d/discussions", number))+"?"+query.Encode(), nil, &discussions)
+		if err != nil {
+			return nil, err
+		}
+		for _, discussion := range discussions {
+			for _, note := range discussion.Notes {
+				kind := PullRequestComment
+				if note.System {
+					kind = PullRequestHistory
+				}
+				activity = append(activity, PullRequestActivity{Kind: kind, Author: note.Author.Name, Body: note.Body,
+					CreatedAt: note.CreatedAt, URL: fmt.Sprintf("%s#note_%d", pull.URL, note.ID)})
+			}
+		}
+		page := strings.TrimSpace(headers.Get("X-Next-Page"))
+		if page == "" {
+			return activity, nil
+		}
+		query.Set("page", page)
+	}
+}
+
 var gitlabListStates = map[PullRequestState]string{PullRequestOpen: "opened", PullRequestClosed: "closed", PullRequestMerged: "merged"}
 
 func (p *gitlabProvider) ListPullRequests(ctx context.Context, repo RepoURL, options ListPullRequestsOptions) ([]PullRequest, error) {
@@ -200,7 +250,7 @@ func (mr gitlabMergeRequest) toPullRequest() (PullRequest, error) {
 		return PullRequest{}, fmt.Errorf("gitlab merge request !%d has unknown state %q", mr.IID, mr.State)
 	}
 	return PullRequest{Number: mr.IID, URL: mr.WebURL, State: state, Head: mr.SourceBranch, Base: mr.TargetBranch,
-		Title: mr.Title, HeadSHA: mr.SHA}, nil
+		Title: mr.Title, Author: mr.Author.Name, Body: mr.Description, CreatedAt: mr.CreatedAt, HeadSHA: mr.SHA}, nil
 }
 
 // pullRequest converts mr, naming its head repository by path_with_namespace:
