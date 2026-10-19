@@ -3,6 +3,7 @@ package git_test
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
@@ -162,5 +163,63 @@ var _ = Describe("plain git provider", func() {
 		Expect(provider.SetCommitStatus(ctx, repo, headSHA, applyStatus)).To(MatchError(ContainSubstring("commit statuses is not supported")))
 		_, err := provider.CommentPullRequest(ctx, repo, 1, "x")
 		Expect(err).To(MatchError(ContainSubstring("pull request comments is not supported")))
+		_, err = provider.ListPullRequestActivity(ctx, repo, 1)
+		Expect(err).To(MatchError(git.ErrPullRequestsUnsupported))
+	})
+})
+
+var _ = Describe("pull request detail activity", func() {
+	It("reads GitHub conversation, review comments, and issue events", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /repos/acme/widgets/issues/5/comments": reply(`[{"body":"Conversation","html_url":"https://github.com/acme/widgets/pull/5#issuecomment-1","created_at":"2026-10-18T10:00:00Z","user":{"login":"Grace"}}]`),
+			"GET /repos/acme/widgets/pulls/5/comments":  reply(`[{"body":"Review","html_url":"https://github.com/acme/widgets/pull/5#discussion_r2","created_at":"2026-10-18T11:00:00Z","user":{"login":"Lin"}}]`),
+			"GET /repos/acme/widgets/issues/5/events":   reply(`[{"event":"review_requested","created_at":"2026-10-18T12:00:00Z","actor":{"login":"Ada"}}]`),
+		})
+		provider := providerClient(models.ConnectionTypeGithub, api.Server.URL, nil).Provider
+		activity, err := provider.ListPullRequestActivity(ctx, repoURL("https://github.com/acme/widgets", ""), 5)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(activity).To(HaveLen(3))
+		Expect([]git.PullRequestActivityKind{activity[0].Kind, activity[1].Kind, activity[2].Kind}).To(Equal([]git.PullRequestActivityKind{git.PullRequestComment, git.PullRequestComment, git.PullRequestHistory}))
+		Expect([]string{activity[0].Body, activity[1].Body, activity[2].Body}).To(Equal([]string{"Conversation", "Review", "review requested"}))
+	})
+
+	It("reads GitLab comments, discussion replies and system history", func(ctx SpecContext) {
+		path := "/api/v4/projects/acme%2Fcli/merge_requests/3"
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET " + path:                  reply(`{"iid":3,"web_url":"https://gl/acme/cli/-/merge_requests/3","state":"opened","description":"Why","author":{"name":"Ada"},"source_branch":"apply","target_branch":"main","source_project_id":7,"target_project_id":7}`),
+			"GET " + path + "/discussions": reply(`[{"id":"root","individual_note":true,"notes":[{"id":10,"body":"Please test","system":false,"created_at":"2026-10-18T10:00:00Z","author":{"name":"Grace"}}]},{"id":"review","notes":[{"id":12,"type":"DiffNote","body":"Update this line","system":false,"created_at":"2026-10-18T10:30:00Z","author":{"name":"Lin"}},{"id":13,"type":"DiscussionNote","body":"Updated","system":false,"created_at":"2026-10-18T10:45:00Z","author":{"name":"Ada"}}]},{"id":"event","individual_note":true,"notes":[{"id":11,"body":"changed the title","system":true,"created_at":"2026-10-18T11:00:00Z","author":{"name":"Ada"}}]}]`),
+		})
+		provider := providerClient(models.ConnectionTypeGitlab, api.Server.URL, nil).Provider
+		repo := repoURL("https://gitlab.example.com/acme/cli", models.ConnectionTypeGitlab)
+		pr, err := provider.GetPullRequest(ctx, repo, 3)
+		Expect(err).ToNot(HaveOccurred())
+		Expect([]string{pr.Author, pr.Body}).To(Equal([]string{"Ada", "Why"}))
+		activity, err := provider.ListPullRequestActivity(ctx, repo, 3)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(activity).To(HaveLen(4))
+		Expect(activity[0].URL).To(Equal("https://gl/acme/cli/-/merge_requests/3#note_10"))
+		Expect(activity[1].Body).To(Equal("Update this line"))
+		Expect(activity[2].Body).To(Equal("Updated"))
+		Expect(activity[3].Kind).To(Equal(git.PullRequestHistory))
+	})
+
+	It("reads Azure creator, body, comments and system history", func(ctx SpecContext) {
+		path := "/acme/Platform/_apis/git/repositories/rules/pullrequests/9"
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET " + path:              reply(`{"pullRequestId":9,"status":"active","title":"T","description":"Why this changes","creationDate":"2026-10-18T09:00:00Z","createdBy":{"displayName":"Ada"},"sourceRefName":"refs/heads/apply","targetRefName":"refs/heads/main","repository":{"name":"rules","project":{"name":"Platform"}}}`),
+			"GET " + path + "/threads": reply(`{"value":[{"id":31,"comments":[{"id":1,"content":"Please test","commentType":"text","publishedDate":"2026-10-18T10:00:00Z","author":{"displayName":"Grace"}},{"id":2,"content":"Updated source","commentType":"system","publishedDate":"2026-10-18T11:00:00Z","author":{"displayName":"Ada"}}]}]}`),
+		})
+		provider := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider
+		repo := repoURL("https://dev.azure.com/acme/Platform/_git/rules", "")
+
+		pr, err := provider.GetPullRequest(ctx, repo, 9)
+		Expect(err).ToNot(HaveOccurred())
+		Expect([]string{pr.Author, pr.Body, pr.CreatedAt.Format("2006-01-02T15:04:05Z")}).To(Equal([]string{"Ada", "Why this changes", "2026-10-18T09:00:00Z"}))
+		activity, err := provider.ListPullRequestActivity(ctx, repo, 9)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(activity).To(Equal([]git.PullRequestActivity{
+			{Kind: git.PullRequestComment, Author: "Grace", Body: "Please test", CreatedAt: pr.CreatedAt.Add(1 * time.Hour), URL: pr.URL + "?discussionId=31"},
+			{Kind: git.PullRequestHistory, Author: "Ada", Body: "Updated source", CreatedAt: pr.CreatedAt.Add(2 * time.Hour), URL: pr.URL + "?discussionId=31"},
+		}))
 	})
 })
