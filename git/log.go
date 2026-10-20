@@ -1,9 +1,11 @@
 package git
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -51,10 +53,13 @@ func (c Commit) IsMerge() bool { return len(c.Parents) > 1 }
 
 // LogOptions configures Cache.Log. Limit > 0 keeps only the newest Limit
 // commits; Paths (matched literally, never as globs) keeps only the commits
-// that touch them.
+// that touch them. HeadFrom, when set, is the repository head is read from
+// (e.g. a fork of the logged repository): it resolves and is fetched there,
+// into the logged repository's mirror, and must share history with base.
 type LogOptions struct {
-	Limit int
-	Paths []string
+	Limit    int
+	Paths    []string
+	HeadFrom *Repository
 }
 
 // HistoryOptions configures Cache.History. Paths (matched literally, never as
@@ -98,8 +103,14 @@ func (c *Cache) Log(ctx context.Context, repo *Repository, base, head string, op
 	if options.Limit > 0 {
 		args = append(args, "--max-count="+strconv.Itoa(options.Limit))
 	}
+	headFrom := cmp.Or(options.HeadFrom, repo)
 	var out string
-	err := c.withRefs(ctx, repo, []string{base, head}, func(mirror string, shas []string) (err error) {
+	err := c.withRefs(ctx, repo, []refOn{{repo, base}, {headFrom, head}}, func(mirror string, shas []string) (err error) {
+		if headFrom != repo {
+			if _, err := mergeBase(ctx, mirror, shas[0], shas[1]); err != nil {
+				return fmt.Errorf("%s of %s and %s of %s: %w", base, repo.URL.Redacted(), head, headFrom.URL.Redacted(), err)
+			}
+		}
 		args = append(args, "--end-of-options", shas[0]+"..."+shas[1], "--")
 		out, err = run(ctx, command{dir: mirror, args: append(args, options.Paths...)})
 		return err
@@ -132,7 +143,7 @@ func (c *Cache) History(ctx context.Context, repo *Repository, ref string, optio
 		args = append(args, "--since="+options.Since)
 	}
 	var out string
-	err := c.withRefs(ctx, repo, []string{ref}, func(mirror string, shas []string) (err error) {
+	err := c.withRefs(ctx, repo, []refOn{{repo, ref}}, func(mirror string, shas []string) (err error) {
 		out, err = run(ctx, command{dir: mirror, args: slices.Concat(args, []string{"--end-of-options", shas[0], "--"}, options.Paths)})
 		return err
 	})
@@ -146,7 +157,7 @@ func (c *Cache) History(ctx context.Context, repo *Repository, ref string, optio
 // their merge base; refs without a common ancestor are an error.
 func (c *Cache) Compare(ctx context.Context, repo *Repository, base, head string) (Comparison, error) {
 	var comparison Comparison
-	err := c.withRefs(ctx, repo, []string{base, head}, func(mirror string, shas []string) error {
+	err := c.withRefs(ctx, repo, []refOn{{repo, base}, {repo, head}}, func(mirror string, shas []string) error {
 		baseSHA, headSHA := shas[0], shas[1]
 		counts, err := run(ctx, command{dir: mirror, args: []string{"rev-list", "--left-right", "--count",
 			"--end-of-options", baseSHA + "..." + headSHA}})
@@ -156,36 +167,56 @@ func (c *Cache) Compare(ctx context.Context, repo *Repository, base, head string
 		if _, err := fmt.Sscanf(counts, "%d\t%d", &comparison.Behind, &comparison.Ahead); err != nil {
 			return fmt.Errorf("parse rev-list counts %q: %w", counts, err)
 		}
-		comparison.MergeBase, err = run(ctx, command{dir: mirror, args: []string{"merge-base", "--end-of-options", baseSHA, headSHA}})
-		if err != nil {
-			return fmt.Errorf("%s and %s have no common ancestor: %w", base, head, err)
+		if comparison.MergeBase, err = mergeBase(ctx, mirror, baseSHA, headSHA); err != nil {
+			return fmt.Errorf("%s and %s: %w", base, head, err)
 		}
 		return nil
 	})
 	return comparison, err
 }
 
-// withRefs resolves names with one ls-remote, fetches each with its full
-// history into the mirror and runs fn on their commits (in names order), all
-// under the mirror lock.
-func (c *Cache) withRefs(ctx context.Context, repo *Repository, names []string, fn func(mirror string, shas []string) error) error {
+// mergeBase is the best common ancestor of commits a and b in dir; commits
+// without one fail with ErrUnrelatedHistories.
+func mergeBase(ctx context.Context, dir, a, b string) (string, error) {
+	base, err := run(ctx, command{dir: dir, args: []string{"merge-base", "--end-of-options", a, b}})
+	if exit, ok := errors.AsType[*exec.ExitError](err); ok && exit.ExitCode() == 1 && base == "" {
+		return "", ErrUnrelatedHistories
+	}
+	return base, err
+}
+
+// refOn is a ref name on the repository it resolves and is fetched from.
+type refOn struct {
+	repo *Repository
+	name string
+}
+
+// withRefs resolves each ref with one ls-remote per repository, fetches each
+// with its full history into repo's mirror and runs fn on their commits (in
+// refs order), all under the mirror lock.
+func (c *Cache) withRefs(ctx context.Context, repo *Repository, refs []refOn, fn func(mirror string, shas []string) error) error {
 	if c.Root == "" {
 		return errors.New("git cache root is required")
 	}
-	refs, err := repo.LsRemote(ctx)
-	if err != nil {
-		return err
-	}
-	resolved := make([]Ref, len(names))
-	for i, name := range names {
-		if resolved[i], err = refs.Resolve(name); err != nil {
-			return fmt.Errorf("%s: %w", repo.URL.Redacted(), err)
+	listed := map[*Repository]RemoteRefs{}
+	resolved := make([]Ref, len(refs))
+	var err error
+	for i, ref := range refs {
+		remote, ok := listed[ref.repo]
+		if !ok {
+			if remote, err = ref.repo.LsRemote(ctx); err != nil {
+				return err
+			}
+			listed[ref.repo] = remote
+		}
+		if resolved[i], err = remote.Resolve(ref.name); err != nil {
+			return fmt.Errorf("%s: %w", ref.repo.URL.Redacted(), err)
 		}
 	}
 	return c.withMirror(ctx, repo, func(mirror string) (err error) {
 		shas := make([]string, len(resolved))
 		for i, ref := range resolved {
-			if shas[i], err = fetchHistory(ctx, mirror, repo, ref); err != nil {
+			if shas[i], err = fetchHistory(ctx, mirror, repo, refs[i].repo, ref); err != nil {
 				return err
 			}
 		}
@@ -212,21 +243,22 @@ func (c *Cache) withMirror(ctx context.Context, repo *Repository, fn func(mirror
 	return fn(mirror)
 }
 
-// fetchHistory makes ref's commit and its full history present in the
-// mirror: a cached commit is reused unless an earlier Depth checkout left the
-// mirror shallow, which would truncate a log or merge base.
-func fetchHistory(ctx context.Context, mirror string, repo *Repository, ref Ref) (string, error) {
+// fetchHistory makes ref's commit and its full history, fetched from repo,
+// present in owner's mirror: a cached commit is reused unless an earlier
+// Depth checkout left the mirror shallow, which would truncate a log or merge
+// base.
+func fetchHistory(ctx context.Context, mirror string, owner, repo *Repository, ref Ref) (string, error) {
 	shallow, err := run(ctx, command{dir: mirror, args: []string{"rev-parse", "--is-shallow-repository"}})
 	if err != nil {
 		return "", err
 	}
 	if shallow == "true" {
-		return fetch(ctx, mirror, repo, ref, 0, "--unshallow")
+		return fetch(ctx, mirror, owner, repo, ref, 0, "--unshallow")
 	}
 	if hasCommit(ctx, mirror, ref.SHA) {
 		return ref.SHA, nil
 	}
-	return fetch(ctx, mirror, repo, ref, 0)
+	return fetch(ctx, mirror, owner, repo, ref, 0)
 }
 
 // parseLog splits logFormat output into commits; parseFiles reads the file

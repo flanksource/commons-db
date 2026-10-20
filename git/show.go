@@ -25,7 +25,7 @@ func (c *Cache) Show(ctx context.Context, repo *Repository, sha, path string) ([
 	var content []byte
 	err := c.withMirror(ctx, repo, func(mirror string) error {
 		if !hasCommit(ctx, mirror, sha) {
-			if _, err := fetch(ctx, mirror, repo, Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}, 0); err != nil {
+			if _, err := fetch(ctx, mirror, repo, repo, Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}, 0); err != nil {
 				return err
 			}
 		}
