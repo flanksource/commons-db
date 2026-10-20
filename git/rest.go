@@ -44,14 +44,23 @@ type restClient struct {
 // newRESTClient refuses a non-HTTPS base URL, verifies TLS (unless the
 // connection opts out), refuses redirects to non-HTTPS URLs, times out after
 // 30s and attaches the "git" observability feature.
-func newRESTClient(ctx any, provider, baseURL string, tls TLS, authorization string) (*restClient, error) {
+func newRESTClient(ctx any, provider, baseURL string, tls TLS, authorization string, options ...ClientOptions) (*restClient, error) {
 	base, err := url.Parse(strings.TrimRight(baseURL, "/"))
 	if err != nil || base.Scheme != "https" || base.Host == "" {
 		return nil, fmt.Errorf("%s API URL must be an HTTPS URL", provider)
 	}
 	base.RawQuery, base.Fragment = "", ""
-	client, err := commonshttp.NewClient().TLSConfig(commonshttp.TLSConfig{
-		CA: tls.CA, Cert: tls.Cert, Key: tls.Key, InsecureSkipVerify: tls.InsecureSkipVerify})
+	if len(options) > 1 {
+		return nil, fmt.Errorf("git client accepts one options value")
+	}
+	tlsOptions := commonshttp.TLSConfig{CA: tls.CA, Cert: tls.Cert, Key: tls.Key, InsecureSkipVerify: tls.InsecureSkipVerify}
+	var client *commonshttp.Client
+	if len(options) == 1 && options[0].TransportPool != nil {
+		client, err = options[0].TransportPool.Client(commonshttp.TransportOptions{Endpoint: base.String(), TLS: tlsOptions,
+			SecurityNamespace: options[0].SecurityNamespace + "\x00" + authorization})
+	} else {
+		client, err = commonshttp.NewClient().TLSConfig(tlsOptions)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%s API TLS: %w", provider, err)
 	}
@@ -84,7 +93,7 @@ func (c *restClient) endpoint(path string, query url.Values) string {
 
 // do sends body as JSON (when non-nil) to an absolute URL on the base host,
 // decodes a 2xx response into out (when non-nil) and returns its headers.
-func (c *restClient) do(ctx context.Context, method, endpoint string, body, out any) (http.Header, error) {
+func (c *restClient) do(ctx context.Context, method, endpoint string, body, out any) (headers http.Header, err error) {
 	target, err := url.Parse(endpoint)
 	if err != nil || !strings.EqualFold(target.Host, c.base.Host) {
 		return nil, fmt.Errorf("%s API URL %q is not on %s", c.provider, endpoint, c.base.Host)
@@ -100,7 +109,13 @@ func (c *restClient) do(ctx context.Context, method, endpoint string, body, out 
 	if err != nil {
 		return nil, fmt.Errorf("%s API %s %s failed: %w", c.provider, method, endpoint, err)
 	}
-	defer response.Body.Close() //nolint:errcheck // read-only body
+	defer func() {
+		_, drainErr := io.Copy(io.Discard, response.Body)
+		closeErr := response.Body.Close()
+		if drainErr != nil || closeErr != nil {
+			err = errors.Join(err, drainErr, closeErr)
+		}
+	}()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		excerpt, _ := io.ReadAll(io.LimitReader(response.Body, errorBodyExcerpt))
 		return nil, &APIError{Provider: c.provider, Method: method, URL: endpoint, StatusCode: response.StatusCode,

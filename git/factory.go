@@ -1,7 +1,9 @@
 package git
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"strings"
@@ -27,13 +29,25 @@ type Client struct {
 // the repository. github, gitlab and azure_devops carry a PAT in Password and
 // the API URL in URL; the namespace comes from Properties organization,
 // group or project respectively.
-func FromConnection(ctx dbcontext.Context, conn models.Connection) (*Client, error) {
+func FromConnection(ctx dbcontext.Context, conn models.Connection, options ...ClientOptions) (*Client, error) {
+	if len(options) > 1 {
+		return nil, fmt.Errorf("git client accepts one options value")
+	}
+	clientOptions := ClientOptions{}
+	if len(options) == 1 {
+		clientOptions = options[0]
+		encoded, err := json.Marshal(conn)
+		if err != nil {
+			return nil, fmt.Errorf("encode git connection identity: %w", err)
+		}
+		clientOptions.SecurityNamespace += fmt.Sprintf("\x00%x", sha256.Sum256(encoded))
+	}
 	tls := TLS{InsecureSkipVerify: conn.InsecureTLS}
 	switch conn.Type {
 	case models.ConnectionTypeGit:
 		return gitClient(conn, tls)
 	case models.ConnectionTypeGithub, models.ConnectionTypeGitlab, models.ConnectionTypeAzureDevops:
-		return providerClient(ctx, conn, tls)
+		return providerClient(ctx, conn, tls, clientOptions)
 	}
 	return nil, fmt.Errorf("connection %q has type %q, which is not a git provider", conn.Name, conn.Type)
 }
@@ -47,7 +61,7 @@ func gitClient(conn models.Connection, tls TLS) (*Client, error) {
 	return &Client{Type: conn.Type, Provider: &genericProvider{repo: repo}, Auth: auth}, nil
 }
 
-func providerClient(ctx dbcontext.Context, conn models.Connection, tls TLS) (*Client, error) {
+func providerClient(ctx dbcontext.Context, conn models.Connection, tls TLS, options ...ClientOptions) (*Client, error) {
 	base := conn.URL
 	if base == "" && conn.Type == models.ConnectionTypeGithub {
 		base = githubAPI
@@ -63,7 +77,7 @@ func providerClient(ctx dbcontext.Context, conn models.Connection, tls TLS) (*Cl
 	if conn.Type == models.ConnectionTypeAzureDevops {
 		authorization = "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+conn.Password))
 	}
-	api, err := newRESTClient(ctx, conn.Type, base, tls, authorization)
+	api, err := newRESTClient(ctx, conn.Type, base, tls, authorization, options...)
 	if err != nil {
 		return nil, err
 	}
