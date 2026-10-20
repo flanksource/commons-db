@@ -1,4 +1,4 @@
-package app
+package secretcatalog
 
 import (
 	gocontext "context"
@@ -46,7 +46,7 @@ type secretsHandler struct {
 	next        http.Handler
 }
 
-type secretsHandlerOptions struct {
+type Options struct {
 	Prefix      string
 	Context     dbcontext.Context
 	Kube        func() (kubernetes.Interface, error)
@@ -88,7 +88,11 @@ type keyPreview struct {
 	Value string `json:"value"`
 }
 
-func newSecretsHandler(options secretsHandlerOptions) *secretsHandler {
+// NewHandler serves credential source metadata and masked key previews.
+func NewHandler(options Options) http.Handler {
+	if options.Kube == nil || options.Next == nil {
+		panic("secretcatalog: Kubernetes provider and next handler are required")
+	}
 	catalog := options.OnePassword
 	if catalog == nil {
 		catalog = contextOnePasswordCatalog{ctx: options.Context}

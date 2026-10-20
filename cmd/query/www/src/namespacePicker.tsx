@@ -27,7 +27,7 @@ function NamespaceField({ field }: { field: FieldControl }) {
 }
 
 const namespacePickerPost: PostExtension = (field, nodes) => {
-  if (field.schema["x-clicky-component"] !== WIDGET) return nodes;
+  if (field.readOnly || field.schema["x-clicky-component"] !== WIDGET) return nodes;
   return { label: nodes.label, value: <NamespaceField field={field} /> };
 };
 

@@ -1,6 +1,7 @@
 package connections
 
 import (
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/types"
@@ -11,10 +12,8 @@ import (
 var _ = Describe("Connection logging validation", func() {
 	DescribeTable("rejects invalid persisted properties",
 		func(property, value string) {
-			err := validateConnection(nil, &models.Connection{
-				Type:       models.ConnectionTypeHTTP,
-				Properties: types.JSONStringMap{property: value},
-			})
+			err := validateConnection(dbcontext.New().WithDB(nil, nil), &models.Connection{Type: models.ConnectionTypeHTTP, Properties: types.JSONStringMap{property: value}})
+
 			Expect(err).To(MatchError(ContainSubstring(property)))
 		},
 		Entry("unknown level", observability.PropertyHTTPLevel, "verbose"),

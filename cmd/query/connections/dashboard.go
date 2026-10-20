@@ -43,7 +43,7 @@ type connectionDashboardHandler struct {
 type connectionDashboardResponse struct {
 	Connections []connectionDashboardItem `json:"connections"`
 	GeneratedAt time.Time                 `json:"generatedAt"`
-	// ReadOnly reports that there is no connection store, so nothing can be added.
+	// ReadOnly reports that neither the database nor the host provider accepts writes.
 	ReadOnly bool `json:"readOnly,omitempty"`
 }
 
@@ -112,7 +112,7 @@ func (h *connectionDashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 	writeJSON(w, connectionDashboardResponse{
 		Connections: dashboardItems(connections, profileUsageCounts(profiles)),
 		GeneratedAt: time.Now().UTC(),
-		ReadOnly:    h.ctx.DB() == nil,
+		ReadOnly:    h.ctx.DB() == nil && !providerWritable(h.virtual),
 	})
 }
 
@@ -306,7 +306,7 @@ func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 		Description: "Returns the profile-aware connection fleet for the namespace-lane dashboard. " +
 			"Reads the connection store and the host's virtual connections only — health is attached only " +
 			"where a prior check is still cached. A row is readOnly when it is virtual or read-only; the " +
-			"response is readOnly when there is no connection store.",
+			"response is readOnly when neither a connection store nor a writable host provider is available.",
 		OperationID: "listConnectionInventory",
 		Parameters: []rpc.OpenAPIParameter{
 			{Name: "type", In: "query", Schema: &rpc.OpenAPISchema{Type: "string"}},

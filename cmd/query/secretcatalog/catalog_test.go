@@ -1,4 +1,4 @@
-package app
+package secretcatalog
 
 import (
 	"net/http"
@@ -33,7 +33,7 @@ var _ = Describe("server-backed secret catalogs", func() {
 	var handler http.Handler
 
 	BeforeEach(func() {
-		handler = newSecretsHandler(secretsHandlerOptions{
+		handler = NewHandler(Options{
 			Prefix:      "/api/v1",
 			OnePassword: fakeOnePasswordCatalog{},
 			Kube: func() (kubernetes.Interface, error) {

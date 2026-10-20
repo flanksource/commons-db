@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
@@ -57,15 +58,15 @@ func TestValidateOpenTelemetryRequiresNestedOpenSearchConnection(t *testing.T) {
 		Name: "traces", Type: models.ConnectionTypeOpenTelemetry,
 		Properties: types.JSONStringMap{"connection": "connection://team/OS"},
 	}
-	if err := validateNestedConnection(database, candidate); err != nil {
+	if err := validateNestedConnection(dbcontext.New().WithDB(database, nil), candidate); err != nil {
 		t.Fatal(err)
 	}
 	candidate.Properties["connection"] = "connection://traces"
-	if err := validateNestedConnection(database, candidate); err == nil {
+	if err := validateNestedConnection(dbcontext.New().WithDB(database, nil), candidate); err == nil {
 		t.Fatal("expected self-referencing OpenTelemetry connection to fail")
 	}
 	candidate.Properties["connection"] = "https://example.test/OS"
-	if err := validateNestedConnection(database, candidate); err == nil {
+	if err := validateNestedConnection(dbcontext.New().WithDB(database, nil), candidate); err == nil {
 		t.Fatal("expected an HTTP URL ending in the unrelated connection name to fail")
 	}
 	// Namespaced, so it resolves to exactly one real record and reaches the
@@ -78,7 +79,7 @@ func TestValidateOpenTelemetryRequiresNestedOpenSearchConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	candidate.Properties["connection"] = "connection://team/warehouse"
-	err := validateNestedConnection(database, candidate)
+	err := validateNestedConnection(dbcontext.New().WithDB(database, nil), candidate)
 	if err == nil {
 		t.Fatal("expected a nested PostgreSQL connection to fail the OpenSearch-only check")
 	}
