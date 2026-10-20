@@ -81,7 +81,9 @@ func run(ctx context.Context, c command) (string, error) {
 
 // runBytes executes git like run and returns its stdout untouched, for blob
 // content whose trailing whitespace is significant.
-func runBytes(ctx context.Context, c command) ([]byte, error) {
+func runBytes(ctx context.Context, c command) (out []byte, err error) {
+	finish := startGitTiming(ctx, "commands")
+	defer func() { finish(err) }()
 	if err := requireGit(ctx); err != nil {
 		return nil, err
 	}

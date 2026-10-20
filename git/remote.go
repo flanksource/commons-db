@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/flanksource/commons/http/middlewares"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/storage/memory"
@@ -46,7 +47,10 @@ func NewRepository(options RepositoryOptions) (*Repository, error) {
 
 // LsRemote lists the remote's refs with go-git against in-memory storage;
 // TLS settings are passed per call.
-func (r *Repository) LsRemote(ctx context.Context) (RemoteRefs, error) {
+func (r *Repository) LsRemote(ctx context.Context) (refs RemoteRefs, err error) {
+	finish := startGitTiming(ctx, "ls_remote")
+	defer func() { finish(err) }()
+	ctx = middlewares.WithClientTimings(ctx)
 	auth, err := r.Auth.goGitAuth(r.URL)
 	if err != nil {
 		return RemoteRefs{}, fmt.Errorf("ls-remote %s: %w", r.URL.Redacted(), err)
