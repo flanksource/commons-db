@@ -88,18 +88,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add go.mod go.sum recordstore/go.mod recordstore/go.sum tracing/go.mod tracing/go.sum cmd/query/go.mod cmd/query/go.sum
-          # cmd/query/www embeds dist/, which is gitignored: force-add the bundle
-          # built above so the tagged cmd/query module compiles for consumers.
-          git add -f cmd/query/www/dist
           if ! git diff --cached --quiet; then
             git commit -m "chore(release): align modules for ${RELEASE_VERSION}"
           fi
+          main_sha="$(git rev-parse HEAD)"
+          # cmd/query/www embeds dist/, which is gitignored. The tags point at a
+          # commit on top of main that force-adds the bundle built above, so the
+          # tagged cmd/query module compiles for consumers while main never
+          # tracks dist/. svu lists every tag (--tag.mode=all), so tags off main
+          # still drive the next version.
+          git add -f cmd/query/www/dist
+          git commit -m "chore(release): embed query UI for ${RELEASE_VERSION}"
           git tag "$RELEASE_VERSION"
           git tag "recordstore/$RELEASE_VERSION"
           git tag "tracing/$RELEASE_VERSION"
           git tag "cmd/query/$RELEASE_VERSION"
           git push --atomic origin \
-            HEAD:refs/heads/main \
+            "${main_sha}:refs/heads/main" \
             "refs/tags/${RELEASE_VERSION}:refs/tags/${RELEASE_VERSION}" \
             "refs/tags/recordstore/${RELEASE_VERSION}:refs/tags/recordstore/${RELEASE_VERSION}" \
             "refs/tags/tracing/${RELEASE_VERSION}:refs/tags/tracing/${RELEASE_VERSION}" \

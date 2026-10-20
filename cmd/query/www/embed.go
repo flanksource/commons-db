@@ -1,8 +1,8 @@
 // Package www embeds the built clicky-ui single-page app and serves it with an
 // index.html fallback for client-side routes. The real assets are produced by
 // `vite build` into dist/, which is gitignored: run `make ui-build` (or
-// `task www:build`) before a source checkout compiles. Release tags carry the
-// built dist/ (the release workflow force-adds it) so module consumers compile.
+// `task www:build`) before a source checkout compiles. Release tags point at a
+// commit off main that carries the built dist/, so module consumers compile.
 package www
 
 import (
