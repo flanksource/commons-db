@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/schedules"
+	"github.com/flanksource/commons-db/cmd/query/secretcatalog"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/cmd/query/www"
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -238,7 +239,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	mux.Handle("/", ui)
 
 	kube := func() (kubernetes.Interface, error) { return queryContext.LocalKubernetes() }
-	base := newSecretsHandler(secretsHandlerOptions{
+	base := secretcatalog.NewHandler(secretcatalog.Options{
 		Prefix: "/api/v1", Context: queryContext, Kube: kube,
 		Next: newSchemaHandler("/api/v1", databaseProfiles, mux),
 	})

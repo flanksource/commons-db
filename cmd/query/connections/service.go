@@ -15,6 +15,7 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/observability"
+	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
@@ -34,8 +35,8 @@ type VirtualConnectionProvider interface {
 }
 
 type Options struct {
-	// Database is the connection store. Without one the service serves only the
-	// Virtual connections and refuses every write as read-only.
+	// Database is the connection store. Without one, host-owned connections may
+	// persist through a WritableConnectionProvider supplied as Virtual.
 	Database   DatabaseProvider
 	Context    ContextProvider
 	DecodeBody BodyDecoder
@@ -91,7 +92,7 @@ type ListOptions struct {
 // the executor would otherwise flatten to string flags. The database provider
 // resolves lazily because entities register before the database exists.
 func (s *Service) RegisterClicky() {
-	clicky.NewEntity[*models.Connection, ListOptions, *models.Connection]("connection").
+	registered := clicky.NewEntity[*models.Connection, ListOptions, *models.Connection]("connection").
 		List(s.List).
 		Get(s.Get).
 		CreateWithContext(func(ctx context.Context, body map[string]any) (*models.Connection, error) {
@@ -106,7 +107,9 @@ func (s *Service) RegisterClicky() {
 		WithAction(entity.TypedActionWithContext("inspect", InspectFlags{service: s}, s.Inspect).
 			WithShort("Inspect this connection's targets, field types, and query-dependent capabilities")).
 		Filters(connectionFilter{service: s}).
-		Register()
+		Build()
+	registered.Routes = map[string]entity.RouteOverride{"update": {Path: "connection/{id}", Method: http.MethodPut}}
+	entity.RegisterEntity(registered)
 }
 
 func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
@@ -150,6 +153,9 @@ func (s *Service) Get(id string) (*models.Connection, error) {
 }
 
 func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Connection, error) {
+	if s.database == nil {
+		return s.saveProvided(ctx, "", body)
+	}
 	db, err := s.store()
 	if err != nil {
 		return nil, err
@@ -162,7 +168,17 @@ func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Conn
 }
 
 func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*models.Connection, error) {
-	db, err := s.writableStore(id)
+	provided, err := resolveVirtualConnection(s.context(), s.virtual, id)
+	if err != nil {
+		return nil, err
+	}
+	if provided != nil {
+		if provided.Virtual {
+			return nil, entity.NewStatusErrorf(http.StatusMethodNotAllowed, "read_only", "virtual connection %q is read-only", provided.Name)
+		}
+		return s.saveProvided(ctx, id, body)
+	}
+	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
@@ -179,7 +195,25 @@ func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*
 }
 
 func (s *Service) Delete(id string) error {
-	db, err := s.writableStore(id)
+	provided, err := resolveVirtualConnection(s.context(), s.virtual, id)
+	if err != nil {
+		return err
+	}
+	if provided != nil {
+		if provided.Virtual {
+			return entity.NewStatusErrorf(http.StatusMethodNotAllowed, "read_only", "virtual connection %q is read-only", provided.Name)
+		}
+		writer, err := writableProvider(s.virtual)
+		if err != nil {
+			return err
+		}
+		if err := writer.DeleteConnection(s.context(), id); err != nil {
+			return err
+		}
+		forgetConnectionHealth(provided.ID.String())
+		return nil
+	}
+	db, err := s.store()
 	if err != nil {
 		return err
 	}
@@ -213,19 +247,6 @@ func (s *Service) optionalStore() (*gorm.DB, error) {
 		return nil, nil
 	}
 	return s.database()
-}
-
-// writableStore refuses a virtual id before it reaches the store: a virtual
-// connection is the host's configuration, never a row this service may change.
-func (s *Service) writableStore(id string) (*gorm.DB, error) {
-	virtual, err := resolveVirtualConnection(s.context(), s.virtual, id)
-	if err != nil {
-		return nil, err
-	}
-	if virtual != nil {
-		return nil, entity.NewStatusErrorf(http.StatusMethodNotAllowed, "read_only", "virtual connection %q is read-only", id)
-	}
-	return s.store()
 }
 
 func (s *Service) withVirtual(stored []*models.Connection, options ListOptions) ([]*models.Connection, error) {
@@ -374,7 +395,7 @@ func createConnection(db *gorm.DB, body map[string]any) (*models.Connection, err
 	if err != nil {
 		return nil, err
 	}
-	if err := validateConnection(db, c); err != nil {
+	if err := validateConnection(dbcontext.New().WithDB(db, nil), c); err != nil {
 		return nil, err
 	}
 	c.ID = uuid.Nil // let the DB assign the id
@@ -395,7 +416,7 @@ func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Conn
 	if err != nil {
 		return nil, err
 	}
-	if err := validateConnection(db, incoming); err != nil {
+	if err := validateConnection(dbcontext.New().WithDB(db, nil), incoming); err != nil {
 		return nil, err
 	}
 	applyConnectionUpdate(existing, incoming)
@@ -406,14 +427,14 @@ func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Conn
 	return existing, nil
 }
 
-func validateConnection(db *gorm.DB, candidate *models.Connection) error {
+func validateConnection(ctx dbcontext.Context, candidate *models.Connection) error {
 	if _, err := observability.PolicyFor(candidate); err != nil {
 		return err
 	}
-	return validateNestedConnection(db, candidate)
+	return validateNestedConnection(ctx, candidate)
 }
 
-func validateNestedConnection(db *gorm.DB, candidate *models.Connection) error {
+func validateNestedConnection(ctx dbcontext.Context, candidate *models.Connection) error {
 	if candidate.Type != models.ConnectionTypeOpenTelemetry {
 		return nil
 	}
@@ -421,7 +442,7 @@ func validateNestedConnection(db *gorm.DB, candidate *models.Connection) error {
 	if err != nil {
 		return err
 	}
-	nested, err := dbcontext.HydrateConnectionByURL(dbcontext.New().WithDB(db, nil), openTelemetry.Connection)
+	nested, err := dbcontext.HydrateConnectionByURL(ctx, openTelemetry.Connection)
 	if err != nil {
 		return fmt.Errorf("resolve nested OpenSearch connection: %w", err)
 	}
@@ -502,7 +523,7 @@ func applyConnectionUpdate(existing, incoming *models.Connection) {
 	}
 }
 
-// redactConnection blanks secrets so they are never returned over the API.
+// redactConnection blanks literal credentials while preserving source references.
 func redactConnection(c *models.Connection) {
 	if c == nil {
 		return
@@ -516,11 +537,19 @@ func redactConnection(c *models.Connection) {
 			c.Properties["authType"] = inferHTTPAuthType(c)
 		}
 	}
-	c.Password = ""
-	c.Certificate = ""
+	c.Password = redactCredential(c.Password)
+	c.Certificate = redactCredential(c.Certificate)
 	if c.Virtual {
 		c.URL = ""
 	}
+}
+
+func redactCredential(value string) string {
+	var ref types.EnvVar
+	if err := ref.Scan(value); err == nil && ref.ValueFrom != nil {
+		return value
+	}
+	return ""
 }
 
 func isHTTPAuthConnectionType(connectionType string) bool {
