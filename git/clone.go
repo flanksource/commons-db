@@ -37,7 +37,7 @@ func Clone(ctx context.Context, repo *Repository, options CloneOptions) (Ref, er
 	if err := prepareCloneDir(ctx, options.Dir, repo); err != nil {
 		return Ref{}, err
 	}
-	if ref.SHA, err = fetch(ctx, options.Dir, repo, ref, options.Depth); err != nil {
+	if ref.SHA, err = fetch(ctx, options.Dir, repo, repo, ref, options.Depth); err != nil {
 		return Ref{}, err
 	}
 	if err := checkoutFetched(ctx, options.Dir, ref); err != nil {

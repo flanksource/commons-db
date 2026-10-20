@@ -22,6 +22,9 @@ var (
 	// ErrBaseMoved is returned when a change pinned to a base commit
 	// (ChangeRequest.BaseSHA) finds the base branch at a different commit.
 	ErrBaseMoved = errors.New("change base moved off the expected commit")
+	// ErrUnrelatedHistories is returned when two commits share no ancestor,
+	// e.g. branches of repositories that are not forks of one another.
+	ErrUnrelatedHistories = errors.New("the commits share no history")
 )
 
 // Provider is a git hosting provider's REST API.

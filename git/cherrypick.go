@@ -1,6 +1,7 @@
 package git
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -39,7 +40,7 @@ func (w *Worktree) cherryPick(ctx context.Context, request ChangeRequest) ([]str
 	if len(request.CherryPick) == 0 {
 		return nil, nil
 	}
-	if err := w.fetchCommits(ctx, request.CherryPick); err != nil {
+	if err := w.fetchCommits(ctx, request.Source, request.CherryPick); err != nil {
 		return nil, err
 	}
 	merges, err := w.mergeCommits(ctx, request.CherryPick, request.CherryPickMainline)
@@ -71,8 +72,10 @@ func (w *Worktree) cherryPick(ctx context.Context, request ChangeRequest) ([]str
 	return skipped, nil
 }
 
-// fetchCommits fetches, by SHA, every commit the mirror does not have yet.
-func (w *Worktree) fetchCommits(ctx context.Context, shas []string) (err error) {
+// fetchCommits fetches, by SHA from source (nil is the worktree's own
+// repository), every commit the mirror does not have yet.
+func (w *Worktree) fetchCommits(ctx context.Context, source *Repository, shas []string) (err error) {
+	source = cmp.Or(source, w.repo)
 	lock, err := acquire(ctx, w.mirrorLock, "mirror lock")
 	if err != nil {
 		return err
@@ -82,7 +85,7 @@ func (w *Worktree) fetchCommits(ctx context.Context, shas []string) (err error) 
 		if hasCommit(ctx, w.mirror, sha) {
 			continue
 		}
-		if _, err := fetch(ctx, w.mirror, w.repo, Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}, 0); err != nil {
+		if _, err := fetch(ctx, w.mirror, w.repo, source, Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}, 0); err != nil {
 			return fmt.Errorf("cherry-pick commit %s: %w", sha, err)
 		}
 	}
