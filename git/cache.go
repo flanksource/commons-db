@@ -97,7 +97,7 @@ func (w *Worktree) materialize(ctx context.Context, depth int) (err error) {
 		return err
 	}
 	if !hasCommit(ctx, w.mirror, w.Ref.SHA) {
-		if w.Ref.SHA, err = fetch(ctx, w.mirror, w.repo, w.Ref, depth); err != nil {
+		if w.Ref.SHA, err = fetch(ctx, w.mirror, w.repo, w.repo, w.Ref, depth); err != nil {
 			return err
 		}
 	}

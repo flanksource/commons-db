@@ -33,12 +33,21 @@ type FileChange struct {
 // lines) are appended to every replayed commit's message, after its origin
 // line; Message is the message of the Files commit only. Nothing is pushed on
 // any failure.
+//
+// Head, instead of CherryPick and Files, points Branch at that full commit
+// SHA as is: a pull request of it merges its history into Base. It must share
+// history with Base (ErrUnrelatedHistories) and not already be on it.
+//
+// Source is the repository the CherryPick or Head commits are fetched from
+// when it is not the changed one, e.g. a fork; nil is the changed repository.
 type ChangeRequest struct {
 	Base               string
 	BaseSHA            string
 	Branch             string
 	Message            string
 	Author             Signature
+	Source             *Repository
+	Head               string
 	CherryPick         []string
 	CherryPickMainline int
 	AllowEmpty         bool
@@ -133,8 +142,15 @@ func (r ChangeRequest) validate() error {
 	if r.BaseSHA != "" && !fullSHAPattern.MatchString(r.BaseSHA) {
 		return fmt.Errorf("change base SHA %q must be a full 40-character lowercase commit SHA", r.BaseSHA)
 	}
-	if len(r.Files) == 0 && len(r.CherryPick) == 0 {
-		return errors.New("change has no files and no commits to cherry-pick")
+	if r.Head != "" {
+		if !fullSHAPattern.MatchString(r.Head) {
+			return fmt.Errorf("change head %q must be a full 40-character lowercase commit SHA", r.Head)
+		}
+		if len(r.Files) > 0 || len(r.CherryPick) > 0 {
+			return errors.New("a change to a head commit takes no files and no commits to cherry-pick")
+		}
+	} else if len(r.Files) == 0 && len(r.CherryPick) == 0 {
+		return errors.New("change has no files, no commits to cherry-pick and no head")
 	}
 	for _, sha := range r.CherryPick {
 		if !fullSHAPattern.MatchString(sha) {
@@ -161,6 +177,9 @@ func baseMoved(request ChangeRequest, actual string) error {
 
 func applyIn(ctx context.Context, worktree *Worktree, request ChangeRequest) (ChangeResult, error) {
 	if err := worktree.CreateBranch(ctx, request.Branch); err != nil {
+		return ChangeResult{}, err
+	}
+	if err := worktree.resetToHead(ctx, request); err != nil {
 		return ChangeResult{}, err
 	}
 	skipped, err := worktree.cherryPick(ctx, request)
@@ -210,4 +229,24 @@ func commitFiles(ctx context.Context, worktree *Worktree, request ChangeRequest)
 		return "", fmt.Errorf("change %s has nothing to push: every cherry-pick was already on %s", request.Branch, request.Base)
 	}
 	return head, nil
+}
+
+// resetToHead points the branch at request.Head, fetched from its source,
+// once it shares history with the base and is not already on it.
+func (w *Worktree) resetToHead(ctx context.Context, request ChangeRequest) error {
+	if request.Head == "" {
+		return nil
+	}
+	if err := w.fetchCommits(ctx, request.Source, []string{request.Head}); err != nil {
+		return err
+	}
+	base, err := mergeBase(ctx, w.Dir, w.Ref.SHA, request.Head)
+	if err != nil {
+		return fmt.Errorf("head %s and %s: %w", request.Head, request.Base, err)
+	}
+	if base == request.Head {
+		return fmt.Errorf("change %s has nothing to push: %s is already on %s", request.Branch, request.Head, request.Base)
+	}
+	_, err = run(ctx, command{dir: w.Dir, args: []string{"reset", "--quiet", "--hard", "--end-of-options", request.Head}})
+	return err
 }

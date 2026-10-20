@@ -80,13 +80,21 @@ func (r *Repository) Resolve(ctx context.Context, ref string) (Ref, error) {
 	return resolved, nil
 }
 
-// refspec fetches ref so that FETCH_HEAD names it; branches land under
-// refs/remotes/origin and tags under refs/tags of the local repository.
-func (ref Ref) refspec() string {
+// originRemote is the namespace of the repository a mirror belongs to.
+const originRemote = "origin"
+
+// refspec fetches ref so that FETCH_HEAD names it. From origin, branches land
+// under refs/remotes/origin and tags under refs/tags of the local repository;
+// from any other remote both land under refs/remotes/<remote>, never over the
+// local repository's own refs.
+func (ref Ref) refspec(remote string) string {
 	switch ref.Kind {
 	case RefBranch:
-		return "+" + ref.FullName + ":refs/remotes/origin/" + ref.Name
+		return "+" + ref.FullName + ":refs/remotes/" + remote + "/" + ref.Name
 	case RefTag:
+		if remote != originRemote {
+			return "+" + ref.FullName + ":refs/remotes/" + remote + "/tags/" + ref.Name
+		}
 		return "+" + ref.FullName + ":" + ref.FullName
 	case RefHead:
 		return "HEAD"
@@ -95,10 +103,19 @@ func (ref Ref) refspec() string {
 	}
 }
 
-// fetch fetches ref from repo into the repository at dir and returns the
-// fetched commit, which may be newer than the SHA ls-remote reported. flags
-// are extra fetch options (e.g. --unshallow).
-func fetch(ctx context.Context, dir string, repo *Repository, ref Ref, depth int, flags ...string) (string, error) {
+// remoteOf is the namespace repo's refs take in owner's mirror: origin for
+// owner itself, repo's cache key for a foreign repository (e.g. a fork).
+func remoteOf(owner, repo *Repository) string {
+	if repo == owner || repo.URL.Clone == owner.URL.Clone {
+		return originRemote
+	}
+	return repo.URL.CacheKey()
+}
+
+// fetch fetches ref from repo into the repository at dir, the mirror of
+// owner, and returns the fetched commit, which may be newer than the SHA
+// ls-remote reported. flags are extra fetch options (e.g. --unshallow).
+func fetch(ctx context.Context, dir string, owner, repo *Repository, ref Ref, depth int, flags ...string) (string, error) {
 	env, cleanup, err := commandEnv(repo)
 	if err != nil {
 		return "", err
@@ -108,7 +125,7 @@ func fetch(ctx context.Context, dir string, repo *Repository, ref Ref, depth int
 	if depth > 0 {
 		args = append(args, fmt.Sprintf("--depth=%d", depth))
 	}
-	args = append(args, "--end-of-options", repo.URL.Clone, ref.refspec())
+	args = append(args, "--end-of-options", repo.URL.Clone, ref.refspec(remoteOf(owner, repo)))
 	if _, err := run(ctx, command{dir: dir, env: env, args: args}); err != nil {
 		return "", fmt.Errorf("fetch %s from %s: %w", ref.Name, repo.URL.Redacted(), err)
 	}
