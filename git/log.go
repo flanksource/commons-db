@@ -55,7 +55,8 @@ func (c Commit) IsMerge() bool { return len(c.Parents) > 1 }
 // commits; Paths (matched literally, never as globs) keeps only the commits
 // that touch them. HeadFrom, when set, is the repository head is read from
 // (e.g. a fork of the logged repository): it resolves and is fetched there,
-// into the logged repository's mirror, and must share history with base.
+// into the logged repository's mirror. A head sharing no history with base
+// lists every commit whose patch base lacks; MergeBase tells the two apart.
 type LogOptions struct {
 	Limit    int
 	Paths    []string
@@ -106,11 +107,6 @@ func (c *Cache) Log(ctx context.Context, repo *Repository, base, head string, op
 	headFrom := cmp.Or(options.HeadFrom, repo)
 	var out string
 	err := c.withRefs(ctx, repo, []refOn{{repo, base}, {headFrom, head}}, func(mirror string, shas []string) (err error) {
-		if headFrom != repo {
-			if _, err := mergeBase(ctx, mirror, shas[0], shas[1]); err != nil {
-				return fmt.Errorf("%s of %s and %s of %s: %w", base, repo.URL.Redacted(), head, headFrom.URL.Redacted(), err)
-			}
-		}
 		args = append(args, "--end-of-options", shas[0]+"..."+shas[1], "--")
 		out, err = run(ctx, command{dir: mirror, args: append(args, options.Paths...)})
 		return err
@@ -173,6 +169,27 @@ func (c *Cache) Compare(ctx context.Context, repo *Repository, base, head string
 		return nil
 	})
 	return comparison, err
+}
+
+// MergeBaseOptions configures Cache.MergeBase. HeadFrom is the repository
+// head is read from (e.g. a fork); nil is the base's own.
+type MergeBaseOptions struct {
+	HeadFrom *Repository
+}
+
+// MergeBase is the best common ancestor of base and head, both fetched with
+// their full history into repo's mirror; refs sharing no history fail with
+// ErrUnrelatedHistories.
+func (c *Cache) MergeBase(ctx context.Context, repo *Repository, base, head string, options MergeBaseOptions) (string, error) {
+	headFrom := cmp.Or(options.HeadFrom, repo)
+	var found string
+	err := c.withRefs(ctx, repo, []refOn{{repo, base}, {headFrom, head}}, func(mirror string, shas []string) (err error) {
+		if found, err = mergeBase(ctx, mirror, shas[0], shas[1]); err != nil {
+			return fmt.Errorf("%s of %s and %s of %s: %w", base, repo.URL.Redacted(), head, headFrom.URL.Redacted(), err)
+		}
+		return nil
+	})
+	return found, err
 }
 
 // mergeBase is the best common ancestor of commits a and b in dir; commits

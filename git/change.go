@@ -38,8 +38,22 @@ type FileChange struct {
 // SHA as is: a pull request of it merges its history into Base. It must share
 // history with Base (ErrUnrelatedHistories) and not already be on it.
 //
-// Source is the repository the CherryPick or Head commits are fetched from
-// when it is not the changed one, e.g. a fork; nil is the changed repository.
+// Source is the repository the CherryPick, Head or Rebase commits are fetched
+// from when it is not the changed one, e.g. a fork; nil is the changed
+// repository.
+//
+// Pick is how CherryPick commits land: PickCherryPick (the default) runs git
+// cherry-pick -x and needs history shared with Base; PickReplay applies each
+// commit's patch as a new commit (git format-patch | git am --3way) keeping
+// its message, author and date, and needs no shared history. Squash then
+// folds the landed commits into one: their messages joined in order, the
+// first commit's author and date, a Co-authored-by trailer per other author,
+// then Trailers.
+//
+// Rebase, instead of CherryPick, Files and Head, rebases the commits of that
+// full SHA which Base lacks onto Base with git rebase: linear, each commit's
+// message, author and date kept, so it takes no Trailers. It must share
+// history with Base (ErrUnrelatedHistories).
 type ChangeRequest struct {
 	Base               string
 	BaseSHA            string
@@ -48,6 +62,9 @@ type ChangeRequest struct {
 	Author             Signature
 	Source             *Repository
 	Head               string
+	Rebase             string
+	Pick               PickStrategy
+	Squash             bool
 	CherryPick         []string
 	CherryPickMainline int
 	AllowEmpty         bool
@@ -142,15 +159,8 @@ func (r ChangeRequest) validate() error {
 	if r.BaseSHA != "" && !fullSHAPattern.MatchString(r.BaseSHA) {
 		return fmt.Errorf("change base SHA %q must be a full 40-character lowercase commit SHA", r.BaseSHA)
 	}
-	if r.Head != "" {
-		if !fullSHAPattern.MatchString(r.Head) {
-			return fmt.Errorf("change head %q must be a full 40-character lowercase commit SHA", r.Head)
-		}
-		if len(r.Files) > 0 || len(r.CherryPick) > 0 {
-			return errors.New("a change to a head commit takes no files and no commits to cherry-pick")
-		}
-	} else if len(r.Files) == 0 && len(r.CherryPick) == 0 {
-		return errors.New("change has no files, no commits to cherry-pick and no head")
+	if err := r.validateContent(); err != nil {
+		return err
 	}
 	for _, sha := range r.CherryPick {
 		if !fullSHAPattern.MatchString(sha) {
@@ -171,6 +181,39 @@ func (r ChangeRequest) validate() error {
 	return nil
 }
 
+// validateContent checks what the change carries: a head commit, a rebase, or
+// commits to pick and files, each with the options it takes.
+func (r ChangeRequest) validateContent() error {
+	if err := r.Pick.validate(); err != nil {
+		return err
+	}
+	if r.Squash && len(r.CherryPick) == 0 {
+		return errors.New("squash folds the commits to cherry-pick, and the change has none")
+	}
+	switch {
+	case r.Rebase != "":
+		if !fullSHAPattern.MatchString(r.Rebase) {
+			return fmt.Errorf("rebase head %q must be a full 40-character lowercase commit SHA", r.Rebase)
+		}
+		if r.Head != "" || len(r.Files) > 0 || len(r.CherryPick) > 0 {
+			return errors.New("a rebase takes no files, commits to cherry-pick or head")
+		}
+		if len(r.Trailers) > 0 {
+			return errors.New("a rebase keeps each commit's message: it takes no trailers")
+		}
+	case r.Head != "":
+		if !fullSHAPattern.MatchString(r.Head) {
+			return fmt.Errorf("change head %q must be a full 40-character lowercase commit SHA", r.Head)
+		}
+		if len(r.Files) > 0 || len(r.CherryPick) > 0 {
+			return errors.New("a change to a head commit takes no files and no commits to cherry-pick")
+		}
+	case len(r.Files) == 0 && len(r.CherryPick) == 0:
+		return errors.New("change has no files, no commits to cherry-pick, no head and no rebase")
+	}
+	return nil
+}
+
 func baseMoved(request ChangeRequest, actual string) error {
 	return fmt.Errorf("%w: %s is at %s, expected %s", ErrBaseMoved, request.Base, actual, request.BaseSHA)
 }
@@ -182,8 +225,14 @@ func applyIn(ctx context.Context, worktree *Worktree, request ChangeRequest) (Ch
 	if err := worktree.resetToHead(ctx, request); err != nil {
 		return ChangeResult{}, err
 	}
+	if err := worktree.rebase(ctx, request); err != nil {
+		return ChangeResult{}, err
+	}
 	skipped, err := worktree.cherryPick(ctx, request)
 	if err != nil {
+		return ChangeResult{}, err
+	}
+	if err := worktree.squash(ctx, request, skipped); err != nil {
 		return ChangeResult{}, err
 	}
 	sha, err := commitFiles(ctx, worktree, request)

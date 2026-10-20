@@ -33,9 +33,9 @@ func (e *CherryPickEmptyError) Error() string {
 	return fmt.Sprintf("cherry-pick %s is empty: its changes are already on %s (set AllowEmpty to skip it)", e.Commit, e.Base)
 }
 
-// cherryPick replays request.CherryPick in order onto the worktree's branch
-// with git cherry-pick -x, appending request.Trailers to each replayed commit,
-// and returns the commits skipped as already applied.
+// cherryPick lands request.CherryPick in order onto the worktree's branch by
+// request.Pick, appending request.Trailers to each landed commit unless they
+// are squashed, and returns the commits skipped as already applied.
 func (w *Worktree) cherryPick(ctx context.Context, request ChangeRequest) ([]string, error) {
 	if len(request.CherryPick) == 0 {
 		return nil, nil
@@ -47,29 +47,55 @@ func (w *Worktree) cherryPick(ctx context.Context, request ChangeRequest) ([]str
 	if err != nil {
 		return nil, err
 	}
+	for sha := range merges {
+		if request.Pick == PickReplay {
+			return nil, fmt.Errorf("replay %s is a merge commit: a replay applies single-parent patches only", sha)
+		}
+	}
 	env, err := request.Author.committerEnv()
 	if err != nil {
 		return nil, err
 	}
+	trailers := request.Trailers
+	if request.Squash {
+		trailers = nil
+	}
 	var skipped []string
 	for _, sha := range request.CherryPick {
-		args := []string{"cherry-pick", "-x"}
-		if merges[sha] {
-			args = append(args, "-m", strconv.Itoa(request.CherryPickMainline))
-		}
-		_, pickErr := run(ctx, command{dir: w.Dir, env: env, args: append(args, "--end-of-options", sha)})
-		if pickErr == nil {
-			if err := w.appendTrailers(ctx, env, request.Trailers); err != nil {
-				return nil, fmt.Errorf("cherry-pick %s: %w", sha, err)
-			}
-			continue
-		}
-		if err := w.cherryPickFailed(ctx, sha, request, pickErr); err != nil {
+		landed, err := w.pickOne(ctx, env, request, sha, merges[sha])
+		if err != nil {
 			return nil, err
 		}
-		skipped = append(skipped, sha)
+		if !landed {
+			skipped = append(skipped, sha)
+			continue
+		}
+		if err := w.appendTrailers(ctx, env, trailers); err != nil {
+			return nil, fmt.Errorf("cherry-pick %s: %w", sha, err)
+		}
 	}
 	return skipped, nil
+}
+
+// pickOne lands sha by request.Pick and reports false when it was skipped as
+// already applied, which only AllowEmpty permits.
+func (w *Worktree) pickOne(ctx context.Context, env []string, request ChangeRequest, sha string, merge bool) (bool, error) {
+	if request.Pick == PickReplay {
+		landed, err := w.replay(ctx, env, sha)
+		if err == nil && !landed && !request.AllowEmpty {
+			return false, &CherryPickEmptyError{Commit: sha, Base: request.Base}
+		}
+		return landed, err
+	}
+	args := []string{"cherry-pick", "-x"}
+	if merge {
+		args = append(args, "-m", strconv.Itoa(request.CherryPickMainline))
+	}
+	_, pickErr := run(ctx, command{dir: w.Dir, env: env, args: append(args, "--end-of-options", sha)})
+	if pickErr == nil {
+		return true, nil
+	}
+	return false, w.cherryPickFailed(ctx, sha, request, pickErr)
 }
 
 // fetchCommits fetches, by SHA from source (nil is the worktree's own
