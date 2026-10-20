@@ -88,6 +88,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add go.mod go.sum recordstore/go.mod recordstore/go.sum tracing/go.mod tracing/go.sum cmd/query/go.mod cmd/query/go.sum
+          # cmd/query/www embeds dist/, which is gitignored: force-add the bundle
+          # built above so the tagged cmd/query module compiles for consumers.
+          git add -f cmd/query/www/dist
           if ! git diff --cached --quiet; then
             git commit -m "chore(release): align modules for ${RELEASE_VERSION}"
           fi
