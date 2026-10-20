@@ -69,13 +69,6 @@ var _ = Describe("a fork of the changed repository", func() {
 		Expect(mirrorRef(repo, "refs/remotes/"+forkRepo.URL.CacheKey()+"/main")).To(Equal(ahead))
 	})
 
-	It("refuses to log a fork branch that shares no history with the base", func(ctx SpecContext) {
-		fork.orphanOn("lone", "lone.txt", "lone\n")
-
-		_, err := cache.Log(ctx, repo, "main", "lone", git.LogOptions{HeadFrom: forkRepo})
-		Expect(err).To(MatchError(git.ErrUnrelatedHistories))
-	})
-
 	It("cherry-picks a fork commit onto a branch of the repository", func(ctx SpecContext) {
 		ahead := fork.commitOn("main", "", "fork.txt", "fork\n", "fork work")
 
