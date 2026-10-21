@@ -6,9 +6,8 @@ import (
 	"path"
 	"strings"
 
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 	"github.com/flanksource/sqlglot-go/sqlglot"
-
-	"github.com/flanksource/commons-db/atlas/sqlserver"
 )
 
 // WithRoutines declares stored procedures and functions from the .sql files
@@ -31,8 +30,8 @@ func refuseRoutines(cfg options, dialect string) error {
 }
 
 // loadRoutines parses every .sql file under dir into the routine it creates.
-func loadRoutines(schemaFS fs.FS, dir string) ([]*sqlserver.Routine, error) {
-	var routines []*sqlserver.Routine
+func loadRoutines(schemaFS fs.FS, dir string) ([]*planner.Routine, error) {
+	var routines []*planner.Routine
 	seen := map[string]string{}
 	err := fs.WalkDir(schemaFS, dir, func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -62,19 +61,19 @@ func loadRoutines(schemaFS fs.FS, dir string) ([]*sqlserver.Routine, error) {
 	return routines, nil
 }
 
-func loadRoutine(schemaFS fs.FS, name string) (*sqlserver.Routine, error) {
+func loadRoutine(schemaFS fs.FS, name string) (*planner.Routine, error) {
 	data, err := fs.ReadFile(schemaFS, name)
 	if err != nil {
 		return nil, fmt.Errorf("read routine %s: %w", name, err)
 	}
-	batches, err := sqlglot.SplitBatches(string(data), sqlserver.Dialect)
+	batches, err := sqlglot.SplitBatches(string(data), planner.Dialect)
 	if err != nil {
 		return nil, fmt.Errorf("routine %s: %w", name, err)
 	}
 	if len(batches) != 1 {
 		return nil, fmt.Errorf("routine %s: expected exactly one batch, found %d", name, len(batches))
 	}
-	routine, err := sqlserver.ParseRoutine(batches[0])
+	routine, err := planner.ParseRoutine(batches[0])
 	if err != nil {
 		return nil, fmt.Errorf("routine %s: %w", name, err)
 	}

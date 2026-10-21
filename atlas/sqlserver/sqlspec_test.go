@@ -7,6 +7,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/atlas/sqlserver"
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 )
 
 const ordersHCL = `
@@ -55,7 +56,7 @@ var _ = Describe("SQL Server HCL codec", func() {
 
 		id, _ := t.Column("id")
 		Expect(id.Type.Type).To(Equal(&schema.IntegerType{T: "int"}))
-		Expect(id.Attrs).To(ContainElement(&sqlserver.Identity{Seed: 1, Increment: 1}))
+		Expect(id.Attrs).To(ContainElement(&planner.Identity{Seed: 1, Increment: 1}))
 
 		status, _ := t.Column("status")
 		Expect(status.Type.Type).To(Equal(&schema.StringType{T: "nvarchar", Size: 20}))
@@ -65,11 +66,11 @@ var _ = Describe("SQL Server HCL codec", func() {
 		Expect(note.Type.Type).To(Equal(&schema.StringType{T: "nvarchar", Size: -1}))
 		Expect(note.Type.Null).To(BeTrue())
 
-		Expect(t.PrimaryKey.Attrs).To(ContainElement(&sqlserver.Clustered{}))
+		Expect(t.PrimaryKey.Attrs).To(ContainElement(&planner.Clustered{}))
 		idx, _ := t.Index("IX_acme_orders_status")
-		Expect(idx.Attrs).ToNot(ContainElement(&sqlserver.Clustered{}))
-		Expect(idx.Attrs).To(ContainElement(&sqlserver.IndexInclude{Columns: []string{"total"}}))
-		Expect(idx.Attrs).To(ContainElement(&sqlserver.IndexPredicate{P: "status <> 'closed'"}))
+		Expect(idx.Attrs).ToNot(ContainElement(&planner.Clustered{}))
+		Expect(idx.Attrs).To(ContainElement(&planner.IndexInclude{Columns: []string{"total"}}))
+		Expect(idx.Attrs).To(ContainElement(&planner.IndexPredicate{P: "status <> 'closed'"}))
 	})
 
 	DescribeTable("refuses what the driver does not manage",

@@ -8,6 +8,9 @@
 // migration directories (revisions, snapshots, clean checks) are not
 // supported.
 //
+// Pure diffing and planning live in sqlglot-go/migrate/atlas/sqlserver. This
+// driver supplies inspection, connection management, locks and SQL execution.
+//
 // Inspection is scoped: InspectOptions.Tables names the objects to read --
 // tables and routines alike, since SQL Server keeps both in one namespace per
 // schema -- and Mode picks tables (InspectTables) and/or routines
@@ -29,6 +32,7 @@ import (
 
 	"github.com/flanksource/commons-db/atlas/internal/sqlx"
 	"github.com/flanksource/commons-db/internal/mssqlcatalog"
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 )
 
 type (
@@ -120,7 +124,7 @@ func open(ctx context.Context, db schema.ExecQuerier) (*Driver, error) {
 	}
 	return &Driver{
 		conn:        c,
-		Differ:      &sqlx.Diff{DiffDriver: &diff{}},
+		Differ:      planner.DefaultDiff,
 		Inspector:   &inspect{c},
 		PlanApplier: &planApply{c},
 	}, nil
@@ -152,10 +156,10 @@ func (d *Driver) CheckClean(context.Context, *migrate.TableIdent) error {
 }
 
 // FormatType converts schema type to its column form in the database.
-func (*Driver) FormatType(t schema.Type) (string, error) { return FormatType(t) }
+func (*Driver) FormatType(t schema.Type) (string, error) { return planner.FormatType(t) }
 
 // ParseType returns the schema.Type value represented by the given string.
-func (*Driver) ParseType(s string) (schema.Type, error) { return ParseType(s) }
+func (*Driver) ParseType(s string) (schema.Type, error) { return planner.ParseType(s) }
 
 // StmtBuilder is a helper method used to build statements with SQL Server
 // formatting: bracket-quoted identifiers.
