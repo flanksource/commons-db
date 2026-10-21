@@ -1,0 +1,84 @@
+package git
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+)
+
+// BlameOptions supplies the displayed contents of a file at an immutable commit.
+type BlameOptions struct {
+	SHA      string
+	Path     string
+	Contents []byte
+}
+
+type BlameAuthor struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+type BlameCommit struct {
+	SHA     string      `json:"sha"`
+	URL     string      `json:"url,omitempty"`
+	Author  BlameAuthor `json:"author"`
+	Date    time.Time   `json:"date"`
+	Subject string      `json:"subject"`
+}
+
+// BlameLine has no Commit when its content is outside the selected revision.
+type BlameLine struct {
+	Line         int          `json:"line"`
+	OriginalLine int          `json:"originalLine"`
+	Path         string       `json:"path"`
+	Content      string       `json:"content"`
+	Commit       *BlameCommit `json:"commit"`
+}
+
+func (c *Cache) Blame(ctx context.Context, repo *Repository, options BlameOptions) (lines []BlameLine, err error) {
+	if !fullSHAPattern.MatchString(options.SHA) {
+		return nil, fmt.Errorf("blame %q: give the full 40-character commit SHA", options.SHA)
+	}
+	if options.Contents == nil || repo == nil {
+		return nil, errors.New("blame: repository and displayed contents are required")
+	}
+	if _, err := safeJoin(".", options.Path); err != nil {
+		return nil, err
+	}
+	ref := Ref{Name: options.SHA, FullName: options.SHA, SHA: options.SHA, Kind: RefSHA}
+	if err := c.withMirror(ctx, repo, func(mirror string) error {
+		_, err := fetchHistory(ctx, mirror, repo, repo, ref)
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	wt, err := c.checkoutRef(ctx, repo, ref, CheckoutOptions{Ref: options.SHA})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, wt.Release()) }()
+	if _, err := blobAt(ctx, wt.mirror, options.SHA, options.Path); err != nil {
+		return nil, err
+	}
+	out, err := runBytes(ctx, command{dir: wt.Dir, stdin: options.Contents,
+		args: []string{"blame", "--line-porcelain", "--root", "--contents", "-", "--", options.Path}})
+	if err != nil {
+		return nil, err
+	}
+	lines, err = parseBlame(out)
+	if err != nil {
+		return nil, err
+	}
+	for _, line := range lines {
+		if line.Commit == nil {
+			continue
+		}
+		link, err := repo.URL.CommitURL(line.Commit.SHA)
+		if err != nil && !errors.Is(err, ErrNoCommitView) {
+			return nil, err
+		}
+		line.Commit.URL = link
+	}
+	return lines, nil
+}
