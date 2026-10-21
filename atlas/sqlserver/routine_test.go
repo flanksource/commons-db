@@ -3,10 +3,9 @@ package sqlserver_test
 import (
 	"ariga.io/atlas/sql/schema"
 
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/flanksource/commons-db/atlas/sqlserver"
 )
 
 const countOrdersProc = `-- Counts a customer's orders.
@@ -29,7 +28,7 @@ END`
 var _ = Describe("SQL Server routine definitions", func() {
 	It("reads a procedure, its parameters and its definition into the schema", func() {
 		s := schema.New("dbo")
-		routine, err := sqlserver.ParseRoutine(countOrdersProc)
+		routine, err := planner.ParseRoutine(countOrdersProc)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(routine.AddTo(s)).To(Succeed())
 
@@ -41,12 +40,12 @@ var _ = Describe("SQL Server routine definitions", func() {
 			{Name: "@customer_id", Type: &schema.IntegerType{T: "int"}, Mode: schema.FuncArgModeIn},
 			{Name: "@count", Type: &schema.IntegerType{T: "int"}, Mode: schema.FuncArgModeInOut},
 		}))
-		Expect(proc.Attrs).To(ConsistOf(&sqlserver.Definition{Text: countOrdersProc}))
+		Expect(proc.Attrs).To(ConsistOf(&planner.Definition{Text: countOrdersProc}))
 	})
 
 	It("reads a scalar function and its return type", func() {
 		s := schema.New("dbo")
-		routine, err := sqlserver.ParseRoutine(orderTotalFunc)
+		routine, err := planner.ParseRoutine(orderTotalFunc)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(routine.Name).To(Equal("acme_order_total"))
 		Expect(routine.AddTo(s)).To(Succeed())
@@ -56,7 +55,7 @@ var _ = Describe("SQL Server routine definitions", func() {
 
 	DescribeTable("refuses a definition that is not exactly one routine",
 		func(definition, message string) {
-			_, err := sqlserver.ParseRoutine(definition)
+			_, err := planner.ParseRoutine(definition)
 			Expect(err).To(MatchError(ContainSubstring(message)))
 		},
 		Entry("a table", "CREATE TABLE dbo.acme_orders (id INT)", "makes no routine"),
@@ -64,14 +63,14 @@ var _ = Describe("SQL Server routine definitions", func() {
 	)
 
 	It("refuses a routine qualified with another schema", func() {
-		routine, err := sqlserver.ParseRoutine("CREATE PROCEDURE tenant_x.acme_purge AS BEGIN SELECT 1; END")
+		routine, err := planner.ParseRoutine("CREATE PROCEDURE tenant_x.acme_purge AS BEGIN SELECT 1; END")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(routine.AddTo(schema.New("dbo"))).To(MatchError(`sqlserver: routine tenant_x.acme_purge is declared in schema "tenant_x", not "dbo"`))
 	})
 
 	DescribeTable("CreateOrAlter turns a definition into CREATE OR ALTER, keeping every other byte",
 		func(definition, expected string) {
-			Expect(sqlserver.CreateOrAlter(definition)).To(Equal(expected))
+			Expect(planner.CreateOrAlter(definition)).To(Equal(expected))
 		},
 		Entry("leading comments and a CREATE PROCEDURE",
 			"-- note\n/* block */ create   PROCEDURE dbo.acme_x AS SELECT 1",
@@ -81,8 +80,7 @@ var _ = Describe("SQL Server routine definitions", func() {
 			"CREATE OR ALTER FUNCTION dbo.acme_f() RETURNS NVARCHAR(4) AS BEGIN RETURN N'ünï'; END"),
 	)
 
-	It("refuses to rewrite text that does not start with CREATE", func() {
-		_, err := sqlserver.CreateOrAlter("ALTER PROCEDURE dbo.acme_x AS SELECT 1")
-		Expect(err).To(MatchError(`sqlserver: routine definition starts with "ALTER", not CREATE`))
+	It("rewrites ALTER definitions from the live catalog", func() {
+		Expect(planner.CreateOrAlter("ALTER PROCEDURE dbo.acme_x AS SELECT 1")).To(Equal("CREATE OR ALTER PROCEDURE dbo.acme_x AS SELECT 1"))
 	})
 })

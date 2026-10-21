@@ -8,18 +8,19 @@ import (
 
 	"github.com/flanksource/commons-db/atlas/sqlserver"
 	"github.com/flanksource/commons-db/internal/mssqlcatalog"
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 )
 
 var _ = Describe("SQL Server column types", func() {
 	DescribeTable("ParseType reads a declared type and FormatType writes its canonical spelling",
 		func(declared, canonical string) {
-			parsed, err := sqlserver.ParseType(declared)
+			parsed, err := planner.ParseType(declared)
 			Expect(err).ToNot(HaveOccurred())
-			formatted, err := sqlserver.FormatType(parsed)
+			formatted, err := planner.FormatType(parsed)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(formatted).To(Equal(canonical))
 
-			reparsed, err := sqlserver.ParseType(formatted)
+			reparsed, err := planner.ParseType(formatted)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(reparsed).To(Equal(parsed), "the canonical spelling is a fixed point")
 		},
@@ -63,7 +64,7 @@ var _ = Describe("SQL Server column types", func() {
 
 	DescribeTable("ParseType refuses types the driver does not manage",
 		func(declared, message string) {
-			_, err := sqlserver.ParseType(declared)
+			_, err := planner.ParseType(declared)
 			Expect(err).To(MatchError(ContainSubstring(message)))
 		},
 		Entry("an alias type", "sysname", `type "sysname" is not supported`),
@@ -77,7 +78,7 @@ var _ = Describe("SQL Server column types", func() {
 		func(column mssqlcatalog.Column, canonical string) {
 			t, err := sqlserver.CatalogType(column)
 			Expect(err).ToNot(HaveOccurred())
-			formatted, err := sqlserver.FormatType(t)
+			formatted, err := planner.FormatType(t)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(formatted).To(Equal(canonical))
 		},
@@ -101,7 +102,7 @@ var _ = Describe("SQL Server column types", func() {
 	})
 
 	It("refuses to format a type that is not a SQL Server type", func() {
-		_, err := sqlserver.FormatType(&schema.JSONType{T: "jsonb"})
+		_, err := planner.FormatType(&schema.JSONType{T: "jsonb"})
 		Expect(err).To(MatchError(ContainSubstring("unsupported type *schema.JSONType")))
 	})
 })
