@@ -43,9 +43,9 @@ var (
 	shortSHAPattern = regexp.MustCompile(`^[0-9a-f]{4,39}$`)
 )
 
-// Resolve finds name as, in order: a full ref, HEAD, a branch, a tag (a name
-// that is both a branch and a tag is ambiguous), then a 40-char SHA. An empty
-// name is HEAD. Short SHAs are refused: they cannot be fetched by name.
+// Resolve finds name as, in order: a full ref, HEAD, a branch, a tag, then a
+// 40-char SHA. A branch takes precedence over a same-named tag. An empty name
+// is HEAD. Short SHAs are refused: they cannot be fetched by name.
 func (r RemoteRefs) Resolve(name string) (Ref, error) {
 	if name == "" || name == "HEAD" {
 		if r.Head == nil {
@@ -59,8 +59,6 @@ func (r RemoteRefs) Resolve(name string) (Ref, error) {
 	branch, isBranch := r.findIn(r.Branches, name)
 	tag, isTag := r.findIn(r.Tags, name)
 	switch {
-	case isBranch && isTag:
-		return Ref{}, fmt.Errorf("ref %q is ambiguous: it is both a branch and a tag, use refs/heads/%s or refs/tags/%s", name, name, name)
 	case isBranch:
 		return branch, nil
 	case isTag:

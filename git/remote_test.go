@@ -6,13 +6,6 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-func newRepository(rawURL string, auth git.Auth) *git.Repository {
-	GinkgoHelper()
-	repo, err := git.NewRepository(git.RepositoryOptions{URL: rawURL, Auth: auth})
-	Expect(err).ToNot(HaveOccurred())
-	return repo
-}
-
 var _ = Describe("Repository", func() {
 	var fixture bareRepo
 	BeforeEach(func() { fixture = newBareRepo("rules") })
@@ -46,15 +39,29 @@ var _ = Describe("Repository", func() {
 		Entry("40-char SHA", func(b bareRepo) string { return b.First }, git.RefSHA, func(b bareRepo) string { return b.First }),
 	)
 
-	It("rejects short SHAs, unknown refs and branch/tag ambiguity", func(ctx SpecContext) {
+	It("rejects short SHAs and unknown refs", func(ctx SpecContext) {
 		repo := newRepository(fixture.FileURL(), git.Auth{})
 		_, err := repo.Resolve(ctx, fixture.First[:8])
 		Expect(err).To(MatchError(ContainSubstring("short SHA")))
 		_, err = repo.Resolve(ctx, "missing")
 		Expect(err).To(MatchError(ContainSubstring(`ref "missing" not found`)))
+	})
+
+	It("checks out a branch before a same-named tag and retains explicit tag selection", func(ctx SpecContext) {
 		gitFixture(fixture.Path, "branch", "v1-lite", fixture.Main)
-		_, err = repo.Resolve(ctx, "v1-lite")
-		Expect(err).To(MatchError(ContainSubstring("ambiguous")))
+		repo := newRepository(fixture.FileURL(), git.Auth{})
+		cache := git.Cache{Root: GinkgoT().TempDir()}
+		for _, name := range []string{"v1-lite", "refs/tags/v1-lite"} {
+			checkout, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: name, Ephemeral: true})
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(checkout.Release)
+			want := git.Ref{Name: "v1-lite", FullName: "refs/heads/v1-lite", SHA: fixture.Main, Kind: git.RefBranch}
+			if name == "refs/tags/v1-lite" {
+				want = git.Ref{Name: "v1-lite", FullName: name, SHA: fixture.First, Kind: git.RefTag}
+			}
+			Expect(checkout.Ref).To(Equal(want))
+			Expect(gitFixture(checkout.Dir, "rev-parse", "HEAD")).To(Equal(want.SHA))
+		}
 	})
 
 	It("lists a smart-HTTP remote only with Basic auth", func(ctx SpecContext) {

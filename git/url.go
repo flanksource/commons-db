@@ -62,6 +62,29 @@ func ParseRepoURL(raw, providerHint string) (RepoURL, error) {
 	return parsed, nil
 }
 
+// SourceRepository resolves a pull request's provider-native source name into
+// a repository on the same host, including fork and Azure project identity.
+func (u RepoURL) SourceRepository(name string) (RepoURL, error) {
+	parts := strings.Split(name, "/")
+	if len(parts) < 2 || strings.ContainsAny(name, "?#:@\\") {
+		return RepoURL{}, fmt.Errorf("invalid PR source repository %q", name)
+	}
+	for _, part := range parts {
+		if part == "" || part == "." || part == ".." {
+			return RepoURL{}, fmt.Errorf("invalid PR source repository %q", name)
+		}
+	}
+	path := "/" + name
+	if u.Provider == models.ConnectionTypeAzureDevops {
+		if len(parts) != 2 {
+			return RepoURL{}, fmt.Errorf("Azure PR source must be project/repository, got %q", name)
+		}
+		u.Project, u.Name = parts[0], parts[1]
+		return ParseRepoURL(u.azureWebBase(), u.Provider)
+	}
+	return ParseRepoURL((&url.URL{Scheme: "https", Host: u.Host, Path: path}).String(), u.Provider)
+}
+
 func splitRepoURL(raw string) (RepoURL, error) {
 	if strings.Contains(raw, "://") {
 		return parseSchemeURL(raw)

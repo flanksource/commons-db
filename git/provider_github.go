@@ -43,10 +43,14 @@ type githubPull struct {
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
 	User      struct {
-		Login string `json:"login"`
+		Login     string `json:"login"`
+		AvatarURL string `json:"avatar_url"`
 	} `json:"user"`
-	MergedAt *string `json:"merged_at"`
-	Head     struct {
+	MergedAt       *string `json:"merged_at"`
+	Mergeable      *bool   `json:"mergeable"`
+	MergeableState string  `json:"mergeable_state"`
+	Draft          bool    `json:"draft"`
+	Head           struct {
 		Ref  string `json:"ref"`
 		SHA  string `json:"sha"`
 		Repo *struct {
@@ -55,6 +59,7 @@ type githubPull struct {
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`
+		SHA string `json:"sha"`
 	} `json:"base"`
 }
 
@@ -152,6 +157,8 @@ func (p *githubProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 		next := p.repoEndpoint(repo, path) + "?per_page=100"
 		for next != "" {
 			var comments []struct {
+				ID        int64     `json:"id"`
+				UpdatedAt time.Time `json:"updated_at"`
 				Body      string    `json:"body"`
 				HTMLURL   string    `json:"html_url"`
 				CreatedAt time.Time `json:"created_at"`
@@ -165,7 +172,8 @@ func (p *githubProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 			}
 			for _, comment := range comments {
 				activity = append(activity, PullRequestActivity{Kind: PullRequestComment, Author: comment.User.Login,
-					Body: comment.Body, CreatedAt: comment.CreatedAt, URL: comment.HTMLURL})
+					Body: comment.Body, CreatedAt: comment.CreatedAt, URL: comment.HTMLURL,
+					ID: fmt.Sprintf("%s:%d", path, comment.ID), Action: "comment", UpdatedAt: comment.UpdatedAt, Mentions: ActivityMentions(comment.Body)})
 			}
 			next = ""
 			if match := linkNextPattern.FindStringSubmatch(headers.Get("Link")); match != nil {
@@ -176,6 +184,7 @@ func (p *githubProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 	next := p.repoEndpoint(repo, fmt.Sprintf("/issues/%d/events", number)) + "?per_page=100"
 	for next != "" {
 		var events []struct {
+			ID        int64     `json:"id"`
 			Event     string    `json:"event"`
 			CreatedAt time.Time `json:"created_at"`
 			Actor     struct {
@@ -188,7 +197,8 @@ func (p *githubProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 		}
 		for _, event := range events {
 			activity = append(activity, PullRequestActivity{Kind: PullRequestHistory, Author: event.Actor.Login,
-				Body: strings.ReplaceAll(event.Event, "_", " "), CreatedAt: event.CreatedAt})
+				Body: strings.ReplaceAll(event.Event, "_", " "), CreatedAt: event.CreatedAt,
+				ID: fmt.Sprintf("event:%d", event.ID), Action: event.Event})
 		}
 		next = ""
 		if match := linkNextPattern.FindStringSubmatch(headers.Get("Link")); match != nil {
@@ -251,6 +261,10 @@ func (pull githubPull) toPullRequest() PullRequest {
 		Title: pull.Title, Author: pull.User.Login, Body: pull.Body, CreatedAt: pull.CreatedAt, HeadSHA: pull.Head.SHA}
 	if pull.Head.Repo != nil {
 		pr.HeadRepository = pull.Head.Repo.FullName
+	}
+	if pull.User.AvatarURL != "" || pull.MergeableState != "" || pull.Mergeable != nil || pull.Base.SHA != "" || pull.Draft {
+		pr.Metadata = &PullRequestMetadata{AuthorAvatarURL: pull.User.AvatarURL, BaseSHA: pull.Base.SHA,
+			Mergeability: githubMergeability(pull.Mergeable, pull.MergeableState), MergeReason: pull.MergeableState, Draft: pull.Draft}
 	}
 	return pr
 }
