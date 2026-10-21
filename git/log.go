@@ -73,6 +73,7 @@ type HistoryOptions struct {
 	Follow bool
 	Limit  int
 	Since  string
+	Offset int
 }
 
 // Comparison is how head relates to base: Ahead commits on head not on base,
@@ -122,7 +123,7 @@ func (c *Cache) Log(ctx context.Context, repo *Repository, base, head string, op
 // detected). ref resolves like a Checkout ref and its full history is fetched
 // into the mirror, unshallowing it when needed.
 func (c *Cache) History(ctx context.Context, repo *Repository, ref string, options HistoryOptions) ([]Commit, error) {
-	if options.Limit < 0 {
+	if options.Limit < 0 || options.Offset < 0 {
 		return nil, fmt.Errorf("invalid history limit %d", options.Limit)
 	}
 	if options.Follow && len(options.Paths) != 1 {
@@ -137,6 +138,9 @@ func (c *Cache) History(ctx context.Context, repo *Repository, ref string, optio
 	}
 	if options.Since != "" {
 		args = append(args, "--since="+options.Since)
+	}
+	if options.Offset > 0 {
+		args = append(args, "--skip="+strconv.Itoa(options.Offset))
 	}
 	var out string
 	err := c.withRefs(ctx, repo, []refOn{{repo, ref}}, func(mirror string, shas []string) (err error) {
