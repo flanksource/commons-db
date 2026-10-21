@@ -18,6 +18,8 @@
 //     ErrPathNotFound for a path absent there; pullrequest.go opens a pull request between two
 //     existing branches (Repository.OpenPullRequest).
 //   - ignore.go lists tracked and unignored paths in a local checkout.
+//   - source.go prepares local working, commit and staged sources with their
+//     changed paths, isolating immutable sources from the original index and checkout.
 //   - provider*.go and rest.go talk to the hosting provider's REST API.
 //   - factory.go builds a Client from a hydrated models.Connection.
 //
