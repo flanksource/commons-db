@@ -8,10 +8,11 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/atlas/sqlserver"
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 )
 
 func planCmds(changes ...schema.Change) []string {
-	plan, err := sqlserver.DefaultPlan.PlanChanges(GinkgoT().Context(), "golden", changes)
+	plan, err := planner.DefaultPlan.PlanChanges(GinkgoT().Context(), "golden", changes)
 	Expect(err).ToNot(HaveOccurred())
 	cmds := make([]string, len(plan.Changes))
 	for i, c := range plan.Changes {
@@ -56,7 +57,7 @@ var _ = Describe("SQL Server plan", func() {
 	It("rebinds a live default around a type change", func() {
 		t := declaredOrders()
 		live := schema.NewColumn("status").SetType(&schema.StringType{T: "nvarchar", Size: 10}).
-			SetDefault(&schema.RawExpr{X: "(N'new')"}).AddAttrs(&sqlserver.DefaultConstraint{Name: "DF__acme_orde__statu__1A2B"})
+			SetDefault(&schema.RawExpr{X: "(N'new')"}).AddAttrs(&planner.DefaultConstraint{Name: "DF__acme_orde__statu__1A2B"})
 		declared, _ := t.Column("status")
 		Expect(planCmds(modify(t, &schema.ModifyColumn{From: live, To: declared, Change: schema.ChangeType | schema.ChangeDefault}))).To(Equal([]string{
 			"ALTER TABLE [dbo].[acme_orders] DROP CONSTRAINT [DF__acme_orde__statu__1A2B]",
@@ -77,8 +78,8 @@ var _ = Describe("SQL Server plan", func() {
 	It("adds a unique clustered index and drops a constraint-backed unique index", func() {
 		t := declaredOrders()
 		status, _ := t.Column("status")
-		added := schema.NewUniqueIndex("UX_acme_orders_status").AddColumns(status).AddAttrs(&sqlserver.Clustered{})
-		dropped := schema.NewUniqueIndex("UQ_acme_orders_note").AddAttrs(&sqlserver.UniqueConstraint{})
+		added := schema.NewUniqueIndex("UX_acme_orders_status").AddColumns(status).AddAttrs(&planner.Clustered{})
+		dropped := schema.NewUniqueIndex("UQ_acme_orders_note").AddAttrs(&planner.UniqueConstraint{})
 		Expect(planCmds(modify(t, &schema.AddIndex{I: added}, &schema.DropIndex{I: dropped}))).To(Equal([]string{
 			"CREATE UNIQUE CLUSTERED INDEX [UX_acme_orders_status] ON [dbo].[acme_orders] ([status])",
 			"ALTER TABLE [dbo].[acme_orders] DROP CONSTRAINT [UQ_acme_orders_note]",
@@ -120,9 +121,9 @@ var _ = Describe("SQL Server plan", func() {
 		}))
 	})
 
-	It("refuses a change it does not plan", func() {
-		_, err := sqlserver.DefaultPlan.PlanChanges(GinkgoT().Context(), "golden",
+	It("refuses a view without its complete T-SQL definition", func() {
+		_, err := planner.DefaultPlan.PlanChanges(GinkgoT().Context(), "golden",
 			[]schema.Change{&schema.AddView{V: schema.NewView("acme_open", "SELECT 1")}}, func(*migrate.PlanOptions) {})
-		Expect(err).To(MatchError("sqlserver: change *schema.AddView is not supported by the SQL Server driver"))
+		Expect(err).To(MatchError("sqlserver: routine acme_open has no T-SQL definition"))
 	})
 })

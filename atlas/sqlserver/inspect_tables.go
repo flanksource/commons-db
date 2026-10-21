@@ -8,6 +8,7 @@ import (
 	"ariga.io/atlas/sql/schema"
 
 	"github.com/flanksource/commons-db/internal/mssqlcatalog"
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 )
 
 // inspectTables reads the base tables in scope with their columns, keys,
@@ -134,13 +135,13 @@ func catalogColumn(c mssqlcatalog.Column) (*schema.Column, error) {
 		if c.DefaultConstraint == nil {
 			return nil, fmt.Errorf("default %s has no constraint name", *c.Default)
 		}
-		column.AddAttrs(&DefaultConstraint{Name: *c.DefaultConstraint})
+		column.AddAttrs(&planner.DefaultConstraint{Name: *c.DefaultConstraint})
 	}
 	if c.Identity {
 		if c.IdentitySeed == nil || c.IdentityIncrement == nil {
 			return nil, fmt.Errorf("identity column without seed and increment")
 		}
-		column.AddAttrs(&Identity{Seed: *c.IdentitySeed, Increment: *c.IdentityIncrement})
+		column.AddAttrs(&planner.Identity{Seed: *c.IdentitySeed, Increment: *c.IdentityIncrement})
 	}
 	return column, nil
 }
@@ -173,16 +174,16 @@ func catalogIndex(t *schema.Table, idx mssqlcatalog.Index, columns []mssqlcatalo
 	index := schema.NewIndex(idx.Name).SetUnique(idx.Unique).SetTable(t)
 	switch idx.TypeDesc {
 	case "CLUSTERED":
-		index.AddAttrs(&Clustered{})
+		index.AddAttrs(&planner.Clustered{})
 	case "NONCLUSTERED":
 	default:
 		return nil, fmt.Errorf("%s indexes are %w", strings.ToLower(idx.TypeDesc), errUnsupported)
 	}
 	if idx.Filter != "" {
-		index.AddAttrs(&IndexPredicate{P: idx.Filter})
+		index.AddAttrs(&planner.IndexPredicate{P: idx.Filter})
 	}
 	if idx.UniqueConstraint {
-		index.AddAttrs(&UniqueConstraint{})
+		index.AddAttrs(&planner.UniqueConstraint{})
 	}
 	var include []string
 	for _, c := range columns {
@@ -197,7 +198,7 @@ func catalogIndex(t *schema.Table, idx mssqlcatalog.Index, columns []mssqlcatalo
 		index.AddParts(&schema.IndexPart{SeqNo: c.KeyOrdinal, C: column, Desc: c.Descending})
 	}
 	if len(include) > 0 {
-		index.AddAttrs(&IndexInclude{Columns: include})
+		index.AddAttrs(&planner.IndexInclude{Columns: include})
 	}
 	return index, nil
 }

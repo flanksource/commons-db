@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	"github.com/flanksource/commons-db/atlas/sqlserver"
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 )
 
 var _ = Describe("SQL Server inspection", func() {
@@ -53,7 +54,7 @@ var _ = Describe("SQL Server inspection", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(s.Tables).To(BeEmpty())
 		Expect(s.Procs).To(HaveLen(1))
-		Expect(s.Procs[0].Attrs).To(ConsistOf(&sqlserver.Definition{Text: touchOrderLive}))
+		Expect(s.Procs[0].Attrs).To(ConsistOf(&planner.Definition{Text: touchOrderLive}))
 	})
 
 	It("fails on a live definition that does not parse, naming the routine", func() {
