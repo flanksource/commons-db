@@ -273,6 +273,8 @@ The record store uses this lower-level API to add newly declared columns to tabl
 
 `sqlserver://` targets reconcile through the Atlas SQL Server driver in `atlas/sqlserver`, which commons-db ships because Atlas OSS has none. A bundle declares tables in SQL Server-shaped HCL and stored procedures and functions as plain `.sql` files:
 
+The driver delegates its differ, SQL Server types and migration planner to `github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver`. Commons-db owns catalog inspection, HCL loading, connections, locks, transactions and applying the resulting SQL. Consumers that need a database-independent typed plan can use sqlglot's `migrate/sqlserver` package directly; this does not expand the HCL or inspection support described below.
+
 ```go
 //go:embed db
 var bundle embed.FS

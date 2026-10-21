@@ -11,6 +11,7 @@ import (
 	"github.com/zclconf/go-cty/cty"
 
 	"github.com/flanksource/commons-db/atlas/internal/specutil"
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 )
 
 // doc is the HCL document the codec reads. Only schemas and tables are
@@ -140,7 +141,7 @@ func convertColumn(spec *sqlspec.Column, _ *schema.Table) (*schema.Column, error
 	if err != nil {
 		return nil, fmt.Errorf("column %q identity: %w", spec.Name, err)
 	}
-	return c.AddAttrs(&Identity{Seed: seed, Increment: increment}), nil
+	return c.AddAttrs(&planner.Identity{Seed: seed, Increment: increment}), nil
 }
 
 func int64Attr(r *schemahcl.Resource, name string) (int64, error) {
@@ -185,7 +186,7 @@ func convertIndex(spec *sqlspec.Index, t *schema.Table) (*schema.Index, error) {
 		if err != nil {
 			return nil, fmt.Errorf("index %q where: %w", spec.Name, err)
 		}
-		idx.AddAttrs(&IndexPredicate{P: p})
+		idx.AddAttrs(&planner.IndexPredicate{P: p})
 	}
 	return idx, includeAttr(spec, t, idx)
 }
@@ -199,7 +200,7 @@ func clusteredAttr(r schemahcl.Resource, fallback bool, idx *schema.Index) error
 		}
 	}
 	if clustered {
-		idx.AddAttrs(&Clustered{})
+		idx.AddAttrs(&planner.Clustered{})
 	}
 	return nil
 }
@@ -213,7 +214,7 @@ func includeAttr(spec *sqlspec.Index, t *schema.Table, idx *schema.Index) error 
 	if err != nil {
 		return fmt.Errorf("index %q include: %w", spec.Name, err)
 	}
-	include := &IndexInclude{}
+	include := &planner.IndexInclude{}
 	for _, ref := range refs {
 		c, err := specutil.ColumnByRef(t, ref)
 		if err != nil {
@@ -251,8 +252,8 @@ func sizedSpec(name string) *schemahcl.TypeSpec {
 // TypeRegistry holds the SQL Server HCL type specs. A (max) size is written
 // with sql(), e.g. `type = sql("nvarchar(max)")`.
 var TypeRegistry = schemahcl.NewRegistry(
-	schemahcl.WithFormatter(FormatType),
-	schemahcl.WithParser(ParseType),
+	schemahcl.WithFormatter(planner.FormatType),
+	schemahcl.WithParser(planner.ParseType),
 	schemahcl.WithSpecs(
 		schemahcl.NewTypeSpec("bit"), schemahcl.NewTypeSpec("tinyint"), schemahcl.NewTypeSpec("smallint"),
 		schemahcl.NewTypeSpec("int"), schemahcl.NewTypeSpec("bigint"),

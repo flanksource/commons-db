@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/commons-db/atlas/internal/sqlx"
 	"github.com/flanksource/commons-db/internal/mssqlcatalog"
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 )
 
 // inspect provides a SQL Server implementation for schema.Inspector.
@@ -123,7 +124,7 @@ func (i *inspect) inspectRoutines(ctx context.Context, s *schema.Schema, scope m
 		if live.Definition == nil {
 			return fmt.Errorf("sqlserver: routine %s.%s has no readable definition (encrypted or no VIEW DEFINITION permission)", live.Schema, live.Name)
 		}
-		routine, err := ParseRoutine(*live.Definition)
+		routine, err := planner.ParseRoutine(*live.Definition)
 		if err != nil {
 			return fmt.Errorf("sqlserver: live routine %s.%s: %w", live.Schema, live.Name, err)
 		}

@@ -5,10 +5,9 @@ import (
 
 	"ariga.io/atlas/sql/schema"
 
+	planner "github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/flanksource/commons-db/atlas/sqlserver"
 )
 
 const touchOrderLive = `-- Marks an order as touched.
@@ -23,7 +22,7 @@ END`
 func routineSchema(definitions ...string) *schema.Schema {
 	s := schema.New("dbo")
 	for _, definition := range definitions {
-		routine, err := sqlserver.ParseRoutine(definition)
+		routine, err := planner.ParseRoutine(definition)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(routine.AddTo(s)).To(Succeed())
 	}
@@ -34,7 +33,7 @@ var _ = Describe("SQL Server routine diff", func() {
 	DescribeTable("compares routine definitions by their canonical form",
 		func(declared string, expected types) {
 			from, to := routineSchema(touchOrderLive), routineSchema(declared)
-			changes, err := sqlserver.DefaultDiff.SchemaDiff(from, to)
+			changes, err := planner.DefaultDiff.SchemaDiff(from, to)
 			Expect(err).ToNot(HaveOccurred())
 			Expect(changeTypes(changes)).To(Equal(expected))
 		},
@@ -53,21 +52,21 @@ var _ = Describe("SQL Server routine diff", func() {
 	It("adds declared routines the database lacks and drops routines only the database has", func() {
 		from := routineSchema(touchOrderLive)
 		to := routineSchema(countOrdersProc, orderTotalFunc)
-		changes, err := sqlserver.DefaultDiff.SchemaDiff(from, to)
+		changes, err := planner.DefaultDiff.SchemaDiff(from, to)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(changeTypes(changes)).To(Equal(types{"*schema.AddProc", "*schema.AddFunc", "*schema.DropProc"}))
 	})
 
 	It("refuses to turn a procedure into a function", func() {
 		from := routineSchema("CREATE PROCEDURE dbo.acme_order_total AS BEGIN SELECT 1; END")
-		_, err := sqlserver.DefaultDiff.SchemaDiff(from, routineSchema(orderTotalFunc))
+		_, err := planner.DefaultDiff.SchemaDiff(from, routineSchema(orderTotalFunc))
 		Expect(err).To(MatchError(ContainSubstring("acme_order_total is a procedure in the database and a function in the bundle")))
 	})
 
 	It("fails on a live definition sqlglot cannot read instead of assuming a change", func() {
 		from := routineSchema(touchOrderLive)
-		from.Procs[0].Attrs = []schema.Attr{&sqlserver.Definition{Text: "CREATE PROCEDURE dbo.acme_touch_order AS BEGIN"}}
-		_, err := sqlserver.DefaultDiff.SchemaDiff(from, routineSchema(touchOrderLive))
+		from.Procs[0].Attrs = []schema.Attr{&planner.Definition{Text: "CREATE PROCEDURE dbo.acme_touch_order AS BEGIN"}}
+		_, err := planner.DefaultDiff.SchemaDiff(from, routineSchema(touchOrderLive))
 		Expect(err).To(MatchError(ContainSubstring("live definition: sqlserver: routine acme_touch_order")))
 	})
 })
@@ -75,7 +74,7 @@ var _ = Describe("SQL Server routine diff", func() {
 var _ = Describe("SQL Server table diff", func() {
 	DescribeTable("compares column defaults as SQL Server stores them",
 		func(live, declared schema.Expr, expected types) {
-			changes, err := sqlserver.DefaultDiff.TableDiff(ordersTable(live, nil), ordersTable(declared, nil))
+			changes, err := planner.DefaultDiff.TableDiff(ordersTable(live, nil), ordersTable(declared, nil))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(changeTypes(changes)).To(Equal(expected))
 		},
@@ -95,14 +94,14 @@ var _ = Describe("SQL Server table diff", func() {
 			schema.New("dbo").AddTables(t)
 			return t
 		}
-		changes, err := sqlserver.DefaultDiff.TableDiff(column(&schema.RawExpr{X: "(N'open')"}), column(&schema.Literal{V: "open"}))
+		changes, err := planner.DefaultDiff.TableDiff(column(&schema.RawExpr{X: "(N'open')"}), column(&schema.Literal{V: "open"}))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(changes).To(BeEmpty())
 	})
 
 	DescribeTable("compares check constraints by their canonical predicate",
 		func(live, declared string, expected types) {
-			changes, err := sqlserver.DefaultDiff.TableDiff(ordersTable(nil, &schema.Check{Name: "CK_acme_orders_qty", Expr: live}),
+			changes, err := planner.DefaultDiff.TableDiff(ordersTable(nil, &schema.Check{Name: "CK_acme_orders_qty", Expr: live}),
 				ordersTable(nil, &schema.Check{Name: "CK_acme_orders_qty", Expr: declared}))
 			Expect(err).ToNot(HaveOccurred())
 			Expect(changeTypes(changes)).To(Equal(expected))
