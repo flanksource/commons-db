@@ -41,13 +41,16 @@ type gitlabMergeRequest struct {
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
 	Author      struct {
-		Name string `json:"name"`
+		Name      string `json:"name"`
+		AvatarURL string `json:"avatar_url"`
 	} `json:"author"`
-	SourceBranch string `json:"source_branch"`
-	TargetBranch string `json:"target_branch"`
-	SHA          string `json:"sha"`
-	SourceID     int    `json:"source_project_id"`
-	TargetID     int    `json:"target_project_id"`
+	SourceBranch        string `json:"source_branch"`
+	TargetBranch        string `json:"target_branch"`
+	SHA                 string `json:"sha"`
+	SourceID            int    `json:"source_project_id"`
+	TargetID            int    `json:"target_project_id"`
+	DetailedMergeStatus string `json:"detailed_merge_status"`
+	Draft               bool   `json:"draft"`
 }
 
 func (p *gitlabProvider) Type() string               { return models.ConnectionTypeGitlab }
@@ -166,6 +169,7 @@ func (p *gitlabProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 		var discussions []struct {
 			Notes []struct {
 				ID        int       `json:"id"`
+				UpdatedAt time.Time `json:"updated_at"`
 				Body      string    `json:"body"`
 				System    bool      `json:"system"`
 				CreatedAt time.Time `json:"created_at"`
@@ -185,7 +189,8 @@ func (p *gitlabProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 					kind = PullRequestHistory
 				}
 				activity = append(activity, PullRequestActivity{Kind: kind, Author: note.Author.Name, Body: note.Body,
-					CreatedAt: note.CreatedAt, URL: fmt.Sprintf("%s#note_%d", pull.URL, note.ID)})
+					CreatedAt: note.CreatedAt, URL: fmt.Sprintf("%s#note_%d", pull.URL, note.ID),
+					ID: fmt.Sprintf("note:%d", note.ID), Action: string(kind), UpdatedAt: note.UpdatedAt, Mentions: ActivityMentions(note.Body)})
 			}
 		}
 		page := strings.TrimSpace(headers.Get("X-Next-Page"))
@@ -249,8 +254,12 @@ func (mr gitlabMergeRequest) toPullRequest() (PullRequest, error) {
 	if !ok {
 		return PullRequest{}, fmt.Errorf("gitlab merge request !%d has unknown state %q", mr.IID, mr.State)
 	}
-	return PullRequest{Number: mr.IID, URL: mr.WebURL, State: state, Head: mr.SourceBranch, Base: mr.TargetBranch,
-		Title: mr.Title, Author: mr.Author.Name, Body: mr.Description, CreatedAt: mr.CreatedAt, HeadSHA: mr.SHA}, nil
+	pr := PullRequest{Number: mr.IID, URL: mr.WebURL, State: state, Head: mr.SourceBranch, Base: mr.TargetBranch,
+		Title: mr.Title, Author: mr.Author.Name, Body: mr.Description, CreatedAt: mr.CreatedAt, HeadSHA: mr.SHA}
+	if mr.Author.AvatarURL != "" || mr.DetailedMergeStatus != "" || mr.Draft {
+		pr.Metadata = &PullRequestMetadata{AuthorAvatarURL: mr.Author.AvatarURL, Mergeability: gitlabMergeability(mr.DetailedMergeStatus), MergeReason: mr.DetailedMergeStatus, Draft: mr.Draft}
+	}
+	return pr, nil
 }
 
 // pullRequest converts mr, naming its head repository by path_with_namespace:

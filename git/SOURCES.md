@@ -64,6 +64,20 @@ Materialization reads raw blobs. Executable permissions and safe relative symlin
 
 Use `errors.Is` with `ErrInvalidSource`, `ErrRevisionNotFound`, `ErrUnmergedIndex`, `ErrSourceChanged`, `ErrUnsupportedSource`, `ErrNotRepository` or `ErrUnrelatedHistories`. Other Git, context, filesystem and cleanup errors remain wrapped with context. `PrepareSource` returns a nil source on failure. No process-global Git configuration or environment is changed.
 
+## Live checkout fingerprints
+
+`git.WorktreeFingerprint(ctx, directory)` returns a canonical repository `Root` and a SHA-256 `SHA` for quick persistent cache validation. It combines HEAD, refs, staged and unstaged status, untracked paths, and dirty-file modification times, sizes and modes. It handles literal filenames, renames, deletions, symlinks and dirty submodules. Repository ignore rules exclude scratch files; global Git configuration remains isolated.
+
+```go
+fingerprint, err := git.WorktreeFingerprint(ctx, project)
+if err != nil {
+    return err
+}
+cacheKey := fingerprint.SHA
+```
+
+The fingerprint reads Git status and stats dirty paths without hashing their contents. An edit that preserves both size and modification time needs explicit cache invalidation. Cache consumers must separately include inputs outside the repository, such as a parent `go.work` and build options. `ErrNotRepository` identifies a directory outside a checkout; filesystem and cancellation failures remain errors.
+
 ## Verification
 
 Run the integration tests against temporary local repositories:
