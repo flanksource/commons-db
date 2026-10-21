@@ -218,8 +218,8 @@ var _ = Describe("pull request detail activity", func() {
 		activity, err := provider.ListPullRequestActivity(ctx, repo, 9)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(activity).To(Equal([]git.PullRequestActivity{
-			{Kind: git.PullRequestComment, Author: "Grace", Body: "Please test", CreatedAt: pr.CreatedAt.Add(1 * time.Hour), URL: pr.URL + "?discussionId=31"},
-			{Kind: git.PullRequestHistory, Author: "Ada", Body: "Updated source", CreatedAt: pr.CreatedAt.Add(2 * time.Hour), URL: pr.URL + "?discussionId=31"},
+			{Kind: git.PullRequestComment, Author: "Grace", Body: "Please test", CreatedAt: pr.CreatedAt.Add(1 * time.Hour), URL: pr.URL + "?discussionId=31", ID: "thread:31:comment:1", Action: "text", Mentions: []string{}},
+			{Kind: git.PullRequestHistory, Author: "Ada", Body: "Updated source", CreatedAt: pr.CreatedAt.Add(2 * time.Hour), URL: pr.URL + "?discussionId=31", ID: "thread:31:comment:2", Action: "system", Mentions: []string{}},
 		}))
 	})
 })

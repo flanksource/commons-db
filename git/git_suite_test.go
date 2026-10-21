@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/flanksource/commons-db/git"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -184,4 +185,11 @@ func argvRecorder() string {
 	Expect(os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755)).To(Succeed())
 	GinkgoT().Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	return log
+}
+
+func newRepository(rawURL string, auth git.Auth) *git.Repository {
+	GinkgoHelper()
+	repo, err := git.NewRepository(git.RepositoryOptions{URL: rawURL, Auth: auth})
+	Expect(err).ToNot(HaveOccurred())
+	return repo
 }

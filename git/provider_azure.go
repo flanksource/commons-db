@@ -42,13 +42,19 @@ type azurePull struct {
 	CreationDate  time.Time `json:"creationDate"`
 	SourceRefName string    `json:"sourceRefName"`
 	TargetRefName string    `json:"targetRefName"`
+	MergeStatus   string    `json:"mergeStatus"`
+	IsDraft       bool      `json:"isDraft"`
 	CreatedBy     struct {
 		ID          string `json:"id"`
 		DisplayName string `json:"displayName"`
+		ImageURL    string `json:"imageUrl"`
 	} `json:"createdBy"`
 	LastMergeSourceCommit struct {
 		CommitID string `json:"commitId"`
 	} `json:"lastMergeSourceCommit"`
+	LastMergeTargetCommit struct {
+		CommitID string `json:"commitId"`
+	} `json:"lastMergeTargetCommit"`
 	ForkSource *struct {
 		Repository azurePullRepo `json:"repository"`
 	} `json:"forkSource"`
@@ -60,6 +66,7 @@ type azurePullRepo struct {
 	Project struct {
 		Name string `json:"name"`
 	} `json:"project"`
+	ID string `json:"id"`
 }
 
 // fullName is "Project/repo", as ListRepositories names a repository.
@@ -128,7 +135,7 @@ func (p *azureProvider) OpenPullRequest(ctx context.Context, repo RepoURL, reque
 			return PullRequest{}, fmt.Errorf("pull request %d opened, but enabling auto-complete failed: %w", pull.ID, err)
 		}
 	}
-	return pull.toPullRequest(repo)
+	return (azurePullReader{provider: p, repo: repo}).read(ctx, pull)
 }
 
 func (p *azureProvider) GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error) {
@@ -136,7 +143,7 @@ func (p *azureProvider) GetPullRequest(ctx context.Context, repo RepoURL, number
 	if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), nil, &pull); err != nil {
 		return PullRequest{}, err
 	}
-	return pull.toPullRequest(repo)
+	return (azurePullReader{provider: p, repo: repo}).read(ctx, pull)
 }
 
 func (p *azureProvider) ListPullRequestActivity(ctx context.Context, repo RepoURL, number int) ([]PullRequestActivity, error) {
@@ -147,6 +154,8 @@ func (p *azureProvider) ListPullRequestActivity(ctx context.Context, repo RepoUR
 		Value []struct {
 			ID       int `json:"id"`
 			Comments []struct {
+				ID            int       `json:"id"`
+				UpdatedAt     time.Time `json:"lastUpdatedDate"`
 				Content       string    `json:"content"`
 				CommentType   string    `json:"commentType"`
 				PublishedDate time.Time `json:"publishedDate"`
@@ -175,7 +184,8 @@ func (p *azureProvider) ListPullRequestActivity(ctx context.Context, repo RepoUR
 				return nil, fmt.Errorf("azure DevOps pull request %d thread %d has unknown comment type %q", number, thread.ID, comment.CommentType)
 			}
 			activity = append(activity, PullRequestActivity{Kind: kind, Author: comment.Author.DisplayName, Body: comment.Content,
-				CreatedAt: comment.PublishedDate, URL: fmt.Sprintf("%s/pullrequest/%d?discussionId=%d", repo.azureWebBase(), number, thread.ID)})
+				CreatedAt: comment.PublishedDate, URL: fmt.Sprintf("%s/pullrequest/%d?discussionId=%d", repo.azureWebBase(), number, thread.ID),
+				ID: fmt.Sprintf("thread:%d:comment:%d", thread.ID, comment.ID), Action: comment.CommentType, UpdatedAt: comment.UpdatedAt, Mentions: ActivityMentions(comment.Content)})
 		}
 	}
 	return activity, nil
@@ -195,6 +205,7 @@ func (p *azureProvider) ListPullRequests(ctx context.Context, repo RepoURL, opti
 	if options.Head != "" {
 		query.Set("searchCriteria.sourceRefName", "refs/heads/"+options.Head)
 	}
+	reader := azurePullReader{provider: p, repo: repo, repositories: make(map[string]azurePullRepo)}
 	return listPullRequestPages(options, func(page, perPage int) ([]PullRequest, int, error) {
 		query.Set("$top", strconv.Itoa(perPage))
 		query.Set("$skip", strconv.Itoa((page-1)*perPage))
@@ -206,7 +217,7 @@ func (p *azureProvider) ListPullRequests(ctx context.Context, repo RepoURL, opti
 		}
 		pulls := make([]PullRequest, 0, len(list.Value))
 		for _, pull := range list.Value {
-			converted, err := pull.toPullRequest(repo)
+			converted, err := reader.read(ctx, pull)
 			if err != nil {
 				return nil, 0, err
 			}
@@ -230,7 +241,13 @@ func (p *azureProvider) repoEndpoint(repo RepoURL, suffix string) string {
 	return p.endpoint("/" + url.PathEscape(repo.Project) + "/_apis/git/repositories/" + url.PathEscape(repo.Name) + suffix)
 }
 
-func (pull azurePull) toPullRequest(repo RepoURL) (PullRequest, error) {
+type azurePullReader struct {
+	provider     *azureProvider
+	repo         RepoURL
+	repositories map[string]azurePullRepo
+}
+
+func (r azurePullReader) read(ctx context.Context, pull azurePull) (PullRequest, error) {
 	states := map[string]PullRequestState{"active": PullRequestOpen, "abandoned": PullRequestClosed, "completed": PullRequestMerged}
 	state, ok := states[pull.Status]
 	if !ok {
@@ -240,13 +257,43 @@ func (pull azurePull) toPullRequest(repo RepoURL) (PullRequest, error) {
 	if pull.ForkSource != nil {
 		head = pull.ForkSource.Repository
 	}
-	if head.Name == "" || head.Project.Name == "" {
-		return PullRequest{}, fmt.Errorf("azure DevOps pull request %d has no head repository name and project", pull.ID)
+	head, err := r.resolve(ctx, head)
+	if err != nil {
+		return PullRequest{}, fmt.Errorf("azure DevOps pull request %d: %w", pull.ID, err)
 	}
-	return PullRequest{Number: pull.ID, URL: fmt.Sprintf("%s/pullrequest/%d", repo.azureWebBase(), pull.ID), State: state,
+	pr := PullRequest{Number: pull.ID, URL: fmt.Sprintf("%s/pullrequest/%d", r.repo.azureWebBase(), pull.ID), State: state,
 		Head: strings.TrimPrefix(pull.SourceRefName, "refs/heads/"), Base: strings.TrimPrefix(pull.TargetRefName, "refs/heads/"),
 		Title: pull.Title, Author: pull.CreatedBy.DisplayName, Body: pull.Description, CreatedAt: pull.CreationDate,
-		HeadSHA: pull.LastMergeSourceCommit.CommitID, HeadRepository: head.fullName()}, nil
+		HeadSHA: pull.LastMergeSourceCommit.CommitID, HeadRepository: head.fullName()}
+	if pull.MergeStatus != "" || pull.CreatedBy.ImageURL != "" || pull.LastMergeTargetCommit.CommitID != "" || pull.IsDraft {
+		pr.Metadata = &PullRequestMetadata{AuthorAvatarURL: pull.CreatedBy.ImageURL, BaseSHA: pull.LastMergeTargetCommit.CommitID,
+			Mergeability: azureMergeability(pull.MergeStatus), MergeReason: pull.MergeStatus, Draft: pull.IsDraft}
+	}
+	return pr, nil
+}
+
+func (r azurePullReader) resolve(ctx context.Context, head azurePullRepo) (azurePullRepo, error) {
+	if head.Name != "" && head.Project.Name != "" {
+		return head, nil
+	}
+	if head.ID == "" {
+		return azurePullRepo{}, fmt.Errorf("no head repository ID to resolve its name and project")
+	}
+	if resolved, ok := r.repositories[head.ID]; ok {
+		return resolved, nil
+	}
+	var resolved azurePullRepo
+	endpoint := r.provider.endpoint("/_apis/git/repositories/" + url.PathEscape(head.ID))
+	if _, err := r.provider.api.do(ctx, http.MethodGet, endpoint, nil, &resolved); err != nil {
+		return azurePullRepo{}, fmt.Errorf("resolve head repository %q: %w", head.ID, err)
+	}
+	if resolved.Name == "" || resolved.Project.Name == "" {
+		return azurePullRepo{}, fmt.Errorf("no head repository name and project after resolving %q", head.ID)
+	}
+	if r.repositories != nil {
+		r.repositories[head.ID] = resolved
+	}
+	return resolved, nil
 }
 
 var azureCommitStates = map[CommitState]string{CommitStatePending: "pending", CommitStateSuccess: "succeeded",

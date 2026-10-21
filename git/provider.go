@@ -116,6 +116,7 @@ type PullRequest struct {
 	// the pull request's own repository otherwise. Empty only when the
 	// provider no longer knows it (GitHub: a deleted fork).
 	HeadRepository string
+	Metadata       *PullRequestMetadata
 }
 
 type PullRequestActivityKind string
@@ -131,6 +132,10 @@ type PullRequestActivity struct {
 	Body      string                  `json:"body"`
 	CreatedAt time.Time               `json:"createdAt"`
 	URL       string                  `json:"url,omitempty"`
+	ID        string                  `json:"id,omitempty"`
+	Action    string                  `json:"action,omitempty"`
+	UpdatedAt time.Time               `json:"updatedAt,omitempty"`
+	Mentions  []string                `json:"mentions,omitempty"`
 }
 
 const (
