@@ -1,13 +1,12 @@
 package viewdeps
 
 import (
-	"testing"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"testing"
 )
 
-func TestViewdeps(t *testing.T) {
+func TestCompatibilityViews(t *testing.T) {
 	RegisterFailHandler(Fail)
-	RunSpecs(t, "viewdeps")
+	RunSpecs(t, "View dependency compatibility")
 }

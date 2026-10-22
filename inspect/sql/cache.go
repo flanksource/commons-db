@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	inspection "github.com/flanksource/commons-db/inspect"
+	native "github.com/flanksource/sqlglot-go/database/inspect"
 )
 
 // Cache owns catalogue storage and fill coordination. Implementations must honor
@@ -29,6 +30,8 @@ type Options struct {
 	// with it. A shared backend needs CacheKey values stable across processes.
 	Cache   Cache
 	Refresh bool
+	// Limits bounds the catalogue; zero fields use the defaults.
+	Limits Limits
 	// Open is used instead of db for short-lived connections. It is called only
 	// on a fill, with the fill context, and Inspect closes the returned pool.
 	Open func(context.Context) (*sql.DB, error)
@@ -52,7 +55,7 @@ func NewMemoryCache() *inspection.Memo[Catalog] {
 // Keep a caller-owned db open while background refreshes may use it. Returned
 // slices and nested pointers are shared cache values and must be treated as read-only.
 // A failed explicit refresh returns the last known catalogue alongside its error.
-func Inspect(ctx context.Context, db *sql.DB, driver string, limits Limits, options Options) (Catalog, error) {
+func Inspect(ctx context.Context, db *sql.DB, driver string, options Options) (Catalog, error) {
 	if (db == nil) == (options.Open == nil) {
 		return Catalog{}, fmt.Errorf("sql inspection requires either a database or an opener")
 	}
@@ -60,13 +63,13 @@ func Inspect(ctx context.Context, db *sql.DB, driver string, limits Limits, opti
 	if baseKey == "" {
 		return Catalog{}, fmt.Errorf("sql inspection cache key is required")
 	}
-	driver = normalizeDriver(driver)
-	if _, _, err := inspectionQueries(driver); err != nil {
+	driver = native.NormalizeDriver(driver)
+	if err := native.ValidateDriver(driver); err != nil {
 		return Catalog{}, err
 	}
-	limits = limits.withDefaults()
-	key := fmt.Sprintf("%s:sql-catalog:v1:%s:%d:%d:%d:%d", baseKey, driver,
-		limits.MaxRelations, limits.MaxColumns, limits.MaxRoutines, limits.MaxDefinitionBytes)
+	limits := options.Limits.WithDefaults()
+	key := fmt.Sprintf("%s:sql-catalog:v2:%s:%d:%d:%d:%d:%d", baseKey, driver,
+		limits.MaxRelations, limits.MaxColumns, limits.MaxMetadata, limits.MaxRoutines, limits.MaxDefinitionBytes)
 	cache := options.Cache
 	if cache == nil {
 		cache = defaultCache

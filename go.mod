@@ -115,7 +115,7 @@ require (
 )
 
 require (
-	github.com/flanksource/sqlglot-go v1.0.3
+	github.com/flanksource/sqlglot-go v1.0.4-0.20261022122245-dc2638100c55
 	gorm.io/driver/sqlserver v1.6.4
 )
 
