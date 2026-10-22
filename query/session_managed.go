@@ -110,7 +110,7 @@ func (r *SessionRegistry) Manage(ctx context.Context, options ManageOptions, arm
 	if err != nil {
 		return nil, err
 	}
-	return r.manageTracked(ctx, session, options, timeout, arm)
+	return r.manageTracked(ctx, managedStart{session: session, options: options, stopTimeout: timeout, arm: arm})
 }
 
 // ManageExisting arms an external capture on a session ResumeTrack reattached.
@@ -132,11 +132,19 @@ func (r *SessionRegistry) ManageExisting(ctx context.Context, session *Session, 
 			return nil, err
 		}
 	}
-	return r.manageTracked(ctx, session, options, timeout, arm)
+	return r.manageTracked(ctx, managedStart{session: session, options: options, stopTimeout: timeout, arm: arm})
 }
 
-func (r *SessionRegistry) manageTracked(ctx context.Context, session *Session, options ManageOptions, timeout time.Duration, arm ArmFunc) (*ManagedSession, error) {
-	run, err := arm(session.Context())
+type managedStart struct {
+	session     *Session
+	options     ManageOptions
+	stopTimeout time.Duration
+	arm         ArmFunc
+}
+
+func (r *SessionRegistry) manageTracked(ctx context.Context, start managedStart) (*ManagedSession, error) {
+	session, options := start.session, start.options
+	run, err := start.arm(session.Context())
 	if err != nil {
 		session.Finish(FinishUpdate{Err: err})
 		return nil, err
@@ -149,7 +157,7 @@ func (r *SessionRegistry) manageTracked(ctx context.Context, session *Session, o
 
 	managed := &ManagedSession{
 		registry: r, session: session, run: run, options: options,
-		operation: context.WithoutCancel(ctx), stopTimeout: timeout,
+		operation: context.WithoutCancel(ctx), stopTimeout: start.stopTimeout,
 	}
 	r.registerManaged(managed)
 	session.OnStop(managed.stopForSession)

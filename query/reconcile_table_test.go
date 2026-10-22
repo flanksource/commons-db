@@ -22,8 +22,9 @@ func columnNames(columns []api.ColumnDef) []string {
 func firstFlattened(source, dest []query.Row, sourceProfile, destProfile query.Profile) query.Row {
 	GinkgoHelper()
 	result, err := query.Reconcile(reconcileCtx(),
-		&query.Result{Rows: source}, &query.Result{Rows: dest},
-		sourceProfile, destProfile, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+		query.ReconcileInput{Result: &query.Result{Rows: source}, Profile: sourceProfile},
+		query.ReconcileInput{Result: &query.Result{Rows: dest}, Profile: destProfile},
+		query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 	Expect(err).ToNot(HaveOccurred())
 	Expect(result.Rows).To(HaveLen(1))
 	return result.Flatten()[0]
@@ -45,9 +46,9 @@ var _ = Describe("ReconcileResult rendering", func() {
 
 	It("emits the join columns before each side's columns", func() {
 		result, err := query.Reconcile(reconcileCtx(),
-			&query.Result{Rows: []query.Row{{"sent_at": reconcileEpoch, "id": "A"}}},
-			&query.Result{Rows: []query.Row{{"received_at": reconcileEpoch, "id": "A"}}},
-			sourceProfile, destProfile, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"sent_at": reconcileEpoch, "id": "A"}}}, Profile: sourceProfile},
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"received_at": reconcileEpoch, "id": "A"}}}, Profile: destProfile},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(columnNames(result.Columns())).To(Equal([]string{
@@ -60,8 +61,9 @@ var _ = Describe("ReconcileResult rendering", func() {
 	It("qualifies both sides by side when a profile is reconciled against itself", func() {
 		same := query.Profile{Name: "orders", Columns: []query.ColumnDef{{Name: "id"}}}
 		result, err := query.Reconcile(reconcileCtx(),
-			&query.Result{Rows: []query.Row{{"id": "A"}}}, &query.Result{Rows: []query.Row{{"id": "A"}}},
-			same, same, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}}}, Profile: same},
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}}}, Profile: same},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(columnNames(result.Columns())).To(ContainElements("orders_src_id", "orders_dest_id"))
@@ -69,9 +71,9 @@ var _ = Describe("ReconcileResult rendering", func() {
 
 	It("omits hidden columns from the rendered schema", func() {
 		result, err := query.Reconcile(reconcileCtx(),
-			&query.Result{Rows: []query.Row{{"id": "A", "internal": "secret"}}},
-			&query.Result{Rows: []query.Row{{"id": "A"}}},
-			sourceProfile, destProfile, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A", "internal": "secret"}}}, Profile: sourceProfile},
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}}}, Profile: destProfile},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(columnNames(result.Columns())).ToNot(ContainElement("outgoing_internal"))
 	})
@@ -87,9 +89,9 @@ var _ = Describe("ReconcileResult rendering", func() {
 
 	It("labels each row of a duplicated key with its position", func() {
 		result, err := query.Reconcile(reconcileCtx(),
-			&query.Result{Rows: []query.Row{{"id": "A"}, {"id": "A"}}},
-			&query.Result{Rows: []query.Row{{"id": "A"}}},
-			sourceProfile, destProfile, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}, {"id": "A"}}}, Profile: sourceProfile},
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}}}, Profile: destProfile},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(result.Flatten()[0]["key"]).To(Equal(api.Text{Content: "A (src 1/2)", Style: "text-amber-500"}))
@@ -115,8 +117,10 @@ var _ = Describe("ReconcileResult rendering", func() {
 	)
 
 	It("renders a header-only table when nothing reconciled", func() {
-		result, err := query.Reconcile(reconcileCtx(), &query.Result{}, &query.Result{},
-			sourceProfile, destProfile, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+		result, err := query.Reconcile(reconcileCtx(),
+			query.ReconcileInput{Result: &query.Result{}, Profile: sourceProfile},
+			query.ReconcileInput{Result: &query.Result{}, Profile: destProfile},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 
 		table := result.Table()
@@ -126,9 +130,9 @@ var _ = Describe("ReconcileResult rendering", func() {
 
 	It("leads the pretty output with the run summary", func() {
 		result, err := query.Reconcile(reconcileCtx(),
-			&query.Result{Rows: []query.Row{{"id": "A"}, {"id": "B"}}},
-			&query.Result{Rows: []query.Row{{"id": "A"}}},
-			sourceProfile, destProfile, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}, {"id": "B"}}}, Profile: sourceProfile},
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}}}, Profile: destProfile},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(result.Pretty().Content).To(Equal(
@@ -137,9 +141,9 @@ var _ = Describe("ReconcileResult rendering", func() {
 
 	It("renders through the clicky formatters", func() {
 		result, err := query.Reconcile(reconcileCtx(),
-			&query.Result{Rows: []query.Row{{"sent_at": reconcileEpoch, "id": "A"}}},
-			&query.Result{Rows: []query.Row{{"received_at": reconcileEpoch, "id": "A"}}},
-			sourceProfile, destProfile, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"sent_at": reconcileEpoch, "id": "A"}}}, Profile: sourceProfile},
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"received_at": reconcileEpoch, "id": "A"}}}, Profile: destProfile},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 
 		csv, err := result.Render("csv")

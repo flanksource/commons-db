@@ -232,7 +232,9 @@ func BuildReplayPreview(ctx context.Context, opts ReplayBuildOptions) (*ReplayPr
 		return nil, fmt.Errorf("profile %q: replay url resolved empty for row %d", opts.Profile.Name, index)
 	}
 
-	target, err := resolveReplayTarget(ctx, spec.Target, opts.DefaultTarget, opts.TargetOverride, requestPath)
+	target, err := resolveReplayTarget(ctx, replayTargetOptions{
+		Profile: spec.Target, Default: opts.DefaultTarget, Override: opts.TargetOverride, RequestURL: requestPath,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -432,12 +434,17 @@ func replayRowSummary(profile Profile, row Row, index int) ReplayRowSummary {
 // resolveReplayTarget picks the connection the request goes to, in precedence
 // order: explicit override, profile target, caller default, then the origin of
 // an absolute request URL. A relative URL with no target is an error.
-func resolveReplayTarget(ctx context.Context, profileTarget, defaultTarget connection.HTTPConnection, override, requestURL string) (connection.HTTPConnection, error) {
-	target := profileTarget
+type replayTargetOptions struct {
+	Profile, Default     connection.HTTPConnection
+	Override, RequestURL string
+}
+
+func resolveReplayTarget(ctx context.Context, opts replayTargetOptions) (connection.HTTPConnection, error) {
+	target, requestURL := opts.Profile, opts.RequestURL
 	if target.IsEmpty() {
-		target = defaultTarget
+		target = opts.Default
 	}
-	if override = strings.TrimSpace(override); override != "" {
+	if override := strings.TrimSpace(opts.Override); override != "" {
 		if strings.HasPrefix(override, "http://") || strings.HasPrefix(override, "https://") {
 			target = connection.HTTPConnection{URL: override}
 		} else {

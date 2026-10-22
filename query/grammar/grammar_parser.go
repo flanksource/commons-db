@@ -1,4 +1,5 @@
 //go:generate go run github.com/mna/pigeon@v1.3.0 -o grammar.go grammar.peg
+//go:generate go run ../../hack/pigeonsplit -in grammar.go -runtime grammar_runtime.go
 package grammar
 
 import (

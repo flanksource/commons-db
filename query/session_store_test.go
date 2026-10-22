@@ -11,13 +11,21 @@ import (
 // filterEpoch anchors the fixture's start times so windows read as offsets.
 var filterEpoch = time.Date(2026, 9, 15, 10, 0, 0, 0, time.UTC)
 
-func filterRecord(id, profile string, state query.SessionState, startedMin int, events int64, labels map[string]string) query.SessionRecord {
+type filterSpec struct {
+	id, profile string
+	state       query.SessionState
+	startedMin  int
+	events      int64
+	labels      map[string]string
+}
+
+func filterRecord(spec filterSpec) query.SessionRecord {
 	return query.SessionRecord{
 		SessionStart: query.SessionStart{
-			ID: id, Profile: profile, Kind: query.KindCapture, Role: query.SessionRoleCapture,
-			Labels: labels, Principal: "admin", StartedAt: filterEpoch.Add(time.Duration(startedMin) * time.Minute),
+			ID: spec.id, Profile: spec.profile, Kind: query.KindCapture, Role: query.SessionRoleCapture,
+			Labels: spec.labels, Principal: "admin", StartedAt: filterEpoch.Add(time.Duration(spec.startedMin) * time.Minute),
 		},
-		SessionStatus: query.SessionStatus{State: state, EventCount: events},
+		SessionStatus: query.SessionStatus{State: spec.state, EventCount: spec.events},
 	}
 }
 
@@ -25,13 +33,16 @@ func filterRecord(id, profile string, state query.SessionState, startedMin int, 
 // a JVM trace with no target label. b and c start at the same minute so a sort
 // by startedAt needs the id tie-breaker.
 func filterFixture() []query.SessionRecord {
-	view := filterRecord("e", "trace-results/jvm_trace", query.SessionRunning, 4, 0, nil)
+	view := filterRecord(filterSpec{id: "e", profile: "trace-results/jvm_trace", state: query.SessionRunning, startedMin: 4})
 	view.Role = query.SessionRoleView
 	return []query.SessionRecord{
-		filterRecord("c", "trace-capture/jvm_trace", query.SessionStopped, 2, 30, map[string]string{"target": "cycle", "origin": "web"}),
-		filterRecord("a", "trace-capture/jvm_trace", query.SessionRunning, 0, 10, map[string]string{"target": "oipa", "origin": "testplan"}),
-		filterRecord("b", "trace-capture/sql_xevent", query.SessionCompleted, 2, 20, map[string]string{"target": "cycle", "origin": "web"}),
-		filterRecord("d", "trace-capture/jvm_trace", query.SessionFailed, 3, 5, nil),
+		filterRecord(filterSpec{id: "c", profile: "trace-capture/jvm_trace", state: query.SessionStopped, startedMin: 2, events: 30,
+			labels: map[string]string{"target": "cycle", "origin": "web"}}),
+		filterRecord(filterSpec{id: "a", profile: "trace-capture/jvm_trace", state: query.SessionRunning, startedMin: 0, events: 10,
+			labels: map[string]string{"target": "oipa", "origin": "testplan"}}),
+		filterRecord(filterSpec{id: "b", profile: "trace-capture/sql_xevent", state: query.SessionCompleted, startedMin: 2, events: 20,
+			labels: map[string]string{"target": "cycle", "origin": "web"}}),
+		filterRecord(filterSpec{id: "d", profile: "trace-capture/jvm_trace", state: query.SessionFailed, startedMin: 3, events: 5}),
 		view,
 	}
 }

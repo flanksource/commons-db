@@ -34,11 +34,9 @@ func (p *sampleFilterLookupProvider) Execute(_ dbcontext.Context, _ ProviderRequ
 func (p *sampleFilterLookupProvider) LookupFilterValues(
 	_ dbcontext.Context,
 	request ProviderRequest,
-	binding ColumnFilterBinding,
-	_ string,
-	_ int,
+	lookup FilterValueSearch,
 ) ([]FilterOption, *Total, error) {
-	p.request, p.binding = request, binding
+	p.request, p.binding = request, lookup.Binding
 	return []FilterOption{{Value: "api", Count: 3}}, &Total{Value: 1, Exact: true}, nil
 }
 

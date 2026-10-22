@@ -160,36 +160,9 @@ func (qm QueryModel) Apply(ctx context.Context, q grammar.QueryField, tx *gorm.D
 			}
 		}
 
-		for _, column := range qm.JSONMapColumns {
-			// Keys in JSON fields are addressable as <column>.<key>
-			// example: labels.cluster or tags.namespace
-			if strings.HasPrefix(originalField, fmt.Sprintf("%s.", column)) {
-				tx = JSONPathMapper(ctx, tx, column, q.Op, strings.TrimPrefix(originalField, column+"."), val)
-				q.Field = column
-			} else if strings.HasPrefix(q.Field, fmt.Sprintf("%s.", column)) {
-				tx = JSONPathMapper(ctx, tx, column, q.Op, strings.TrimPrefix(q.Field, column+"."), val)
-				q.Field = column
-			}
-
-			// Another way to search jsonb maps is to do an unkeyed lookup on the values
-			// example: tags=default (matches tags={namespace: default})
-			if originalField == column && (q.Op == grammar.Eq || q.Op == grammar.Neq) {
-				tx = filterJSONColumnValues(tx, column, q.Op, val)
-				q.Field = column
-			}
-		}
-
-		if qm.HasProperties {
-			column := "properties"
-			if strings.HasPrefix(originalField, fmt.Sprintf("%s.", column)) {
-				name := strings.TrimPrefix(originalField, fmt.Sprintf("%s.", column))
-				tx = filterProperties(tx, q.Op, name, val)
-				q.Field = column
-			} else if originalField == column {
-				tx = filterJSONColumnValues(tx, column, q.Op, val)
-				q.Field = column
-			}
-		}
+		tx, q.Field = qm.applyJSONColumnFilters(ctx, tx, jsonColumnFilter{
+			Field: q.Field, OriginalField: originalField, Op: q.Op, Value: val,
+		})
 
 		if !slices.Contains(ignoreFieldsForClauses, q.Field) {
 			if !slices.Contains(qm.Columns, q.Field) {
@@ -214,6 +187,52 @@ func (qm QueryModel) Apply(ctx context.Context, q grammar.QueryField, tx *gorm.D
 	}
 
 	return tx, clauses, nil
+}
+
+// jsonColumnFilter is a query field as applyJSONColumnFilters sees it: Field is
+// lowercased and alias-resolved, OriginalField is as written, and Value is the
+// unmapped value text.
+type jsonColumnFilter struct {
+	Field, OriginalField string
+	Op                   grammar.QueryOperator
+	Value                string
+}
+
+// applyJSONColumnFilters applies keyed and unkeyed lookups on JSON map columns
+// and properties, returning the field the query now targets.
+func (qm QueryModel) applyJSONColumnFilters(ctx context.Context, tx *gorm.DB, q jsonColumnFilter) (*gorm.DB, string) {
+	originalField, val := q.OriginalField, q.Value
+	for _, column := range qm.JSONMapColumns {
+		// Keys in JSON fields are addressable as <column>.<key>
+		// example: labels.cluster or tags.namespace
+		if strings.HasPrefix(originalField, fmt.Sprintf("%s.", column)) {
+			tx = JSONPathMapper(ctx, tx, column, q.Op, strings.TrimPrefix(originalField, column+"."), val)
+			q.Field = column
+		} else if strings.HasPrefix(q.Field, fmt.Sprintf("%s.", column)) {
+			tx = JSONPathMapper(ctx, tx, column, q.Op, strings.TrimPrefix(q.Field, column+"."), val)
+			q.Field = column
+		}
+
+		// Another way to search jsonb maps is to do an unkeyed lookup on the values
+		// example: tags=default (matches tags={namespace: default})
+		if originalField == column && (q.Op == grammar.Eq || q.Op == grammar.Neq) {
+			tx = filterJSONColumnValues(tx, column, q.Op, val)
+			q.Field = column
+		}
+	}
+
+	if qm.HasProperties {
+		column := "properties"
+		if strings.HasPrefix(originalField, fmt.Sprintf("%s.", column)) {
+			name := strings.TrimPrefix(originalField, fmt.Sprintf("%s.", column))
+			tx = filterProperties(tx, q.Op, name, val)
+			q.Field = column
+		} else if originalField == column {
+			tx = filterJSONColumnValues(tx, column, q.Op, val)
+			q.Field = column
+		}
+	}
+	return tx, q.Field
 }
 
 // filterJSONColumnValues handles filtering on JSON column values

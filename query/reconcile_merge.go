@@ -69,12 +69,14 @@ func mergeJoin(ctx context.Context, run ReconcileRun) (*ReconcileResult, error) 
 		return nil, fmt.Errorf("reconcile: %w", err)
 	}
 
-	source, err := openReconcileSide(ctx, "source", run.Source, run.SourceFilters, keyOf, spec)
+	source, err := openReconcileSide(ctx,
+		reconcileSideOptions{Name: "source", Profile: run.Source, Params: run.SourceFilters}, keyOf, spec)
 	if err != nil {
 		return nil, err
 	}
 	defer source.close()
-	dest, err := openReconcileSide(ctx, "dest", run.Dest, run.DestFilters, keyOf, spec)
+	dest, err := openReconcileSide(ctx,
+		reconcileSideOptions{Name: "dest", Profile: run.Dest, Params: run.DestFilters}, keyOf, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -174,14 +176,14 @@ type reconcileSide struct {
 	rows int
 }
 
-func openReconcileSide(
-	ctx context.Context,
-	name string,
-	profile Profile,
-	params map[string]any,
-	keyOf KeyFunc,
-	spec ReconcileSpec,
-) (*reconcileSide, error) {
+type reconcileSideOptions struct {
+	Name    string
+	Profile Profile
+	Params  map[string]any
+}
+
+func openReconcileSide(ctx context.Context, opts reconcileSideOptions, keyOf KeyFunc, spec ReconcileSpec) (*reconcileSide, error) {
+	name, profile, params := opts.Name, opts.Profile, opts.Params
 	timeColumn, err := timeColumnOf(spec.TimeColumn, profile, nil)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile: %s: %w", name, err)

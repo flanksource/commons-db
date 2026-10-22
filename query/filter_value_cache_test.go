@@ -24,9 +24,7 @@ func (p *cachedLookupProvider) Execute(querycontext.Context, query.ProviderReque
 func (p *cachedLookupProvider) LookupFilterValues(
 	_ querycontext.Context,
 	request query.ProviderRequest,
-	_ query.ColumnFilterBinding,
-	_ string,
-	_ int,
+	_ query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
 	p.calls++
 	request.Diagnostics.RecordRequest("SELECT status FROM lookup_source", nil, map[string]any{"operation": "filter-values"})
