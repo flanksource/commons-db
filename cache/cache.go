@@ -9,5 +9,9 @@ import (
 )
 
 func NewCache[T any](name string, expiration time.Duration) cache.CacheInterface[T] {
-	return cache.New[T](gocache_store.NewGoCache(gocache.New(expiration, expiration)))
+	return cache.New[T](newMemoryStore(expiration))
+}
+
+func newMemoryStore(expiration time.Duration) *gocache_store.GoCacheStore {
+	return gocache_store.NewGoCache(gocache.New(expiration, expiration))
 }

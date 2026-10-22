@@ -126,3 +126,21 @@ func probeS3(ctx dbcontext.Context, model models.Connection) (ProbeResult, error
 	}
 	return ProbeResult{OK: true}, nil
 }
+
+type ConnectionContext interface {
+	context.Context
+	HydrateConnectionByURL(connectionName string) (*models.Connection, error)
+	GetEnvValueFromCache(env types.EnvVar, namespace string) (string, error)
+	GetNamespace() string
+}
+
+func Get(ctx dbcontext.Context, connectionName string) (*models.Connection, error) {
+	connection, err := dbcontext.FindConnectionByURL(ctx, connectionName)
+	if err != nil {
+		return nil, err
+	} else if connection == nil {
+		return nil, fmt.Errorf("connection (%s) not found", connectionName)
+	}
+
+	return dbcontext.HydrateConnection(ctx, connection)
+}

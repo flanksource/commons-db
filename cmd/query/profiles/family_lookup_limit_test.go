@@ -42,8 +42,9 @@ func (countingLookupMock) Execute(dbcontext.Context, query.ProviderRequest) ([]q
 }
 
 func (m countingLookupMock) LookupFilterValues(
-	_ dbcontext.Context, _ query.ProviderRequest, _ query.ColumnFilterBinding, search string, limit int,
+	_ dbcontext.Context, _ query.ProviderRequest, lookup query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
+	search, limit := lookup.Search, lookup.Limit
 	atomic.StoreInt64(m.lastLimit, int64(limit))
 
 	matched := make([]query.FilterOption, 0, len(m.values))
