@@ -99,7 +99,7 @@ func portForwardPod(ctx context.Context, k8s kubernetes.Interface, restConfig *r
 		return nil, err
 	}
 
-	return portForwardToPod(ctx, restConfig, opts.Namespace, pod.Name, remotePort)
+	return portForwardToPod(ctx, restConfig, podPortTarget{Namespace: opts.Namespace, PodName: pod.Name, RemotePort: remotePort})
 }
 
 // PortForwardService sets up port forwarding to a pod backing the specified service.
@@ -159,7 +159,7 @@ func portForwardService(ctx context.Context, k8s kubernetes.Interface, restConfi
 		return nil, err
 	}
 
-	return portForwardToPod(ctx, restConfig, opts.Namespace, pod.Name, remotePort)
+	return portForwardToPod(ctx, restConfig, podPortTarget{Namespace: opts.Namespace, PodName: pod.Name, RemotePort: remotePort})
 }
 
 // PortForwardDeployment sets up port forwarding to a pod managed by the specified deployment.
@@ -221,7 +221,7 @@ func portForwardDeployment(ctx context.Context, k8s kubernetes.Interface, restCo
 		return nil, err
 	}
 
-	return portForwardToPod(ctx, restConfig, opts.Namespace, pod.Name, remotePort)
+	return portForwardToPod(ctx, restConfig, podPortTarget{Namespace: opts.Namespace, PodName: pod.Name, RemotePort: remotePort})
 }
 
 func (o PortForwardOptions) validate() error {
@@ -314,8 +314,14 @@ func podReady(pod *corev1.Pod) bool {
 	return false
 }
 
+type podPortTarget struct {
+	Namespace  string
+	PodName    string
+	RemotePort int
+}
+
 // portForwardToPod establishes port forwarding to a specific pod over an SPDY tunnel.
-func portForwardToPod(ctx context.Context, restConfig *rest.Config, namespace, podName string, remotePort int) (*forwardSession, error) {
+func portForwardToPod(ctx context.Context, restConfig *rest.Config, target podPortTarget) (*forwardSession, error) {
 	if restConfig == nil {
 		return nil, fmt.Errorf("kubernetes REST config is required")
 	}
@@ -323,7 +329,7 @@ func portForwardToPod(ctx context.Context, restConfig *rest.Config, namespace, p
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse server URL: %w", err)
 	}
-	serverURL.Path = fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", namespace, podName)
+	serverURL.Path = fmt.Sprintf("/api/v1/namespaces/%s/pods/%s/portforward", target.Namespace, target.PodName)
 
 	transport, upgrader, err := spdy.RoundTripperFor(restConfig)
 	if err != nil {
@@ -337,7 +343,7 @@ func portForwardToPod(ctx context.Context, restConfig *rest.Config, namespace, p
 
 	// Let client-go bind port zero and report the selected port after readiness;
 	// this avoids releasing a pre-selected port before the forwarder binds it.
-	ports := []string{fmt.Sprintf("0:%d", remotePort)}
+	ports := []string{fmt.Sprintf("0:%d", target.RemotePort)}
 	pf, err := portforward.New(dialer, ports, stopChan, readyChan, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create port forwarder: %w", err)
