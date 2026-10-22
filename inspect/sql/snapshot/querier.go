@@ -1,12 +1,6 @@
+// Package snapshot preserves the commons-db API; implementations live in sqlglot-go.
 package snapshot
 
-import (
-	"context"
-	"database/sql"
-)
+import native "github.com/flanksource/sqlglot-go/database/inspect/snapshot"
 
-// Querier is implemented by a database, pinned connection or transaction.
-type Querier interface {
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
+type Querier = native.Querier

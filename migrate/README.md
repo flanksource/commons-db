@@ -1,5 +1,7 @@
 # HCL migrations
 
+The implementation now lives in [sqlglot-go/database/migrate](https://github.com/flanksource/sqlglot-go/tree/main/database/migrate). This package preserves commons-db API compatibility with aliases and forwarding functions. The standalone sqlglot CLI exposes `schema inspect`, `migrate plan` and `migrate apply`, including reviewed PostgreSQL and SQLite schema artifacts. Existing script/security bundle execution through this API retains its behavior.
+
 `migrate.Apply` is the single filesystem-backed migration seam for PostgreSQL, SQLite and SQL Server. The connection string selects the target, while callers pass the same embedded Atlas HCL bundle and options. SQL Server bundles are SQL Server-shaped rather than portable; see [SQL Server](#sql-server).
 
 ```go
@@ -174,7 +176,6 @@ SQLite rejects the following before schema mutation:
 | `role` or `permission` blocks | Managed security is PostgreSQL-only |
 | `WithExclude(...)` | Partial inspection could hide SQLite drift |
 | `WithSchema(...)` with a value other than `public` | SQLite has no PostgreSQL schema namespace |
-| `WithDrops()` | The SQLite path is intentionally additive-only |
 
 These declarations are parser-valid PostgreSQL HCL but are not SQLite-compatible: bit strings, network and MAC types, spatial types, intervals, serial and identity types, XML, money, arrays, ranges and multiranges, full-text search types, enums, domains, and other user-defined types.
 
@@ -192,11 +193,11 @@ Some declarations are accepted because their storage representation is useful on
 
 ### SQLite migration-time limits
 
-The SQLite apply runs in one transaction and is additive by default. A newly created table may contain every supported constraint above. For an existing table, only missing columns and indexes are applied unless the caller opts in with `WithRebuilds()`.
+The SQLite apply runs in one transaction. It reconciles supported indexes, constraints, column types, defaults and nullability, rebuilding populated tables when needed. Column and table drops are skipped by default; valid changes in the same migration still apply. Omitted columns remain in the effective desired table definition so a rebuild preserves their values. PostgreSQL also skips omitted columns and tables by default.
 
-`WithRebuilds()` allows Atlas to copy existing rows through a transactional SQLite table rebuild for added primary keys and foreign keys, added or changed named checks, and column default and nullability changes. Added indexes are also supported. It disables foreign-key enforcement before opening the transaction, verifies that no new foreign-key violations appear before commit, and restores enforcement afterward. An incompatible value or constraint rolls the transaction back. Drops, renames, index modifications, and column type changes remain refused; in particular, an existing unique index cannot be removed by opting into rebuilds. A table with an unmanaged trigger is refused rather than silently losing that trigger during rebuild. PostgreSQL accepts the option but already applies these schema changes through its ordinary migration path.
+`WithDrops()` opts into dropping columns and tables. On SQLite it inspects all user tables and treats the supplied HCL as the complete desired table schema: user tables omitted from the bundle are removed. Without this option, inspection stays limited to the declared tables. Index and constraint removal do not require `WithDrops()`. A rename represented by Atlas as a column removal and addition preserves the old column by default; this API does not infer rename mappings.
 
-Without `WithRebuilds()`, adding or changing a check or adding a foreign key on an existing table is unsupported, and adding a JSON column may be refused because its generated `json_valid` check is a table constraint. An otherwise portable added column must also satisfy SQLite's native `ALTER TABLE ADD COLUMN` restrictions; for example, a required column generally needs a usable default when rows already exist. `WithRebuilds()` does not transform or backfill values. Tables and views outside the bundle are not managed; callers must assess views that depend on changed columns before applying a rebuild.
+The transaction disables foreign-key enforcement while applying changes, verifies that no new foreign-key violations appear before commit, and restores enforcement afterward. An incompatible value or constraint rolls the transaction back. A rebuild that would discard an unmanaged trigger is refused. SQLite's native column-addition rules still apply, and the migrator does not backfill values. Views remain outside the table bundle; callers must assess views that depend on changed columns. Rebuilds no longer require the removed `WithRebuilds()` option; remove it from existing callers.
 
 ## PostgreSQL schema-scoped bundles
 
@@ -321,7 +322,7 @@ Generated DDL and the catalog queries avoid syntax newer than compatibility leve
 These fail with an error instead of being ignored:
 
 - hash-gated pre/post `.sql` scripts outside the routine directory;
-- `WithSchema` other than `dbo`, `WithDrops` and `WithRebuilds`;
+- `WithSchema` other than `dbo` and `WithDrops`;
 - `role` and `permission` blocks;
 - `view`, `trigger`, `sequence`, `function` and `procedure` HCL blocks, computed columns, user-defined and alias types (including `sysname`), and any unknown column, index or table attribute;
 - declared tables that the database has partitioned or carries triggers on, and IDENTITY changes on an existing column.
