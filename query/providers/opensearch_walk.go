@@ -350,17 +350,17 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 	details := openSearchDiagnosticDetails(w.index, built.limitParam(), position)
 	w.diagnostics.RecordRequest(body, nil, details)
 	started := time.Now()
-	raw, err := w.searcher.SearchRaw(ctx, opensearch.Request{
+	search := opensearch.Request{
 		Index: index,
 		Query: body,
 		Limit: built.limitParam(),
 		PIT:   position.pit,
-	})
+	}
+	raw, err := w.searcher.SearchRaw(ctx, search)
 	if err != nil {
 		w.diagnostics.RecordError(err)
 		w.diagnostics.RecordResponse(started, 0, details)
-		return opensearch.Response{}, nil, false,
-			openSearchFailure(err, index, body, built.limitParam(), position.pit)
+		return opensearch.Response{}, nil, false, openSearchFailure(err, search)
 	}
 	if position.size > 0 && len(raw.Hits.Hits) > position.size {
 		raw.Hits.Hits = raw.Hits.Hits[:position.size]
@@ -407,13 +407,13 @@ func openSearchDiagnosticDetails(index, limit string, position openSearchPage) m
 // answers a rejected query with a parse exception and a Java stack trace that
 // names neither the index nor any part of the DSL it refused, so the request is
 // the only thing that makes the message actionable.
-func openSearchFailure(err error, index, body, limit, pit string) error {
-	details := map[string]any{"index": index, "limit": limit}
-	if pit != "" {
-		details["pit"] = pit
+func openSearchFailure(err error, search opensearch.Request) error {
+	details := map[string]any{"index": search.Index, "limit": search.Limit}
+	if search.PIT != "" {
+		details["pit"] = search.PIT
 	}
-	diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "opensearch", Query: body, Detail: query.DiagnosticFull})
-	diagnostics.RecordRequest(body, nil, details)
+	diagnostics := query.NewDiagnostics(query.DiagnosticOptions{Provider: "opensearch", Query: search.Query, Detail: query.DiagnosticFull})
+	diagnostics.RecordRequest(search.Query, nil, details)
 	return query.WithDiagnostics(err, diagnostics)
 }
 

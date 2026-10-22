@@ -42,7 +42,7 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		return SQLPageResult{}, err
 	}
 
-	started := time.Now()
+	trace := sqlPageTrace{request: request, dialect: dialect, started: time.Now()}
 	// Gated on WantsPreview rather than on the sink existing: a reconciliation
 	// records itself on every run, and turning on server debug logging for every
 	// page of an ordinary read is a debug-run price an ordinary read must not pay.
@@ -50,33 +50,8 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		ctx,
 		dialect == dialectClickHouse && request.Diagnostics.WantsPreview(),
 	)
-	defer func() {
-		if request.Diagnostics == nil {
-			return
-		}
-		details := map[string]any{
-			"dialect": string(dialect),
-			"paging": map[string]any{
-				"limit": request.Page.Limit, "offset": request.Page.Offset,
-				"mode": request.Page.Mode().String(), "hasMore": result.HasMore,
-			},
-		}
-		if queryID != "" {
-			details["clickhouse"] = providerDetails()
-		}
-		if result.Total != nil {
-			details["total"] = map[string]any{"value": result.Total.Value, "relation": result.Total.Relation()}
-		}
-		if err != nil {
-			request.Diagnostics.RecordError(err)
-		}
-		// Marshalling every page's rows costs more than the preview is worth
-		// outside a debug run, and RecordPreview would discard it anyway.
-		if len(result.Rows) > 0 && request.Diagnostics.WantsPreview() {
-			request.Diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(result.Rows))
-		}
-		request.Diagnostics.RecordResponse(started, len(result.Rows), details)
-	}()
+	trace.queryID, trace.providerDetails = queryID, providerDetails
+	defer func() { trace.recordResponse(result, err) }()
 
 	built, err := buildPagedSQL(dialect, request)
 	if err != nil {
@@ -86,33 +61,14 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 	if err != nil {
 		return SQLPageResult{}, err
 	}
-	requestDetails := map[string]any{
-		"dialect": string(dialect),
-		"paging": map[string]any{
-			"limit": request.Page.Limit, "offset": request.Page.Offset, "mode": request.Page.Mode().String(),
-		},
+	run := sqlStatementRun{
+		Connection: request.Connection, Dialect: dialect, Statement: statement, Args: args, Started: trace.started,
 	}
-	if queryID != "" {
-		requestDetails["queryId"] = queryID
-	}
+	requestDetails := trace.requestDetails()
 	request.Diagnostics.RecordRequest(statement, args, requestDetails)
 
-	defer func() {
-		publishSQLStatement(request.Connection, dialect, statement, args, started, len(result.Rows), err)
-	}()
-
-	// A failure is the one moment the statement that ran is worth more than it
-	// costs to carry, so it travels on the error rather than only in a debug
-	// run's diagnostics — "column does not exist" names no column and no query.
-	// A debug run already hands its own diagnostics back to the caller.
-	defer func() {
-		if err == nil || request.Diagnostics != nil {
-			return
-		}
-		failure := query.NewDiagnostics(query.DiagnosticOptions{Provider: string(dialect), Query: request.Query, Detail: query.DiagnosticFull})
-		failure.RecordRequest(statement, args, requestDetails)
-		err = query.WithDiagnostics(err, failure)
-	}()
+	defer func() { publishSQLStatement(run, len(result.Rows), err) }()
+	defer func() { err = withSQLFailure(err, request, run, requestDetails) }()
 
 	// The statement is the dialect generator's output for a tree: the operator's
 	// own SQL parsed (the connection browser gates it on
@@ -124,6 +80,76 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 		return SQLPageResult{}, sqlExecError(dialect, request.Filters, err)
 	}
 	defer func() { _ = rows.Close() }()
+	return scanSQLPage(rows, request)
+}
+
+// sqlPageTrace records one page read into the request's diagnostics.
+type sqlPageTrace struct {
+	request         SQLPageRequest
+	dialect         sqlDialect
+	started         time.Time
+	queryID         string
+	providerDetails func() map[string]any
+}
+
+func (t sqlPageTrace) requestDetails() map[string]any {
+	page := t.request.Page
+	details := map[string]any{
+		"dialect": string(t.dialect),
+		"paging": map[string]any{
+			"limit": page.Limit, "offset": page.Offset, "mode": page.Mode().String(),
+		},
+	}
+	if t.queryID != "" {
+		details["queryId"] = t.queryID
+	}
+	return details
+}
+
+func (t sqlPageTrace) recordResponse(result SQLPageResult, err error) {
+	diagnostics, page := t.request.Diagnostics, t.request.Page
+	if diagnostics == nil {
+		return
+	}
+	details := map[string]any{
+		"dialect": string(t.dialect),
+		"paging": map[string]any{
+			"limit": page.Limit, "offset": page.Offset,
+			"mode": page.Mode().String(), "hasMore": result.HasMore,
+		},
+	}
+	if t.queryID != "" {
+		details["clickhouse"] = t.providerDetails()
+	}
+	if result.Total != nil {
+		details["total"] = map[string]any{"value": result.Total.Value, "relation": result.Total.Relation()}
+	}
+	if err != nil {
+		diagnostics.RecordError(err)
+	}
+	// Marshalling every page's rows costs more than the preview is worth
+	// outside a debug run, and RecordPreview would discard it anyway.
+	if len(result.Rows) > 0 && diagnostics.WantsPreview() {
+		diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(result.Rows))
+	}
+	diagnostics.RecordResponse(t.started, len(result.Rows), details)
+}
+
+// withSQLFailure attaches the statement that ran to a failure. A failure is the
+// one moment that statement is worth more than it costs to carry, so it travels
+// on the error rather than only in a debug run's diagnostics — "column does not
+// exist" names no column and no query. A debug run already hands its own
+// diagnostics back to the caller.
+func withSQLFailure(err error, request SQLPageRequest, run sqlStatementRun, details map[string]any) error {
+	if err == nil || request.Diagnostics != nil {
+		return err
+	}
+	failure := query.NewDiagnostics(query.DiagnosticOptions{Provider: string(run.Dialect), Query: request.Query, Detail: query.DiagnosticFull})
+	failure.RecordRequest(run.Statement, run.Args, details)
+	return query.WithDiagnostics(err, failure)
+}
+
+func scanSQLPage(rows *sql.Rows, request SQLPageRequest) (result SQLPageResult, err error) {
 	result.ColumnTypes, err = rows.ColumnTypes()
 	if err != nil {
 		return SQLPageResult{}, fmt.Errorf("failed to describe sql rows: %w", err)
@@ -157,15 +183,24 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 	return result, nil
 }
 
-// publishSQLStatement hands a statement that ran on the named connection, with
-// the rows it returned or the error it failed with, to the SQL statement tap.
-func publishSQLStatement(name string, dialect sqlDialect, statement string, args []any, started time.Time, rows int, err error) {
-	if !connection.ObservingSQL(name) {
+// sqlStatementRun is one statement as it ran on the named connection.
+type sqlStatementRun struct {
+	Connection string
+	Dialect    sqlDialect
+	Statement  string
+	Args       []any
+	Started    time.Time
+}
+
+// publishSQLStatement hands a statement that ran, with the rows it returned or
+// the error it failed with, to the SQL statement tap.
+func publishSQLStatement(run sqlStatementRun, rows int, err error) {
+	if !connection.ObservingSQL(run.Connection) {
 		return
 	}
 	published := connection.Statement{
-		Connection: name, Driver: string(dialect), SQL: statement, Args: args,
-		StartedAt: started, Duration: time.Since(started), Rows: int64(rows),
+		Connection: run.Connection, Driver: string(run.Dialect), SQL: run.Statement, Args: run.Args,
+		StartedAt: run.Started, Duration: time.Since(run.Started), Rows: int64(rows),
 	}
 	if err != nil {
 		published.Error = err.Error()

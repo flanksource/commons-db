@@ -105,11 +105,12 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 			if remaining > 0 && remaining < current.Limit {
 				current.Limit = remaining
 			}
-			batch, total, more, err := p.readPage(ctx, client, dialect, request, current)
+			read, err := ReadSQLPage(ctx, client, string(dialect), sqlPageRequest(request, current))
 			if err != nil {
 				yield(query.Page{}, err)
 				return
 			}
+			batch, total, more := read.Rows, read.Total, read.HasMore
 			capped := remaining > 0 && len(batch) >= remaining && more
 			result := query.Page{Rows: batch, HasMore: more && !capped, Total: total, Truncated: capped}
 			var keys []any
@@ -270,17 +271,10 @@ func (p sqlProvider) connectRequest(req query.ProviderRequest) (sqlConnectReques
 	}, nil
 }
 
-func (p sqlProvider) readPage(
-	ctx context.Context,
-	client *sql.DB,
-	dialect sqlDialect,
-	req query.ProviderRequest,
-	page query.PageRequest,
-) (batch []query.Row, total *query.Total, more bool, err error) {
-	result, err := ReadSQLPage(ctx, client, string(dialect), SQLPageRequest{
+func sqlPageRequest(req query.ProviderRequest, page query.PageRequest) SQLPageRequest {
+	return SQLPageRequest{
 		Connection: req.Connection, Query: req.Query, QueryArgs: req.QueryArgs, QueryIdentifiers: req.QueryIdentifiers,
 		Filters: req.Filters, Order: req.Order, Position: req.Position,
 		Page: page, Diagnostics: req.Diagnostics,
-	})
-	return result.Rows, result.Total, result.HasMore, err
+	}
 }

@@ -5,8 +5,37 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 )
+
+// ResolveInlineURL resolves an inline connection URL for connectionType; an
+// empty raw URL resolves to empty.
+func ResolveInlineURL(ctx context.Context, raw, connectionType string) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	resolved, err := ctx.ResolveConnectionURL(raw, connectionType, ctx.GetNamespace())
+	if err != nil {
+		return "", fmt.Errorf("resolve inline %s url: %w", connectionType, err)
+	}
+	return resolved, nil
+}
+
+// OrderKeys reads a row's position in the declared order, which is what the
+// next page resumes after.
+func OrderKeys(row query.Row, order query.Order) ([]any, error) {
+	keys := make([]any, 0, len(order))
+	for _, by := range order {
+		value, ok := row[by.Column]
+		if !ok {
+			return nil, fmt.Errorf(
+				"cannot cursor on column %q: the query does not return it, so there is no position to resume from", by.Column)
+		}
+		keys = append(keys, value)
+	}
+	return keys, nil
+}
 
 // FieldBatches splits fields into consecutive batches of at most size.
 func FieldBatches(fields []string, size int) [][]string {

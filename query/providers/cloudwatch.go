@@ -3,12 +3,16 @@ package providers
 import (
 	"fmt"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
 
+	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons-db/logs/cloudwatch"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 func init() {
@@ -82,4 +86,31 @@ func (cloudwatchProvider) Execute(ctx context.Context, req query.ProviderRequest
 	}
 
 	return logResultToRows(result), nil
+}
+
+// awsConfigForRequest hydrates an AWS connection and returns the SDK config
+// alongside the endpoint to talk to.
+//
+// The endpoint comes back separately because AWSConnection.Client does not
+// apply it — a caller pointing at LocalStack or a VPC endpoint has to set
+// BaseEndpoint on the service client itself.
+func awsConfigForRequest(ctx context.Context, connectionName, region, endpoint string) (aws.Config, string, error) {
+	conn := connection.AWSConnection{ConnectionName: connectionName, Region: region}
+	if err := conn.Populate(ctx); err != nil {
+		return aws.Config{}, "", err
+	}
+
+	if endpoint != "" {
+		resolved, err := providerkit.ResolveInlineURL(ctx, endpoint, models.ConnectionTypeAWS)
+		if err != nil {
+			return aws.Config{}, "", err
+		}
+		conn.Endpoint = resolved
+	}
+
+	cfg, err := conn.Client(ctx)
+	if err != nil {
+		return aws.Config{}, "", err
+	}
+	return cfg, conn.Endpoint, nil
 }

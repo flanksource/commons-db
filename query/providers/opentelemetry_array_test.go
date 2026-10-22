@@ -80,8 +80,8 @@ var _ = Describe("OpenTelemetry array filters", func() {
 		searcher, err := opensearch.New(ctx, opensearch.Backend{Address: server.URL}, nil)
 		Expect(err).ToNot(HaveOccurred())
 		options, total, err := lookupOpenSearchFilterValues(
-			ctx, searcher, "logs-*", nil,
-			query.ColumnFilterBinding{Field: "labels", Array: true}, "man", 25,
+			ctx, searcher, openSearchValuesSource{Index: "logs-*"},
+			query.FilterValueSearch{Binding: query.ColumnFilterBinding{Field: "labels", Array: true}, Search: "man", Limit: 25},
 		)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(options).To(Equal([]query.FilterOption{{Value: "managed", Count: 2}}))
