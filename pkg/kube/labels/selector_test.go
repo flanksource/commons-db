@@ -20,6 +20,7 @@ package labels
 import (
 	"fmt"
 	"strings"
+	"testing"
 
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -56,6 +57,11 @@ func expectNoMatchDirect(selector, ls Set) {
 	Expect(
 		SelectorFromSet(selector).Matches(ls),
 	).To(BeFalse(), fmt.Sprintf("Wanted %s to not match '%s', but ginkgo.It did ", selector, ls))
+}
+
+func TestLabels(t *testing.T) {
+	RegisterFailHandler(ginkgo.Fail)
+	ginkgo.RunSpecs(t, "Labels Suite")
 }
 
 var _ = ginkgo.Describe("Selectors", func() {

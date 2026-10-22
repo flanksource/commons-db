@@ -17,11 +17,19 @@ func Copy(s, alphabet string) (string, bool) {
 	var out strings.Builder
 	out.Grow(len(s))
 	for i := 0; i < len(s); i++ {
-		at := strings.IndexByte(alphabet, s[i])
-		if at < 0 {
+		value, ok := copyAlphabetByte(s[i], alphabet)
+		if !ok {
 			return "", false
 		}
-		out.WriteByte(alphabet[at])
+		out.WriteByte(value)
 	}
 	return out.String(), true
+}
+
+func copyAlphabetByte(value byte, alphabet string) (byte, bool) {
+	at := strings.IndexByte(alphabet, value)
+	if at < 0 {
+		return 0, false
+	}
+	return alphabet[at], true
 }

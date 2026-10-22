@@ -9,6 +9,14 @@ import "github.com/zclconf/go-cty/cty"
 
 type Option = native.Option
 
+type SchemaProvisioner = native.SchemaProvisioner
+
+func NewProvisioner(schemaFS fs.FS, opts ...Option) *SchemaProvisioner {
+	return native.NewProvisioner(schemaFS, opts...)
+}
+
+func WithRoutines(dir string) Option { return native.WithRoutines(dir) }
+
 func WithRebuilds() Option { return native.WithRebuilds() }
 
 func WithDir(dir string) Option { return native.WithDir(dir) }

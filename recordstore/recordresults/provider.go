@@ -223,13 +223,13 @@ func (followProvider) SupportsRequestSort() bool {
 }
 
 func (followProvider) LookupFilterValues(
-	ctx dbcontext.Context, req query.ProviderRequest, binding query.ColumnFilterBinding, search string, limit int,
+	ctx dbcontext.Context, req query.ProviderRequest, lookup query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
 	index, err := sqliteProvider()
 	if err != nil {
 		return nil, nil, err
 	}
-	return index.LookupFilterValues(ctx, req, binding, search, limit)
+	return index.LookupFilterValues(ctx, req, lookup)
 }
 
 func (followProvider) BackendCapabilities(ctx dbcontext.Context, req query.ProviderRequest) (connection.BackendCapabilities, error) {

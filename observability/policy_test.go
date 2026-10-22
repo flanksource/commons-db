@@ -3,6 +3,7 @@ package observability_test
 import (
 	"encoding/json"
 	"errors"
+	"testing"
 	"time"
 
 	"github.com/flanksource/commons-db/models"
@@ -13,27 +14,34 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("Connection logging policy", func() {
-	It("resolves SQL defaults and the exact slow boundary", func() {
-		policy, err := observability.PolicyFor(&models.Connection{Type: models.ConnectionTypePostgres})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(policy.SlowThreshold).To(Equal(time.Second))
-		Expect(policy.Level(observability.EventError)).To(Equal(logger.Error))
-		Expect(policy.Level(observability.EventSlow)).To(Equal(logger.Warn))
-		Expect(policy.Level(observability.EventSQL)).To(Equal(logger.Trace))
-		Expect(policy.Level(observability.EventSQLParams)).To(Equal(logger.Trace1))
-		Expect(policy.Enabled(observability.EventHTTP)).To(BeFalse())
+func TestObservability(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Connection Observability Suite")
+}
 
-		event, level := policy.Completion(999*time.Millisecond, nil)
-		Expect(event).To(Equal(observability.EventSQL))
-		Expect(level).To(Equal(logger.Trace))
-		event, level = policy.Completion(time.Second, nil)
-		Expect(event).To(Equal(observability.EventSlow))
-		Expect(level).To(Equal(logger.Warn))
-		event, level = policy.Completion(time.Millisecond, errors.New("boom"))
-		Expect(event).To(Equal(observability.EventError))
-		Expect(level).To(Equal(logger.Error))
-	})
+func sqlPolicyDefaults() {
+	policy, err := observability.PolicyFor(&models.Connection{Type: models.ConnectionTypePostgres})
+	Expect(err).NotTo(HaveOccurred())
+	Expect(policy.SlowThreshold).To(Equal(time.Second))
+	Expect(policy.Level(observability.EventError)).To(Equal(logger.Error))
+	Expect(policy.Level(observability.EventSlow)).To(Equal(logger.Warn))
+	Expect(policy.Level(observability.EventSQL)).To(Equal(logger.Trace))
+	Expect(policy.Level(observability.EventSQLParams)).To(Equal(logger.Trace1))
+	Expect(policy.Enabled(observability.EventHTTP)).To(BeFalse())
+
+	event, level := policy.Completion(999*time.Millisecond, nil)
+	Expect(event).To(Equal(observability.EventSQL))
+	Expect(level).To(Equal(logger.Trace))
+	event, level = policy.Completion(time.Second, nil)
+	Expect(event).To(Equal(observability.EventSlow))
+	Expect(level).To(Equal(logger.Warn))
+	event, level = policy.Completion(time.Millisecond, errors.New("boom"))
+	Expect(event).To(Equal(observability.EventError))
+	Expect(level).To(Equal(logger.Error))
+}
+
+var _ = Describe("Connection logging policy", func() {
+	It("resolves SQL defaults and the exact slow boundary", sqlPolicyDefaults)
 
 	It("resolves the shared HTTP ladder", func() {
 		policy, err := observability.PolicyFor(&models.Connection{Type: models.ConnectionTypeOpenSearch})
