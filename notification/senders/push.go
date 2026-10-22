@@ -47,7 +47,9 @@ func (t *Telegram) sendOne(ctx context.Context, token, chatID string, data Data)
 	if err != nil {
 		return err
 	}
-	return post(ctx, "telegram", fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token), body, nil)
+	return post(ctx, webhookPost{
+		Channel: "telegram", URL: fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token), Body: body,
+	})
 }
 
 // markdownV2Reserved are the characters Telegram's MarkdownV2 requires escaped.
@@ -120,8 +122,10 @@ func (p *Pushbullet) Send(ctx context.Context, conn *models.Connection, data Dat
 	if err != nil {
 		return err
 	}
-	return post(ctx, "pushbullet", "https://api.pushbullet.com/v2/pushes", body,
-		map[string]string{"Access-Token": token})
+	return post(ctx, webhookPost{
+		Channel: "pushbullet", URL: "https://api.pushbullet.com/v2/pushes", Body: body,
+		Headers: map[string]string{"Access-Token": token},
+	})
 }
 
 // Pushover posts a form-encoded message for one user key.

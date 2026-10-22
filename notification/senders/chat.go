@@ -38,7 +38,7 @@ func (d *Discord) Send(ctx context.Context, conn *models.Connection, data Data) 
 	if err != nil {
 		return err
 	}
-	return post(ctx, "discord", webhook, body, nil)
+	return post(ctx, webhookPost{Channel: "discord", URL: webhook, Body: body})
 }
 
 // Teams posts a MessageCard to an incoming webhook.
@@ -78,7 +78,7 @@ func (t *Teams) Send(ctx context.Context, conn *models.Connection, data Data) er
 	if err != nil {
 		return err
 	}
-	return post(ctx, "teams", webhook, body, nil)
+	return post(ctx, webhookPost{Channel: "teams", URL: webhook, Body: body})
 }
 
 // Mattermost posts to an incoming webhook, with optional channel, username and
@@ -111,7 +111,7 @@ func (m *Mattermost) Send(ctx context.Context, conn *models.Connection, data Dat
 	if err != nil {
 		return err
 	}
-	return post(ctx, "mattermost", webhook, body, nil)
+	return post(ctx, webhookPost{Channel: "mattermost", URL: webhook, Body: body})
 }
 
 // webhookURL reads a webhook from the connection URL, falling back to the

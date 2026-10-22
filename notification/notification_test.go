@@ -16,7 +16,9 @@ func TestNotification(t *testing.T) {
 
 // Properties carry per-channel overrides on one delivery, so the un-prefixing
 // rule decides whether an override reaches its channel at all.
-var _ = Describe("PropertiesForChannel", func() {
+var _ = Describe("PropertiesForChannel", propertiesForChannelSpecs)
+
+func propertiesForChannelSpecs() {
 	It("passes bare keys through to every channel", func() {
 		resolved := notification.PropertiesForChannel(models.ConnectionTypeSlack,
 			map[string]string{"channel": "#ops"})
@@ -48,7 +50,7 @@ var _ = Describe("PropertiesForChannel", func() {
 	It("survives a nil property map", func() {
 		Expect(notification.PropertiesForChannel(models.ConnectionTypeSlack, nil)).To(BeEmpty())
 	})
-})
+}
 
 var _ = Describe("Attachment support", func() {
 	// This is the rule the whole delivery design rests on: only mail can carry
