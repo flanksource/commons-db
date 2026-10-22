@@ -102,6 +102,17 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 		return nil, fmt.Errorf("failed to parse base URL '%s': %w", t.conn.URL, err)
 	}
 
+	conn, err := t.dialTail(ctx, parsedBaseURL, request)
+	if err != nil {
+		return nil, err
+	}
+
+	itemChan := make(chan StreamItem)
+	go t.readTail(ctx, conn, itemChan)
+	return itemChan, nil
+}
+
+func (t *lokiSearcher) dialTail(ctx context.Context, parsedBaseURL *url.URL, request StreamRequest) (*websocket.Conn, error) {
 	host := parsedBaseURL.Hostname()
 	if host == "" {
 		return nil, fmt.Errorf("loki URL requires a host")
@@ -130,11 +141,25 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 	dialer.NetDialContext = func(ctx stdcontext.Context, network, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, network, target)
 	}
+	var err error
 	if dialer.TLSClientConfig, err = t.conn.TLS.TLSClientConfig(); err != nil {
 		return nil, err
 	}
 	dialer.TLSClientConfig.ServerName = host
 
+	headers, err := t.tailHeaders(parsedBaseURL)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, _, err := dialer.DialContext(ctx, websocketURL, headers)
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to websocket: %w", err)
+	}
+	return conn, nil
+}
+
+func (t *lokiSearcher) tailHeaders(parsedBaseURL *url.URL) (netHTTP.Header, error) {
 	headers := netHTTP.Header{}
 	// The fixed request URL keeps configured endpoints out of the HTTP request
 	// parser; these values preserve the validated destination, Host header and SNI.
@@ -150,85 +175,84 @@ func (t *lokiSearcher) Stream(ctx context.Context, request StreamRequest) (<-cha
 		// handshake never runs. Saying so beats tailing unauthenticated.
 		return nil, fmt.Errorf("loki tail does not support OAuth connections; use basic auth, a bearer token or mTLS")
 	}
+	return headers, nil
+}
 
-	conn, _, err := dialer.DialContext(ctx, websocketURL, headers)
-	if err != nil {
-		return nil, fmt.Errorf("failed to connect to websocket: %w", err)
-	}
+func (t *lokiSearcher) readTail(ctx context.Context, conn *websocket.Conn, itemChan chan<- StreamItem) {
+	defer close(itemChan)
+	defer conn.Close()
 
-	itemChan := make(chan StreamItem)
+	conn.SetPongHandler(func(string) error {
+		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	})
 
-	go func() {
-		defer close(itemChan)
-		defer conn.Close()
-
-		conn.SetPongHandler(func(string) error {
-			return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
-		})
-
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				var response StreamResponse
-				if err := conn.ReadJSON(&response); err != nil {
-					if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-						return
-					}
-					select {
-					case itemChan <- StreamItem{Error: fmt.Errorf("WebSocket read error in Loki stream: %w", err)}:
-					case <-ctx.Done():
-					}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			var response StreamResponse
+			if err := conn.ReadJSON(&response); err != nil {
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 					return
 				}
-
-				mappingConfig := DefaultFieldMappingConfig
-				if t.mappingConfig != nil {
-					mappingConfig = t.mappingConfig.WithDefaults(DefaultFieldMappingConfig)
+				select {
+				case itemChan <- StreamItem{Error: fmt.Errorf("WebSocket read error in Loki stream: %w", err)}:
+				case <-ctx.Done():
 				}
+				return
+			}
 
-				for _, stream := range response.Streams {
-					for _, v := range stream.Values {
-						if len(v) != 2 {
-							continue
-						}
+			mappingConfig := DefaultFieldMappingConfig
+			if t.mappingConfig != nil {
+				mappingConfig = t.mappingConfig.WithDefaults(DefaultFieldMappingConfig)
+			}
 
-						firstObserved, err := strconv.ParseInt(v[0], 10, 64)
-						if err != nil {
-							continue
-						}
-
-						line := &logs.LogLine{
-							Count:         1,
-							FirstObserved: time.Unix(0, firstObserved),
-							Message:       v[1],
-							// Cloned: every line of a stream would otherwise
-							// share one map, so editing one line's labels
-							// would edit them all.
-							Labels: maps.Clone(stream.Stream),
-						}
-
-						for k, val := range stream.Stream {
-							if err := logs.MapFieldToLogLine(k, val, line, mappingConfig); err != nil {
-								continue
-							}
-						}
-
-						line.SetHash()
-
-						select {
-						case itemChan <- StreamItem{LogLine: line}:
-						case <-ctx.Done():
-							return
-						}
-					}
-				}
+			if !sendTailResponse(ctx, response, mappingConfig, itemChan) {
+				return
 			}
 		}
-	}()
+	}
+}
 
-	return itemChan, nil
+func sendTailResponse(ctx context.Context, response StreamResponse, mappingConfig logs.FieldMappingConfig, itemChan chan<- StreamItem) bool {
+	for _, stream := range response.Streams {
+		for _, v := range stream.Values {
+			if len(v) != 2 {
+				continue
+			}
+
+			firstObserved, err := strconv.ParseInt(v[0], 10, 64)
+			if err != nil {
+				continue
+			}
+
+			line := &logs.LogLine{
+				Count:         1,
+				FirstObserved: time.Unix(0, firstObserved),
+				Message:       v[1],
+				// Cloned: every line of a stream would otherwise
+				// share one map, so editing one line's labels
+				// would edit them all.
+				Labels: maps.Clone(stream.Stream),
+			}
+
+			for k, val := range stream.Stream {
+				if err := logs.MapFieldToLogLine(k, val, line, mappingConfig); err != nil {
+					continue
+				}
+			}
+
+			line.SetHash()
+
+			select {
+			case itemChan <- StreamItem{LogLine: line}:
+			case <-ctx.Done():
+				return false
+			}
+		}
+	}
+	return true
 }
 
 var DefaultFieldMappingConfig = logs.FieldMappingConfig{
