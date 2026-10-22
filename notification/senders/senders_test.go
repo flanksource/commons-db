@@ -7,12 +7,18 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"testing"
 
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/notification/senders"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestSenders(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Notification Senders Suite")
+}
 
 // capture records what a webhook received, so a spec can assert on the request
 // a channel actually built rather than only on the fact that it returned nil.

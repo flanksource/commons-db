@@ -79,14 +79,20 @@ func SupportsAttachments(connectionType string) bool {
 // post sends a JSON body to a webhook and turns a non-2xx into an error naming
 // the channel and echoing the response, which is the only thing that ever says
 // why a webhook rejected a message.
-func post(ctx context.Context, channel, url string, body []byte, headers map[string]string) error {
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytesReader(body))
+func post(ctx context.Context, webhook webhookPost) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, webhook.URL, bytesReader(webhook.Body))
 	if err != nil {
 		return err
 	}
 	request.Header.Set("Content-Type", "application/json")
-	for key, value := range headers {
+	for key, value := range webhook.Headers {
 		request.Header.Set(key, value)
 	}
-	return do(channel, request)
+	return do(webhook.Channel, request)
+}
+
+type webhookPost struct {
+	Channel, URL string
+	Body         []byte
+	Headers      map[string]string
 }
