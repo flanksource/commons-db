@@ -4,12 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"testing"
 
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/lib/pq"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestCompatibilityViews(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "View dependency compatibility")
+}
 
 // startDB opens one database for the whole suite. Embedded postgres needs a
 // SysV shared-memory segment, which a machine already running several instances
