@@ -146,7 +146,7 @@ func compileBatch(ctx context.Context, cfg BatchConfig, rows []query.Row) (*comp
 		return nil, err
 	}
 
-	merge, err := compileMerger(ctx, cfg.Keep, cfg.When, cfg.Emit, cfg.Set)
+	merge, err := compileMerger(ctx, mergerOptions{Keep: cfg.Keep, When: cfg.When, Emit: cfg.Emit, Set: cfg.Set})
 	if err != nil {
 		return nil, err
 	}

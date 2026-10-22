@@ -2,6 +2,7 @@ package processor_test
 
 import (
 	gocontext "context"
+	"testing"
 
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
@@ -9,6 +10,11 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestProcessor(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Query Processor Suite")
+}
 
 // statusByKey indexes recon output rows by a key column to their status.
 func statusByKey(rows []query.Row, key string) map[string]string {
