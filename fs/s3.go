@@ -65,6 +65,8 @@ type s3FS struct {
 	Bucket string
 }
 
+var _ FilesystemRW = (*s3FS)(nil)
+
 // NewS3FS returns a filesystem over bucket. optFns adjust the S3 client, e.g. its
 // endpoint or path-style addressing.
 func NewS3FS(ctx context.Context, bucket string, cfg aws.Config, optFns ...func(*s3.Options)) *s3FS {
