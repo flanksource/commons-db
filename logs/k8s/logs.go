@@ -3,6 +3,7 @@ package k8s
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"maps"
 	"strconv"
 	"strings"
@@ -92,12 +93,26 @@ func Fetch(ctx context.Context, client kubernetes.Interface, pods []corev1.Pod, 
 // carries once per container has nowhere else to live when the lines arrive one
 // at a time, and a row missing its pod and namespace is a row a live view
 // cannot column the way a paged one does.
-func Follow(ctx context.Context, client kubernetes.Interface, target Target, request Request, emit func(logs.LogResult)) error {
+func Follow(ctx context.Context, client kubernetes.Interface, opts FollowOptions) error {
+	request := opts.Request
 	request.Follow = true
-	metadata := target.Metadata()
-	return readContainerLogs(ctx, client, target, request, func(line *logs.LogLine) {
-		emit(logs.LogResult{Metadata: metadata, Logs: []*logs.LogLine{line}})
+	metadata := opts.Target.Metadata()
+	return readContainerLogs(ctx, containerRead{Client: client, Target: opts.Target, Request: request}, func(line *logs.LogLine) {
+		opts.Emit(logs.LogResult{Metadata: metadata, Logs: []*logs.LogLine{line}})
 	})
+}
+
+// FollowOptions names the container stream Follow tails and where each line goes.
+type FollowOptions struct {
+	Target  Target
+	Request Request
+	Emit    func(logs.LogResult)
+}
+
+type containerRead struct {
+	Client  kubernetes.Interface
+	Target  Target
+	Request Request
 }
 
 // Target is one container's log stream: the pod holding it and, when the
@@ -203,7 +218,7 @@ func podSelectable(pod corev1.Pod) types.ResourceSelectableMap {
 // read returns.
 func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, target Target, request Request) (*logs.LogResult, error) {
 	output := logs.LogResult{Metadata: target.Metadata()}
-	err := readContainerLogs(ctx, client, target, request, func(line *logs.LogLine) {
+	err := readContainerLogs(ctx, containerRead{Client: client, Target: target, Request: request}, func(line *logs.LogLine) {
 		output.Logs = append(output.Logs, line)
 	})
 	if err != nil {
@@ -219,14 +234,27 @@ func fetchContainerLogs(ctx context.Context, client kubernetes.Interface, target
 // what they do with a line and in whether the kubelet ever stops sending them.
 // Two walks would be two id schemes to keep in step, and the id is what a
 // resumed read discards its already-served prefix by.
-func readContainerLogs(
-	ctx context.Context,
-	client kubernetes.Interface,
-	target Target,
-	request Request,
-	emit func(*logs.LogLine),
-) error {
-	pod := target.Pod
+func readContainerLogs(ctx context.Context, read containerRead, emit func(*logs.LogLine)) error {
+	opt, err := podLogOptions(read.Target, read.Request)
+	if err != nil {
+		return err
+	}
+	bounds, err := parseLineBounds(read.Request)
+	if err != nil {
+		return err
+	}
+
+	pod := read.Target.Pod
+	podLogs, err := read.Client.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opt).Stream(ctx)
+	if err != nil {
+		return err
+	}
+	defer podLogs.Close()
+
+	return scanContainerLogs(podLogs, read.Target, bounds, emit)
+}
+
+func podLogOptions(target Target, request Request) (*corev1.PodLogOptions, error) {
 	opt := &corev1.PodLogOptions{
 		Container:  target.Container,
 		Timestamps: true,
@@ -239,19 +267,30 @@ func readContainerLogs(
 	if request.Start != "" {
 		start, err := request.GetStart()
 		if err != nil {
-			return fmt.Errorf("start %q is not a time or date math: %w", request.Start, err)
+			return nil, fmt.Errorf("start %q is not a time or date math: %w", request.Start, err)
 		}
 		opt.SinceTime = &metav1.Time{Time: start}
 	}
+	return opt, nil
+}
 
+// lineBounds are the request's limits the kubelet cannot apply, so they are
+// enforced while scanning.
+type lineBounds struct {
+	end   time.Time
+	limit int
+	after *Position
+}
+
+func parseLineBounds(request Request) (lineBounds, error) {
+	bounds := lineBounds{after: request.After}
 	// The kubelet serves no upper bound, so an end is enforced while scanning.
-	var end time.Time
 	if request.End != "" {
 		parsed, err := request.GetEnd()
 		if err != nil {
-			return fmt.Errorf("end %q is not a time or date math: %w", request.End, err)
+			return bounds, fmt.Errorf("end %q is not a time or date math: %w", request.End, err)
 		}
-		end = parsed
+		bounds.end = parsed
 	}
 
 	// Limit caps how many lines are read forward from the window's start, not
@@ -262,22 +301,19 @@ func readContainerLogs(
 	// silently disagreed with an End bound too: with both set, the tail lines
 	// are all newer than the bound and every one of them is discarded, so a
 	// bounded query with a limit returned nothing at all.
-	var limit int
 	if request.Limit != "" {
 		parsed, err := strconv.Atoi(request.Limit)
 		if err != nil {
-			return fmt.Errorf("limit %q is not a number: %w", request.Limit, err)
+			return bounds, fmt.Errorf("limit %q is not a number: %w", request.Limit, err)
 		}
-		limit = parsed
+		bounds.limit = parsed
 	}
+	return bounds, nil
+}
 
-	req := client.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, opt)
-	podLogs, err := req.Stream(ctx)
-	if err != nil {
-		return err
-	}
-	defer podLogs.Close()
-
+func scanContainerLogs(podLogs io.Reader, target Target, bounds lineBounds, emit func(*logs.LogLine)) error {
+	pod := target.Pod
+	end, limit := bounds.end, bounds.limit
 	stream := target.stream()
 	// ordinal counts the lines sharing one instant, and resets when the instant
 	// does. Numbering within the timestamp rather than within the fetch is what
@@ -312,7 +348,7 @@ func readContainerLogs(
 			break
 		}
 		id := fmt.Sprintf("%s#%d", stream, ordinal)
-		if request.After != nil && request.After.reached(t, id) {
+		if bounds.after != nil && bounds.after.reached(t, id) {
 			continue
 		}
 		// One past the cap is read on purpose: the caller cuts at the limit and

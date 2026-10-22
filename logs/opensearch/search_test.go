@@ -165,112 +165,112 @@ func TestNewHonorsInsecureTLS(t *testing.T) {
 	}
 }
 
-func TestPreprocessJSONFields(t *testing.T) {
-	tests := []struct {
-		name     string
-		input    map[string]any
-		expected map[string]any
-	}{
-		{
-			name: "valid JSON in @json field",
-			input: map[string]any{
-				"message":     "test message",
-				"config@json": `{"key": "value", "number": 42}`,
-				"other_field": "normal value",
-			},
-			expected: map[string]any{
-				"message":     "test message",
-				"config@json": map[string]any{"key": "value", "number": float64(42)},
-				"other_field": "normal value",
-			},
+var preprocessJSONFieldsCases = []struct {
+	name     string
+	input    map[string]any
+	expected map[string]any
+}{
+	{
+		name: "valid JSON in @json field",
+		input: map[string]any{
+			"message":     "test message",
+			"config@json": `{"key": "value", "number": 42}`,
+			"other_field": "normal value",
 		},
-		{
-			name: "invalid JSON in @json field - should remain unchanged",
-			input: map[string]any{
-				"message":     "test message",
-				"config@json": `{"key": "value", invalid json}`,
-				"other_field": "normal value",
-			},
-			expected: map[string]any{
-				"message":     "test message",
-				"config@json": `{"key": "value", invalid json}`,
-				"other_field": "normal value",
-			},
+		expected: map[string]any{
+			"message":     "test message",
+			"config@json": map[string]any{"key": "value", "number": float64(42)},
+			"other_field": "normal value",
 		},
-		{
-			name: "non-string value in @json field - should remain unchanged",
-			input: map[string]any{
-				"message":     "test message",
-				"config@json": 42,
-				"other_field": "normal value",
-			},
-			expected: map[string]any{
-				"message":     "test message",
-				"config@json": 42,
-				"other_field": "normal value",
-			},
+	},
+	{
+		name: "invalid JSON in @json field - should remain unchanged",
+		input: map[string]any{
+			"message":     "test message",
+			"config@json": `{"key": "value", invalid json}`,
+			"other_field": "normal value",
 		},
-		{
-			name: "nested JSON objects",
-			input: map[string]any{
-				"complex@json": `{"nested": {"deep": {"value": "test"}}, "array": [1, 2, 3]}`,
-			},
-			expected: map[string]any{
-				"complex@json": map[string]any{
-					"nested": map[string]any{
-						"deep": map[string]any{
-							"value": "test",
-						},
+		expected: map[string]any{
+			"message":     "test message",
+			"config@json": `{"key": "value", invalid json}`,
+			"other_field": "normal value",
+		},
+	},
+	{
+		name: "non-string value in @json field - should remain unchanged",
+		input: map[string]any{
+			"message":     "test message",
+			"config@json": 42,
+			"other_field": "normal value",
+		},
+		expected: map[string]any{
+			"message":     "test message",
+			"config@json": 42,
+			"other_field": "normal value",
+		},
+	},
+	{
+		name: "nested JSON objects",
+		input: map[string]any{
+			"complex@json": `{"nested": {"deep": {"value": "test"}}, "array": [1, 2, 3]}`,
+		},
+		expected: map[string]any{
+			"complex@json": map[string]any{
+				"nested": map[string]any{
+					"deep": map[string]any{
+						"value": "test",
 					},
-					"array": []any{float64(1), float64(2), float64(3)},
 				},
+				"array": []any{float64(1), float64(2), float64(3)},
 			},
 		},
-		{
-			name: "empty JSON object",
-			input: map[string]any{
-				"empty@json": `{}`,
-			},
-			expected: map[string]any{
-				"empty@json": map[string]any{},
-			},
+	},
+	{
+		name: "empty JSON object",
+		input: map[string]any{
+			"empty@json": `{}`,
 		},
-		{
-			name: "empty JSON array",
-			input: map[string]any{
-				"empty@json": `[]`,
-			},
-			expected: map[string]any{
-				"empty@json": []any{},
-			},
+		expected: map[string]any{
+			"empty@json": map[string]any{},
 		},
-		{
-			name: "fields without @json or @input suffix - should remain unchanged",
-			input: map[string]any{
-				"message":     "test message",
-				"config":      `{"key": "value"}`,
-				"other_field": "normal value",
-			},
-			expected: map[string]any{
-				"message":     "test message",
-				"config":      `{"key": "value"}`,
-				"other_field": "normal value",
-			},
+	},
+	{
+		name: "empty JSON array",
+		input: map[string]any{
+			"empty@json": `[]`,
 		},
-		{
-			name: "mixed valid and invalid JSON fields",
-			input: map[string]any{
-				"valid@json":   `{"valid": true}`,
-				"invalid@json": `{invalid json}`,
-			},
-			expected: map[string]any{
-				"valid@json":   map[string]any{"valid": true},
-				"invalid@json": `{invalid json}`,
-			},
+		expected: map[string]any{
+			"empty@json": []any{},
 		},
-	}
+	},
+	{
+		name: "fields without @json or @input suffix - should remain unchanged",
+		input: map[string]any{
+			"message":     "test message",
+			"config":      `{"key": "value"}`,
+			"other_field": "normal value",
+		},
+		expected: map[string]any{
+			"message":     "test message",
+			"config":      `{"key": "value"}`,
+			"other_field": "normal value",
+		},
+	},
+	{
+		name: "mixed valid and invalid JSON fields",
+		input: map[string]any{
+			"valid@json":   `{"valid": true}`,
+			"invalid@json": `{invalid json}`,
+		},
+		expected: map[string]any{
+			"valid@json":   map[string]any{"valid": true},
+			"invalid@json": `{invalid json}`,
+		},
+	},
+}
 
-	for _, tt := range tests {
+func TestPreprocessJSONFields(t *testing.T) {
+	for _, tt := range preprocessJSONFieldsCases {
 		t.Run(tt.name, func(t *testing.T) {
 			// Make a copy of input to avoid modifying the test case
 			input := make(map[string]any)
