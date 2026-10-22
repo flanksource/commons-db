@@ -277,24 +277,47 @@ func (c *Client) GetRestMapper() (meta.RESTMapper, error) {
 	return c.restMapper, err
 }
 
-func (c *Client) ExecutePodf(
-	ctx context.Context,
-	namespace, pod, container string,
-	command ...string,
-) (string, string, error) {
+type PodExecOptions struct {
+	Namespace string
+	Pod       string
+	Container string
+	Command   []string
+}
+
+type PodWaitOptions struct {
+	Namespace string
+	Name      string
+	Timeout   time.Duration
+	Phases    []v1.PodPhase
+}
+
+type ContainerWaitOptions struct {
+	Namespace      string
+	Name           string
+	Timeout        time.Duration
+	ContainerNames []string
+}
+
+type ResourceRef struct {
+	Kind      string
+	Namespace string
+	Name      string
+}
+
+func (c *Client) ExecutePodf(ctx context.Context, opts PodExecOptions) (string, string, error) {
 	const tty = false
 	req := c.CoreV1().RESTClient().Post().
 		Resource("pods").
-		Name(pod).
-		Namespace(namespace).
+		Name(opts.Pod).
+		Namespace(opts.Namespace).
 		SubResource("exec").
-		Param("container", container).
+		Param("container", opts.Container).
 		Param("stdin", fmt.Sprintf("%t", false)).
 		Param("stdout", fmt.Sprintf("%t", true)).
 		Param("stderr", fmt.Sprintf("%t", true)).
 		Param("tty", fmt.Sprintf("%t", tty))
 
-	for _, c := range command {
+	for _, c := range opts.Command {
 		req.Param("command", c)
 	}
 
@@ -337,22 +360,18 @@ func (c *Client) GetPodLogs(ctx context.Context, namespace, podName, container s
 
 // WaitForPod waits for a pod to be in the specified phase, or returns an
 // error if the timeout is exceeded
-func (c *Client) WaitForPod(
-	ctx context.Context,
-	namespace, name string,
-	timeout time.Duration,
-	phases ...v1.PodPhase,
-) error {
+func (c *Client) WaitForPod(ctx context.Context, opts PodWaitOptions) error {
 	start := time.Now()
+	phases := opts.Phases
 	if len(phases) == 0 {
 		phases = []v1.PodPhase{v1.PodRunning}
 	}
 
-	pods := c.CoreV1().Pods(namespace)
+	pods := c.CoreV1().Pods(opts.Namespace)
 	for {
-		pod, err := pods.Get(ctx, name, metav1.GetOptions{})
-		if start.Add(timeout).Before(time.Now()) {
-			return fmt.Errorf("timeout exceeded waiting for %s is %s, error: %v", name, pod.Status.Phase, err)
+		pod, err := pods.Get(ctx, opts.Name, metav1.GetOptions{})
+		if start.Add(opts.Timeout).Before(time.Now()) {
+			return fmt.Errorf("timeout exceeded waiting for %s is %s, error: %v", opts.Name, pod.Status.Phase, err)
 		}
 
 		if pod == nil || pod.Status.Phase == v1.PodPending {
@@ -419,19 +438,17 @@ func (c *Client) WaitForJob(
 	}
 }
 
-func (c *Client) StreamLogsV2(
-	ctx context.Context,
-	namespace, name string,
-	timeout time.Duration,
-	containerNames ...string,
-) error {
+func (c *Client) StreamLogsV2(ctx context.Context, opts ContainerWaitOptions) error {
+	namespace, name, containerNames := opts.Namespace, opts.Name, opts.ContainerNames
 	podsClient := c.CoreV1().Pods(namespace)
 	pod, err := podsClient.Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 
-	if err := c.WaitForContainerStart(ctx, namespace, name, 120*time.Second, containerNames...); err != nil {
+	startOpts := opts
+	startOpts.Timeout = 120 * time.Second
+	if err := c.WaitForContainerStart(ctx, startOpts); err != nil {
 		return err
 	}
 
@@ -482,7 +499,7 @@ func (c *Client) StreamLogsV2(
 
 	wg.Wait()
 
-	if err = c.WaitForPod(ctx, namespace, name, timeout, v1.PodSucceeded); err != nil {
+	if err = c.WaitForPod(ctx, PodWaitOptions{Namespace: namespace, Name: name, Timeout: opts.Timeout, Phases: []v1.PodPhase{v1.PodSucceeded}}); err != nil {
 		return err
 	}
 
@@ -499,26 +516,22 @@ func (c *Client) StreamLogsV2(
 }
 
 // WaitForContainerStart waits for the specified containers to be started (or any container if no names are specified) - returns an error if the timeout is exceeded
-func (c *Client) WaitForContainerStart(
-	ctx context.Context,
-	namespace, name string,
-	timeout time.Duration,
-	containerNames ...string,
-) error {
-	timeoutTimer := time.NewTimer(timeout)
+func (c *Client) WaitForContainerStart(ctx context.Context, opts ContainerWaitOptions) error {
+	timeoutTimer := time.NewTimer(opts.Timeout)
 	defer timeoutTimer.Stop()
 
-	podsClient := c.CoreV1().Pods(namespace)
+	containerNames := opts.ContainerNames
+	podsClient := c.CoreV1().Pods(opts.Namespace)
 	for {
 		select {
 		case <-timeoutTimer.C:
-			return fmt.Errorf("timeout exceeded waiting for %s", name)
+			return fmt.Errorf("timeout exceeded waiting for %s", opts.Name)
 
 		case <-ctx.Done():
 			return ctx.Err()
 
 		default:
-			pod, err := podsClient.Get(ctx, name, metav1.GetOptions{})
+			pod, err := podsClient.Get(ctx, opts.Name, metav1.GetOptions{})
 			if err != nil {
 				if apiErrors.IsNotFound(err) {
 					time.Sleep(time.Second)
@@ -728,13 +741,10 @@ func (c *Client) GetResource(ctx context.Context, kind, namespace, name string) 
 	}, err
 }
 
-func (c *Client) WaitForReady(ctx context.Context, kind, namespace, name string, timeout ...time.Duration) (*Resource, error) {
-	var timeoutDuration time.Duration
-	if len(timeout) > 0 {
-		timeoutDuration = timeout[0]
-	} else {
-		timeoutDuration = time.Minute
-	}
+// WaitForReady polls until ref is healthy; a zero timeout waits one minute.
+func (c *Client) WaitForReady(ctx context.Context, ref ResourceRef, timeout time.Duration) (*Resource, error) {
+	kind, namespace, name := ref.Kind, ref.Namespace, ref.Name
+	timeoutDuration := timeout
 
 	start := time.Now()
 
@@ -765,7 +775,8 @@ func (c *Client) WaitForReady(ctx context.Context, kind, namespace, name string,
 	}
 }
 
-func (c *Client) WaitFor(ctx context.Context, kind, namespace, name string, condition func(*unstructured.Unstructured) bool, timeout time.Duration) (*unstructured.Unstructured, error) {
+func (c *Client) WaitFor(ctx context.Context, ref ResourceRef, condition func(*unstructured.Unstructured) bool, timeout time.Duration) (*unstructured.Unstructured, error) {
+	kind, namespace, name := ref.Kind, ref.Namespace, ref.Name
 	client, _, err := c.GetClientByKind(kind)
 	if err != nil {
 		return nil, err
