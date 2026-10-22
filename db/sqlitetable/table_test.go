@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"testing"
 	"time"
 
 	"ariga.io/atlas/sql/schema"
@@ -16,6 +17,11 @@ import (
 	sqlitemigrate "github.com/flanksource/commons-db/migrate/sqlite"
 	"github.com/flanksource/commons-db/query"
 )
+
+func TestSQLiteTable(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "SQLite Table Suite")
+}
 
 var _ = Describe("sqlitetable.Table", func() {
 	var (

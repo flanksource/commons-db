@@ -15,31 +15,41 @@ func ParseURL(connection string) (*pgx.ConnConfig, error) {
 	if strings.Contains(connection, "cloudsql-instance-connection-name") {
 		parsed := parseParams(connection)
 		userPrivateIP, _ := strconv.ParseBool(parsed["use-private-ip"])
-		return setupCloudSQL(context.TODO(), parsed["user"], parsed["db"], parsed["cloudsql-instance-connection-name"], userPrivateIP)
+		return setupCloudSQL(context.TODO(), cloudSQLOptions{
+			User:                   parsed["user"],
+			Database:               parsed["db"],
+			InstanceConnectionName: parsed["cloudsql-instance-connection-name"],
+			UsePrivateIP:           userPrivateIP,
+		})
 	}
 
 	return nil, nil
 }
 
-func setupCloudSQL(ctx context.Context, user, dbName, instanceConnectionName string, usePrivate bool) (*pgx.ConnConfig, error) {
+type cloudSQLOptions struct {
+	User, Database, InstanceConnectionName string
+	UsePrivateIP                           bool
+}
+
+func setupCloudSQL(ctx context.Context, cloudSQL cloudSQLOptions) (*pgx.ConnConfig, error) {
 	dialer, err := cloudsqlconn.NewDialer(ctx, cloudsqlconn.WithIAMAuthN())
 	if err != nil {
 		return nil, fmt.Errorf("cloudsqlconn.NewDialer: %w", err)
 	}
 
 	var opts []cloudsqlconn.DialOption
-	if usePrivate {
+	if cloudSQL.UsePrivateIP {
 		opts = append(opts, cloudsqlconn.WithPrivateIP())
 	}
 
-	dsn := fmt.Sprintf("user=%s database=%s", user, dbName)
+	dsn := fmt.Sprintf("user=%s database=%s", cloudSQL.User, cloudSQL.Database)
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil {
 		return nil, err
 	}
 
 	config.DialFunc = func(ctx context.Context, network, instance string) (net.Conn, error) {
-		return dialer.Dial(ctx, instanceConnectionName, opts...)
+		return dialer.Dial(ctx, cloudSQL.InstanceConnectionName, opts...)
 	}
 	return config, nil
 }

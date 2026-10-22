@@ -21,6 +21,11 @@ var (
 	scratchSeq    atomic.Uint64
 )
 
+type scratchRequest struct {
+	adminURL, name, unique string
+	now                    time.Time
+}
+
 // createLeasedDatabase carves a fresh managed test database out of the server
 // adminURL points at, and returns a DSN for it plus a closure that drops it.
 //
@@ -29,16 +34,12 @@ var (
 // adminURL is used only as a maintenance connection; the database it names is
 // never modified. The returned DSN is adminURL with its path replaced, so every
 // other connection parameter (sslmode, credentials, options) is preserved.
-func createLeasedDatabase(
-	ctx context.Context,
-	adminURL, name, unique string,
-	now time.Time,
-) (string, *databaseLease, error) {
-	session, err := openPoolSession(ctx, adminURL)
+func createLeasedDatabase(ctx context.Context, req scratchRequest) (string, *databaseLease, error) {
+	session, err := openPoolSession(ctx, req.adminURL)
 	if err != nil {
 		return "", nil, err
 	}
-	dbName := managedDatabaseName(testDatabasePrefix, now.UTC().Truncate(time.Second), unique, name)
+	dbName := managedDatabaseName(testDatabasePrefix, req.now.UTC().Truncate(time.Second), req.unique, req.name)
 	if err := session.lock(ctx, dbName); err != nil {
 		return "", nil, errors.Join(err, session.close())
 	}
@@ -46,7 +47,7 @@ func createLeasedDatabase(
 		return "", nil, errors.Join(fmt.Errorf("create database %s: %w", dbName, err), session.close())
 	}
 	lease := &databaseLease{session: session, name: dbName}
-	dsn, err := withDatabase(adminURL, dbName)
+	dsn, err := withDatabase(req.adminURL, dbName)
 	if err != nil {
 		return "", nil, errors.Join(err, lease.release())
 	}

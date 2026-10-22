@@ -122,16 +122,12 @@ func validateManagedPrefix(prefix, kind string) error {
 	return nil
 }
 
-func acquirePooledScratch(
-	ctx context.Context,
-	adminURL, name, unique string,
-	now time.Time,
-) (string, *databaseLease, error) {
-	pool, err := newEphemeralPool(defaultPoolConfig(adminURL, func() time.Time { return now }))
+func acquirePooledScratch(ctx context.Context, req scratchRequest) (string, *databaseLease, error) {
+	pool, err := newEphemeralPool(defaultPoolConfig(req.adminURL, func() time.Time { return req.now }))
 	if err != nil {
 		return "", nil, err
 	}
-	return pool.acquire(ctx, name, unique)
+	return pool.acquire(ctx, req.name, req.unique)
 }
 
 func defaultPoolConfig(adminURL string, now func() time.Time) ephemeralPoolConfig {

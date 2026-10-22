@@ -36,7 +36,9 @@ func TestCompatibility(t *testing.T) {
 	RunSpecs(t, "Database API compatibility")
 }
 
-var _ = Describe("database compatibility shims", func() {
+var _ = Describe("database compatibility shims", databaseCompatibilitySpecs)
+
+func databaseCompatibilitySpecs() {
 	It("applies portable HCL and retains commons catalog cache metadata", func(ctx SpecContext) {
 		db, err := sql.Open("sqlite", filepath.Join(GinkgoT().TempDir(), "compat.db"))
 		Expect(err).NotTo(HaveOccurred())
@@ -59,4 +61,4 @@ table "items" {
 		Expect(second.Capabilities.Require(connection.BackendCapabilityArrayFilters)).To(Succeed())
 		Expect(nativemigrate.Apply(context.Background(), "", files, oldmigrate.WithDB(db))).To(Succeed())
 	})
-})
+}
