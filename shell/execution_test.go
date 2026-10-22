@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -17,9 +18,92 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/types"
+	"github.com/flanksource/commons/collections"
 	commons "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
+	"github.com/samber/lo"
 )
+
+func TestShell(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Shell Suite")
+}
+
+func TestEnv(t *testing.T) {
+	testData := []struct {
+		name         string
+		exec         Exec
+		expectedVars []string
+	}{
+		{
+			name: "access custom env vars",
+			exec: Exec{
+				Script: "env",
+				EnvVars: []types.EnvVar{
+					{Name: "mc_test_secret", ValueStatic: "abcdef"},
+				},
+			},
+			expectedVars: []string{"mc_test_secret"},
+		},
+		{
+			name: "access multiple custom env vars",
+			exec: Exec{
+				Script: "env",
+				EnvVars: []types.EnvVar{
+					{Name: "mc_test_secret_key", ValueStatic: "abc"},
+					{Name: "mc_test_secret_id", ValueStatic: "xyz"},
+				},
+			},
+			expectedVars: []string{"mc_test_secret_key", "mc_test_secret_id"},
+		},
+		{
+			name: "no access to process env",
+			exec: Exec{
+				Script: "env",
+			},
+			expectedVars: []string{},
+		},
+	}
+
+	ctx := dbcontext.New()
+	for _, td := range testData {
+		t.Run(td.name, func(t *testing.T) {
+			result, err := Run(ctx, td.exec)
+			if err != nil {
+				t.Fatalf("failed to run command %s", err)
+			}
+
+			if result.ExitCode != 0 {
+				t.Errorf("unexpected non-zero exit code: %d", result.ExitCode)
+			}
+
+			if result.Stderr != "" {
+				t.Errorf("unexpected stderr: %s", result.Stderr)
+			}
+
+			envVars := strings.Split(result.Stdout, "\n")
+
+			// These env vars are always made available.
+			envVars = lo.Filter(envVars, func(v string, _ int) bool {
+				key, _, _ := strings.Cut(v, "=")
+				return key != "PWD" && key != "SHLVL" && key != "_"
+			})
+
+			envVarKeys := lo.Map(envVars, func(v string, _ int) string {
+				key, _, _ := strings.Cut(v, "=")
+				return key
+			})
+
+			expected := collections.MapKeys(allowedEnvVars)
+			expected = append(expected, td.expectedVars...)
+			if !lo.Every(expected, envVarKeys) {
+				t.Errorf("expected %s, got %s", td.expectedVars, envVarKeys)
+			}
+		})
+
+		os.RemoveAll("./shell-tmp/")
+	}
+}
 
 var _ = Describe("Shell execution", func() {
 	It("uses SetupEnv as the exact environment with per-run host passthrough", func() {
