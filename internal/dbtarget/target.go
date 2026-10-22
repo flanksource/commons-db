@@ -13,4 +13,4 @@ const SQLServer = native.SQLServer
 
 type Target = native.Target
 
-func Parse(raw string) (Target, error) { return native.Parse(raw) }
+var Parse = native.Parse
