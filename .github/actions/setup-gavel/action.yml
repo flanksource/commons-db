@@ -1,5 +1,5 @@
 name: Set up pinned Gavel
-description: Build the Gavel revision with isolated Ginkgo reporter imports.
+description: Build the Gavel revision with isolated reporter imports and Ginkgo benchmark selection fixes.
 runs:
   using: composite
   steps:
@@ -7,7 +7,7 @@ runs:
       uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       with:
         repository: flanksource/gavel
-        ref: b92402dd613b157dcc3349cb2fe12aa87d9e178b
+        ref: 750fb67a05f93a3ad6728ffbef4d7bfc0e0faac6
         path: .tmp/gavel-source
         persist-credentials: false
     - name: Build Gavel
