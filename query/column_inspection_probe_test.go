@@ -60,12 +60,12 @@ var _ = Describe("cardinality probes", func() {
 			{Name: "message", Type: ColumnTypeString},
 			{Name: "kubernetes.pod_name", Type: ColumnTypeString},
 		}
-		_, _, err := inspectColumns(
-			WithRecorder(context.New(), recorder),
-			profile,
-			ProviderRequest{Provider: stub.Type(), Connection: connection},
-			discovered, raw,
-		)
+		_, _, err := inspectColumns(WithRecorder(context.New(), recorder), columnInspectionOptions{
+			Profile:    profile,
+			Request:    ProviderRequest{Provider: stub.Type(), Connection: connection},
+			Columns:    discovered,
+			RawColumns: raw,
+		})
 		Expect(err).ToNot(HaveOccurred())
 		return recorder
 	}
@@ -111,13 +111,12 @@ var _ = Describe("cardinality probes", func() {
 		stub := &cardinalityProviderStub{counts: map[string]int64{"message": 1}}
 		RegisterProvider(stub)
 
-		_, _, err := inspectColumns(
-			context.New(),
-			Profile{Provider: ProviderConfig{Type: stub.Type()}},
-			ProviderRequest{Provider: stub.Type()},
-			[]ColumnDef{{Name: "message", Type: ColumnTypeString}},
-			[]ColumnDef{{Name: "message", Type: ColumnTypeString}},
-		)
+		_, _, err := inspectColumns(context.New(), columnInspectionOptions{
+			Profile:    Profile{Provider: ProviderConfig{Type: stub.Type()}},
+			Request:    ProviderRequest{Provider: stub.Type()},
+			Columns:    []ColumnDef{{Name: "message", Type: ColumnTypeString}},
+			RawColumns: []ColumnDef{{Name: "message", Type: ColumnTypeString}},
+		})
 		Expect(err).ToNot(HaveOccurred())
 	})
 })

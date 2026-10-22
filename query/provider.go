@@ -98,7 +98,15 @@ type InspectionOptions struct {
 // an estimate, and nil is "the backend did not say". Collapsing the three into
 // an int is what lets an estimate be rendered as a count.
 type FilterLookupProvider interface {
-	LookupFilterValues(ctx context.Context, req ProviderRequest, binding ColumnFilterBinding, search string, limit int) ([]FilterOption, *Total, error)
+	LookupFilterValues(ctx context.Context, req ProviderRequest, lookup FilterValueSearch) ([]FilterOption, *Total, error)
+}
+
+// FilterValueSearch names the bound column whose values are listed, the typed
+// search narrowing them, and how many to return.
+type FilterValueSearch struct {
+	Binding ColumnFilterBinding
+	Search  string
+	Limit   int
 }
 
 // ProviderRequest is the resolved input handed to a Provider by the engine.

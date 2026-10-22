@@ -60,15 +60,9 @@ func columnFilterTarget(column ColumnDef) (target JSONPathFilterTarget, declared
 // backend cannot name it; an inferred one simply yields nothing, because a
 // profile that renders perfectly well should not fail over a field nobody asked
 // to address.
-func resolveBackendField(
-	profile Profile,
-	column ColumnDef,
-	target JSONPathFilterTarget,
-	declared bool,
-	nested string,
-) (string, bool, error) {
-	field := target.Field
-	if declared {
+func resolveBackendField(profile Profile, column ColumnDef, request backendFieldRequest) (string, bool, error) {
+	field, nested := request.Target.Field, request.Nested
+	if request.Declared {
 		if err := validateSQLFilterField(profile.Provider.Type, fmt.Sprintf("column %q", column.Name), field); err != nil {
 			return "", false, err
 		}
@@ -82,6 +76,14 @@ func resolveBackendField(
 		return "", false, err
 	}
 	return field, true, nil
+}
+
+// backendFieldRequest is the column's inferred or declared target and the
+// container its selection is compiled inside.
+type backendFieldRequest struct {
+	Target   JSONPathFilterTarget
+	Declared bool
+	Nested   string
 }
 
 // resolveColumnNesting settles which container a column's selection is compiled

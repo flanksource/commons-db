@@ -80,7 +80,9 @@ var _ = Describe("Reconcile", func() {
 	}}
 
 	reconcile := func(spec query.ReconcileSpec) (*query.ReconcileResult, error) {
-		return query.Reconcile(reconcileCtx(), source, dest, outgoingProfile(), incomingProfile(), spec)
+		return query.Reconcile(reconcileCtx(),
+			query.ReconcileInput{Result: source, Profile: outgoingProfile()},
+			query.ReconcileInput{Result: dest, Profile: incomingProfile()}, spec)
 	}
 
 	// Both sides need their own key expression, but ReconcileSpec carries one.
@@ -96,8 +98,10 @@ var _ = Describe("Reconcile", func() {
 			{"received_at": reconcileEpoch.Add(250 * time.Millisecond), "id": "A"},
 		}}
 
-		result, err := query.Reconcile(reconcileCtx(), aliasedSource, aliasedDest,
-			outgoingProfile(), incomingProfile(), query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+		result, err := query.Reconcile(reconcileCtx(),
+			query.ReconcileInput{Result: aliasedSource, Profile: outgoingProfile()},
+			query.ReconcileInput{Result: aliasedDest, Profile: incomingProfile()},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 1, OnlySource: 1}))
 	})
@@ -139,8 +143,10 @@ var _ = Describe("Reconcile", func() {
 			{"received_at": reconcileEpoch.Add(4 * time.Second), "id": "A"},
 		}}
 
-		result, err := query.Reconcile(reconcileCtx(), duplicated, arrivals,
-			outgoingProfile(), incomingProfile(), query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+		result, err := query.Reconcile(reconcileCtx(),
+			query.ReconcileInput{Result: duplicated, Profile: outgoingProfile()},
+			query.ReconcileInput{Result: arrivals, Profile: incomingProfile()},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 
 		Expect(result.Rows).To(HaveLen(6))
@@ -155,8 +161,10 @@ var _ = Describe("Reconcile", func() {
 
 	It("groups rows whose key resolves to nothing under the empty key", func() {
 		missing := &query.Result{Rows: []query.Row{{"sent_at": reconcileEpoch, "id": nil}}}
-		result, err := query.Reconcile(reconcileCtx(), missing, &query.Result{},
-			outgoingProfile(), incomingProfile(), query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+		result, err := query.Reconcile(reconcileCtx(),
+			query.ReconcileInput{Result: missing, Profile: outgoingProfile()},
+			query.ReconcileInput{Result: &query.Result{}, Profile: incomingProfile()},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Rows).To(HaveLen(1))
 		Expect(result.Rows[0].Key).To(BeEmpty())
@@ -167,8 +175,9 @@ var _ = Describe("Reconcile", func() {
 		left := &query.Result{Rows: []query.Row{{"region": "eu", "id": "1"}}}
 		right := &query.Result{Rows: []query.Row{{"region": "eu", "id": "1"}, {"region": "us", "id": "1"}}}
 
-		result, err := query.Reconcile(reconcileCtx(), left, right,
-			query.Profile{Name: "same"}, query.Profile{Name: "same"},
+		result, err := query.Reconcile(reconcileCtx(),
+			query.ReconcileInput{Result: left, Profile: query.Profile{Name: "same"}},
+			query.ReconcileInput{Result: right, Profile: query.Profile{Name: "same"}},
 			query.ReconcileSpec{Key: query.KeySpec{Columns: []string{"region", "id"}}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Stats).To(Equal(query.ReconcileStats{Matched: 1, OnlyDest: 1}))
@@ -195,9 +204,9 @@ var _ = Describe("Reconcile", func() {
 	It("omits the time fields when neither profile declares a timestamp column", func() {
 		untimed := query.Profile{Name: "untimed"}
 		result, err := query.Reconcile(reconcileCtx(),
-			&query.Result{Rows: []query.Row{{"id": "A"}}},
-			&query.Result{Rows: []query.Row{{"id": "A"}}},
-			untimed, untimed, query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}}}, Profile: untimed},
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"id": "A"}}}, Profile: untimed},
+			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Rows[0].SourceTime).To(BeNil())
 		Expect(result.Rows[0].TimeDiff).To(BeNil())
@@ -206,9 +215,9 @@ var _ = Describe("Reconcile", func() {
 	DescribeTable("parses the timestamp shapes providers return",
 		func(sent, received any, expected time.Duration) {
 			result, err := query.Reconcile(reconcileCtx(),
-				&query.Result{Rows: []query.Row{{"sent_at": sent, "id": "A"}}},
-				&query.Result{Rows: []query.Row{{"received_at": received, "id": "A"}}},
-				outgoingProfile(), incomingProfile(), query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
+				query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"sent_at": sent, "id": "A"}}}, Profile: outgoingProfile()},
+				query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"received_at": received, "id": "A"}}}, Profile: incomingProfile()},
+				query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(*result.Rows[0].TimeDiff).To(Equal(expected))
 		},
@@ -220,8 +229,8 @@ var _ = Describe("Reconcile", func() {
 
 	It("rejects a timestamp it cannot parse", func() {
 		_, err := query.Reconcile(reconcileCtx(),
-			&query.Result{Rows: []query.Row{{"sent_at": "not a time", "id": "A"}}},
-			&query.Result{}, outgoingProfile(), incomingProfile(),
+			query.ReconcileInput{Result: &query.Result{Rows: []query.Row{{"sent_at": "not a time", "id": "A"}}}, Profile: outgoingProfile()},
+			query.ReconcileInput{Result: &query.Result{}, Profile: incomingProfile()},
 			query.ReconcileSpec{Key: query.KeySpec{CEL: `row.id`}})
 		Expect(err).To(MatchError(ContainSubstring("cannot parse")))
 	})

@@ -20,6 +20,20 @@ import (
 	"k8s.io/apimachinery/pkg/selection"
 )
 
+var (
+	// resourceSelectorCache caches the results of resource selector queries
+	resourceSelectorCache = cache.New(time.Second*90, time.Minute*5)
+
+	// immutableCache caches immutable resource selector results (no expiration)
+	immutableCache = cache.New(cache.NoExpiration, time.Hour*12)
+)
+
+// FlushResourceSelectorCache flushes all resource selector caches
+func FlushResourceSelectorCache() {
+	resourceSelectorCache.Flush()
+	immutableCache.Flush()
+}
+
 // SetResourceSelectorClause applies a ResourceSelector to a GORM query.
 // The caller must provide a QueryModel that defines the table structure and capabilities.
 //
@@ -96,14 +110,8 @@ func SetResourceSelectorClause(
 
 // queryResourceSelector runs the given resourceSelector and returns the resource results.
 // It includes caching support based on the resource selector's cache directive.
-func queryResourceSelector[T any](
-	ctx context.Context,
-	limit int,
-	selectColumns []string,
-	resourceSelector types.ResourceSelector,
-	queryModel QueryModel,
-	clauses ...clause.Expression,
-) ([]T, error) {
+func queryResourceSelector[T any](ctx context.Context, opts ResourceSelectorQuery, resourceSelector types.ResourceSelector) ([]T, error) {
+	queryModel, selectColumns, limit, clauses := opts.Model, opts.Columns, opts.Limit, opts.Clauses
 	if resourceSelector.IsEmpty() {
 		return nil, nil
 	}
@@ -204,6 +212,15 @@ func jsonColumnRequirementsToSQLClause(q *gorm.DB, column string, r labels.Requi
 	return q
 }
 
+// ResourceSelectorQuery is the table, projection, row cap and extra clauses a
+// resource selector query runs with. A selector's own limit wins over Limit.
+type ResourceSelectorQuery struct {
+	Model   QueryModel
+	Columns []string
+	Limit   int
+	Clauses []clause.Expression
+}
+
 // QueryResourceSelectors queries a table using multiple resource selectors.
 // It returns the combined results from all selectors, respecting the limit.
 //
@@ -214,26 +231,21 @@ func jsonColumnRequirementsToSQLClause(q *gorm.DB, column string, r labels.Requi
 //	    Columns: []string{"id", "name", "type"},
 //	    HasTags: true,
 //	}
-//	results, err := QueryResourceSelectors[MyResource](ctx, model, []string{"id", "name"}, 100, nil, selectors...)
-func QueryResourceSelectors[T any](
-	ctx context.Context,
-	queryModel QueryModel,
-	selectColumns []string,
-	limit int,
-	clauses []clause.Expression,
-	resourceSelectors ...types.ResourceSelector,
-) ([]T, error) {
+//	results, err := QueryResourceSelectors[MyResource](ctx, ResourceSelectorQuery{
+//	    Model: model, Columns: []string{"id", "name"}, Limit: 100,
+//	}, selectors...)
+func QueryResourceSelectors[T any](ctx context.Context, opts ResourceSelectorQuery, resourceSelectors ...types.ResourceSelector) ([]T, error) {
 	var output []T
 
 	for _, resourceSelector := range resourceSelectors {
-		items, err := queryResourceSelector[T](ctx, limit, selectColumns, resourceSelector, queryModel, clauses...)
+		items, err := queryResourceSelector[T](ctx, opts, resourceSelector)
 		if err != nil {
 			return nil, err
 		}
 
 		output = append(output, items...)
-		if limit > 0 && len(output) >= limit {
-			return output[:limit], nil
+		if opts.Limit > 0 && len(output) >= opts.Limit {
+			return output[:opts.Limit], nil
 		}
 	}
 

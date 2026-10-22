@@ -84,7 +84,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	provider, providerErr := GetProvider(p.Provider.Type)
-	req, err := buildProviderRequest(ctx, provider, p.Provider, p.Query, p.Params, resolved)
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
@@ -98,17 +98,10 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	if providerErr != nil {
 		return nil, providerErr
 	}
-	pageRequest := options.Page
-	if pageRequest.Limit <= 0 {
-		pageRequest.Limit = DefaultSampleLimit
+	pageRequest, err := samplePageRequest(p, options)
+	if err != nil {
+		return nil, err
 	}
-	if maximum := p.RowLimits().MaxPageSize; pageRequest.Limit > maximum {
-		return nil, fmt.Errorf("profile %q: requested page size %d exceeds maximum page size %d", p.Name, pageRequest.Limit, maximum)
-	}
-	if pageRequest.Strategy == 0 && p.Pageable() == nil && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
-		pageRequest.Strategy = PagingCursor
-	}
-	pageRequest.Inspection = options.Inspection
 	req.Inspection = options.Inspection
 	// A sample explains itself when — and only as far as — the request that
 	// asked for it was armed. The alternative, a flag on the sample body, let a
@@ -132,21 +125,14 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 		rows = []Row{}
 	}
 	rawColumns := mergeInspectionColumns(InferSampleColumns(rows), options.InspectionColumns)
-	var processorPreview *ProcessorPreview
-	if options.PreviewProcessors {
-		processorPreview, rows, err = previewSampleProcessors(ctx, p, rows)
-		if err != nil {
-			return nil, fmt.Errorf("profile %q: %w", p.Name, err)
-		}
-	}
-	rows, _, err = applyRowTransforms(ctx, p, rows)
+	processorPreview, rows, err := mapSampleRows(ctx, p, rows, options.PreviewProcessors)
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	if rows == nil {
-		rows = []Row{}
-	}
-	columns, inspectionStatus, err := inspectColumns(ctx, p, req, mergeInspectionColumns(InferSampleColumns(rows), options.InspectionColumns), rawColumns)
+	columns, inspectionStatus, err := inspectColumns(ctx, columnInspectionOptions{
+		Profile: p, Request: req, RawColumns: rawColumns,
+		Columns: mergeInspectionColumns(InferSampleColumns(rows), options.InspectionColumns),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: inspect columns: %w", p.Name, err)
 	}
@@ -173,6 +159,42 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 		Inspection:       inspectionStatus,
 		Resolution:       resolution,
 	}, nil
+}
+
+// mapSampleRows runs the optional processor preview and then the profile's row
+// mapping over a raw sample page.
+func mapSampleRows(ctx context.Context, p Profile, rows []Row, previewProcessors bool) (*ProcessorPreview, []Row, error) {
+	var processorPreview *ProcessorPreview
+	var err error
+	if previewProcessors {
+		processorPreview, rows, err = previewSampleProcessors(ctx, p, rows)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	rows, _, err = applyRowTransforms(ctx, p, rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	if rows == nil {
+		rows = []Row{}
+	}
+	return processorPreview, rows, nil
+}
+
+func samplePageRequest(p Profile, options SampleOptions) (PageRequest, error) {
+	pageRequest := options.Page
+	if pageRequest.Limit <= 0 {
+		pageRequest.Limit = DefaultSampleLimit
+	}
+	if maximum := p.RowLimits().MaxPageSize; pageRequest.Limit > maximum {
+		return PageRequest{}, fmt.Errorf("profile %q: requested page size %d exceeds maximum page size %d", p.Name, pageRequest.Limit, maximum)
+	}
+	if pageRequest.Strategy == 0 && p.Pageable() == nil && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
+		pageRequest.Strategy = PagingCursor
+	}
+	pageRequest.Inspection = options.Inspection
+	return pageRequest, nil
 }
 
 func samplePage(ctx context.Context, profile Profile, params map[string]any, request PageRequest) (Page, error) {
@@ -294,54 +316,10 @@ func scanSQL(input string) ([]string, int, bool) {
 			}
 			continue
 		}
-		if c == '\'' || c == '"' || c == '`' {
-			quote := c
-			i++
-			for i < len(input) {
-				if input[i] == quote {
-					if i+1 < len(input) && input[i+1] == quote {
-						i += 2
-						continue
-					}
-					i++
-					break
-				}
-				if input[i] == '\\' && i+1 < len(input) {
-					i += 2
-				} else {
-					i++
-				}
-			}
+		if next, quoted := skipSQLQuoted(input, i); quoted {
+			i = next
 			hasToken = true
 			continue
-		}
-		if c == '[' {
-			i++
-			for i < len(input) && input[i] != ']' {
-				i++
-			}
-			if i < len(input) {
-				i++
-			}
-			hasToken = true
-			continue
-		}
-		if c == '$' {
-			j := i + 1
-			for j < len(input) && (unicode.IsLetter(rune(input[j])) || unicode.IsDigit(rune(input[j])) || input[j] == '_') {
-				j++
-			}
-			if j < len(input) && input[j] == '$' {
-				delim := input[i : j+1]
-				i = j + 1
-				if end := strings.Index(input[i:], delim); end >= 0 {
-					i += end + len(delim)
-				} else {
-					i = len(input)
-				}
-				hasToken = true
-				continue
-			}
 		}
 		if c == ';' {
 			if hasToken {
@@ -374,6 +352,57 @@ func scanSQL(input string) ([]string, int, bool) {
 		statements++
 	}
 	return tokens, statements, hasAssignment
+}
+
+// skipSQLQuoted returns the index just past a quoted string, quoted identifier
+// or dollar-quoted body starting at i, and false when none starts there.
+func skipSQLQuoted(input string, i int) (int, bool) {
+	c := input[i]
+	if c == '\'' || c == '"' || c == '`' {
+		quote := c
+		i++
+		for i < len(input) {
+			if input[i] == quote {
+				if i+1 < len(input) && input[i+1] == quote {
+					i += 2
+					continue
+				}
+				i++
+				break
+			}
+			if input[i] == '\\' && i+1 < len(input) {
+				i += 2
+			} else {
+				i++
+			}
+		}
+		return i, true
+	}
+	if c == '[' {
+		i++
+		for i < len(input) && input[i] != ']' {
+			i++
+		}
+		if i < len(input) {
+			i++
+		}
+		return i, true
+	}
+	if c == '$' {
+		j := i + 1
+		for j < len(input) && (unicode.IsLetter(rune(input[j])) || unicode.IsDigit(rune(input[j])) || input[j] == '_') {
+			j++
+		}
+		if j < len(input) && input[j] == '$' {
+			delim := input[i : j+1]
+			i = j + 1
+			if end := strings.Index(input[i:], delim); end >= 0 {
+				return i + end + len(delim), true
+			}
+			return len(input), true
+		}
+	}
+	return i, false
 }
 
 // InferSampleColumns infers stable, compact ColumnDefs from top-level row keys.

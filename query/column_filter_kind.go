@@ -277,7 +277,7 @@ func resolveColumnFilterBinding(profile Profile, column ColumnDef) (ColumnFilter
 	if array && !SupportsArrayFilters(profile.Provider.Type) {
 		return ColumnFilterBinding{}, false, fmt.Errorf("%s declares an array filter, which provider %q cannot compile", owner, profile.Provider.Type)
 	}
-	field, addressable, err := resolveBackendField(profile, column, target, declared, nested)
+	field, addressable, err := resolveBackendField(profile, column, backendFieldRequest{Target: target, Declared: declared, Nested: nested})
 	if err != nil {
 		return ColumnFilterBinding{}, false, err
 	}

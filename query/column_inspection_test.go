@@ -79,10 +79,13 @@ var _ = Describe("source-aware column inspection", func() {
 			{Name: "retries", Type: ColumnTypeNumber},
 		}
 
-		columns, status, err := inspectColumns(context.New(), profile, ProviderRequest{Provider: provider.Type()}, discovered, []ColumnDef{
-			{Name: "message", Type: ColumnTypeString},
-			{Name: "status", Type: ColumnTypeString},
-			{Name: "retries", Type: ColumnTypeNumber},
+		columns, status, err := inspectColumns(context.New(), columnInspectionOptions{
+			Profile: profile, Request: ProviderRequest{Provider: provider.Type()}, Columns: discovered,
+			RawColumns: []ColumnDef{
+				{Name: "message", Type: ColumnTypeString},
+				{Name: "status", Type: ColumnTypeString},
+				{Name: "retries", Type: ColumnTypeNumber},
+			},
 		})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(status).To(Equal(&InspectionStatus{

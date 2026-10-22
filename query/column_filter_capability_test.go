@@ -33,9 +33,7 @@ func (p *arrayCapabilityLookupProvider) BackendCapabilities(
 func (p *arrayCapabilityLookupProvider) LookupFilterValues(
 	_ dbcontext.Context,
 	_ query.ProviderRequest,
-	_ query.ColumnFilterBinding,
-	_ string,
-	_ int,
+	_ query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
 	p.lookupCalls++
 	return []query.FilterOption{{Value: fmt.Sprintf("value-%d", p.lookupCalls)}}, &query.Total{Value: 1, Exact: true}, nil

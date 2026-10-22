@@ -73,10 +73,8 @@ var providerConnectionTypes = map[string][]string{
 	"azureloganalytics": {models.ConnectionTypeAzure},
 }
 
-// ProfileSource returns the externally referenced profile form schema. Each
-// provider branch points at its standalone component under profiles/.
-func ProfileSource() Schema {
-	paramDef := Schema{
+func profileParamSchema() Schema {
+	return Schema{
 		"type": "object",
 		// The noun behind the list's "Add <noun>" row.
 		"title":    "Parameter",
@@ -134,8 +132,10 @@ func ProfileSource() Schema {
 			},
 		},
 	}
+}
 
-	orderBy := Schema{
+func profileOrderSchema() Schema {
+	return Schema{
 		"type":     "object",
 		"title":    "Order column",
 		"required": []string{"column"},
@@ -148,8 +148,10 @@ func ProfileSource() Schema {
 			},
 		},
 	}
+}
 
-	columnDef := Schema{
+func profileColumnSchema() Schema {
+	return Schema{
 		"type":     "object",
 		"required": []string{"name"},
 		"properties": Schema{
@@ -205,69 +207,7 @@ func ProfileSource() Schema {
 				"x-clicky-component": "jsonpath-picker",
 				"x-clicky-order":     9,
 			},
-			"filter": Schema{
-				"type": "object", "title": "Filter", "x-clicky-order": 10,
-				"description": "How this column is filtered at the backend; a direct column or simple CEL infers the field, and Type infers the control",
-				"properties": Schema{
-					"field": Schema{
-						"type": "string", "title": "Field",
-						"description":        "Backend field the selection applies to — the indexed field for a document store, the result column for SQL; required only when the column implies none",
-						"x-clicky-component": "es-param-field",
-					},
-					"nested": Schema{
-						"type": "string", "title": "Nested",
-						"description":        "The `nested` mapping the field lives inside; a selection on such a field is compiled inside a nested query, and a flat clause on one matches nothing",
-						"x-clicky-component": "es-param-field",
-					},
-					"where": Schema{
-						"type": "object", "title": "Where", "x-col-span": "full",
-						"additionalProperties": Schema{"type": "string"},
-						"description":          "Constants the selection also requires, keyed by backend field — the key of a key/value tag list, whose value is what the operator picks; requires Nested",
-					},
-					"kind": Schema{
-						"type": "string", "title": "Kind", "enum": query.ColumnFilterKindValues(),
-						"x-enum-labels": map[string]string{
-							"terms":    "Value list",
-							"match":    "Pattern list",
-							"exact":    "Exact match",
-							"text":     "Text search",
-							"range":    "Numeric range",
-							"duration": "Duration range",
-							"date":     "Date range",
-							"time":     "Date & time range",
-							"boolean":  "Boolean",
-							"none":     "Not filterable",
-						},
-						"x-enum-display": "combobox",
-						"description":    "Overrides the control derived from Type; set it where the rendered type and the backend storage disagree",
-					},
-					"options": Schema{
-						"type": "array", "items": Schema{"type": "string"}, "title": "Options", "x-col-span": "full",
-						"description": "Selectable values; leave empty to ask the backend for its own distinct values. Value selections only",
-					},
-					"lookup": Schema{
-						"type": "boolean", "title": "Lookup", "default": true,
-						"description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked. Value selections only",
-					},
-					"limit": Schema{
-						"type": "integer", "title": "Limit", "default": query.DefaultFilterLookupLimit,
-						"minimum": 1, "maximum": query.MaxFilterLookupLimit,
-						"description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup. Value selections only",
-					},
-					"multi": Schema{
-						"type": "boolean", "title": "Multi", "default": true,
-						"description": "Allow several values at once",
-					},
-					"disabled": Schema{
-						"type": "boolean", "title": "Disabled",
-						"description": "Offer no filter for this column while keeping the column itself rendered",
-					},
-					"array": Schema{
-						"type": "boolean", "title": "Array",
-						"description": "The backend field holds several string values: a selection matches records holding any included element, an exclusion drops records holding any excluded element, and lookup lists elements rather than whole arrays. Supported SQL and document providers use native element semantics and must advertise that support",
-					},
-				},
-			},
+			"filter": profileColumnFilterSchema(),
 			"hidden": Schema{"type": "boolean", "title": "Hidden", "description": "Hide the column from default output while retaining it for later column and style CEL", "x-clicky-order": 11},
 			"style": Schema{
 				"type": "string", "title": "Style",
@@ -278,7 +218,76 @@ func ProfileSource() Schema {
 			},
 		},
 	}
-	aliasDef := Schema{
+}
+
+func profileColumnFilterSchema() Schema {
+	return Schema{
+		"type": "object", "title": "Filter", "x-clicky-order": 10,
+		"description": "How this column is filtered at the backend; a direct column or simple CEL infers the field, and Type infers the control",
+		"properties": Schema{
+			"field": Schema{
+				"type": "string", "title": "Field",
+				"description":        "Backend field the selection applies to — the indexed field for a document store, the result column for SQL; required only when the column implies none",
+				"x-clicky-component": "es-param-field",
+			},
+			"nested": Schema{
+				"type": "string", "title": "Nested",
+				"description":        "The `nested` mapping the field lives inside; a selection on such a field is compiled inside a nested query, and a flat clause on one matches nothing",
+				"x-clicky-component": "es-param-field",
+			},
+			"where": Schema{
+				"type": "object", "title": "Where", "x-col-span": "full",
+				"additionalProperties": Schema{"type": "string"},
+				"description":          "Constants the selection also requires, keyed by backend field — the key of a key/value tag list, whose value is what the operator picks; requires Nested",
+			},
+			"kind": Schema{
+				"type": "string", "title": "Kind", "enum": query.ColumnFilterKindValues(),
+				"x-enum-labels": map[string]string{
+					"terms":    "Value list",
+					"match":    "Pattern list",
+					"exact":    "Exact match",
+					"text":     "Text search",
+					"range":    "Numeric range",
+					"duration": "Duration range",
+					"date":     "Date range",
+					"time":     "Date & time range",
+					"boolean":  "Boolean",
+					"none":     "Not filterable",
+				},
+				"x-enum-display": "combobox",
+				"description":    "Overrides the control derived from Type; set it where the rendered type and the backend storage disagree",
+			},
+			"options": Schema{
+				"type": "array", "items": Schema{"type": "string"}, "title": "Options", "x-col-span": "full",
+				"description": "Selectable values; leave empty to ask the backend for its own distinct values. Value selections only",
+			},
+			"lookup": Schema{
+				"type": "boolean", "title": "Lookup", "default": true,
+				"description": "Ask the backend for this field's distinct values; turn off for a high-cardinality field that is typed rather than picked. Value selections only",
+			},
+			"limit": Schema{
+				"type": "integer", "title": "Limit", "default": query.DefaultFilterLookupLimit,
+				"minimum": 1, "maximum": query.MaxFilterLookupLimit,
+				"description": "How many distinct values the control offers before the rest have to be typed for; requires Lookup. Value selections only",
+			},
+			"multi": Schema{
+				"type": "boolean", "title": "Multi", "default": true,
+				"description": "Allow several values at once",
+			},
+			"disabled": Schema{
+				"type": "boolean", "title": "Disabled",
+				"description": "Offer no filter for this column while keeping the column itself rendered",
+			},
+			"array": Schema{
+				"type": "boolean", "title": "Array",
+				"description": "The backend field holds several string values: a selection matches records holding any included element, an exclusion drops records holding any excluded element, and lookup lists elements rather than whole arrays. Supported SQL and document providers use native element semantics and must advertise that support",
+			},
+		},
+	}
+}
+
+func profileAliasSchema() Schema {
+	return Schema{
 		"type": "object", "required": []string{"name", "cel"},
 		"properties": Schema{
 			"name": strProp("Name", "Dotted output path"),
@@ -289,7 +298,10 @@ func ProfileSource() Schema {
 			},
 		},
 	}
-	filterDef := Schema{
+}
+
+func profileFilterSchema() Schema {
+	return Schema{
 		"type": "object", "required": []string{"fields"},
 		"properties": Schema{
 			"name":        strProp("Name", "Filter identity, shown in the UI"),
@@ -303,7 +315,9 @@ func ProfileSource() Schema {
 			"hidden":  Schema{"type": "boolean", "title": "Hidden", "description": "Always applied, rather than offered as a toggle"},
 		},
 	}
+}
 
+func profileProviderSchema() Schema {
 	provider := Schema{
 		"type":            "object",
 		"title":           "Provider",
@@ -330,7 +344,12 @@ func ProfileSource() Schema {
 			"then": Schema{"$ref": "profiles/" + typ + ".json"},
 		})
 	}
+	return provider
+}
 
+// ProfileSource returns the externally referenced profile form schema. Each
+// provider branch points at its standalone component under profiles/.
+func ProfileSource() Schema {
 	return Schema{
 		"$schema":  Draft,
 		"title":    "Profile",
@@ -359,7 +378,7 @@ func ProfileSource() Schema {
 				"x-clicky-component": "k8s-namespace-selector",
 				"x-clicky-order":     1,
 			},
-			"provider": provider,
+			"provider": profileProviderSchema(),
 			"query": Schema{
 				"type":               "string",
 				"title":              "Query",
@@ -373,7 +392,7 @@ func ProfileSource() Schema {
 			// item PROPERTIES that identify it, so clicky-ui stays domain-agnostic.
 			// The description doubles as the zero-item explanation in the add row.
 			"params": Schema{
-				"type": "array", "title": "Params", "items": paramDef,
+				"type": "array", "title": "Params", "items": profileParamSchema(),
 				"description":        "A parameter turns a fixed query into a reusable one: give it a name and it becomes {{.params.<name>}} inside the query, the provider options and the connection.",
 				"x-array-display":    "accordion",
 				"x-clicky-component": "es-params",
@@ -389,12 +408,12 @@ func ProfileSource() Schema {
 					"nounPlural": "parameters",
 				},
 			},
-			"columns": Schema{"type": "array", "title": "Columns", "x-layout": "table", "items": columnDef},
-			"aliases": Schema{"type": "array", "title": "Aliases", "x-layout": "table", "items": aliasDef},
+			"columns": Schema{"type": "array", "title": "Columns", "x-layout": "table", "items": profileColumnSchema()},
+			"aliases": Schema{"type": "array", "title": "Aliases", "x-layout": "table", "items": profileAliasSchema()},
 			"ignore":  Schema{"type": "array", "title": "Ignore", "items": Schema{"type": "string"}},
-			"filters": Schema{"type": "array", "title": "Filters", "x-array-display": "accordion", "items": filterDef},
+			"filters": Schema{"type": "array", "title": "Filters", "x-array-display": "accordion", "items": profileFilterSchema()},
 			"order": Schema{
-				"type": "array", "title": "Order", "x-layout": "table", "items": orderBy,
+				"type": "array", "title": "Order", "x-layout": "table", "items": profileOrderSchema(),
 				"description": "Total order the rows are returned in, ending in a column marked unique. Paging past the first page requires it: without a tiebreaker, two runs of the same query may interleave tied rows differently and a second page can repeat or skip rows from the first.",
 			},
 			"processors": Schema{
@@ -499,6 +518,41 @@ func connectionProp(providerType string, scope Schema) Schema {
 // providerConnectionScope scopes a provider's connection picker to the
 // connection types valid for the selected provider.type.
 var providerConnectionScope = Schema{"param": "types", "from": "provider.type", "map": providerConnectionTypes}
+
+func traceSpec() Schema {
+	return Schema{
+		"type": "object", "title": "Trace",
+		"description": "Long-running stream configuration",
+		"properties": Schema{
+			"maxDuration": Schema{
+				"type": "string", "title": "Maximum duration",
+				"description": "Session lifetime, for example 15m",
+			},
+			"maxEvents": Schema{
+				"type": "integer", "title": "Maximum events", "minimum": 1,
+				"description": "Final emitted rows retained in the session ring",
+			},
+			"buffer": Schema{
+				"type": "object", "title": "Processor buffer",
+				"description": "Collect raw rows before running whole-result processors; the first configured bound reached flushes the batch",
+				"anyOf": []any{
+					Schema{"required": []string{"maxRows"}},
+					Schema{"required": []string{"maxWait"}},
+				},
+				"properties": Schema{
+					"maxRows": Schema{
+						"type": "integer", "title": "Maximum rows", "minimum": 1,
+						"description": "Raw provider rows per processor batch",
+					},
+					"maxWait": Schema{
+						"type": "string", "title": "Maximum wait",
+						"description": "Time from the first pending raw row to a flush, for example 250ms",
+					},
+				},
+			},
+		},
+	}
+}
 
 // replayConnectionScope scopes a replay target's connection picker by the
 // replay kind rather than the profile's provider: an HTTP replay needs an HTTP

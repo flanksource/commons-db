@@ -58,6 +58,18 @@ func ProfileComponents() map[string]Schema {
 func providerOptions(typ string) Schema {
 	props := Schema{}
 	switch typ {
+	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
+		addDatabaseOptions(typ, props)
+	case "http", "prometheus", "postgrest", "loki", "opensearch", "opentelemetry", "jaeger":
+		addQueryAPIOptions(typ, props)
+	case "cloudwatch", "gcpcloudlogging", "bigquery", "k8s", "azureloganalytics":
+		addCloudLogOptions(typ, props)
+	}
+	return Schema{"type": "object", "title": "Options", "properties": props}
+}
+
+func addDatabaseOptions(typ string, props Schema) {
+	switch typ {
 	case "sql":
 		props["type"] = Schema{
 			"type":  "string",
@@ -75,6 +87,11 @@ func providerOptions(typ string) Schema {
 		props["database"] = strProp("Database", "Database override for this query")
 	case "sqlite":
 		props["url"] = inlineURLProp("Database path", "Inline SQLite file path used instead of a saved connection")
+	}
+}
+
+func addQueryAPIOptions(typ string, props Schema) {
+	switch typ {
 	case "http":
 		props["url"] = inlineURLProp("Base URL", "Inline HTTP base URL used instead of a saved connection")
 		props["method"] = Schema{"type": "string", "title": "Method", "enum": []string{"GET", "POST", "PUT", "PATCH", "DELETE"}}
@@ -119,6 +136,11 @@ func providerOptions(typ string) Schema {
 		for _, field := range []string{"service", "operation", "lookback", "start", "end", "limit", "minDuration", "maxDuration", "tags"} {
 			props[field] = strProp(titleCase(field), "")
 		}
+	}
+}
+
+func addCloudLogOptions(typ string, props Schema) {
+	switch typ {
 	case "cloudwatch":
 		props["endpoint"] = inlineURLProp("Endpoint", "Inline CloudWatch endpoint used instead of the region's AWS endpoint")
 		props["logGroup"] = strProp("Log group", "Log group the Insights query runs against")
@@ -159,7 +181,6 @@ func providerOptions(typ string) Schema {
 		props["limit"] = strProp("Limit", "Maximum number of rows")
 		props["mapping"] = fieldMappingProp()
 	}
-	return Schema{"type": "object", "title": "Options", "properties": props}
 }
 
 // fieldMappingProp is the logs.FieldMappingConfig form: which source columns
