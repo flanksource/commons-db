@@ -67,7 +67,7 @@ func (p *githubProvider) Type() string               { return models.ConnectionT
 func (p *githubProvider) SupportsPullRequests() bool { return true }
 
 func (p *githubProvider) Verify(ctx context.Context) error {
-	_, err := p.api.do(ctx, http.MethodGet, p.api.endpoint("/user", nil), nil, nil)
+	_, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint("/user", nil)})
 	return err
 }
 
@@ -91,7 +91,7 @@ func (p *githubProvider) listPages(ctx context.Context, next string) ([]Reposito
 	var repos []RepositoryInfo
 	for next != "" {
 		var page []githubRepo
-		headers, err := p.api.do(ctx, http.MethodGet, next, nil, &page)
+		headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: next, Out: &page})
 		if err != nil {
 			return nil, err
 		}
@@ -118,7 +118,7 @@ func (p *githubProvider) OpenPullRequest(ctx context.Context, repo RepoURL, requ
 	}
 	var pull githubPull
 	body := map[string]any{"title": request.Title, "body": request.Body, "head": request.Head, "base": request.Base, "draft": request.Draft}
-	if _, err := p.api.do(ctx, http.MethodPost, p.repoEndpoint(repo, "/pulls"), body, &pull); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.repoEndpoint(repo, "/pulls"), Body: body, Out: &pull}); err != nil {
 		return PullRequest{}, err
 	}
 	issue := fmt.Sprintf("/issues/%d", pull.Number)
@@ -133,7 +133,7 @@ func (p *githubProvider) OpenPullRequest(ctx context.Context, repo RepoURL, requ
 		if len(extra.values) == 0 {
 			continue
 		}
-		if _, err := p.api.do(ctx, http.MethodPost, p.repoEndpoint(repo, extra.path), map[string]any{extra.field: extra.values}, nil); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.repoEndpoint(repo, extra.path), Body: map[string]any{extra.field: extra.values}}); err != nil {
 			return PullRequest{}, fmt.Errorf("pull request %s opened, but setting %s failed: %w", pull.HTMLURL, extra.field, err)
 		}
 	}
@@ -142,7 +142,7 @@ func (p *githubProvider) OpenPullRequest(ctx context.Context, repo RepoURL, requ
 
 func (p *githubProvider) GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error) {
 	var pull githubPull
-	if _, err := p.api.do(ctx, http.MethodGet, p.repoEndpoint(repo, fmt.Sprintf("/pulls/%d", number)), nil, &pull); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.repoEndpoint(repo, fmt.Sprintf("/pulls/%d", number)), Out: &pull}); err != nil {
 		return PullRequest{}, err
 	}
 	return pull.toPullRequest(), nil
@@ -166,7 +166,7 @@ func (p *githubProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 					Login string `json:"login"`
 				} `json:"user"`
 			}
-			headers, err := p.api.do(ctx, http.MethodGet, next, nil, &comments)
+			headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: next, Out: &comments})
 			if err != nil {
 				return nil, err
 			}
@@ -191,7 +191,7 @@ func (p *githubProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 				Login string `json:"login"`
 			} `json:"actor"`
 		}
-		headers, err := p.api.do(ctx, http.MethodGet, next, nil, &events)
+		headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: next, Out: &events})
 		if err != nil {
 			return nil, err
 		}
@@ -229,7 +229,7 @@ func (p *githubProvider) ListPullRequests(ctx context.Context, repo RepoURL, opt
 		query.Set("page", strconv.Itoa(page))
 		query.Set("per_page", strconv.Itoa(perPage))
 		var pulls []githubPull
-		if _, err := p.api.do(ctx, http.MethodGet, p.repoEndpoint(repo, "/pulls")+"?"+query.Encode(), nil, &pulls); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.repoEndpoint(repo, "/pulls") + "?" + query.Encode(), Out: &pulls}); err != nil {
 			return nil, 0, err
 		}
 		converted := make([]PullRequest, 0, len(pulls))
@@ -241,7 +241,7 @@ func (p *githubProvider) ListPullRequests(ctx context.Context, repo RepoURL, opt
 }
 
 func (p *githubProvider) ClosePullRequest(ctx context.Context, repo RepoURL, number int) error {
-	_, err := p.api.do(ctx, http.MethodPatch, p.repoEndpoint(repo, fmt.Sprintf("/pulls/%d", number)), map[string]any{"state": "closed"}, nil)
+	_, err := p.api.do(ctx, restRequest{Method: http.MethodPatch, Endpoint: p.repoEndpoint(repo, fmt.Sprintf("/pulls/%d", number)), Body: map[string]any{"state": "closed"}})
 	return err
 }
 
@@ -278,7 +278,7 @@ func (p *githubProvider) SetCommitStatus(ctx context.Context, repo RepoURL, sha 
 		return err
 	}
 	body := status.optionalFields(map[string]any{"state": state, "context": status.Context}, "description", "target_url")
-	_, err = p.api.do(ctx, http.MethodPost, p.repoEndpoint(repo, "/statuses/"+url.PathEscape(sha)), body, nil)
+	_, err = p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.repoEndpoint(repo, "/statuses/"+url.PathEscape(sha)), Body: body})
 	return err
 }
 
@@ -291,8 +291,8 @@ func (p *githubProvider) CommentPullRequest(ctx context.Context, repo RepoURL, n
 	var comment struct {
 		HTMLURL string `json:"html_url"`
 	}
-	if _, err := p.api.do(ctx, http.MethodPost, p.repoEndpoint(repo, fmt.Sprintf("/issues/%d/comments", number)),
-		map[string]any{"body": body}, &comment); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.repoEndpoint(repo, fmt.Sprintf("/issues/%d/comments", number)),
+		Body: map[string]any{"body": body}, Out: &comment}); err != nil {
 		return "", err
 	}
 	if comment.HTMLURL == "" {

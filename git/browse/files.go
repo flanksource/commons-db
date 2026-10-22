@@ -90,7 +90,7 @@ func (s *Service) Commits(ctx context.Context, request Request) (git.Page[Commit
 		}
 		cursor.SHA = ref.SHA
 	}
-	commits, err := s.cache.History(ctx, repo, cursor.SHA, git.HistoryOptions{Limit: request.Limit + 1, Offset: cursor.Offset})
+	commits, err := s.cache.History(ctx, repo, cursor.SHA, git.HistoryOptions{Limit: request.Limit + 1, Offset: cursor.Offset, Detail: git.HistoryMetadata})
 	if err != nil {
 		return git.Page[Commit]{}, err
 	}

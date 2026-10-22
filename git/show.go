@@ -22,21 +22,14 @@ func (c *Cache) Show(ctx context.Context, repo *Repository, sha, path string) ([
 	if path == "" {
 		return nil, errors.New("show: path is required")
 	}
-	var content []byte
-	err := c.withMirror(ctx, repo, func(mirror string) error {
-		if !hasCommit(ctx, mirror, sha) {
-			if _, err := fetch(ctx, mirror, repo, repo, Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}, 0); err != nil {
-				return err
-			}
-		}
-		blob, err := blobAt(ctx, mirror, sha, path)
-		if err != nil {
-			return fmt.Errorf("%s: %w", repo.URL.Redacted(), err)
-		}
-		content, err = runBytes(ctx, command{dir: mirror, args: []string{"cat-file", "blob", "--end-of-options", blob}})
-		return err
-	})
-	return content, err
+	blobs, err := c.ReadBlobs(ctx, repo, []BlobRequest{{SHA: sha, Path: path}})
+	if err != nil {
+		return nil, err
+	}
+	if !blobs[0].Present {
+		return nil, fmt.Errorf("%s at %s: %w", path, sha, ErrPathNotFound)
+	}
+	return blobs[0].Content, nil
 }
 
 // blobAt finds the blob id of path in commit sha with ls-tree, so a missing

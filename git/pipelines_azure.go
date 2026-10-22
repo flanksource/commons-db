@@ -24,7 +24,7 @@ func (p *azureProvider) pipelineQuery(ctx context.Context, options PipelineOptio
 		ID string `json:"id"`
 	}
 	path := "/" + url.PathEscape(options.Repository.Project) + "/_apis/git/repositories/" + url.PathEscape(options.Repository.Name)
-	if _, err := p.api.do(ctx, http.MethodGet, p.endpoint(path), nil, &repo); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.endpoint(path), Out: &repo}); err != nil {
 		return nil, err
 	}
 	if repo.ID == "" {
@@ -55,7 +55,7 @@ func (p *azureProvider) ListPipelines(ctx context.Context, options PipelineOptio
 		} `json:"value"`
 	}
 	path := "/" + url.PathEscape(options.Repository.Project) + "/_apis/build/definitions"
-	headers, err := p.api.do(ctx, http.MethodGet, p.api.endpoint(path, query), nil, &response)
+	headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint(path, query), Out: &response})
 	if err != nil {
 		return Page[Pipeline]{}, err
 	}
@@ -108,7 +108,7 @@ func (p *azureProvider) ListPipelineExecutions(ctx context.Context, options Pipe
 		Value []azureExecution `json:"value"`
 	}
 	path := "/" + url.PathEscape(options.Repository.Project) + "/_apis/build/builds"
-	headers, err := p.api.do(ctx, http.MethodGet, p.api.endpoint(path, query), nil, &response)
+	headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint(path, query), Out: &response})
 	if err != nil {
 		return Page[PipelineExecution]{}, err
 	}

@@ -46,23 +46,16 @@ func (c *Cache) Blame(ctx context.Context, repo *Repository, options BlameOption
 	if _, err := safeJoin(".", options.Path); err != nil {
 		return nil, err
 	}
-	ref := Ref{Name: options.SHA, FullName: options.SHA, SHA: options.SHA, Kind: RefSHA}
-	if err := c.withMirror(ctx, repo, func(mirror string) error {
-		_, err := fetchHistory(ctx, mirror, repo, repo, ref)
-		return err
-	}); err != nil {
-		return nil, err
-	}
-	wt, err := c.checkoutRef(ctx, repo, ref, CheckoutOptions{Ref: options.SHA})
-	if err != nil {
-		return nil, err
-	}
-	defer func() { err = errors.Join(err, wt.Release()) }()
-	if _, err := blobAt(ctx, wt.mirror, options.SHA, options.Path); err != nil {
-		return nil, err
-	}
-	out, err := runBytes(ctx, command{dir: wt.Dir, stdin: options.Contents,
-		args: []string{"blame", "--line-porcelain", "--root", "--contents", "-", "--", options.Path}})
+	var out []byte
+	err = c.withRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.SHA}}, History: true}, func(mirror string, shas []string) error {
+		if _, err := blobAt(ctx, mirror, shas[0], options.Path); err != nil {
+			return err
+		}
+		var readErr error
+		out, readErr = runBytes(ctx, command{dir: mirror, stdin: options.Contents, args: []string{"blame", "--line-porcelain", "--root", "--contents", "-", shas[0], "--", options.Path}})
+		return readErr
+	})
+
 	if err != nil {
 		return nil, err
 	}

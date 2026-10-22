@@ -17,7 +17,7 @@ func (p *azureProvider) PullRequestReview(ctx context.Context, repo RepoURL, num
 	var project struct {
 		ID string `json:"id"`
 	}
-	if _, err := p.api.do(ctx, http.MethodGet, p.endpoint("/_apis/projects/"+url.PathEscape(repo.Project)), nil, &project); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.endpoint("/_apis/projects/" + url.PathEscape(repo.Project)), Out: &project}); err != nil {
 		return PullRequestReview{}, fmt.Errorf("read Azure project %q: %w", repo.Project, err)
 	}
 	if project.ID == "" {
@@ -29,7 +29,7 @@ func (p *azureProvider) PullRequestReview(ctx context.Context, repo RepoURL, num
 		var page struct {
 			Value []azurePolicyEvaluation `json:"value"`
 		}
-		if _, err := p.api.do(ctx, http.MethodGet, p.api.endpoint("/"+url.PathEscape(repo.Project)+"/_apis/policy/evaluations", query), nil, &page); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint("/"+url.PathEscape(repo.Project)+"/_apis/policy/evaluations", query), Out: &page}); err != nil {
 			return PullRequestReview{}, fmt.Errorf("read Azure pull request #%d policies: %w", number, err)
 		}
 		for _, evaluation := range page.Value {
@@ -54,7 +54,7 @@ func (p *azureProvider) PullRequestReview(ctx context.Context, repo RepoURL, num
 			Vote     int    `json:"vote"`
 		} `json:"value"`
 	}
-	if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, fmt.Sprintf("/%d/reviewers", number)), nil, &reviewers); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d/reviewers", number)), Out: &reviewers}); err != nil {
 		return PullRequestReview{}, fmt.Errorf("read Azure pull request #%d reviewers: %w", number, err)
 	}
 	for _, reviewer := range reviewers.Value {

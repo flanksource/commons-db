@@ -76,7 +76,7 @@ func (p *azureProvider) Type() string               { return models.ConnectionTy
 func (p *azureProvider) SupportsPullRequests() bool { return true }
 
 func (p *azureProvider) Verify(ctx context.Context) error {
-	_, err := p.api.do(ctx, http.MethodGet, p.endpoint("/_apis/projects"), nil, nil)
+	_, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.endpoint("/_apis/projects")})
 	return err
 }
 
@@ -94,7 +94,7 @@ func (p *azureProvider) ListRepositories(ctx context.Context, options ListReposi
 	var page struct {
 		Value []azureRepo `json:"value"`
 	}
-	if _, err := p.api.do(ctx, http.MethodGet, p.endpoint(path), nil, &page); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.endpoint(path), Out: &page}); err != nil {
 		return nil, err
 	}
 	repos := make([]RepositoryInfo, 0, len(page.Value))
@@ -126,12 +126,12 @@ func (p *azureProvider) OpenPullRequest(ctx context.Context, repo RepoURL, reque
 		body["labels"] = labels
 	}
 	var pull azurePull
-	if _, err := p.api.do(ctx, http.MethodPost, p.pullEndpoint(repo, ""), body, &pull); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.pullEndpoint(repo, ""), Body: body, Out: &pull}); err != nil {
 		return PullRequest{}, err
 	}
 	if request.AutoMerge {
 		autoComplete := map[string]any{"autoCompleteSetBy": map[string]string{"id": pull.CreatedBy.ID}}
-		if _, err := p.api.do(ctx, http.MethodPatch, p.pullEndpoint(repo, fmt.Sprintf("/%d", pull.ID)), autoComplete, nil); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodPatch, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d", pull.ID)), Body: autoComplete}); err != nil {
 			return PullRequest{}, fmt.Errorf("pull request %d opened, but enabling auto-complete failed: %w", pull.ID, err)
 		}
 	}
@@ -140,7 +140,7 @@ func (p *azureProvider) OpenPullRequest(ctx context.Context, repo RepoURL, reque
 
 func (p *azureProvider) GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error) {
 	var pull azurePull
-	if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), nil, &pull); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), Out: &pull}); err != nil {
 		return PullRequest{}, err
 	}
 	return (azurePullReader{provider: p, repo: repo}).read(ctx, pull)
@@ -166,7 +166,7 @@ func (p *azureProvider) ListPullRequestActivity(ctx context.Context, repo RepoUR
 			} `json:"comments"`
 		} `json:"value"`
 	}
-	if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, fmt.Sprintf("/%d/threads", number)), nil, &result); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d/threads", number)), Out: &result}); err != nil {
 		return nil, err
 	}
 	activity := []PullRequestActivity{}
@@ -212,7 +212,7 @@ func (p *azureProvider) ListPullRequests(ctx context.Context, repo RepoURL, opti
 		var list struct {
 			Value []azurePull `json:"value"`
 		}
-		if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, "")+"&"+query.Encode(), nil, &list); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.pullEndpoint(repo, "") + "&" + query.Encode(), Out: &list}); err != nil {
 			return nil, 0, err
 		}
 		pulls := make([]PullRequest, 0, len(list.Value))
@@ -229,7 +229,7 @@ func (p *azureProvider) ListPullRequests(ctx context.Context, repo RepoURL, opti
 
 // ClosePullRequest abandons the pull request.
 func (p *azureProvider) ClosePullRequest(ctx context.Context, repo RepoURL, number int) error {
-	_, err := p.api.do(ctx, http.MethodPatch, p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), map[string]any{"status": "abandoned"}, nil)
+	_, err := p.api.do(ctx, restRequest{Method: http.MethodPatch, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), Body: map[string]any{"status": "abandoned"}})
 	return err
 }
 
@@ -284,7 +284,7 @@ func (r azurePullReader) resolve(ctx context.Context, head azurePullRepo) (azure
 	}
 	var resolved azurePullRepo
 	endpoint := r.provider.endpoint("/_apis/git/repositories/" + url.PathEscape(head.ID))
-	if _, err := r.provider.api.do(ctx, http.MethodGet, endpoint, nil, &resolved); err != nil {
+	if _, err := r.provider.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: endpoint, Out: &resolved}); err != nil {
 		return azurePullRepo{}, fmt.Errorf("resolve head repository %q: %w", head.ID, err)
 	}
 	if resolved.Name == "" || resolved.Project.Name == "" {
@@ -312,7 +312,7 @@ func (p *azureProvider) SetCommitStatus(ctx context.Context, repo RepoURL, sha s
 		statusContext = map[string]string{"genre": status.Context[:slash], "name": status.Context[slash+1:]}
 	}
 	body := status.optionalFields(map[string]any{"state": state, "context": statusContext}, "description", "targetUrl")
-	_, err = p.api.do(ctx, http.MethodPost, p.repoEndpoint(repo, "/commits/"+url.PathEscape(sha)+"/statuses"), body, nil)
+	_, err = p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.repoEndpoint(repo, "/commits/"+url.PathEscape(sha)+"/statuses"), Body: body})
 	return err
 }
 
@@ -333,7 +333,7 @@ func (p *azureProvider) CommentPullRequest(ctx context.Context, repo RepoURL, nu
 	var created struct {
 		ID int `json:"id"`
 	}
-	if _, err := p.api.do(ctx, http.MethodPost, p.pullEndpoint(repo, fmt.Sprintf("/%d/threads", number)), thread, &created); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d/threads", number)), Body: thread, Out: &created}); err != nil {
 		return "", err
 	}
 	if created.ID == 0 {

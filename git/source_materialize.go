@@ -1,16 +1,12 @@
 package git
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 )
 
@@ -71,56 +67,16 @@ func (s *PreparedSource) materialize(ctx context.Context) (err error) {
 }
 
 func (s *PreparedSource) streamBlobs(ctx context.Context, root *os.Root, entries []sourceEntry) (err error) {
-	finish := startGitTiming(ctx, "commands")
-	defer func() { finish(err) }()
-	var input strings.Builder
-	for _, entry := range entries {
-		input.WriteString(entry.object + "\n")
+	objects := make([]string, len(entries))
+	for index, entry := range entries {
+		objects[index] = entry.object
 	}
-	cmd := exec.CommandContext(ctx, "git", "cat-file", "--batch")
-	cmd.Dir, cmd.Env, cmd.Stdin = s.gitDir, s.env, strings.NewReader(input.String())
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	pipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	reader := bufio.NewReader(pipe)
-	for _, entry := range entries {
-		if err := writeSourceBlob(root, reader, entry); err != nil {
-			killErr := cmd.Process.Kill()
-			return errors.Join(err, killErr, cmd.Wait())
+	return readObjectBatch(ctx, objectBatchOptions{Dir: s.gitDir, Env: s.env, Objects: objects, Read: func(index int, blob batchBlob, content io.Reader) error {
+		if blob.Missing {
+			return fmt.Errorf("Git source blob %q is missing", entries[index].path)
 		}
-	}
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("git cat-file: %w: %s", err, Redact(stderr.String()))
-	}
-	return nil
-}
-
-func writeSourceBlob(root *os.Root, reader *bufio.Reader, entry sourceEntry) error {
-	header, err := reader.ReadString('\n')
-	if err != nil {
-		return fmt.Errorf("read blob for %q: %w", entry.path, err)
-	}
-	fields := strings.Fields(header)
-	if len(fields) != 3 || fields[0] != entry.object || fields[1] != "blob" {
-		return fmt.Errorf("invalid Git blob for %q: %q", entry.path, header)
-	}
-	size, err := strconv.ParseInt(fields[2], 10, 64)
-	if err != nil || size < 0 {
-		return fmt.Errorf("invalid Git blob size for %q: %q", entry.path, header)
-	}
-	if err := writeSourceEntry(root, reader, entry, size); err != nil {
-		return err
-	}
-	if ending, err := reader.ReadByte(); err != nil || ending != '\n' {
-		return fmt.Errorf("invalid Git blob terminator for %q", entry.path)
-	}
-	return nil
+		return writeSourceEntry(root, content, entries[index], blob.Size)
+	}})
 }
 
 func writeSourceEntry(root *os.Root, reader io.Reader, entry sourceEntry, size int64) error {

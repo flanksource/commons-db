@@ -57,7 +57,7 @@ func (p *gitlabProvider) Type() string               { return models.ConnectionT
 func (p *gitlabProvider) SupportsPullRequests() bool { return true }
 
 func (p *gitlabProvider) Verify(ctx context.Context) error {
-	_, err := p.api.do(ctx, http.MethodGet, p.api.endpoint("/api/v4/user", nil), nil, nil)
+	_, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint("/api/v4/user", nil)})
 	return err
 }
 
@@ -71,7 +71,7 @@ func (p *gitlabProvider) ListRepositories(ctx context.Context, options ListRepos
 	var repos []RepositoryInfo
 	for {
 		var page []gitlabProject
-		headers, err := p.api.do(ctx, http.MethodGet, p.api.endpoint(path, query), nil, &page)
+		headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint(path, query), Out: &page})
 		if err != nil {
 			return nil, err
 		}
@@ -118,12 +118,12 @@ func (p *gitlabProvider) OpenPullRequest(ctx context.Context, repo RepoURL, requ
 		body["reviewer_ids"] = reviewers
 	}
 	var mr gitlabMergeRequest
-	if _, err := p.api.do(ctx, http.MethodPost, p.mrEndpoint(repo, ""), body, &mr); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.mrEndpoint(repo, ""), Body: body, Out: &mr}); err != nil {
 		return PullRequest{}, err
 	}
 	if request.AutoMerge {
 		autoMerge := map[string]any{"merge_when_pipeline_succeeds": true}
-		if _, err := p.api.do(ctx, http.MethodPut, p.mrEndpoint(repo, fmt.Sprintf("/%d/merge", mr.IID)), autoMerge, nil); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodPut, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d/merge", mr.IID)), Body: autoMerge}); err != nil {
 			return PullRequest{}, fmt.Errorf("merge request %s opened, but enabling auto-merge failed: %w", mr.WebURL, err)
 		}
 	}
@@ -136,7 +136,7 @@ func (p *gitlabProvider) userIDs(ctx context.Context, usernames []string) ([]int
 		var users []struct {
 			ID int `json:"id"`
 		}
-		if _, err := p.api.do(ctx, http.MethodGet, p.api.endpoint("/api/v4/users", url.Values{"username": {username}}), nil, &users); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint("/api/v4/users", url.Values{"username": {username}}), Out: &users}); err != nil {
 			return nil, err
 		}
 		if len(users) != 1 {
@@ -149,7 +149,7 @@ func (p *gitlabProvider) userIDs(ctx context.Context, usernames []string) ([]int
 
 func (p *gitlabProvider) GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error) {
 	var mr gitlabMergeRequest
-	if _, err := p.api.do(ctx, http.MethodGet, p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), nil, &mr); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), Out: &mr}); err != nil {
 		return PullRequest{}, err
 	}
 	return p.pullRequest(ctx, repo, mr)
@@ -178,7 +178,7 @@ func (p *gitlabProvider) ListPullRequestActivity(ctx context.Context, repo RepoU
 				} `json:"author"`
 			} `json:"notes"`
 		}
-		headers, err := p.api.do(ctx, http.MethodGet, p.mrEndpoint(repo, fmt.Sprintf("/%d/discussions", number))+"?"+query.Encode(), nil, &discussions)
+		headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d/discussions", number)) + "?" + query.Encode(), Out: &discussions})
 		if err != nil {
 			return nil, err
 		}
@@ -219,7 +219,7 @@ func (p *gitlabProvider) ListPullRequests(ctx context.Context, repo RepoURL, opt
 		query.Set("page", strconv.Itoa(page))
 		query.Set("per_page", strconv.Itoa(perPage))
 		var mrs []gitlabMergeRequest
-		if _, err := p.api.do(ctx, http.MethodGet, p.mrEndpoint(repo, "")+"?"+query.Encode(), nil, &mrs); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.mrEndpoint(repo, "") + "?" + query.Encode(), Out: &mrs}); err != nil {
 			return nil, 0, err
 		}
 		pulls := make([]PullRequest, 0, len(mrs))
@@ -235,7 +235,7 @@ func (p *gitlabProvider) ListPullRequests(ctx context.Context, repo RepoURL, opt
 }
 
 func (p *gitlabProvider) ClosePullRequest(ctx context.Context, repo RepoURL, number int) error {
-	_, err := p.api.do(ctx, http.MethodPut, p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), map[string]any{"state_event": "close"}, nil)
+	_, err := p.api.do(ctx, restRequest{Method: http.MethodPut, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), Body: map[string]any{"state_event": "close"}})
 	return err
 }
 
@@ -275,7 +275,7 @@ func (p *gitlabProvider) pullRequest(ctx context.Context, repo RepoURL, mr gitla
 		return pr, nil
 	}
 	var source gitlabProject
-	if _, err := p.api.do(ctx, http.MethodGet, p.api.endpoint(fmt.Sprintf("/api/v4/projects/%d", mr.SourceID), nil), nil, &source); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint(fmt.Sprintf("/api/v4/projects/%d", mr.SourceID), nil), Out: &source}); err != nil {
 		return PullRequest{}, fmt.Errorf("gitlab merge request !%d source project %d: %w", mr.IID, mr.SourceID, err)
 	}
 	pr.HeadRepository = source.PathWithNamespace
@@ -291,7 +291,7 @@ func (p *gitlabProvider) SetCommitStatus(ctx context.Context, repo RepoURL, sha 
 		return err
 	}
 	body := status.optionalFields(map[string]any{"state": state, "name": status.Context}, "description", "target_url")
-	_, err = p.api.do(ctx, http.MethodPost, p.projectEndpoint(repo, "/statuses/"+url.PathEscape(sha)), body, nil)
+	_, err = p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.projectEndpoint(repo, "/statuses/"+url.PathEscape(sha)), Body: body})
 	return err
 }
 
@@ -303,7 +303,7 @@ func (p *gitlabProvider) CommentPullRequest(ctx context.Context, repo RepoURL, n
 		return "", err
 	}
 	var mr gitlabMergeRequest
-	if _, err := p.api.do(ctx, http.MethodGet, p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), nil, &mr); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), Out: &mr}); err != nil {
 		return "", err
 	}
 	if mr.WebURL == "" {
@@ -312,7 +312,7 @@ func (p *gitlabProvider) CommentPullRequest(ctx context.Context, repo RepoURL, n
 	var note struct {
 		ID int `json:"id"`
 	}
-	if _, err := p.api.do(ctx, http.MethodPost, p.mrEndpoint(repo, fmt.Sprintf("/%d/notes", number)), map[string]any{"body": body}, &note); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodPost, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d/notes", number)), Body: map[string]any{"body": body}, Out: &note}); err != nil {
 		return "", err
 	}
 	if note.ID == 0 {

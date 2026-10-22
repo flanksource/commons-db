@@ -11,11 +11,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
+
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 )
 
 const (
 	minGitMajor = 2
-	minGitMinor = 31 // GIT_CONFIG_COUNT
+	minGitMinor = 42 // bare blame with supplied contents
 )
 
 var (
@@ -48,7 +51,7 @@ type command struct {
 	args  []string
 }
 
-// requireGit checks once per process that a git binary >= 2.31 is on PATH.
+// requireGit checks once per process that a git binary >= 2.42 is on PATH.
 func requireGit(ctx context.Context) error {
 	gitCheck.once.Do(func() {
 		out, err := exec.CommandContext(ctx, "git", "version").Output()
@@ -102,6 +105,19 @@ func runBytes(ctx context.Context, c command) (out []byte, err error) {
 		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(c.args, " "), err, Redact(strings.TrimSpace(stderr.String())))
 	}
 	return stdout.Bytes(), nil
+}
+
+func startGitTiming(ctx context.Context, operation string) func(error) {
+	started := time.Now()
+	return func(err error) {
+		metric := rpchttp.TimingMetric{Name: "git", Duration: time.Since(started), Counters: []rpchttp.TimingCounter{
+			{Name: "ops", Value: 1}, {Name: operation, Value: 1}, {Name: "errors"},
+		}}
+		if err != nil {
+			metric.Counters[2].Value = 1
+		}
+		rpchttp.AddTiming(ctx, metric)
+	}
 }
 
 // baseEnv is the process environment minus inherited git steering, with
