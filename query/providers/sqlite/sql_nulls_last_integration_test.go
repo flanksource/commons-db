@@ -2,9 +2,12 @@ package sqlite_test
 
 import (
 	"fmt"
+	"testing"
 
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	// Registers only the "sqlite" key, as a record-store host would.
+	_ "github.com/flanksource/commons-db/query/providers/sqlite"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -67,3 +70,8 @@ var _ = Describe("sqlite cursor paging over a nullable order column", func() {
 		}))
 	})
 })
+
+func TestSQLite(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Query SQL Provider Suite")
+}

@@ -204,13 +204,13 @@ func (p k8sLogsProvider) Stream(ctx context.Context, req query.ProviderRequest, 
 	var group errgroup.Group
 	for _, container := range containers {
 		group.Go(func() error {
-			err := k8s.Follow(tailCtx, target.client, container, request, func(result logs.LogResult) {
+			err := k8s.Follow(tailCtx, target.client, k8s.FollowOptions{Target: container, Request: request, Emit: func(result logs.LogResult) {
 				mu.Lock()
 				defer mu.Unlock()
 				for _, row := range logResultsToRows([]logs.LogResult{result}) {
 					emit(row)
 				}
-			})
+			}})
 			if err != nil {
 				// One container failing ends the whole tail: its siblings are
 				// stopped here so none of them is still emitting rows after

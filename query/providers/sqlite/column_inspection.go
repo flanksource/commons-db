@@ -62,7 +62,7 @@ func (p sqlProvider) InspectColumnFilters(
 				if err != nil {
 					return nil, err
 				}
-				batchCounts, err := readColumnStats(fillContext, client, statement, driverArgs(dialect, args), batch)
+				batchCounts, err := readColumnStats(fillContext, client, renderedSQL{Statement: statement, Args: driverArgs(dialect, args)}, batch)
 				if err != nil {
 					return nil, err
 				}
@@ -119,13 +119,13 @@ func buildColumnStatsSQL(dialect sqlDialect, base sqlQuery, fields []string) (*s
 	return statement, nil
 }
 
-func readColumnStats(ctx context.Context, client *sql.DB, statement string, args []any, fields []string) (map[string]int64, error) {
+func readColumnStats(ctx context.Context, client *sql.DB, rendered renderedSQL, fields []string) (map[string]int64, error) {
 	counts := make([]sql.NullInt64, len(fields))
 	destinations := make([]any, len(fields))
 	for index := range counts {
 		destinations[index] = &counts[index]
 	}
-	if err := client.QueryRowContext(ctx, statement, args...).Scan(destinations...); err != nil {
+	if err := client.QueryRowContext(ctx, rendered.Statement, rendered.Args...).Scan(destinations...); err != nil {
 		return nil, fmt.Errorf("read column cardinality: %w", err)
 	}
 	result := make(map[string]int64, len(fields))
