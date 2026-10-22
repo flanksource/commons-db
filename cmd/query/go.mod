@@ -11,9 +11,9 @@ require (
 	github.com/flanksource/clicky/aichat v1.21.82
 	github.com/flanksource/clicky/valkey v1.21.82
 	github.com/flanksource/commons v1.60.1
-	github.com/flanksource/commons-db v0.1.60-0.20261019052133-565977fdcb1a
-	github.com/flanksource/commons-db/recordstore v0.1.60-0.20261019052133-565977fdcb1a
-	github.com/flanksource/commons-db/tracing v0.1.45
+	github.com/flanksource/commons-db v0.1.61
+	github.com/flanksource/commons-db/recordstore v0.1.61
+	github.com/flanksource/commons-db/tracing v0.1.61
 	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.10.0
@@ -162,7 +162,7 @@ require (
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
-	github.com/flanksource/sqlglot-go v1.0.3 // indirect
+	github.com/flanksource/sqlglot-go v1.0.4-0.20261022123344-3264e440e925 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect

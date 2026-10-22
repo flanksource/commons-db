@@ -327,10 +327,8 @@ github.com/flanksource/is-healthy v1.0.92 h1:15lC+p1RmyO1kOdZdpHdheqysgIK+hQD2ft
 github.com/flanksource/is-healthy v1.0.92/go.mod h1:Gm46NfdDQsK9yDZNUNvkCm7jNnbl8R5vfcUYG3BgPXg=
 github.com/flanksource/kubectl-neat v1.0.4 h1:t5/9CqgE84oEtB0KitgJ2+WIeLfD+RhXSxYrqb4X8yI=
 github.com/flanksource/kubectl-neat v1.0.4/go.mod h1:Un/Voyh3cmiZNKQrW/TkAl28nAA7vwnwDGVjRErKjOw=
-github.com/flanksource/sqlglot-go v1.0.3 h1:Wi+4pETCXOX95Y55VWI0BYBPj/OJAAV8vriOdpcgkX4=
-github.com/flanksource/sqlglot-go v1.0.3/go.mod h1:M7sGnJGwh3FGsexQdxFI20JQcmT2jHTpBbYYinVxEJI=
-github.com/flanksource/sqlglot-go v1.0.4-0.20261022122245-dc2638100c55 h1:2So8/eLK4KHzlgqCMNay+8NHOboDBSSLHZzUz9eIRDo=
-github.com/flanksource/sqlglot-go v1.0.4-0.20261022122245-dc2638100c55/go.mod h1:lLkHKgcKwoLDcZ+VchYEp3mNic7fJml4bc8HXyh4vzY=
+github.com/flanksource/sqlglot-go v1.0.4-0.20261022123344-3264e440e925 h1:sQGUeHC+LP/rhh9lNBbQ9our+JYY1cgHQYPSTZKiMSw=
+github.com/flanksource/sqlglot-go v1.0.4-0.20261022123344-3264e440e925/go.mod h1:lLkHKgcKwoLDcZ+VchYEp3mNic7fJml4bc8HXyh4vzY=
 github.com/fortytw2/leaktest v1.3.0 h1:u8491cBMTQ8ft8aeV+adlcytMZylmA5nnwwkRZjI8vw=
 github.com/fortytw2/leaktest v1.3.0/go.mod h1:jDsjWgpAGjm2CA7WthBh/CdZYEPF31XHquHwclZch5g=
 github.com/fsnotify/fsnotify v1.10.1 h1:b0/UzAf9yR5rhf3RPm9gf3ehBPpf0oZKIjtpKrx59Ho=
