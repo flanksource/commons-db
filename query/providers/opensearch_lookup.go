@@ -7,7 +7,7 @@ import (
 	"github.com/flanksource/commons-db/query/esdsl"
 )
 
-func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.ProviderRequest, binding query.ColumnFilterBinding, search string, limit int) ([]query.FilterOption, *query.Total, error) {
+func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.ProviderRequest, lookup query.FilterValueSearch) ([]query.FilterOption, *query.Total, error) {
 	runtime, err := openSearchClient(ctx, req)
 	if err != nil {
 		return nil, nil, err
@@ -28,10 +28,12 @@ func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.Prov
 	if err != nil {
 		return nil, nil, err
 	}
-	return lookupOpenSearchFilterValues(ctx, runtime.searcher, runtime.options.Index, request.body, binding, search, limit)
+	return lookupOpenSearchFilterValues(ctx, runtime.searcher, openSearchValuesSource{
+		Index: runtime.options.Index, Body: request.body,
+	}, lookup)
 }
 
-func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.ProviderRequest, binding query.ColumnFilterBinding, search string, limit int) ([]query.FilterOption, *query.Total, error) {
+func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.ProviderRequest, lookup query.FilterValueSearch) ([]query.FilterOption, *query.Total, error) {
 	runtime, err := openTelemetrySearchClient(ctx, req)
 	if err != nil {
 		return nil, nil, err
@@ -48,18 +50,27 @@ func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.P
 	if err != nil {
 		return nil, nil, err
 	}
-	return lookupOpenSearchFilterValues(ctx, runtime.searcher, runtime.options.Index, request.body, binding, search, limit)
+	return lookupOpenSearchFilterValues(ctx, runtime.searcher, openSearchValuesSource{
+		Index: runtime.options.Index, Body: request.body,
+	}, lookup)
+}
+
+// openSearchValuesSource is the index and query body a value lookup aggregates over.
+type openSearchValuesSource struct {
+	Index string
+	Body  map[string]any
 }
 
 // lookupOpenSearchFilterValues adapts the searcher's distinct-value lookup to
 // the filter options a bound column offers.
-func lookupOpenSearchFilterValues(ctx context.Context, searcher *opensearch.Searcher, index string, body map[string]any, binding query.ColumnFilterBinding, search string, limit int) ([]query.FilterOption, *query.Total, error) {
+func lookupOpenSearchFilterValues(ctx context.Context, searcher *opensearch.Searcher, source openSearchValuesSource, lookup query.FilterValueSearch) ([]query.FilterOption, *query.Total, error) {
+	binding := lookup.Binding
 	result, err := searcher.DistinctValues(ctx, opensearch.ValuesRequest{
-		Index:  index,
+		Index:  source.Index,
 		Field:  binding.Field,
-		Search: search,
-		Limit:  limit,
-		Body:   body,
+		Search: lookup.Search,
+		Limit:  lookup.Limit,
+		Body:   source.Body,
 		// A nested field's values live in entries the parent document does not
 		// carry, so the lookup has to descend the same way the filter does — and
 		// pin the same entry, or it would offer the values of every other tag as

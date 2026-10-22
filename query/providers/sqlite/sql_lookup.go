@@ -19,10 +19,9 @@ import (
 func (p sqlProvider) LookupFilterValues(
 	ctx context.Context,
 	req query.ProviderRequest,
-	binding query.ColumnFilterBinding,
-	search string,
-	limit int,
+	lookup query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
+	binding, limit := lookup.Binding, lookup.Limit
 	if req.Query == "" {
 		return nil, nil, fmt.Errorf("sql query is required")
 	}
@@ -52,7 +51,7 @@ func (p sqlProvider) LookupFilterValues(
 		Query:    sqlQuery{Text: req.Query, Args: req.QueryArgs, Identifiers: req.QueryIdentifiers},
 		Binding:  binding,
 		Siblings: req.Filters,
-		Search:   search,
+		Search:   lookup.Search,
 		Limit:    limit,
 	})
 	if err != nil {
@@ -67,8 +66,10 @@ func (p sqlProvider) LookupFilterValues(
 		"dialect": string(dialect), "operation": "filter-values",
 	})
 
-	options, total, err := readFilterValues(ctx, client, statement, driverArgs(dialect, args), limit)
-	publishSQLStatement(req.Connection, dialect, statement, args, started, len(options), err)
+	options, total, err := readFilterValues(ctx, client, renderedSQL{Statement: statement, Args: driverArgs(dialect, args)}, limit)
+	publishSQLStatement(sqlStatementRun{
+		Connection: req.Connection, Dialect: dialect, Statement: statement, Args: args, Started: started,
+	}, len(options), err)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -80,10 +81,16 @@ func (p sqlProvider) LookupFilterValues(
 	return options, &query.Total{Value: int64(total), Exact: true}, nil
 }
 
+// renderedSQL is a statement and the driver arguments it binds.
+type renderedSQL struct {
+	Statement string
+	Args      []any
+}
+
 // readFilterValues runs a lookup statement and reads up to limit options, and
 // the number of distinct values there are.
-func readFilterValues(ctx context.Context, client *sql.DB, statement string, args []any, limit int) ([]query.FilterOption, int, error) {
-	rows, err := client.QueryContext(ctx, statement, args...)
+func readFilterValues(ctx context.Context, client *sql.DB, rendered renderedSQL, limit int) ([]query.FilterOption, int, error) {
+	rows, err := client.QueryContext(ctx, rendered.Statement, rendered.Args...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("failed to look up filter values: %w", err)
 	}

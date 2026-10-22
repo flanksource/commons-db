@@ -16,10 +16,9 @@ import (
 func (k8sLogsProvider) LookupFilterValues(
 	ctx context.Context,
 	req query.ProviderRequest,
-	binding query.ColumnFilterBinding,
-	search string,
-	limit int,
+	lookup query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
+	binding, search, limit := lookup.Binding, lookup.Search, lookup.Limit
 	selector, err := kubernetesTargetSelector(req.Query, req.Filters)
 	if err != nil {
 		return nil, nil, err

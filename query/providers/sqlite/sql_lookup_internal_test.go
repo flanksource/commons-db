@@ -9,7 +9,7 @@ import (
 
 var _ = Describe("sqlProvider.LookupFilterValues", func() {
 	DescribeTable("refuses a limit outside 1..MaxFilterLookupLimit before connecting", func(limit int, message string) {
-		_, _, err := sqlProvider{}.LookupFilterValues(context.New(), query.ProviderRequest{Query: ordersQuery}, query.ColumnFilterBinding{}, "", limit)
+		_, _, err := sqlProvider{}.LookupFilterValues(context.New(), query.ProviderRequest{Query: ordersQuery}, query.FilterValueSearch{Limit: limit})
 		Expect(err).To(MatchError(ContainSubstring(message)))
 	},
 		Entry("zero", 0, "positive limit"),
@@ -17,12 +17,10 @@ var _ = Describe("sqlProvider.LookupFilterValues", func() {
 	)
 })
 
-// lookupSQL is the distinct-values statement for binding over base.
-func lookupSQL(dialect sqlDialect, base sqlQuery, binding query.ColumnFilterBinding,
-	siblings []query.ColumnFilterValue, search string) (string, []any, error) {
-	return rendered(buildLookupSQL(dialect, sqlLookupRequest{
-		Query: base, Binding: binding, Siblings: siblings, Search: search, Limit: 20,
-	}))
+// lookupSQL is the distinct-values statement for request, taking 20 values.
+func lookupSQL(dialect sqlDialect, request sqlLookupRequest) (string, []any, error) {
+	request.Limit = 20
+	return rendered(buildLookupSQL(dialect, request))
 }
 
 var _ = Describe("buildLookupSQL", func() {
@@ -33,7 +31,7 @@ var _ = Describe("buildLookupSQL", func() {
 	}
 
 	It("counts distinct values over the wrapped base", func() {
-		statement, args, err := lookupSQL(dialectPostgres, orders, regionBinding, nil, "")
+		statement, args, err := lookupSQL(dialectPostgres, sqlLookupRequest{Query: orders, Binding: regionBinding})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).To(Equal(basePrefix(`"__cdb_base"`) +
 			`SELECT "region" AS value, COUNT(*) AS count, COUNT(*) OVER () AS total FROM "__cdb_base" ` +
@@ -44,15 +42,15 @@ var _ = Describe("buildLookupSQL", func() {
 	// The options offered must be the options the table can actually show, so
 	// every other active selection still scopes the question.
 	It("applies the sibling filters", func() {
-		statement, args, err := lookupSQL(dialectPostgres, orders, regionBinding,
-			[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "")
+		statement, args, err := lookupSQL(dialectPostgres, sqlLookupRequest{Query: orders, Binding: regionBinding,
+			Siblings: []query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).To(ContainSubstring(`WHERE ("env" IN ($1) AND NOT "region" IS NULL)`))
 		Expect(args).To(Equal([]any{"prod"}))
 	})
 
 	It("matches a search term case-insensitively", func() {
-		statement, args, err := lookupSQL(dialectPostgres, orders, regionBinding, nil, "US")
+		statement, args, err := lookupSQL(dialectPostgres, sqlLookupRequest{Query: orders, Binding: regionBinding, Search: "US"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).To(ContainSubstring(`LOWER("region") LIKE $1 ESCAPE '!'`))
 		Expect(args).To(Equal([]any{"%us%"}))
@@ -61,7 +59,7 @@ var _ = Describe("buildLookupSQL", func() {
 	// Someone typing "50%" is looking for a literal "50%", not for everything.
 	DescribeTable("neutralises the wildcards in a typed search term",
 		func(dialect sqlDialect, search, pattern string) {
-			_, args, err := lookupSQL(dialect, orders, regionBinding, nil, search)
+			_, args, err := lookupSQL(dialect, sqlLookupRequest{Query: orders, Binding: regionBinding, Search: search})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(args).To(Equal([]any{pattern}))
 		},
@@ -74,7 +72,7 @@ var _ = Describe("buildLookupSQL", func() {
 
 	DescribeTable("takes the head of the set the way each dialect spells it",
 		func(dialect sqlDialect, tail string) {
-			statement, _, err := lookupSQL(dialect, orders, regionBinding, nil, "")
+			statement, _, err := lookupSQL(dialect, sqlLookupRequest{Query: orders, Binding: regionBinding})
 			Expect(err).ToNot(HaveOccurred())
 			Expect(statement).To(HaveSuffix(tail))
 		},
@@ -85,7 +83,7 @@ var _ = Describe("buildLookupSQL", func() {
 	)
 
 	It("has no ESCAPE clause on clickhouse, whose LIKE takes none", func() {
-		statement, _, err := lookupSQL(dialectClickHouse, orders, regionBinding, nil, "us")
+		statement, _, err := lookupSQL(dialectClickHouse, sqlLookupRequest{Query: orders, Binding: regionBinding, Search: "us"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(statement).To(ContainSubstring(`LOWER("region") LIKE @cdb_p1`))
 		Expect(statement).ToNot(ContainSubstring("ESCAPE"))
@@ -101,8 +99,8 @@ var _ = Describe("buildLookupSQL", func() {
 		// many times that row's array repeats it.
 		DescribeTable("lists string array members with row counts in every SQL dialect",
 			func(dialect sqlDialect, expected string) {
-				statement, args, err := lookupSQL(dialect, orders, tablesBinding,
-					[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "Pol")
+				statement, args, err := lookupSQL(dialect, sqlLookupRequest{Query: orders, Binding: tablesBinding,
+					Siblings: []query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, Search: "Pol"})
 				Expect(err).ToNot(HaveOccurred())
 				Expect(statement).To(Equal(expected))
 				Expect(args).To(Equal([]any{"prod", "%pol%"}))
@@ -138,8 +136,8 @@ var _ = Describe("buildLookupSQL", func() {
 		DescribeTable("numbers sibling and search placeholders after authored parameters",
 			func(dialect sqlDialect, authoredPlaceholder, siblingPlaceholder, searchPlaceholder string) {
 				authored := sqlQuery{Text: "SELECT id, env, tables FROM orders WHERE id = " + sqlParamMarker(0), Args: []any{int64(7)}}
-				statement, args, err := lookupSQL(dialect, authored, tablesBinding,
-					[]query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, "Pol")
+				statement, args, err := lookupSQL(dialect, sqlLookupRequest{Query: authored, Binding: tablesBinding,
+					Siblings: []query.ColumnFilterValue{terms("env", []string{"prod"}, nil)}, Search: "Pol"})
 				Expect(err).ToNot(HaveOccurred())
 				Expect(statement).To(And(
 					ContainSubstring("WHERE id = "+authoredPlaceholder),
@@ -155,9 +153,9 @@ var _ = Describe("buildLookupSQL", func() {
 
 	// A range and a toggle are typed, not picked, so there is no list to offer.
 	It("refuses a lookup on a filter with no values to list", func() {
-		_, _, err := lookupSQL(dialectPostgres, orders, query.ColumnFilterBinding{
+		_, _, err := lookupSQL(dialectPostgres, sqlLookupRequest{Query: orders, Binding: query.ColumnFilterBinding{
 			Key: "filter.latency_ms", Field: "latency_ms", Kind: query.ColumnFilterKindRange,
-		}, nil, "")
+		}})
 		Expect(err).To(MatchError(ContainSubstring("has no values to list")))
 	})
 })

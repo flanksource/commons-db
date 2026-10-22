@@ -87,10 +87,10 @@ func (openTelemetryProvider) InspectColumnFilters(
 		ctx,
 		req,
 		openTelemetryInspectionColumns(columns, runtime.options),
-		runtime.searcher,
 		openSearchInspectionSource{
-			Index:  runtime.options.Index,
-			Search: &search,
+			Searcher: runtime.searcher,
+			Index:    runtime.options.Index,
+			Search:   &search,
 			Build: func(mapping *esdsl.TimeFieldMapping) (openSearchRequest, error) {
 				return buildOpenTelemetryRequest(req, runtime.options, openSearchPage{}, mapping)
 			},

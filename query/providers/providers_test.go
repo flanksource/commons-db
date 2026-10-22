@@ -7,10 +7,13 @@ import (
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"testing"
 
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	// Register the built-in providers under test.
+	_ "github.com/flanksource/commons-db/query/providers"
 	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
@@ -529,3 +532,8 @@ var _ = Describe("prometheus provider", func() {
 		Expect(result.Rows[0]).ToNot(HaveKey("__name__"))
 	})
 })
+
+func TestProviders(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Query Providers Suite")
+}

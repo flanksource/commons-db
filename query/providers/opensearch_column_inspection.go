@@ -31,9 +31,10 @@ func (opensearchProvider) InspectColumnFilters(
 	if err != nil {
 		return query.ColumnInspectionResult{}, err
 	}
-	return inspectOpenSearchColumnFilters(ctx, req, columns, runtime.searcher, openSearchInspectionSource{
-		Index:  runtime.options.Index,
-		Search: runtime.options.Search,
+	return inspectOpenSearchColumnFilters(ctx, req, columns, openSearchInspectionSource{
+		Searcher: runtime.searcher,
+		Index:    runtime.options.Index,
+		Search:   runtime.options.Search,
 		Build: func(mapping *esdsl.TimeFieldMapping) (openSearchRequest, error) {
 			return buildOpenSearchRequest(req, runtime.options, openSearchPage{}, mapping)
 		},
@@ -41,18 +42,19 @@ func (opensearchProvider) InspectColumnFilters(
 }
 
 type openSearchInspectionSource struct {
-	Index  string
-	Search *esdsl.Search
-	Build  func(*esdsl.TimeFieldMapping) (openSearchRequest, error)
+	Searcher *opensearch.Searcher
+	Index    string
+	Search   *esdsl.Search
+	Build    func(*esdsl.TimeFieldMapping) (openSearchRequest, error)
 }
 
 func inspectOpenSearchColumnFilters(
 	ctx dbcontext.Context,
 	req query.ProviderRequest,
 	columns []query.ColumnDef,
-	searcher *opensearch.Searcher,
 	source openSearchInspectionSource,
 ) (query.ColumnInspectionResult, error) {
+	searcher := source.Searcher
 	requestedNames := openSearchInspectionFields(columns)
 	inspector, err := opensearchinspect.New(searcher.GetRawClient(), opensearchinspect.Options{
 		CacheKey: searcher.InspectionKey(),
@@ -74,7 +76,7 @@ func inspectOpenSearchColumnFilters(
 	}
 	if len(statFields) > 0 {
 		var statsCache inspection.CacheMetadata
-		counts, statsCache, err = inspectOpenSearchColumnStats(ctx, searcher, source, req, statFields)
+		counts, statsCache, err = inspectOpenSearchColumnStats(ctx, source, req, statFields)
 		if err != nil {
 			return query.ColumnInspectionResult{}, err
 		}
@@ -89,11 +91,11 @@ func inspectOpenSearchColumnFilters(
 
 func inspectOpenSearchColumnStats(
 	ctx dbcontext.Context,
-	searcher *opensearch.Searcher,
 	source openSearchInspectionSource,
 	req query.ProviderRequest,
 	fields []string,
 ) (map[string]int64, inspection.CacheMetadata, error) {
+	searcher := source.Searcher
 	key, err := providerkit.InspectionRequestKey("opensearch-column-stats:"+searcher.InspectionKey(), req, fields)
 	if err != nil {
 		return nil, inspection.CacheMetadata{}, err

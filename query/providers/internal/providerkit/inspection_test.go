@@ -15,7 +15,9 @@ func TestProviderkit(t *testing.T) {
 	RunSpecs(t, "Providerkit Suite")
 }
 
-var _ = Describe("FieldBatches", func() {
+var _ = Describe("FieldBatches", fieldBatchesSpecs)
+
+func fieldBatchesSpecs() {
 	fields := []string{"a", "b", "c", "d", "e"}
 
 	DescribeTable("splits fields into consecutive batches of at most size",
@@ -30,4 +32,4 @@ var _ = Describe("FieldBatches", func() {
 	It("returns no batches for no fields", func() {
 		Expect(providerkit.FieldBatches(nil, 2)).To(BeEmpty())
 	})
-})
+}
