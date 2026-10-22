@@ -9,15 +9,15 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// commitAs commits path=content on the checked-out branch of b's work
-// checkout as author, at date, pushes it and returns the commit SHA.
-func (b bareRepo) commitAs(branch, author, date, path, content, message string) string {
+// commitAs commits c on the checked-out branch of b's work checkout as
+// c.Author, at c.Date, pushes it and returns the commit SHA.
+func (b bareRepo) commitAs(c fixtureCommit) string {
 	GinkgoHelper()
-	gitFixture(b.work(), "checkout", "-q", branch)
-	writeFixtureFile(b.work(), path, content)
+	gitFixture(b.work(), "checkout", "-q", c.Branch)
+	writeFixtureFile(b.work(), c.Path, c.Content)
 	gitFixture(b.work(), "add", "-A")
-	gitFixture(b.work(), "commit", "-q", "--author", author, "--date", date, "-m", message)
-	gitFixture(b.work(), "push", "-q", b.Path, branch)
+	gitFixture(b.work(), "commit", "-q", "--author", c.Author, "--date", c.Date, "-m", c.Message)
+	gitFixture(b.work(), "push", "-q", b.Path, c.Branch)
 	return gitFixture(b.work(), "rev-parse", "HEAD")
 }
 
@@ -49,20 +49,20 @@ var _ = Describe("change strategies", func() {
 
 	Describe("Cache.MergeBase", func() {
 		It("finds the common ancestor of a fork branch and the base", func(ctx SpecContext) {
-			fork.commitOn("main", "", "fork.txt", "fork\n", "fork work")
-			Expect(cache.MergeBase(ctx, repo, "main", "main", git.MergeBaseOptions{HeadFrom: forkRepo})).To(Equal(upstream.Main))
+			fork.commitOn(fixtureCommit{Branch: "main", Path: "fork.txt", Content: "fork\n", Message: "fork work"})
+			Expect(cache.MergeBase(ctx, repo, git.MergeBaseOptions{Base: "main", Head: "main", HeadFrom: forkRepo})).To(Equal(upstream.Main))
 		})
 
 		It("refuses branches that share no history", func(ctx SpecContext) {
 			fork.orphanOn("lone", "lone.txt", "lone\n")
-			_, err := cache.MergeBase(ctx, repo, "main", "lone", git.MergeBaseOptions{HeadFrom: forkRepo})
+			_, err := cache.MergeBase(ctx, repo, git.MergeBaseOptions{Base: "main", Head: "lone", HeadFrom: forkRepo})
 			Expect(err).To(MatchError(git.ErrUnrelatedHistories))
 		})
 	})
 
 	It("lists the commits of an unrelated fork branch by patch, for a replay", func(ctx SpecContext) {
 		lone := fork.orphanOn("lone", "lone.txt", "lone\n")
-		commits, err := cache.Log(ctx, repo, "main", "lone", git.LogOptions{HeadFrom: forkRepo})
+		commits, err := cache.Log(ctx, repo, git.LogOptions{Base: "main", Head: "lone", HeadFrom: forkRepo})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(commits).To(HaveLen(1))
 		Expect(commits[0].SHA).To(Equal(lone))
@@ -70,8 +70,8 @@ var _ = Describe("change strategies", func() {
 
 	It("replays commits of an unrelated branch keeping each one's message, author and date", func(ctx SpecContext) {
 		fork.orphanOn("lone", "lone.txt", "lone\n")
-		first := fork.commitAs("lone", thandi, "2026-10-17T08:00:00+02:00", "rules/a.xml", "<a/>\n", "Add rule A\n\nBecause underwriting asked.")
-		second := fork.commitAs("lone", sipho, "2026-10-17T09:00:00+02:00", "rules/b.xml", "<b/>\n", "Add rule B")
+		first := fork.commitAs(fixtureCommit{Branch: "lone", Author: thandi, Date: "2026-10-17T08:00:00+02:00", Path: "rules/a.xml", Content: "<a/>\n", Message: "Add rule A\n\nBecause underwriting asked."})
+		second := fork.commitAs(fixtureCommit{Branch: "lone", Author: sipho, Date: "2026-10-17T09:00:00+02:00", Path: "rules/b.xml", Content: "<b/>\n", Message: "Add rule B"})
 
 		result, err := cache.Apply(ctx, repo, git.ChangeRequest{Base: "main", BaseSHA: upstream.Main, Branch: "promote/replay",
 			Author: fixtureSignature, Source: forkRepo, Pick: git.PickReplay, CherryPick: []string{first, second}, Trailers: []string{"Applied-by: ada"}})
@@ -84,8 +84,8 @@ var _ = Describe("change strategies", func() {
 	})
 
 	It("squashes picked commits into one, keeping the messages, the first author and the others as co-authors", func(ctx SpecContext) {
-		first := fork.commitAs("main", thandi, "2026-10-17T08:00:00+02:00", "rules/a.xml", "<a/>\n", "Add rule A")
-		second := fork.commitAs("main", sipho, "2026-10-17T09:00:00+02:00", "rules/b.xml", "<b/>\n", "Add rule B\n\nWith a body.")
+		first := fork.commitAs(fixtureCommit{Branch: "main", Author: thandi, Date: "2026-10-17T08:00:00+02:00", Path: "rules/a.xml", Content: "<a/>\n", Message: "Add rule A"})
+		second := fork.commitAs(fixtureCommit{Branch: "main", Author: sipho, Date: "2026-10-17T09:00:00+02:00", Path: "rules/b.xml", Content: "<b/>\n", Message: "Add rule B\n\nWith a body."})
 
 		result, err := cache.Apply(ctx, repo, git.ChangeRequest{Base: "main", BaseSHA: upstream.Main, Branch: "promote/squash",
 			Author: fixtureSignature, Source: forkRepo, CherryPick: []string{first, second}, Squash: true, Trailers: []string{"Applied-by: ada"}})
@@ -98,9 +98,9 @@ var _ = Describe("change strategies", func() {
 	})
 
 	It("rebases a fork branch onto the advanced base, linear, keeping authors and messages and adding no origin line", func(ctx SpecContext) {
-		fork.commitAs("main", thandi, "2026-10-17T08:00:00+02:00", "rules/a.xml", "<a/>\n", "Add rule A")
-		head := fork.commitAs("main", sipho, "2026-10-17T09:00:00+02:00", "rules/b.xml", "<b/>\n", "Add rule B")
-		advanced := upstream.commitOn("main", "", "upstream.txt", "upstream\n", "upstream work")
+		fork.commitAs(fixtureCommit{Branch: "main", Author: thandi, Date: "2026-10-17T08:00:00+02:00", Path: "rules/a.xml", Content: "<a/>\n", Message: "Add rule A"})
+		head := fork.commitAs(fixtureCommit{Branch: "main", Author: sipho, Date: "2026-10-17T09:00:00+02:00", Path: "rules/b.xml", Content: "<b/>\n", Message: "Add rule B"})
+		advanced := upstream.commitOn(fixtureCommit{Branch: "main", Path: "upstream.txt", Content: "upstream\n", Message: "upstream work"})
 
 		result, err := cache.Apply(ctx, repo, git.ChangeRequest{Base: "main", BaseSHA: advanced, Branch: "promote/rebase",
 			Author: fixtureSignature, Source: forkRepo, Rebase: head})

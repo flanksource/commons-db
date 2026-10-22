@@ -41,23 +41,31 @@ type restClient struct {
 	http     *commonshttp.Client
 }
 
+// restClientOptions configures newRESTClient for one Provider API at BaseURL,
+// authenticating with the Authorization header; Client shares transports.
+type restClientOptions struct {
+	Provider      string
+	BaseURL       string
+	TLS           TLS
+	Authorization string
+	Client        ClientOptions
+}
+
 // newRESTClient refuses a non-HTTPS base URL, verifies TLS (unless the
 // connection opts out), refuses redirects to non-HTTPS URLs, times out after
 // 30s and attaches the "git" observability feature.
-func newRESTClient(ctx any, provider, baseURL string, tls TLS, authorization string, options ...ClientOptions) (*restClient, error) {
-	base, err := url.Parse(strings.TrimRight(baseURL, "/"))
+func newRESTClient(ctx any, options restClientOptions) (*restClient, error) {
+	provider, tls, authorization := options.Provider, options.TLS, options.Authorization
+	base, err := url.Parse(strings.TrimRight(options.BaseURL, "/"))
 	if err != nil || base.Scheme != "https" || base.Host == "" {
 		return nil, fmt.Errorf("%s API URL must be an HTTPS URL", provider)
 	}
 	base.RawQuery, base.Fragment = "", ""
-	if len(options) > 1 {
-		return nil, fmt.Errorf("git client accepts one options value")
-	}
 	tlsOptions := commonshttp.TLSConfig{CA: tls.CA, Cert: tls.Cert, Key: tls.Key, InsecureSkipVerify: tls.InsecureSkipVerify}
 	var client *commonshttp.Client
-	if len(options) == 1 && options[0].TransportPool != nil {
-		client, err = options[0].TransportPool.Client(commonshttp.TransportOptions{Endpoint: base.String(), TLS: tlsOptions,
-			SecurityNamespace: options[0].SecurityNamespace + "\x00" + authorization})
+	if options.Client.TransportPool != nil {
+		client, err = options.Client.TransportPool.Client(commonshttp.TransportOptions{Endpoint: base.String(), TLS: tlsOptions,
+			SecurityNamespace: options.Client.SecurityNamespace + "\x00" + authorization})
 	} else {
 		client, err = commonshttp.NewClient().TLSConfig(tlsOptions)
 	}
@@ -91,9 +99,19 @@ func (c *restClient) endpoint(path string, query url.Values) string {
 	return endpoint
 }
 
-// do sends body as JSON (when non-nil) to an absolute URL on the base host,
-// decodes a 2xx response into out (when non-nil) and returns its headers.
-func (c *restClient) do(ctx context.Context, method, endpoint string, body, out any) (headers http.Header, err error) {
+// restRequest is one provider API call: Body is sent as JSON (when non-nil)
+// to Endpoint, an absolute URL on the base host, and a 2xx response is
+// decoded into Out (when non-nil).
+type restRequest struct {
+	Method   string
+	Endpoint string
+	Body     any
+	Out      any
+}
+
+// do sends options and returns the response headers.
+func (c *restClient) do(ctx context.Context, options restRequest) (headers http.Header, err error) {
+	method, endpoint, body, out := options.Method, options.Endpoint, options.Body, options.Out
 	target, err := url.Parse(endpoint)
 	if err != nil || !strings.EqualFold(target.Host, c.base.Host) {
 		return nil, fmt.Errorf("%s API URL %q is not on %s", c.provider, endpoint, c.base.Host)

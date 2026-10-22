@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/gofrs/flock"
@@ -97,7 +98,7 @@ func (w *Worktree) materialize(ctx context.Context, depth int) (err error) {
 		return err
 	}
 	if !hasCommit(ctx, w.mirror, w.Ref.SHA) {
-		if w.Ref.SHA, err = fetch(ctx, w.mirror, w.repo, w.repo, w.Ref, depth); err != nil {
+		if w.Ref.SHA, err = fetch(ctx, fetchOptions{Dir: w.mirror, Owner: w.repo, Repo: w.repo, Ref: w.Ref, Depth: depth}); err != nil {
 			return err
 		}
 	}
@@ -138,6 +139,39 @@ func hasCommit(ctx context.Context, dir, sha string) bool {
 	}
 	_, err := run(ctx, command{dir: dir, args: []string{"cat-file", "-e", "--end-of-options", sha + "^{commit}"}})
 	return err == nil
+}
+
+func (c *Cache) Files(ctx context.Context, repo *Repository, sha string) ([]string, error) {
+	if !fullSHAPattern.MatchString(sha) {
+		return nil, fmt.Errorf("list files: a full 40-character commit SHA is required")
+	}
+	paths := []string{}
+	err := c.withMirror(ctx, repo, func(mirror string) error {
+		if !hasCommit(ctx, mirror, sha) {
+			if _, err := fetch(ctx, fetchOptions{Dir: mirror, Owner: repo, Repo: repo, Ref: Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}}); err != nil {
+				return err
+			}
+		}
+		output, err := run(ctx, command{dir: mirror, args: []string{"ls-tree", "-r", "-z", "--full-tree", "--end-of-options", sha}})
+		if err != nil {
+			return err
+		}
+		for _, entry := range strings.Split(strings.TrimSuffix(output, "\x00"), "\x00") {
+			if entry == "" {
+				continue
+			}
+			metadata, path, ok := strings.Cut(entry, "\t")
+			fields := strings.Fields(metadata)
+			if !ok || len(fields) != 3 {
+				return fmt.Errorf("unexpected Git tree entry %q", entry)
+			}
+			if fields[1] == "blob" && (fields[0] == "100644" || fields[0] == "100755") {
+				paths = append(paths, path)
+			}
+		}
+		return nil
+	})
+	return paths, err
 }
 
 // acquire takes an exclusive file lock, waiting until ctx is done.

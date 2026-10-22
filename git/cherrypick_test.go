@@ -27,7 +27,7 @@ var _ = Describe("Cache.Apply with CherryPick", func() {
 	branchExists := func() string { return gitFixture(fixture.Path, "branch", "--list", "promote/one") }
 
 	It("cherry-picks commits in order onto the base before the files, recording their origin", func(ctx SpecContext) {
-		second := fixture.commitOn("feature", "", "other.txt", "x\n", "other")
+		second := fixture.commitOn(fixtureCommit{Branch: "feature", Path: "other.txt", Content: "x\n", Message: "other"})
 		change := promote(fixture.Feature, second)
 		change.Files = []git.FileChange{{Path: "release.txt", Content: []byte("r1\n")}}
 
@@ -40,7 +40,7 @@ var _ = Describe("Cache.Apply with CherryPick", func() {
 	})
 
 	It("aborts a conflicting cherry-pick and pushes nothing", func(ctx SpecContext) {
-		conflict := fixture.commitOn("conflict", fixture.First, "README.md", "conflict\n", "conflicting readme")
+		conflict := fixture.commitOn(fixtureCommit{Branch: "conflict", From: fixture.First, Path: "README.md", Content: "conflict\n", Message: "conflicting readme"})
 		_, err := cache.Apply(ctx, repo, promote(conflict))
 		var conflictErr *git.CherryPickConflictError
 		Expect(errors.As(err, &conflictErr)).To(BeTrue(), "%v", err)
@@ -49,7 +49,7 @@ var _ = Describe("Cache.Apply with CherryPick", func() {
 	})
 
 	It("refuses a merge commit without a mainline before pushing", func(ctx SpecContext) {
-		fixture.commitOn("side", fixture.Main, "side.txt", "side\n", "side")
+		fixture.commitOn(fixtureCommit{Branch: "side", From: fixture.Main, Path: "side.txt", Content: "side\n", Message: "side"})
 		merge := fixture.mergeInto("feature", "side")
 		_, err := cache.Apply(ctx, repo, promote(merge))
 		Expect(err).To(MatchError(And(ContainSubstring(merge), ContainSubstring("mainline"))))
@@ -63,7 +63,7 @@ var _ = Describe("Cache.Apply with CherryPick", func() {
 	})
 
 	It("appends the trailers to every picked commit's message, after its origin", func(ctx SpecContext) {
-		second := fixture.commitOn("feature", "", "other.txt", "x\n", "other")
+		second := fixture.commitOn(fixtureCommit{Branch: "feature", Path: "other.txt", Content: "x\n", Message: "other"})
 		change := promote(fixture.Feature, second)
 		change.Trailers = []string{"Requested-by: ada"}
 

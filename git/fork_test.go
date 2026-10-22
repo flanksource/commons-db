@@ -57,10 +57,10 @@ var _ = Describe("a fork of the changed repository", func() {
 	}
 
 	It("logs the fork's commits the repository lacks, keeping the fork's refs out of origin", func(ctx SpecContext) {
-		ahead := fork.commitOn("main", "", "fork.txt", "fork\n", "fork work")
-		upstreamAhead := upstream.commitOn("main", "", "upstream.txt", "upstream\n", "upstream work")
+		ahead := fork.commitOn(fixtureCommit{Branch: "main", Path: "fork.txt", Content: "fork\n", Message: "fork work"})
+		upstreamAhead := upstream.commitOn(fixtureCommit{Branch: "main", Path: "upstream.txt", Content: "upstream\n", Message: "upstream work"})
 
-		commits, err := cache.Log(ctx, repo, "main", "main", git.LogOptions{HeadFrom: forkRepo})
+		commits, err := cache.Log(ctx, repo, git.LogOptions{Base: "main", Head: "main", HeadFrom: forkRepo})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(commits).To(HaveLen(1))
 		Expect(commits[0].SHA).To(Equal(ahead))
@@ -70,7 +70,7 @@ var _ = Describe("a fork of the changed repository", func() {
 	})
 
 	It("cherry-picks a fork commit onto a branch of the repository", func(ctx SpecContext) {
-		ahead := fork.commitOn("main", "", "fork.txt", "fork\n", "fork work")
+		ahead := fork.commitOn(fixtureCommit{Branch: "main", Path: "fork.txt", Content: "fork\n", Message: "fork work"})
 
 		result, err := cache.Apply(ctx, repo, git.ChangeRequest{Base: "main", BaseSHA: upstream.Main, Branch: "promote/1",
 			Author: fixtureSignature, Source: forkRepo, CherryPick: []string{ahead}})
@@ -81,7 +81,7 @@ var _ = Describe("a fork of the changed repository", func() {
 	})
 
 	It("pushes a fork head as a branch of the repository and opens a pull request into the base", func(ctx SpecContext) {
-		ahead := fork.commitOn("main", "", "fork.txt", "fork\n", "fork work")
+		ahead := fork.commitOn(fixtureCommit{Branch: "main", Path: "fork.txt", Content: "fork\n", Message: "fork work"})
 
 		result, err := cache.Apply(ctx, repo, git.ChangeRequest{Base: "main", BaseSHA: upstream.Main, Branch: "promote/fork-main",
 			Source: forkRepo, Head: ahead, PullRequest: &git.PullRequestRequest{Title: "Promote fork"}})

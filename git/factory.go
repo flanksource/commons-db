@@ -10,6 +10,7 @@ import (
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	commonshttp "github.com/flanksource/commons/http"
 )
 
 // Client is a git connection: its provider API and the credentials for its
@@ -21,6 +22,12 @@ type Client struct {
 
 	connectionURL *url.URL
 	namespace     string
+}
+
+// ClientOptions shares transport connections while keeping middleware per client.
+type ClientOptions struct {
+	TransportPool     *commonshttp.TransportPool
+	SecurityNamespace string
 }
 
 // FromConnection builds a Client from a hydrated connection (URL, username,
@@ -61,7 +68,7 @@ func gitClient(conn models.Connection, tls TLS) (*Client, error) {
 	return &Client{Type: conn.Type, Provider: &genericProvider{repo: repo}, Auth: auth}, nil
 }
 
-func providerClient(ctx dbcontext.Context, conn models.Connection, tls TLS, options ...ClientOptions) (*Client, error) {
+func providerClient(ctx dbcontext.Context, conn models.Connection, tls TLS, options ClientOptions) (*Client, error) {
 	base := conn.URL
 	if base == "" && conn.Type == models.ConnectionTypeGithub {
 		base = githubAPI
@@ -77,7 +84,7 @@ func providerClient(ctx dbcontext.Context, conn models.Connection, tls TLS, opti
 	if conn.Type == models.ConnectionTypeAzureDevops {
 		authorization = "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+conn.Password))
 	}
-	api, err := newRESTClient(ctx, conn.Type, base, tls, authorization, options...)
+	api, err := newRESTClient(ctx, restClientOptions{Provider: conn.Type, BaseURL: base, TLS: tls, Authorization: authorization, Client: options})
 	if err != nil {
 		return nil, err
 	}

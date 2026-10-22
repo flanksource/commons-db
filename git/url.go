@@ -41,6 +41,8 @@ var (
 	cacheKeyUnsafe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 )
 
+var ErrNoCommitView = errors.New("no web commit view")
+
 // ParseRepoURL parses an HTTP(S), SSH, scp-style, git://, file:// URL or a
 // local path. providerHint (a models.ConnectionType* git provider) overrides
 // host-based provider detection, e.g. for a self-hosted GitLab.
@@ -225,6 +227,21 @@ func (u RepoURL) CacheKey() string {
 		readable = readable[len(readable)-80:]
 	}
 	return readable + "-" + hex.EncodeToString(sum[:])[:12]
+}
+
+func (u RepoURL) CommitURL(sha string) (string, error) {
+	if !fullSHAPattern.MatchString(sha) {
+		return "", fmt.Errorf("commit URL: give the full 40-character commit SHA")
+	}
+	switch u.Provider {
+	case models.ConnectionTypeGithub:
+		return u.webBase() + "/commit/" + sha, nil
+	case models.ConnectionTypeGitlab:
+		return u.webBase() + "/-/commit/" + sha, nil
+	case models.ConnectionTypeAzureDevops:
+		return u.azureWebBase() + "/commit/" + sha, nil
+	}
+	return "", ErrNoCommitView
 }
 
 // Redact removes user info from every URL in text, e.g. git error output.
