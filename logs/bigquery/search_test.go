@@ -17,19 +17,7 @@ func TestSearch_Manual(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.New().WithNamespace("mc")
 
-	conn := connection.GCPConnection{
-		Project: "workload-prod-eu-02",
-		Credentials: &types.EnvVar{
-			ValueFrom: &types.EnvVarSource{
-				SecretKeyRef: &types.SecretKeySelector{
-					Key: "credentials",
-					LocalObjectReference: types.LocalObjectReference{
-						Name: "gcloud-flanksource",
-					},
-				},
-			},
-		},
-	}
+	conn := manualGCPConnection()
 
 	// The searcher takes a hydrated connection — resolving the credential is the
 	// caller's job, as it is for the bigquery provider.
@@ -51,5 +39,21 @@ func TestSearch_Manual(t *testing.T) {
 		g.Expect(log.Labels["name"]).To(Not(BeEmpty()))
 		g.Expect(log.Labels["number"]).To(Not(BeEmpty()))
 		g.Expect(log.Labels["gender"]).To(Not(BeEmpty()))
+	}
+}
+
+func manualGCPConnection() connection.GCPConnection {
+	return connection.GCPConnection{
+		Project: "workload-prod-eu-02",
+		Credentials: &types.EnvVar{
+			ValueFrom: &types.EnvVarSource{
+				SecretKeyRef: &types.SecretKeySelector{
+					Key: "credentials",
+					LocalObjectReference: types.LocalObjectReference{
+						Name: "gcloud-flanksource",
+					},
+				},
+			},
+		},
 	}
 }

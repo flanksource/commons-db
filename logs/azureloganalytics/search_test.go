@@ -17,13 +17,7 @@ func TestSearch_Manual(t *testing.T) {
 	g := NewWithT(t)
 	ctx := context.New()
 
-	conn := connection.AzureConnection{
-		ClientID:     &types.EnvVar{ValueStatic: ""},
-		ClientSecret: &types.EnvVar{ValueStatic: ""},
-		TenantID:     "",
-	}
-
-	searcher := New(conn, nil)
+	searcher := New(manualAzureConnection(), nil)
 
 	request := Request{
 		WorkspaceID: "",
@@ -34,4 +28,12 @@ func TestSearch_Manual(t *testing.T) {
 	g.Expect(err).To(BeNil())
 	g.Expect(result).ToNot(BeNil())
 	g.Expect(len(result.Logs)).To(BeNumerically(">", 0))
+}
+
+func manualAzureConnection() connection.AzureConnection {
+	return connection.AzureConnection{
+		ClientID:     &types.EnvVar{ValueStatic: ""},
+		ClientSecret: &types.EnvVar{ValueStatic: ""},
+		TenantID:     "",
+	}
 }

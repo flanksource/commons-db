@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"cloud.google.com/go/logging"
 	"cloud.google.com/go/logging/logadmin"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/api/iterator"
@@ -82,34 +83,9 @@ func (gcp *cloudLogging) Search(ctx context.Context, request Request) (*logs.Log
 		Logs: make([]*logs.LogLine, 0),
 	}
 
-	filterParts := []string{}
-	if request.Filter != "" {
-		filterParts = append(filterParts, request.Filter)
-	}
-
-	if request.Start != "" {
-		startTime, err := request.GetStart()
-		if err != nil {
-			return nil, fmt.Errorf("invalid start time: %w", err)
-		}
-		filterParts = append(filterParts, fmt.Sprintf(`timestamp >= "%s"`, startTime.Format("2006-01-02T15:04:05Z")))
-	}
-
-	if request.End != "" {
-		endTime, err := request.GetEnd()
-		if err != nil {
-			return nil, fmt.Errorf("invalid end time: %w", err)
-		}
-		filterParts = append(filterParts, fmt.Sprintf(`timestamp <= "%s"`, endTime.Format("2006-01-02T15:04:05Z")))
-	}
-
-	var combinedFilter string
-	if len(filterParts) > 0 {
-		wrappedParts := make([]string, len(filterParts))
-		for i, part := range filterParts {
-			wrappedParts[i] = fmt.Sprintf("(%s)", part)
-		}
-		combinedFilter = strings.Join(wrappedParts, " AND ")
+	combinedFilter, err := buildFilter(request)
+	if err != nil {
+		return nil, err
 	}
 
 	pageSize := min(maxLogLines, 1000)
@@ -135,58 +111,11 @@ func (gcp *cloudLogging) Search(ctx context.Context, request Request) (*logs.Log
 			continue
 		}
 
-		line := &logs.LogLine{
-			Count: 1,
+		line, err := entryToLogLine(ctx, entry, mappingConfig)
+		if err != nil {
+			return nil, err
 		}
 
-		if entry.InsertID != "" {
-			line.ID = entry.InsertID
-		}
-		if !entry.Timestamp.IsZero() {
-			line.FirstObserved = entry.Timestamp
-		}
-		if entry.Severity != 0 {
-			line.Severity = entry.Severity.String()
-		}
-		if entry.LogName != "" {
-			line.Source = entry.LogName
-		}
-
-		switch payload := entry.Payload.(type) {
-		case string:
-			line.Message = payload
-		default:
-			payloadMap, err := collections.ToJSONMap(payload)
-			if err != nil {
-				return nil, fmt.Errorf("failed to convert payload to JSON map: %w", err)
-			}
-
-			for k, v := range payloadMap {
-				if err := logs.MapFieldToLogLine(k, v, line, mappingConfig); err != nil {
-					ctx.Warnf("Error mapping field %s for log %s: %v", k, line.ID, err)
-				}
-			}
-		}
-
-		if entry.Resource != nil && entry.Resource.Labels != nil {
-			for k, v := range entry.Resource.Labels {
-				resourceKey := "resource." + k
-				if err := logs.MapFieldToLogLine(resourceKey, v, line, mappingConfig); err != nil {
-					ctx.Warnf("Error mapping resource field %s for log %s: %v", resourceKey, line.ID, err)
-				}
-			}
-		}
-
-		if entry.Labels != nil {
-			for k, v := range entry.Labels {
-				labelKey := "label." + k
-				if err := logs.MapFieldToLogLine(labelKey, v, line, mappingConfig); err != nil {
-					ctx.Warnf("Error mapping label field %s for log %s: %v", labelKey, line.ID, err)
-				}
-			}
-		}
-
-		line.SetHash()
 		result.Logs = append(result.Logs, line)
 		if len(result.Logs) >= maxLogLines {
 			break
@@ -194,6 +123,95 @@ func (gcp *cloudLogging) Search(ctx context.Context, request Request) (*logs.Log
 	}
 
 	return result, nil
+}
+
+func buildFilter(request Request) (string, error) {
+	filterParts := []string{}
+	if request.Filter != "" {
+		filterParts = append(filterParts, request.Filter)
+	}
+
+	if request.Start != "" {
+		startTime, err := request.GetStart()
+		if err != nil {
+			return "", fmt.Errorf("invalid start time: %w", err)
+		}
+		filterParts = append(filterParts, fmt.Sprintf(`timestamp >= "%s"`, startTime.Format("2006-01-02T15:04:05Z")))
+	}
+
+	if request.End != "" {
+		endTime, err := request.GetEnd()
+		if err != nil {
+			return "", fmt.Errorf("invalid end time: %w", err)
+		}
+		filterParts = append(filterParts, fmt.Sprintf(`timestamp <= "%s"`, endTime.Format("2006-01-02T15:04:05Z")))
+	}
+
+	var combinedFilter string
+	if len(filterParts) > 0 {
+		wrappedParts := make([]string, len(filterParts))
+		for i, part := range filterParts {
+			wrappedParts[i] = fmt.Sprintf("(%s)", part)
+		}
+		combinedFilter = strings.Join(wrappedParts, " AND ")
+	}
+	return combinedFilter, nil
+}
+
+func entryToLogLine(ctx context.Context, entry *logging.Entry, mappingConfig logs.FieldMappingConfig) (*logs.LogLine, error) {
+	line := &logs.LogLine{
+		Count: 1,
+	}
+
+	if entry.InsertID != "" {
+		line.ID = entry.InsertID
+	}
+	if !entry.Timestamp.IsZero() {
+		line.FirstObserved = entry.Timestamp
+	}
+	if entry.Severity != 0 {
+		line.Severity = entry.Severity.String()
+	}
+	if entry.LogName != "" {
+		line.Source = entry.LogName
+	}
+
+	switch payload := entry.Payload.(type) {
+	case string:
+		line.Message = payload
+	default:
+		payloadMap, err := collections.ToJSONMap(payload)
+		if err != nil {
+			return nil, fmt.Errorf("failed to convert payload to JSON map: %w", err)
+		}
+
+		for k, v := range payloadMap {
+			if err := logs.MapFieldToLogLine(k, v, line, mappingConfig); err != nil {
+				ctx.Warnf("Error mapping field %s for log %s: %v", k, line.ID, err)
+			}
+		}
+	}
+
+	if entry.Resource != nil && entry.Resource.Labels != nil {
+		for k, v := range entry.Resource.Labels {
+			resourceKey := "resource." + k
+			if err := logs.MapFieldToLogLine(resourceKey, v, line, mappingConfig); err != nil {
+				ctx.Warnf("Error mapping resource field %s for log %s: %v", resourceKey, line.ID, err)
+			}
+		}
+	}
+
+	if entry.Labels != nil {
+		for k, v := range entry.Labels {
+			labelKey := "label." + k
+			if err := logs.MapFieldToLogLine(labelKey, v, line, mappingConfig); err != nil {
+				ctx.Warnf("Error mapping label field %s for log %s: %v", labelKey, line.ID, err)
+			}
+		}
+	}
+
+	line.SetHash()
+	return line, nil
 }
 
 // defaultFieldMappingConfig can vary widely depending on the source of the log.

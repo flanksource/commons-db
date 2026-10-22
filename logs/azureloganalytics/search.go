@@ -15,6 +15,19 @@ import (
 	"github.com/flanksource/commons-db/logs"
 )
 
+// Request represents parameters for Azure Log Analytics queries.
+//
+// +kubebuilder:object:generate=true
+type Request struct {
+	logs.LogsRequestBase `json:",inline" template:"true"`
+
+	// WorkspaceID is the Azure Log Analytics workspace ID to query.
+	WorkspaceID string `json:"workspaceID" template:"true"`
+
+	// Query is the KQL (Kusto Query Language) query to execute.
+	Query string `json:"query" template:"true"`
+}
+
 // Searcher implements log searching using Azure Log Analytics.
 type Searcher struct {
 	conn          connection.AzureConnection
@@ -117,27 +130,10 @@ func (s *Searcher) Search(ctx context.Context, request Request) (*logs.LogResult
 		result.Metadata["totalRows"] = len(table.Rows)
 
 		for _, row := range table.Rows {
-			line := &logs.LogLine{
-				Count: 1,
+			line, err := rowToLogLine(columnNames, row, mappingConfig)
+			if err != nil {
+				return nil, err
 			}
-
-			for i, value := range row {
-				if i >= len(columnNames) || value == nil {
-					continue
-				}
-
-				if err := logs.MapFieldToLogLine(columnNames[i], value, line, mappingConfig); err != nil {
-					return nil, fmt.Errorf("failed to map field %s: %w", columnNames[i], err)
-				}
-			}
-
-			if line.Message == "" {
-				if m, err := utils.Stringify(row); err == nil {
-					line.Message = m
-				}
-			}
-
-			line.SetHash()
 			result.Logs = append(result.Logs, line)
 
 			if maxLogLines > 0 && len(result.Logs) >= maxLogLines {
@@ -151,6 +147,31 @@ func (s *Searcher) Search(ctx context.Context, request Request) (*logs.LogResult
 	}
 
 	return result, nil
+}
+
+func rowToLogLine(columnNames []string, row azquery.Row, mappingConfig logs.FieldMappingConfig) (*logs.LogLine, error) {
+	line := &logs.LogLine{
+		Count: 1,
+	}
+
+	for i, value := range row {
+		if i >= len(columnNames) || value == nil {
+			continue
+		}
+
+		if err := logs.MapFieldToLogLine(columnNames[i], value, line, mappingConfig); err != nil {
+			return nil, fmt.Errorf("failed to map field %s: %w", columnNames[i], err)
+		}
+	}
+
+	if line.Message == "" {
+		if m, err := utils.Stringify(row); err == nil {
+			line.Message = m
+		}
+	}
+
+	line.SetHash()
+	return line, nil
 }
 
 // buildTimespan constructs an ISO8601 time interval from the request's start/end fields.
