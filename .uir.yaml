@@ -1,0 +1,86 @@
+# Copy to .uir.yaml, or run: uir lint --config .uir.example
+# Based on ~/.agents/AGENTS.md and ~/.codex/AGENTS.md.
+# Rules are warnings; thresholds for command thickness are project heuristics.
+# Only indexed sources and named callables can be checked by these metrics.
+# Review rules about error handling, duplication, TDD and shared ownership separately.
+version: 1
+lint:
+  include_tests: true
+  rules:
+    # Inspect build-excluded sources too: ignore or platform constraints do not require hack.
+    - id: hack-build-tag
+      severity: warning
+      message: "{{.path}} must require the hack build tag"
+      query: |
+        SELECT path
+        FROM files(include_excluded => TRUE)
+        WHERE path MATCH '**/hack/**/*.go'
+          AND file.build_constraint NOT REQUIRES 'hack'
+        ORDER BY path
+
+    # Core rules / C-9: use the stricter Codex limit of 1,000 Go lines;
+    # ~/.agents/AGENTS.md currently recommends a range of 1,000–2,000.
+    - id: go-file-lines
+      severity: warning
+      message: "{{.path}} has {{.lines}} lines; keep Go files at or below 2,000 lines and split cohesive responsibilities (Core rules / C-9)"
+      query: |
+        SELECT path, file.lines AS lines
+        FROM files()
+        WHERE path MATCH '**/*.go' AND file.lines > 2000
+        ORDER BY lines DESC, path
+
+    # Core rules / C-9: applies when non-Go sources have been indexed/imported.
+    # The Go indexer alone does not index TypeScript, Markdown or other languages.
+    - id: other-file-lines
+      severity: warning
+      message: "{{.path}} has {{.lines}} lines; keep non-Go files at or below 1000 lines (Core rules / C-9)"
+      query: |
+        SELECT path, file.lines AS lines
+        FROM files()
+        WHERE path NOT MATCH '**/*.go' AND file.lines > 100
+        ORDER BY lines DESC, path
+
+    # C-8: body_lines counts physical body lines, including comments and blanks.
+    # Multiline signatures are excluded, so this approximates total function length.
+    - id: function-body-lines
+      severity: warning
+      message: "{{.name}} has a {{.lines}}-line body; keep functions at or below 100 lines (C-8)"
+      query: |
+        SELECT symbol.name AS name, symbol.metrics.body_lines AS lines
+        FROM func:*
+        WHERE symbol.metrics.body_lines > 100
+        ORDER BY lines DESC, name
+
+    # C-10: parameter count identifies candidates for named arguments/options.
+    # It cannot prove whether individual call sites already use named arguments.
+    - id: function-parameters
+      severity: warning
+      message: "{{.name}} has {{.params}} parameters; consider a Go options struct or moving sate into a context object, or moving functions onto stateful  obejcts/services"
+      query: |
+        SELECT symbol.name AS name, symbol.metrics.param_count AS params
+        FROM func:*
+        WHERE symbol.metrics.param_count > 4
+        ORDER BY params DESC, name
+
+    # Keep business logic in backend providers/stores; CLI files should wire commands.
+    # 300 physical lines is a configurable proxy, not proof of business logic.
+    - id: thick-command-files
+      severity: warning
+      message: "{{.path}} has {{.lines}} lines; keep cmd/ files thin by moving business logic into backend packages (example limit: 300 lines)"
+      query: |
+        SELECT path, file.lines AS lines
+        FROM files()
+        WHERE path MATCH '**/cmd/**/*.go' AND file.lines > 200
+        ORDER BY lines DESC, path
+
+    # References include type uses and calls, regardless of import alias.
+    # Match the cmd path segment, allowing root and nested command directories.
+    - id: cobra-outside-cmd
+      severity: warning
+      message: "{{.path}} references Cobra {{.name}} outside cmd/; keep CLI dependencies in the command layer"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:github.com/spf13/cobra)
+        WHERE symbol.package = 'github.com/spf13/cobra'
+          AND path NOT MATCH '**/cmd/**'
+        ORDER BY path, line, name
