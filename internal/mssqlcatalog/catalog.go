@@ -27,15 +27,19 @@ type Rows interface {
 }
 
 // Queryer runs a catalog query. Callers that bound or instrument queries
-// implement it; FromDB adapts a plain *sql.DB.
+// implement it; FromDB adapts database/sql handles.
 type Queryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (Rows, error)
 }
 
 // FromDB adapts db to Queryer.
-func FromDB(db *sql.DB) Queryer { return sqlDB{db} }
+func FromDB(db SQLQueryer) Queryer { return sqlDB{db} }
 
-type sqlDB struct{ db *sql.DB }
+type SQLQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+type sqlDB struct{ db SQLQueryer }
 
 func (d sqlDB) QueryContext(ctx context.Context, query string, args ...any) (Rows, error) {
 	rows, err := d.db.QueryContext(ctx, query, args...)
