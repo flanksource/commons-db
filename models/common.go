@@ -215,54 +215,14 @@ func ConvertRowToNativeTypes(row map[string]any, columnDef map[string]ColumnType
 			}
 
 		case ColumnTypeDuration:
-			switch v := value.(type) {
-			case int:
-				row[colName] = time.Duration(v)
-			case int32:
-				row[colName] = time.Duration(v)
-			case int64:
-				row[colName] = time.Duration(v)
-			case float64:
-				row[colName] = time.Duration(int64(v))
-			case string:
-				if parsed, err := time.ParseDuration(v); err != nil {
-					if _, exists := invalidTypesPerColumn[colName]; !exists {
-						invalidTypesPerColumn[colName] = fmt.Sprintf("failed to parse duration (value: %v)", v)
-					}
-					row[colName] = nil
-				} else {
-					row[colName] = parsed
-				}
-			case nil:
-				row[colName] = nil
-			default:
-				if _, exists := invalidTypesPerColumn[colName]; !exists {
-					invalidTypesPerColumn[colName] = fmt.Sprintf("invalid type %T", v)
-				}
-				row[colName] = nil
-			}
+			converted, invalid := convertToDuration(value)
+			row[colName] = converted
+			recordInvalidType(invalidTypesPerColumn, colName, invalid)
 
 		case ColumnTypeDateTime:
-			switch v := value.(type) {
-			case time.Time:
-				row[colName] = v
-			case string:
-				if parsed, err := time.Parse(time.RFC3339, v); err != nil {
-					if _, exists := invalidTypesPerColumn[colName]; !exists {
-						invalidTypesPerColumn[colName] = fmt.Sprintf("failed to parse datetime (value: %v)", v)
-					}
-					row[colName] = nil
-				} else {
-					row[colName] = parsed
-				}
-			case nil:
-				row[colName] = nil
-			default:
-				if _, exists := invalidTypesPerColumn[colName]; !exists {
-					invalidTypesPerColumn[colName] = fmt.Sprintf("invalid type %T", v)
-				}
-				row[colName] = nil
-			}
+			converted, invalid := convertToDateTime(value)
+			row[colName] = converted
+			recordInvalidType(invalidTypesPerColumn, colName, invalid)
 
 		case ColumnTypeString:
 			if value == nil {
@@ -282,28 +242,9 @@ func ConvertRowToNativeTypes(row map[string]any, columnDef map[string]ColumnType
 			}
 
 		case ColumnTypeBoolean:
-			switch v := value.(type) {
-			case bool:
-				row[colName] = v
-			case string:
-				if parsed, err := strconv.ParseBool(v); err != nil {
-					if _, exists := invalidTypesPerColumn[colName]; !exists {
-						invalidTypesPerColumn[colName] = fmt.Sprintf("failed to parse boolean (value: %v)", v)
-					}
-					row[colName] = false
-				} else {
-					row[colName] = parsed
-				}
-			case int, int32, int64:
-				row[colName] = v != 0
-			case nil:
-				row[colName] = false
-			default:
-				if _, exists := invalidTypesPerColumn[colName]; !exists {
-					invalidTypesPerColumn[colName] = fmt.Sprintf("invalid boolean type %T", v)
-				}
-				row[colName] = false
-			}
+			converted, invalid := convertToBoolean(value)
+			row[colName] = converted
+			recordInvalidType(invalidTypesPerColumn, colName, invalid)
 
 		default:
 			// do nothing
@@ -311,4 +252,72 @@ func ConvertRowToNativeTypes(row map[string]any, columnDef map[string]ColumnType
 	}
 
 	return row, invalidTypesPerColumn
+}
+
+func recordInvalidType(invalidTypesPerColumn map[string]string, colName, invalid string) {
+	if invalid == "" {
+		return
+	}
+	if _, exists := invalidTypesPerColumn[colName]; !exists {
+		invalidTypesPerColumn[colName] = invalid
+	}
+}
+
+func convertToDuration(value any) (any, string) {
+	switch v := value.(type) {
+	case int:
+		return time.Duration(v), ""
+	case int32:
+		return time.Duration(v), ""
+	case int64:
+		return time.Duration(v), ""
+	case float64:
+		return time.Duration(int64(v)), ""
+	case string:
+		parsed, err := time.ParseDuration(v)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to parse duration (value: %v)", v)
+		}
+		return parsed, ""
+	case nil:
+		return nil, ""
+	default:
+		return nil, fmt.Sprintf("invalid type %T", v)
+	}
+}
+
+func convertToDateTime(value any) (any, string) {
+	switch v := value.(type) {
+	case time.Time:
+		return v, ""
+	case string:
+		parsed, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			return nil, fmt.Sprintf("failed to parse datetime (value: %v)", v)
+		}
+		return parsed, ""
+	case nil:
+		return nil, ""
+	default:
+		return nil, fmt.Sprintf("invalid type %T", v)
+	}
+}
+
+func convertToBoolean(value any) (bool, string) {
+	switch v := value.(type) {
+	case bool:
+		return v, ""
+	case string:
+		parsed, err := strconv.ParseBool(v)
+		if err != nil {
+			return false, fmt.Sprintf("failed to parse boolean (value: %v)", v)
+		}
+		return parsed, ""
+	case int, int32, int64:
+		return v != 0, ""
+	case nil:
+		return false, ""
+	default:
+		return false, fmt.Sprintf("invalid boolean type %T", v)
+	}
 }

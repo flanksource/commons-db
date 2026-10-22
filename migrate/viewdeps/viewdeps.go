@@ -14,6 +14,12 @@ type Querier = native.Querier
 
 type Exec = native.Exec
 
+type DropOptions = native.DropOptions
+
+func Sweep(ctx context.Context, opts DropOptions) ([]View, func(context.Context) error, error) {
+	return native.Sweep(ctx, opts)
+}
+
 func Dependents(ctx context.Context, q Querier, tables []Table) ([]View, error) {
 	return native.Dependents(ctx, q, tables)
 }

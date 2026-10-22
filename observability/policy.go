@@ -87,31 +87,24 @@ var supportedLevels = map[string]logger.LogLevel{
 }
 
 var commonEvents = []EventDefinition{
-	event(EventError, PropertyErrorLevel, "Errors", "Failed operations, including the sanitized request identity.", "error", []string{"error", "operation", "duration"}),
-	event(EventSlow, PropertySlowLevel, "Slow operations", "Successful operations at or above the slow threshold.", "warn", []string{"operation", "duration", "slow threshold"}),
+	{Event: EventError, Property: PropertyErrorLevel, Label: "Errors", Description: "Failed operations, including the sanitized request identity.", Default: "error", Captures: []string{"error", "operation", "duration"}},
+	{Event: EventSlow, Property: PropertySlowLevel, Label: "Slow operations", Description: "Successful operations at or above the slow threshold.", Default: "warn", Captures: []string{"operation", "duration", "slow threshold"}},
 }
 
 var providerEvents = map[ProviderFamily][]EventDefinition{
 	ProviderGeneric: {
-		event(EventOperation, PropertyOperationLevel, "Operation summary", "One completion record for a successful provider operation.", "debug", []string{"operation", "duration", "result summary"}),
+		{Event: EventOperation, Property: PropertyOperationLevel, Label: "Operation summary", Description: "One completion record for a successful provider operation.", Default: "debug", Captures: []string{"operation", "duration", "result summary"}},
 	},
 	ProviderSQL: {
-		event(EventSQL, PropertySQLLevel, "SQL statement", "The sanitized SQL statement and its completion metrics.", "trace", []string{"statement", "duration", "rows"}),
-		event(EventSQLParams, PropertySQLParamsLevel, "SQL parameters", "Bound arguments, with credential-shaped values redacted.", "trace1", []string{"bound arguments"}),
+		{Event: EventSQL, Property: PropertySQLLevel, Label: "SQL statement", Description: "The sanitized SQL statement and its completion metrics.", Default: "trace", Captures: []string{"statement", "duration", "rows"}},
+		{Event: EventSQLParams, Property: PropertySQLParamsLevel, Label: "SQL parameters", Description: "Bound arguments, with credential-shaped values redacted.", Default: "trace1", Captures: []string{"bound arguments"}},
 	},
 	ProviderHTTP: {
-		event(EventHTTP, PropertyHTTPLevel, "Access summary", "One method, sanitized URL, status and duration record per request.", "debug", []string{"method", "URL", "status", "duration"}),
-		event(EventHTTPHeaders, PropertyHTTPHeadersLevel, "Headers and parameters", "Sanitized request and response headers plus query parameters.", "trace", []string{"headers", "query parameters"}),
-		event(EventHTTPRequestBody, PropertyHTTPRequestBodyLevel, "Request body", "A bounded sanitized request body.", "trace1", []string{"request body"}),
-		event(EventHTTPResponseBody, PropertyHTTPResponseBodyLevel, "Response body", "A bounded sanitized response body with explicit truncation metadata.", "trace2", []string{"response body"}),
+		{Event: EventHTTP, Property: PropertyHTTPLevel, Label: "Access summary", Description: "One method, sanitized URL, status and duration record per request.", Default: "debug", Captures: []string{"method", "URL", "status", "duration"}},
+		{Event: EventHTTPHeaders, Property: PropertyHTTPHeadersLevel, Label: "Headers and parameters", Description: "Sanitized request and response headers plus query parameters.", Default: "trace", Captures: []string{"headers", "query parameters"}},
+		{Event: EventHTTPRequestBody, Property: PropertyHTTPRequestBodyLevel, Label: "Request body", Description: "A bounded sanitized request body.", Default: "trace1", Captures: []string{"request body"}},
+		{Event: EventHTTPResponseBody, Property: PropertyHTTPResponseBodyLevel, Label: "Response body", Description: "A bounded sanitized response body with explicit truncation metadata.", Default: "trace2", Captures: []string{"response body"}},
 	},
-}
-
-func event(kind Event, property, label, description, defaultLevel string, captures []string) EventDefinition {
-	return EventDefinition{
-		Event: kind, Property: property, Label: label, Description: description,
-		Default: defaultLevel, Captures: captures,
-	}
 }
 
 func CapabilityFor(connectionType string) Capability {

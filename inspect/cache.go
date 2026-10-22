@@ -29,6 +29,60 @@ type CachePolicy struct {
 	MaxWeight       int
 }
 
+type CacheClass string
+
+const (
+	CacheClassOpenSearchTargets         CacheClass = "opensearch-targets"
+	CacheClassSQLCatalog                CacheClass = "sql-catalog"
+	CacheClassOpenSearchFields          CacheClass = "opensearch-fields"
+	CacheClassOpenSearchDynamicMapping  CacheClass = "opensearch-dynamic-mapping"
+	CacheClassOpenSearchConcreteMapping CacheClass = "opensearch-concrete-mapping"
+	CacheClassCardinality               CacheClass = "column-cardinality"
+	CacheClassFilterValues              CacheClass = "filter-values"
+)
+
+func Policy(class CacheClass) CachePolicy {
+	switch class {
+	case CacheClassOpenSearchTargets:
+		return CachePolicy{
+			Name: string(class), InitialFreshFor: 6 * time.Hour, MaximumFreshFor: 24 * time.Hour,
+			FillTimeout: DefaultFillTimeout, MaxEntries: 256, MaxWeight: 100_000,
+		}
+	case CacheClassSQLCatalog:
+		return CachePolicy{
+			Name: string(class), InitialFreshFor: 24 * time.Hour, MaximumFreshFor: 7 * 24 * time.Hour,
+			FillTimeout: DefaultFillTimeout, MaxEntries: 256, MaxWeight: 100_000,
+		}
+	case CacheClassOpenSearchFields:
+		return CachePolicy{
+			Name: string(class), InitialFreshFor: 24 * time.Hour, MaximumFreshFor: 7 * 24 * time.Hour,
+			FillTimeout: DefaultFillTimeout, MaxEntries: 1_024, MaxWeight: 250_000,
+		}
+	case CacheClassOpenSearchDynamicMapping:
+		return CachePolicy{
+			Name: string(class), InitialFreshFor: 24 * time.Hour, MaximumFreshFor: 7 * 24 * time.Hour,
+			FillTimeout: DefaultFillTimeout, MaxEntries: 1_024, MaxWeight: 250_000,
+		}
+	case CacheClassOpenSearchConcreteMapping:
+		return CachePolicy{
+			Name: string(class), InitialFreshFor: 7 * 24 * time.Hour, MaximumFreshFor: 30 * 24 * time.Hour,
+			FillTimeout: DefaultFillTimeout, MaxEntries: 1_024, MaxWeight: 250_000,
+		}
+	case CacheClassCardinality:
+		return CachePolicy{
+			Name: string(class), InitialFreshFor: 7 * 24 * time.Hour, MaximumFreshFor: 30 * 24 * time.Hour,
+			FillTimeout: DefaultFillTimeout, MaxEntries: 2_048, MaxWeight: 100_000,
+		}
+	case CacheClassFilterValues:
+		return CachePolicy{
+			Name: string(class), InitialFreshFor: 24 * time.Hour, MaximumFreshFor: 7 * 24 * time.Hour,
+			FillTimeout: DefaultFillTimeout, MaxEntries: 4_096, MaxWeight: 100_000,
+		}
+	default:
+		panic("unknown inspection cache class " + class)
+	}
+}
+
 type CacheMetadata struct {
 	Policy             string     `json:"policy"`
 	State              CacheState `json:"state"`
@@ -224,13 +278,13 @@ func (m *Memo[T]) get(ctx context.Context, options GetOptions[T]) (Result[T], er
 		m.lru.MoveToFront(entry.element)
 		now := m.now()
 		if !now.Before(entry.freshUntil) && !now.Before(entry.nextAttemptAt) {
-			m.startLocked(ctx, options.Key, m.generations[options.Key], false, options.Load)
+			m.startLocked(ctx, flightKey{key: options.Key, generation: m.generations[options.Key]}, false, options.Load)
 		}
 		result := m.resultLocked(options.Key, entry, now)
 		m.mu.Unlock()
 		return result, nil
 	}
-	flight := m.startLocked(ctx, options.Key, m.generations[options.Key], false, options.Load)
+	flight := m.startLocked(ctx, flightKey{key: options.Key, generation: m.generations[options.Key]}, false, options.Load)
 	m.mu.Unlock()
 	return waitForFlight(ctx, flight)
 }
@@ -244,23 +298,21 @@ func (m *Memo[T]) refresh(ctx context.Context, options GetOptions[T]) (Result[T]
 	}
 	generation := currentGeneration + 1
 	m.generations[options.Key] = generation
-	flight := m.startLocked(ctx, options.Key, generation, true, options.Load)
+	flight := m.startLocked(ctx, flightKey{key: options.Key, generation: generation}, true, options.Load)
 	m.mu.Unlock()
 	return waitForFlight(ctx, flight)
 }
 
 func (m *Memo[T]) startLocked(
 	ctx context.Context,
-	key string,
-	generation uint64,
+	identifier flightKey,
 	manual bool,
 	load func(context.Context) (T, error),
 ) *memoFlight[T] {
-	identifier := flightKey{key: key, generation: generation}
 	if current := m.flights[identifier]; current != nil {
 		return current
 	}
-	flight := &memoFlight[T]{done: make(chan struct{}), manual: manual, generation: generation}
+	flight := &memoFlight[T]{done: make(chan struct{}), manual: manual, generation: identifier.generation}
 	m.flights[identifier] = flight
 	go m.runFill(context.WithoutCancel(ctx), identifier, flight, load)
 	return flight
@@ -290,7 +342,7 @@ func (m *Memo[T]) runFill(
 	defer close(flight.done)
 	delete(m.flights, identifier)
 	if err != nil {
-		m.recordFailureLocked(identifier.key, identifier.generation, finished, err, flight.manual)
+		m.recordFailureLocked(identifier, finished, err, flight.manual)
 		if entry := m.entries[identifier.key]; entry != nil {
 			flight.result = m.resultLocked(identifier.key, entry, finished)
 		} else if !m.hasFlightLocked(identifier.key) {
@@ -327,11 +379,11 @@ func (m *Memo[T]) runFill(
 	flight.result.Cache.Cached = false
 }
 
-func (m *Memo[T]) recordFailureLocked(key string, generation uint64, now time.Time, err error, manual bool) {
-	if m.generations[key] != generation {
+func (m *Memo[T]) recordFailureLocked(identifier flightKey, now time.Time, err error, manual bool) {
+	if m.generations[identifier.key] != identifier.generation {
 		return
 	}
-	entry := m.entries[key]
+	entry := m.entries[identifier.key]
 	if entry == nil {
 		return
 	}
