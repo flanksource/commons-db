@@ -3,6 +3,7 @@ package connection
 import (
 	gocontext "context"
 	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"time"
@@ -11,6 +12,7 @@ import (
 	signerv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"github.com/aws/aws-sdk-go-v2/service/eks"
 	"github.com/flanksource/commons-db/context"
+	"github.com/patrickmn/go-cache"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -20,6 +22,26 @@ const (
 	emptyStringSha256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 	v1Prefix          = "k8s-aws-v1."
 )
+
+// tokenSafetyMargin is the duration to deduct when caching tokens.
+// Example: if a token expires in 15 minutes then we cache it with a
+// TTL of 15 minutes - tokenSafetyMargin = 10 minutes.
+//
+// This is to prevent using a token that immediately expires.
+const tokenSafetyMargin = time.Minute * 5
+
+// caches cloud tokens. eg: EKS token, GKE token, ...
+var tokenCache = cache.New(time.Hour, time.Hour)
+
+func tokenCacheKey(cloud string, cred any, identifiers string) string {
+	switch v := cred.(type) {
+	case string:
+		return fmt.Sprintf("%s-%s-%s", cloud, v, identifiers)
+	default:
+		m, _ := json.Marshal(v)
+		return fmt.Sprintf("%s-%s-%s", cloud, m, identifiers)
+	}
+}
 
 // +kubebuilder:object:generate=true
 type EKSConnection struct {

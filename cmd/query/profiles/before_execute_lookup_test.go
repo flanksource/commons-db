@@ -27,7 +27,7 @@ func (hookedLookupProvider) Execute(dbcontext.Context, query.ProviderRequest) ([
 }
 
 func (p hookedLookupProvider) LookupFilterValues(
-	dbcontext.Context, query.ProviderRequest, query.ColumnFilterBinding, string, int,
+	dbcontext.Context, query.ProviderRequest, query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
 	*p.events = append(*p.events, "lookup")
 	return []query.FilterOption{{Value: "api"}}, &query.Total{Value: 1, Exact: true}, nil

@@ -27,11 +27,11 @@ func (familyLookupMock) Execute(dbcontext.Context, query.ProviderRequest) ([]que
 }
 
 func (m familyLookupMock) LookupFilterValues(
-	_ dbcontext.Context, _ query.ProviderRequest, _ query.ColumnFilterBinding, search string, _ int,
+	_ dbcontext.Context, _ query.ProviderRequest, lookup query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
 	matches := make([]query.FilterOption, 0, len(m.values))
 	for _, value := range m.values {
-		if search == "" || strings.Contains(value, search) {
+		if lookup.Search == "" || strings.Contains(value, lookup.Search) {
 			matches = append(matches, query.FilterOption{Value: value})
 		}
 	}

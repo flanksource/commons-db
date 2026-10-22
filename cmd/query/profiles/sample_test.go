@@ -46,9 +46,7 @@ func (sampleInspectionProvider) InspectColumnFilters(
 func (sampleLookupProvider) LookupFilterValues(
 	dbcontext.Context,
 	query.ProviderRequest,
-	query.ColumnFilterBinding,
-	string,
-	int,
+	query.FilterValueSearch,
 ) ([]query.FilterOption, *query.Total, error) {
 	return []query.FilterOption{{Value: "api", Count: 3}}, &query.Total{Value: 1, Exact: true}, nil
 }

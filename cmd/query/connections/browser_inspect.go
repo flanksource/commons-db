@@ -162,7 +162,7 @@ func (h *connectionBrowserHandler) inspectionOpenSearchSearcher(ctx dbcontext.Co
 
 func (h *connectionBrowserHandler) inspectSQL(ctx context.Context, conn *models.Connection, database string, refresh bool) (sqlinspect.Catalog, error) {
 	key := fmt.Sprintf("%s:connection:%s:%d:%s:%s", h.ctx.ConnectionCacheScope(), conn.ID, conn.UpdatedAt.UnixNano(), conn.Type, database)
-	catalog, err := sqlinspect.Inspect(ctx, nil, conn.Type, sqlinspect.Limits{}, sqlinspect.Options{
+	catalog, err := sqlinspect.Inspect(ctx, nil, conn.Type, sqlinspect.Options{
 		CacheKey: key,
 		Refresh:  refresh,
 		Open: func(loadContext context.Context) (*sql.DB, error) {
