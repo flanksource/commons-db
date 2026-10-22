@@ -88,7 +88,7 @@ func ApplyDedupe(ctx context.Context, rows []query.Row, cfg DedupeConfig) ([]que
 		return rows, nil
 	}
 
-	merge, err := compileMerger(ctx, cfg.Keep, cfg.When, cfg.Emit, cfg.Set)
+	merge, err := compileMerger(ctx, mergerOptions{Keep: cfg.Keep, When: cfg.When, Emit: cfg.Emit, Set: cfg.Set})
 	if err != nil {
 		return nil, err
 	}
