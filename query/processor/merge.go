@@ -20,17 +20,22 @@ type merger struct {
 	setOrder []string
 }
 
+type mergerOptions struct {
+	Keep, When, Emit string
+	Set              map[string]string
+}
+
 // compileMerger compiles the expressions once, so a result of a million rows
 // pays for parsing them a million times over.
-func compileMerger(ctx context.Context, keep, when, emit string, set map[string]string) (*merger, error) {
-	compiled := &merger{keep: keep, set: map[string]*query.RowExpr{}}
+func compileMerger(ctx context.Context, opts mergerOptions) (*merger, error) {
+	compiled := &merger{keep: opts.Keep, set: map[string]*query.RowExpr{}}
 
 	for _, expression := range []struct {
 		source string
 		target **query.RowExpr
 	}{
-		{when, &compiled.when},
-		{emit, &compiled.emit},
+		{opts.When, &compiled.when},
+		{opts.Emit, &compiled.emit},
 	} {
 		if expression.source == "" {
 			continue
@@ -42,12 +47,12 @@ func compileMerger(ctx context.Context, keep, when, emit string, set map[string]
 		*expression.target = expr
 	}
 
-	for name := range set {
+	for name := range opts.Set {
 		compiled.setOrder = append(compiled.setOrder, name)
 	}
 	sort.Strings(compiled.setOrder)
 	for _, name := range compiled.setOrder {
-		expr, err := query.CompileRowExpr(ctx, set[name])
+		expr, err := query.CompileRowExpr(ctx, opts.Set[name])
 		if err != nil {
 			return nil, fmt.Errorf("set %q: %w", name, err)
 		}
