@@ -1,0 +1,20 @@
+name: Set up pinned Gavel
+description: Build the Gavel revision with isolated Ginkgo reporter imports.
+runs:
+  using: composite
+  steps:
+    - name: Check out Gavel
+      uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      with:
+        repository: flanksource/gavel
+        ref: b92402dd613b157dcc3349cb2fe12aa87d9e178b
+        path: .tmp/gavel-source
+        persist-credentials: false
+    - name: Build Gavel
+      shell: bash
+      working-directory: .tmp/gavel-source
+      env:
+        GOWORK: off
+      run: |
+        make build
+        echo "$PWD/.bin" >> "$GITHUB_PATH"

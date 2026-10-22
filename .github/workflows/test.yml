@@ -64,6 +64,9 @@ jobs:
           pnpm --dir cmd/query/www install --frozen-lockfile
           pnpm --dir cmd/query/www build
 
+      - name: Set up pinned Gavel
+        uses: ./.github/actions/setup-gavel
+
       - name: Install deps-start
         run: |
           set -euo pipefail
@@ -131,6 +134,7 @@ jobs:
       - name: Test with gavel
         uses: flanksource/gavel@ce8e88b2ad8b9dc62802ae4230bb086768d3d105 # v0.0.56
         with:
+          version: source
           args: test --ignore ./e2e --bench=^$ --timeout 25m --test-timeout 10m
           artifact-name: gavel-test
           comment-header: gavel-test
@@ -194,9 +198,13 @@ jobs:
       - name: Check go.mod files are tidy
         run: make tidy-check
 
+      - name: Set up pinned Gavel
+        uses: ./.github/actions/setup-gavel
+
       - name: Lint with gavel
         uses: flanksource/gavel@ce8e88b2ad8b9dc62802ae4230bb086768d3d105 # v0.0.56
         with:
+          version: source
           args: lint --timeout 10m
           artifact-name: gavel-lint
           comment-header: gavel-lint
