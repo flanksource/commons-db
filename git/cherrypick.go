@@ -62,7 +62,7 @@ func (w *Worktree) cherryPick(ctx context.Context, request ChangeRequest) ([]str
 	}
 	var skipped []string
 	for _, sha := range request.CherryPick {
-		landed, err := w.pickOne(ctx, env, request, sha, merges[sha])
+		landed, err := w.pickOne(ctx, pickOptions{Env: env, Request: request, SHA: sha, Merge: merges[sha]})
 		if err != nil {
 			return nil, err
 		}
@@ -77,9 +77,19 @@ func (w *Worktree) cherryPick(ctx context.Context, request ChangeRequest) ([]str
 	return skipped, nil
 }
 
-// pickOne lands sha by request.Pick and reports false when it was skipped as
-// already applied, which only AllowEmpty permits.
-func (w *Worktree) pickOne(ctx context.Context, env []string, request ChangeRequest, sha string, merge bool) (bool, error) {
+// pickOptions is one commit SHA to land by Request.Pick, committing as Env's
+// committer; Merge marks a merge commit replayed against its mainline.
+type pickOptions struct {
+	Env     []string
+	Request ChangeRequest
+	SHA     string
+	Merge   bool
+}
+
+// pickOne lands options.SHA and reports false when it was skipped as already
+// applied, which only AllowEmpty permits.
+func (w *Worktree) pickOne(ctx context.Context, options pickOptions) (bool, error) {
+	env, request, sha := options.Env, options.Request, options.SHA
 	if request.Pick == PickReplay {
 		landed, err := w.replay(ctx, env, sha)
 		if err == nil && !landed && !request.AllowEmpty {
@@ -88,7 +98,7 @@ func (w *Worktree) pickOne(ctx context.Context, env []string, request ChangeRequ
 		return landed, err
 	}
 	args := []string{"cherry-pick", "-x"}
-	if merge {
+	if options.Merge {
 		args = append(args, "-m", strconv.Itoa(request.CherryPickMainline))
 	}
 	_, pickErr := run(ctx, command{dir: w.Dir, env: env, args: append(args, "--end-of-options", sha)})
@@ -111,7 +121,7 @@ func (w *Worktree) fetchCommits(ctx context.Context, source *Repository, shas []
 		if hasCommit(ctx, w.mirror, sha) {
 			continue
 		}
-		if _, err := fetch(ctx, w.mirror, w.repo, source, Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}, 0); err != nil {
+		if _, err := fetch(ctx, fetchOptions{Dir: w.mirror, Owner: w.repo, Repo: source, Ref: Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}}); err != nil {
 			return fmt.Errorf("cherry-pick commit %s: %w", sha, err)
 		}
 	}

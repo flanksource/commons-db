@@ -9,20 +9,31 @@ import (
 // work is the non-bare checkout newBareRepo cloned the fixture from.
 func (b bareRepo) work() string { return filepath.Join(b.Root, "work") }
 
-// commitOn commits path=content on branch (created at from when from is set)
-// in the work checkout, pushes the branch to the bare repository and returns
-// the new commit SHA.
-func (b bareRepo) commitOn(branch, from, path, content, message string) string {
+// fixtureCommit is one Path=Content commit with Message on Branch. commitOn
+// creates Branch at From when set; commitAs commits as Author at Date.
+type fixtureCommit struct {
+	Branch  string
+	From    string
+	Path    string
+	Content string
+	Message string
+	Author  string
+	Date    string
+}
+
+// commitOn commits c in the work checkout, pushes the branch to the bare
+// repository and returns the new commit SHA.
+func (b bareRepo) commitOn(c fixtureCommit) string {
 	GinkgoHelper()
-	if from != "" {
-		gitFixture(b.work(), "checkout", "-q", "-B", branch, from)
+	if c.From != "" {
+		gitFixture(b.work(), "checkout", "-q", "-B", c.Branch, c.From)
 	} else {
-		gitFixture(b.work(), "checkout", "-q", branch)
+		gitFixture(b.work(), "checkout", "-q", c.Branch)
 	}
-	writeFixtureFile(b.work(), path, content)
+	writeFixtureFile(b.work(), c.Path, c.Content)
 	gitFixture(b.work(), "add", "-A")
-	gitFixture(b.work(), "commit", "-q", "-m", message)
-	gitFixture(b.work(), "push", "-q", "--force", b.Path, branch)
+	gitFixture(b.work(), "commit", "-q", "-m", c.Message)
+	gitFixture(b.work(), "push", "-q", "--force", b.Path, c.Branch)
 	return gitFixture(b.work(), "rev-parse", "HEAD")
 }
 

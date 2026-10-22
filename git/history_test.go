@@ -1,6 +1,8 @@
 package git_test
 
 import (
+	"os"
+
 	"github.com/flanksource/commons-db/git"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -18,6 +20,30 @@ var _ = Describe("Cache.History and Cache.Show", func() {
 		repo = newRepository(fixture.FileURL(), git.Auth{})
 	})
 
+	It("reads a pinned cached commit after the remote becomes unavailable", func(ctx SpecContext) {
+		_, err := cache.History(ctx, repo, fixture.Main, git.HistoryOptions{})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(os.Rename(fixture.Path, fixture.Path+".offline")).To(Succeed())
+		commits, err := cache.History(ctx, repo, fixture.Main, git.HistoryOptions{Limit: 1})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(commits).To(HaveLen(1))
+		Expect(commits[0].SHA).To(Equal(fixture.Main))
+	})
+
+	It("returns commit metadata without file details or rename work when requested", func(ctx SpecContext) {
+		log := argvRecorder()
+		commits, err := cache.History(ctx, repo, fixture.Main, git.HistoryOptions{Limit: 1, Detail: git.HistoryMetadata})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(commits).To(HaveLen(1))
+		Expect(commits[0].SHA).To(Equal(fixture.Main))
+		Expect(commits[0].Files).To(BeEmpty())
+		Expect(commits[0].Status).To(BeEmpty())
+		commands, err := os.ReadFile(log)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(commands)).NotTo(ContainSubstring("--find-renames"))
+		Expect(string(commands)).NotTo(ContainSubstring("--name-status"))
+	})
+
 	changes := func(commits []git.Commit) []git.Commit {
 		out := make([]git.Commit, len(commits))
 		for i, commit := range commits {
@@ -27,9 +53,9 @@ var _ = Describe("Cache.History and Cache.Show", func() {
 	}
 
 	It("lists the commits of one ref touching Paths newest first, keeping the newest Limit", func(ctx SpecContext) {
-		created := fixture.commitOn("main", "", "a.txt", "a1\n", "add a")
-		fixture.commitOn("main", "", "b.txt", "b\n", "add b")
-		changed := fixture.commitOn("main", "", "a.txt", "a2\n", "change a")
+		created := fixture.commitOn(fixtureCommit{Branch: "main", Path: "a.txt", Content: "a1\n", Message: "add a"})
+		fixture.commitOn(fixtureCommit{Branch: "main", Path: "b.txt", Content: "b\n", Message: "add b"})
+		changed := fixture.commitOn(fixtureCommit{Branch: "main", Path: "a.txt", Content: "a2\n", Message: "change a"})
 
 		commits, err := cache.History(ctx, repo, "main", git.HistoryOptions{Paths: []string{"a.txt"}})
 		Expect(err).ToNot(HaveOccurred())
@@ -44,9 +70,9 @@ var _ = Describe("Cache.History and Cache.Show", func() {
 	})
 
 	It("follows a renamed file back past the rename only with Follow", func(ctx SpecContext) {
-		created := fixture.commitOn("main", "", "a.txt", "line one\nline two\nline three\n", "add a")
+		created := fixture.commitOn(fixtureCommit{Branch: "main", Path: "a.txt", Content: "line one\nline two\nline three\n", Message: "add a"})
 		renamed := fixture.changeOn("main", "rename a", "mv", "a.txt", "c.txt")
-		edited := fixture.commitOn("main", "", "c.txt", "line one\nline two\nline three\nline four\n", "edit c")
+		edited := fixture.commitOn(fixtureCommit{Branch: "main", Path: "c.txt", Content: "line one\nline two\nline three\nline four\n", Message: "edit c"})
 		renamedStatus := map[string]git.FileStatus{"c.txt": git.FileRenamed}
 
 		followed, err := cache.History(ctx, repo, "main", git.HistoryOptions{Paths: []string{"c.txt"}, Follow: true})
@@ -65,8 +91,8 @@ var _ = Describe("Cache.History and Cache.Show", func() {
 
 	It("matches Paths literally, so a file under a glob-like directory does not match its siblings", func(ctx SpecContext) {
 		const globbed = "[Old] Plan/data.xml"
-		fixture.commitOn("main", "", "d Plan/data.xml", "sibling\n", "add a sibling the glob would match")
-		literal := fixture.commitOn("main", "", globbed, "plan\n", "add the bracketed plan")
+		fixture.commitOn(fixtureCommit{Branch: "main", Path: "d Plan/data.xml", Content: "sibling\n", Message: "add a sibling the glob would match"})
+		literal := fixture.commitOn(fixtureCommit{Branch: "main", Path: globbed, Content: "plan\n", Message: "add the bracketed plan"})
 		want := []git.Commit{{SHA: literal, Files: []string{globbed}, Status: map[string]git.FileStatus{globbed: git.FileAdded}}}
 
 		commits, err := cache.History(ctx, repo, "main", git.HistoryOptions{Paths: []string{globbed}})
@@ -85,8 +111,8 @@ var _ = Describe("Cache.History and Cache.Show", func() {
 
 	It("shows a file's bytes at an old commit and ErrPathNotFound once it is deleted", func(ctx SpecContext) {
 		const oldContent = "old\n"
-		old := fixture.commitOn("main", "", "a.txt", oldContent, "add a")
-		fixture.commitOn("main", "", "a.txt", "new\n", "change a")
+		old := fixture.commitOn(fixtureCommit{Branch: "main", Path: "a.txt", Content: oldContent, Message: "add a"})
+		fixture.commitOn(fixtureCommit{Branch: "main", Path: "a.txt", Content: "new\n", Message: "change a"})
 		deleted := fixture.changeOn("main", "remove a", "rm", "-q", "a.txt")
 
 		content, err := cache.Show(ctx, repo, old, "a.txt")

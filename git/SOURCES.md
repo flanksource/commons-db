@@ -2,7 +2,7 @@
 
 `Cache.PrepareSource` captures the source a local analysis tool should read and the exact changed-path selection it should report against. It uses the existing `commons-db/git` command, environment, path validation and timing infrastructure. It does not require a remote or provider client.
 
-Live worktree comparison requires Git 2.45 or newer for `--no-lazy-fetch`. Older versions fail explicitly rather than fetching missing objects on demand. Immutable sources use the package's existing Git 2.31 minimum.
+Live worktree comparison requires Git 2.45 or newer for `--no-lazy-fetch`. Older versions fail explicitly rather than fetching missing objects on demand. Immutable sources require Git 2.42, which supports supplied-content blame in a bare repository.
 
 ```go
 cache := &git.Cache{Root: filepath.Join(project, ".tmp", "sources")}

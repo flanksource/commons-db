@@ -116,22 +116,34 @@ func remoteOf(owner, repo *Repository) string {
 	return repo.URL.CacheKey()
 }
 
-// fetch fetches ref from repo into the repository at dir, the mirror of
-// owner, and returns the fetched commit, which may be newer than the SHA
-// ls-remote reported. flags are extra fetch options (e.g. --unshallow).
-func fetch(ctx context.Context, dir string, owner, repo *Repository, ref Ref, depth int, flags ...string) (string, error) {
+// fetchOptions configures fetch: Ref is fetched from Repo into the repository
+// at Dir, the mirror of Owner. Depth > 0 shallows the fetch; Flags are extra
+// fetch options (e.g. --unshallow).
+type fetchOptions struct {
+	Dir   string
+	Owner *Repository
+	Repo  *Repository
+	Ref   Ref
+	Depth int
+	Flags []string
+}
+
+// fetch fetches options.Ref and returns the fetched commit, which may be
+// newer than the SHA ls-remote reported.
+func fetch(ctx context.Context, options fetchOptions) (string, error) {
+	repo, ref := options.Repo, options.Ref
 	env, cleanup, err := commandEnv(repo)
 	if err != nil {
 		return "", err
 	}
 	defer cleanup()
-	args := append([]string{"fetch", "--quiet", "--no-tags"}, flags...)
-	if depth > 0 {
-		args = append(args, fmt.Sprintf("--depth=%d", depth))
+	args := append([]string{"fetch", "--quiet", "--no-tags"}, options.Flags...)
+	if options.Depth > 0 {
+		args = append(args, fmt.Sprintf("--depth=%d", options.Depth))
 	}
-	args = append(args, "--end-of-options", repo.URL.Clone, ref.refspec(remoteOf(owner, repo)))
-	if _, err := run(ctx, command{dir: dir, env: env, args: args}); err != nil {
+	args = append(args, "--end-of-options", repo.URL.Clone, ref.refspec(remoteOf(options.Owner, repo)))
+	if _, err := run(ctx, command{dir: options.Dir, env: env, args: args}); err != nil {
 		return "", fmt.Errorf("fetch %s from %s: %w", ref.Name, repo.URL.Redacted(), err)
 	}
-	return run(ctx, command{dir: dir, args: []string{"rev-parse", "--verify", "FETCH_HEAD^{commit}"}})
+	return run(ctx, command{dir: options.Dir, args: []string{"rev-parse", "--verify", "FETCH_HEAD^{commit}"}})
 }

@@ -1,6 +1,8 @@
 package git_test
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/flanksource/commons-db/git"
@@ -18,9 +20,24 @@ var _ = Describe("Cache.Blame", func() {
 		repo = newRepository(fixture.FileURL(), git.Auth{})
 	})
 
+	It("attributes supplied contents from the bare cache without creating a worktree", func(ctx SpecContext) {
+		const original = "<Rule>\n<Value/>\n</Rule>\n"
+		created := fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: original, Message: "Add rule"})
+		log := argvRecorder()
+		lines, err := cache.Blame(ctx, repo, git.BlameOptions{SHA: created, Path: "rule.xml", Contents: []byte(original)})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(lines).To(HaveLen(3))
+		Expect(lines[1].Commit.SHA).To(Equal(created))
+		commands, err := os.ReadFile(log)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(string(commands)).NotTo(ContainSubstring("worktree"))
+		_, err = os.Stat(filepath.Join(cache.Root, repo.URL.CacheKey(), "worktrees"))
+		Expect(os.IsNotExist(err)).To(BeTrue())
+	})
+
 	It("attributes displayed lines across a rename and marks inserted and changed lines without writing them", func(ctx SpecContext) {
 		const original = "<Rule>\n  <Value>old</Value>\n</Rule>\n"
-		created := fixture.commitOn("main", "", "old.xml", original, "Add rule")
+		created := fixture.commitOn(fixtureCommit{Branch: "main", Path: "old.xml", Content: original, Message: "Add rule"})
 		fixture.changeOn("main", "Rename rule", "mv", "old.xml", "[Plan] rule.xml")
 		const displayed = "<Rule>\n  <Added/>\n  <Value>new</Value>\n</Rule>\n"
 		head := gitFixture(fixture.work(), "rev-parse", "HEAD")
@@ -37,7 +54,7 @@ var _ = Describe("Cache.Blame", func() {
 	})
 
 	DescribeTable("preserves displayed line boundaries", func(ctx SpecContext, displayed string, expected []string) {
-		head := fixture.commitOn("main", "", "rule.xml", "<Rule>\n  <Value/>\n</Rule>\n", "Add rule")
+		head := fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: "<Rule>\n  <Value/>\n</Rule>\n", Message: "Add rule"})
 		lines, err := cache.Blame(ctx, repo, git.BlameOptions{SHA: head, Path: "rule.xml", Contents: []byte(displayed)})
 		Expect(err).NotTo(HaveOccurred())
 		contents := make([]string, len(lines))
@@ -54,19 +71,19 @@ var _ = Describe("Cache.Blame", func() {
 
 	It("uses the requested commit after its branch advances and completes a shallow cache", func(ctx SpecContext) {
 		const displayed = "<Rule>\n<Value/>\n</Rule>\n"
-		created := fixture.commitOn("main", "", "rule.xml", displayed, "Add rule")
-		head := fixture.commitOn("main", "", "other.xml", "<Other/>", "Other rule")
+		created := fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: displayed, Message: "Add rule"})
+		head := fixture.commitOn(fixtureCommit{Branch: "main", Path: "other.xml", Content: "<Other/>", Message: "Other rule"})
 		wt, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: head, Depth: 1})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(wt.Release()).To(Succeed())
-		fixture.commitOn("main", "", "rule.xml", "<Replaced/>\n", "Replace rule")
+		fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: "<Replaced/>\n", Message: "Replace rule"})
 		lines, err := cache.Blame(ctx, repo, git.BlameOptions{SHA: head, Path: "rule.xml", Contents: []byte(displayed)})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(lines[1].Commit.SHA).To(Equal(created))
 	})
 
 	It("retains each line's original author and commit", func(ctx SpecContext) {
-		created := fixture.commitOn("main", "", "rule.xml", "<Rule>\n<Old/>\n</Rule>\n", "Add rule")
+		created := fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: "<Rule>\n<Old/>\n</Rule>\n", Message: "Add rule"})
 		const displayed = "<Rule>\n<New/>\n</Rule>\n"
 		writeFixtureFile(fixture.work(), "rule.xml", displayed)
 		gitFixture(fixture.work(), "add", "rule.xml")

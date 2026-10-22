@@ -86,7 +86,7 @@ func (p *azureProvider) PullRequestChecks(ctx context.Context, repo RepoURL, pr 
 	var result struct {
 		Value []azurePullStatus `json:"value"`
 	}
-	if _, err := p.api.do(ctx, http.MethodGet, p.pullEndpoint(repo, fmt.Sprintf("/%d/statuses", pr.Number)), nil, &result); err != nil {
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d/statuses", pr.Number)), Out: &result}); err != nil {
 		return nil, err
 	}
 	slices.SortStableFunc(result.Value, func(a, b azurePullStatus) int {
@@ -144,7 +144,7 @@ func (p *githubProvider) PullRequestChecks(ctx context.Context, repo RepoURL, pr
 			} `json:"check_runs"`
 		}
 		endpoint := p.repoEndpoint(repo, "/commits/"+url.PathEscape(pr.HeadSHA)+"/check-runs") + "?per_page=100&filter=latest&page=" + strconv.Itoa(page)
-		if _, err := p.api.do(ctx, http.MethodGet, endpoint, nil, &result); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: endpoint, Out: &result}); err != nil {
 			return nil, err
 		}
 		for _, check := range result.CheckRuns {
@@ -175,7 +175,7 @@ func (p *githubProvider) githubStatuses(ctx context.Context, repo RepoURL, sha s
 			} `json:"statuses"`
 		}
 		endpoint := p.repoEndpoint(repo, "/commits/"+url.PathEscape(sha)+"/status") + "?per_page=100&page=" + strconv.Itoa(page)
-		if _, err := p.api.do(ctx, http.MethodGet, endpoint, nil, &result); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: endpoint, Out: &result}); err != nil {
 			return nil, err
 		}
 		for _, status := range result.Statuses {
@@ -200,7 +200,7 @@ func (p *gitlabProvider) PullRequestChecks(ctx context.Context, repo RepoURL, pr
 			URL   string `json:"target_url"`
 		}
 		endpoint := p.projectEndpoint(repo, "/repository/commits/"+url.PathEscape(pr.HeadSHA)+"/statuses") + "?per_page=100&page=" + strconv.Itoa(page)
-		if _, err := p.api.do(ctx, http.MethodGet, endpoint, nil, &statuses); err != nil {
+		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: endpoint, Out: &statuses}); err != nil {
 			return nil, err
 		}
 		for _, status := range statuses {

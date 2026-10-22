@@ -16,7 +16,9 @@ import (
 
 func TestGitHTTP(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Git HTTP handlers") }
 
-var _ = Describe("shared Git HTTP", func() {
+var _ = Describe("shared Git HTTP", gitHTTPSpecs)
+
+func gitHTTPSpecs() {
 	It("authorizes every operation before parsing inputs or resolving credentials", func() {
 		called := false
 		api, err := httpapi.New(httpapi.Options{Authorize: func(context.Context) error { return errors.New("forbidden") }, Service: func(context.Context) (*browse.Service, error) { called = true; return nil, nil }})
@@ -51,4 +53,4 @@ var _ = Describe("shared Git HTTP", func() {
 		api.Handler("refs")(response, httptest.NewRequest(http.MethodGet, "/git/refs?connection=missing", nil))
 		Expect(response.Code).To(Equal(http.StatusNotFound))
 	})
-})
+}

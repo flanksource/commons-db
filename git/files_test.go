@@ -9,8 +9,8 @@ import (
 var _ = Describe("Git file discovery", func() {
 	It("lists files at an immutable commit, including nested names and ignored tracked files", func(ctx SpecContext) {
 		fixture := newBareRepo("rules")
-		first := fixture.commitOn("main", "", "reports/security groups.xlsx", "workbook", "add workbook")
-		fixture.commitOn("main", "", "later.xlsx", "later", "add later workbook")
+		first := fixture.commitOn(fixtureCommit{Branch: "main", Path: "reports/security groups.xlsx", Content: "workbook", Message: "add workbook"})
+		fixture.commitOn(fixtureCommit{Branch: "main", Path: "later.xlsx", Content: "later", Message: "add later workbook"})
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
 		repo := newRepository(fixture.FileURL(), git.Auth{})
 		files, err := cache.Files(ctx, repo, first)
@@ -22,7 +22,7 @@ var _ = Describe("Git file discovery", func() {
 	})
 	It("paginates history without changing the pinned revision", func(ctx SpecContext) {
 		fixture := newBareRepo("rules")
-		latest := fixture.commitOn("main", "", "second.txt", "second", "second")
+		latest := fixture.commitOn(fixtureCommit{Branch: "main", Path: "second.txt", Content: "second", Message: "second"})
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
 		repo := newRepository(fixture.FileURL(), git.Auth{})
 		page, err := cache.History(ctx, repo, latest, git.HistoryOptions{Limit: 1, Offset: 1})

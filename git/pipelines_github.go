@@ -52,7 +52,7 @@ func (p *githubProvider) ListPipelines(ctx context.Context, options PipelineOpti
 			State   string `json:"state"`
 		} `json:"workflows"`
 	}
-	headers, err := p.api.do(ctx, http.MethodGet, p.repoEndpoint(options.Repository, "/actions/workflows")+"?"+query.Encode(), nil, &response)
+	headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.repoEndpoint(options.Repository, "/actions/workflows") + "?" + query.Encode(), Out: &response})
 	if err != nil {
 		return Page[Pipeline]{}, err
 	}
@@ -98,7 +98,7 @@ func (p *githubProvider) ListPipelineExecutions(ctx context.Context, options Pip
 	var response struct {
 		Runs []githubExecution `json:"workflow_runs"`
 	}
-	headers, err := p.api.do(ctx, http.MethodGet, p.repoEndpoint(options.Repository, "/actions/workflows/"+options.Pipeline+"/runs")+"?"+query.Encode(), nil, &response)
+	headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.repoEndpoint(options.Repository, "/actions/workflows/"+options.Pipeline+"/runs") + "?" + query.Encode(), Out: &response})
 	if err != nil {
 		return Page[PipelineExecution]{}, err
 	}

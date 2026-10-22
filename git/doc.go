@@ -17,6 +17,9 @@
 //     the mirror; show.go reads a file at a commit (Cache.Show), with
 //     ErrPathNotFound for a path absent there; pullrequest.go opens a pull request between two
 //     existing branches (Repository.OpenPullRequest).
+//   - changes.go compares endpoint object IDs without loading bodies;
+//     blobs.go reads selected files in one batch; blame.go attributes supplied
+//     contents directly against an immutable commit in the bare mirror.
 //   - ignore.go lists tracked and unignored paths in a local checkout.
 //   - source.go prepares local working, commit and staged sources with their
 //     changed paths, isolating immutable sources from the original index and checkout.
@@ -30,7 +33,7 @@
 // go-git plumbing/protocol/packp/srvresp.go, the multi_ack TODO), which the
 // old client papered over by mutating the process-global
 // transport.UnsupportedCapabilities. go-git v5 also has no linked worktrees.
-// The git binary (>= 2.31, for GIT_CONFIG_COUNT) handles both, and nothing in
+// The git binary (>= 2.42, for bare supplied-content blame) handles both, and nothing in
 // this package mutates go-git globals: TLS for LsRemote is passed per call.
 //
 // # Credential policy

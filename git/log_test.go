@@ -31,11 +31,11 @@ var _ = Describe("Cache.Log and Cache.Compare", func() {
 	}
 
 	It("lists the commits on head not on base oldest first, with files and merge parents", func(ctx SpecContext) {
-		side := fixture.commitOn("side", fixture.Main, "side.txt", "side\n", "side work\n\nwhy it matters")
+		side := fixture.commitOn(fixtureCommit{Branch: "side", From: fixture.Main, Path: "side.txt", Content: "side\n", Message: "side work\n\nwhy it matters"})
 		merge := fixture.mergeInto("feature", "side")
 		author := git.Signature{Name: "Fixture", Email: "fixture@example.org"}
 
-		commits, err := cache.Log(ctx, repo, "main", "feature", git.LogOptions{})
+		commits, err := cache.Log(ctx, repo, git.LogOptions{Base: "main", Head: "feature"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(summary(commits)).To(Equal([]git.Commit{
 			{SHA: fixture.Feature, Subject: "feature", Author: author, Parents: []string{fixture.Main}, Files: []string{"feature.txt"}},
@@ -48,23 +48,23 @@ var _ = Describe("Cache.Log and Cache.Compare", func() {
 		gitFixture(fixture.work(), "checkout", "-q", "main")
 		gitFixture(fixture.work(), "cherry-pick", fixture.Feature)
 		gitFixture(fixture.work(), "push", "-q", fixture.Path, "main")
-		later := fixture.commitOn("feature", "", "later.txt", "later\n", "later")
+		later := fixture.commitOn(fixtureCommit{Branch: "feature", Path: "later.txt", Content: "later\n", Message: "later"})
 
-		commits, err := cache.Log(ctx, repo, "main", "feature", git.LogOptions{})
+		commits, err := cache.Log(ctx, repo, git.LogOptions{Base: "main", Head: "feature"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(summary(commits)).To(Equal([]git.Commit{{SHA: later, Subject: "later",
 			Author: git.Signature{Name: "Fixture", Email: "fixture@example.org"}, Parents: []string{fixture.Feature}, Files: []string{"later.txt"}}}))
 	})
 
 	It("keeps the newest Limit commits and filters by path", func(ctx SpecContext) {
-		second := fixture.commitOn("feature", "", "other.txt", "x\n", "other")
-		third := fixture.commitOn("feature", "", "feature.txt", "changed\n", "feature again")
+		second := fixture.commitOn(fixtureCommit{Branch: "feature", Path: "other.txt", Content: "x\n", Message: "other"})
+		third := fixture.commitOn(fixtureCommit{Branch: "feature", Path: "feature.txt", Content: "changed\n", Message: "feature again"})
 
-		limited, err := cache.Log(ctx, repo, "main", "feature", git.LogOptions{Limit: 2})
+		limited, err := cache.Log(ctx, repo, git.LogOptions{Base: "main", Head: "feature", Limit: 2})
 		Expect(err).ToNot(HaveOccurred())
 		Expect([]string{limited[0].SHA, limited[1].SHA}).To(Equal([]string{second, third}))
 
-		scoped, err := cache.Log(ctx, repo, "main", "feature", git.LogOptions{Paths: []string{"feature.txt"}})
+		scoped, err := cache.Log(ctx, repo, git.LogOptions{Base: "main", Head: "feature", Paths: []string{"feature.txt"}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect([]string{scoped[0].SHA, scoped[1].SHA}).To(Equal([]string{fixture.Feature, third}))
 		Expect(scoped).To(HaveLen(2))
@@ -79,14 +79,14 @@ var _ = Describe("Cache.Log and Cache.Compare", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(comparison).To(Equal(git.Comparison{Ahead: 1, Behind: 0, MergeBase: fixture.Main}))
 
-		fixture.commitOn("main", "", "hotfix.txt", "fix\n", "hotfix")
+		fixture.commitOn(fixtureCommit{Branch: "main", Path: "hotfix.txt", Content: "fix\n", Message: "hotfix"})
 		comparison, err = cache.Compare(ctx, repo, "main", "feature")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(comparison).To(Equal(git.Comparison{Ahead: 1, Behind: 1, MergeBase: fixture.Main}))
 	})
 
 	It("refuses an unknown ref", func(ctx SpecContext) {
-		_, err := cache.Log(ctx, repo, "main", "missing", git.LogOptions{})
+		_, err := cache.Log(ctx, repo, git.LogOptions{Base: "main", Head: "missing"})
 		Expect(err).To(MatchError(ContainSubstring(`ref "missing" not found`)))
 	})
 })
