@@ -49,9 +49,9 @@ table "items" {
 		Expect(oldmigrate.Apply(ctx, "", files, oldmigrate.WithDB(db), oldmigrate.WithRebuilds())).To(Succeed())
 		cache := oldinspect.NewMemoryCache()
 		opts := oldinspect.Options{CacheKey: "compat-catalog", Cache: cache}
-		first, err := oldinspect.Inspect(ctx, db, "sqlite", opts)
+		first, err := oldinspect.Inspect(ctx, db, "sqlite", oldinspect.Limits{}, opts)
 		Expect(err).NotTo(HaveOccurred())
-		second, err := oldinspect.Inspect(ctx, db, "sqlite", opts)
+		second, err := oldinspect.Inspect(ctx, db, "sqlite", oldinspect.Limits{}, opts)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(first.Schemas).To(Equal(second.Schemas))
 		Expect(second.Cache).NotTo(BeNil())
