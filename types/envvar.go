@@ -320,99 +320,78 @@ func (t EnvVarResourceSelector) Hydrate(env map[string]any) (*ResourceSelector, 
 		Cache: t.Cache,
 	}
 
-	if !t.Agent.Empty() {
-		agent, err := t.Agent.Eval(env)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate agent: %v", err)
-		}
-		rs.Agent = agent
+	if err := evalValueExpressions(env, []valueExpressionTarget{
+		{name: "agent", expr: t.Agent, target: &rs.Agent},
+		{name: "id", expr: t.ID, target: &rs.ID},
+		{name: "name", expr: t.Name, target: &rs.Name},
+		{name: "namespace", expr: t.Namespace, target: &rs.Namespace},
+	}); err != nil {
+		return nil, err
 	}
 
-	if !t.ID.Empty() {
-		id, err := t.ID.Eval(env)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate id: %v", err)
-		}
-		rs.ID = id
+	var err error
+	if rs.Types, err = evalValueExpressionList(env, "type", t.Types); err != nil {
+		return nil, err
+	}
+	if rs.Statuses, err = evalValueExpressionList(env, "status", t.Statuses); err != nil {
+		return nil, err
 	}
 
-	if !t.Name.Empty() {
-		name, err := t.Name.Eval(env)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate name: %v", err)
-		}
-		rs.Name = name
-	}
-
-	if !t.Namespace.Empty() {
-		namespace, err := t.Namespace.Eval(env)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate namespace: %v", err)
-		}
-		rs.Namespace = namespace
-	}
-
-	if len(t.Types) > 0 {
-		rs.Types = make([]string, len(t.Types))
-		for i, typeExpr := range t.Types {
-			if !typeExpr.Empty() {
-				typeStr, err := typeExpr.Eval(env)
-				if err != nil {
-					return nil, fmt.Errorf("failed to evaluate type at index %d: %v", i, err)
-				}
-				rs.Types[i] = typeStr
+	for i, expr := range t.Healths {
+		if !expr.Empty() {
+			result, err := expr.Eval(env)
+			if err != nil {
+				return nil, fmt.Errorf("failed to evaluate health at index %d: %v", i, err)
 			}
+			rs.Health.Add(result)
 		}
 	}
 
-	if len(t.Statuses) > 0 {
-		rs.Statuses = make([]string, len(t.Statuses))
-		for i, statusExpr := range t.Statuses {
-			if !statusExpr.Empty() {
-				statusStr, err := statusExpr.Eval(env)
-				if err != nil {
-					return nil, fmt.Errorf("failed to evaluate status at index %d: %v", i, err)
-				}
-				rs.Statuses[i] = statusStr
-			}
-		}
-	}
-
-	if len(t.Healths) > 0 {
-		for i, expr := range t.Healths {
-			if !expr.Empty() {
-				result, err := expr.Eval(env)
-				if err != nil {
-					return nil, fmt.Errorf("failed to evaluate health at index %d: %v", i, err)
-				}
-				rs.Health.Add(result)
-			}
-		}
-	}
-
-	if !t.TagSelector.Empty() {
-		tagSelector, err := t.TagSelector.Eval(env)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate tagSelector: %v", err)
-		}
-		rs.TagSelector = tagSelector
-	}
-
-	if !t.LabelSelector.Empty() {
-		labelSelector, err := t.LabelSelector.Eval(env)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate labelSelector: %v", err)
-		}
-		rs.LabelSelector = labelSelector
-	}
-
-	if !t.FieldSelector.Empty() {
-		fieldSelector, err := t.FieldSelector.Eval(env)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate fieldSelector: %v", err)
-		}
-		rs.FieldSelector = fieldSelector
+	if err := evalValueExpressions(env, []valueExpressionTarget{
+		{name: "tagSelector", expr: t.TagSelector, target: &rs.TagSelector},
+		{name: "labelSelector", expr: t.LabelSelector, target: &rs.LabelSelector},
+		{name: "fieldSelector", expr: t.FieldSelector, target: &rs.FieldSelector},
+	}); err != nil {
+		return nil, err
 	}
 
 	return &rs, nil
+}
+
+type valueExpressionTarget struct {
+	name   string
+	expr   ValueExpression
+	target *string
+}
+
+func evalValueExpressions(env map[string]any, fields []valueExpressionTarget) error {
+	for _, field := range fields {
+		if field.expr.Empty() {
+			continue
+		}
+		value, err := field.expr.Eval(env)
+		if err != nil {
+			return fmt.Errorf("failed to evaluate %s: %v", field.name, err)
+		}
+		*field.target = value
+	}
+	return nil
+}
+
+func evalValueExpressionList(env map[string]any, kind string, exprs []ValueExpression) ([]string, error) {
+	if len(exprs) == 0 {
+		return nil, nil
+	}
+	values := make([]string, len(exprs))
+	for i, expr := range exprs {
+		if expr.Empty() {
+			continue
+		}
+		value, err := expr.Eval(env)
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate %s at index %d: %v", kind, i, err)
+		}
+		values[i] = value
+	}
+	return values, nil
 }

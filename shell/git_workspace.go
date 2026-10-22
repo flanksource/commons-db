@@ -184,8 +184,10 @@ func populateWorktree(ctx context.Context, source, target string, wt *connection
 			}
 		}
 
-		if err := copyListedFiles(ctx, source, target, "untracked", nil,
-			"ls-files", "--others", "--exclude-standard", "-z"); err != nil {
+		if err := copyListedFiles(ctx, listedFilesCopy{
+			Source: source, Target: target, Kind: "untracked",
+			Args: []string{"ls-files", "--others", "--exclude-standard", "-z"},
+		}); err != nil {
 			return err
 		}
 	}
@@ -203,8 +205,10 @@ func populateWorktree(ctx context.Context, source, target string, wt *connection
 		}
 		// --others --ignored --exclude-standard is the exact complement of the
 		// untracked listing above: `git worktree add` brings neither.
-		if err := copyListedFiles(ctx, source, target, "ignored", skip,
-			"ls-files", "--others", "--ignored", "--exclude-standard", "-z"); err != nil {
+		if err := copyListedFiles(ctx, listedFilesCopy{
+			Source: source, Target: target, Kind: "ignored", Skip: skip,
+			Args: []string{"ls-files", "--others", "--ignored", "--exclude-standard", "-z"},
+		}); err != nil {
 			return err
 		}
 	}
@@ -255,12 +259,19 @@ func dirtyFiles(ctx context.Context, source, since string) ([]string, error) {
 	return out, nil
 }
 
+type listedFilesCopy struct {
+	Source, Target, Kind string
+	Skip                 map[string]struct{}
+	Args                 []string
+}
+
 // copyListedFiles copies every path emitted by a NUL-separated `git ls-files`
 // invocation from source into target, skipping any path in skip.
-func copyListedFiles(ctx context.Context, source, target, kind string, skip map[string]struct{}, args ...string) error {
-	out, err := gitOutput(ctx, source, args...)
+func copyListedFiles(ctx context.Context, opts listedFilesCopy) error {
+	source, target, kind, skip := opts.Source, opts.Target, opts.Kind, opts.Skip
+	out, err := gitOutput(ctx, source, opts.Args...)
 	if err != nil {
-		return fmt.Errorf("git %s: %w", strings.Join(args, " "), err)
+		return fmt.Errorf("git %s: %w", strings.Join(opts.Args, " "), err)
 	}
 
 	var copied, cloned, bytesCopied int64
