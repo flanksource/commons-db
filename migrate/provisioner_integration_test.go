@@ -3,12 +3,18 @@ package migrate
 import (
 	"context"
 	"database/sql"
+	"testing"
 	"testing/fstest"
 
 	"github.com/flanksource/commons-db/dbtest"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestProvisioner(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Migration Provisioner Suite")
+}
 
 var _ = Describe("migration provisioner", Label("integration"), func() {
 	It("runs instance reconciliation for every cloned database", func(ctx SpecContext) {

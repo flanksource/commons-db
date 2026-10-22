@@ -128,7 +128,7 @@ table "t" {
   }
 }
 `)}
-	err = Apply(ctx, dsn, fs, WithDir("migrations"), WithName("views"))
+	err = Apply(ctx, dsn, fs, WithDir("migrations"), WithName("views"), WithDrops())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "public.ext")
 	assert.Contains(t, err.Error(), "CREATE VIEW", "error must carry replayable DDL")

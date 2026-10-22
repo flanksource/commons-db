@@ -31,7 +31,7 @@ table "context_items" {
 		Expect(handle.SQL().QueryRowContext(ctx, `
 SELECT encode(hash, 'hex')
 FROM agent_namespace_two.schema_migration_scripts
-WHERE scope = $1 AND path = 'seed.sql'`, migrationScope(secondSchema, "runtime")).Scan(&secondHashBefore)).To(Succeed())
+WHERE scope = $1 AND path = 'seed.sql'`, secondSchema+":"+"runtime").Scan(&secondHashBefore)).To(Succeed())
 
 		filesystem["schema.hcl"] = &fstest.MapFile{Data: []byte(`
 schema "public" {}
@@ -68,7 +68,7 @@ table "context_items" {
 		Expect(handle.SQL().QueryRowContext(ctx, `
 SELECT encode(hash, 'hex')
 FROM agent_namespace_two.schema_migration_scripts
-WHERE scope = $1 AND path = 'seed.sql'`, migrationScope(secondSchema, "runtime")).Scan(&secondHashAfter)).To(Succeed())
+WHERE scope = $1 AND path = 'seed.sql'`, secondSchema+":"+"runtime").Scan(&secondHashAfter)).To(Succeed())
 		Expect(secondHashAfter).To(Equal(secondHashBefore))
 
 		var publicTable *string

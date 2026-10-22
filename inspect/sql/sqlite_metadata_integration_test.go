@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -25,7 +26,7 @@ var _ = Describe("SQLite schema metadata", func() {
 			_, err := client.ExecContext(ctx, statement)
 			Expect(err).ToNot(HaveOccurred())
 		}
-		catalog, err := Inspect(ctx, client, "sqlite", Limits{}, Options{CacheKey: "sqlite-schema-metadata", Refresh: true})
+		catalog, err := Inspect(ctx, client, "sqlite", Options{CacheKey: "sqlite-schema-metadata", Refresh: true})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(catalog.Truncated).To(BeFalse())
 		var orders, view Relation
@@ -54,7 +55,7 @@ var _ = Describe("SQLite schema metadata", func() {
 		Expect(err).ToNot(HaveOccurred())
 		_, err = client.ExecContext(ctx, "CREATE INDEX items_name_idx ON items(name)")
 		Expect(err).ToNot(HaveOccurred())
-		catalog, err := Inspect(ctx, client, "sqlite", Limits{MaxColumns: 2}, Options{CacheKey: "sqlite-independent-limits", Refresh: true})
+		catalog, err := Inspect(ctx, client, "sqlite", Options{CacheKey: "sqlite-independent-limits", Refresh: true, Limits: Limits{MaxColumns: 2}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(catalog.Truncated).To(BeFalse())
 		Expect(catalog.Schemas[0].Relations[0].Indexes).To(HaveLen(1))
@@ -74,7 +75,7 @@ var _ = Describe("SQLite schema metadata", func() {
 			_, err := client.ExecContext(ctx, statement)
 			Expect(err).ToNot(HaveOccurred())
 		}
-		catalog, err := Inspect(ctx, client, "sqlite", Limits{}, Options{CacheKey: "sqlite-key-nullability", Refresh: true})
+		catalog, err := Inspect(ctx, client, "sqlite", Options{CacheKey: "sqlite-key-nullability", Refresh: true})
 		Expect(err).ToNot(HaveOccurred())
 		columns := map[string][]Column{}
 		for _, relation := range catalog.Schemas[0].Relations {
@@ -84,7 +85,7 @@ var _ = Describe("SQLite schema metadata", func() {
 		Expect(columns["integer_key"][0].Nullable).To(Equal(pointer(false)))
 		Expect(columns["strict_key"][0].Nullable).To(Equal(pointer(false)))
 		Expect(columns["without_rowid_key"][0].Nullable).To(Equal(pointer(false)))
-		bounded, err := Inspect(ctx, client, "sqlite", Limits{MaxColumns: 5}, Options{CacheKey: "sqlite-column-limit", Refresh: true})
+		bounded, err := Inspect(ctx, client, "sqlite", Options{CacheKey: "sqlite-column-limit", Refresh: true, Limits: Limits{MaxColumns: 5}})
 		Expect(err).ToNot(HaveOccurred())
 		columnCount := 0
 		for _, relation := range bounded.Schemas[0].Relations {
@@ -109,7 +110,7 @@ var _ = Describe("SQLite schema metadata", func() {
 		}
 		bounded, cancel := context.WithTimeout(ctx, 3*time.Second)
 		defer cancel()
-		catalog, err := Inspect(bounded, client, "sqlite", Limits{}, Options{CacheKey: "sqlite-constraint-detail", Refresh: true})
+		catalog, err := Inspect(bounded, client, "sqlite", Options{CacheKey: "sqlite-constraint-detail", Refresh: true})
 		Expect(err).ToNot(HaveOccurred())
 		var children Relation
 		for _, relation := range catalog.Schemas[0].Relations {
@@ -133,7 +134,7 @@ var _ = Describe("SQLite schema metadata", func() {
 			_, err := client.ExecContext(ctx, statement)
 			Expect(err).ToNot(HaveOccurred())
 		}
-		catalog, err := Inspect(ctx, client, "sqlite", Limits{MaxMetadata: 1}, Options{CacheKey: "sqlite-metadata-limit", Refresh: true})
+		catalog, err := Inspect(ctx, client, "sqlite", Options{CacheKey: "sqlite-metadata-limit", Refresh: true, Limits: Limits{MaxMetadata: 1}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(catalog.Truncated).To(BeTrue())
 		Expect(catalog.Schemas[0].Relations[0].ForeignKeys).To(HaveLen(1))
@@ -153,7 +154,7 @@ var _ = Describe("SQLite schema metadata", func() {
 			_, err := client.ExecContext(ctx, statement)
 			Expect(err).ToNot(HaveOccurred())
 		}
-		catalog, err := Inspect(ctx, client, "sqlite", Limits{MaxMetadata: 1, MaxDefinitionBytes: 5}, Options{CacheKey: "sqlite-definition-limit", Refresh: true})
+		catalog, err := Inspect(ctx, client, "sqlite", Options{CacheKey: "sqlite-definition-limit", Refresh: true, Limits: Limits{MaxMetadata: 1, MaxDefinitionBytes: 5}})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(catalog.Truncated).To(BeTrue())
 		Expect(catalog.Schemas[0].Relations[0].ViewDef).To(BeEmpty())
@@ -162,3 +163,8 @@ var _ = Describe("SQLite schema metadata", func() {
 })
 
 func pointer[T any](value T) *T { return &value }
+
+func TestSQLInspection(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "SQL Inspection")
+}
