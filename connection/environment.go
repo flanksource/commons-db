@@ -161,40 +161,14 @@ func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osEx
 	}
 
 	if connections.Kubernetes != nil {
-		if lo.FromPtr(connections.FromConfigItem) == "" {
-			// If the kubernetes connection didn't come from `fromConfigItem`, we hydrate it here
-			ctx = ctx.WithKubernetes(connections.Kubernetes)
-			if _, _, err := connections.Kubernetes.Populate(ctx, true); err != nil {
-				return nil, fmt.Errorf("failed to hydrate kubernetes connection: %w", err)
-			}
+		// The kubernetes connection didn't come from `fromConfigItem`, so we hydrate it here
+		ctx = ctx.WithKubernetes(connections.Kubernetes)
+		cleaner, err := setupKubernetesConnection(ctx, connections.Kubernetes, cmd, &output)
+		if cleaner != nil {
+			cleaners = append(cleaners, cleaner)
 		}
-
-		if _, pathErr := os.Stat(connections.Kubernetes.Kubeconfig.ValueStatic); pathErr == nil {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("KUBECONFIG=%s", connections.Kubernetes.Kubeconfig.ValueStatic))
-
-			if f, err := os.ReadFile(connections.Kubernetes.Kubeconfig.ValueStatic); err != nil {
-				return nil, fmt.Errorf("failed to read kubeconfig: %w", err)
-			} else if apiServer, err := kubernetes.GetAPIServer(f); err != nil {
-				return nil, fmt.Errorf("failed to get api server: %w", err)
-			} else {
-				output.ApiServer = apiServer
-			}
-		} else {
-			configPath, err := saveConfig(cmd.Dir, kubernetesConfigTemplate, connections.Kubernetes)
-			if err != nil {
-				return nil, fmt.Errorf("failed to store kubernetes credentials: %w", err)
-			}
-			cleaners = append(cleaners, func() error {
-				return os.RemoveAll(filepath.Dir(configPath))
-			})
-
-			if apiServer, err := kubernetes.GetAPIServer([]byte(connections.Kubernetes.Kubeconfig.ValueStatic)); err != nil {
-				return nil, fmt.Errorf("failed to get api server: %w", err)
-			} else {
-				output.ApiServer = apiServer
-			}
-
-			cmd.Env = append(cmd.Env, fmt.Sprintf("KUBECONFIG=%s", configPath))
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -203,66 +177,29 @@ func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osEx
 	}
 
 	if connections.AWS != nil {
-		if err := connections.AWS.Populate(ctx); err != nil {
-			return nil, fmt.Errorf("failed to hydrate aws connection: %w", err)
-		}
-
-		output.Sources = append(output.Sources, fmt.Sprintf("awsConnection: %s", connections.AWS.ConnectionName))
-		configPath, err := saveConfig(cmd.Dir, awsConfigTemplate, connections.AWS)
+		cleaner, err := setupAWSConnection(ctx, connections.AWS, cmd, &output)
 		if err != nil {
-			return nil, fmt.Errorf("failed to store AWS credentials: %w", err)
+			return nil, err
 		}
-
-		cleaners = append(cleaners, func() error {
-			return os.RemoveAll(filepath.Dir(configPath))
-		})
-
-		cmd.Env = append(cmd.Env, "AWS_EC2_METADATA_DISABLED=true") // https://github.com/aws/aws-cli/issues/5262#issuecomment-705832151
-		cmd.Env = append(cmd.Env, fmt.Sprintf("AWS_SHARED_CREDENTIALS_FILE=%s", configPath))
-		if connections.AWS.Region != "" {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("AWS_DEFAULT_REGION=%s", connections.AWS.Region))
-		}
+		cleaners = append(cleaners, cleaner)
 	} else if connections.EKSPodIdentity {
 		injectEksPodIdentity(ctx, cmd)
 	}
 
 	if connections.Azure != nil {
-		if err := connections.Azure.HydrateConnection(ctx); err != nil {
-			return nil, fmt.Errorf("failed to hydrate connection %w", err)
-		}
-		output.Sources = append(output.Sources, fmt.Sprintf("azureConnection: %s", connections.Azure.ConnectionName))
-
-		// login with service principal
-		runCmd := osExec.CommandContext(ctx, "az", "login", "--service-principal", "--username", connections.Azure.ClientID.ValueStatic, "--password", connections.Azure.ClientSecret.ValueStatic, "--tenant", connections.Azure.TenantID)
-		if err := runCmd.Run(); err != nil {
-			return nil, fmt.Errorf("failed to login: %w", err)
+		if err := setupAzureConnection(ctx, connections.Azure, &output); err != nil {
+			return nil, err
 		}
 	}
 
 	if connections.GCP != nil {
-		if err := connections.GCP.HydrateConnection(ctx); err != nil {
-			return nil, fmt.Errorf("failed to hydrate connection %w", err)
+		cleaner, err := setupGCPConnection(ctx, connections.GCP, cmd, &output)
+		if cleaner != nil {
+			cleaners = append(cleaners, cleaner)
 		}
-
-		output.Sources = append(output.Sources, fmt.Sprintf("gcpConnection: %s", connections.GCP.ConnectionName))
-
-		configPath, err := saveConfig(cmd.Dir, gcloudConfigTemplate, connections.GCP)
 		if err != nil {
-			return nil, fmt.Errorf("failed to store gcloud credentials: %w", err)
+			return nil, err
 		}
-
-		cleaners = append(cleaners, func() error {
-			return os.RemoveAll(filepath.Dir(configPath))
-		})
-
-		// to configure gcloud CLI to use the service account specified in GOOGLE_APPLICATION_CREDENTIALS,
-		// we need to explicitly activate it
-		runCmd := osExec.CommandContext(ctx, "gcloud", "auth", "activate-service-account", "--key-file", configPath)
-		if err := runCmd.Run(); err != nil {
-			return nil, fmt.Errorf("failed to activate GCP service account: %w", err)
-		}
-
-		cmd.Env = append(cmd.Env, fmt.Sprintf("GOOGLE_APPLICATION_CREDENTIALS=%s", configPath))
 	}
 
 	output.EnvVars = cmd.Env
@@ -270,6 +207,104 @@ func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osEx
 	output.Cleanup = cleanup
 
 	return &output, nil
+}
+
+func removeConfigDir(configPath string) func() error {
+	return func() error {
+		return os.RemoveAll(filepath.Dir(configPath))
+	}
+}
+
+func setupKubernetesConnection(ctx context.Context, conn *KubernetesConnection, cmd *osExec.Cmd, output *ConnectionSetupResult) (func() error, error) {
+	if _, _, err := conn.Populate(ctx, true); err != nil {
+		return nil, fmt.Errorf("failed to hydrate kubernetes connection: %w", err)
+	}
+
+	if _, pathErr := os.Stat(conn.Kubeconfig.ValueStatic); pathErr == nil {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("KUBECONFIG=%s", conn.Kubeconfig.ValueStatic))
+		f, err := os.ReadFile(conn.Kubeconfig.ValueStatic)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read kubeconfig: %w", err)
+		}
+		apiServer, err := kubernetes.GetAPIServer(f)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get api server: %w", err)
+		}
+		output.ApiServer = apiServer
+		return nil, nil
+	}
+
+	configPath, err := saveConfig(cmd.Dir, kubernetesConfigTemplate, conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store kubernetes credentials: %w", err)
+	}
+	cleaner := removeConfigDir(configPath)
+
+	apiServer, err := kubernetes.GetAPIServer([]byte(conn.Kubeconfig.ValueStatic))
+	if err != nil {
+		return cleaner, fmt.Errorf("failed to get api server: %w", err)
+	}
+	output.ApiServer = apiServer
+
+	cmd.Env = append(cmd.Env, fmt.Sprintf("KUBECONFIG=%s", configPath))
+	return cleaner, nil
+}
+
+func setupAWSConnection(ctx context.Context, conn *AWSConnection, cmd *osExec.Cmd, output *ConnectionSetupResult) (func() error, error) {
+	if err := conn.Populate(ctx); err != nil {
+		return nil, fmt.Errorf("failed to hydrate aws connection: %w", err)
+	}
+
+	output.Sources = append(output.Sources, fmt.Sprintf("awsConnection: %s", conn.ConnectionName))
+	configPath, err := saveConfig(cmd.Dir, awsConfigTemplate, conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store AWS credentials: %w", err)
+	}
+
+	cmd.Env = append(cmd.Env, "AWS_EC2_METADATA_DISABLED=true") // https://github.com/aws/aws-cli/issues/5262#issuecomment-705832151
+	cmd.Env = append(cmd.Env, fmt.Sprintf("AWS_SHARED_CREDENTIALS_FILE=%s", configPath))
+	if conn.Region != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("AWS_DEFAULT_REGION=%s", conn.Region))
+	}
+	return removeConfigDir(configPath), nil
+}
+
+func setupAzureConnection(ctx context.Context, conn *AzureConnection, output *ConnectionSetupResult) error {
+	if err := conn.HydrateConnection(ctx); err != nil {
+		return fmt.Errorf("failed to hydrate connection %w", err)
+	}
+	output.Sources = append(output.Sources, fmt.Sprintf("azureConnection: %s", conn.ConnectionName))
+
+	// login with service principal
+	runCmd := osExec.CommandContext(ctx, "az", "login", "--service-principal", "--username", conn.ClientID.ValueStatic, "--password", conn.ClientSecret.ValueStatic, "--tenant", conn.TenantID)
+	if err := runCmd.Run(); err != nil {
+		return fmt.Errorf("failed to login: %w", err)
+	}
+	return nil
+}
+
+func setupGCPConnection(ctx context.Context, conn *GCPConnection, cmd *osExec.Cmd, output *ConnectionSetupResult) (func() error, error) {
+	if err := conn.HydrateConnection(ctx); err != nil {
+		return nil, fmt.Errorf("failed to hydrate connection %w", err)
+	}
+
+	output.Sources = append(output.Sources, fmt.Sprintf("gcpConnection: %s", conn.ConnectionName))
+
+	configPath, err := saveConfig(cmd.Dir, gcloudConfigTemplate, conn)
+	if err != nil {
+		return nil, fmt.Errorf("failed to store gcloud credentials: %w", err)
+	}
+	cleaner := removeConfigDir(configPath)
+
+	// to configure gcloud CLI to use the service account specified in GOOGLE_APPLICATION_CREDENTIALS,
+	// we need to explicitly activate it
+	runCmd := osExec.CommandContext(ctx, "gcloud", "auth", "activate-service-account", "--key-file", configPath)
+	if err := runCmd.Run(); err != nil {
+		return cleaner, fmt.Errorf("failed to activate GCP service account: %w", err)
+	}
+
+	cmd.Env = append(cmd.Env, fmt.Sprintf("GOOGLE_APPLICATION_CREDENTIALS=%s", configPath))
+	return cleaner, nil
 }
 
 func cleanupConnectionFiles(cleaners []func() error) error {

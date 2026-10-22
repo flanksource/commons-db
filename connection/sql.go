@@ -28,7 +28,20 @@ import (
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
+	native "github.com/flanksource/sqlglot-go/database/capabilities"
 )
+
+type BackendCapability = native.BackendCapability
+
+const BackendCapabilityArrayFilters = native.BackendCapabilityArrayFilters
+
+type BackendCapabilityStatus = native.BackendCapabilityStatus
+
+type BackendCapabilities = native.BackendCapabilities
+
+func ProbeBackendCapabilities(ctx context.Context, db *databasesql.DB, backend string) (BackendCapabilities, error) {
+	return native.ProbeBackendCapabilities(ctx, db, backend)
+}
 
 var supportedSQLTypes = []string{
 	models.ConnectionTypePostgres,
