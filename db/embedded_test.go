@@ -8,9 +8,16 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	. "github.com/onsi/ginkgo/v2"
+	. "github.com/onsi/gomega"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestEmbeddedConfiguration(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Embedded PostgreSQL Configuration Suite")
+}
 
 // TestFreePort_ReturnsPositive is cheap and runs without spinning postgres.
 func TestFreePort_ReturnsPositive(t *testing.T) {
