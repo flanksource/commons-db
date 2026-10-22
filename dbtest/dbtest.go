@@ -252,7 +252,9 @@ func createConfiguredScratch(
 	}
 	resolutionContext, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	return createLeasedDatabase(resolutionContext, adminURL, opts.Name, unique, time.Now())
+	return createLeasedDatabase(resolutionContext, scratchRequest{
+		adminURL: adminURL, name: opts.Name, unique: unique, now: time.Now(),
+	})
 }
 
 func createEmbeddedScratch(
@@ -266,7 +268,9 @@ func createEmbeddedScratch(
 	}
 	resolutionContext, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	return acquirePooledScratch(resolutionContext, adminURL, opts.Name, unique, time.Now())
+	return acquirePooledScratch(resolutionContext, scratchRequest{
+		adminURL: adminURL, name: opts.Name, unique: unique, now: time.Now(),
+	})
 }
 
 func acquireProvisionedScratchWithTimeout(
@@ -277,14 +281,9 @@ func acquireProvisionedScratchWithTimeout(
 ) (string, *databaseLease, error) {
 	provisioningContext, cancel := context.WithTimeout(ctx, provisioningTimeout)
 	defer cancel()
-	return acquireProvisionedScratch(
-		provisioningContext,
-		adminURL,
-		opts.Name,
-		unique,
-		opts.Provisioner,
-		time.Now(),
-	)
+	return acquireProvisionedScratch(provisioningContext, scratchRequest{
+		adminURL: adminURL, name: opts.Name, unique: unique, now: time.Now(),
+	}, opts.Provisioner)
 }
 
 // close releases every handle and then drops the database, so handles are gone

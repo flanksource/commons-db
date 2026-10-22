@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"sort"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/lib/pq"
@@ -16,6 +17,38 @@ import (
 	. "github.com/onsi/gomega"
 	"golang.org/x/sync/errgroup"
 )
+
+func TestEphemeralDatabases(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Ephemeral Database Suite")
+}
+
+const releaseHelperAdminURLEnv = "DBTEST_RELEASE_HELPER_ADMIN_URL"
+
+// TestReleaseInBackgroundHelper is the child process for the "completes a
+// background drop after the releasing process exits" spec: it leases a
+// database, prints its name, releases it in the background and exits at once.
+func TestReleaseInBackgroundHelper(t *testing.T) {
+	adminURL := os.Getenv(releaseHelperAdminURLEnv)
+	if adminURL == "" {
+		return
+	}
+	dsn, lease, err := createLeasedDatabase(context.Background(), scratchRequest{
+		adminURL: adminURL, name: "exit release", unique: uniqueSuffix(), now: time.Now(),
+	})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	parsed, err := url.Parse(dsn)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	fmt.Println(strings.TrimPrefix(parsed.Path, "/"))
+	lease.releaseInBackground()
+	os.Exit(0)
+}
 
 var _ = Describe("pooled ephemeral databases", Label("integration"), Ordered, func() {
 	var adminURL string

@@ -82,14 +82,14 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		provisioner := &integrationProvisioner{fingerprint: fmt.Sprintf("reuse-%d", time.Now().UnixNano())}
 		DeferCleanup(dropProvisionerTemplates, adminURL, provisioner.fingerprint)
 
-		firstDSN, firstLease, err := acquireProvisionedScratch(
-			ctx, adminURL, "first", uniqueSuffix(), provisioner, time.Now(),
-		)
+		firstDSN, firstLease, err := acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "first", unique: uniqueSuffix(), now: time.Now(),
+		}, provisioner)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(expectProvisionerCleanup, firstLease)
-		secondDSN, secondLease, err := acquireProvisionedScratch(
-			ctx, adminURL, "second", uniqueSuffix(), provisioner, time.Now(),
-		)
+		secondDSN, secondLease, err := acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "second", unique: uniqueSuffix(), now: time.Now(),
+		}, provisioner)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(expectProvisionerCleanup, secondLease)
 
@@ -129,14 +129,9 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		group, groupContext := errgroup.WithContext(ctx)
 		for index := range callers {
 			group.Go(func() error {
-				_, lease, err := acquireProvisionedScratch(
-					groupContext,
-					adminURL,
-					"concurrent",
-					uniqueSuffix(),
-					provisioner,
-					time.Now(),
-				)
+				_, lease, err := acquireProvisionedScratch(groupContext, scratchRequest{
+					adminURL: adminURL, name: "concurrent", unique: uniqueSuffix(), now: time.Now(),
+				}, provisioner)
 				leases[index] = lease
 				return err
 			})
@@ -154,13 +149,13 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		provisioner.templateFailures.Store(1)
 		DeferCleanup(dropProvisionerTemplates, adminURL, provisioner.fingerprint)
 
-		_, _, err := acquireProvisionedScratch(
-			ctx, adminURL, "failed", uniqueSuffix(), provisioner, time.Now(),
-		)
+		_, _, err := acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "failed", unique: uniqueSuffix(), now: time.Now(),
+		}, provisioner)
 		Expect(err).To(MatchError(ContainSubstring("injected template preparation failure")))
-		_, lease, err := acquireProvisionedScratch(
-			ctx, adminURL, "retry", uniqueSuffix(), provisioner, time.Now(),
-		)
+		_, lease, err := acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "retry", unique: uniqueSuffix(), now: time.Now(),
+		}, provisioner)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(expectProvisionerCleanup, lease)
 		Expect(lease.release()).To(Succeed())
@@ -177,9 +172,9 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		deadline, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
-		_, _, err := acquireProvisionedScratch(
-			deadline, adminURL, "deadline", uniqueSuffix(), provisioner, time.Now(),
-		)
+		_, _, err := acquireProvisionedScratch(deadline, scratchRequest{
+			adminURL: adminURL, name: "deadline", unique: uniqueSuffix(), now: time.Now(),
+		}, provisioner)
 
 		Expect(err).To(MatchError(context.DeadlineExceeded))
 		Expect(provisionerTemplateExists(adminURL, provisioner.fingerprint)).To(BeFalse())
@@ -193,9 +188,9 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		}
 		DeferCleanup(dropProvisionerTemplates, adminURL, provisioner.fingerprint)
 
-		_, lease, err := acquireProvisionedScratch(
-			ctx, adminURL, "connection-drain", uniqueSuffix(), provisioner, time.Now(),
-		)
+		_, lease, err := acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "connection-drain", unique: uniqueSuffix(), now: time.Now(),
+		}, provisioner)
 
 		Eventually(provisioner.templateConnectionClosed).Should(Receive(Succeed()))
 		Expect(err).NotTo(HaveOccurred())
@@ -211,9 +206,9 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		unique := uniqueSuffix()
 		instanceName := managedDatabaseName(testDatabasePrefix, created, unique, "instance-failure")
 
-		_, _, err := acquireProvisionedScratch(
-			ctx, adminURL, "instance-failure", unique, provisioner, created,
-		)
+		_, _, err := acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "instance-failure", unique: unique, now: created,
+		}, provisioner)
 
 		Expect(err).To(MatchError(ContainSubstring("injected instance preparation failure")))
 		Expect(databaseExists(ctx, adminURL, instanceName)).To(BeFalse())
@@ -229,17 +224,17 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		DeferCleanup(dropProvisionerTemplates, adminURL, oldProvisioner.fingerprint)
 		DeferCleanup(dropProvisionerTemplates, adminURL, newProvisioner.fingerprint)
 
-		_, lease, err := acquireProvisionedScratch(
-			ctx, adminURL, "old", uniqueSuffix(), oldProvisioner, old,
-		)
+		_, lease, err := acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "old", unique: uniqueSuffix(), now: old,
+		}, oldProvisioner)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(expectProvisionerCleanup, lease)
 		Expect(lease.release()).To(Succeed())
 		oldTemplate := provisionerTemplate(adminURL, oldProvisioner.fingerprint)
 
-		_, lease, err = acquireProvisionedScratch(
-			ctx, adminURL, "current", uniqueSuffix(), oldProvisioner, now,
-		)
+		_, lease, err = acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "current", unique: uniqueSuffix(), now: now,
+		}, oldProvisioner)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(expectProvisionerCleanup, lease)
 		Expect(lease.release()).To(Succeed())
@@ -253,9 +248,9 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func() { Expect(lockSession.close()).To(Succeed()) })
 		Expect(lockSession.lock(ctx, templateLockNamespace+identity.key)).To(Succeed())
-		_, lease, err = acquireProvisionedScratch(
-			ctx, adminURL, "new", uniqueSuffix(), newProvisioner, now,
-		)
+		_, lease, err = acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "new", unique: uniqueSuffix(), now: now,
+		}, newProvisioner)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(expectProvisionerCleanup, lease)
 		Expect(lease.release()).To(Succeed())
@@ -273,7 +268,7 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		identity, err := newTemplateIdentity(fmt.Sprintf("orphan-%d", time.Now().UnixNano()))
 		Expect(err).NotTo(HaveOccurred())
 		orphanName := templateDatabaseName(identity, now.Add(-staleDatabaseAge-time.Hour))
-		createSealedTemplate(ctx, adminURL, "template0", orphanName, "")
+		createSealedTemplate(ctx, adminURL, sealedTemplate{source: "template0", name: orphanName})
 		DeferCleanup(dropTemplateIfPresent, adminURL, orphanName)
 
 		Expect(sweepStaleTemplates(ctx, adminURL, "", now)).To(Succeed())
@@ -285,9 +280,9 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		now := time.Now().UTC().Truncate(time.Second)
 		provisioner := &integrationProvisioner{fingerprint: fmt.Sprintf("duplicate-%d", time.Now().UnixNano())}
 		DeferCleanup(dropProvisionerTemplates, adminURL, provisioner.fingerprint)
-		_, lease, err := acquireProvisionedScratch(
-			ctx, adminURL, "original", uniqueSuffix(), provisioner, now,
-		)
+		_, lease, err := acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "original", unique: uniqueSuffix(), now: now,
+		}, provisioner)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(expectProvisionerCleanup, lease)
 		Expect(lease.release()).To(Succeed())
@@ -295,12 +290,14 @@ var _ = Describe("provisioned ephemeral databases", Label("integration"), Ordere
 		identity, err := newTemplateIdentity(provisioner.fingerprint)
 		Expect(err).NotTo(HaveOccurred())
 		duplicateName := templateDatabaseName(identity, now.Add(time.Second))
-		createSealedTemplate(ctx, adminURL, original.name, duplicateName, identity.metadata)
+		createSealedTemplate(ctx, adminURL, sealedTemplate{
+			source: original.name, name: duplicateName, metadata: identity.metadata,
+		})
 		DeferCleanup(dropTemplateIfPresent, adminURL, duplicateName)
 
-		_, lease, err = acquireProvisionedScratch(
-			ctx, adminURL, "duplicate", uniqueSuffix(), provisioner, now.Add(2*time.Second),
-		)
+		_, lease, err = acquireProvisionedScratch(ctx, scratchRequest{
+			adminURL: adminURL, name: "duplicate", unique: uniqueSuffix(), now: now.Add(2 * time.Second),
+		}, provisioner)
 
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(expectProvisionerCleanup, lease)
@@ -399,26 +396,30 @@ func dropProvisionerTemplates(adminURL, fingerprint string) {
 	}
 }
 
-func createSealedTemplate(ctx context.Context, adminURL, source, name, metadata string) {
+type sealedTemplate struct {
+	source, name, metadata string
+}
+
+func createSealedTemplate(ctx context.Context, adminURL string, template sealedTemplate) {
 	GinkgoHelper()
 	session, err := openPoolSession(ctx, adminURL)
 	Expect(err).NotTo(HaveOccurred())
 	defer session.close() //nolint:errcheck
 	_, err = session.conn.ExecContext(
 		ctx,
-		"CREATE DATABASE "+pq.QuoteIdentifier(name)+" WITH TEMPLATE "+pq.QuoteIdentifier(source),
+		"CREATE DATABASE "+pq.QuoteIdentifier(template.name)+" WITH TEMPLATE "+pq.QuoteIdentifier(template.source),
 	)
 	Expect(err).NotTo(HaveOccurred())
-	if metadata != "" {
+	if template.metadata != "" {
 		_, err = session.conn.ExecContext(
 			ctx,
-			"COMMENT ON DATABASE "+pq.QuoteIdentifier(name)+" IS "+pq.QuoteLiteral(metadata),
+			"COMMENT ON DATABASE "+pq.QuoteIdentifier(template.name)+" IS "+pq.QuoteLiteral(template.metadata),
 		)
 		Expect(err).NotTo(HaveOccurred())
 	}
 	_, err = session.conn.ExecContext(
 		ctx,
-		"ALTER DATABASE "+pq.QuoteIdentifier(name)+" WITH ALLOW_CONNECTIONS false IS_TEMPLATE true",
+		"ALTER DATABASE "+pq.QuoteIdentifier(template.name)+" WITH ALLOW_CONNECTIONS false IS_TEMPLATE true",
 	)
 	Expect(err).NotTo(HaveOccurred())
 }

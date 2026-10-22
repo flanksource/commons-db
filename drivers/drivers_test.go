@@ -1,11 +1,20 @@
 package drivers
 
 import (
+	"testing"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
 
-var _ = Describe("ParseParams", func() {
+func TestDrivers(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Drivers Suite")
+}
+
+var _ = Describe("ParseParams", parseParamsSpecs)
+
+func parseParamsSpecs() {
 	tests := []struct {
 		input  string
 		output map[string]string
@@ -28,4 +37,4 @@ var _ = Describe("ParseParams", func() {
 			Expect(result).To(Equal(test.output))
 		})
 	}
-})
+}

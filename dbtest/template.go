@@ -51,9 +51,8 @@ func newTemplateIdentity(fingerprint string) (templateIdentity, error) {
 
 func acquireProvisionedScratch(
 	ctx context.Context,
-	adminURL, name, unique string,
+	req scratchRequest,
 	provisioner Provisioner,
-	now time.Time,
 ) (string, *databaseLease, error) {
 	fingerprint, err := provisioner.Fingerprint(ctx)
 	if err != nil {
@@ -64,10 +63,10 @@ func acquireProvisionedScratch(
 		return "", nil, err
 	}
 	manager := templateManager{
-		adminURL: adminURL, provisioner: provisioner, identity: identity,
-		now: now.UTC().Truncate(time.Second),
+		adminURL: req.adminURL, provisioner: provisioner, identity: identity,
+		now: req.now.UTC().Truncate(time.Second),
 	}
-	return manager.acquire(ctx, name, unique)
+	return manager.acquire(ctx, req.name, req.unique)
 }
 
 func (m templateManager) acquire(
