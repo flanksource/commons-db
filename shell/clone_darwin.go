@@ -15,7 +15,10 @@ func cloneFile(src, dst string) error {
 		return err
 	}
 
-	err := unix.Clonefile(src, dst, 0)
+	return cloneFileError(unix.Clonefile(src, dst, 0))
+}
+
+func cloneFileError(err error) error {
 	switch {
 	case err == nil:
 		return nil
