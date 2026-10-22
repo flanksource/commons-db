@@ -115,21 +115,31 @@ func ExecuteStream(ctx context.Context, reg *SessionRegistry, p Profile, params 
 	}
 
 	if p.Kind() == KindTrace {
-		return startTrace(ctx, reg, p, resolved, filters, release)
+		return startTrace(ctx, reg, traceStart{
+			profile: p, resolved: resolved, filters: filters, release: release,
+		})
 	}
 	return startTop(ctx, reg, topSampler{
 		profile: p, resolved: resolved, filters: filters, supplied: supplied, release: release,
 	})
 }
 
-func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved map[string]any, filters []ColumnFilterValue, release func()) (*Session, error) {
+type traceStart struct {
+	profile  Profile
+	resolved map[string]any
+	filters  []ColumnFilterValue
+	release  func()
+}
+
+func startTrace(ctx context.Context, reg *SessionRegistry, start traceStart) (*Session, error) {
 	started := false
 	defer func() {
 		if !started {
-			release()
+			start.release()
 		}
 	}()
 
+	p, resolved, filters := start.profile, start.resolved, start.filters
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return nil, err
@@ -138,7 +148,7 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 	if !ok {
 		return nil, fmt.Errorf("profile %q: provider %q does not support streaming", p.Name, p.Provider.Type)
 	}
-	req, err := buildProviderRequest(ctx, provider, p.Provider, p.Query, p.Params, resolved)
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
@@ -162,12 +172,16 @@ func startTrace(ctx context.Context, reg *SessionRegistry, p Profile, resolved m
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 
-	run, err := reg.startStream(ctx, p, resolved, reg.ClampEvents(p.Trace.EventLimit()), p.Trace.DurationLimit())
+	run, err := reg.startStream(ctx, p, streamStartOptions{
+		Params: resolved, MaxEvents: reg.ClampEvents(p.Trace.EventLimit()), Duration: p.Trace.DurationLimit(),
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	go runTrace(run, sp, req, pipeline, p.Trace.Buffer, release)
+	go runTrace(run, traceStream{
+		provider: sp, request: req, pipeline: pipeline, buffer: p.Trace.Buffer, release: start.release,
+	})
 	started = true
 	return run.session, nil
 }
@@ -208,23 +222,24 @@ func openTailWindow(filters []ColumnFilterValue) []ColumnFilterValue {
 	return open
 }
 
-func runTrace(
-	run streamRun,
-	sp StreamProvider,
-	req ProviderRequest,
-	pipeline *tracePipeline,
-	buffer *TraceBufferSpec,
-	release func(),
-) {
-	defer release()
+type traceStream struct {
+	provider StreamProvider
+	request  ProviderRequest
+	pipeline *tracePipeline
+	buffer   *TraceBufferSpec
+	release  func()
+}
+
+func runTrace(run streamRun, stream traceStream) {
+	defer stream.release()
 	defer run.cancel()
 	ctx, session := run.ctx, run.session
 	markStreamRunning(session)
 	deliveryCtx, stopDelivery := stdcontext.WithCancel(stdcontext.Background())
 	defer stopDelivery()
-	rows, done := streamTraceRows(ctx, sp, req, deliveryCtx)
+	rows, done := streamTraceRows(ctx, stream.provider, stream.request, deliveryCtx)
 	runner := traceRunner{
-		session: session, pipeline: pipeline, buffer: buffer,
+		session: session, pipeline: stream.pipeline, buffer: stream.buffer,
 		rows: rows, done: done,
 	}
 	err := normalizeStreamErr(ctx, runner.run())
@@ -416,7 +431,9 @@ func startTop(ctx context.Context, reg *SessionRegistry, sampler topSampler) (*S
 	if _, err := GetProvider(p.Provider.Type); err != nil {
 		return nil, err
 	}
-	run, err := reg.startStream(ctx, p, maps.Clone(sampler.resolved), reg.ClampEvents(0), p.Top.DurationLimit())
+	run, err := reg.startStream(ctx, p, streamStartOptions{
+		Params: maps.Clone(sampler.resolved), MaxEvents: reg.ClampEvents(0), Duration: p.Top.DurationLimit(),
+	})
 	if err != nil {
 		return nil, err
 	}

@@ -90,46 +90,49 @@ func walkRequest(p Profile, batch int) PageRequest {
 // A caller wanting a single page breaks after the first, which is also what
 // releases the backend cursor.
 func ExecutePages(ctx context.Context, p Profile, page PageRequest, params ...map[string]any) iter.Seq2[Page, error] {
-	return executePages(ctx, p, page, true, params...)
+	return executePages(ctx, pageExecution{Profile: p, Page: page, ApplyPipeline: true, Params: params})
 }
 
 func executeRawPages(ctx context.Context, p Profile, page PageRequest, params ...map[string]any) iter.Seq2[Page, error] {
-	return executePages(ctx, p, page, false, params...)
+	return executePages(ctx, pageExecution{Profile: p, Page: page, Params: params})
 }
 
-func executePages(ctx context.Context, p Profile, page PageRequest, applyPipeline bool, params ...map[string]any) iter.Seq2[Page, error] {
-	if err := page.Validate(); err != nil {
-		return ErrorPage(err)
+// pageExecution is one paged run of a profile. ApplyPipeline runs processors
+// and row transforms over each raw page; Params holds at most one supplied map.
+type pageExecution struct {
+	Profile       Profile
+	Page          PageRequest
+	ApplyPipeline bool
+	Params        []map[string]any
+}
+
+func validatePageExecution(run pageExecution) error {
+	p := run.Profile
+	if err := run.Page.Validate(); err != nil {
+		return err
 	}
 	if err := p.Validate(); err != nil {
-		return ErrorPage(err)
+		return err
 	}
 	if p.Kind() == KindTrace {
-		return ErrorPage(fmt.Errorf("profile %q is a trace; use ExecuteStream", p.Name))
+		return fmt.Errorf("profile %q is a trace; use ExecuteStream", p.Name)
 	}
-	if applyPipeline {
-		label, err := nonPageProcessor(p.Processors)
-		if err != nil {
-			return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
-		}
-		if label != "" {
-			return ErrorPage(fmt.Errorf("profile %q cannot be paged: processor %q needs the whole result", p.Name, label))
-		}
+	if !run.ApplyPipeline {
+		return nil
 	}
-
-	// Resolved once and used for both the provider request and the cursor scope
-	// below: the scope is what a cursor is validated against, so serving a page
-	// under one order and scoping it under another would stale every cursor the
-	// walk mints.
-	//
-	// A sort the request names leads the declared order rather than replacing
-	// it, so the tiebreaker paging depends on is still where it has to be. The
-	// scope picks the resolved order up, which is what correctly stales a cursor
-	// cut under a different sort.
-	order, err := p.RequestedOrder(page.Sort, page.Desc)
+	label, err := nonPageProcessor(p.Processors)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return fmt.Errorf("profile %q: %w", p.Name, err)
 	}
+	if label != "" {
+		return fmt.Errorf("profile %q cannot be paged: processor %q needs the whole result", p.Name, label)
+	}
+	return nil
+}
+
+// resolvePageStrategy settles the strategy a cursor-only provider's first page
+// implies and refuses a position or mode the profile and provider cannot serve.
+func resolvePageStrategy(p Profile, page PageRequest, order Order) (PageRequest, error) {
 	// A cursor-only provider's first page has no token yet, so without an
 	// explicit strategy it looks like offset zero. Resolve that ambiguity here
 	// rather than making every transport know which providers have no offset.
@@ -143,20 +146,46 @@ func executePages(ctx context.Context, p Profile, page PageRequest, applyPipelin
 	// so the profile is held to declaring one before it can be asked for one.
 	if page.Offset > 0 || !page.Cursor.IsZero() {
 		if err := order.Pageable(); err != nil {
-			return ErrorPage(fmt.Errorf("profile %q cannot be paged: %w", p.Name, err))
+			return PageRequest{}, fmt.Errorf("profile %q cannot be paged: %w", p.Name, err)
 		}
 	}
 	if mode := page.Mode(); !modes.Supports(mode) {
-		return ErrorPage(fmt.Errorf("profile %q: provider %q cannot page by %s (it serves %s)",
-			p.Name, p.Provider.Type, mode, modes))
+		return PageRequest{}, fmt.Errorf("profile %q: provider %q cannot page by %s (it serves %s)",
+			p.Name, p.Provider.Type, mode, modes)
+	}
+	return page, nil
+}
+
+func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error] {
+	if err := validatePageExecution(run); err != nil {
+		return ErrorPage(err)
+	}
+	p, applyPipeline := run.Profile, run.ApplyPipeline
+
+	// Resolved once and used for both the provider request and the cursor scope
+	// below: the scope is what a cursor is validated against, so serving a page
+	// under one order and scoping it under another would stale every cursor the
+	// walk mints.
+	//
+	// A sort the request names leads the declared order rather than replacing
+	// it, so the tiebreaker paging depends on is still where it has to be. The
+	// scope picks the resolved order up, which is what correctly stales a cursor
+	// cut under a different sort.
+	order, err := p.RequestedOrder(run.Page.Sort, run.Page.Desc)
+	if err != nil {
+		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+	}
+	page, err := resolvePageStrategy(p, run.Page, order)
+	if err != nil {
+		return ErrorPage(err)
 	}
 
 	if p.Namespace != "" {
 		ctx = ctx.WithNamespace(p.Namespace)
 	}
 	var supplied map[string]any
-	if len(params) > 0 {
-		supplied = params[0]
+	if len(run.Params) > 0 {
+		supplied = run.Params[0]
 	}
 	// The first page of a walk picks the clock its date math resolves against and
 	// stamps it into the cursor; every later page reads it back. Resolving afresh
@@ -176,7 +205,7 @@ func executePages(ctx context.Context, p Profile, page PageRequest, applyPipelin
 	if err != nil {
 		return ErrorPage(err)
 	}
-	req, err := buildProviderRequest(ctx, provider, p.Provider, p.Query, p.Params, resolved)
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
 	if err != nil {
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}

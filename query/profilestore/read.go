@@ -1,3 +1,6 @@
+// Package profilestore holds the contracts a profile store and a profile read
+// hook satisfy, shared by the profile service and the data sources it serves.
+//
 // Read hooks: the contract a data source implements to prepare profile reads,
 // and the errors it wraps so the transport answers with the right status.
 package profilestore
@@ -65,4 +68,22 @@ func PrepareReads(ctx context.Context, hook BeforeExecuteFunc, reads []ReadReque
 		return func() {}, err
 	}
 	return releaseOnce, nil
+}
+
+type Store interface {
+	List(context.Context) ([]query.Profile, error)
+	Get(context.Context, string) (query.Profile, error)
+	Save(context.Context, query.Profile) error
+	Update(context.Context, string, query.Profile, UpdateOptions) error
+	Delete(context.Context, string) error
+}
+
+type VirtualStore interface {
+	Store
+	Peek(context.Context, string) (query.Profile, error)
+	IsVirtual(string) bool
+}
+
+type UpdateOptions struct {
+	ReplaceExisting bool
 }

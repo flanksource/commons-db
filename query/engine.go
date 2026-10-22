@@ -7,8 +7,60 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons-db/context"
 )
+
+// Row is a single result record keyed by column name. It is a type alias for
+// the generic map so provider code (ported from duty/dataquery) and CEL
+// evaluation can treat rows uniformly.
+type Row = map[string]any
+
+// RowPresenter restores a typed record's table presentation after a provider
+// has returned it as a generic Row. It is used only for the interactive Clicky
+// document; raw exports keep the provider values unchanged.
+type RowPresenter interface {
+	Columns() []api.ColumnDef
+	Present(Row) (map[string]any, error)
+}
+
+// Result is the output of executing a Profile: the tabular rows plus any named
+// context objects (Policy/Plan/Integrations side panels, each
+// produced by a SubQuery).
+type Result struct {
+	// Profile is the name of the Profile that produced this Result.
+	Profile string `json:"profile,omitempty" yaml:"profile,omitempty"`
+
+	// Rows are the primary tabular records.
+	Rows []Row `json:"rows" yaml:"rows"`
+
+	// Presenter supplies rich cells for the interactive table without changing
+	// the raw values serialized by JSON, CSV, Excel, and other exports.
+	Presenter RowPresenter `json:"-" yaml:"-"`
+
+	// Context holds named side objects keyed by SubQuery name.
+	Context map[string]any `json:"context,omitempty" yaml:"context,omitempty"`
+
+	// ColumnFilterKeys binds rendered columns to native server filter params.
+	ColumnFilterKeys map[string]string `json:"-" yaml:"-"`
+
+	// ColumnSortKeys binds rendered columns to the public name a request sorts
+	// them by. A column absent from it cannot be ordered on, which is what makes
+	// the table render its header inert rather than offering a sort the server
+	// would refuse.
+	ColumnSortKeys map[string]string `json:"-" yaml:"-"`
+
+	// Styles holds each row's evaluated ColumnDef.Style classes, keyed by column
+	// name and positionally parallel to Rows. It is render-only and deliberately
+	// off the wire: styling a cell must not change the value an export carries.
+	Styles []map[string]string `json:"-" yaml:"-"`
+
+	// Truncated reports that this result is short of what the query had to
+	// give — the Profile's export ceiling stopping the read, or the backend
+	// applying a cap of its own. It travels with the Result so a partial answer
+	// is never mistaken for a complete one.
+	Truncated bool `json:"truncated,omitempty" yaml:"truncated,omitempty"`
+}
 
 // Execute runs a Profile end-to-end: resolve the supplied params, render the
 // query, dispatch to the provider, run processors, and then evaluate aliases,
@@ -52,7 +104,7 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	if err != nil {
 		return nil, err
 	}
-	req, err := buildProviderRequest(ctx, provider, p.Provider, p.Query, p.Params, resolved)
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
@@ -206,7 +258,7 @@ func executeSubQuery(ctx context.Context, sub SubQuery, defs []ParamDef, params 
 	if err != nil {
 		return nil, err
 	}
-	req, err := buildProviderRequest(ctx, provider, sub.Provider, sub.Query, defs, params)
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: sub.Provider, Query: sub.Query, Defs: defs, Resolved: params})
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +275,16 @@ func executeSubQuery(ctx context.Context, sub SubQuery, defs []ParamDef, params 
 // against the profile params. Providers with structural query binding receive
 // values separately from their query text. Callers set Filters, Order and
 // Position on the result.
-func buildProviderRequest(ctx context.Context, provider Provider, cfg ProviderConfig, rawQuery string, defs []ParamDef, resolved map[string]any) (ProviderRequest, error) {
+type providerRequestInput struct {
+	Provider Provider
+	Config   ProviderConfig
+	Query    string
+	Defs     []ParamDef
+	Resolved map[string]any
+}
+
+func buildProviderRequest(ctx context.Context, in providerRequestInput) (ProviderRequest, error) {
+	provider, cfg, rawQuery, defs, resolved := in.Provider, in.Config, in.Query, in.Defs, in.Resolved
 	templateParams, err := providerTemplateParams(cfg, defs, resolved)
 	if err != nil {
 		return ProviderRequest{}, err

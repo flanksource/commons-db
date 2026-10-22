@@ -54,7 +54,7 @@ func (p Profile) SortBindings() ([]SortBinding, error) {
 		if !nestable || nested != "" || len(target.Where) > 0 {
 			continue
 		}
-		field, addressable, err := resolveBackendField(p, column, target, declared, nested)
+		field, addressable, err := resolveBackendField(p, column, backendFieldRequest{Target: target, Declared: declared, Nested: nested})
 		if err != nil {
 			return nil, err
 		}

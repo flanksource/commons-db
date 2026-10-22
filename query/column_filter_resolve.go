@@ -125,25 +125,55 @@ func (b ColumnFilterBinding) resolveSelection(value any) (ColumnFilterValue, err
 }
 
 func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) ([]FilterOption, *Total, error) {
-	profile, input := request.Profile, request.Input
-	key, search, limit := request.Key, request.Search, request.Limit
+	profile := request.Profile
 	if err := profile.Validate(); err != nil {
 		return nil, nil, err
 	}
 	if profile.Namespace != "" {
 		ctx = ctx.WithNamespace(profile.Namespace)
 	}
-	resolved, filters, err := resolveProfileInput(profile, input, time.Now())
+	resolved, filters, err := resolveProfileInput(profile, request.Input, time.Now())
 	if err != nil {
 		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
-	binding, err := profile.filterBinding(key)
+	lookup, err := profileFilterValueSearch(profile, request)
 	if err != nil {
 		return nil, nil, err
 	}
-	if !binding.Kind.Lookupable() {
-		return nil, nil, fmt.Errorf("filter %q is a %s filter and has no values to list", key, binding.Kind.Normalized())
+	// An enumerated filter already carries the answer, so asking the backend
+	// would be a round trip whose result is sitting in the profile. It is
+	// deliberately served whole: `options` names the values that exist, so
+	// withholding some of them would answer a different question than the one
+	// the author wrote.
+	if len(lookup.Binding.Options) > 0 {
+		return enumeratedFilterOptions(lookup.Binding.Options, lookup.Search)
 	}
+	provider, err := GetProvider(profile.Provider.Type)
+	if err != nil {
+		return nil, nil, err
+	}
+	lookupProvider, ok := provider.(FilterLookupProvider)
+	if !ok {
+		return nil, nil, fmt.Errorf("provider %q does not support column filter lookups", profile.Provider.Type)
+	}
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: profile.Provider, Query: profile.Query, Defs: profile.Params, Resolved: resolved})
+	if err != nil {
+		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+	}
+	req.Filters = siblingFilters(filters, request.Key)
+	req.Inspection = request.Inspection
+	return lookupCachedFilterValues(ctx, lookupProvider, req, lookup)
+}
+
+func profileFilterValueSearch(profile Profile, request FilterValueLookupRequest) (FilterValueSearch, error) {
+	binding, err := profile.filterBinding(request.Key)
+	if err != nil {
+		return FilterValueSearch{}, err
+	}
+	if !binding.Kind.Lookupable() {
+		return FilterValueSearch{}, fmt.Errorf("filter %q is a %s filter and has no values to list", request.Key, binding.Kind.Normalized())
+	}
+	limit := request.Limit
 	// A declared limit narrows what the caller asked for; it never widens it.
 	// The guard is on the binding rather than the caller because a binding
 	// nobody declared — every inferred one, and every one the connection browser
@@ -151,79 +181,58 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 	if binding.Limit > 0 && (limit <= 0 || binding.Limit < limit) {
 		limit = binding.Limit
 	}
-	// An enumerated filter already carries the answer, so asking the backend
-	// would be a round trip whose result is sitting in the profile. It is
-	// deliberately served whole: `options` names the values that exist, so
-	// withholding some of them would answer a different question than the one
-	// the author wrote.
-	if len(binding.Options) > 0 {
-		options := make([]FilterOption, 0, len(binding.Options))
-		for _, option := range binding.Options {
-			if search == "" || strings.Contains(strings.ToLower(option), strings.ToLower(search)) {
-				options = append(options, FilterOption{Value: option})
-			}
+	return FilterValueSearch{Binding: binding, Search: request.Search, Limit: limit}, nil
+}
+
+func enumeratedFilterOptions(values []string, search string) ([]FilterOption, *Total, error) {
+	options := make([]FilterOption, 0, len(values))
+	for _, option := range values {
+		if search == "" || strings.Contains(strings.ToLower(option), strings.ToLower(search)) {
+			options = append(options, FilterOption{Value: option})
 		}
-		// An enumerated filter is the whole set by construction, so the count is
-		// the number and not an estimate of it.
-		return options, &Total{Value: int64(len(options)), Exact: true}, nil
 	}
-	// The filter being looked up must not narrow its own options, or a chosen
-	// value would hide every alternative. Every other active selection — column
-	// or param — still scopes the question.
+	// An enumerated filter is the whole set by construction, so the count is
+	// the number and not an estimate of it.
+	return options, &Total{Value: int64(len(options)), Exact: true}, nil
+}
+
+// siblingFilters drops the filter being looked up: it must not narrow its own
+// options, or a chosen value would hide every alternative. Every other active
+// selection — column or param — still scopes the question.
+func siblingFilters(filters []ColumnFilterValue, key string) []ColumnFilterValue {
 	siblings := make([]ColumnFilterValue, 0, len(filters))
 	for _, filter := range filters {
 		if filter.Key != key {
 			siblings = append(siblings, filter)
 		}
 	}
-	provider, err := GetProvider(profile.Provider.Type)
+	return siblings
+}
+
+func lookupCachedFilterValues(ctx context.Context, provider FilterLookupProvider, req ProviderRequest, lookup FilterValueSearch) ([]FilterOption, *Total, error) {
+	key := lookup.Binding.Key
+	capabilities, err := filterValueCapabilityFingerprint(ctx, req, lookup.Binding)
 	if err != nil {
 		return nil, nil, err
-	}
-	lookup, ok := provider.(FilterLookupProvider)
-	if !ok {
-		return nil, nil, fmt.Errorf("provider %q does not support column filter lookups", profile.Provider.Type)
-	}
-	req, err := buildProviderRequest(ctx, provider, profile.Provider, profile.Query, profile.Params, resolved)
-	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
-	}
-	req.Filters = siblings
-	req.Inspection = request.Inspection
-	capabilityFingerprint := ""
-	requiresArrayCapability := binding.Array
-	for _, filter := range siblings {
-		requiresArrayCapability = requiresArrayCapability || (filter.Array && !filter.IsZero())
-	}
-	if requiresArrayCapability {
-		capabilities, err := RequireBackendCapability(ctx, req, connection.BackendCapabilityArrayFilters)
-		if err != nil {
-			return nil, nil, fmt.Errorf("filter %q: %w", key, err)
-		}
-		capabilityFingerprint, err = capabilities.Fingerprint()
-		if err != nil {
-			return nil, nil, fmt.Errorf("filter %q backend capabilities: %w", key, err)
-		}
 	}
 	identity, err := ctx.ConnectionCacheIdentity(req.Connection)
 	if err != nil {
 		return nil, nil, fmt.Errorf("filter %q connection identity: %w", key, err)
 	}
-	cacheKey, err := filterValueCacheKey(
-		identity, filterLookupProviderIdentity(lookup), capabilityFingerprint,
-		req, binding, search, limit,
-	)
+	cacheKey, err := filterValueCacheKey(filterValueCacheIdentity{
+		Connection: identity, Provider: filterLookupProviderIdentity(provider), Capabilities: capabilities,
+	}, req, lookup)
 	if err != nil {
 		return nil, nil, err
 	}
 	result, err := filterValueCache.Get(ctx, inspect.GetOptions[cachedFilterValues]{
-		Key: cacheKey, Refresh: request.Inspection.Refresh,
+		Key: cacheKey, Refresh: req.Inspection.Refresh,
 		Load: func(fillContext stdcontext.Context) (cachedFilterValues, error) {
 			lookupContext, lookupRequest, operation, err := prepareConnectionOperation(ctx.Wrap(fillContext), req)
 			if err != nil {
 				return cachedFilterValues{}, err
 			}
-			options, total, err := lookup.LookupFilterValues(lookupContext, lookupRequest, binding, search, limit)
+			options, total, err := provider.LookupFilterValues(lookupContext, lookupRequest, lookup)
 			operation.Finish(len(options), err)
 			return cachedFilterValues{Options: options, Total: total}, err
 		},
@@ -234,15 +243,35 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 	return result.Value.Options, result.Value.Total, nil
 }
 
-func filterValueCacheKey(
-	identity string,
-	providerIdentity string,
-	capabilityFingerprint string,
-	req ProviderRequest,
-	binding ColumnFilterBinding,
-	search string,
-	limit int,
-) (string, error) {
+func filterValueCapabilityFingerprint(ctx context.Context, req ProviderRequest, binding ColumnFilterBinding) (string, error) {
+	requiresArrayCapability := binding.Array
+	for _, filter := range req.Filters {
+		requiresArrayCapability = requiresArrayCapability || (filter.Array && !filter.IsZero())
+	}
+	if !requiresArrayCapability {
+		return "", nil
+	}
+	capabilities, err := RequireBackendCapability(ctx, req, connection.BackendCapabilityArrayFilters)
+	if err != nil {
+		return "", fmt.Errorf("filter %q: %w", binding.Key, err)
+	}
+	fingerprint, err := capabilities.Fingerprint()
+	if err != nil {
+		return "", fmt.Errorf("filter %q backend capabilities: %w", binding.Key, err)
+	}
+	return fingerprint, nil
+}
+
+// filterValueCacheIdentity is what, beyond the request, distinguishes one
+// cached lookup from another: the connection, the provider instance, and the
+// backend capabilities the lookup relied on.
+type filterValueCacheIdentity struct {
+	Connection   string
+	Provider     string
+	Capabilities string
+}
+
+func filterValueCacheKey(identity filterValueCacheIdentity, req ProviderRequest, lookup FilterValueSearch) (string, error) {
 	payload, err := json.Marshal(struct {
 		Identity         string
 		ProviderIdentity string
@@ -260,12 +289,12 @@ func filterValueCacheKey(
 		Search           string
 		Limit            int
 	}{
-		Identity: identity, ProviderIdentity: providerIdentity, Capabilities: capabilityFingerprint,
+		Identity: identity.Connection, ProviderIdentity: identity.Provider, Capabilities: identity.Capabilities,
 		Provider: req.Provider, Query: req.Query, QueryArgs: req.QueryArgs,
 		QueryIdentifiers: req.QueryIdentifiers,
 		Options:          req.Options, Params: req.Params, ParamRoles: req.ParamRoles,
 		TemplatedParams: req.TemplatedParams, Filters: req.Filters,
-		Binding: binding, Search: search, Limit: limit,
+		Binding: lookup.Binding, Search: lookup.Search, Limit: lookup.Limit,
 	})
 	if err != nil {
 		return "", fmt.Errorf("encode filter value cache key: %w", err)

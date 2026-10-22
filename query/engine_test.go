@@ -3,6 +3,7 @@ package query_test
 import (
 	"fmt"
 	"sync"
+	"testing"
 
 	"github.com/flanksource/commons-db/connection"
 	context "github.com/flanksource/commons-db/context"
@@ -441,3 +442,8 @@ var _ = Describe("Execute row ceiling", func() {
 		Expect(result.Truncated).To(BeFalse())
 	})
 })
+
+func TestQuery(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Query Suite")
+}

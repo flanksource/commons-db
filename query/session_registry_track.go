@@ -176,9 +176,15 @@ type streamRun struct {
 	cancel  stdcontext.CancelFunc
 }
 
+type streamStartOptions struct {
+	Params    map[string]any
+	MaxEvents int
+	Duration  time.Duration
+}
+
 // startStream admits a stream session over p. A followed trace is a view and is
 // never persisted; anything else is a capture.
-func (r *SessionRegistry) startStream(ctx context.Context, p Profile, params map[string]any, maxEvents int, duration time.Duration) (streamRun, error) {
+func (r *SessionRegistry) startStream(ctx context.Context, p Profile, opts streamStartOptions) (streamRun, error) {
 	role := SessionRoleCapture
 	if p.Trace != nil && p.Trace.Follow {
 		role = SessionRoleView
@@ -189,7 +195,7 @@ func (r *SessionRegistry) startStream(ctx context.Context, p Profile, params map
 	}
 	session, err := NewSession(SessionOptions{
 		ID: uuid.NewString(), Profile: p, Kind: p.Kind(), Role: role,
-		Params: params, Labels: labels, Owner: r.opts.Owner, MaxEvents: maxEvents,
+		Params: opts.Params, Labels: labels, Owner: r.opts.Owner, MaxEvents: opts.MaxEvents,
 	})
 	if err != nil {
 		return streamRun{}, err
@@ -197,7 +203,7 @@ func (r *SessionRegistry) startStream(ctx context.Context, p Profile, params map
 	run, cancel := ctx.WithCancel()
 	err = r.admit(session, sessionAttachment{
 		run: run, cancel: cancel, storeCtx: stdcontext.WithoutCancel(ctx),
-		stopAt: session.rec.StartedAt.Add(r.ClampDuration(duration)),
+		stopAt: session.rec.StartedAt.Add(r.ClampDuration(opts.Duration)),
 	})
 	if err != nil {
 		return streamRun{}, err

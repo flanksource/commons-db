@@ -177,7 +177,10 @@ func ReconcileProfiles(ctx context.Context, run ReconcileRun) (*ReconcileResult,
 	if err != nil {
 		return nil, fmt.Errorf("dest profile %q: %w", run.Dest.Name, err)
 	}
-	result, err := Reconcile(ctx, source, dest, run.Source, run.Dest, run.Config.ReconcileSpec)
+	result, err := Reconcile(ctx,
+		ReconcileInput{Result: source, Profile: run.Source},
+		ReconcileInput{Result: dest, Profile: run.Dest},
+		run.Config.ReconcileSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -265,6 +268,13 @@ type ReconcileResult struct {
 // keys unaccounted for.
 func (r *ReconcileResult) Bounded() bool { return r.SourceTruncated || r.DestTruncated }
 
+// ReconcileInput is one side of a Reconcile: the rows read and the profile
+// that read them.
+type ReconcileInput struct {
+	Result  *Result
+	Profile Profile
+}
+
 // Reconcile joins two Results on spec.Key.
 //
 // Every key present on either side produces at least one row. When a key repeats
@@ -272,7 +282,9 @@ func (r *ReconcileResult) Bounded() bool { return r.SourceTruncated || r.DestTru
 // destination rows emit 6 rows — because with a duplicated identity there is no
 // principled way to decide which source belongs to which destination, and
 // silently picking one hides the ambiguity that is usually the actual bug.
-func Reconcile(ctx context.Context, source, dest *Result, sourceProfile, destProfile Profile, spec ReconcileSpec) (*ReconcileResult, error) {
+func Reconcile(ctx context.Context, sourceSide, destSide ReconcileInput, spec ReconcileSpec) (*ReconcileResult, error) {
+	source, dest := sourceSide.Result, destSide.Result
+	sourceProfile, destProfile := sourceSide.Profile, destSide.Profile
 	if source == nil || dest == nil {
 		return nil, fmt.Errorf("reconcile requires both a source and a destination result")
 	}
