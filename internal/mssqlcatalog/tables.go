@@ -55,8 +55,9 @@ func Tables(ctx context.Context, q Queryer, scope Scope, tableType TableType) ([
 			t.TABLE_TYPE,
 			CASE WHEN t.TABLE_TYPE = 'VIEW' THEN %s ELSE '' END AS VIEW_DEF
 		FROM INFORMATION_SCHEMA.TABLES t
+		JOIN sys.schemas s ON s.name = t.TABLE_SCHEMA
 		LEFT JOIN sys.objects o
-		  ON o.object_id = OBJECT_ID(t.TABLE_SCHEMA + '.' + t.TABLE_NAME)
+		  ON o.schema_id = s.schema_id AND o.name = t.TABLE_NAME
 		WHERE t.TABLE_SCHEMA = %s
 		AND t.TABLE_TYPE = CASE %s
 			WHEN 'table' THEN 'BASE TABLE'
