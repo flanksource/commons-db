@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"path/filepath"
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -162,3 +163,8 @@ var _ = Describe("SQLite schema metadata", func() {
 })
 
 func pointer[T any](value T) *T { return &value }
+
+func TestSQLInspection(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "SQL Inspection")
+}

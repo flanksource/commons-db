@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	inspection "github.com/flanksource/commons-db/inspect"
+	native "github.com/flanksource/sqlglot-go/database/inspect"
 )
 
 // Cache owns catalogue storage and fill coordination. Implementations must honor
@@ -60,13 +61,13 @@ func Inspect(ctx context.Context, db *sql.DB, driver string, limits Limits, opti
 	if baseKey == "" {
 		return Catalog{}, fmt.Errorf("sql inspection cache key is required")
 	}
-	driver = normalizeDriver(driver)
-	if _, _, err := inspectionQueries(driver); err != nil {
+	driver = native.NormalizeDriver(driver)
+	if err := native.ValidateDriver(driver); err != nil {
 		return Catalog{}, err
 	}
-	limits = limits.withDefaults()
-	key := fmt.Sprintf("%s:sql-catalog:v1:%s:%d:%d:%d:%d", baseKey, driver,
-		limits.MaxRelations, limits.MaxColumns, limits.MaxRoutines, limits.MaxDefinitionBytes)
+	limits = limits.WithDefaults()
+	key := fmt.Sprintf("%s:sql-catalog:v2:%s:%d:%d:%d:%d:%d", baseKey, driver,
+		limits.MaxRelations, limits.MaxColumns, limits.MaxMetadata, limits.MaxRoutines, limits.MaxDefinitionBytes)
 	cache := options.Cache
 	if cache == nil {
 		cache = defaultCache

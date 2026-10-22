@@ -52,7 +52,7 @@ require (
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
-	github.com/hashicorp/hcl/v2 v2.24.0
+	github.com/hashicorp/hcl/v2 v2.24.0 // indirect
 	github.com/henvic/httpretty v0.1.4
 	github.com/hexops/gotextdiff v1.0.3
 	github.com/hirochachacha/go-smb2 v1.1.0
@@ -73,7 +73,7 @@ require (
 	github.com/opensearch-project/opensearch-go/v2 v2.3.0
 	github.com/orcaman/concurrent-map/v2 v2.0.1
 	github.com/patrickmn/go-cache v2.1.0+incompatible
-	github.com/pgplex/pgparser v0.2.0
+	github.com/pgplex/pgparser v0.2.0 // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.10
 	github.com/prometheus/client_golang v1.23.2
@@ -115,7 +115,7 @@ require (
 )
 
 require (
-	github.com/flanksource/sqlglot-go v1.0.3
+	github.com/flanksource/sqlglot-go v1.0.4-0.20261022123344-3264e440e925
 	gorm.io/driver/sqlserver v1.6.4
 )
 
