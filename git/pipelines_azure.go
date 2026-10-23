@@ -18,7 +18,7 @@ type azureWebLinks struct {
 
 func (p *azureProvider) pipelineQuery(ctx context.Context, options PipelineOptions) (url.Values, error) {
 	if options.Repository.Project == "" {
-		return nil, fmt.Errorf("Azure pipeline repository requires a project")
+		return nil, fmt.Errorf("query azure pipelines: the repository has no project")
 	}
 	var repo struct {
 		ID string `json:"id"`

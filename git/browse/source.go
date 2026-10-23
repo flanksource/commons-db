@@ -13,7 +13,7 @@ import (
 
 func New(options Options) (*Service, error) {
 	if options.Catalog == nil || options.Resolve == nil || options.CacheDir == "" {
-		return nil, fmt.Errorf("Git browser requires catalog, connection resolver and cache directory")
+		return nil, fmt.Errorf("new git browser: catalog, connection resolver and cache directory are required")
 	}
 	return &Service{options: options, cache: &git.Cache{Root: options.CacheDir}}, nil
 }

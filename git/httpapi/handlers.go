@@ -24,7 +24,7 @@ type API struct{ options Options }
 
 func New(options Options) (*API, error) {
 	if options.Authorize == nil || options.Service == nil {
-		return nil, fmt.Errorf("Git HTTP handlers require authorization and service callbacks")
+		return nil, fmt.Errorf("new git HTTP handlers: authorization and service callbacks are required")
 	}
 	return &API{options: options}, nil
 }
