@@ -53,9 +53,19 @@ type bareRepo struct {
 
 func (b bareRepo) FileURL() string { return "file://" + b.Path }
 
+// fixtureTempDir is a spec temp directory by its canonical path. git reports
+// the paths it resolves (a repository root, a worktree) with symlinks resolved,
+// and on macOS the temp directory sits under the /var -> /private/var symlink.
+func fixtureTempDir() string {
+	GinkgoHelper()
+	dir, err := filepath.EvalSymlinks(GinkgoT().TempDir())
+	Expect(err).NotTo(HaveOccurred())
+	return dir
+}
+
 func newBareRepo(name string) bareRepo {
 	GinkgoHelper()
-	root := GinkgoT().TempDir()
+	root := fixtureTempDir()
 	work := filepath.Join(root, "work")
 	Expect(os.MkdirAll(work, 0o755)).To(Succeed())
 	gitFixture(work, "init", "-q", "-b", "main")
