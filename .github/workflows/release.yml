@@ -43,6 +43,12 @@ jobs:
         with:
           cmd: patch
           pushTag: false
+          # Release tags sit on release-only commits off main, so svu must see
+          # every branch's tags; only v* tags are versions (cmd/query/v*,
+          # tracing/v* and stray tags such as wip-* are not, and a non-semver
+          # tag makes svu fail, which the action reports as "unchanged").
+          tagMode: all
+          tagPattern: "v*"
 
       - name: Set up Go
         if: steps.version.outputs.changed == 'true'
