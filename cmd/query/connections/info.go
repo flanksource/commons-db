@@ -199,7 +199,7 @@ func discoverSQLBackend(ctx context.Context, connectionContext dbcontext.Context
 	}
 	defer client.Close()
 
-	capabilities, err := dbconnection.ProbeBackendCapabilities(ctx, client, connection.Type)
+	capabilities, err := dbconnection.ProbeBackendCapabilities(connectionContext, client, connection.Type)
 	if err != nil {
 		return serverInfo{}, err
 	}
