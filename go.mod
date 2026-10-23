@@ -38,7 +38,7 @@ require (
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/flanksource/clicky v1.21.82
-	github.com/flanksource/commons v1.60.1
+	github.com/flanksource/commons v1.60.2-0.20261023035157-e894a9b2a6db
 	github.com/flanksource/deps v1.0.46
 	github.com/flanksource/gomplate/v3 v3.24.90
 	github.com/flanksource/is-healthy v1.0.92
@@ -116,6 +116,7 @@ require (
 
 require (
 	github.com/flanksource/sqlglot-go v1.0.4-0.20261022123344-3264e440e925
+	github.com/yuin/goldmark v1.7.17
 	gorm.io/driver/sqlserver v1.6.4
 )
 
@@ -357,7 +358,6 @@ require (
 	github.com/xuri/efp v0.0.1 // indirect
 	github.com/xuri/excelize/v2 v2.11.0 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
-	github.com/yuin/goldmark v1.7.17 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	github.com/zclconf/go-cty-yaml v1.2.0 // indirect
