@@ -14,6 +14,9 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+
+	"github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/tracing"
 )
 
 //go:embed dist
@@ -26,11 +29,16 @@ const baseTag = `<base href="/" />`
 
 // Handler returns an http.Handler that serves the embedded SPA. Existing files
 // under dist/ are served directly; unknown non-asset paths fall back to
-// index.html so client-side routing works.
+// index.html so client-side routing works. GET /traces/{kind} links to a
+// trace window (?stream, ?afterSeq, ?toSeq) and redirects to the app's page
+// for the kind's result profile, so a host links to a window without knowing
+// how the app names its pages.
 //
 // The app may be mounted under a prefix the host strips (http.StripPrefix):
 // index.html is then served with its <base> at that prefix, read from the
-// difference between the path the client asked for and the one left here.
+// difference between the path the client asked for and the one left here. A
+// host serving it over a trace store (traceserve.Handler) routes /api/ to the
+// store under the same prefix and everything else here.
 func Handler() (http.Handler, error) {
 	dist, err := fs.Sub(distFS, "dist")
 	if err != nil {
@@ -45,7 +53,9 @@ func Handler() (http.Handler, error) {
 	}
 	fileServer := http.FileServer(http.FS(dist))
 
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /traces/{kind}", openTrace)
+	mux.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(r.URL.Path, "/")
 		if p != "" && p != "index.html" {
 			if f, err := dist.Open(p); err == nil {
@@ -59,7 +69,20 @@ func Handler() (http.Handler, error) {
 			}
 		}
 		serveIndex(w, r, index)
-	}), nil
+	}))
+	return mux, nil
+}
+
+// openTrace sends /traces/{kind}?stream&afterSeq&toSeq on to the app's page
+// for the kind's result profile with the same query. The redirect is
+// relative, so it stays under the path the host mounted the app at.
+func openTrace(w http.ResponseWriter, r *http.Request) {
+	target := "../" + profiles.SurfaceKey(tracing.ProfilePrefix+r.PathValue("kind"))
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	w.Header().Set("Location", target)
+	w.WriteHeader(http.StatusFound)
 }
 
 func serveIndex(w http.ResponseWriter, r *http.Request, index []byte) {

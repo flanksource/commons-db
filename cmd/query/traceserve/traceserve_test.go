@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -166,28 +167,16 @@ var _ = Describe("a trace store served through query", func() {
 		Expect(events).ToNot(ContainSubstring("one"), "seq 1 is outside the window")
 	})
 
-	It("serves the query app under the path the host mounts it at", func() {
-		status, body, _ := store.do(http.MethodGet, "/profile-traces-terminal?stream="+castStream)
-		Expect(status).To(Equal(http.StatusOK))
-		Expect(body).To(ContainSubstring(`<base href="` + mount + `/"`))
-
-		status, body, _ = store.do(http.MethodGet, "/api/openapi.json")
+	It("serves the profile OpenAPI document and nothing of the query app", func() {
+		status, body, _ := store.do(http.MethodGet, "/api/openapi.json")
 		Expect(status).To(Equal(http.StatusOK))
 		Expect(body).To(ContainSubstring("traces/terminal"))
 
-		status, body, _ = store.do(http.MethodGet, "/api/v1/profiles")
-		Expect(status).To(Equal(http.StatusNotFound), "an API route it does not serve is not the app")
-		Expect(body).ToNot(ContainSubstring("<html"))
-	})
-
-	It("links a kind's window to the app's page for it, under the mount", func() {
-		window := "stream=" + castStream + "&afterSeq=1&toSeq=3"
-		status, _, header := store.do(http.MethodGet, "/traces/http_proxy?"+window)
-		Expect(status).To(Equal(http.StatusFound))
-		location, err := url.Parse(store.server.URL + mount + "/traces/http_proxy")
-		Expect(err).ToNot(HaveOccurred())
-		Expect(location.ResolveReference(&url.URL{Path: strings.SplitN(header.Get("Location"), "?", 2)[0]}).Path).To(Equal(mount + "/profile-traces-http-proxy"))
-		Expect(header.Get("Location")).To(HaveSuffix("?" + window))
+		for _, path := range []string{"/", "/profile-traces-terminal?stream=" + castStream, "/traces/terminal?stream=" + castStream, "/api/v1/profiles"} {
+			status, body, _ = store.do(http.MethodGet, path)
+			Expect(status).To(Equal(http.StatusNotFound), path)
+			Expect(body).ToNot(ContainSubstring("<html"), path)
+		}
 	})
 
 	It("refuses to start or stop a capture, but checkpoints a running one into its records", func() {
@@ -210,8 +199,35 @@ var _ = Describe("a trace store served through query", func() {
 		)), "the checkpoint dumped the host's goroutines")
 	})
 
-	It("reopens the store a closed host left, with its records", func() {
+	It("reopens the store a closed host left, read-only, with its records", func() {
 		store.close()
-		Expect(serve(dir).records(terminal.Kind, "stream="+castStream)).To(HaveLen(4))
+		handler, closeStore, err := traceserve.Reopen(traceserve.ReopenOptions{Dir: dir, Kinds: storeKinds()})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(closeStore)
+		server := httptest.NewServer(http.StripPrefix(mount, handler))
+		DeferCleanup(server.Close)
+		reopened := mounted{server: server}
+		Expect(reopened.records(terminal.Kind, "stream="+castStream)).To(HaveLen(4))
+		status, _, _ := reopened.do(http.MethodPost, "/api/v1/traces/"+stacks.Kind+"/sessions")
+		Expect(status).To(Equal(http.StatusForbidden))
+	})
+})
+
+var _ = Describe("reopening a trace store directory", func() {
+	It("is os.ErrNotExist for a store that is gone, and creates nothing", func() {
+		dir := filepath.Join(GinkgoT().TempDir(), "pruned")
+		_, _, err := traceserve.Reopen(traceserve.ReopenOptions{Dir: dir, Kinds: storeKinds()})
+		Expect(err).To(MatchError(os.ErrNotExist))
+		Expect(dir).ToNot(BeADirectory())
+	})
+
+	It("refuses a path that is not a directory, or no kinds", func() {
+		file := filepath.Join(GinkgoT().TempDir(), "store")
+		Expect(os.WriteFile(file, []byte("not a store"), 0o600)).To(Succeed())
+		_, _, err := traceserve.Reopen(traceserve.ReopenOptions{Dir: file, Kinds: storeKinds()})
+		Expect(err).To(MatchError(ContainSubstring("is not a directory")))
+
+		_, _, err = traceserve.Reopen(traceserve.ReopenOptions{Dir: GinkgoT().TempDir()})
+		Expect(err).To(MatchError(ContainSubstring("kinds")))
 	})
 })

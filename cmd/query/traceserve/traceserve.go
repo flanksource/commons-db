@@ -1,14 +1,18 @@
-// Package traceserve serves a trace results store through query: the
+// Package traceserve serves the API of a trace results store: the
 // traces/<kind> result profiles, the sessions API over its captures (their
-// exports and checkpoints) and the query app, as one handler a host mounts
-// under a path of its own. gavel mounts it over a run's store; `query serve`
-// opens its own store through the same Open.
+// exports and checkpoints) and the profile OpenAPI document, as one handler a
+// host mounts under a path of its own. It serves no UI: a host renders the
+// store with clicky-ui or @flanksource/commons-db-ui, or composes the query
+// app over the handler itself (www.Handler serves the app's pages, and the
+// /traces/{kind} links to them). gavel mounts it over a run's store; `query
+// serve` opens its own store through the same Open.
 package traceserve
 
 import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -16,7 +20,6 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
-	"github.com/flanksource/commons-db/cmd/query/www"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
@@ -88,8 +91,8 @@ type Options struct {
 //	GET  /api/v1/traces/{kind}/export            a window downloaded (?stream, ?afterSeq, ?toSeq, ?format)
 //	POST /api/v1/sessions/{id}/checkpoint        a running capture's reading, committed
 //	     /api/v1/sessions...                     the sessions API over the captures
-//	GET  /traces/{kind}                          the app's page for a window (?stream, ?afterSeq, ?toSeq)
-//	GET  /...                                    the query app
+//
+// Every other path is 404.
 func Handler(options Options) (http.Handler, error) {
 	runtime := options.Runtime
 	if runtime == nil || runtime.Results == nil || runtime.Sessions == nil {
@@ -108,11 +111,14 @@ func Handler(options Options) (http.Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	app, err := appHandler(profileService)
+	openAPI, err := profileService.OpenAPIHandler(&cobra.Command{Use: "query"}, nil)
 	if err != nil {
 		return nil, err
 	}
-	profileHandler, err := profileService.Handler(APIPrefix, app)
+	rest := http.NewServeMux()
+	rest.Handle("GET /api/openapi.json", openAPI)
+	rest.Handle("/", http.NotFoundHandler())
+	profileHandler, err := profileService.Handler(APIPrefix, rest)
 	if err != nil {
 		return nil, err
 	}
@@ -126,37 +132,40 @@ func Handler(options Options) (http.Handler, error) {
 	return sessionService.Handler(APIPrefix, profileHandler)
 }
 
-// appHandler serves the OpenAPI document the app discovers the profiles from,
-// the app itself, and a 404 for any other API route, which the app's
-// client-side routes must not answer.
-func appHandler(profileService *profiles.Service) (http.Handler, error) {
-	openAPI, err := profileService.OpenAPIHandler(&cobra.Command{Use: "query"}, nil)
-	if err != nil {
-		return nil, err
-	}
-	app, err := www.Handler()
-	if err != nil {
-		return nil, err
-	}
-	mux := http.NewServeMux()
-	mux.Handle("/api/openapi.json", openAPI)
-	mux.Handle("/api/", http.NotFoundHandler())
-	mux.HandleFunc("GET /traces/{kind}", openTrace)
-	mux.Handle("/", app)
-	return mux, nil
+// ReopenOptions say which store Reopen serves.
+type ReopenOptions struct {
+	// Dir is the directory a closed store was left in, such as a finished
+	// run's; Reopen never creates it.
+	Dir string
+	// Kinds declares the result types the store's streams hold.
+	Kinds *tracing.Kinds
 }
 
-// openTrace sends a link to a kind's window, /traces/{kind}?stream&afterSeq&toSeq,
-// on to the app's page for the kind's result profile with the same query, so a
-// host links to a window without knowing how the app names its pages. The
-// redirect is relative, so it stays under the path the host mounted the app at.
-func openTrace(w http.ResponseWriter, r *http.Request) {
-	target := "../" + profiles.SurfaceKey(ProfilePrefix+r.PathValue("kind"))
-	if r.URL.RawQuery != "" {
-		target += "?" + r.URL.RawQuery
+// reopenedRetention is the stream TTL a reopened store is opened with. A
+// stream's expiry is set when it is first appended to, and nothing appends to
+// a reopened store: it serves no capture, so the TTL never applies.
+const reopenedRetention = time.Hour
+
+// Reopen serves the store a closed host left in options.Dir, read-only
+// (ReadOnly), with the close that stops using it. A store that is gone is
+// os.ErrNotExist; one that is there but does not open is an error.
+func Reopen(options ReopenOptions) (http.Handler, func() error, error) {
+	info, err := os.Stat(options.Dir)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reopen trace store: %w", err)
 	}
-	w.Header().Set("Location", target)
-	w.WriteHeader(http.StatusFound)
+	if !info.IsDir() {
+		return nil, nil, fmt.Errorf("reopen trace store: %s is not a directory", options.Dir)
+	}
+	runtime, closeStore, err := Open(OpenOptions{Dir: options.Dir, Kinds: options.Kinds, Retention: reopenedRetention})
+	if err != nil {
+		return nil, nil, err
+	}
+	handler, err := Handler(Options{Runtime: runtime, Authorize: ReadOnly})
+	if err != nil {
+		return nil, nil, errors.Join(err, closeStore())
+	}
+	return handler, closeStore, nil
 }
 
 // ReadOnly is an Authorize that serves a store's captures without letting a

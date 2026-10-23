@@ -137,9 +137,28 @@ database-scoped sessions.
 
 ## Embedding a trace store (`traceserve`)
 
-`traceserve` serves one trace results store — the explorer UI, its profile API,
-and the sessions API — from inside another program, with no database. gavel
-mounts each test run's store this way at `/query/`.
+`traceserve` serves the API of one trace results store — its profile API, the
+sessions API and the profile OpenAPI document — from inside another program,
+with no database. It serves no UI and does not link the explorer app
+(`cmd/query/www`), so a library host builds without the app's `dist/`. Hosts
+render the store with clicky-ui or `@flanksource/commons-db-ui` (whose
+`OperationCatalog` reads `/api/openapi.json`). gavel mounts each test run's
+store this way at `/query/<run id>`.
+
+A store a closed host left behind, such as a finished run's, is served
+read-only in one call:
+
+```go
+handler, closeStore, err := traceserve.Reopen(traceserve.ReopenOptions{Dir: storeDir, Kinds: kinds})
+if errors.Is(err, os.ErrNotExist) {
+	// the store is gone (pruned); Reopen creates nothing
+}
+defer closeStore()
+mux.Handle("/query/", http.StripPrefix("/query", handler))
+```
+
+A host that captures into a store opens it, serves the runtime, and closes it
+when done:
 
 ```go
 runtime, closeStore, err := traceserve.Open(traceserve.OpenOptions{
@@ -147,12 +166,13 @@ runtime, closeStore, err := traceserve.Open(traceserve.OpenOptions{
 })
 defer closeStore()
 handler, err := traceserve.Handler(traceserve.Options{Runtime: runtime, Authorize: traceserve.ReadOnly})
-mux.Handle("/query/", http.StripPrefix("/query", handler))
 ```
 
 `Open` opens (or creates) the SQLite-backed store in `Dir` and returns the
-`tracing.Runtime` that starts captures into it. `Handler` serves, relative to
-where it is mounted:
+`tracing.Runtime` that starts captures into it. `Reopen` refuses a `Dir` that
+is missing (`os.ErrNotExist`) or not a directory, and serves with
+`traceserve.ReadOnly`. `Handler` serves, relative to where it is mounted, and
+answers `404` for every other path:
 
 | Route | Purpose |
 | --- | --- |
@@ -161,14 +181,22 @@ where it is mounted:
 | `POST /api/v1/sessions/{id}/checkpoint` | Commit a running capture's reading now, with the kind's checkpoint params as an optional JSON body, such as `stacks`' `{"key", "pid", "transport", "reason", "dump"}` or `process_samples`' `{"key"}` (`409` when the session has no running capture, `400` for params its kind refuses or does not read) |
 | `/api/v1/sessions...` | The sessions API over the store's captures |
 | `GET /api/openapi.json` | The result profiles and session routes |
-| `GET /traces/{kind}` | Redirects to the explorer's page for a window, keeping `stream`/`afterSeq`/`toSeq` |
-| `GET /...` | The explorer app |
 
 The checkpoint is `sessions.ActionCheckpoint`: a caller allowed to read a
 session but not to checkpoint it is answered `403`. `traceserve.ReadOnly`
 allows reads and checkpoints and refuses `ActionControl` (start, stop, extend,
-restart); a nil
-`Authorize` allows everything.
+restart); a nil `Authorize` allows everything.
+
+### Serving the explorer app over a store
+
+The explorer app is `www.Handler()`; `query serve` mounts it at `/`. A host
+that wants the app over an embedded store composes it under the same mount as
+the store's API, sending `/api/` to `traceserve.Handler` and everything else to
+`www.Handler()`. Linking `www` embeds the built app, which only release tags
+carry (see `www/embed.go`). The app adds `GET /traces/{kind}`, which redirects
+to its page for a window, keeping `stream`/`afterSeq`/`toSeq`. That link lives
+with the app because it names the app's pages, and without the app it would
+point at nothing.
 
 The app works under any mount path: the served `index.html` carries
 `<base href>` set to the path it was reached under, and the app prefixes its
