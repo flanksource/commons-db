@@ -1,6 +1,7 @@
 package app
 
 import (
+	"testing"
 	"time"
 
 	. "github.com/onsi/ginkgo/v2"
@@ -10,6 +11,11 @@ import (
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
 )
+
+func TestApp(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "Query App Suite")
+}
 
 var _ = Describe("sessions table migration", func() {
 	It("rebuilds legacy rows as session records and serves the new columns to the store", func() {
