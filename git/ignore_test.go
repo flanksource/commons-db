@@ -11,7 +11,7 @@ import (
 
 var _ = Describe("Git-visible paths", func() {
 	It("excludes ignored files and directories while retaining tracked matches", func(ctx SpecContext) {
-		directory := GinkgoT().TempDir()
+		directory := fixtureTempDir()
 		Expect(os.MkdirAll(filepath.Join(directory, "ignored"), 0o755)).To(Succeed())
 		Expect(os.MkdirAll(filepath.Join(directory, "internal"), 0o755)).To(Succeed())
 		for path, content := range map[string]string{
@@ -43,7 +43,7 @@ var _ = Describe("Git-visible paths", func() {
 	})
 
 	It("treats directories outside Git as visible", func(ctx SpecContext) {
-		directory := GinkgoT().TempDir()
+		directory := fixtureTempDir()
 		visible, err := git.ListVisiblePaths(ctx, directory)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(visible.Contains(filepath.Join(directory, "main.go"))).To(BeTrue())
