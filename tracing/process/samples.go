@@ -31,6 +31,9 @@ type Sample struct {
 	// wrote to disk since it started; nil when it exited before they were read.
 	DiskReadBytes  *uint64 `json:"diskReadBytes,omitempty" pretty:"label=Disk read,type=bytes" sort:"diskReadBytes"`
 	DiskWriteBytes *uint64 `json:"diskWriteBytes,omitempty" pretty:"label=Disk written,type=bytes" sort:"diskWriteBytes"`
+	// DiskIOError is why the disk counters could not be read, such as the
+	// caller lacking permission over another user's or a setuid process.
+	DiskIOError string `json:"diskIOError,omitempty" pretty:"label=Disk I/O error" filter:"none"`
 	// The counts of each armed facet (SampleParams.Facets), every tick.
 	OpenFiles   *int `json:"openFiles,omitempty" pretty:"label=Open files" sort:"openFiles"`
 	Sockets     *int `json:"sockets,omitempty" pretty:"label=Sockets" sort:"sockets"`
@@ -156,9 +159,11 @@ func (s samples) sample(ctx context.Context, run *samplesRun, force string, reco
 			SampledAt: listedAt, Tick: run.tick, Key: Key(p.Process), PID: p.PID,
 			CPUPercent: p.cpuPercent, MemoryPercent: p.MemoryPercent, RSSBytes: p.RSSBytes,
 		}
-		if counters := io[p.PID]; counters != nil {
+		reading := io[p.PID]
+		if counters := reading.IO; counters != nil {
 			sample.DiskReadBytes, sample.DiskWriteBytes = &counters.DiskReadBytes, &counters.DiskWriteBytes
 		}
+		sample.DiskIOError = reading.IOError
 		if held, ok := descriptors[p.PID]; ok {
 			run.facets(&sample, held, sample.Key == force)
 		}

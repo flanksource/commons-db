@@ -38,8 +38,9 @@ var facets = []facet{
 
 // read reads the disk IO of every process, and, when a facet is armed, the
 // descriptors of every one of them with one lsof call; a process that
-// exited before it was read has neither.
-func (r *samplesRun) read(ctx context.Context, processes []observed) (map[int]*clickyprocess.ProcessIO, map[int][]clickyprocess.Descriptor, error) {
+// exited before it was read has neither, and one the caller may not read has
+// its IOError.
+func (r *samplesRun) read(ctx context.Context, processes []observed) (map[int]clickyprocess.Process, map[int][]clickyprocess.Descriptor, error) {
 	pids := make([]int, 0, len(processes))
 	listed := make([]clickyprocess.Process, 0, len(processes))
 	for _, p := range processes {
@@ -49,9 +50,9 @@ func (r *samplesRun) read(ctx context.Context, processes []observed) (map[int]*c
 	if err := snapshot.PopulateIO(ctx, pids); err != nil {
 		return nil, nil, err
 	}
-	io := make(map[int]*clickyprocess.ProcessIO, len(pids))
+	io := make(map[int]clickyprocess.Process, len(pids))
 	for _, p := range snapshot.All() {
-		io[p.PID] = p.IO
+		io[p.PID] = p
 	}
 	if len(r.params.Facets) == 0 {
 		return io, nil, nil

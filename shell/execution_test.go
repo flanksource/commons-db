@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -298,6 +299,116 @@ var _ = Describe("Shell execution", func() {
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(details.Stdout).To(Equal("stdin-value"))
+	})
+
+	DescribeTable("detects the interpreter from the shebang",
+		func(script, interpreter string, args []string) {
+			gotInterpreter, gotArgs := DetectInterpreterFromShebang(script)
+			Expect(gotInterpreter).To(Equal(interpreter))
+			Expect(gotArgs).To(Equal(args))
+		},
+		Entry("a bare interpreter takes the script with -c", "#!/bin/sh\necho", "/bin/sh", []string{"-c"}),
+		Entry("env resolving an interpreter takes the script with -c", "#!/usr/bin/env python3\nprint()", "/usr/bin/env", []string{"python3", "-c"}),
+		Entry("explicit interpreter arguments are kept as written", "#!/bin/bash -euc\necho", "/bin/bash", []string{"-euc"}),
+		Entry("env with explicit arguments is kept as written", "#!/usr/bin/env python3 -c\nprint()", "/usr/bin/env", []string{"python3", "-c"}),
+	)
+
+	It("runs a script whose shebang resolves its interpreter through env", func() {
+		command, err := CreateCommandFromScript(shellContext(stdcontext.Background()), "#!/usr/bin/env sh\necho \"$0\"")
+		Expect(err).ToNot(HaveOccurred())
+
+		details, err := RunCmd(shellContext(stdcontext.Background()), Exec{
+			Chroot:  GinkgoT().TempDir(),
+			BaseDir: GinkgoT().TempDir(),
+		}, command)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(details.Stdout).To(Equal("sh"))
+	})
+
+	It("runs many commands against one prepared environment, redacting each", func() {
+		const sensitiveValue = "prepared-sensitive-value"
+		prepared, err := SetupEnv(shellContext(stdcontext.Background()), &Exec{
+			Chroot:  GinkgoT().TempDir(),
+			BaseDir: GinkgoT().TempDir(),
+			EnvVars: []types.EnvVar{{Name: "SHELL_TOKEN", ValueStatic: sensitiveValue}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(prepared.Cleanup)
+
+		for range 2 {
+			details, err := prepared.Run(shellContext(stdcontext.Background()), exec.Command("sh", "-c", `printf %s "$SHELL_TOKEN"`), RunOptions{})
+			Expect(err).ToNot(HaveOccurred())
+			Expect(details.Stdout).To(Equal("[REDACTED]"))
+		}
+	})
+
+	It("does not let a wrapped run change the prepared environment", func() {
+		prepared, err := SetupEnv(shellContext(stdcontext.Background()), &Exec{Chroot: GinkgoT().TempDir(), BaseDir: GinkgoT().TempDir()})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(prepared.Cleanup)
+		before := slices.Clone(prepared.Env)
+
+		_, err = prepared.Run(shellContext(stdcontext.Background()), exec.Command("sh", "-c", "true"), RunOptions{
+			Wrap: func(_ stdcontext.Context, cmd string, args, _ []string) (string, []string, []string, error) {
+				return cmd, args, []string{"PATH=/usr/bin:/bin", "WRAPPED=1"}, nil
+			},
+		})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(prepared.Env).To(Equal(before))
+	})
+
+	It("writes connection credential files into CredentialsDir, not the command directory", func() {
+		workDir, credsDir := GinkgoT().TempDir(), GinkgoT().TempDir()
+		prepared, err := SetupEnv(shellContext(stdcontext.Background()), &Exec{
+			Chroot:         workDir,
+			BaseDir:        GinkgoT().TempDir(),
+			CredentialsDir: credsDir,
+			Connections: connection.ExecConnections{AWS: &connection.AWSConnection{
+				AccessKey: types.EnvVar{ValueStatic: "creds-dir-access-key"},
+				SecretKey: types.EnvVar{ValueStatic: "creds-dir-secret-key"},
+			}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(prepared.Cleanup)
+
+		Expect(filepath.Join(workDir, ".creds")).ToNot(BeAnExistingFile())
+		inCredsDir, err := filepath.Glob(filepath.Join(credsDir, ".creds", "*"))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(inCredsDir).ToNot(BeEmpty())
+		Expect(prepared.Cwd).To(Equal(workDir))
+	})
+
+	It("runs the command through Wrap with the prepared environment", func() {
+		var seenEnv []string
+		details, err := RunCmd(shellContext(stdcontext.Background()), Exec{
+			Chroot:  GinkgoT().TempDir(),
+			BaseDir: GinkgoT().TempDir(),
+			EnvVars: []types.EnvVar{{Name: "SHELL_DECLARED", ValueStatic: "declared"}},
+			Wrap: func(_ stdcontext.Context, cmd string, args, env []string) (string, []string, []string, error) {
+				seenEnv = env
+				return "env", append([]string{"SHELL_WRAPPED=wrapped", cmd}, args...), nil, nil
+			},
+		}, exec.Command("sh", "-c", `printf '%s %s' "$SHELL_WRAPPED" "$SHELL_DECLARED"`))
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(details.Stdout).To(Equal("wrapped [REDACTED]"))
+		Expect(seenEnv).To(ContainElement("SHELL_DECLARED=declared"))
+	})
+
+	It("does not start the command when Wrap fails", func() {
+		marker := filepath.Join(GinkgoT().TempDir(), "started")
+		_, err := RunCmd(shellContext(stdcontext.Background()), Exec{
+			Chroot:  GinkgoT().TempDir(),
+			BaseDir: GinkgoT().TempDir(),
+			Wrap: func(stdcontext.Context, string, []string, []string) (string, []string, []string, error) {
+				return "", nil, nil, errors.New("sandbox unavailable")
+			},
+		}, exec.Command("sh", "-c", "touch "+marker))
+
+		Expect(err).To(MatchError(ContainSubstring("sandbox unavailable")))
+		Expect(marker).ToNot(BeAnExistingFile())
 	})
 })
 

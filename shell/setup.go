@@ -288,7 +288,11 @@ func SetupEnv(ctx context.Context, exec *Exec) (*SetupResult, error) {
 	sensitiveValues = append(sensitiveValues, envParams.sensitiveValues...)
 
 	cmd := osExec.CommandContext(ctx, "true")
+	// Connection setup writes its credential files under cmd.Dir.
 	cmd.Dir = cwd
+	if exec.CredentialsDir != "" {
+		cmd.Dir = exec.CredentialsDir
+	}
 	cmd.Env = envs
 
 	setupResult, err := connection.SetupConnection(ctx, exec.Connections, cmd)

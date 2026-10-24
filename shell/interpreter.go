@@ -3,6 +3,7 @@ package shell
 import (
 	"bufio"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -50,6 +51,10 @@ func DetectInterpreterFromShebang(script string) (string, []string) {
 			} else if len(parts) == 1 {
 				// No args, just interpreter and assume it supports the -c flag
 				return parts[0], []string{"-c"}
+			} else if len(parts) == 2 && filepath.Base(parts[0]) == "env" {
+				// `env <interpreter>` resolves a bare interpreter from PATH, so it
+				// takes the script the same way.
+				return parts[0], []string{parts[1], "-c"}
 			}
 			return parts[0], parts[1:]
 		}
