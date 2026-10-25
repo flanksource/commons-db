@@ -291,7 +291,10 @@ func SetupEnv(ctx context.Context, exec *Exec) (*SetupResult, error) {
 	// Connection setup writes its credential files under cmd.Dir.
 	cmd.Dir = cwd
 	if exec.CredentialsDir != "" {
-		cmd.Dir = exec.CredentialsDir
+		// Relative credential paths would not resolve from the command's Cwd.
+		if cmd.Dir, err = filepath.Abs(exec.CredentialsDir); err != nil {
+			return nil, cleanupSetupFailure(fmt.Errorf("error getting absolute path for credentials directory: %w", err), workspaceCleanup)
+		}
 	}
 	cmd.Env = envs
 

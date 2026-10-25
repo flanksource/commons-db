@@ -380,6 +380,31 @@ var _ = Describe("Shell execution", func() {
 		Expect(prepared.Cwd).To(Equal(workDir))
 	})
 
+	It("points credential env vars at absolute paths when CredentialsDir is relative", func() {
+		credsDir := GinkgoT().TempDir()
+		testDir, err := os.Getwd()
+		Expect(err).ToNot(HaveOccurred())
+		relativeCredsDir, err := filepath.Rel(testDir, credsDir)
+		Expect(err).ToNot(HaveOccurred())
+		prepared, err := SetupEnv(shellContext(stdcontext.Background()), &Exec{
+			Chroot:         GinkgoT().TempDir(),
+			BaseDir:        GinkgoT().TempDir(),
+			CredentialsDir: relativeCredsDir,
+			Connections: connection.ExecConnections{AWS: &connection.AWSConnection{
+				AccessKey: types.EnvVar{ValueStatic: "relative-creds-access-key"},
+				SecretKey: types.EnvVar{ValueStatic: "relative-creds-secret-key"},
+			}},
+		})
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(prepared.Cleanup)
+
+		credentialsFile, found := lo.Find(prepared.Env, func(env string) bool { return strings.HasPrefix(env, "AWS_SHARED_CREDENTIALS_FILE=") })
+		Expect(found).To(BeTrue())
+		credentialsPath := strings.TrimPrefix(credentialsFile, "AWS_SHARED_CREDENTIALS_FILE=")
+		Expect(filepath.IsAbs(credentialsPath)).To(BeTrue(), credentialsPath)
+		Expect(credentialsPath).To(BeAnExistingFile())
+	})
+
 	It("runs the command through Wrap with the prepared environment", func() {
 		var seenEnv []string
 		details, err := RunCmd(shellContext(stdcontext.Background()), Exec{
