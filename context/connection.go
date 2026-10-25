@@ -77,6 +77,17 @@ func HydrateConnectionByURL(ctx Context, connectionString string) (*models.Conne
 	isConnectionUUID := uuidErr == nil
 
 	if !isConnectionUUID && !strings.HasPrefix(connectionString, "connection://") {
+		// A bare name, such as mydb, also parses as a URL: the context's
+		// resolver gets the first say on it.
+		if resolver := ctx.connectionResolver(); resolver != nil && !strings.Contains(connectionString, "://") {
+			connection, err := resolver(ctx, "connection://"+connectionString)
+			if err != nil {
+				return nil, fmt.Errorf("failed to find connection (%s): %w", connectionString, err)
+			}
+			if connection != nil {
+				return HydrateConnection(ctx, connection)
+			}
+		}
 		if _url, err := url.Parse(connectionString); err == nil {
 			return models.ConnectionFromURL(*_url), nil
 		}

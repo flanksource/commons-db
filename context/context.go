@@ -70,6 +70,10 @@ func (k Context) WithConnectionResolver(resolver ConnectionResolver) Context {
 	})
 }
 
+// ConnectionResolver is the resolver this context asks before the connections
+// table, nil when it has none; a resolver attached over it chains to it.
+func (k Context) ConnectionResolver() ConnectionResolver { return k.connectionResolver() }
+
 func (k Context) connectionResolver() ConnectionResolver {
 	state, _ := k.Value(connectionResolverKey{}).(connectionResolverState)
 	return state.resolver

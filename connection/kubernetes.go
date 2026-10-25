@@ -47,8 +47,8 @@ func KubernetesMaxResources(ctx context.Context, connectionName string) (int, er
 // +kubebuilder:object:generate=true
 type KubeconfigConnection struct {
 	// Connection name to populate kubeconfig
-	ConnectionName string        `json:"connection,omitempty"`
-	Kubeconfig     *types.EnvVar `json:"kubeconfig,omitempty"`
+	ConnectionName string        `json:"connection,omitempty" yaml:"connection,omitempty"`
+	Kubeconfig     *types.EnvVar `json:"kubeconfig,omitempty" yaml:"kubeconfig,omitempty"`
 }
 
 func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interface, *rest.Config, error) {
@@ -94,11 +94,11 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 
 // +kubebuilder:object:generate=true
 type KubernetesConnection struct {
-	KubeconfigConnection `json:",inline"`
+	KubeconfigConnection `json:",inline" yaml:",inline"`
 
-	EKS  *EKSConnection  `json:"eks,omitempty"`
-	GKE  *GKEConnection  `json:"gke,omitempty"`
-	CNRM *CNRMConnection `json:"cnrm,omitempty"`
+	EKS  *EKSConnection  `json:"eks,omitempty" yaml:"eks,omitempty"`
+	GKE  *GKEConnection  `json:"gke,omitempty" yaml:"gke,omitempty"`
+	CNRM *CNRMConnection `json:"cnrm,omitempty" yaml:"cnrm,omitempty"`
 }
 
 // String returns a human readable string representation of the KubernetesConnection
