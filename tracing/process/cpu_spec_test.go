@@ -70,12 +70,13 @@ var _ = Describe("cpuRates", func() {
 		Expect(rates.observe(listing(time.Second, started), at.Add(time.Second))).To(HaveKeyWithValue(key, HaveValue(BeNumerically("~", 100, 1e-9))))
 	})
 
-	It("fails when a process's CPU time goes backwards", func() {
+	It("is unknown again when ps reports the same start second but less CPU time, a pid reused within that second", func() {
 		rates := newCPURates()
 		_, err := rates.observe(listing(2*time.Second, started), at)
 		Expect(err).ToNot(HaveOccurred())
-		_, err = rates.observe(listing(time.Second, started), at.Add(time.Second))
-		Expect(err).To(MatchError(ContainSubstring("went backwards")))
+		Expect(rates.observe(listing(110*time.Millisecond, started), at.Add(time.Second))).To(HaveKeyWithValue(key, BeNil()))
+		Expect(rates.observe(listing(1110*time.Millisecond, started), at.Add(2*time.Second))).
+			To(HaveKeyWithValue(key, HaveValue(BeNumerically("~", 100, 1e-9))), "rated from the new process's first observation")
 	})
 })
 

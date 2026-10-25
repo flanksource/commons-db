@@ -128,7 +128,12 @@ func (r *cpuRates) forget(listed []clickyprocess.Process) {
 
 // samePID reports whether two observations sharing a Key are one process,
 // not a pid reused within the second its first holder started.
+// ps reports start times to the second, so a pid reused within that second
+// shows the same start: its lower CPU time is what tells it apart.
 func samePID(previous, current clickyprocess.Process) bool {
+	if current.CPUTime < previous.CPUTime {
+		return false
+	}
 	return previous.StartedAt == nil || current.StartedAt == nil || previous.StartedAt.Equal(*current.StartedAt)
 }
 
