@@ -11,7 +11,7 @@ import (
 )
 
 var _ = Describe("SQLite SQL connections", func() {
-	It("opens a snapshot read-only through the shared SQLite driver", func() {
+	DescribeTable("opens a snapshot read-only through the shared SQLite driver", func(prefix string) {
 		path := filepath.Join(GinkgoT().TempDir(), "snapshot.sqlite")
 		writer, err := sql.Open("sqlite", path)
 		Expect(err).NotTo(HaveOccurred())
@@ -23,7 +23,7 @@ var _ = Describe("SQLite SQL connections", func() {
 
 		var connection SQLConnection
 		Expect(connection.FromModel(models.Connection{
-			Name: "snapshot", Type: models.ConnectionTypeSQLite, URL: "file:" + path + "?mode=ro",
+			Name: "snapshot", Type: models.ConnectionTypeSQLite, URL: prefix + path + "?mode=ro",
 		})).To(Succeed())
 		client, err := connection.Client(dbcontext.New())
 		Expect(err).NotTo(HaveOccurred())
@@ -34,5 +34,5 @@ var _ = Describe("SQLite SQL connections", func() {
 		Expect(outcome).To(Equal("matched"))
 		_, err = client.Exec(`DELETE FROM reconcile_rows`)
 		Expect(err).To(HaveOccurred())
-	})
+	}, Entry("file URI", "file:"), Entry("sqlite URL", "sqlite://"))
 })
