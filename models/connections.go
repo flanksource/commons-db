@@ -109,6 +109,9 @@ type Connection struct {
 	Virtual     bool                `gorm:"-" json:"virtual,omitempty" faker:"-"`
 	ReadOnly    bool                `gorm:"-" json:"read_only,omitempty" faker:"-"`
 	ExpiresAt   *time.Time          `gorm:"-" json:"expires_at,omitempty" faker:"-"`
+	// Warnings are problems loading the connection, such as a file that is not
+	// a valid Connection resource; a connection with warnings cannot be used.
+	Warnings []string `gorm:"-" json:"warnings,omitempty" faker:"-"`
 }
 
 func (c *Connection) GetID() string {

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -119,7 +118,7 @@ func (c *Cache) Log(ctx context.Context, repo *Repository, options LogOptions) (
 	}
 	headFrom := cmp.Or(options.HeadFrom, repo)
 	var out string
-	err := c.withRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.Base}, {headFrom, options.Head}}, History: true}, func(mirror string, shas []string) (err error) {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.Base}, {headFrom, options.Head}}, History: true}, func(mirror string, shas []string) (err error) {
 		args = append(args, "--end-of-options", shas[0]+"..."+shas[1], "--")
 		out, err = run(ctx, command{dir: mirror, args: append(args, options.Paths...)})
 		return err
@@ -169,7 +168,7 @@ func (c *Cache) History(ctx context.Context, repo *Repository, ref string, optio
 		args = append(args, "--skip="+strconv.Itoa(options.Offset))
 	}
 	var out string
-	err := c.withRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, ref}}, History: true}, func(mirror string, shas []string) (err error) {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, ref}}, History: true}, func(mirror string, shas []string) (err error) {
 		out, err = run(ctx, command{dir: mirror, args: slices.Concat(args, []string{"--end-of-options", shas[0], "--"}, options.Paths)})
 		return err
 	})
@@ -184,7 +183,7 @@ func (c *Cache) History(ctx context.Context, repo *Repository, ref string, optio
 // their merge base; refs without a common ancestor are an error.
 func (c *Cache) Compare(ctx context.Context, repo *Repository, base, head string) (Comparison, error) {
 	var comparison Comparison
-	err := c.withRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {repo, head}}, History: true}, func(mirror string, shas []string) error {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {repo, head}}, History: true}, func(mirror string, shas []string) error {
 		baseSHA, headSHA := shas[0], shas[1]
 		counts, err := run(ctx, command{dir: mirror, args: []string{"rev-list", "--left-right", "--count", "--end-of-options", baseSHA + "..." + headSHA}})
 		if err != nil {
@@ -217,7 +216,7 @@ func (c *Cache) MergeBase(ctx context.Context, repo *Repository, options MergeBa
 	base, head := options.Base, options.Head
 	headFrom := cmp.Or(options.HeadFrom, repo)
 	var found string
-	err := c.withRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {headFrom, head}}, History: true}, func(mirror string, shas []string) (err error) {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {headFrom, head}}, History: true}, func(mirror string, shas []string) (err error) {
 		if found, err = mergeBase(ctx, mirror, shas[0], shas[1]); err != nil {
 			return fmt.Errorf("%s of %s and %s of %s: %w", base, repo.URL.Redacted(), head, headFrom.URL.Redacted(), err)
 		}
@@ -248,56 +247,92 @@ type refReadOptions struct {
 	History bool
 }
 
-// withRefs prepares and retains immutable commits under the writer lock, then
-// reads them outside the lock. Full object IDs do not need remote discovery.
-func (c *Cache) withRefs(ctx context.Context, repo *Repository, options refReadOptions, fn func(mirror string, shas []string) error) error {
-	directory, shas, err := c.prepareReadRefs(ctx, repo, options)
+// withRefs makes the commits present and pinned, then reads them under the
+// shared mirror lock, so a fetch or Maintain waits for the read but other
+// reads do not. Full object IDs do not need remote discovery.
+func (c *Cache) withRefs(ctx context.Context, repo *Repository, options refReadOptions, fn func(mirror string, shas []string) error) (err error) {
+	mirror, shas, unlock, err := c.lockReadRefs(ctx, repo, options)
 	if err != nil {
 		return err
 	}
-	return readRepository(ctx, directory, func() error { return fn(directory, shas) })
+	defer func() { err = errors.Join(err, unlock()) }()
+	return readRepository(ctx, mirror, func() error { return fn(mirror, shas) })
 }
 
+// prepareReadRefs is withRefs for a caller that reads after the lock is
+// released (a Tree): its pins keep the commits from gc.
 func (c *Cache) prepareReadRefs(ctx context.Context, repo *Repository, options refReadOptions) (string, []string, error) {
-	if c.Root == "" {
-		return "", nil, errors.New("git cache root is required")
+	mirror, shas, unlock, err := c.lockReadRefs(ctx, repo, options)
+	if err != nil {
+		return "", nil, err
 	}
-	if repo == nil {
-		return "", nil, errors.New("git repository is required")
+	return mirror, shas, unlock()
+}
+
+// lockReadRefs returns the commits under the shared mirror lock. Commits this
+// process already pinned cost no git process; any other commit is checked,
+// fetched when missing and pinned under the exclusive lock first.
+func (c *Cache) lockReadRefs(ctx context.Context, repo *Repository, options refReadOptions) (string, []string, func() error, error) {
+	paths, err := c.mirrorPaths(repo)
+	if err != nil {
+		return "", nil, nil, err
 	}
 	resolved, err := resolveReadRefs(ctx, options.Refs)
 	if err != nil {
-		return "", nil, err
+		return "", nil, nil, err
 	}
 	shas := make([]string, len(resolved))
-	var directory string
-	err = c.withMirror(ctx, repo, func(mirror string) (err error) {
-		directory = mirror
-		var updates strings.Builder
-		retained := map[string]bool{}
-		for i, ref := range resolved {
-			shas[i] = ref.SHA
-			fetching := fetchOptions{Dir: mirror, Owner: repo, Repo: options.Refs[i].repo, Ref: ref}
-			if options.History {
-				shas[i], err = fetchHistory(ctx, fetching)
-			} else if !hasCommit(ctx, mirror, ref.SHA) {
-				shas[i], err = fetch(ctx, fetching)
-			}
-			if err != nil {
-				return err
-			}
-			if !retained[shas[i]] {
-				fmt.Fprintf(&updates, "update refs/commons-cache/commits/%s %s\n", shas[i], shas[i])
-				retained[shas[i]] = true
-			}
-		}
-		_, err = run(ctx, command{dir: mirror, args: []string{"update-ref", "--stdin"}, stdin: []byte(updates.String())})
-		return err
-	})
-	if err != nil {
-		return "", nil, err
+	for i, ref := range resolved {
+		shas[i] = ref.SHA
 	}
-	return directory, shas, nil
+	lock, err := acquire(ctx, paths.lock, "mirror lock", sharedLock)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	pinned, err := paths.usePinned(shas, options.History)
+	if err != nil {
+		return "", nil, nil, errors.Join(err, lock.Unlock())
+	}
+	if pinned {
+		return paths.git, shas, lock.Unlock, nil
+	}
+	if err := lock.Unlock(); err != nil {
+		return "", nil, nil, err
+	}
+	if shas, err = c.pinReadRefs(ctx, paths, repo, resolved, options); err != nil {
+		return "", nil, nil, err
+	}
+	if lock, err = acquire(ctx, paths.lock, "mirror lock", sharedLock); err != nil {
+		return "", nil, nil, err
+	}
+	return paths.git, shas, lock.Unlock, nil
+}
+
+// pinReadRefs makes every ref's commit present (fetching it when missing, with
+// full history for a History read) and pins it, under the exclusive lock.
+func (c *Cache) pinReadRefs(ctx context.Context, paths mirrorPaths, repo *Repository, resolved []Ref, options refReadOptions) (shas []string, err error) {
+	lock, err := acquire(ctx, paths.lock, "mirror lock", exclusiveLock)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, lock.Unlock()) }()
+	if err := ensureMirror(ctx, paths.git); err != nil {
+		return nil, err
+	}
+	shas = make([]string, len(resolved))
+	for i, ref := range resolved {
+		shas[i] = ref.SHA
+		fetching := fetchOptions{Dir: paths.git, Owner: repo, Repo: options.Refs[i].repo, Ref: ref}
+		if options.History {
+			shas[i], err = fetchHistory(ctx, fetching)
+		} else if !hasCommit(ctx, paths.git, ref.SHA) {
+			shas[i], err = fetch(ctx, fetching)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return shas, paths.pin(ctx, slices.Compact(slices.Sorted(slices.Values(shas))))
 }
 
 func resolveReadRefs(ctx context.Context, refs []refOn) ([]Ref, error) {
@@ -324,25 +359,6 @@ func resolveReadRefs(ctx context.Context, refs []refOn) ([]Ref, error) {
 		}
 	}
 	return resolved, nil
-}
-
-// withMirror runs fn on repo's bare mirror, created when missing, under the
-// mirror lock.
-func (c *Cache) withMirror(ctx context.Context, repo *Repository, fn func(mirror string) error) (err error) {
-	if c.Root == "" {
-		return errors.New("git cache root is required")
-	}
-	dir := filepath.Join(c.Root, repo.URL.CacheKey())
-	mirror := filepath.Join(dir, "mirror.git")
-	lock, err := acquire(ctx, filepath.Join(dir, "mirror.lock"), "mirror lock")
-	if err != nil {
-		return err
-	}
-	defer func() { err = errors.Join(err, lock.Unlock()) }()
-	if err := ensureMirror(ctx, mirror); err != nil {
-		return err
-	}
-	return fn(mirror)
 }
 
 // fetchHistory makes ref's commit and its full history, fetched from repo,

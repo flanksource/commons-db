@@ -48,7 +48,7 @@ func authBranchFor(authentication schema.Schema, authType string) schema.Schema 
 }
 
 var _ = Describe("Connection schema", func() {
-	s := schema.Connection()
+	s := schema.Connection(schema.ConnectionOptions{})
 
 	It("is a valid Draft 2020-12 object that marshals to JSON", func() {
 		Expect(s["$schema"]).To(Equal(schema.Draft))
@@ -226,7 +226,7 @@ var _ = Describe("Connection schema", func() {
 		firstSourceBranch := source["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("connections/"))
 
-		bundled := schema.Connection()
+		bundled := schema.Connection(schema.ConnectionOptions{})
 		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(57))
 		firstBundledBranch := bundled["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstBundledBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("#/$defs/"))
@@ -253,9 +253,79 @@ var _ = Describe("Connection schema", func() {
 	})
 })
 
+var _ = Describe("Connection schema under an app's policy", func() {
+	policy := schema.ConnectionOptions{
+		AllowedTypes:  []string{models.ConnectionTypeSQLite, models.ConnectionTypePostgres},
+		SecretSources: []string{"secret", "configmap"},
+		URLSources:    []string{"value", "secret"},
+	}
+	s := schema.Connection(policy)
+	branchTypes := func(s schema.Schema) []string {
+		var types []string
+		for _, raw := range s["allOf"].([]any) {
+			condition := raw.(map[string]any)["if"].(map[string]any)["properties"].(map[string]any)
+			types = append(types, condition["type"].(map[string]any)["const"].(string))
+		}
+		return types
+	}
+
+	It("offers only the allowed types, in the form's order, with their branches and defs alone", func() {
+		Expect(s["properties"].(schema.Schema)["type"].(schema.Schema)["enum"]).To(Equal([]string{models.ConnectionTypePostgres, models.ConnectionTypeSQLite}))
+		Expect(branchTypes(s)).To(Equal([]string{models.ConnectionTypePostgres, models.ConnectionTypeSQLite}))
+		Expect(s["$defs"].(schema.Schema)).To(HaveLen(2))
+		Expect(branchFor(s, models.ConnectionTypePostgres)["properties"]).To(HaveKey("password"))
+	})
+
+	It("advertises the allowed secret and URL sources at the root", func() {
+		Expect(s).To(HaveKeyWithValue("x-clicky-secret-sources", []string{"secret", "configmap"}))
+		Expect(s).To(HaveKeyWithValue("x-clicky-url-sources", []string{"value", "secret"}))
+	})
+
+	It("seeds every picker with a source the policy allows", func() {
+		defaults := map[string][]string{}
+		var walk func(node any)
+		walk = func(node any) {
+			switch n := node.(type) {
+			case map[string]any:
+				if source, ok := n["x-clicky-default-source"].(string); ok {
+					component, _ := n["x-clicky-component"].(string)
+					defaults[component] = append(defaults[component], source)
+				}
+				for _, child := range n {
+					walk(child)
+				}
+			case []any:
+				for _, child := range n {
+					walk(child)
+				}
+			}
+		}
+		walk(schema.Connection(schema.ConnectionOptions{SecretSources: []string{"secret", "configmap"}, URLSources: []string{"secret"}}))
+		Expect(defaults["k8s-secret-selector"]).ToNot(BeEmpty())
+		Expect(defaults["k8s-secret-selector"]).To(HaveEach(BeElementOf("secret", "configmap")))
+		Expect(defaults["k8s-url-selector"]).To(HaveEach(Equal("secret")))
+
+		defaults = map[string][]string{}
+		walk(schema.Connection(schema.ConnectionOptions{}))
+		Expect(defaults["k8s-secret-selector"]).To(ContainElement("value"), "a restricted schema must not change the unrestricted one")
+	})
+
+	It("leaves out a hint the policy does not set, and every type when it allows them all", func() {
+		open := schema.Connection(schema.ConnectionOptions{SecretSources: []string{"secret"}})
+		Expect(open).ToNot(HaveKey("x-clicky-url-sources"))
+		Expect(branchTypes(open)).To(HaveLen(57))
+		Expect(schema.Connection(schema.ConnectionOptions{})).ToNot(HaveKey("x-clicky-secret-sources"))
+	})
+
+	It("lists every connection type a policy may name", func() {
+		Expect(schema.ConnectionTypes()).To(HaveLen(57))
+		Expect(schema.ConnectionTypes()).To(ContainElement(models.ConnectionTypeSQLite))
+	})
+})
+
 // allConnectionTypesSet is the connection type enum as a set, for the drift guard.
 func allConnectionTypesSet() map[string]struct{} {
-	enum := schema.Connection()["properties"].(schema.Schema)["type"].(schema.Schema)["enum"].([]string)
+	enum := schema.Connection(schema.ConnectionOptions{})["properties"].(schema.Schema)["type"].(schema.Schema)["enum"].([]string)
 	set := map[string]struct{}{}
 	for _, t := range enum {
 		set[t] = struct{}{}

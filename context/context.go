@@ -658,6 +658,9 @@ func (k Context) Wrap(ctx gocontext.Context) Context {
 	if client, ok := k.Value(localKubernetesContextKey).(*dutyKubernetes.Client); ok && client != nil {
 		wrapped = wrapped.WithLocalKubernetes(client)
 	}
+	if clients, ok := k.Value(kubeContextClientsKey{}).(KubeContextClients); ok && clients != nil {
+		wrapped = wrapped.WithKubeContextClients(clients)
+	}
 	if state, ok := k.Value(connectionResolverKey{}).(connectionResolverState); ok && state.resolver != nil {
 		wrapped = wrapped.WithValue(connectionResolverKey{}, state)
 	}

@@ -112,23 +112,61 @@ var _ = Describe("a layered connection store", func() {
 		Expect(resolve("orders").UpdatedAt).To(BeTemporally("==", later))
 	})
 
-	DescribeTable("refuses a layer it cannot read, naming the file",
-		func(files map[string]string, expected string) {
-			for file, document := range files {
-				write(app, file, document)
+	DescribeTable("lists a file it cannot read as a warning on that connection alone, naming the file",
+		func(file, document, name, expected string) {
+			path := write(app, file, document)
+			write(app, "good.yaml", header+"spec: {postgres: {url: {value: 'postgres://good'}}}\n")
+			listed, err := connections.ListConnections()
+			Expect(err).ToNot(HaveOccurred())
+			Expect(listed).To(HaveLen(2))
+			byName := map[string]*models.Connection{}
+			for _, connection := range listed {
+				byName[connection.Name] = connection
 			}
-			_, err := connections.ListConnections()
-			Expect(err).To(MatchError(And(ContainSubstring(app), ContainSubstring(expected))))
+			Expect(byName["good"].Warnings).To(BeEmpty())
+			Expect(byName[name]).ToNot(BeNil(), "the broken file is listed under %q", name)
+			Expect(byName[name].Source).To(Equal("file://" + path))
+			Expect(byName[name].Warnings).To(ConsistOf(And(ContainSubstring(path), ContainSubstring(expected))))
+			Expect(resolve("good").URL).To(Equal("postgres://good"))
+			_, err = dbcontext.HydrateConnectionByURL(connections.Attach(ctx), "connection://"+name)
+			Expect(err).To(MatchError(And(ContainSubstring("cannot be used"), ContainSubstring(path), ContainSubstring(expected))))
 		},
-		Entry("a file that is not YAML", map[string]string{"bad.yaml": "spec: [unclosed"}, "decode connection"),
-		Entry("an unknown field", map[string]string{"bad.yaml": header + "spec: {postgres: {colour: red}}\n"}, "unknown field"),
-		Entry("another kind", map[string]string{"bad.yaml": "kind: Playbook\nspec: {postgres: {}}\n"}, `kind is "Playbook"`),
-		Entry("no kind of connection", map[string]string{"bad.yaml": header + "spec: {}\n"}, "names no kind of connection"),
-		Entry("one connection in two files", map[string]string{
-			"a.yaml": header + "metadata: {name: dup}\nspec: {postgres: {}}\n",
-			"b.yaml": header + "metadata: {name: dup}\nspec: {loki: {url: x}}\n",
-		}, "both define connection /dup"),
+		Entry("a file that is not YAML", "bad.yaml", "spec: [unclosed", "bad", "decode connection"),
+		Entry("an unknown field", "bad.yaml", header+"spec: {postgres: {colour: red}}\n", "bad", "unknown field"),
+		Entry("another kind", "bad.yaml", "apiVersion: mission-control.flanksource.com/v1\nkind: Playbook\nspec: {postgres: {}}\n", "bad", `kind is "Playbook"`),
+		Entry("a legacy flat connection, with no apiVersion or kind", "legacy.yaml",
+			"name: orders\ntype: postgres\nurl: postgres://db/orders\npassword: secret://orders/password\n", "legacy",
+			"legacy.yaml is not a Connection resource: it needs apiVersion: "+crd.APIVersion+" and kind: Connection"),
+		Entry("a resource with a kind but no apiVersion", "bad.yaml", "kind: Connection\nspec: {postgres: {}}\n", "bad", "needs apiVersion: "+crd.APIVersion),
+		Entry("no kind of connection, named by its metadata", "bad.yaml", header+"metadata: {name: named}\nspec: {}\n", "named", "names no kind of connection"),
 	)
+
+	It("keeps the first of two files defining one connection and warns about the other", func() {
+		write(app, "a.yaml", header+"metadata: {name: dup}\nspec: {postgres: {url: {value: 'postgres://first'}}}\n")
+		second := write(app, "b.yaml", header+"metadata: {name: dup}\nspec: {loki: {url: x}}\n")
+		listed, err := connections.ListConnections()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(listed).To(HaveLen(1))
+		Expect(listed[0].URL).To(Equal("postgres://first"))
+		Expect(listed[0].Warnings).To(ConsistOf(ContainSubstring(second + " also defines connection /dup")))
+	})
+
+	It("finds the layer and file that define the connection in effect", func() {
+		write(global, "logs.yaml", header+"spec: {loki: {url: 'http://global'}}\n")
+		path := write(app, "logs.yaml", header+"spec: {loki: {url: 'http://app'}}\n")
+		found, err := connections.Find("connection://logs")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(found).To(PointTo(MatchFields(IgnoreExtras, Fields{
+			"Layer":      Equal(store.Layer{Name: store.LayerApp, Dir: app}),
+			"Path":       Equal(path),
+			"Connection": MatchFields(IgnoreExtras, Fields{"Name": Equal("logs"), "URL": Equal("http://app")}),
+		})))
+		Expect(connections.Find(found.Connection.ID.String())).To(PointTo(HaveField("Path", path)))
+
+		missing, err := connections.Find("connection://missing")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(missing).To(BeNil())
+	})
 
 	It("skips layers that do not exist and files that are not connections", func() {
 		write(app, "README.md", "# not a connection")

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons/http/middlewares"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
@@ -46,10 +47,14 @@ func NewRepository(options RepositoryOptions) (*Repository, error) {
 }
 
 // LsRemote lists the remote's refs with go-git against in-memory storage;
-// TLS settings are passed per call.
+// TLS settings are passed per call. A local repository is listed by the git
+// binary (lsRemoteLocal).
 func (r *Repository) LsRemote(ctx context.Context) (refs RemoteRefs, err error) {
+	if path, local := r.URL.LocalPath(); local {
+		return lsRemoteLocal(ctx, path)
+	}
 	finish := startGitTiming(ctx, "ls_remote")
-	defer func() { finish(err) }()
+	defer func() { finish(err, "", nil) }()
 	ctx = middlewares.WithClientTimings(ctx)
 	auth, err := r.Auth.goGitAuth(r.URL)
 	if err != nil {
@@ -71,8 +76,12 @@ func (r *Repository) LsRemote(ctx context.Context) (refs RemoteRefs, err error) 
 }
 
 // Resolve lists the remote and resolves ref (see RemoteRefs.Resolve); an
-// empty ref is the remote HEAD.
+// empty ref is the remote HEAD. A full 40-character SHA is the commit itself,
+// without listing the remote, even if a branch or tag carries that name.
 func (r *Repository) Resolve(ctx context.Context, ref string) (Ref, error) {
+	if fullSHAPattern.MatchString(ref) {
+		return Ref{Name: ref, FullName: ref, SHA: ref, Kind: RefSHA}, nil
+	}
 	refs, err := r.LsRemote(ctx)
 	if err != nil {
 		return Ref{}, err
@@ -130,19 +139,37 @@ type fetchOptions struct {
 
 // fetch fetches options.Ref and returns the fetched commit, which may be
 // newer than the SHA ls-remote reported.
-func fetch(ctx context.Context, options fetchOptions) (string, error) {
+func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	repo, ref := options.Repo, options.Ref
 	env, cleanup, err := commandEnv(repo)
 	if err != nil {
 		return "", err
 	}
 	defer cleanup()
-	args := append([]string{"fetch", "--quiet", "--no-tags"}, options.Flags...)
+	verbosity, report := "--quiet", func(FetchProgress) {}
+	if observer := fetchObserver(ctx); observer != nil {
+		verbosity = "--progress"
+		var received string
+		report = func(progress FetchProgress) {
+			if progress.Phase == "Receiving objects" && progress.Transferred != "" {
+				received = progress.Transferred
+			}
+			progress.Repository, progress.Ref = repo.URL.Redacted(), ref.Name
+			observer(progress)
+		}
+		defer func() {
+			if kib, ok := transferredKiB(received); ok {
+				rpchttp.AddTiming(ctx, rpchttp.TimingMetric{Name: "git_fetch", Counters: []rpchttp.TimingCounter{{Name: "received_kib", Value: kib}}})
+			}
+			report(FetchProgress{Done: true, Err: err})
+		}()
+	}
+	args := append([]string{"fetch", verbosity, "--no-tags"}, options.Flags...)
 	if options.Depth > 0 {
 		args = append(args, fmt.Sprintf("--depth=%d", options.Depth))
 	}
 	args = append(args, "--end-of-options", repo.URL.Clone, ref.refspec(remoteOf(options.Owner, repo)))
-	if _, err := run(ctx, command{dir: options.Dir, env: env, args: args}); err != nil {
+	if _, err := run(ctx, command{dir: options.Dir, env: env, args: args, progress: report}); err != nil {
 		return "", fmt.Errorf("fetch %s from %s: %w", ref.Name, repo.URL.Redacted(), err)
 	}
 	return run(ctx, command{dir: options.Dir, args: []string{"rev-parse", "--verify", "FETCH_HEAD^{commit}"}})

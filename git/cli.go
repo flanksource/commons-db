@@ -49,6 +49,9 @@ type command struct {
 	env   []string
 	stdin []byte
 	args  []string
+	// progress, when set, receives the progress meter git writes to stderr;
+	// the remaining stderr still annotates a failure.
+	progress func(FetchProgress)
 }
 
 // requireGit checks once per process that a git binary >= 2.42 is on PATH.
@@ -86,11 +89,11 @@ func run(ctx context.Context, c command) (string, error) {
 // content whose trailing whitespace is significant.
 func runBytes(ctx context.Context, c command) (out []byte, err error) {
 	finish := startGitTiming(ctx, "commands")
-	defer func() { finish(err) }()
+	cmd := exec.CommandContext(ctx, "git", c.args...)
+	defer func() { finish(err, gitSubcommand(c.args), cmd.ProcessState) }()
 	if err := requireGit(ctx); err != nil {
 		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, "git", c.args...)
 	cmd.Dir = c.dir
 	cmd.Env = c.env
 	if cmd.Env == nil {
@@ -101,23 +104,56 @@ func runBytes(ctx context.Context, c command) (out []byte, err error) {
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
+	var meter *progressWriter
+	if c.progress != nil {
+		meter = &progressWriter{onProgress: c.progress}
+		cmd.Stderr = meter
+	}
+	err = cmd.Run()
+	if meter != nil {
+		meter.flush()
+		stderr = meter.other
+	}
+	if err != nil {
 		return nil, fmt.Errorf("git %s: %w: %s", strings.Join(c.args, " "), err, Redact(strings.TrimSpace(stderr.String())))
 	}
 	return stdout.Bytes(), nil
 }
 
-func startGitTiming(ctx context.Context, operation string) func(error) {
+// startGitTiming returns the finish func of one git operation. A subprocess
+// passes its subcommand and finished state, so its CPU and block IO land on
+// the "git" metric and on a per-subcommand "git_<subcommand>" metric; go-git
+// operations pass "" and nil.
+func startGitTiming(ctx context.Context, operation string) func(err error, subcommand string, state *os.ProcessState) {
 	started := time.Now()
-	return func(err error) {
-		metric := rpchttp.TimingMetric{Name: "git", Duration: time.Since(started), Counters: []rpchttp.TimingCounter{
-			{Name: "ops", Value: 1}, {Name: operation, Value: 1}, {Name: "errors"},
-		}}
+	return func(err error, subcommand string, state *os.ProcessState) {
+		elapsed := time.Since(started)
+		failed := int64(0)
 		if err != nil {
-			metric.Counters[2].Value = 1
+			failed = 1
 		}
-		rpchttp.AddTiming(ctx, metric)
+		usage := rusageCounters(state)
+		counters := append([]rpchttp.TimingCounter{{Name: "ops", Value: 1}, {Name: operation, Value: 1}, {Name: "errors", Value: failed}}, usage...)
+		rpchttp.AddTiming(ctx, rpchttp.TimingMetric{Name: "git", Duration: elapsed, Counters: counters})
+		if subcommand != "" {
+			rpchttp.AddTiming(ctx, rpchttp.TimingMetric{Name: "git_" + strings.ReplaceAll(subcommand, "-", "_"), Duration: elapsed,
+				Counters: append([]rpchttp.TimingCounter{{Name: "ops", Value: 1}, {Name: "errors", Value: failed}}, usage...)})
+		}
 	}
+}
+
+// gitSubcommand is the first argument after git's global options (-c and -C
+// take a value).
+func gitSubcommand(args []string) string {
+	for i := 0; i < len(args); i++ {
+		switch arg := args[i]; {
+		case arg == "-c" || arg == "-C":
+			i++
+		case !strings.HasPrefix(arg, "-"):
+			return arg
+		}
+	}
+	return ""
 }
 
 // baseEnv is the process environment minus inherited git steering, with

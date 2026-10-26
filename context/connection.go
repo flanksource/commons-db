@@ -264,8 +264,25 @@ func GetConnection(ctx Context, name, namespace string) (*models.Connection, err
 	return HydrateConnection(ctx, connection)
 }
 
+// HydrateConnection resolves connection's references and templates in place.
+// A connection whose kubecontext property is set reads its secret://,
+// configmap://, helm:// and service URL references through that kubeconfig
+// context's cluster rather than the context's local client.
 func HydrateConnection(ctx Context, connection *models.Connection) (*models.Connection, error) {
 	var err error
+
+	// A connection that failed to load is listed with its warnings, but using it fails.
+	if len(connection.Warnings) > 0 {
+		return nil, fmt.Errorf("connection %q cannot be used: %s", connection.Name, strings.Join(connection.Warnings, "; "))
+	}
+
+	if kubeContext := connection.Properties[KubeContextProperty]; kubeContext != "" {
+		client, err := ctx.KubeContextClient(kubeContext)
+		if err != nil {
+			return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
+		}
+		ctx = ctx.WithLocalKubernetes(client)
+	}
 
 	if connection.URL, err = GetEnvStringFromCache(ctx, connection.URL, connection.Namespace); err != nil {
 		return nil, err

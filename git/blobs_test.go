@@ -17,7 +17,7 @@ var _ = Describe("Cache.ReadBlobs", func() {
 		old := fixture.commitOn(fixtureCommit{Branch: "main", Path: path, Content: original, Message: "Add binary"})
 		head := fixture.commitOn(fixtureCommit{Branch: "main", Path: path, Message: "Empty binary"})
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
-		repo := newRepository(fixture.FileURL(), git.Auth{})
+		repo := mirroredRepository(fixture)
 		log := argvRecorder()
 		blobs, err := cache.ReadBlobs(ctx, repo, []git.BlobRequest{{SHA: old, Path: path}, {SHA: head, Path: path}, {SHA: head, Path: "absent.xml"}})
 		Expect(err).NotTo(HaveOccurred())

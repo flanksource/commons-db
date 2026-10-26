@@ -112,7 +112,7 @@ func (w *Worktree) pickOne(ctx context.Context, options pickOptions) (bool, erro
 // repository), every commit the mirror does not have yet.
 func (w *Worktree) fetchCommits(ctx context.Context, source *Repository, shas []string) (err error) {
 	source = cmp.Or(source, w.repo)
-	lock, err := acquire(ctx, w.mirrorLock, "mirror lock")
+	lock, err := acquire(ctx, w.mirrorLock, "mirror lock", exclusiveLock)
 	if err != nil {
 		return err
 	}

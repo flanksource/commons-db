@@ -18,7 +18,7 @@ type objectStream struct {
 	input  io.WriteCloser
 	output *bufio.Reader
 	stderr bytes.Buffer
-	finish func(error)
+	finish func(error, string, *os.ProcessState)
 	closed bool
 }
 
@@ -26,13 +26,13 @@ func openObjectStream(ctx context.Context, options command) (stream *objectStrea
 	finish := startGitTiming(ctx, "commands")
 	defer func() {
 		if err != nil {
-			finish(err)
+			finish(err, "cat-file", nil)
 		}
 	}()
 	if err := requireGit(ctx); err != nil {
 		return nil, err
 	}
-	stream = &objectStream{ctx: ctx, finish: finish, cmd: exec.CommandContext(ctx, "git", "cat-file", "--batch", "-Z")}
+	stream = &objectStream{ctx: ctx, finish: finish, cmd: exec.CommandContext(ctx, "git", "cat-file", "--batch-command", "-Z")}
 	stream.cmd.Dir, stream.cmd.Env = options.dir, options.env
 	if stream.cmd.Env == nil {
 		stream.cmd.Env = baseEnv()
@@ -54,16 +54,35 @@ func openObjectStream(ctx context.Context, options command) (stream *objectStrea
 }
 
 func (stream *objectStream) read(object string, read func(batchBlob, io.Reader) error) error {
+	if err := stream.request("contents", object); err != nil {
+		return err
+	}
+	if err := readBatchObject(stream.output, object, read); err != nil {
+		return stream.stop(err)
+	}
+	return nil
+}
+
+// info reads an object's header (its size) without its content.
+func (stream *objectStream) info(object string) (batchBlob, error) {
+	if err := stream.request("info", object); err != nil {
+		return batchBlob{}, err
+	}
+	blob, err := readBatchHeader(stream.output, object)
+	if err != nil {
+		return batchBlob{}, stream.stop(err)
+	}
+	return blob, nil
+}
+
+func (stream *objectStream) request(verb, object string) error {
 	if stream.closed {
 		return fs.ErrClosed
 	}
 	if err := stream.ctx.Err(); err != nil {
 		return stream.stop(err)
 	}
-	if _, err := io.WriteString(stream.input, object+"\x00"); err != nil {
-		return stream.stop(err)
-	}
-	if err := readBatchObject(stream.output, object, read); err != nil {
+	if _, err := io.WriteString(stream.input, verb+" "+object+"\x00"); err != nil {
 		return stream.stop(err)
 	}
 	return nil
@@ -87,12 +106,12 @@ func (stream *objectStream) stop(cause error) error {
 		requestErr := stream.ctx.Err()
 		cancelledWorker := cause == nil && requestErr != nil && (errors.Is(waitErr, requestErr) || terminated && exit.ExitCode() == -1)
 		if !cancelledWorker {
-			err = errors.Join(err, fmt.Errorf("git cat-file --batch: %w: %s", waitErr, Redact(stream.stderr.String())))
+			err = errors.Join(err, fmt.Errorf("git cat-file --batch-command: %w: %s", waitErr, Redact(stream.stderr.String())))
 		}
 	}
 	if cause != nil {
 		err = errors.Join(err, stream.ctx.Err())
 	}
-	stream.finish(err)
+	stream.finish(err, "cat-file", stream.cmd.ProcessState)
 	return err
 }

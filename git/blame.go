@@ -47,7 +47,7 @@ func (c *Cache) Blame(ctx context.Context, repo *Repository, options BlameOption
 		return nil, err
 	}
 	var out []byte
-	err = c.withRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.SHA}}, History: true}, func(mirror string, shas []string) error {
+	err = c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.SHA}}, History: true}, func(mirror string, shas []string) error {
 		if _, err := blobAt(ctx, mirror, shas[0], options.Path); err != nil {
 			return err
 		}

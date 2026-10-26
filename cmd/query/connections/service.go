@@ -11,6 +11,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
+	"github.com/flanksource/commons-db/cmd/query/secretcatalog"
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -18,6 +19,7 @@ import (
 	"github.com/flanksource/commons-db/types"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
+	"k8s.io/client-go/kubernetes"
 )
 
 type DatabaseProvider func() (*gorm.DB, error)
@@ -42,6 +44,14 @@ type Options struct {
 	DecodeBody BodyDecoder
 	Profiles   ProfileProvider
 	Virtual    VirtualConnectionProvider
+	// Policy narrows the connection types and value sources the service lists,
+	// offers in its form schema and accepts on save.
+	Policy Policy
+	// Secrets, when set, makes Handler serve the connection form's secret,
+	// namespace, workload and 1Password pickers under {prefix}/connections.
+	// Its Prefix and Next are set by Handler; an unset Context is the
+	// service's, and an unset Kube that context's local Kubernetes client.
+	Secrets *secretcatalog.Options
 }
 
 type Service struct {
@@ -50,6 +60,8 @@ type Service struct {
 	decodeBody BodyDecoder
 	profiles   ProfileProvider
 	virtual    VirtualConnectionProvider
+	policy     Policy
+	secrets    *secretcatalog.Options
 	browser    *connectionBrowserHandler
 }
 
@@ -66,9 +78,13 @@ func New(options Options) (*Service, error) {
 	if options.Profiles == nil {
 		return nil, fmt.Errorf("profile provider is required")
 	}
+	if err := options.Policy.validate(); err != nil {
+		return nil, err
+	}
 	return &Service{
 		database: options.Database, context: options.Context,
 		decodeBody: options.DecodeBody, profiles: options.Profiles, virtual: options.Virtual,
+		policy: options.Policy, secrets: options.Secrets,
 		browser: newConnectionBrowserHandler("", options.Context(), http.NotFoundHandler()),
 	}, nil
 }
@@ -123,12 +139,35 @@ func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	browser.next = actions
 	health := newConnectionHealthHandler(prefix, ctx, browser)
 	health.virtual = s.virtual
-	return newConnectionSchemaHandler(browser.prefix, newConnectionDashboardHandler(connectionDashboardHandlerOptions{
-		Prefix: prefix, Context: ctx, Profiles: s.profiles, Virtual: s.virtual, Next: health,
+	handler := newConnectionSchemaHandler(browser.prefix, s.policy, newConnectionDashboardHandler(connectionDashboardHandlerOptions{
+		Prefix: prefix, Context: ctx, Profiles: s.profiles, Virtual: s.virtual, Policy: s.policy, Next: health,
 	}))
+	if s.secrets == nil {
+		return handler
+	}
+	return s.secretsHandler(browser.prefix, ctx, handler)
+}
+
+// secretsHandler serves the secret pickers' {prefix}/connections/secrets...,
+// namespaces and workloads routes, in front of everything else Handler serves.
+func (s *Service) secretsHandler(prefix string, ctx dbcontext.Context, next http.Handler) http.Handler {
+	options := *s.secrets
+	options.Prefix, options.Next = prefix+"/connections", next
+	if options.Context.Context.Context == nil {
+		options.Context = ctx
+	}
+	if options.Kube == nil {
+		kube := options.Context
+		options.Kube = func() (kubernetes.Interface, error) { return kube.LocalKubernetes() }
+	}
+	return secretcatalog.NewHandler(options)
 }
 
 func (s *Service) List(options ListOptions) ([]*models.Connection, error) {
+	options, matches := s.policy.scope(options)
+	if !matches {
+		return []*models.Connection{}, nil
+	}
 	db, err := s.optionalStore()
 	if err != nil {
 		return nil, err
@@ -164,7 +203,7 @@ func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Conn
 	if err != nil {
 		return nil, err
 	}
-	return createConnection(db, body)
+	return createConnection(db, s.policy, body)
 }
 
 func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*models.Connection, error) {
@@ -186,7 +225,7 @@ func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*
 	if err != nil {
 		return nil, err
 	}
-	updated, err := updateConnection(db, id, body)
+	updated, err := updateConnection(db, s.policy, id, body)
 	if err != nil {
 		return nil, classifyReferenceConflict(err, "update", id)
 	}
@@ -264,7 +303,8 @@ func (s *Service) withVirtual(stored []*models.Connection, options ListOptions) 
 }
 
 // virtualConnections returns the provider's connections that match the list's
-// type filter, as the provider holds them.
+// type filter, as the provider holds them. A connection that failed to load
+// has no type to filter on, so it is always listed with its warnings.
 func virtualConnections(provider VirtualConnectionProvider, options ListOptions) ([]*models.Connection, error) {
 	if provider == nil {
 		return nil, nil
@@ -276,7 +316,7 @@ func virtualConnections(provider VirtualConnectionProvider, options ListOptions)
 	types := connectionTypeFilter(options)
 	var matched []*models.Connection
 	for _, connection := range listed {
-		if len(types) == 0 || slices.Contains(types, connection.Type) {
+		if len(types) == 0 || slices.Contains(types, connection.Type) || len(connection.Warnings) > 0 && connection.Type == "" {
 			matched = append(matched, connection)
 		}
 	}
@@ -390,9 +430,12 @@ func connectionTypeFilter(o ListOptions) []string {
 }
 
 // createConnection inserts a new connection and returns it redacted.
-func createConnection(db *gorm.DB, body map[string]any) (*models.Connection, error) {
+func createConnection(db *gorm.DB, policy Policy, body map[string]any) (*models.Connection, error) {
 	c, err := connectionFromBody(body)
 	if err != nil {
+		return nil, err
+	}
+	if err := policy.check(c); err != nil {
 		return nil, err
 	}
 	if err := validateConnection(dbcontext.New().WithDB(db, nil), c); err != nil {
@@ -407,7 +450,7 @@ func createConnection(db *gorm.DB, body map[string]any) (*models.Connection, err
 }
 
 // updateConnection applies an edit, preserving stored secrets left blank.
-func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Connection, error) {
+func updateConnection(db *gorm.DB, policy Policy, id string, body map[string]any) (*models.Connection, error) {
 	existing, err := findConnection(db, id)
 	if err != nil {
 		return nil, err
@@ -420,6 +463,9 @@ func updateConnection(db *gorm.DB, id string, body map[string]any) (*models.Conn
 		return nil, err
 	}
 	applyConnectionUpdate(existing, incoming)
+	if err := policy.check(existing); err != nil {
+		return nil, err
+	}
 	if err := db.Save(existing).Error; err != nil {
 		return nil, fmt.Errorf("update connection: %w", err)
 	}

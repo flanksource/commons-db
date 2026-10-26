@@ -30,6 +30,7 @@ func ToModel(obj *Connection) (models.Connection, error) {
 		Username:    obj.Spec.Username.String(),
 		Password:    obj.Spec.Password.String(),
 		Certificate: obj.Spec.Certificate.String(),
+		InsecureTLS: obj.Spec.InsecureTLS,
 	}
 
 	if obj.GetUID() != "" {

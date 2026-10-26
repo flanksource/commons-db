@@ -38,6 +38,18 @@ type PullRequestMetadata struct {
 type PullRequestMetadataOptions struct {
 	Number  int
 	BaseSHA string
+	// Listed is the pull request a ListPullRequests returned, read instead of
+	// a GetPullRequest. GitHub's listing has no mergeability, so GitHub still
+	// reads the pull request.
+	Listed *PullRequest
+	// SkipChecks reads no checks and leaves Checks nil.
+	SkipChecks bool
+}
+
+// PullRequestReader is the part of a Provider pull request metadata reads.
+type PullRequestReader interface {
+	Type() string
+	GetPullRequest(ctx context.Context, repo RepoURL, number int) (PullRequest, error)
 }
 
 type PullRequestChecksReader interface {
@@ -89,11 +101,8 @@ func (u RepoURL) RefWebURL(options WebRefOptions) (string, error) {
 	}
 }
 
-func ReadPullRequestMetadata(ctx context.Context, provider Provider, repo RepoURL, options PullRequestMetadataOptions) (*PullRequestMetadata, error) {
-	if options.Number <= 0 {
-		return nil, fmt.Errorf("pull request number must be positive")
-	}
-	pr, err := provider.GetPullRequest(ctx, repo, options.Number)
+func ReadPullRequestMetadata(ctx context.Context, provider PullRequestReader, repo RepoURL, options PullRequestMetadataOptions) (*PullRequestMetadata, error) {
+	pr, err := metadataPullRequest(ctx, provider, repo, options)
 	if err != nil {
 		return nil, err
 	}
@@ -112,12 +121,28 @@ func ReadPullRequestMetadata(ctx context.Context, provider Provider, repo RepoUR
 	if err := setPullRequestLinks(repo, pr, &metadata); err != nil {
 		return nil, err
 	}
+	if options.SkipChecks {
+		return &metadata, nil
+	}
 	reader, ok := provider.(PullRequestChecksReader)
 	if !ok {
 		return &metadata, unsupported(provider.Type(), "pull request checks")
 	}
 	metadata.Checks, err = reader.PullRequestChecks(ctx, repo, pr)
 	return &metadata, err
+}
+
+func metadataPullRequest(ctx context.Context, provider PullRequestReader, repo RepoURL, options PullRequestMetadataOptions) (PullRequest, error) {
+	if options.Number <= 0 {
+		return PullRequest{}, fmt.Errorf("pull request number must be positive")
+	}
+	if options.Listed != nil && options.Listed.Number != options.Number {
+		return PullRequest{}, fmt.Errorf("listed pull request #%d is not #%d", options.Listed.Number, options.Number)
+	}
+	if options.Listed == nil || provider.Type() == models.ConnectionTypeGithub {
+		return provider.GetPullRequest(ctx, repo, options.Number)
+	}
+	return *options.Listed, nil
 }
 
 func setPullRequestLinks(repo RepoURL, pr PullRequest, metadata *PullRequestMetadata) error {

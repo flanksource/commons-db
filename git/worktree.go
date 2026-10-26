@@ -73,7 +73,7 @@ func (w *Worktree) Release() error {
 
 func (w *Worktree) remove() (err error) {
 	ctx := context.Background()
-	lock, err := acquire(ctx, w.mirrorLock, "mirror lock")
+	lock, err := acquire(ctx, w.mirrorLock, "mirror lock", exclusiveLock)
 	if err != nil {
 		return err
 	}
@@ -170,28 +170,45 @@ func (w *Worktree) Commit(ctx context.Context, options CommitOptions) (string, e
 
 // CreateTag tags the current commit, annotated when Message is set.
 func (w *Worktree) CreateTag(ctx context.Context, options TagOptions) error {
-	if err := ValidateTagName(options.Name); err != nil {
-		return err
-	}
-	cmd := command{dir: w.Dir, args: []string{"tag", "--end-of-options", options.Name}}
-	if options.Message != "" {
-		identity, err := options.Tagger.env()
-		if err != nil {
-			return err
-		}
-		cmd = command{dir: w.Dir, env: append(baseEnv(), identity...), stdin: []byte(options.Message),
-			args: []string{"tag", "--annotate", "--file=-", "--end-of-options", options.Name}}
-	}
-	if _, err := run(ctx, cmd); err != nil {
+	if err := createTag(ctx, w.Dir, "HEAD", options); err != nil {
 		return err
 	}
 	w.tags = append(w.tags, options.Name)
 	return nil
 }
 
+// createTag tags target in the repository at dir, annotated when Message is
+// set.
+func createTag(ctx context.Context, dir, target string, options TagOptions) error {
+	if err := ValidateTagName(options.Name); err != nil {
+		return err
+	}
+	cmd := command{dir: dir, args: []string{"tag", "--end-of-options", options.Name, target}}
+	if options.Message != "" {
+		identity, err := options.Tagger.env()
+		if err != nil {
+			return err
+		}
+		cmd = command{dir: dir, env: append(baseEnv(), identity...), stdin: []byte(options.Message),
+			args: []string{"tag", "--annotate", "--file=-", "--end-of-options", options.Name, target}}
+	}
+	_, err := run(ctx, cmd)
+	return err
+}
+
 // safeJoin resolves a worktree-relative path, refusing absolute paths, ".."
 // escapes and anything inside .git.
 func safeJoin(root, path string) (string, error) {
+	clean, err := cleanChangePath(path)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, clean), nil
+}
+
+// cleanChangePath is a worktree-relative path in the OS's form, refusing
+// absolute paths, ".." escapes and anything inside .git.
+func cleanChangePath(path string) (string, error) {
 	if path == "" || filepath.IsAbs(path) || strings.HasPrefix(path, "/") {
 		return "", fmt.Errorf("path %q must be relative to the worktree", path)
 	}
@@ -204,7 +221,7 @@ func safeJoin(root, path string) (string, error) {
 			return "", fmt.Errorf("path %q is inside .git", path)
 		}
 	}
-	return filepath.Join(root, clean), nil
+	return clean, nil
 }
 
 func existingAncestor(dir string) string {

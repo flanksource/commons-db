@@ -2,7 +2,11 @@ package git_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
+	"regexp"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
 	. "github.com/onsi/ginkgo/v2"
@@ -110,6 +114,59 @@ var _ = Describe("Cache.Apply", func() {
 		_, err := cache.Apply(ctx, newRepository(fixture.FileURL(), git.Auth{}), change)
 		Expect(err).To(MatchError(git.ErrBranchExists))
 		Expect(gitFixture(fixture.Path, "rev-parse", "refs/heads/feature")).To(Equal(fixture.Feature))
+	})
+
+	Describe("without a worktree", func() {
+		var base string
+		BeforeEach(func() {
+			work := filepath.Join(fixture.Root, "seed")
+			gitFixture(fixture.Root, "clone", "-q", fixture.Path, work)
+			writeFixtureFile(work, ".gitattributes", "*.xml text eol=lf\n")
+			writeFixtureFile(work, "tools/run.sh", "#!/bin/sh\necho one\n")
+			Expect(os.Chmod(filepath.Join(work, "tools/run.sh"), 0o755)).To(Succeed())
+			gitFixture(work, "add", "-A")
+			gitFixture(work, "commit", "-q", "-m", "tools")
+			gitFixture(work, "push", "-q", "origin", "main")
+			base = gitFixture(work, "rev-parse", "HEAD")
+		})
+
+		files := []git.FileChange{
+			{Path: "rules/br/new.xml", Content: []byte("<rule>\r\n</rule>\r\n")},
+			{Path: "tools/run.sh", Content: []byte("#!/bin/sh\necho two\n")},
+			{Path: "README.md", Delete: true},
+		}
+		timestamp := regexp.MustCompile(`(?m) \d+ [+-]\d{4}$`)
+		commit := func(sha string) string {
+			return timestamp.ReplaceAllString(gitFixture(fixture.Path, "cat-file", "commit", sha), "")
+		}
+
+		It("commits the same tree and commit content as a worktree, with no worktree", func(ctx SpecContext) {
+			change := func(branch string) git.ChangeRequest {
+				return git.ChangeRequest{Base: "main", BaseSHA: base, Branch: branch, Author: fixtureSignature,
+					Message: "apply run 1  \n\n\nbody line \n\n", Files: files}
+			}
+			repo := newRepository(fixture.FileURL(), git.Auth{})
+			viaWorktree, err := git.ApplyInWorktree(ctx, cache, repo, change("apply/worktree"))
+			Expect(err).ToNot(HaveOccurred())
+			timed, timings := rpchttp.WithTimings(ctx)
+			viaIndex, err := cache.Apply(timed, repo, change("apply/index"))
+			Expect(err).ToNot(HaveOccurred())
+
+			Expect(gitFixture(fixture.Path, "rev-parse", "apply/index^{tree}")).To(Equal(gitFixture(fixture.Path, "rev-parse", "apply/worktree^{tree}")))
+			Expect(commit(viaIndex.CommitSHA)).To(Equal(commit(viaWorktree.CommitSHA)))
+			Expect(gitFixture(fixture.Path, "ls-tree", "-r", "apply/index")).To(ContainSubstring("100755 blob"))
+			Expect(gitFixture(fixture.Path, "cat-file", "-p", "apply/index:rules/br/new.xml")).To(Equal("<rule>\n</rule>"))
+			worktreeOps, _ := timings.Counter("git_worktree", "ops")
+			Expect(worktreeOps).To(BeZero())
+		})
+
+		It("refuses deleting a file the base lacks before pushing", func(ctx SpecContext) {
+			change := git.ChangeRequest{Base: "main", Branch: "apply/missing", Message: "delete", Author: fixtureSignature,
+				Files: []git.FileChange{{Path: "rules/absent.xml", Delete: true}}}
+			_, err := cache.Apply(ctx, newRepository(fixture.FileURL(), git.Auth{}), change)
+			Expect(err).To(MatchError(ContainSubstring("delete rules/absent.xml")))
+			Expect(gitFixture(fixture.Path, "branch", "--list", "apply/missing")).To(BeEmpty())
+		})
 	})
 
 	It("requires a branch base for a pull request", func(ctx SpecContext) {

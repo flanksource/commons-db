@@ -219,6 +219,12 @@ func (u RepoURL) Short() string {
 	return u.Host + "/" + u.Path
 }
 
+// LocalPath is the directory of a local repository (a path or file:// URL);
+// reads open it in place instead of mirroring it.
+func (u RepoURL) LocalPath() (string, bool) {
+	return u.Path, u.Scheme == "file"
+}
+
 // CacheKey is a filesystem-safe, collision-resistant directory name.
 func (u RepoURL) CacheKey() string {
 	sum := sha256.Sum256([]byte(u.Clone))

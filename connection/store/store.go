@@ -56,8 +56,8 @@ func Open(app string) (*Store, error) {
 func (s *Store) Layers() []Layer { return slices.Clone(s.layers) }
 
 // entries are the connections in effect, each its last layer's.
-func (s *Store) entries() ([]entry, error) {
-	effective := map[string]entry{}
+func (s *Store) entries() ([]Entry, error) {
+	effective := map[string]Entry{}
 	for _, layer := range s.layers {
 		entries, err := readLayer(layer)
 		if err != nil {
@@ -67,13 +67,17 @@ func (s *Store) entries() ([]entry, error) {
 			effective[read.key()] = read
 		}
 	}
-	merged := make([]entry, 0, len(effective))
+	merged := make([]Entry, 0, len(effective))
 	for _, read := range effective {
 		merged = append(merged, read)
 	}
-	slices.SortFunc(merged, func(a, b entry) int { return strings.Compare(a.key(), b.key()) })
+	slices.SortFunc(merged, func(a, b Entry) int { return strings.Compare(a.key(), b.key()) })
 	return merged, nil
 }
+
+// Entries are the entries in effect, by namespace and name, each with the
+// layer and file that define it.
+func (s *Store) Entries() ([]Entry, error) { return s.entries() }
 
 // ListConnections are the connections in effect, by namespace and name.
 func (s *Store) ListConnections() ([]*models.Connection, error) {
@@ -83,7 +87,7 @@ func (s *Store) ListConnections() ([]*models.Connection, error) {
 	}
 	connections := make([]*models.Connection, 0, len(entries))
 	for _, read := range entries {
-		connections = append(connections, &read.connection)
+		connections = append(connections, &read.Connection)
 	}
 	return connections, nil
 }
@@ -93,27 +97,36 @@ func (s *Store) ListConnections() ([]*models.Connection, error) {
 // connection://type/namespace/name, or a bare name. A connection with no
 // namespace answers any namespace. It is (nil, nil) for a reference the store
 // does not define, and an error for a name more than one namespace defines.
+// A file that defines no usable connection resolves to a connection carrying
+// the problem in Warnings, which dbcontext.HydrateConnection refuses to use.
 // It is a dbcontext.ConnectionResolver.
 func (s *Store) ResolveConnection(_ dbcontext.Context, reference string) (*models.Connection, error) {
-	read, err := s.find(reference, s.entries)
+	read, err := s.Find(reference)
 	if err != nil || read == nil {
 		return nil, err
 	}
-	return &read.connection, nil
+	return &read.Connection, nil
 }
 
-func (s *Store) find(reference string, entries func() ([]entry, error)) (*entry, error) {
+// Find is the entry in effect that reference names, with the layer and file
+// that define it, on the terms of ResolveConnection: (nil, nil) for a
+// reference the store does not define.
+func (s *Store) Find(reference string) (*Entry, error) {
+	return s.find(reference, s.entries)
+}
+
+func (s *Store) find(reference string, entries func() ([]Entry, error)) (*Entry, error) {
 	all, err := entries()
 	if err != nil {
 		return nil, err
 	}
 	id, idErr := uuid.Parse(reference)
 	namespace, name, named := parseReference(reference)
-	var matches []entry
+	var matches []Entry
 	for _, read := range all {
 		switch {
-		case idErr == nil && read.connection.ID == id,
-			named && read.connection.Name == name && (namespace == "" || read.connection.Namespace == "" || read.connection.Namespace == namespace):
+		case idErr == nil && read.Connection.ID == id,
+			named && read.Connection.Name == name && (namespace == "" || read.Connection.Namespace == "" || read.Connection.Namespace == namespace):
 			matches = append(matches, read)
 		}
 	}
@@ -125,7 +138,7 @@ func (s *Store) find(reference string, entries func() ([]entry, error)) (*entry,
 	}
 	sources := make([]string, 0, len(matches))
 	for _, match := range matches {
-		sources = append(sources, match.path)
+		sources = append(sources, match.Path)
 	}
 	return nil, fmt.Errorf("connection %q is ambiguous: %s each define one; name its namespace", reference, strings.Join(sources, ", "))
 }
@@ -179,12 +192,12 @@ func (s *Store) Save(layer string, resource *crd.Connection) error {
 		return fmt.Errorf("save connection %s: %w", resource.Name, err)
 	}
 	path := filepath.Join(target.Dir, resource.Name+".yaml")
-	existing, err := s.find("connection://"+resource.Namespace+"/"+resource.Name, func() ([]entry, error) { return readLayer(target) })
+	existing, err := s.find("connection://"+resource.Namespace+"/"+resource.Name, func() ([]Entry, error) { return readLayer(target) })
 	if err != nil {
 		return err
 	}
-	if existing != nil && existing.connection.Namespace == resource.Namespace {
-		path = existing.path
+	if existing != nil && existing.Connection.Namespace == resource.Namespace {
+		path = existing.Path
 	} else if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("save connection %s: %s already defines another connection", resource.Name, path)
 	}
@@ -198,14 +211,14 @@ func (s *Store) Delete(layer, reference string) error {
 	if err != nil {
 		return err
 	}
-	existing, err := s.find(reference, func() ([]entry, error) { return readLayer(target) })
+	existing, err := s.find(reference, func() ([]Entry, error) { return readLayer(target) })
 	if err != nil {
 		return err
 	}
 	if existing == nil {
 		return fmt.Errorf("delete connection %s from %s: %w", reference, layer, os.ErrNotExist)
 	}
-	if err := os.Remove(existing.path); err != nil {
+	if err := os.Remove(existing.Path); err != nil {
 		return fmt.Errorf("delete connection %s: %w", reference, err)
 	}
 	return nil
