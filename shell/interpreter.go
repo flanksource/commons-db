@@ -49,17 +49,28 @@ func DetectInterpreterFromShebang(script string) (string, []string) {
 			if len(parts) == 0 {
 				return "", nil
 			} else if len(parts) == 1 {
-				// No args, just interpreter and assume it supports the -c flag
-				return parts[0], []string{"-c"}
+				// No args: the interpreter takes the script inline with its own flag.
+				return parts[0], []string{inlineScriptFlag(parts[0])}
 			} else if len(parts) == 2 && filepath.Base(parts[0]) == "env" {
 				// `env <interpreter>` resolves a bare interpreter from PATH, so it
 				// takes the script the same way.
-				return parts[0], []string{parts[1], "-c"}
+				return parts[0], []string{parts[1], inlineScriptFlag(parts[1])}
 			}
 			return parts[0], parts[1:]
 		}
 	}
 	return DefaultInterpreter, DefaultInterpreterArgs
+}
+
+// inlineScriptFlag is the flag an interpreter takes a script's source with:
+// -e for those whose -c means something else (node's is --check, which reads
+// a file), -c for shells, python and the rest.
+func inlineScriptFlag(interpreter string) string {
+	switch filepath.Base(interpreter) {
+	case "node", "nodejs", "ruby", "perl":
+		return "-e"
+	}
+	return "-c"
 }
 
 // DetectDefaultInterpreter detects the default interpreter based on the OS.

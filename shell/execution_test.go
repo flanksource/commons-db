@@ -311,7 +311,30 @@ var _ = Describe("Shell execution", func() {
 		Entry("env resolving an interpreter takes the script with -c", "#!/usr/bin/env python3\nprint()", "/usr/bin/env", []string{"python3", "-c"}),
 		Entry("explicit interpreter arguments are kept as written", "#!/bin/bash -euc\necho", "/bin/bash", []string{"-euc"}),
 		Entry("env with explicit arguments is kept as written", "#!/usr/bin/env python3 -c\nprint()", "/usr/bin/env", []string{"python3", "-c"}),
+		// node's -c is --check, which reads a file: these take inline code with -e.
+		Entry("node takes the script with -e", "#!/usr/local/bin/node\nconsole.log()", "/usr/local/bin/node", []string{"-e"}),
+		Entry("env resolving node takes the script with -e", "#!/usr/bin/env node\nconsole.log()", "/usr/bin/env", []string{"node", "-e"}),
+		Entry("ruby takes the script with -e", "#!/usr/bin/env ruby\nputs", "/usr/bin/env", []string{"ruby", "-e"}),
+		Entry("perl takes the script with -e", "#!/usr/bin/perl\nprint", "/usr/bin/perl", []string{"-e"}),
 	)
+
+	It("runs a node script that reads its input from stdin", func() {
+		if _, err := exec.LookPath("node"); err != nil {
+			Skip("node is not installed")
+		}
+		command, err := CreateCommandFromScript(shellContext(stdcontext.Background()),
+			"#!/usr/bin/env node\nconst input = JSON.parse(require(\"node:fs\").readFileSync(0, \"utf8\"));\nprocess.stdout.write(input.greeting);")
+		Expect(err).ToNot(HaveOccurred())
+		command.Stdin = strings.NewReader(`{"greeting":"hello from node"}`)
+
+		details, err := RunCmd(shellContext(stdcontext.Background()), Exec{
+			Chroot:  GinkgoT().TempDir(),
+			BaseDir: GinkgoT().TempDir(),
+		}, command)
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(details.Stdout).To(Equal("hello from node"))
+	})
 
 	It("runs a script whose shebang resolves its interpreter through env", func() {
 		command, err := CreateCommandFromScript(shellContext(stdcontext.Background()), "#!/usr/bin/env sh\necho \"$0\"")
