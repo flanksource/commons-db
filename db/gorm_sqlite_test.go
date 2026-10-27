@@ -23,7 +23,8 @@ var _ = Describe("NewGorm SQL statements", func() {
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(sqlDB.Close)
 		var statements []connection.Statement
-		DeferCleanup(connection.ObserveSQL(connection.OwnDatabase, func(s connection.Statement) { statements = append(statements, s) }))
+		release := connection.ObserveSQL(connection.OwnDatabase, func(s connection.Statement) { statements = append(statements, s) })
+		DeferCleanup(release)
 
 		Expect(database.Exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)").Error).To(Succeed())
 		var count int64
@@ -35,6 +36,9 @@ var _ = Describe("NewGorm SQL statements", func() {
 		Expect(statements[1].Args).To(Equal([]any{"x"}))
 		Expect(statements[1].Driver).To(Equal("sqlite"))
 		Expect(statements[1].Connection).To(Equal(connection.OwnDatabase))
+		release()
+		Expect(database.Exec("DELETE FROM notes").Error).To(Succeed())
+		Expect(statements).To(HaveLen(2))
 	})
 })
 
