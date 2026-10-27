@@ -34,7 +34,7 @@ func (p *azureProvider) PullRequestReview(ctx context.Context, repo RepoURL, num
 			}
 			policy, err := evaluation.toPolicy(repo)
 			if err != nil {
-				return PullRequestReview{}, fmt.Errorf("Azure pull request #%d policy %d: %w", number, evaluation.Configuration.ID, err)
+				return PullRequestReview{}, fmt.Errorf("azure pull request #%d policy %d: %w", number, evaluation.Configuration.ID, err)
 			}
 			review.Policies = append(review.Policies, policy)
 		}
@@ -55,7 +55,7 @@ func (p *azureProvider) PullRequestReview(ctx context.Context, repo RepoURL, num
 	}
 	for _, reviewer := range reviewers.Value {
 		if reviewer.ID == "" || reviewer.Name == "" {
-			return PullRequestReview{}, fmt.Errorf("Azure pull request #%d has a reviewer without id or display name", number)
+			return PullRequestReview{}, fmt.Errorf("azure pull request #%d has a reviewer without id or display name", number)
 		}
 		review.Reviewers = append(review.Reviewers, PullRequestReviewer{ID: reviewer.ID, Name: reviewer.Name, Required: reviewer.Required, Vote: reviewer.Vote})
 	}
@@ -125,7 +125,7 @@ func (evaluation azurePolicyEvaluation) toPolicy(repo RepoURL) (PullRequestPolic
 		policy.BuildID = buildID
 		base, _, ok := strings.Cut(repo.azureWebBase(), "/_git/")
 		if !ok {
-			return PullRequestPolicy{}, fmt.Errorf("Azure repository %s has no project web URL", repo.Redacted())
+			return PullRequestPolicy{}, fmt.Errorf("azure repository %s has no project web URL", repo.Redacted())
 		}
 		policy.URL = base + "/_build/results?" + url.Values{"buildId": {strconv.Itoa(buildID)}, "view": {"results"}}.Encode()
 	}
