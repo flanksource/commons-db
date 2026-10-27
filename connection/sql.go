@@ -283,6 +283,16 @@ func setURLDatabase(raw, database string) (string, error) {
 // to Open and otherwise fall back to process defaults (for pgx, the OS user).
 func (s SQLConnection) connectionString() (string, error) {
 	raw := s.URL.ValueStatic
+	if s.Type == models.ConnectionTypeSQLite && strings.HasPrefix(strings.ToLower(raw), "sqlite://") {
+		raw = raw[len("sqlite://"):]
+		if raw == "" {
+			return "", fmt.Errorf("sqlite connection path is required")
+		}
+		if strings.HasPrefix(raw, "file:") {
+			return raw, nil
+		}
+		return "file:" + raw, nil
+	}
 	username := s.Username.ValueStatic
 	password := s.Password.ValueStatic
 	if username == "" && password == "" && s.Type != models.ConnectionTypeClickHouse {

@@ -79,7 +79,7 @@ func (u RepoURL) SourceRepository(name string) (RepoURL, error) {
 	path := "/" + name
 	if u.Provider == models.ConnectionTypeAzureDevops {
 		if len(parts) != 2 {
-			return RepoURL{}, fmt.Errorf("Azure PR source must be project/repository, got %q", name)
+			return RepoURL{}, fmt.Errorf("azure PR source must be project/repository, got %q", name)
 		}
 		u.Project, u.Name = parts[0], parts[1]
 		return ParseRepoURL(u.azureWebBase(), u.Provider)
@@ -217,6 +217,12 @@ func (u RepoURL) Short() string {
 		return u.Path
 	}
 	return u.Host + "/" + u.Path
+}
+
+// LocalPath is the directory of a local repository (a path or file:// URL);
+// reads open it in place instead of mirroring it.
+func (u RepoURL) LocalPath() (string, bool) {
+	return u.Path, u.Scheme == "file"
 }
 
 // CacheKey is a filesystem-safe, collision-resistant directory name.

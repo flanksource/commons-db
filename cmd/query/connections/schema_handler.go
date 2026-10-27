@@ -12,15 +12,16 @@ import (
 // newConnectionSchemaHandler answers a schema request (`Accept:
 // application/schema+json` or `?__schema`) on {prefix}/connection[s] with the
 // connection form schema, so every host that mounts Service.Handler serves the
-// form without re-implementing it. Every other request goes to next.
-func newConnectionSchemaHandler(prefix string, next http.Handler) http.Handler {
+// form without re-implementing it, narrowed to policy. Every other request
+// goes to next.
+func newConnectionSchemaHandler(prefix string, policy Policy, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimSuffix(r.URL.Path, "/")
 		if !profiles.WantsSchema(r) || (path != prefix+"/connection" && path != prefix+"/connections") {
 			next.ServeHTTP(w, r)
 			return
 		}
-		body, err := schema.JSON(schema.Connection())
+		body, err := schema.JSON(schema.Connection(policy.schemaOptions()))
 		if err != nil {
 			entity.WriteError(w, entity.NewStatusErrorf(http.StatusInternalServerError, "schema_failed",
 				"encode the connection schema: %v", err))

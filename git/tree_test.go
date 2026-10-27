@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing/fstest"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons-db/git"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -33,6 +34,53 @@ var _ = Describe("native Git tree filesystem", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(entries).To(HaveLen(1))
 		Expect(entries[0].Name()).To(Equal("deep"))
+	})
+
+	It("reads every file of one directory through a single listing of that directory", func(ctx SpecContext) {
+		fixture := newBareRepo("directory-listing")
+		names := []string{"a.xml", "b.xml", "c.xml"}
+		for _, name := range names {
+			writeFixtureFile(fixture.work(), "rules/"+name, "<"+name+"/>")
+		}
+		head := fixture.commitOn(fixtureCommit{Branch: "main", Path: "elsewhere/d.xml", Content: "<d/>", Message: "Add rules"})
+		cache := &git.Cache{Root: GinkgoT().TempDir()}
+		timed, timings := rpchttp.WithTimings(ctx)
+		tree, err := cache.OpenTree(timed, git.TreeOptions{Directory: fixture.Path, Revision: head})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(tree.Close()).To(Succeed()) })
+		for _, name := range names {
+			body, err := fs.ReadFile(tree, "rules/"+name)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(string(body)).To(Equal("<" + name + "/>"))
+		}
+		_, err = fs.Stat(tree, "rules/missing.xml")
+		Expect(err).To(MatchError(fs.ErrNotExist))
+		listings, _ := timings.Counter("git_ls_tree", "ops")
+		Expect(listings).To(Equal(int64(1)))
+	})
+
+	It("exposes object IDs and blob sizes of listed entries", func(ctx SpecContext) {
+		fixture := newBareRepo("tree-objects")
+		const body = "<Rule/>\n"
+		head := fixture.commitOn(fixtureCommit{Branch: "main", Path: "rules/rule.xml", Content: body, Message: "Add rule"})
+		cache := &git.Cache{Root: GinkgoT().TempDir()}
+		tree, err := cache.OpenTree(ctx, git.TreeOptions{Directory: fixture.Path, Revision: head})
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(tree.Close()).To(Succeed()) })
+		root, err := fs.ReadDir(tree, ".")
+		Expect(err).NotTo(HaveOccurred())
+		rules, err := fs.ReadDir(tree, "rules")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(rules).To(HaveLen(1))
+		info, err := rules[0].Info()
+		Expect(err).NotTo(HaveOccurred())
+		directory, directoryOK := git.ObjectID(root[1])
+		file, fileOK := git.ObjectID(rules[0])
+		Expect([]any{root[1].Name(), directory, directoryOK, file, fileOK, info.Size()}).To(Equal([]any{
+			"rules", gitFixture(fixture.Path, "rev-parse", head+":rules"), true,
+			gitFixture(fixture.Path, "rev-parse", head+":rules/rule.xml"), true, int64(len(body))}))
+		_, ok := git.ObjectID(fs.FileInfoToDirEntry(info))
+		Expect(ok).To(BeFalse())
 	})
 
 	It("reports the selected commit without inspecting a checkout or loading its history", func(ctx SpecContext) {
@@ -123,7 +171,7 @@ var _ = Describe("native Git tree filesystem", func() {
 	It("opens a pinned cached repository without rediscovering an unavailable remote", func(ctx SpecContext) {
 		fixture := newBareRepo("cached-tree")
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
-		repo := newRepository(fixture.FileURL(), git.Auth{})
+		repo := mirroredRepository(fixture)
 		_, err := cache.ReadBlobs(ctx, repo, []git.BlobRequest{{SHA: fixture.Main, Path: "README.md"}})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(os.Rename(fixture.Path, fixture.Path+"-offline")).To(Succeed())

@@ -23,6 +23,41 @@ var _ = Describe("pull request listing metadata", func() {
 		Expect(metadata.Checks).To(Equal([]git.PullRequestCheck{{Name: "lint", State: "success", URL: "https://example.com/lint"}, {Name: "Build", State: "pending", URL: "https://example.com/build"}}))
 	})
 
+	It("reads a listed Azure pull request's metadata without fetching it again or reading checks when skipped", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{})
+		listed := git.PullRequest{Number: 9, State: git.PullRequestOpen, Head: "feature/a", Base: "main", HeadSHA: "head", HeadRepository: "Platform/rules", Author: "Ada",
+			Metadata: &git.PullRequestMetadata{AuthorAvatarURL: "https://example.com/avatar.png", Mergeability: "conflicts", Draft: true}}
+		provider := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider
+		metadata, err := git.ReadPullRequestMetadata(ctx, provider, repoURL("https://dev.azure.com/acme/Platform/_git/rules", ""),
+			git.PullRequestMetadataOptions{Number: 9, BaseSHA: "base", Listed: &listed, SkipChecks: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(api.Calls()).To(BeEmpty())
+		Expect(metadata.Author).To(Equal("Ada"))
+		Expect(metadata.Mergeability).To(Equal("conflicts"))
+		Expect(metadata.Draft).To(BeTrue())
+		Expect(metadata.Checks).To(BeNil())
+		Expect(metadata.BaseCommitURL).To(HaveSuffix("/commit/base"))
+	})
+
+	It("still reads a listed GitHub pull request, whose listing has no mergeability", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /repos/acme/rules/pulls/9": reply(`{"number":9,"state":"open","user":{"login":"ada"},"mergeable":true,"mergeable_state":"clean","head":{"ref":"feature/a","sha":"head","repo":{"full_name":"acme/rules"}},"base":{"ref":"main","sha":"base"}}`),
+		})
+		listed := git.PullRequest{Number: 9, State: git.PullRequestOpen, Head: "feature/a", Base: "main", HeadSHA: "head", HeadRepository: "acme/rules"}
+		metadata, err := git.ReadPullRequestMetadata(ctx, providerClient(models.ConnectionTypeGithub, api.Server.URL, nil).Provider,
+			repoURL("https://github.com/acme/rules", ""), git.PullRequestMetadataOptions{Number: 9, Listed: &listed, SkipChecks: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(api.Calls()).To(HaveLen(1))
+		Expect(metadata.Mergeability).To(Equal("mergeable"))
+	})
+
+	It("refuses a listed pull request of another number", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{})
+		_, err := git.ReadPullRequestMetadata(ctx, providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider,
+			repoURL("https://dev.azure.com/acme/Platform/_git/rules", ""), git.PullRequestMetadataOptions{Number: 9, Listed: &git.PullRequest{Number: 8}})
+		Expect(err).To(MatchError(ContainSubstring("listed pull request #8 is not #9")))
+	})
+
 	It("reads GitLab merge blockers and preserves failed upstream checks", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"GET /api/v4/projects/acme%2Frules/merge_requests/9":                 reply(`{"iid":9,"state":"opened","author":{"name":"Ada","avatar_url":"https://example.com/ada.png"},"source_branch":"feature/a","target_branch":"main","sha":"head","source_project_id":1,"target_project_id":1,"detailed_merge_status":"not_approved"}`),

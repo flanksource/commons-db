@@ -95,6 +95,9 @@ func (c *Cache) PrepareSource(ctx context.Context, options SourceOptions) (sourc
 	if err = source.initialize(ctx, c.Root); err != nil {
 		return source, err
 	}
+	if err = source.pinHead(ctx); err != nil {
+		return source, err
+	}
 	if options.Kind == SourceStaged {
 		err = source.captureIndex(ctx)
 	} else {

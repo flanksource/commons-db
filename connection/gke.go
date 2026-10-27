@@ -17,7 +17,7 @@ import (
 type GKEConnection struct {
 	GCPConnection `json:",inline" yaml:",inline"`
 
-	ProjectID string `json:"projectID"`
+	ProjectID string `json:"projectID" yaml:"projectID"`
 	Zone      string `json:"zone"`
 	Cluster   string `json:"cluster"`
 }

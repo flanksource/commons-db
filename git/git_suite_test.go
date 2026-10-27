@@ -197,6 +197,15 @@ func argvRecorder() string {
 	return log
 }
 
+// mirroredRepository is the fixture served over smart HTTP: a file:// URL is
+// a local repository read in place, so specs of the mirror (fetch, pins,
+// an unavailable remote) need a real transport.
+func mirroredRepository(fixture bareRepo) *git.Repository {
+	GinkgoHelper()
+	remote := newHTTPRemote(fixture.Root, false)
+	return newRepository(remote.URL(fixture), git.Auth{Username: remote.User, Password: remote.Password})
+}
+
 func newRepository(rawURL string, auth git.Auth) *git.Repository {
 	GinkgoHelper()
 	repo, err := git.NewRepository(git.RepositoryOptions{URL: rawURL, Auth: auth})

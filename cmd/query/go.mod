@@ -7,7 +7,7 @@ require (
 	github.com/flanksource/captain v0.0.69
 	// Kept in lockstep with the root module's clicky pin (see ../../go.mod):
 	// a workspace build resolves one clicky for both modules.
-	github.com/flanksource/clicky v1.21.82
+	github.com/flanksource/clicky v1.21.85
 	github.com/flanksource/clicky/aichat v1.21.82
 	github.com/flanksource/clicky/valkey v1.21.82
 	github.com/flanksource/commons v1.60.2-0.20261023035157-e894a9b2a6db

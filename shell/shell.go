@@ -8,6 +8,7 @@ import (
 	"os"
 	osExec "os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -66,12 +67,22 @@ type Exec struct {
 	DotEnv  []string
 	Chroot  string
 	BaseDir string
+	// CredentialsDir is where connection credential files are written; empty
+	// writes them into the command's working directory.
+	CredentialsDir string
 
 	PassthroughEnv   []string
 	SuccessExitCodes []int
 	DisplayPath      string
 	DisplayArgs      []string
+
+	// Wrap rewrites the command for confined execution (e.g. a sandbox) after the
+	// environment is prepared. A nil env keeps the prepared environment.
+	Wrap WrapFunc
 }
+
+// WrapFunc rewrites a command, its arguments and environment before it starts.
+type WrapFunc func(ctx gocontext.Context, cmd string, args, env []string) (string, []string, []string, error)
 
 // +kubebuilder:object:generate=true
 type Artifact struct {
@@ -150,18 +161,64 @@ func RunCmd(ctx context.Context, exec Exec, cmd *osExec.Cmd) (*ExecDetails, erro
 	if err != nil {
 		return nil, ctx.Oops().Wrap(err)
 	}
-	result, runErr := runCmd(ctx, &commandContext{
-		cmd:              cmd,
-		artifacts:        setup.Artifacts,
-		extra:            setup.Extra,
-		mountPoint:       setup.Cwd,
-		env:              setup.Env,
-		sensitiveValues:  setup.sensitiveValues,
-		successExitCodes: exec.SuccessExitCodes,
-		displayPath:      exec.DisplayPath,
-		displayArgs:      exec.DisplayArgs,
+	result, runErr := setup.Run(ctx, cmd, RunOptions{
+		Wrap:             exec.Wrap,
+		SuccessExitCodes: exec.SuccessExitCodes,
+		DisplayPath:      exec.DisplayPath,
+		DisplayArgs:      exec.DisplayArgs,
 	})
 	return finishRun(result, runErr, setup.Cleanup(), setup.sensitiveValues)
+}
+
+// RunOptions are the per-command settings of a run against a prepared setup.
+type RunOptions struct {
+	// Wrap rewrites the command for confined execution; a nil env from it keeps
+	// the prepared environment.
+	Wrap             WrapFunc
+	SuccessExitCodes []int
+	DisplayPath      string
+	DisplayArgs      []string
+}
+
+// Run executes cmd in the prepared environment without preparing it again, so
+// one setup — its connections, credential files and resolved secrets — serves
+// many commands. Output is redacted against the setup's sensitive values on
+// every run. The setup is never modified, so concurrent runs are safe; the
+// caller still owns Cleanup.
+func (s *SetupResult) Run(ctx context.Context, cmd *osExec.Cmd, opts RunOptions) (*ExecDetails, error) {
+	if cmd == nil {
+		return nil, ctx.Oops().Errorf("shell command is required")
+	}
+	env, err := wrapCommand(ctx, opts.Wrap, cmd, s.Env, s.sensitiveValues)
+	if err != nil {
+		return nil, err
+	}
+	return runCmd(ctx, &commandContext{
+		cmd:              cmd,
+		artifacts:        s.Artifacts,
+		extra:            s.Extra,
+		mountPoint:       s.Cwd,
+		env:              env,
+		sensitiveValues:  s.sensitiveValues,
+		successExitCodes: opts.SuccessExitCodes,
+		displayPath:      opts.DisplayPath,
+		displayArgs:      opts.DisplayArgs,
+	})
+}
+
+func wrapCommand(ctx context.Context, wrap WrapFunc, cmd *osExec.Cmd, env, sensitiveValues []string) ([]string, error) {
+	if wrap == nil {
+		return env, nil
+	}
+	path, args, wrappedEnv, err := wrap(ctx, cmd.Path, cmd.Args[1:], slices.Clone(env))
+	if err != nil {
+		return nil, fmt.Errorf("wrapping %s for confined execution: %s", cmd.Path, redactText(err.Error(), sensitiveValues))
+	}
+	cmd.Path, cmd.Args = path, append([]string{path}, args...)
+	if wrappedEnv == nil {
+		return env, nil
+	}
+	return wrappedEnv, nil
 }
 
 func finishRun(result *ExecDetails, runErr, cleanupErr error, sensitiveValues []string) (*ExecDetails, error) {

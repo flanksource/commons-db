@@ -41,37 +41,13 @@ func (s *PreparedSource) initialize(ctx context.Context, cacheRoot string) error
 		return err
 	}
 	s.env = append(baseEnv(), "GIT_ALTERNATE_OBJECT_DIRECTORIES="+strconv.Quote(objects), "GIT_NO_REPLACE_OBJECTS=1")
-	return s.copyRefs(ctx)
+	return nil
 }
 
-func (s *PreparedSource) copyRefs(ctx context.Context) error {
-	root := s.info.RepositoryRoot
-	refs, err := run(ctx, command{dir: root, args: []string{"for-each-ref", "--format=%(objectname) %(refname)"}})
-	if err != nil {
-		return err
-	}
-	var packed strings.Builder
-	for _, line := range strings.Split(refs, "\n") {
-		if line == "" {
-			continue
-		}
-		_, ref, ok := strings.Cut(line, " ")
-		if !ok || !strings.HasPrefix(ref, "refs/") {
-			return fmt.Errorf("invalid local ref %q", line)
-		}
-		if strings.HasPrefix(ref, "refs/replace/") {
-			continue
-		}
-		if _, err := safeJoin(s.gitDir, ref); err != nil {
-			return err
-		}
-		packed.WriteString(line + "\n")
-	}
-	// Packed refs preserve case-distinct names on case-insensitive filesystems.
-	if err := os.WriteFile(filepath.Join(s.gitDir, "packed-refs"), []byte(packed.String()), 0o600); err != nil {
-		return err
-	}
-	head, err := sourceHead(ctx, root)
+// pinHead records the source's HEAD commit as the scratch repository's only
+// ref: revisions resolve in the source repository itself (resolveCommit).
+func (s *PreparedSource) pinHead(ctx context.Context) error {
+	head, err := sourceHead(ctx, s.info.RepositoryRoot)
 	if err != nil {
 		return err
 	}
@@ -106,7 +82,8 @@ func (s *PreparedSource) resolveCommit(ctx context.Context, revision string) (st
 	if err := ValidateRevision(revision); err != nil {
 		return "", fmt.Errorf("%w: %w", ErrInvalidSource, err)
 	}
-	resolved, err := s.git(ctx, "rev-parse", "--verify", "--quiet", "--end-of-options", revision+"^{commit}")
+	resolved, err := run(ctx, command{dir: s.info.RepositoryRoot, env: append(baseEnv(), "GIT_NO_REPLACE_OBJECTS=1"),
+		args: []string{"rev-parse", "--verify", "--quiet", "--end-of-options", revision + "^{commit}"}})
 	if err != nil {
 		return "", fmt.Errorf("%w: %q: %w", ErrRevisionNotFound, revision, err)
 	}

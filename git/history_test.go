@@ -21,6 +21,7 @@ var _ = Describe("Cache.History and Cache.Show", func() {
 	})
 
 	It("reads a pinned cached commit after the remote becomes unavailable", func(ctx SpecContext) {
+		repo = mirroredRepository(fixture)
 		_, err := cache.History(ctx, repo, fixture.Main, git.HistoryOptions{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(os.Rename(fixture.Path, fixture.Path+".offline")).To(Succeed())

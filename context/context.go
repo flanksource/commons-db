@@ -70,6 +70,10 @@ func (k Context) WithConnectionResolver(resolver ConnectionResolver) Context {
 	})
 }
 
+// ConnectionResolver is the resolver this context asks before the connections
+// table, nil when it has none; a resolver attached over it chains to it.
+func (k Context) ConnectionResolver() ConnectionResolver { return k.connectionResolver() }
+
 func (k Context) connectionResolver() ConnectionResolver {
 	state, _ := k.Value(connectionResolverKey{}).(connectionResolverState)
 	return state.resolver
@@ -653,6 +657,9 @@ func (k Context) Wrap(ctx gocontext.Context) Context {
 		WithNamespace(k.GetNamespace())
 	if client, ok := k.Value(localKubernetesContextKey).(*dutyKubernetes.Client); ok && client != nil {
 		wrapped = wrapped.WithLocalKubernetes(client)
+	}
+	if clients, ok := k.Value(kubeContextClientsKey{}).(KubeContextClients); ok && clients != nil {
+		wrapped = wrapped.WithKubeContextClients(clients)
 	}
 	if state, ok := k.Value(connectionResolverKey{}).(connectionResolverState); ok && state.resolver != nil {
 		wrapped = wrapped.WithValue(connectionResolverKey{}, state)

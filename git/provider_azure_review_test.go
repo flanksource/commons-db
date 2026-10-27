@@ -31,4 +31,25 @@ var _ = Describe("Azure pull request review", func() {
 		}))
 		Expect(api.Calls()[1].Query).To(ContainSubstring("artifactId=vstfs%3A%2F%2F%2FCodeReview%2FCodeReviewId%2F11111111-1111-1111-1111-111111111111%2F9"))
 	})
+
+	It("reads the project id once per organization and project", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /acme/_apis/projects/Platform":                                        reply(`{"id":"22222222-2222-2222-2222-222222222222"}`),
+			"GET /acme/Platform/_apis/policy/evaluations":                              reply(`{"value":[]}`),
+			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/reviewers": reply(`{"value":[]}`),
+		})
+		repo := repoURL("https://dev.azure.com/acme/Platform/_git/rules", "")
+		for range 2 {
+			provider := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider
+			_, err := provider.(git.PullRequestReviewReader).PullRequestReview(ctx, repo, 9)
+			Expect(err).ToNot(HaveOccurred())
+		}
+		projects := 0
+		for _, call := range api.Calls() {
+			if call.Path == "/acme/_apis/projects/Platform" {
+				projects++
+			}
+		}
+		Expect(projects).To(Equal(1))
+	})
 })

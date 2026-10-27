@@ -77,6 +77,17 @@ func HydrateConnectionByURL(ctx Context, connectionString string) (*models.Conne
 	isConnectionUUID := uuidErr == nil
 
 	if !isConnectionUUID && !strings.HasPrefix(connectionString, "connection://") {
+		// A bare name, such as mydb, also parses as a URL: the context's
+		// resolver gets the first say on it.
+		if resolver := ctx.connectionResolver(); resolver != nil && !strings.Contains(connectionString, "://") {
+			connection, err := resolver(ctx, "connection://"+connectionString)
+			if err != nil {
+				return nil, fmt.Errorf("failed to find connection (%s): %w", connectionString, err)
+			}
+			if connection != nil {
+				return HydrateConnection(ctx, connection)
+			}
+		}
 		if _url, err := url.Parse(connectionString); err == nil {
 			return models.ConnectionFromURL(*_url), nil
 		}
@@ -253,8 +264,25 @@ func GetConnection(ctx Context, name, namespace string) (*models.Connection, err
 	return HydrateConnection(ctx, connection)
 }
 
+// HydrateConnection resolves connection's references and templates in place.
+// A connection whose kubecontext property is set reads its secret://,
+// configmap://, helm:// and service URL references through that kubeconfig
+// context's cluster rather than the context's local client.
 func HydrateConnection(ctx Context, connection *models.Connection) (*models.Connection, error) {
 	var err error
+
+	// A connection that failed to load is listed with its warnings, but using it fails.
+	if len(connection.Warnings) > 0 {
+		return nil, fmt.Errorf("connection %q cannot be used: %s", connection.Name, strings.Join(connection.Warnings, "; "))
+	}
+
+	if kubeContext := connection.Properties[KubeContextProperty]; kubeContext != "" {
+		client, err := ctx.KubeContextClient(kubeContext)
+		if err != nil {
+			return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
+		}
+		ctx = ctx.WithLocalKubernetes(client)
+	}
 
 	if connection.URL, err = GetEnvStringFromCache(ctx, connection.URL, connection.Namespace); err != nil {
 		return nil, err

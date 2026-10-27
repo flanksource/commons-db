@@ -29,6 +29,7 @@ type connectionDashboardHandlerOptions struct {
 	Context  dbcontext.Context
 	Profiles ProfileProvider
 	Virtual  VirtualConnectionProvider
+	Policy   Policy
 	Next     http.Handler
 }
 
@@ -37,6 +38,7 @@ type connectionDashboardHandler struct {
 	ctx      dbcontext.Context
 	profiles ProfileProvider
 	virtual  VirtualConnectionProvider
+	policy   Policy
 	next     http.Handler
 }
 
@@ -62,6 +64,9 @@ type connectionDashboardItem struct {
 	ProfileCount int                        `json:"profileCount"`
 	UpdatedAt    time.Time                  `json:"updatedAt"`
 	ReadOnly     bool                       `json:"readOnly,omitempty"`
+	// Warnings are problems loading the connection; it cannot be used until
+	// they are fixed, while every other connection still lists.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type dashboardEndpoint struct {
@@ -83,6 +88,7 @@ func newConnectionDashboardHandler(options connectionDashboardHandlerOptions) ht
 		ctx:      options.Context,
 		profiles: options.Profiles,
 		virtual:  options.Virtual,
+		policy:   options.Policy,
 		next:     options.Next,
 	}
 }
@@ -117,6 +123,10 @@ func (h *connectionDashboardHandler) ServeHTTP(w http.ResponseWriter, r *http.Re
 }
 
 func (h *connectionDashboardHandler) listConnections(ctx context.Context, options ListOptions) ([]*models.Connection, error) {
+	options, matches := h.policy.scope(options)
+	if !matches {
+		return nil, nil
+	}
 	var connections []*models.Connection
 	if db := h.ctx.DB(); db != nil {
 		query := db.WithContext(ctx).Model(&models.Connection{})
@@ -153,6 +163,7 @@ func dashboardItems(connections []*models.Connection, usage map[string]int) []co
 			InsecureTLS:      connection.InsecureTLS,
 			ProfileCount:     dashboardProfileCount(connection, usage), UpdatedAt: connection.UpdatedAt,
 			ReadOnly: connection.ReadOnly || connection.Virtual,
+			Warnings: connection.Warnings,
 		}
 		if cached, ok := cachedConnectionHealth(connection.ID.String(), connection.UpdatedAt); ok {
 			items[index].Health = healthSummary(cached)

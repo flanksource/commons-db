@@ -197,14 +197,87 @@ func connectionLoggingSchema(connectionType string) Schema {
 	}
 }
 
-// Connection returns the bundled schema consumed by clicky-ui.
-func Connection() Schema {
+// ConnectionOptions narrows the connection form to an app's policy. An empty
+// field leaves that part of the form as it is.
+type ConnectionOptions struct {
+	// AllowedTypes are the connection types the form offers; each must be one
+	// of ConnectionTypes.
+	AllowedTypes []string
+	// SecretSources and URLSources are the value sources (clicky-ui's
+	// SecretValueSource: secret, configmap, helm, serviceaccount, onepassword,
+	// value) the form's credential and URL pickers offer, advertised as the
+	// root x-clicky-secret-sources and x-clicky-url-sources hints.
+	SecretSources []string
+	URLSources    []string
+}
+
+// ConnectionTypes are the connection types the form knows.
+func ConnectionTypes() []string { return slices.Clone(allConnectionTypes) }
+
+// Connection returns the bundled schema consumed by clicky-ui, narrowed to
+// options. It panics on a type it does not know: callers validate a policy
+// before they serve it.
+func Connection(options ConnectionOptions) Schema {
+	source := ConnectionSource()
+	if len(options.AllowedTypes) > 0 {
+		restrictConnectionTypes(source, options.AllowedTypes)
+	}
+	if len(options.SecretSources) > 0 {
+		source["x-clicky-secret-sources"] = slices.Clone(options.SecretSources)
+	}
+	if len(options.URLSources) > 0 {
+		source["x-clicky-url-sources"] = slices.Clone(options.URLSources)
+	}
 	refs := SchemaRefs("connections", ConnectionComponents())
-	bundled, err := Bundle(ConnectionSource(), refs)
+	bundled, err := Bundle(source, refs)
 	if err != nil {
 		panic(fmt.Sprintf("bundle connection schema: %v", err))
 	}
+	seedAllowedSources(bundled, map[string][]string{"k8s-secret-selector": options.SecretSources, "k8s-url-selector": options.URLSources})
 	return bundled
+}
+
+// seedAllowedSources replaces a picker's x-clicky-default-source the policy
+// does not allow with the first source it does, so an empty field starts on an
+// allowed source rather than one the server will refuse on save. allowed maps
+// a picker's x-clicky-component to its sources; an empty list allows any.
+func seedAllowedSources(node any, allowed map[string][]string) {
+	switch n := node.(type) {
+	case map[string]any:
+		component, _ := n["x-clicky-component"].(string)
+		if source, ok := n["x-clicky-default-source"].(string); ok && len(allowed[component]) > 0 && !slices.Contains(allowed[component], source) {
+			n["x-clicky-default-source"] = allowed[component][0]
+		}
+		for _, child := range n {
+			seedAllowedSources(child, allowed)
+		}
+	case []any:
+		for _, child := range n {
+			seedAllowedSources(child, allowed)
+		}
+	}
+}
+
+// restrictConnectionTypes keeps only allowed in source's type enum, icons and
+// per-type branches; Bundle then drops the components no branch references.
+func restrictConnectionTypes(source Schema, allowed []string) {
+	for _, typ := range allowed {
+		if !slices.Contains(allConnectionTypes, typ) {
+			panic(fmt.Sprintf("connection schema: unknown connection type %q", typ))
+		}
+	}
+	enum := slices.DeleteFunc(slices.Clone(allConnectionTypes), func(typ string) bool { return !slices.Contains(allowed, typ) })
+	field := source["properties"].(Schema)["type"].(Schema)
+	field["enum"] = enum
+	icons := map[string]string{}
+	for _, typ := range enum {
+		icons[typ] = connectionTypeIcons[typ]
+	}
+	field["x-enum-icons"] = icons
+	source["allOf"] = slices.DeleteFunc(source["allOf"].([]any), func(branch any) bool {
+		condition := branch.(Schema)["if"].(Schema)["properties"].(Schema)["type"].(Schema)
+		return !slices.Contains(enum, condition["const"].(string))
+	})
 }
 
 // SchemaRefs keys component schemas by their relative external-ref path.

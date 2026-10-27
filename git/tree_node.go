@@ -3,52 +3,124 @@ package git
 import (
 	"fmt"
 	"io/fs"
-	"strconv"
+	"path"
 	"strings"
 )
 
-func (t *Tree) loadNode(name string) (treeNode, error) {
-	raw, err := runBytes(t.ctx, command{dir: t.dir, env: t.env, args: []string{"--literal-pathspecs", "ls-tree", "-l", "-z", "--full-tree", "--end-of-options", t.info.SHA, "--", name}})
-	if err != nil {
+func (t *Tree) node(name string) (treeNode, error) {
+	if err := t.validatePath(name); err != nil {
 		return treeNode{}, err
 	}
-	if len(raw) == 0 {
+	if name == "." {
+		return treeNode{path: ".", mode: fs.ModeDir | 0o555, sized: true}, nil
+	}
+	if node, found := t.nodes[name]; found {
+		return node, nil
+	}
+	parent := path.Dir(name)
+	if t.complete || t.listed[parent] {
 		return treeNode{}, fs.ErrNotExist
 	}
-	entry, rest, terminated := strings.Cut(string(raw), "\x00")
-	if !terminated || rest != "" {
-		return treeNode{}, fmt.Errorf("invalid Git tree lookup for %q", name)
-	}
-	node, err := parseTreeNode(entry)
-	if err != nil {
+	if err := t.listDirectory(parent); err != nil {
 		return treeNode{}, err
 	}
-	if node.path != name {
-		return treeNode{}, fmt.Errorf("git tree lookup for %q returned %q", name, node.path)
+	if node, found := t.nodes[name]; found {
+		return node, nil
 	}
-	if t.nodes == nil {
-		t.nodes = map[string]treeNode{}
+	return treeNode{}, fs.ErrNotExist
+}
+
+func (t *Tree) validatePath(name string) error {
+	if t.closed {
+		return fs.ErrClosed
 	}
-	t.nodes[name] = node
+	if err := t.ctx.Err(); err != nil {
+		return err
+	}
+	if !fs.ValidPath(name) || strings.ContainsRune(name, 0) {
+		return fs.ErrInvalid
+	}
+	return nil
+}
+
+// listDirectory reads one directory's entries with a non-recursive ls-tree;
+// a missing directory, or a blob in its place, lists nothing.
+func (t *Tree) listDirectory(directory string) error {
+	args := []string{"--literal-pathspecs", "ls-tree", "-z", "--full-tree", "--end-of-options", t.info.SHA}
+	if directory != "." {
+		args = append(args, "--", directory+"/")
+	}
+	raw, err := runBytes(t.ctx, command{dir: t.dir, env: t.env, args: args})
+	if err != nil {
+		return err
+	}
+	if t.listed == nil {
+		t.nodes, t.children, t.listed = map[string]treeNode{}, map[string][]string{}, map[string]bool{}
+	}
+	for _, entry := range strings.Split(string(raw), "\x00") {
+		if entry == "" {
+			continue
+		}
+		node, err := parseTreeNode(entry)
+		if err != nil {
+			return err
+		}
+		if path.Dir(node.path) != directory {
+			return fmt.Errorf("git tree listing of %q returned %q", directory, node.path)
+		}
+		t.nodes[node.path] = node
+		t.children[directory] = append(t.children[directory], node.path)
+	}
+	sortNames(t.children[directory])
+	t.listed[directory] = true
+	return nil
+}
+
+// sizedNode is name's node with its blob size, read through the object
+// stream the first time it is asked for.
+func (t *Tree) sizedNode(name string) (fs.FileInfo, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	node, err := t.node(name)
+	if err == nil && !node.sized {
+		node, err = t.readSize(node)
+	}
+	if err != nil {
+		return nil, &fs.PathError{Op: "stat", Path: name, Err: err}
+	}
+	return node, nil
+}
+
+func (t *Tree) readSize(node treeNode) (treeNode, error) {
+	if err := t.openStream(); err != nil {
+		return node, err
+	}
+	blob, err := t.stream.info(node.object)
+	if err != nil {
+		return node, err
+	}
+	if blob.Missing {
+		return node, fmt.Errorf("source object %s for %q is missing", node.object, node.path)
+	}
+	node.size, node.sized = blob.Size, true
+	t.nodes[node.path] = node
 	return node, nil
 }
 
 func parseTreeNode(entry string) (treeNode, error) {
 	header, name, ok := strings.Cut(entry, "\t")
 	fields := strings.Fields(header)
-	if !ok || len(fields) != 4 || !fs.ValidPath(name) || name == "." {
+	if !ok || len(fields) != 3 || !fs.ValidPath(name) || name == "." {
 		return treeNode{}, fmt.Errorf("%w: Git tree entry %q", ErrUnsupportedSource, entry)
 	}
 	node := treeNode{path: name, object: fields[2], mode: 0o444}
-	if fields[0] == "040000" && fields[1] == "tree" && fields[3] == "-" {
-		node.mode = fs.ModeDir | 0o555
+	if fields[0] == "040000" && fields[1] == "tree" {
+		node.mode, node.sized = fs.ModeDir|0o555, true
 		return node, nil
 	}
-	size, err := strconv.ParseInt(fields[3], 10, 64)
-	if fields[1] != "blob" || err != nil || size < 0 {
+	if fields[1] != "blob" {
 		return treeNode{}, fmt.Errorf("%w: Git tree blob entry %q", ErrUnsupportedSource, entry)
 	}
-	node.size = size
 	switch fields[0] {
 	case "100644":
 	case "100755":

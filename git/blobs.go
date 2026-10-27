@@ -41,7 +41,7 @@ func (c *Cache) ReadBlobs(ctx context.Context, repo *Repository, requests []Blob
 			seen[request.SHA] = true
 		}
 	}
-	err := c.withRefs(ctx, repo, refReadOptions{Refs: refs}, func(mirror string, _ []string) error {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: refs}, func(mirror string, _ []string) error {
 		return readObjectBatch(ctx, objectBatchOptions{Dir: mirror, Objects: objects, Read: func(index int, blob batchBlob, content io.Reader) error {
 			if blob.Missing {
 				return nil

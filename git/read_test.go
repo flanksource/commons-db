@@ -82,8 +82,8 @@ var _ = Describe("cached immutable reads", func() {
 			_, err := cache.History(queued, repo, fixture.Main, git.HistoryOptions{Limit: 1})
 			cancelled <- err
 		}()
-		Eventually(count(gate.prepared), time.Minute, 200*time.Millisecond).Should(Equal(5))
 		Consistently(count(gate.started), time.Second, 200*time.Millisecond).Should(Equal(4))
+		Expect(count(gate.prepared)()).To(BeZero(), "reads of a pinned commit rewrite no pin ref")
 		cancel()
 		Eventually(cancelled, time.Second).Should(Receive(MatchError(context.Canceled)))
 		Expect(os.WriteFile(gate.release, nil, 0o600)).To(Succeed())

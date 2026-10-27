@@ -14,52 +14,40 @@ type treeNode struct {
 	path, object string
 	mode         fs.FileMode
 	size         int64
+	sized        bool
 }
 
-func (node treeNode) Name() string               { return path.Base(node.path) }
-func (node treeNode) Size() int64                { return node.size }
-func (node treeNode) Mode() fs.FileMode          { return node.mode }
-func (node treeNode) ModTime() time.Time         { return time.Time{} }
-func (node treeNode) IsDir() bool                { return node.mode.IsDir() }
-func (node treeNode) Sys() any                   { return nil }
-func (node treeNode) Type() fs.FileMode          { return node.mode.Type() }
-func (node treeNode) Info() (fs.FileInfo, error) { return node, nil }
+func (node treeNode) Name() string       { return path.Base(node.path) }
+func (node treeNode) Size() int64        { return node.size }
+func (node treeNode) Mode() fs.FileMode  { return node.mode }
+func (node treeNode) ModTime() time.Time { return time.Time{} }
+func (node treeNode) IsDir() bool        { return node.mode.IsDir() }
+func (node treeNode) Sys() any           { return nil }
 
-func (t *Tree) node(name string) (treeNode, error) {
-	if err := t.validatePath(name); err != nil {
-		return treeNode{}, err
-	}
-	if name == "." {
-		return treeNode{path: ".", mode: fs.ModeDir | 0o555}, nil
-	}
-	if node, found := t.nodes[name]; found {
-		return node, nil
-	}
-	if t.complete {
-		return treeNode{}, fs.ErrNotExist
-	}
-	return t.loadNode(name)
+// treeEntry is a listed directory entry; its Info reads the blob size on
+// first use, so listing a tree never asks git for sizes.
+type treeEntry struct {
+	node treeNode
+	tree *Tree
 }
 
-func (t *Tree) validatePath(name string) error {
-	if t.closed {
-		return fs.ErrClosed
-	}
-	if err := t.ctx.Err(); err != nil {
-		return err
-	}
-	if !fs.ValidPath(name) || strings.ContainsRune(name, 0) {
-		return fs.ErrInvalid
-	}
-	return nil
+func (entry treeEntry) Name() string               { return entry.node.Name() }
+func (entry treeEntry) IsDir() bool                { return entry.node.IsDir() }
+func (entry treeEntry) Type() fs.FileMode          { return entry.node.mode.Type() }
+func (entry treeEntry) Info() (fs.FileInfo, error) { return entry.tree.sizedNode(entry.node.path) }
+
+// ObjectID is the Git object ID (blob or tree) of an entry a Tree listed.
+func ObjectID(entry fs.DirEntry) (string, bool) {
+	listed, ok := entry.(treeEntry)
+	return listed.node.object, ok && listed.node.object != ""
 }
 
 func (t *Tree) loadNodes() error {
-	raw, err := runBytes(t.ctx, command{dir: t.dir, env: t.env, args: []string{"ls-tree", "-r", "-l", "-z", "--full-tree", "--end-of-options", t.info.SHA}})
+	raw, err := runBytes(t.ctx, command{dir: t.dir, env: t.env, args: []string{"ls-tree", "-r", "-t", "-z", "--full-tree", "--end-of-options", t.info.SHA}})
 	if err != nil {
 		return err
 	}
-	nodes := map[string]treeNode{".": {path: ".", mode: fs.ModeDir | 0o555}}
+	nodes := map[string]treeNode{".": {path: ".", mode: fs.ModeDir | 0o555, sized: true}}
 	children := map[string][]string{}
 	for _, entry := range strings.Split(string(raw), "\x00") {
 		if entry == "" {
@@ -76,15 +64,23 @@ func (t *Tree) loadNodes() error {
 			nodes[node.path] = node
 			parent := path.Dir(node.path)
 			children[parent] = append(children[parent], node.path)
-			node = treeNode{path: parent, mode: fs.ModeDir | 0o555}
+			node = treeNode{path: parent, mode: fs.ModeDir | 0o555, sized: true}
 		}
 	}
-	for _, names := range children {
-		slices.SortFunc(names, func(left, right string) int { return strings.Compare(path.Base(left), path.Base(right)) })
-	}
+	sortChildren(children)
 	t.nodes, t.children = nodes, children
 	t.complete = true
 	return nil
+}
+
+func sortChildren(children map[string][]string) {
+	for _, names := range children {
+		sortNames(names)
+	}
+}
+
+func sortNames(names []string) {
+	slices.SortFunc(names, func(left, right string) int { return strings.Compare(path.Base(left), path.Base(right)) })
 }
 
 func (t *Tree) ReadDir(name string) ([]fs.DirEntry, error) {
@@ -93,23 +89,34 @@ func (t *Tree) ReadDir(name string) ([]fs.DirEntry, error) {
 	if err := t.validatePath(name); err != nil {
 		return nil, &fs.PathError{Op: "readdir", Path: name, Err: err}
 	}
+	if len(t.children[name]) == 0 {
+		if err := t.requireDirectory(name); err != nil {
+			return nil, &fs.PathError{Op: "readdir", Path: name, Err: err}
+		}
+	}
+	entries := make([]fs.DirEntry, len(t.children[name]))
+	for index, child := range t.children[name] {
+		entries[index] = treeEntry{node: t.nodes[child], tree: t}
+	}
+	return entries, nil
+}
+
+// requireDirectory loads the whole tree unless it is loaded, so a walk costs
+// one listing, and checks name is a directory.
+func (t *Tree) requireDirectory(name string) error {
 	if !t.complete {
 		if err := t.loadNodes(); err != nil {
-			return nil, &fs.PathError{Op: "readdir", Path: name, Err: err}
+			return err
 		}
 	}
 	node, err := t.node(name)
 	if err != nil {
-		return nil, &fs.PathError{Op: "readdir", Path: name, Err: err}
+		return err
 	}
 	if !node.IsDir() {
-		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
+		return fs.ErrInvalid
 	}
-	entries := make([]fs.DirEntry, len(t.children[name]))
-	for index, child := range t.children[name] {
-		entries[index] = t.nodes[child]
-	}
-	return entries, nil
+	return nil
 }
 
 func (t *Tree) Open(name string) (fs.File, error) {
@@ -130,6 +137,7 @@ func (t *Tree) Open(name string) (fs.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	node.size, node.sized = int64(len(content)), true
 	return &treeFile{Reader: bytes.NewReader(content), info: node}, nil
 }
 

@@ -41,26 +41,15 @@ func readObjectBatch(ctx context.Context, options objectBatchOptions) (err error
 }
 
 func readBatchObject(reader *bufio.Reader, object string, read func(batchBlob, io.Reader) error) error {
-	header, err := reader.ReadString(0)
+	blob, err := readBatchHeader(reader, object)
 	if err != nil {
-		return fmt.Errorf("read Git blob %q: %w", object, err)
+		return err
 	}
-	if header == object+" missing\x00" {
-		return read(batchBlob{Missing: true}, strings.NewReader(""))
+	if blob.Missing {
+		return read(blob, strings.NewReader(""))
 	}
-	fields := strings.Fields(strings.TrimSuffix(header, "\x00"))
-	if len(fields) != 3 || fields[1] != "blob" {
-		return fmt.Errorf("invalid Git blob %q: %q", object, header)
-	}
-	if !strings.Contains(object, ":") && fields[0] != object {
-		return fmt.Errorf("git blob %q returned object %q", object, fields[0])
-	}
-	size, err := strconv.ParseInt(fields[2], 10, 64)
-	if err != nil || size < 0 {
-		return fmt.Errorf("invalid Git blob size for %q: %q", object, header)
-	}
-	content := &io.LimitedReader{R: reader, N: size}
-	if err := read(batchBlob{Object: fields[0], Size: size}, content); err != nil {
+	content := &io.LimitedReader{R: reader, N: blob.Size}
+	if err := read(blob, content); err != nil {
 		return err
 	}
 	if content.N != 0 {
@@ -70,4 +59,26 @@ func readBatchObject(reader *bufio.Reader, object string, read func(batchBlob, i
 		return fmt.Errorf("invalid Git blob terminator for %q", object)
 	}
 	return nil
+}
+
+func readBatchHeader(reader *bufio.Reader, object string) (batchBlob, error) {
+	header, err := reader.ReadString(0)
+	if err != nil {
+		return batchBlob{}, fmt.Errorf("read Git blob %q: %w", object, err)
+	}
+	if header == object+" missing\x00" {
+		return batchBlob{Missing: true}, nil
+	}
+	fields := strings.Fields(strings.TrimSuffix(header, "\x00"))
+	if len(fields) != 3 || fields[1] != "blob" {
+		return batchBlob{}, fmt.Errorf("invalid Git blob %q: %q", object, header)
+	}
+	if !strings.Contains(object, ":") && fields[0] != object {
+		return batchBlob{}, fmt.Errorf("git blob %q returned object %q", object, fields[0])
+	}
+	size, err := strconv.ParseInt(fields[2], 10, 64)
+	if err != nil || size < 0 {
+		return batchBlob{}, fmt.Errorf("invalid Git blob size for %q: %q", object, header)
+	}
+	return batchBlob{Object: fields[0], Size: size}, nil
 }

@@ -20,9 +20,12 @@ const lockRetry = 50 * time.Millisecond
 //
 //	<Root>/<RepoURL.CacheKey>/mirror.git
 //	<Root>/<RepoURL.CacheKey>/mirror.lock
+//	<Root>/<RepoURL.CacheKey>/pins/<sha>
 //	<Root>/<RepoURL.CacheKey>/worktrees/<ref dir>[.lock]
 //
-// mirror.lock serializes fetches and worktree bookkeeping; each worktree is
+// mirror.lock is held shared by reads and exclusively by fetches, pin writes,
+// Maintain and worktree bookkeeping; a pin file's mtime is when a read last
+// used that commit (see Maintain). Each worktree is
 // leased exclusively until Release, so concurrent checkouts of different refs
 // proceed while a second checkout of the same ref waits.
 type Cache struct {
@@ -65,7 +68,7 @@ func (c *Cache) checkoutRef(ctx context.Context, repo *Repository, ref Ref, opti
 	}
 	worktree := &Worktree{Dir: filepath.Join(base, "worktrees", name), Ref: ref, repo: repo,
 		mirror: filepath.Join(base, "mirror.git"), mirrorLock: filepath.Join(base, "mirror.lock"), ephemeral: options.Ephemeral}
-	if worktree.lease, err = acquire(ctx, worktree.Dir+".lock", "worktree lease"); err != nil {
+	if worktree.lease, err = acquire(ctx, worktree.Dir+".lock", "worktree lease", exclusiveLock); err != nil {
 		return nil, fmt.Errorf("%s at %s: %w", repo.URL.Redacted(), ref.Name, err)
 	}
 	if err := worktree.materialize(ctx, options.Depth); err != nil {
@@ -89,7 +92,7 @@ func worktreeName(ref Ref, ephemeral bool) (string, error) {
 // materialize fetches ref into the mirror unless its commit is cached, then
 // adds (or resets) the worktree at that commit, under the mirror lock.
 func (w *Worktree) materialize(ctx context.Context, depth int) (err error) {
-	lock, err := acquire(ctx, w.mirrorLock, "mirror lock")
+	lock, err := acquire(ctx, w.mirrorLock, "mirror lock", exclusiveLock)
 	if err != nil {
 		return err
 	}
@@ -146,12 +149,7 @@ func (c *Cache) Files(ctx context.Context, repo *Repository, sha string) ([]stri
 		return nil, fmt.Errorf("list files: a full 40-character commit SHA is required")
 	}
 	paths := []string{}
-	err := c.withMirror(ctx, repo, func(mirror string) error {
-		if !hasCommit(ctx, mirror, sha) {
-			if _, err := fetch(ctx, fetchOptions{Dir: mirror, Owner: repo, Repo: repo, Ref: Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}}); err != nil {
-				return err
-			}
-		}
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, sha}}}, func(mirror string, _ []string) error {
 		output, err := run(ctx, command{dir: mirror, args: []string{"ls-tree", "-r", "-z", "--full-tree", "--end-of-options", sha}})
 		if err != nil {
 			return err
@@ -174,13 +172,24 @@ func (c *Cache) Files(ctx context.Context, repo *Repository, sha string) ([]stri
 	return paths, err
 }
 
-// acquire takes an exclusive file lock, waiting until ctx is done.
-func acquire(ctx context.Context, path, what string) (*flock.Flock, error) {
+type lockMode bool
+
+const (
+	exclusiveLock lockMode = false
+	sharedLock    lockMode = true
+)
+
+// acquire takes a file lock in mode, waiting until ctx is done.
+func acquire(ctx context.Context, path, what string, mode lockMode) (*flock.Flock, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create %s directory: %w", what, err)
 	}
 	lock := flock.New(path)
-	locked, err := lock.TryLockContext(ctx, lockRetry)
+	try := lock.TryLockContext
+	if mode == sharedLock {
+		try = lock.TryRLockContext
+	}
+	locked, err := try(ctx, lockRetry)
 	if err != nil || !locked {
 		return nil, fmt.Errorf("acquire %s %s: %w", what, path, errors.Join(err, ctx.Err()))
 	}

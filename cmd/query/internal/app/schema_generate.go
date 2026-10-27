@@ -10,7 +10,7 @@ import (
 
 func generatedSchemas() map[string]schema.Schema {
 	files := map[string]schema.Schema{
-		"connection.json":     schema.Connection(),
+		"connection.json":     schema.Connection(schema.ConnectionOptions{}),
 		"profile.json":        schema.Profile(),
 		"src/connection.json": schema.ConnectionSource(),
 		"src/profile.json":    schema.ProfileSource(),

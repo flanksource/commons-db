@@ -53,6 +53,9 @@ func (s *Service) saveProvided(ctx context.Context, id string, body map[string]a
 		applyConnectionUpdate(existing, candidate)
 		candidate = existing
 	}
+	if err := s.policy.check(candidate); err != nil {
+		return nil, err
+	}
 	resolver := s.context().Wrap(ctx).WithConnectionResolver(s.virtual.ResolveConnection)
 	if err := validateConnection(resolver, candidate); err != nil {
 		return nil, err

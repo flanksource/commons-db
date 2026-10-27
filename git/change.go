@@ -93,15 +93,12 @@ func (c *Cache) Apply(ctx context.Context, repo *Repository, request ChangeReque
 	if err != nil {
 		return ChangeResult{}, err
 	}
-	worktree, err := c.checkoutRef(ctx, repo, base, CheckoutOptions{Ephemeral: true})
+	apply := c.applyInIndex
+	if request.needsWorktree() {
+		apply = c.applyInWorktree
+	}
+	result, err := apply(ctx, repo, base, request)
 	if err != nil {
-		return ChangeResult{}, err
-	}
-	if request.BaseSHA != "" && worktree.Ref.SHA != request.BaseSHA {
-		return ChangeResult{}, errors.Join(baseMoved(request, worktree.Ref.SHA), worktree.Release())
-	}
-	result, err := applyIn(ctx, worktree, request)
-	if err := errors.Join(err, worktree.Release()); err != nil {
 		return result, err
 	}
 	if request.PullRequest == nil {
@@ -216,6 +213,24 @@ func (r ChangeRequest) validateContent() error {
 
 func baseMoved(request ChangeRequest, actual string) error {
 	return fmt.Errorf("%w: %s is at %s, expected %s", ErrBaseMoved, request.Base, actual, request.BaseSHA)
+}
+
+// needsWorktree reports a change only a worktree can land: replayed,
+// rebased or reset commits. Files alone are committed without one.
+func (r ChangeRequest) needsWorktree() bool {
+	return r.Head != "" || r.Rebase != "" || len(r.CherryPick) > 0
+}
+
+func (c *Cache) applyInWorktree(ctx context.Context, repo *Repository, base Ref, request ChangeRequest) (ChangeResult, error) {
+	worktree, err := c.checkoutRef(ctx, repo, base, CheckoutOptions{Ephemeral: true})
+	if err != nil {
+		return ChangeResult{}, err
+	}
+	if request.BaseSHA != "" && worktree.Ref.SHA != request.BaseSHA {
+		return ChangeResult{}, errors.Join(baseMoved(request, worktree.Ref.SHA), worktree.Release())
+	}
+	result, err := applyIn(ctx, worktree, request)
+	return result, errors.Join(err, worktree.Release())
 }
 
 func applyIn(ctx context.Context, worktree *Worktree, request ChangeRequest) (ChangeResult, error) {

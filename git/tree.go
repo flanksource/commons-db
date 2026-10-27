@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"os"
 	"path/filepath"
 	"sync"
 )
@@ -39,6 +40,7 @@ type Tree struct {
 	stream   *objectStream
 	nodes    map[string]treeNode
 	children map[string][]string
+	listed   map[string]bool
 }
 
 // OpenTree captures the revision without writing source files or leasing a
@@ -59,12 +61,7 @@ func (c *Cache) OpenTree(ctx context.Context, options TreeOptions) (result *Tree
 	if options.Directory != "" {
 		err = tree.openLocal(c.Root, options)
 	} else {
-		var commits []string
-		tree.dir, commits, err = c.prepareReadRefs(ctx, options.Repository, refReadOptions{Refs: []refOn{{options.Repository, options.Revision}}})
-		if err == nil {
-			tree.info = TreeInfo{SHA: commits[0], GitDirectory: tree.dir}
-			tree.release, err = acquireRepositoryReader(ctx, tree.dir)
-		}
+		err = tree.openRepository(c, options.Repository, options.Revision)
 	}
 	if err != nil {
 		return nil, err
@@ -72,28 +69,90 @@ func (c *Cache) OpenTree(ctx context.Context, options TreeOptions) (result *Tree
 	return tree, nil
 }
 
-func (t *Tree) openLocal(cacheRoot string, options TreeOptions) error {
-	directory, err := run(t.ctx, command{dir: options.Directory, args: []string{"rev-parse", "--absolute-git-dir"}})
-	if err != nil {
-		return fmt.Errorf("%w: %w", ErrNotRepository, err)
+// openRepository reads a local repository in place (readRefs) and any other
+// through the pinned mirror.
+func (t *Tree) openRepository(c *Cache, repo *Repository, revision string) error {
+	refs := refReadOptions{Refs: []refOn{{repo, revision}}}
+	var commits []string
+	var err error
+	if readsInPlace(repo, refs.Refs) {
+		var reader *localReader
+		if reader, commits, err = c.prepareLocalRefs(t.ctx, repo, refs); err != nil {
+			return err
+		}
+		t.dir, t.info = reader.git, TreeInfo{SHA: commits[0], GitDirectory: reader.gitDirectory}
+	} else {
+		if t.dir, commits, err = c.prepareReadRefs(t.ctx, repo, refs); err != nil {
+			return err
+		}
+		t.info = TreeInfo{SHA: commits[0], GitDirectory: t.dir}
 	}
-	directory, err = filepath.EvalSymlinks(directory)
-	if err != nil {
-		return err
-	}
-	t.info.GitDirectory = directory
-	t.release, err = acquireRepositoryReader(t.ctx, directory)
-	if err != nil {
-		return err
-	}
-	source := &PreparedSource{info: SourceInfo{Kind: SourceCommit, RepositoryRoot: directory}}
-	t.cleanup = source.Release
-	if err := source.initialize(t.ctx, cacheRoot); err != nil {
-		return err
-	}
-	t.info.SHA, err = source.resolveCommit(t.ctx, options.Revision)
-	t.dir, t.env = source.gitDir, source.env
+	t.release, err = acquireRepositoryReader(t.ctx, t.dir)
 	return err
+}
+
+func (t *Tree) openLocal(cacheRoot string, options TreeOptions) error {
+	local, err := openLocalRepository(t.ctx, localRepositoryOptions{CacheRoot: cacheRoot, Directory: options.Directory, Revisions: []string{options.Revision}})
+	if local != nil {
+		t.info.GitDirectory, t.release, t.cleanup = local.gitDirectory, local.release, local.source.Release
+	}
+	if err != nil {
+		return err
+	}
+	t.info.SHA, t.dir, t.env = local.commits[0], local.source.gitDir, local.source.env
+	return nil
+}
+
+type localRepositoryOptions struct {
+	CacheRoot string
+	Directory string
+	Revisions []string
+}
+
+// localRepository is a private scratch repository reading a local
+// repository's objects through alternates, holding a reader slot on it.
+type localRepository struct {
+	gitDirectory string
+	source       *PreparedSource
+	commits      []string
+	release      func()
+}
+
+// close releases what openLocalRepository acquired.
+func (l *localRepository) close() error {
+	l.release()
+	return l.source.Release()
+}
+
+// openLocalRepository resolves options.Revisions in the local repository and
+// opens a scratch repository whose HEAD is the first of them; none of the
+// local repository's refs are copied. On error, a non-nil result still owns
+// what it acquired.
+func openLocalRepository(ctx context.Context, options localRepositoryOptions) (*localRepository, error) {
+	directory, err := run(ctx, command{dir: options.Directory, args: []string{"rev-parse", "--absolute-git-dir"}})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrNotRepository, err)
+	}
+	if directory, err = filepath.EvalSymlinks(directory); err != nil {
+		return nil, err
+	}
+	release, err := acquireRepositoryReader(ctx, directory)
+	if err != nil {
+		return nil, err
+	}
+	local := &localRepository{gitDirectory: directory, release: release,
+		source: &PreparedSource{info: SourceInfo{Kind: SourceCommit, RepositoryRoot: directory}}}
+	if err := local.source.initialize(ctx, options.CacheRoot); err != nil {
+		return local, err
+	}
+	for _, revision := range options.Revisions {
+		commit, err := local.source.resolveCommit(ctx, revision)
+		if err != nil {
+			return local, err
+		}
+		local.commits = append(local.commits, commit)
+	}
+	return local, os.WriteFile(filepath.Join(local.source.gitDir, "HEAD"), []byte(local.commits[0]+"\n"), 0o600)
 }
 
 func (t *Tree) Info() TreeInfo { return t.info }
@@ -152,11 +211,8 @@ func (t *Tree) ReadFile(name string) ([]byte, error) {
 	if !node.mode.IsRegular() {
 		return nil, &fs.PathError{Op: "read", Path: name, Err: fmt.Errorf("%w: mode %s", ErrUnsupportedSource, node.mode)}
 	}
-	if t.stream == nil {
-		t.stream, err = openObjectStream(t.ctx, command{dir: t.dir, env: t.env})
-		if err != nil {
-			return nil, &fs.PathError{Op: "read", Path: name, Err: err}
-		}
+	if err := t.openStream(); err != nil {
+		return nil, &fs.PathError{Op: "read", Path: name, Err: err}
 	}
 	var content []byte
 	err = t.stream.read(node.object, func(blob batchBlob, reader io.Reader) error {
@@ -170,5 +226,14 @@ func (t *Tree) ReadFile(name string) ([]byte, error) {
 	if err != nil {
 		return nil, &fs.PathError{Op: "read", Path: name, Err: err}
 	}
+	node.size, node.sized = int64(len(content)), true
+	t.nodes[name] = node
 	return content, nil
+}
+
+func (t *Tree) openStream() (err error) {
+	if t.stream == nil {
+		t.stream, err = openObjectStream(t.ctx, command{dir: t.dir, env: t.env})
+	}
+	return err
 }
