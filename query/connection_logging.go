@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons/har"
+	"github.com/flanksource/commons/har/harpretty"
 	"github.com/flanksource/commons/logger"
 )
 
@@ -275,7 +276,7 @@ func (operation *connectionOperation) logHTTPEntry(entry har.Entry, rows int) {
 			mergeLogValues(base, map[string]any{
 				"request_headers": entry.Request.Headers, "query": entry.Request.QueryString, "response_headers": entry.Response.Headers,
 			}),
-			operation.prettyHTTPEntry(entry, har.DetailOptions{RequestHeaders: true, QueryString: true, ResponseHeaders: true}),
+			operation.prettyHTTPEntry(entry, harpretty.DetailOptions{RequestHeaders: true, QueryString: true, ResponseHeaders: true}),
 		)
 	}
 	if entry.Request.PostData != nil && entry.Request.PostData.Text != "" && operation.wants(observability.EventHTTPRequestBody) {
@@ -283,7 +284,7 @@ func (operation *connectionOperation) logHTTPEntry(entry har.Entry, rows int) {
 			operation.policy.Level(observability.EventHTTPRequestBody),
 			observability.EventHTTPRequestBody,
 			mergeLogValues(base, map[string]any{"request_body": entry.Request.PostData.Text, "body_size": entry.Request.BodySize}),
-			operation.prettyHTTPEntry(entry, har.DetailOptions{RequestBody: true}),
+			operation.prettyHTTPEntry(entry, harpretty.DetailOptions{RequestBody: true}),
 		)
 	}
 	if entry.Response.Content.Text != "" && operation.wants(observability.EventHTTPResponseBody) {
@@ -293,7 +294,7 @@ func (operation *connectionOperation) logHTTPEntry(entry har.Entry, rows int) {
 			mergeLogValues(base, map[string]any{
 				"response_body": entry.Response.Content.Text, "body_size": entry.Response.BodySize, "truncated": entry.Response.Content.Truncated,
 			}),
-			operation.prettyHTTPEntry(entry, har.DetailOptions{ResponseBody: true}),
+			operation.prettyHTTPEntry(entry, harpretty.DetailOptions{ResponseBody: true}),
 		)
 	}
 }

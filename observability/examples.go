@@ -7,6 +7,7 @@ import (
 
 	dbgorm "github.com/flanksource/commons-db/gorm"
 	"github.com/flanksource/commons/har"
+	"github.com/flanksource/commons/har/harpretty"
 )
 
 const previewSQL = "SELECT * FROM orders WHERE tenant_id = ?"
@@ -102,20 +103,20 @@ func previewSQLTrace(event Event, duration time.Duration, rows int64) string {
 
 func previewHTTPDetail(event Event) string {
 	entry := previewHTTPEntry()
-	var options har.DetailOptions
+	var options harpretty.DetailOptions
 	switch event {
 	case EventHTTP:
-		return entry.Pretty().String()
+		return harpretty.Entry(entry).Pretty().String()
 	case EventHTTPHeaders:
-		options = har.DetailOptions{RequestHeaders: true, QueryString: true, ResponseHeaders: true}
+		options = harpretty.DetailOptions{RequestHeaders: true, QueryString: true, ResponseHeaders: true}
 	case EventHTTPRequestBody:
-		options = har.DetailOptions{RequestBody: true}
+		options = harpretty.DetailOptions{RequestBody: true}
 	case EventHTTPResponseBody:
-		options = har.DetailOptions{ResponseBody: true}
+		options = harpretty.DetailOptions{ResponseBody: true}
 	default:
 		return ""
 	}
-	return entry.Pretty().String() + "\n" + entry.Detail(options).String()
+	return harpretty.Entry(entry).Pretty().String() + "\n" + harpretty.Entry(entry).Detail(options).String()
 }
 
 func previewCompletion(event Event, family ProviderFamily, duration time.Duration, rows int64) string {

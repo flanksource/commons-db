@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
-	"github.com/flanksource/commons/http/middlewares"
+	"github.com/flanksource/commons/http/middlewares/timing"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/storage/memory"
@@ -55,7 +55,7 @@ func (r *Repository) LsRemote(ctx context.Context) (refs RemoteRefs, err error) 
 	}
 	finish := startGitTiming(ctx, "ls_remote")
 	defer func() { finish(err, "", nil) }()
-	ctx = middlewares.WithClientTimings(ctx)
+	ctx = timing.WithClientTimings(ctx)
 	auth, err := r.Auth.goGitAuth(r.URL)
 	if err != nil {
 		return RemoteRefs{}, fmt.Errorf("ls-remote %s: %w", r.URL.Redacted(), err)
