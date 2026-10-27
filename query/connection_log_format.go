@@ -11,6 +11,7 @@ import (
 	dbgorm "github.com/flanksource/commons-db/gorm"
 	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons/har"
+	"github.com/flanksource/commons/har/harpretty"
 	"github.com/flanksource/commons/logger"
 )
 
@@ -76,7 +77,7 @@ func (operation *connectionOperation) prettySummary(event observability.Event, d
 		}.Pretty())
 	}
 	if operation.policy.Family == observability.ProviderHTTP && event == observability.EventHTTP && operation.collector != nil {
-		return operation.withIdentity(operation.collector.Pretty())
+		return operation.withIdentity((&harpretty.Collector{Collector: operation.collector}).Pretty())
 	}
 
 	text := api.Text{}
@@ -126,9 +127,9 @@ func oneLineLogValue(value any) string {
 	return strings.Join(strings.Fields(fmt.Sprint(value)), " ")
 }
 
-func (operation *connectionOperation) prettyHTTPEntry(entry har.Entry, options har.DetailOptions) api.Textable {
-	text := operation.withIdentity(entry.Pretty())
-	if detail := entry.Detail(options); detail != nil {
+func (operation *connectionOperation) prettyHTTPEntry(entry har.Entry, options harpretty.DetailOptions) api.Textable {
+	text := operation.withIdentity(harpretty.Entry(entry).Pretty())
+	if detail := harpretty.Entry(entry).Detail(options); detail != nil {
 		text = text.NewLine().Add(detail)
 	}
 	return text
