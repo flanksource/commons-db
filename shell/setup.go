@@ -39,6 +39,7 @@ type Setup struct {
 	Checkout    *Checkout                  `json:"checkout,omitempty" yaml:"checkout,omitempty"`
 	Connections connection.ExecConnections `json:"connections,omitempty" yaml:"connections,omitempty"`
 	Env         []string                   `json:"-" yaml:"-"`
+	Patch       string                     `json:"patch,omitempty" yaml:"patch,omitempty"`
 }
 
 type Checkout struct {
@@ -174,7 +175,17 @@ func Prepare(ctx context.Context, setup *Setup) (*SetupResult, error) {
 	if setup == nil {
 		setup = &Setup{}
 	}
-	return SetupEnv(ctx, setup.ToExec())
+	if err := validateSetupPatch(setup); err != nil {
+		return nil, err
+	}
+	result, err := SetupEnv(ctx, setup.ToExec())
+	if err != nil {
+		return nil, err
+	}
+	if err := applySetupPatch(ctx, setup, result); err != nil {
+		return nil, cleanupSetupFailure(err, result.Cleanup)
+	}
+	return result, nil
 }
 
 func (s Setup) ToExec() *Exec {
@@ -195,7 +206,7 @@ func (c *Checkout) toGitConnection(cwd string) *connection.GitConnection {
 	mode := c.Mode
 	if mode == "" {
 		switch {
-		case c.URL != "":
+		case c.URL != "" || c.Connection != "":
 			mode = CheckoutRemote
 		case c.Path != "":
 			mode = CheckoutLocal
