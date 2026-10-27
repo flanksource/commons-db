@@ -77,7 +77,7 @@ func (p *azureProvider) projectID(ctx context.Context, project string) (string, 
 		return "", fmt.Errorf("read Azure project %q: %w", project, err)
 	}
 	if read.ID == "" {
-		return "", fmt.Errorf("Azure project %q has no id", project)
+		return "", fmt.Errorf("azure project %q has no id", project)
 	}
 	azureProjectIDs.Store(key, read.ID)
 	return read.ID, nil

@@ -3,6 +3,7 @@ package process
 import (
 	"context"
 	"os"
+	"syscall"
 
 	clickyprocess "github.com/flanksource/clicky/process"
 	. "github.com/onsi/ginkgo/v2"
@@ -24,6 +25,9 @@ var _ = Describe("samplesRun.read", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(readings[os.Getpid()].IO).NotTo(BeNil())
 		Expect(readings[rootOwned].IO).To(BeNil())
-		Expect(readings[rootOwned].IOError).To(ContainSubstring("operation not permitted"))
+		Expect(readings[rootOwned].IOError).To(SatisfyAny(
+			ContainSubstring(syscall.EPERM.Error()),
+			ContainSubstring(syscall.EACCES.Error()),
+		))
 	})
 })
