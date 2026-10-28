@@ -180,6 +180,8 @@ spec:
 
 `match` contains CEL predicates over `source`, `target` and `context`; any true expression matches. A source matching multiple targets fails. Unmatched sources create entries by default; `target.create: false` reports them as missing. Filtered eligible targets without source matches are reported as stale and retained.
 
+Nested selectors such as `$.servers[*].databases[*]` resolve every wildcard to a concrete write path. Adding a nested field preserves its existing parents and siblings. Creating a new entry requires exactly one parent sequence; multiple possible parents fail rather than guessing where to insert it.
+
 Each `set` key is a JSONPath relative to the selected target, such as `$.name`. `value` is a CEL expression; `when` optionally guards evaluation. Use `value: '"managed"'` for a CEL string literal and `when: '"email" in source'` for optional fields. Mapping guards see the original target for that source row.
 
 `strategy` defaults to `replace`. `mergeUnique` appends new list values not already present. `replaceMatching` removes existing list items satisfying its `match`, then inserts incoming values; `item` denotes each existing list element, for example `item.context == context.name`.

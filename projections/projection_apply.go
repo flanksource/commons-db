@@ -443,6 +443,19 @@ type projectionMappingApplyOptions struct {
 
 func applyProjectionMappings(options projectionMappingApplyOptions) ([]string, error) {
 	var changed []string
+	var document map[string]any
+	if err := yaml.NodeToValue(options.File.Docs[0].Body, &document); err != nil {
+		return nil, projectionYAMLError(err)
+	}
+	selector, err := jp.ParseString(options.Selector)
+	if err != nil {
+		return nil, err
+	}
+	locations := selector.Locate(document, 0)
+	if options.Index < 0 || options.Index >= len(locations) {
+		return nil, fmt.Errorf("target index %d outside %s (%d entries)", options.Index, options.Selector, len(locations))
+	}
+	entryPath := locations[options.Index].String()
 	evaluationTarget, err := projectionMap(options.Target)
 	if err != nil {
 		return nil, fmt.Errorf("copy target for expression evaluation: %w", err)
@@ -482,20 +495,37 @@ func applyProjectionMappings(options projectionMappingApplyOptions) ([]string, e
 		if projectionValuesEqual(currentValue, value) {
 			continue
 		}
+		mergePath := entryPath
+		fragmentPath := jsonPath
+		if len(current) == 0 {
+			for end := len(jsonPath) - 1; end > 0; end-- {
+				parents := jsonPath[:end].Get(options.Target)
+				if len(parents) == 1 {
+					if _, ok := parents[0].(map[string]any); ok {
+						mergePath += strings.TrimPrefix(jsonPath[:end].String(), "$")
+						fragmentPath = jsonPath[end:]
+						break
+					}
+				}
+			}
+		}
 		if err := jsonPath.SetOne(options.Target, value); err != nil {
 			return nil, err
 		}
-		entryPath := strings.TrimSuffix(options.Selector, "[*]") + fmt.Sprintf("[%d]", options.Index)
 		flowStyle, err := projectionTargetYAMLFlowStyle(options.File, entryPath)
 		if err != nil {
 			return nil, err
 		}
 		if len(current) == 0 {
 			fragment := map[string]any{}
-			if err := jsonPath.SetOne(fragment, value); err != nil {
+			if err := fragmentPath.SetOne(fragment, value); err != nil {
 				return nil, err
 			}
-			if err := mergeProjectionYAML(options.File, entryPath, fragment, flowStyle); err != nil {
+			parentFlowStyle, err := projectionTargetYAMLFlowStyle(options.File, mergePath)
+			if err != nil {
+				return nil, err
+			}
+			if err := mergeProjectionYAML(options.File, mergePath, fragment, parentFlowStyle); err != nil {
 				return nil, err
 			}
 		} else {
