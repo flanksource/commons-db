@@ -87,6 +87,30 @@ var _ = Describe("sqlite backend opened read-only", func() {
 		Expect(seqs).To(Equal([]int64{1, 2}))
 	})
 
+	It("prepares and reads the owner's stream without writing or submitting a batch", func() {
+		meta, err := owner.Meta(ctx, "run-1")
+		Expect(err).ToNot(HaveOccurred())
+		observer, err := readOnly(owner.Path()).Conn(ctx)
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(observer.Close)
+		var before, after int64
+		Expect(observer.QueryRowContext(ctx, "PRAGMA data_version").Scan(&before)).To(Succeed())
+
+		for _, backend := range []*sqlite.Backend{reader, openReader(recordstoretest.Schema, nil)} {
+			prepared, found, err := backend.Prepare(ctx, meta)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(found).To(BeTrue())
+			Expect(prepared).To(Equal(meta))
+			seqs, rows := recordstoretest.Scanned(backend, "run-1", 0)
+			Expect(seqs).To(Equal([]int64{1, 2}))
+			Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(1, 2))))
+		}
+
+		Expect(submissions()).To(BeEmpty())
+		Expect(observer.QueryRowContext(ctx, "PRAGMA data_version").Scan(&after)).To(Succeed())
+		Expect(after).To(Equal(before))
+	})
+
 	It("submits an append as a one-entry batch carrying its kind's schema, returning the writer's exact result", func() {
 		result, err := reader.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(3, 4))
 		Expect(err).ToNot(HaveOccurred())

@@ -26,8 +26,10 @@ func (b *Backend) Prepare(ctx context.Context, source recordstore.Meta) (records
 	if _, err := b.kindTable(source.Kind); err != nil {
 		return recordstore.Meta{}, false, err
 	}
-	if err := b.purgeExpired(ctx, source.Stream); err != nil {
-		return recordstore.Meta{}, false, err
+	if !b.readOnly.Load() {
+		if err := b.purgeExpired(ctx, source.Stream); err != nil {
+			return recordstore.Meta{}, false, err
+		}
 	}
 	indexed, err := b.Meta(ctx, source.Stream)
 	if errors.Is(err, recordstore.ErrNotFound) {
