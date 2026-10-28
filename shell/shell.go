@@ -16,6 +16,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/types"
+	"github.com/flanksource/commons-db/workspace"
 	fileUtils "github.com/flanksource/commons/files"
 	"github.com/flanksource/commons/logger"
 	"github.com/flanksource/commons/properties"
@@ -260,6 +261,7 @@ type commandContext struct {
 
 	// Working directory for the command
 	mountPoint string
+	workspace  *workspace.Workspace
 }
 
 func runCmd(ctx context.Context, command *commandContext) (*ExecDetails, error) {

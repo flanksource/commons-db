@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/commons-db/context"
 	dbgit "github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/types"
+	"github.com/flanksource/commons-db/workspace"
 	"github.com/flanksource/commons/hash"
 	"github.com/flanksource/commons/properties"
 	"github.com/flanksource/commons/utils"
@@ -23,9 +24,12 @@ import (
 var checkoutLocks = utils.NamedLock{}
 
 type SetupResult struct {
-	Env             []string
-	Cwd             string
-	Extra           map[string]any
+	Env   []string
+	Cwd   string
+	Extra map[string]any
+	// Workspace is the git checkout Cwd belongs to, when the setup has one; it
+	// snapshots, syncs and diffs the run's working state.
+	Workspace       *workspace.Workspace
 	Artifacts       []Artifact
 	Cleanup         func() error
 	sensitiveValues []string
@@ -327,6 +331,7 @@ func SetupEnv(ctx context.Context, exec *Exec) (*SetupResult, error) {
 		Env:             mergeEnvSlices(cmd.Env),
 		Cwd:             cwd,
 		Extra:           envParams.extra,
+		Workspace:       envParams.workspace,
 		Artifacts:       exec.Artifacts,
 		Cleanup:         cleanup,
 		sensitiveValues: uniqueValues(sensitiveValues),
@@ -406,15 +411,16 @@ func prepareEnvironment(ctx context.Context, exec *Exec) (*commandContext, func(
 		return nil, nil, fmt.Errorf("error hydrating connection: %w", err)
 	}
 
-	mountPoint, extra, cleanup, err := prepareCheckout(ctx, exec.BaseDir, &checkout)
+	ws, extra, err := prepareCheckout(ctx, exec.BaseDir, &checkout)
 	if err != nil {
 		return nil, nil, err
 	}
-	result.mountPoint = mountPoint
+	result.mountPoint = ws.Dir
+	result.workspace = ws
 	for k, v := range extra {
 		result.extra[k] = v
 	}
-	return &result, cleanup, nil
+	return &result, ws.Release, nil
 }
 
 func prepareRemoteCheckout(ctx context.Context, baseDir string, checkout *connection.GitConnection) (string, map[string]any, error) {
