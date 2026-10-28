@@ -49,6 +49,19 @@ func createProjectionTarget(
 	}
 
 	sequenceSelector := strings.TrimSuffix(selector, "[*]")
+	var document map[string]any
+	if err := yaml.NodeToValue(file.Docs[0].Body, &document); err != nil {
+		return nil, projectionYAMLError(err)
+	}
+	jsonSelector, err := jp.ParseString(sequenceSelector)
+	if err != nil {
+		return nil, err
+	}
+	parents := jsonSelector.Locate(document, 0)
+	if len(parents) != 1 {
+		return nil, fmt.Errorf("creation requires exactly one target sequence at %s, found %d", sequenceSelector, len(parents))
+	}
+	sequenceSelector = parents[0].String()
 	sequencePath, err := yaml.PathString(sequenceSelector)
 	if err != nil {
 		return nil, projectionYAMLError(err)
