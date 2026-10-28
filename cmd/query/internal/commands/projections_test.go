@@ -12,6 +12,28 @@ import (
 )
 
 var _ = ginkgo.Describe("Projections CLI", func() {
+	ginkgo.DescribeTable("explains the relevant projection workflow in command help",
+		func(name string, sections []string) {
+			args := []string{"projections"}
+			if name != "" {
+				args = append(args, name)
+			}
+			var output bytes.Buffer
+			root, err := commands.New(commands.Options{Args: append(args, "--help", "--no-color"), Stdout: &output, Stderr: &output, BuildInfo: commands.BuildInfo{Version: "dev", Commit: "unknown", Date: "unknown"}})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(root.Execute()).To(Succeed())
+			for _, section := range append(sections, "Selecting manifests:", "Output:", "query projections syntax --help") {
+				Expect(output.String()).To(ContainSubstring(section))
+			}
+			Expect(output.String()).NotTo(ContainSubstring("\x1b["))
+			Expect(output.String()).NotTo(ContainSubstring("selected Faro context"))
+		},
+		ginkgo.Entry("root", "", []string{"Workflow:", "Manifest syntax:", "projections.flanksource.com/v1alpha1", "entries: []"}),
+		ginkgo.Entry("run", "run", []string{"Source queries:", "Filtering and validation:", "Results and connections:", "perTarget", "source.body"}),
+		ginkgo.Entry("apply", "apply", []string{"Matching and mapping syntax:", "List strategies:", "Creation and aggregation:", "Validation and execution:", "Dry runs and results:", "replaceMatching"}),
+		ginkgo.Entry("verify", "verify", []string{"Manifest checks:", "Target checks:", "Results and limits:", "future source rows"}),
+	)
+
 	ginkgo.It("keeps local exec operations out of the served command tree", func() {
 		dir := ginkgo.GinkgoT().TempDir()
 		root, err := commands.New(commands.Options{Args: []string{"--config-dir", dir, "--profiles-dir", filepath.Join(dir, "profiles"), "--db", "", "serve"}, Stdout: io.Discard, Stderr: io.Discard, BuildInfo: commands.BuildInfo{Version: "dev", Commit: "unknown", Date: "unknown"}})
