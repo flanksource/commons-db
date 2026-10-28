@@ -45,6 +45,7 @@ type ExecConnections struct {
 	AWS        *AWSConnection        `yaml:"aws,omitempty" json:"aws,omitempty"`
 	GCP        *GCPConnection        `yaml:"gcp,omitempty" json:"gcp,omitempty"`
 	Azure      *AzureConnection      `yaml:"azure,omitempty" json:"azure,omitempty"`
+	OpenSearch *OpenSearchConnection `yaml:"opensearch,omitempty" json:"opensearch,omitempty"`
 }
 
 func saveConfig(cwd string, configTemplate *textTemplate.Template, view any) (configPath string, resultErr error) {
@@ -187,7 +188,11 @@ func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osEx
 	}
 
 	if connections.Azure != nil {
-		if err := setupAzureConnection(ctx, connections.Azure, &output); err != nil {
+		cleaner, err := setupAzureConnection(ctx, connections.Azure, cmd, &output)
+		if cleaner != nil {
+			cleaners = append(cleaners, cleaner)
+		}
+		if err != nil {
 			return nil, err
 		}
 	}
@@ -198,6 +203,11 @@ func SetupConnection(ctx context.Context, connections ExecConnections, cmd *osEx
 			cleaners = append(cleaners, cleaner)
 		}
 		if err != nil {
+			return nil, err
+		}
+	}
+	if connections.OpenSearch != nil {
+		if err := setupOpenSearchConnection(ctx, connections.OpenSearch, cmd); err != nil {
 			return nil, err
 		}
 	}
@@ -269,23 +279,34 @@ func setupAWSConnection(ctx context.Context, conn *AWSConnection, cmd *osExec.Cm
 	return removeConfigDir(configPath), nil
 }
 
-func setupAzureConnection(ctx context.Context, conn *AzureConnection, output *ConnectionSetupResult) error {
+func setupAzureConnection(ctx context.Context, conn *AzureConnection, cmd *osExec.Cmd, output *ConnectionSetupResult) (func() error, error) {
 	if err := conn.HydrateConnection(ctx); err != nil {
-		return fmt.Errorf("failed to hydrate connection %w", err)
+		return nil, fmt.Errorf("failed to hydrate connection %w", err)
+	}
+	if conn.ClientID == nil || conn.ClientID.IsEmpty() || conn.ClientSecret == nil || conn.ClientSecret.IsEmpty() || conn.TenantID == "" {
+		return nil, fmt.Errorf("azure CLI login requires clientID, clientSecret and tenantID")
+	}
+	cleaner, err := isolateCloudConfig(cmd, "AZURE_CONFIG_DIR")
+	if err != nil {
+		return nil, err
 	}
 	output.Sources = append(output.Sources, fmt.Sprintf("azureConnection: %s", conn.ConnectionName))
 
 	// login with service principal
 	runCmd := osExec.CommandContext(ctx, "az", "login", "--service-principal", "--username", conn.ClientID.ValueStatic, "--password", conn.ClientSecret.ValueStatic, "--tenant", conn.TenantID)
+	runCmd.Env = cmd.Env
 	if err := runCmd.Run(); err != nil {
-		return fmt.Errorf("failed to login: %w", err)
+		return cleaner, fmt.Errorf("failed to login: %w", err)
 	}
-	return nil
+	return cleaner, nil
 }
 
 func setupGCPConnection(ctx context.Context, conn *GCPConnection, cmd *osExec.Cmd, output *ConnectionSetupResult) (func() error, error) {
 	if err := conn.HydrateConnection(ctx); err != nil {
 		return nil, fmt.Errorf("failed to hydrate connection %w", err)
+	}
+	if conn.Credentials == nil || conn.Credentials.IsEmpty() {
+		return nil, fmt.Errorf("GCP CLI login requires credentials")
 	}
 
 	output.Sources = append(output.Sources, fmt.Sprintf("gcpConnection: %s", conn.ConnectionName))
@@ -295,16 +316,40 @@ func setupGCPConnection(ctx context.Context, conn *GCPConnection, cmd *osExec.Cm
 		return nil, fmt.Errorf("failed to store gcloud credentials: %w", err)
 	}
 	cleaner := removeConfigDir(configPath)
+	cacheCleanup, err := isolateCloudConfig(cmd, "CLOUDSDK_CONFIG")
+	if err != nil {
+		return cleaner, err
+	}
+	cleanup := func() error { return errors.Join(cleaner(), cacheCleanup()) }
 
 	// to configure gcloud CLI to use the service account specified in GOOGLE_APPLICATION_CREDENTIALS,
 	// we need to explicitly activate it
 	runCmd := osExec.CommandContext(ctx, "gcloud", "auth", "activate-service-account", "--key-file", configPath)
+	runCmd.Env = cmd.Env
 	if err := runCmd.Run(); err != nil {
-		return cleaner, fmt.Errorf("failed to activate GCP service account: %w", err)
+		return cleanup, fmt.Errorf("failed to activate GCP service account: %w", err)
 	}
 
 	cmd.Env = append(cmd.Env, fmt.Sprintf("GOOGLE_APPLICATION_CREDENTIALS=%s", configPath))
-	return cleaner, nil
+	return cleanup, nil
+}
+
+func isolateCloudConfig(cmd *osExec.Cmd, variable string) (func() error, error) {
+	base := filepath.Join(cmd.Dir, ".creds")
+	if err := os.MkdirAll(base, 0700); err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp(base, strings.ToLower(variable)+"-")
+	if err != nil {
+		return nil, err
+	}
+	for i := len(cmd.Env) - 1; i >= 0; i-- {
+		if strings.HasPrefix(cmd.Env[i], variable+"=") {
+			cmd.Env = append(cmd.Env[:i], cmd.Env[i+1:]...)
+		}
+	}
+	cmd.Env = append(cmd.Env, variable+"="+dir)
+	return func() error { return os.RemoveAll(dir) }, nil
 }
 
 func cleanupConnectionFiles(cleaners []func() error) error {

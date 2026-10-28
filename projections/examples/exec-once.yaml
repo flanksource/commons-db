@@ -1,0 +1,21 @@
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: inventory
+spec:
+  source:
+    query:
+      exec:
+        script: printf '%s' '{"items":[{"id":"api","name":"API service"}]}'
+        select: $.items
+        timeout: 1m
+  target:
+    path: target.yaml
+    select: $.entries[*]
+  match:
+    - source.id == target.id
+  set:
+    $.id:
+      value: source.id
+    $.name:
+      value: source.name

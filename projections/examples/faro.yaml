@@ -1,0 +1,52 @@
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: faro-catalog
+spec:
+  source:
+    query:
+      exec:
+        script: >-
+          faro catalog list --full --context {{shellQuote .context.name}}
+          --json --no-progress
+        passthroughEnv: [XDG_CONFIG_HOME]
+---
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: faro-access
+spec:
+  source:
+    query:
+      exec:
+        script: >-
+          faro access users export --principal-types users,groups
+          --context {{shellQuote .context.name}} --json --no-progress
+        select: $.entries
+        passthroughEnv: [XDG_CONFIG_HOME]
+---
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: faro-changes
+spec:
+  source:
+    query:
+      exec:
+        script: >-
+          faro catalog change search 'type=PermissionChange'
+          --context {{shellQuote .context.name}} --json --no-progress
+        passthroughEnv: [XDG_CONFIG_HOME]
+---
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: faro-insights
+spec:
+  source:
+    query:
+      exec:
+        script: >-
+          faro catalog insights search 'severity=high' --full --limit 0
+          --context {{shellQuote .context.name}} --json --no-progress
+        passthroughEnv: [XDG_CONFIG_HOME]

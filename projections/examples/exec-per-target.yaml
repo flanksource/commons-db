@@ -1,0 +1,21 @@
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: target-facts
+spec:
+  source:
+    query:
+      exec:
+        mode: perTarget
+        script: printf '{"state":"ready","id":"%s"}' {{shellQuote .target.id}}
+        timeout: 30s
+  target:
+    path: target.yaml
+    select: $.entries[*]
+    filter: target.active
+    create: false
+  match:
+    - source.id == target.id
+  set:
+    $.state:
+      value: source.body.state

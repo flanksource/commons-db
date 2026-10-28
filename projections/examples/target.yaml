@@ -1,0 +1,3 @@
+entries:
+  - {id: api, name: API, active: true}
+  - {id: worker, name: Worker, active: true}

@@ -47,6 +47,10 @@ func New(options Options) (*cobra.Command, error) {
 	if requestsVersion(options.Args) {
 		return root, nil
 	}
+	if requestsProjections(options.Args) {
+		root.AddCommand(newProjections())
+		return root, nil
+	}
 
 	database := app.ResolveDatabaseOptions(options.Args)
 	if requestsMetadataOnly(options.Args) {
@@ -64,6 +68,9 @@ func New(options Options) (*cobra.Command, error) {
 		return nil, err
 	}
 	clicky.GenerateCLI(root)
+	if requestsMetadataOnly(options.Args) {
+		root.AddCommand(newProjections())
+	}
 	return root, nil
 }
 

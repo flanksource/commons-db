@@ -1,5 +1,6 @@
 ROOT := ../..
 BIN_DIR ?= $(ROOT)/.bin
+PNPM ?= pnpm
 
 .PHONY: build lint test ui-build ui-install
 
@@ -9,14 +10,14 @@ build: ui-build
 
 lint: ui-build
 	go vet ./...
-	pnpm --dir www typecheck
+	$(PNPM) --dir www typecheck
 
 test: ui-build
 	go test ./...
-	pnpm --dir www test
+	$(PNPM) --dir www test
 
 ui-build:
-	pnpm --dir www build
+	$(PNPM) --dir www build
 
 ui-install:
-	pnpm --dir www install --frozen-lockfile
+	$(PNPM) --dir www install --frozen-lockfile
