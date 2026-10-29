@@ -24,6 +24,9 @@
             "cloudwatch": [
               "aws"
             ],
+            "cloudwatchmetrics": [
+              "aws"
+            ],
             "gcpcloudlogging": [
               "google_cloud"
             ],
