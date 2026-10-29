@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons/http"
-	"github.com/flanksource/commons/http/middlewares"
+	"github.com/flanksource/commons/http/middlewares/oauth"
 	"github.com/labstack/echo/v4"
 
 	"github.com/flanksource/commons-db/models"
@@ -245,7 +245,7 @@ func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.
 	} else if !conn.Bearer.IsEmpty() {
 		req.Header.Set(echo.HeaderAuthorization, "Bearer "+conn.Bearer.ValueStatic)
 	} else if !conn.OAuth.IsEmpty() {
-		oauthTransport := middlewares.NewOauthTransport(middlewares.OauthConfig{
+		oauthTransport := oauth.NewOauthTransport(oauth.OauthConfig{
 			ClientID:     conn.OAuth.ClientID.String(),
 			ClientSecret: conn.OAuth.ClientSecret.String(),
 			TokenURL:     conn.OAuth.TokenURL,
@@ -292,12 +292,10 @@ func CreateHTTPClient(ctx ConnectionContext, conn HTTPConnection) (*http.Client,
 	if !conn.HTTPBasicAuth.IsEmpty() {
 		client.Auth(conn.GetUsername(), conn.GetPassword())
 		client.Digest(conn.Digest)
-		client.NTLM(conn.NTLM)
-		client.NTLMV2(conn.NTLMV2)
 	} else if !conn.Bearer.IsEmpty() {
 		client.Header(echo.HeaderAuthorization, "Bearer "+conn.Bearer.ValueStatic)
 	} else if !conn.OAuth.IsEmpty() {
-		client.OAuth(middlewares.OauthConfig{
+		client.OAuth(oauth.OauthConfig{
 			ClientID:     conn.OAuth.ClientID.ValueStatic,
 			ClientSecret: conn.OAuth.ClientSecret.ValueStatic,
 			TokenURL:     conn.OAuth.TokenURL,

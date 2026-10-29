@@ -15,7 +15,7 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
-	"github.com/flanksource/commons/http/middlewares"
+	"github.com/flanksource/commons/http/middlewares/oauth"
 )
 
 // connectionActionsHandler powers the connection form's "Test" split-button:
@@ -364,7 +364,7 @@ func newHTTPProbeTransport(conn dbconnection.HTTPConnection, target *httpProbeTa
 		}), nil
 	}
 	if !conn.OAuth.IsEmpty() {
-		return middlewares.NewOauthTransport(middlewares.OauthConfig{
+		return oauth.NewOauthTransport(oauth.OauthConfig{
 			ClientID:     conn.OAuth.ClientID.String(),
 			ClientSecret: conn.OAuth.ClientSecret.String(),
 			TokenURL:     conn.OAuth.TokenURL,

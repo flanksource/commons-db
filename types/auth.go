@@ -1,14 +1,10 @@
 package types
 
-import (
-	"strings"
-)
+import "strings"
 
 // +kubebuilder:object:generate=true
 type HTTPBasicAuth struct {
 	Authentication `yaml:",inline" json:",inline"`
-	NTLM           bool `yaml:"ntlm,omitempty" json:"ntlm,omitempty"`
-	NTLMV2         bool `yaml:"ntlmv2,omitempty" json:"ntlmv2,omitempty"`
 	Digest         bool `yaml:"digest,omitempty" json:"digest,omitempty"`
 }
 

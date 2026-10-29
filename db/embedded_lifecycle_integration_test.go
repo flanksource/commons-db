@@ -78,6 +78,31 @@ var _ = Describe("embedded PostgreSQL lifecycle", Label("integration"), func() {
 		Expect(testingSettingDrift(scaled, have)).To(Equal([]string{"work_mem: have " + staleWorkMem + ", want 8MB"}))
 	})
 
+	It("reuses a fast server on the port even when it was started from another data directory", func() {
+		config := newConfig(true)
+		dsn, stop, err := StartEmbedded(config)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+
+		config.DataDir = GinkgoT().TempDir()
+		reusedDSN, stopReuser, err := StartEmbedded(config)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(reusedDSN).To(Equal(dsn))
+		Expect(stopReuser()).To(Succeed())
+		Expect(filepath.Join(config.DataDir, "data", "postmaster.pid")).NotTo(BeAnExistingFile())
+	})
+
+	It("refuses to reuse a durable server started from another data directory", func() {
+		config := newConfig(false)
+		_, stop, err := StartEmbedded(config)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(stop()).To(Succeed()) })
+
+		config.DataDir = GinkgoT().TempDir()
+		_, _, err = StartEmbedded(config)
+		Expect(err).To(MatchError(ContainSubstring("expected PostgreSQL data_directory")))
+	})
+
 	It("refuses to reuse a durable server as a fast one", func() {
 		config := newConfig(false)
 		_, stop, err := StartEmbedded(config)
