@@ -351,6 +351,14 @@
         "url": "/api/v1/profiles"
       }
     },
+    "labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "SQL column name to upstream metric label or dimension",
+      "title": "Metric labels",
+      "type": "object"
+    },
     "namespace": {
       "title": "Namespace",
       "type": "string",
@@ -947,6 +955,21 @@
           "then": {
             "$ref": "profiles/azureloganalytics.json"
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cloudwatchmetrics"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "profiles/cloudwatchmetrics.json"
+          }
         }
       ],
       "properties": {
@@ -970,6 +993,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -1049,7 +1075,8 @@
             "gcpcloudlogging",
             "bigquery",
             "k8s",
-            "azureloganalytics"
+            "azureloganalytics",
+            "cloudwatchmetrics"
           ],
           "title": "Type",
           "type": "string",
@@ -1059,6 +1086,7 @@
             "bigquery": "google-cloud",
             "clickhouse": "clickhouse",
             "cloudwatch": "aws",
+            "cloudwatchmetrics": "aws",
             "gcpcloudlogging": "google-cloud",
             "http": "globe",
             "jaeger": "activity",

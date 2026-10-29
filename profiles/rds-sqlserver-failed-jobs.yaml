@@ -1,0 +1,15 @@
+profile: rds-sqlserver-failed-jobs
+imports: [rds-sqlserver-metrics]
+provider:
+  type: cloudwatchmetrics
+  options:
+    statistic: Sum
+query: |
+  SELECT db_instance, 'failed_jobs_per_period' AS metric, 'count' AS unit,
+         min(value) AS min, avg(value) AS avg, max(value) AS max,
+         percentile(value, 50) AS p50, percentile(value, 90) AS p90,
+         percentile(value, 95) AS p95, percentile(value, 99) AS p99,
+         count(value) AS samples
+  FROM FailedSQLServerAgentJobsCount
+  GROUP BY db_instance
+  ORDER BY db_instance

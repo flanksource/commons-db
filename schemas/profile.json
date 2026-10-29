@@ -24,6 +24,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -196,6 +199,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -353,6 +359,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -459,6 +468,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -621,6 +633,204 @@
       "title": "Query provider: cloudwatch",
       "type": "object"
     },
+    "cloudwatchmetrics": {
+      "properties": {
+        "connection": {
+          "description": "Pick a saved connection or type an inline DSN/URL",
+          "title": "Connection",
+          "type": "string",
+          "x-clicky-lookup": {
+            "filter": "connection",
+            "multi": false,
+            "scope": {
+              "from": "provider.type",
+              "map": {
+                "azureloganalytics": [
+                  "azure"
+                ],
+                "bigquery": [
+                  "google_cloud"
+                ],
+                "clickhouse": [
+                  "clickhouse"
+                ],
+                "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
+                "gcpcloudlogging": [
+                  "google_cloud"
+                ],
+                "http": [
+                  "http"
+                ],
+                "jaeger": [
+                  "jaeger"
+                ],
+                "k8s": [
+                  "kubernetes"
+                ],
+                "loki": [
+                  "loki"
+                ],
+                "mysql": [
+                  "mysql"
+                ],
+                "opensearch": [
+                  "opensearch",
+                  "elasticsearch"
+                ],
+                "opentelemetry": [
+                  "opentelemetry"
+                ],
+                "postgres": [
+                  "postgres"
+                ],
+                "postgrest": [
+                  "http"
+                ],
+                "prometheus": [
+                  "prometheus"
+                ],
+                "sql": [
+                  "postgres",
+                  "mysql",
+                  "sql_server",
+                  "clickhouse",
+                  "sqlite"
+                ],
+                "sqlite": [
+                  "sqlite"
+                ],
+                "sqlserver": [
+                  "sql_server"
+                ]
+              },
+              "param": "types"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          }
+        },
+        "options": {
+          "properties": {
+            "concurrency": {
+              "default": 4,
+              "maximum": 32,
+              "minimum": 1,
+              "title": "Concurrent metric batches",
+              "type": "integer"
+            },
+            "dimensions": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "title": "Dimension filters",
+              "type": "object"
+            },
+            "endpoint": {
+              "title": "Endpoint",
+              "type": "string"
+            },
+            "language": {
+              "enum": [
+                "metrics",
+                "sql",
+                "metrics-insights"
+              ],
+              "title": "Language",
+              "type": "string"
+            },
+            "metrics": {
+              "items": {
+                "properties": {
+                  "dimensions": {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "name": {
+                    "title": "Name",
+                    "type": "string"
+                  },
+                  "namespace": {
+                    "title": "Namespace",
+                    "type": "string"
+                  },
+                  "statistic": {
+                    "title": "Statistic",
+                    "type": "string"
+                  },
+                  "unit": {
+                    "title": "Unit",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "namespace"
+                ],
+                "type": "object"
+              },
+              "title": "Explicit metric identities",
+              "type": "array"
+            },
+            "namespace": {
+              "title": "Namespace",
+              "type": "string"
+            },
+            "range": {
+              "properties": {
+                "end": {
+                  "description": "Date math, for example now",
+                  "title": "End",
+                  "type": "string"
+                },
+                "start": {
+                  "description": "Date math, for example now-1h",
+                  "title": "Start",
+                  "type": "string"
+                },
+                "step": {
+                  "description": "Sample step, for example 30s",
+                  "title": "Step",
+                  "type": "string"
+                }
+              },
+              "title": "Range",
+              "type": "object"
+            },
+            "region": {
+              "title": "Region",
+              "type": "string"
+            },
+            "statistic": {
+              "title": "Statistic",
+              "type": "string"
+            },
+            "unit": {
+              "title": "Unit",
+              "type": "string"
+            }
+          },
+          "title": "Options",
+          "type": "object"
+        },
+        "type": {
+          "const": "cloudwatchmetrics",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Query provider: cloudwatchmetrics",
+      "type": "object"
+    },
     "gcpcloudlogging": {
       "properties": {
         "connection": {
@@ -643,6 +853,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -817,6 +1030,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -939,6 +1155,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -1080,6 +1299,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -1205,6 +1427,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -1338,6 +1563,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -1444,6 +1672,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -2497,6 +2728,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -3592,6 +3826,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -3698,6 +3935,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -3808,6 +4048,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -3864,6 +4107,14 @@
         },
         "options": {
           "properties": {
+            "language": {
+              "enum": [
+                "promql",
+                "sql"
+              ],
+              "title": "Language",
+              "type": "string"
+            },
             "range": {
               "properties": {
                 "end": {
@@ -3937,6 +4188,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -4066,6 +4320,9 @@
                 "cloudwatch": [
                   "aws"
                 ],
+                "cloudwatchmetrics": [
+                  "aws"
+                ],
                 "gcpcloudlogging": [
                   "google_cloud"
                 ],
@@ -4167,6 +4424,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -4605,6 +4865,14 @@
         "searchParam": "__lookup_q",
         "url": "/api/v1/profiles"
       }
+    },
+    "labels": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "SQL column name to upstream metric label or dimension",
+      "title": "Metric labels",
+      "type": "object"
     },
     "namespace": {
       "title": "Namespace",
@@ -5202,6 +5470,21 @@
           "then": {
             "$ref": "#/$defs/azureloganalytics"
           }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "cloudwatchmetrics"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "$ref": "#/$defs/cloudwatchmetrics"
+          }
         }
       ],
       "properties": {
@@ -5225,6 +5508,9 @@
                   "clickhouse"
                 ],
                 "cloudwatch": [
+                  "aws"
+                ],
+                "cloudwatchmetrics": [
                   "aws"
                 ],
                 "gcpcloudlogging": [
@@ -5304,7 +5590,8 @@
             "gcpcloudlogging",
             "bigquery",
             "k8s",
-            "azureloganalytics"
+            "azureloganalytics",
+            "cloudwatchmetrics"
           ],
           "title": "Type",
           "type": "string",
@@ -5314,6 +5601,7 @@
             "bigquery": "google-cloud",
             "clickhouse": "clickhouse",
             "cloudwatch": "aws",
+            "cloudwatchmetrics": "aws",
             "gcpcloudlogging": "google-cloud",
             "http": "globe",
             "jaeger": "activity",
