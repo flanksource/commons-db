@@ -4,7 +4,7 @@ go 1.26.1
 
 require (
 	github.com/apache/arrow-go/v18 v18.5.2
-	github.com/flanksource/commons-db v0.1.66
+	github.com/flanksource/commons-db v0.1.67
 )
 
 require (
