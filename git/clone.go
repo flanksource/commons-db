@@ -14,6 +14,8 @@ import (
 // CloneOptions configures Clone. An empty Ref is the remote HEAD; Depth 0
 // fetches full history.
 type CloneOptions struct {
+	// Cache supplies an optional object cache; the clone remains independent.
+	Cache *Cache
 	Dir   string
 	Ref   string
 	Depth int
@@ -30,6 +32,9 @@ func Clone(ctx context.Context, repo *Repository, options CloneOptions) (Ref, er
 	if options.Depth < 0 {
 		return Ref{}, fmt.Errorf("invalid clone depth %d", options.Depth)
 	}
+	if options.Cache != nil && options.Cache.Root == "" {
+		return Ref{}, errors.New("git cache root is required")
+	}
 	ref, err := repo.Resolve(ctx, options.Ref)
 	if err != nil {
 		return Ref{}, err
@@ -37,7 +42,12 @@ func Clone(ctx context.Context, repo *Repository, options CloneOptions) (Ref, er
 	if err := prepareCloneDir(ctx, options.Dir, repo); err != nil {
 		return Ref{}, err
 	}
-	if ref.SHA, err = fetch(ctx, fetchOptions{Dir: options.Dir, Owner: repo, Repo: repo, Ref: ref, Depth: options.Depth}); err != nil {
+	if options.Cache != nil {
+		err = options.Cache.cloneCached(ctx, repo, ref, options)
+	} else {
+		ref.SHA, err = fetch(ctx, fetchOptions{Dir: options.Dir, Owner: repo, Repo: repo, Ref: ref, Depth: options.Depth})
+	}
+	if err != nil {
 		return Ref{}, err
 	}
 	if err := checkoutFetched(ctx, options.Dir, ref); err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	registry "github.com/flanksource/commons-db/git/internal/cache"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -41,7 +42,11 @@ func (c *Cache) mirrorPaths(repo *Repository) (mirrorPaths, error) {
 	if repo == nil {
 		return mirrorPaths{}, errors.New("git repository is required")
 	}
-	return newMirrorPaths(filepath.Join(c.Root, repo.URL.CacheKey())), nil
+	owner, err := registry.Load(c.Root, repo.URL.CacheKey())
+	if err != nil {
+		return mirrorPaths{}, err
+	}
+	return newMirrorPaths(filepath.Join(c.Root, owner)), nil
 }
 
 func (m mirrorPaths) pinned() (*sync.Map, error) {
