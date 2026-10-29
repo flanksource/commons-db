@@ -1,0 +1,54 @@
+profile: pod-metrics
+provider:
+  type: prometheus
+  connection: connection://prometheus
+  options:
+    language: sql
+    range: {start: now-6h, end: now, step: 30s}
+labels:
+  cluster: cluster
+  namespace: namespace
+  pod: pod
+  container: container
+  job: job
+columns:
+  - {name: cluster, type: string}
+  - {name: namespace, type: string}
+  - {name: pod, type: string}
+  - {name: metric, type: string}
+  - {name: unit, type: string}
+  - {name: min, type: number}
+  - {name: avg, type: number}
+  - {name: max, type: number}
+  - {name: p50, type: number}
+  - {name: p90, type: number}
+  - {name: p95, type: number}
+  - {name: p99, type: number}
+  - {name: samples, type: number}
+order:
+  - {column: cluster}
+  - {column: namespace}
+  - {column: pod}
+  - {column: metric, unique: true}
+query: |
+  WITH containers AS (
+  SELECT time, cluster, namespace, pod, container, 'cpu_usage' AS metric, 'millicores' AS unit, rate(value, '5m') * 1000 AS value
+  FROM container_cpu_usage_seconds_total
+  WHERE job = 'kubelet' AND container != '' AND container != 'POD'
+  UNION ALL
+  SELECT time, cluster, namespace, pod, container, 'memory_working_set' AS metric, 'MiB' AS unit, value / 1048576.0 AS value
+  FROM container_memory_working_set_bytes
+  WHERE job = 'kubelet' AND container != '' AND container != 'POD'
+  ), samples AS (
+  SELECT time, cluster, namespace, pod, metric, unit, sum(value) AS value
+  FROM containers GROUP BY time, cluster, namespace, pod, metric, unit
+  )
+  SELECT cluster, namespace, pod, metric, unit,
+         min(value) AS min, avg(value) AS avg, max(value) AS max,
+         percentile(value, 50) AS p50, percentile(value, 90) AS p90,
+         percentile(value, 95) AS p95, percentile(value, 99) AS p99,
+         count(value) AS samples
+  FROM samples
+  GROUP BY cluster, namespace, pod, metric, unit
+  ORDER BY cluster, namespace, pod, metric
+
