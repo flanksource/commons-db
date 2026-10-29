@@ -210,7 +210,10 @@ func (r *embeddedRuntime) reuseRunningServer(dsn string) (bool, error) {
 	if !listening {
 		return false, nil
 	}
-	if err := r.validateServer(dsn); err != nil {
+	// A FastTesting server is validated as disposable (fsync off), so any one
+	// on the port can host test databases, whichever data directory it was
+	// started from. A durable server must be this config's own cluster.
+	if err := r.validateServer(dsn, !r.config.FastTesting); err != nil {
 		return false, fmt.Errorf(
 			"port %d is occupied by an incompatible PostgreSQL server: %w",
 			r.port,
@@ -225,10 +228,10 @@ func (r *embeddedRuntime) validateStartedServer(dsn string) error {
 	if err := waitReady(dsn, 10*time.Second); err != nil {
 		return fmt.Errorf("embedded postgres never became ready: %w", err)
 	}
-	return r.validateServer(dsn)
+	return r.validateServer(dsn, true)
 }
 
-func (r *embeddedRuntime) validateServer(dsn string) error {
+func (r *embeddedRuntime) validateServer(dsn string, requireOwnDataDirectory bool) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, err := pgx.Connect(ctx, dsn)
@@ -237,8 +240,10 @@ func (r *embeddedRuntime) validateServer(dsn string) error {
 	}
 	defer conn.Close(context.Background()) //nolint:errcheck
 
-	if err := validateEmbeddedDataDirectory(ctx, conn, r.dataPath); err != nil {
-		return err
+	if requireOwnDataDirectory {
+		if err := validateEmbeddedDataDirectory(ctx, conn, r.dataPath); err != nil {
+			return err
+		}
 	}
 	if r.config.FastTesting {
 		if err := validateFastTestingServer(ctx, conn, r.stopCommand(), r.scaledTesting); err != nil {
