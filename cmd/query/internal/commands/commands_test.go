@@ -143,6 +143,8 @@ var _ = Describe("New", Ordered, func() {
 		replay, _, err := root.Find([]string{"profiles", "replay"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(replay.Name()).To(Equal("replay"))
+		Expect(root.PersistentFlags().Lookup("json")).NotTo(BeNil())
+		Expect(root.PersistentFlags().Lookup("no-progress")).NotTo(BeNil())
 		for _, flag := range []string{"param", "select", "target", "method", "url", "body", "header", "execute", "preview-hash"} {
 			Expect(replay.Flags().Lookup(flag)).NotTo(BeNil(), flag)
 		}

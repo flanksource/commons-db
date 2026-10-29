@@ -32,8 +32,9 @@ func (RunFlags) ClickyActionFlags() {}
 // next one. The paging facts travel with the rows rather than being printed and
 // discarded, so `--format json` carries the cursor a script needs to resume.
 type RunResult struct {
-	Profile string      `json:"profile"`
-	Rows    []query.Row `json:"rows"`
+	Metrics *query.MetricMetadata `json:"metrics,omitempty"`
+	Profile string                `json:"profile"`
+	Rows    []query.Row           `json:"rows"`
 
 	Limit  int `json:"limit,omitempty"`
 	Offset int `json:"offset,omitempty"`
@@ -85,6 +86,7 @@ func (s *Service) Run(ctx context.Context, name string, options RunFlags) (*RunR
 	}
 
 	return &RunResult{
+		Metrics:    response.metrics,
 		Profile:    resolved.Profile.Name,
 		Rows:       rows,
 		Limit:      request.limit,
@@ -160,6 +162,9 @@ func (r *RunResult) Table() api.TextTable {
 
 // Render formats the page in the given clicky format.
 func (r *RunResult) Render(format string) (string, error) {
+	if format == "json" || format == "yaml" {
+		return clicky.Format(r, clicky.FormatOptions{Format: format})
+	}
 	return clicky.Format(r.Table(), clicky.FormatOptions{Format: format})
 }
 
@@ -168,6 +173,11 @@ func (r *RunResult) Render(format string) (string, error) {
 // version of a truncated export.
 func (r *RunResult) Pretty() api.Text {
 	text := api.Text{Content: r.summary()}
+	if r.Metrics != nil {
+		for _, notice := range r.Metrics.Notices {
+			text.Children = append(text.Children, api.Text{Content: notice.Severity + ": " + notice.Message + "\n", Style: "text-yellow-500"})
+		}
+	}
 	if r.Truncated {
 		text.Children = append(text.Children, api.Text{
 			Content: "this read stopped short of the whole result; --all reads to the profile's export ceiling\n",
