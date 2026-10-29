@@ -14,6 +14,7 @@ import (
 // full SHA, is pushed in place of the local Branch, which then only names the
 // remote branch.
 type PushOptions struct {
+	tagRefs       map[string]string
 	Branch        string
 	RemoteBranch  string
 	Commit        string
@@ -51,7 +52,11 @@ func (o PushOptions) refspecs() ([]string, error) {
 		if err := ValidateTagName(tag); err != nil {
 			return nil, err
 		}
-		refspecs = append(refspecs, "refs/tags/"+tag+":refs/tags/"+tag)
+		source := tag
+		if mapped, ok := o.tagRefs[tag]; ok {
+			source = mapped
+		}
+		refspecs = append(refspecs, "refs/tags/"+source+":refs/tags/"+tag)
 	}
 	if len(refspecs) == 0 {
 		return nil, errors.New("push needs a branch or a tag")
@@ -78,6 +83,18 @@ func (o PushOptions) flags() ([]string, error) {
 
 // Push pushes the branch and tags to the worktree's repository.
 func (w *Worktree) Push(ctx context.Context, options PushOptions) error {
+	if _, shared := w.repo.Provider.(RemoteHistoryProvider); shared {
+		if options.Branch != "" {
+			if options.RemoteBranch == "" {
+				options.RemoteBranch = options.Branch
+			}
+			options.Branch = w.localName(options.Branch)
+		}
+		options.tagRefs = map[string]string{}
+		for _, tag := range options.Tags {
+			options.tagRefs[tag] = w.localName(tag)
+		}
+	}
 	return push(ctx, w.Dir, w.repo, options)
 }
 

@@ -109,6 +109,7 @@ func (w *Worktree) CreateBranch(ctx context.Context, name string) error {
 	if err := ValidateBranchName(name); err != nil {
 		return err
 	}
+	name = w.localName(name)
 	if _, err := run(ctx, command{dir: w.Dir, args: []string{"checkout", "--quiet", "-b", name}}); err != nil {
 		return err
 	}
@@ -170,6 +171,9 @@ func (w *Worktree) Commit(ctx context.Context, options CommitOptions) (string, e
 
 // CreateTag tags the current commit, annotated when Message is set.
 func (w *Worktree) CreateTag(ctx context.Context, options TagOptions) error {
+	if _, shared := w.repo.Provider.(RemoteHistoryProvider); shared {
+		return w.createSharedTag(ctx, options)
+	}
 	if err := createTag(ctx, w.Dir, "HEAD", options); err != nil {
 		return err
 	}
