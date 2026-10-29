@@ -30,6 +30,7 @@ import (
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/metrics"
 )
 
 // SQLite storage classes used for inferred column types.
@@ -69,6 +70,9 @@ func Merge(ctx context.Context, mergeSQL string, sets ...ResultSet) ([]query.Row
 		return nil, fmt.Errorf("failed to get sql.DB: %w", err)
 	}
 	defer func() { _ = sqlDB.Close() }()
+	if err := metrics.InitializeWorkspace(ctx, sqlDB); err != nil {
+		return nil, err
+	}
 
 	for _, set := range sets {
 		if err := createTable(gormDB, set); err != nil {
