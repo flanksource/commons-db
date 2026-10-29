@@ -90,6 +90,9 @@ func (t *AWSConnection) Populate(ctx ConnectionContext) error {
 
 		t.AccessKey.ValueStatic = connection.Username
 		t.SecretKey.ValueStatic = connection.Password
+		if t.SessionToken.IsEmpty() {
+			t.SessionToken.ValueStatic = connection.Properties["sessionToken"]
+		}
 		if t.Endpoint == "" {
 			t.Endpoint = connection.URL
 		}
@@ -161,7 +164,7 @@ func (t *AWSConnection) Client(ctx context.Context) (aws.Config, error) {
 	}
 
 	if !t.AccessKey.IsEmpty() {
-		options = append(options, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(t.AccessKey.ValueStatic, t.SecretKey.ValueStatic, "")))
+		options = append(options, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(t.AccessKey.ValueStatic, t.SecretKey.ValueStatic, t.SessionToken.ValueStatic)))
 	}
 
 	cfg, err := config.LoadDefaultConfig(ctx, options...)

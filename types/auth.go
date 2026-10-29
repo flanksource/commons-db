@@ -1,8 +1,6 @@
 package types
 
-import (
-	"strings"
-)
+import "strings"
 
 // +kubebuilder:object:generate=true
 type HTTPBasicAuth struct {
