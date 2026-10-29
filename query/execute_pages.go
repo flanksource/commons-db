@@ -210,6 +210,8 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}
 	req.Filters = filters
+	req.Labels = p.Labels
+	req.MetricMetadata = &MetricMetadata{}
 	req.Order = order
 	req.Diagnostics = page.Diagnostics
 	req.Inspection = page.Inspection
@@ -221,6 +223,7 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
 	}
 	scope := CursorScope{
+		Labels:     p.Labels,
 		Profile:    p.Name,
 		Provider:   p.Provider.Type,
 		Connection: req.Connection,
@@ -297,6 +300,9 @@ func providerPages(ctx context.Context, p Profile, req ProviderRequest, page Pag
 			return
 		}
 		for pg, err := range bufferedPages(rows, page) {
+			if req.MetricMetadata != nil && (len(req.MetricMetadata.Sources) > 0 || len(req.MetricMetadata.Notices) > 0) {
+				pg.Metrics = req.MetricMetadata
+			}
 			if !yield(pg, err) {
 				return
 			}

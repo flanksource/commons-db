@@ -52,6 +52,8 @@ type Profile struct {
 	// provider's raw row keys are used.
 	Columns []ColumnDef `json:"columns,omitempty" yaml:"columns,omitempty"`
 
+	Labels map[string]string `json:"labels,omitempty" yaml:"labels,omitempty"`
+
 	// Presenter restores rich typed cells for runtime-generated profiles. It is
 	// deliberately not serializable: authored profiles remain data-only.
 	Presenter RowPresenter `json:"-" yaml:"-"`

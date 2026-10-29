@@ -89,6 +89,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	req.Filters = filters
+	req.Labels = p.Labels
 	// The rendered query and options are what run, so they are what must be
 	// proven read-only — a templated options.method would otherwise slip a
 	// non-GET request past the check.

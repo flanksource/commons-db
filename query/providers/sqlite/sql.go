@@ -15,6 +15,8 @@ import (
 	"math"
 	"strconv"
 
+	_ "github.com/flanksource/commons-db/query/metrics"
+
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
