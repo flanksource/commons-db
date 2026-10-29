@@ -1,0 +1,20 @@
+rule_files: []
+evaluation_interval: 1m
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'cpu{container="a"}'
+        values: '1000 1100 5'
+      - series: 'cpu{container="b"}'
+        values: '1000000 1000000 1001100'
+    promql_expr_test:
+      - expr: round(sum(rate(cpu[2m])), 0.001)
+        eval_time: 2m1s
+        exp_samples:
+          - labels: '{}'
+            value: 18.417
+      - expr: round(rate((sum(cpu))[2m:1m]), 0.001)
+        eval_time: 2m1s
+        exp_samples:
+          - labels: '{}'
+            value: 0.083

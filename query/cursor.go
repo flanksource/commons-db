@@ -142,6 +142,7 @@ func (p CursorPosition) IsZero() bool { return len(p.Keys) == 0 }
 // request a cursor is checked against is one the cursor helped build, and
 // checking against it would be circular.
 type CursorScope struct {
+	Labels     map[string]string
 	Profile    string
 	Provider   string
 	Connection string
@@ -522,11 +523,13 @@ func (s CursorScope) fingerprint() (string, error) {
 
 func (s CursorScope) inputFingerprint() (string, error) {
 	encoded, err := json.Marshal(struct {
-		Provider   string         `json:"provider"`
-		Connection string         `json:"connection"`
-		Query      string         `json:"query"`
-		Options    map[string]any `json:"options"`
+		Labels     map[string]string `json:"labels,omitempty"`
+		Provider   string            `json:"provider"`
+		Connection string            `json:"connection"`
+		Query      string            `json:"query"`
+		Options    map[string]any    `json:"options"`
 	}{
+		Labels:     s.Labels,
 		Provider:   s.Provider,
 		Connection: s.Connection,
 		Query:      s.Query,

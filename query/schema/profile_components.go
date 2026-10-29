@@ -26,6 +26,7 @@ var providerTypeIcons = map[string]string{
 	"jaeger":        "activity",
 
 	"cloudwatch":        "aws",
+	"cloudwatchmetrics": "aws",
 	"bigquery":          "google-cloud",
 	"gcpcloudlogging":   "google-cloud",
 	"k8s":               "kubernetes",
@@ -58,6 +59,19 @@ func ProfileComponents() map[string]Schema {
 func providerOptions(typ string) Schema {
 	props := Schema{}
 	switch typ {
+	case "cloudwatchmetrics":
+		props["concurrency"] = Schema{"type": "integer", "title": "Concurrent metric batches", "minimum": 1, "maximum": 32, "default": 4}
+		props["language"] = Schema{"type": "string", "title": "Language", "enum": []string{"metrics", "sql", "metrics-insights"}}
+		for _, key := range []string{"region", "endpoint", "namespace", "statistic", "unit"} {
+			props[key] = strProp(titleCase(key), "")
+		}
+		props["range"] = providerOptions("prometheus")["properties"].(Schema)["range"]
+		props["dimensions"] = Schema{"type": "object", "title": "Dimension filters", "additionalProperties": Schema{"type": "string"}}
+		metricProps := Schema{"dimensions": Schema{"type": "object", "additionalProperties": Schema{"type": "string"}}}
+		for _, key := range []string{"name", "namespace", "statistic", "unit"} {
+			metricProps[key] = strProp(titleCase(key), "")
+		}
+		props["metrics"] = Schema{"type": "array", "title": "Explicit metric identities", "items": Schema{"type": "object", "required": []string{"name", "namespace"}, "properties": metricProps}}
 	case "sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite":
 		addDatabaseOptions(typ, props)
 	case "http", "prometheus", "postgrest", "loki", "opensearch", "opentelemetry", "jaeger":
@@ -98,6 +112,7 @@ func addQueryAPIOptions(typ string, props Schema) {
 		props["body"] = Schema{"type": "string", "title": "Body", "format": "textarea"}
 		props["jsonpath"] = strProp("JSONPath", "Extract rows from a wrapped JSON response")
 	case "prometheus":
+		props["language"] = Schema{"type": "string", "title": "Language", "enum": []string{"promql", "sql"}}
 		props["url"] = inlineURLProp("URL", "Inline Prometheus URL used instead of a saved connection")
 		props["range"] = Schema{
 			"type":  "object",

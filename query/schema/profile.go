@@ -41,7 +41,7 @@ var providerTypes = []string{
 	"sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite",
 	"http", "prometheus", "postgrest", "loki", "opensearch", "jaeger",
 	"opentelemetry", "cloudwatch", "gcpcloudlogging", "bigquery", "k8s",
-	"azureloganalytics",
+	"azureloganalytics", "cloudwatchmetrics",
 }
 
 // providerConnectionTypes maps each profile provider type to the connection
@@ -67,6 +67,7 @@ var providerConnectionTypes = map[string][]string{
 	"jaeger":        {models.ConnectionTypeJaeger},
 
 	"cloudwatch":        {models.ConnectionTypeAWS},
+	"cloudwatchmetrics": {models.ConnectionTypeAWS},
 	"bigquery":          {models.ConnectionTypeGCP},
 	"gcpcloudlogging":   {models.ConnectionTypeGCP},
 	"k8s":               {models.ConnectionTypeKubernetes},
@@ -409,6 +410,7 @@ func ProfileSource() Schema {
 				},
 			},
 			"columns": Schema{"type": "array", "title": "Columns", "x-layout": "table", "items": profileColumnSchema()},
+			"labels":  Schema{"type": "object", "title": "Metric labels", "description": "SQL column name to upstream metric label or dimension", "additionalProperties": Schema{"type": "string"}},
 			"aliases": Schema{"type": "array", "title": "Aliases", "x-layout": "table", "items": profileAliasSchema()},
 			"ignore":  Schema{"type": "array", "title": "Ignore", "items": Schema{"type": "string"}},
 			"filters": Schema{"type": "array", "title": "Filters", "x-array-display": "accordion", "items": profileFilterSchema()},

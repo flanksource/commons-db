@@ -171,7 +171,8 @@ func (t *Total) Relation() string {
 // is something the source can hand back, whereas a position between rows of one
 // fetch is something it would have to be asked to invent.
 type Page struct {
-	Rows []Row
+	Metrics *MetricMetadata `json:"metrics,omitempty"`
+	Rows    []Row
 
 	// Styles are the evaluated cell styles for Rows, positionally parallel to
 	// it. Nil when no column declares a Style.

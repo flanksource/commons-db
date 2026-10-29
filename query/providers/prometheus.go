@@ -30,6 +30,7 @@ func (prometheusProvider) Type() string { return "prometheus" }
 
 // prometheusOptions are decoded from ProviderRequest.Options.
 type prometheusOptions struct {
+	Language string `json:"language,omitempty"`
 	// URL is an inline Prometheus address used when no stored connection is referenced.
 	URL string `json:"url,omitempty"`
 
@@ -104,7 +105,13 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 	if err != nil {
 		return nil, fmt.Errorf("failed to create prometheus client: %w", err)
 	}
-	client := promV1.NewAPI(apiClient)
+	client := annotatedPrometheus{API: promV1.NewAPI(apiClient), client: apiClient, metadata: req.MetricMetadata}
+	if opts.Language == "sql" {
+		return executePrometheusSQL(ctx, req, client, opts)
+	}
+	if opts.Language != "" && opts.Language != "promql" {
+		return nil, fmt.Errorf("unsupported prometheus language %q", opts.Language)
+	}
 
 	result, err := runPromQL(ctx, client, req.Query, opts.Range)
 	if err != nil {
@@ -160,12 +167,19 @@ func transformPrometheusResult(result model.Value, selectLabels []string) ([]que
 	switch v := result.(type) {
 	case model.Vector:
 		for _, sample := range v {
+			if sample.Histogram != nil {
+				return nil, fmt.Errorf("raw native histograms are unsupported; use histogram_quantile or histogram_avg in PromQL")
+			}
 			row := rowFromMetric(sample.Metric, selectLabels)
+			row["timestamp"] = sample.Timestamp.Time()
 			row["value"] = float64(sample.Value)
 			results = append(results, row)
 		}
 	case model.Matrix:
 		for _, sampleStream := range v {
+			if len(sampleStream.Histograms) > 0 {
+				return nil, fmt.Errorf("raw native histograms are unsupported; use histogram_quantile or histogram_avg in PromQL")
+			}
 			for _, samplePair := range sampleStream.Values {
 				row := rowFromMetric(sampleStream.Metric, selectLabels)
 				row["timestamp"] = samplePair.Timestamp.Time()
