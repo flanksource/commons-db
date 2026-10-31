@@ -28,7 +28,7 @@ func (p *azureProvider) pipelineQuery(ctx context.Context, options PipelineOptio
 		return nil, err
 	}
 	if repo.ID == "" {
-		return nil, fmt.Errorf("Azure repository %q has no ID", options.Repository.Name)
+		return nil, fmt.Errorf("azure repository %q has no ID", options.Repository.Name)
 	}
 	query := url.Values{"api-version": {azureAPIVersion}, "repositoryId": {repo.ID}, "repositoryType": {"TfsGit"}, "$top": {strconv.Itoa(options.Limit)}}
 	if options.Cursor != "" {
@@ -62,7 +62,7 @@ func (p *azureProvider) ListPipelines(ctx context.Context, options PipelineOptio
 	page := Page[Pipeline]{Items: make([]Pipeline, 0, len(response.Value)), NextCursor: headers.Get("x-ms-continuationtoken")}
 	for _, definition := range response.Value {
 		if definition.ID <= 0 || definition.Name == "" {
-			return Page[Pipeline]{}, fmt.Errorf("Azure pipeline is missing ID or name")
+			return Page[Pipeline]{}, fmt.Errorf("azure pipeline is missing ID or name")
 		}
 		page.Items = append(page.Items, Pipeline{ID: strconv.FormatInt(definition.ID, 10), Name: definition.Name, Path: definition.Path, URL: definition.Links.Web.Href})
 	}
@@ -115,7 +115,7 @@ func (p *azureProvider) ListPipelineExecutions(ctx context.Context, options Pipe
 	page := Page[PipelineExecution]{Items: make([]PipelineExecution, 0, len(response.Value)), NextCursor: headers.Get("x-ms-continuationtoken")}
 	for _, run := range response.Value {
 		if run.ID <= 0 || strconv.FormatInt(run.Definition.ID, 10) != options.Pipeline || !fullSHAPattern.MatchString(run.SourceVersion) {
-			return Page[PipelineExecution]{}, fmt.Errorf("Azure build %d has invalid definition or source SHA", run.ID)
+			return Page[PipelineExecution]{}, fmt.Errorf("azure build %d has invalid definition or source SHA", run.ID)
 		}
 		page.Items = append(page.Items, PipelineExecution{ID: strconv.FormatInt(run.ID, 10), Pipeline: options.Pipeline,
 			Number: run.BuildNumber, Name: run.BuildNumber, Branch: run.SourceBranch, SHA: run.SourceVersion,

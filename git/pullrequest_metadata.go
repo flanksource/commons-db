@@ -64,7 +64,7 @@ type WebRefOptions struct {
 
 func (u RepoURL) RefWebURL(options WebRefOptions) (string, error) {
 	if options.Ref == "" || (options.Kind != RefBranch && options.Kind != RefSHA) {
-		return "", fmt.Errorf("Git web link needs a branch or commit, got %q %q", options.Kind, options.Ref)
+		return "", fmt.Errorf("git web link needs a branch or commit, got %q %q", options.Kind, options.Ref)
 	}
 	if options.Repository != "" {
 		owner, name, ok := strings.Cut(options.Repository, "/")

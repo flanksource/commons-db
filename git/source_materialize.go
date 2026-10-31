@@ -73,7 +73,7 @@ func (s *PreparedSource) streamBlobs(ctx context.Context, root *os.Root, entries
 	}
 	return readObjectBatch(ctx, objectBatchOptions{Dir: s.gitDir, Env: s.env, Objects: objects, Read: func(index int, blob batchBlob, content io.Reader) error {
 		if blob.Missing {
-			return fmt.Errorf("Git source blob %q is missing", entries[index].path)
+			return fmt.Errorf("git source blob %q is missing", entries[index].path)
 		}
 		return writeSourceEntry(root, content, entries[index], blob.Size)
 	}})

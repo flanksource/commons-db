@@ -79,7 +79,7 @@ func (u RepoURL) SourceRepository(name string) (RepoURL, error) {
 	path := "/" + name
 	if u.Provider == models.ConnectionTypeAzureDevops {
 		if len(parts) != 2 {
-			return RepoURL{}, fmt.Errorf("Azure PR source must be project/repository, got %q", name)
+			return RepoURL{}, fmt.Errorf("azure PR source must be project/repository, got %q", name)
 		}
 		u.Project, u.Name = parts[0], parts[1]
 		return ParseRepoURL(u.azureWebBase(), u.Provider)

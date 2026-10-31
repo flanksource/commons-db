@@ -81,6 +81,7 @@ var _ = Describe("Git server timing", func() {
 		root := fixtureTempDir()
 		work := filepath.Join(root, "work")
 		gitFixture(root, "init", "-q", "-b", "main", work)
+		gitFixture(work, "config", "maintenance.autoDetach", "false")
 		for i := range 150 {
 			writeFixtureFile(work, fmt.Sprintf("rules/rule-%03d.xml", i), strings.Repeat(fmt.Sprintf("<Rule id=\"%d\"/>\n", i), 64))
 		}

@@ -2,6 +2,7 @@ package otel
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -10,6 +11,9 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	api "go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 func TestTracer(t *testing.T) {
@@ -41,6 +45,15 @@ func emitSpan() {
 	span.End()
 }
 
+type recordingProcessor struct {
+	started, ended int
+}
+
+func (p *recordingProcessor) OnStart(context.Context, sdktrace.ReadWriteSpan) { p.started++ }
+func (p *recordingProcessor) OnEnd(sdktrace.ReadOnlySpan)                     { p.ended++ }
+func (p *recordingProcessor) Shutdown(context.Context) error                  { return nil }
+func (p *recordingProcessor) ForceFlush(context.Context) error                { return nil }
+
 var _ = Describe("Tracer", func() {
 	var sink *collector
 	var server *httptest.Server
@@ -71,17 +84,44 @@ var _ = Describe("Tracer", func() {
 		Expect(err).To(MatchError(ContainSubstring("invalid opentelemetry collector url")))
 	})
 
-	It("Init keeps its signature and flushes spans on the returned shutdown", func() {
-		shutdown := (Tracer{ServiceName: "test", CollectorURL: server.URL}).Init()
+	It("Init flushes spans on the returned shutdown", func() {
+		shutdown, err := (Tracer{ServiceName: "test", CollectorURL: server.URL}).Init()
+		Expect(err).NotTo(HaveOccurred())
 		emitSpan()
 		shutdown()
 		Expect(sink.received()).To(Equal([]string{"/v1/traces"}))
 	})
 
-	It("Init returns a no-op shutdown when setup fails", func() {
-		shutdown := (Tracer{ServiceName: "test", CollectorURL: "http://bad host:4318"}).Init()
-		Expect(shutdown).NotTo(BeNil())
-		shutdown()
-		Expect(sink.received()).To(BeEmpty())
+	It("Init returns setup errors", func() {
+		shutdown, err := (Tracer{ServiceName: "test", CollectorURL: "http://bad host:4318"}).Init()
+		Expect(shutdown).To(BeNil())
+		Expect(err).To(MatchError(ContainSubstring("invalid opentelemetry collector url")))
+	})
+
+	It("calls registered processors for global spans", func() {
+		processor := &recordingProcessor{}
+		exporter := tracetest.NewInMemoryExporter()
+		shutdown, err := (Tracer{ServiceName: "test", Exporter: exporter, SpanProcessors: []sdktrace.SpanProcessor{processor}}).Init()
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(shutdown)
+		emitSpan()
+		Expect([]int{processor.started, processor.ended}).To(Equal([]int{1, 1}))
+	})
+
+	It("returns exporter and resource initialization errors", func() {
+		failure := errors.New("initialization failed")
+		for _, test := range []struct {
+			name     string
+			exporter func() (sdktrace.SpanExporter, error)
+			resource func() (*resource.Resource, error)
+		}{
+			{"exporter", func() (sdktrace.SpanExporter, error) { return nil, failure }, func() (*resource.Resource, error) { return resource.Empty(), nil }},
+			{"resource", func() (sdktrace.SpanExporter, error) { return tracetest.NewInMemoryExporter(), nil }, func() (*resource.Resource, error) { return nil, failure }},
+		} {
+			shutdown, err := (Tracer{}).init(test.exporter, test.resource)
+			Expect(shutdown).To(BeNil())
+			Expect(err).To(MatchError(ContainSubstring(test.name)))
+			Expect(errors.Is(err, failure)).To(BeTrue())
+		}
 	})
 })

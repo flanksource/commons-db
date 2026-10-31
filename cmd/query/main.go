@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/flanksource/commons-db/cmd/query/internal/commands"
+	_ "github.com/flanksource/commons/logger/yamlcolor"
 )
 
 var (

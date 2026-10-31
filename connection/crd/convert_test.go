@@ -43,6 +43,30 @@ var _ = Describe("converting a typed connection", func() {
 				Type: models.ConnectionTypePostgres, URL: "postgres://db/app?sslmode=disable",
 				Properties: types.JSONStringMap{"host": "", "database": "", "insecure_tls": "true"},
 			}),
+		Entry("postgres from a url with a query, TLS off appended to it",
+			"  postgres:\n    url: {value: 'postgres://db/app?application_name=acme'}\n    insecureTLS: true\n",
+			models.Connection{
+				Type: models.ConnectionTypePostgres, URL: "postgres://db/app?application_name=acme&sslmode=disable",
+				Properties: types.JSONStringMap{"host": "", "database": "", "insecure_tls": "true"},
+			}),
+		Entry("mysql from its parts, with TLS off",
+			"  mysql:\n    host: {value: db:3306}\n    database: {value: orders}\n    insecureTLS: true\n",
+			models.Connection{
+				Type: models.ConnectionTypeMySQL, URL: "mysql://$(username):$(password)@$(properties.host)/$(properties.database)?sslMode=disabled",
+				Properties: types.JSONStringMap{"host": "db:3306", "database": "orders", "insecure_tls": "true"},
+			}),
+		Entry("mongo from its parts, its replica set and TLS as the query",
+			"  mongo:\n    host: {value: db:27017}\n    database: {value: orders}\n    replicaSet: rs0\n    insecureTLS: true\n",
+			models.Connection{
+				Type: models.ConnectionTypeMongo, URL: "mongodb://$(username):$(password)@$(properties.host)/$(properties.database)?replicaSet=rs0&tls=true",
+				Properties: types.JSONStringMap{"host": "db:27017", "database": "orders", "replica_set": "rs0", "insecure_tls": "true"},
+			}),
+		Entry("slack, its icon and color kept apart",
+			"  slack:\n    token: {value: xoxb}\n    channel: C0123\n    color: good\n    icon: ':robot:'\n",
+			models.Connection{
+				Type: models.ConnectionTypeSlack, URL: "slack://$(password)@$(username)", Username: "C0123", Password: "xoxb",
+				Properties: types.JSONStringMap{"BotName": "", "Icon": ":robot:", "ThreadTS": "", "Title": "", "Color": "good"},
+			}),
 		Entry("loki",
 			"  loki:\n    url: http://loki:3100\n    username: {value: admin}\n",
 			models.Connection{Type: models.ConnectionTypeLoki, URL: "http://loki:3100", Username: "admin"}),
@@ -81,10 +105,9 @@ var _ = Describe("converting a typed connection", func() {
 	})
 
 	It("keeps a connection that names its type the deprecated way", func() {
-		connection, err := crd.ToModel(decode("kind: Connection\nmetadata: {name: conn}\nspec:\n  type: postgres\n  url: {value: 'postgres://db'}\n"))
+		connection, err := crd.ToModel(decode("kind: Connection\nmetadata: {name: conn}\nspec:\n  type: postgres\n  url: {value: 'postgres://db'}\n  insecure_tls: true\n"))
 		Expect(err).ToNot(HaveOccurred())
-		Expect(connection.Type).To(Equal("postgres"))
-		Expect(connection.URL).To(Equal("postgres://db"))
+		Expect(connection).To(Equal(models.Connection{Name: "conn", Type: "postgres", URL: "postgres://db", InsecureTLS: true}))
 	})
 
 	DescribeTable("FromModel is the resource ToModel reads back as the same persisted connection",

@@ -182,7 +182,7 @@ func connectionFromDatabaseSpec(spec ConnectionSpec, dbObj *models.Connection) {
 		dbObj.Type = models.ConnectionTypeMongo
 		dbObj.URL = spec.Mongo.URL.String()
 		if dbObj.URL == "" {
-			dbObj.URL = "mongodb://$(username):$(password)@$(properties.host)/?$(properties.database)"
+			dbObj.URL = "mongodb://$(username):$(password)@$(properties.host)/$(properties.database)"
 		}
 		queryParams := url.Values{}
 		if spec.Mongo.ReplicaSet != "" {
@@ -191,9 +191,7 @@ func connectionFromDatabaseSpec(spec ConnectionSpec, dbObj *models.Connection) {
 		if spec.Mongo.InsecureTLS {
 			queryParams.Set("tls", "true")
 		}
-		if len(queryParams) > 0 {
-			dbObj.URL += queryParams.Encode()
-		}
+		dbObj.URL = appendQuery(dbObj.URL, queryParams.Encode())
 		dbObj.Username = spec.Mongo.Username.String()
 		dbObj.Password = spec.Mongo.Password.String()
 		dbObj.Properties = map[string]string{
@@ -229,7 +227,7 @@ func connectionFromDatabaseSpec(spec ConnectionSpec, dbObj *models.Connection) {
 			dbObj.URL = "mysql://$(username):$(password)@$(properties.host)/$(properties.database)"
 		}
 		if spec.MySQL.InsecureTLS {
-			dbObj.URL += "sslMode=disabled"
+			dbObj.URL = appendQuery(dbObj.URL, "sslMode=disabled")
 		}
 		dbObj.Username = spec.MySQL.Username.String()
 		dbObj.Password = spec.MySQL.Password.String()
@@ -247,7 +245,7 @@ func connectionFromDatabaseSpec(spec ConnectionSpec, dbObj *models.Connection) {
 			dbObj.URL = "postgres://$(username):$(password)@$(properties.host)/$(properties.database)"
 		}
 		if spec.Postgres.InsecureTLS {
-			dbObj.URL += "?sslmode=disable"
+			dbObj.URL = appendQuery(dbObj.URL, "sslmode=disable")
 		}
 		dbObj.Username = spec.Postgres.Username.String()
 		dbObj.Password = spec.Postgres.Password.String()
@@ -284,6 +282,19 @@ func connectionFromDatabaseSpec(spec ConnectionSpec, dbObj *models.Connection) {
 		dbObj.Properties = map[string]string{
 			"port": spec.SMB.Port.String(),
 		}
+	}
+}
+
+// appendQuery is rawURL with the encoded query appended after its existing
+// query, if any.
+func appendQuery(rawURL, query string) string {
+	switch {
+	case query == "":
+		return rawURL
+	case strings.Contains(rawURL, "?"):
+		return rawURL + "&" + query
+	default:
+		return rawURL + "?" + query
 	}
 }
 
@@ -329,7 +340,7 @@ func connectionFromNotificationSpec(spec ConnectionSpec, dbObj *models.Connectio
 		dbObj.Password = spec.Slack.Token.String()
 		dbObj.Properties = map[string]string{
 			"BotName":  spec.Slack.BotName,
-			"Icon":     spec.Slack.Color,
+			"Icon":     spec.Slack.Icon,
 			"ThreadTS": spec.Slack.ThreadTS,
 			"Title":    spec.Slack.Title,
 			"Color":    spec.Slack.Color,

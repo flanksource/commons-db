@@ -10,8 +10,11 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/flanksource/clicky/formatters"
+	"github.com/flanksource/clicky/formatters/excel"
+	"github.com/flanksource/clicky/formatters/pdf"
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -38,7 +41,13 @@ type execHandler struct {
 	prepare profilestore.BeforeExecuteFunc
 }
 
+var registerExportFormats = sync.OnceFunc(func() {
+	excel.Use()
+	pdf.Use()
+})
+
 func newExecHandler(prefix string, ctx dbcontext.Context, store profilestore.Store, next http.Handler) *execHandler {
+	registerExportFormats()
 	return &execHandler{prefix: strings.TrimRight(prefix, "/"), ctx: ctx, store: store, next: next}
 }
 

@@ -17,8 +17,8 @@ import (
 type CNRMConnection struct {
 	GKE GKEConnection `json:"gke" yaml:"gke"`
 
-	ClusterResource          string `json:"clusterResource"`
-	ClusterResourceNamespace string `json:"clusterResourceNamespace"`
+	ClusterResource          string `json:"clusterResource" yaml:"clusterResource"`
+	ClusterResourceNamespace string `json:"clusterResourceNamespace" yaml:"clusterResourceNamespace"`
 }
 
 func (t *CNRMConnection) Populate(ctx ConnectionContext) error {

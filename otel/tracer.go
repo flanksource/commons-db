@@ -20,10 +20,12 @@ import (
 )
 
 type Tracer struct {
-	ServiceName  string
-	CollectorURL string
-	Insecure     bool
-	Samplers     map[string]sdktrace.Sampler
+	ServiceName    string
+	CollectorURL   string
+	Insecure       bool
+	Samplers       map[string]sdktrace.Sampler
+	SpanProcessors []sdktrace.SpanProcessor
+	Exporter       sdktrace.SpanExporter
 }
 
 func (tracer Tracer) Sample(name string, perc float64) Tracer {
@@ -31,13 +33,12 @@ func (tracer Tracer) Sample(name string, perc float64) Tracer {
 	return tracer
 }
 
-// Init installs the global tracer provider, logging any setup failure and
-// returning a no-op shutdown in that case. Use Start to receive the error.
-func (tracer Tracer) Init() func() {
+// Init installs the global tracer provider. The returned shutdown flushes
+// buffered spans, logging a failure to do so.
+func (tracer Tracer) Init() (func(), error) {
 	shutdown, err := tracer.Start(context.Background())
 	if err != nil {
-		logger.Errorf("%v", err)
-		return func() {}
+		return nil, err
 	}
 	return func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
@@ -45,32 +46,52 @@ func (tracer Tracer) Init() func() {
 		if err := shutdown(ctx); err != nil {
 			logger.Errorf("%s", err)
 		}
-	}
+	}, nil
 }
 
 // Start installs the global tracer provider and returns a shutdown that
 // flushes buffered spans before closing the exporter.
 func (tracer Tracer) Start(ctx context.Context) (func(context.Context) error, error) {
+	return tracer.init(func() (sdktrace.SpanExporter, error) {
+		return tracer.newExporter(ctx)
+	}, func() (*resource.Resource, error) {
+		return resource.New(ctx, resource.WithAttributes(attribute.String("service.name", tracer.ServiceName)))
+	})
+}
+
+func (tracer Tracer) newExporter(ctx context.Context) (sdktrace.SpanExporter, error) {
+	if tracer.Exporter != nil {
+		return tracer.Exporter, nil
+	}
 	client, err := tracer.client()
 	if err != nil {
 		return nil, err
 	}
-	exporter, err := otlptrace.New(ctx, client)
+	return otlptrace.New(ctx, client)
+}
+
+func (tracer Tracer) init(newExporter func() (sdktrace.SpanExporter, error), newResource func() (*resource.Resource, error)) (func(context.Context) error, error) {
+	exporter, err := newExporter()
 	if err != nil {
-		return nil, fmt.Errorf("failed to create opentelemetry exporter: %w", err)
+		return nil, fmt.Errorf("create opentelemetry exporter: %w", err)
 	}
-	resources, err := resource.New(ctx,
-		resource.WithAttributes(attribute.String("service.name", tracer.ServiceName)),
-	)
+	resources, err := newResource()
 	if err != nil {
-		return nil, fmt.Errorf("could not set opentelemetry resources: %w", err)
+		if shutdownErr := exporter.Shutdown(context.Background()); shutdownErr != nil {
+			return nil, fmt.Errorf("create opentelemetry resource: %w; shutdown exporter: %w", err, shutdownErr)
+		}
+		return nil, fmt.Errorf("create opentelemetry resource: %w", err)
 	}
 
-	provider := sdktrace.NewTracerProvider(
+	options := []sdktrace.TracerProviderOption{
 		sdktrace.WithSampler(NewCustomSampler(sdktrace.AlwaysSample(), tracer.Samplers)),
 		sdktrace.WithBatcher(exporter),
 		sdktrace.WithResource(resources),
-	)
+	}
+	for _, processor := range tracer.SpanProcessors {
+		options = append(options, sdktrace.WithSpanProcessor(processor))
+	}
+	provider := sdktrace.NewTracerProvider(options...)
 	otel.SetTracerProvider(provider)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	return provider.Shutdown, nil

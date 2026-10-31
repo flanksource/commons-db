@@ -95,7 +95,8 @@ func (s *Store) ListConnections() ([]*models.Connection, error) {
 // ResolveConnection is the connection reference names: its id,
 // connection://name, connection://namespace/name, the deprecated
 // connection://type/namespace/name, or a bare name. A connection with no
-// namespace answers any namespace. It is (nil, nil) for a reference the store
+// namespace answers any namespace a reference names that defines no connection
+// of that name. It is (nil, nil) for a reference the store
 // does not define, and an error for a name more than one namespace defines.
 // A file that defines no usable connection resolves to a connection carrying
 // the problem in Warnings, which dbcontext.HydrateConnection refuses to use.
@@ -128,6 +129,12 @@ func (s *Store) find(reference string, entries func() ([]Entry, error)) (*Entry,
 		case idErr == nil && read.Connection.ID == id,
 			named && read.Connection.Name == name && (namespace == "" || read.Connection.Namespace == "" || read.Connection.Namespace == namespace):
 			matches = append(matches, read)
+		}
+	}
+	if namespace != "" {
+		exact := slices.DeleteFunc(slices.Clone(matches), func(match Entry) bool { return match.Connection.Namespace != namespace })
+		if len(exact) > 0 {
+			matches = exact
 		}
 	}
 	switch len(matches) {
@@ -186,6 +193,9 @@ func (s *Store) Save(layer string, resource *crd.Connection) error {
 	}
 	if resource.Name == "" {
 		return fmt.Errorf("save connection: metadata.name is required")
+	}
+	if resource.Name != filepath.Base(resource.Name) || strings.HasPrefix(resource.Name, ".") {
+		return fmt.Errorf("save connection: metadata.name %q must be a plain file name that does not start with a dot", resource.Name)
 	}
 	resource.APIVersion, resource.Kind = crd.APIVersion, crd.Kind
 	if _, err := crd.ToModel(resource); err != nil {

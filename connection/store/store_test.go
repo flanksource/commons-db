@@ -182,6 +182,32 @@ var _ = Describe("a layered connection store", func() {
 		Expect(resolve("connection://b/db").Namespace).To(Equal("b"))
 	})
 
+	It("prefers the connection of the namespace a reference names over one with no namespace, resolving and saving", func() {
+		write(app, "orders.yaml", header+"metadata: {name: orders}\nspec: {loki: {url: 'http://any'}}\n")
+		shop := write(app, "shop-orders.yaml", header+"metadata: {name: orders, namespace: shop}\nspec: {loki: {url: 'http://shop'}}\n")
+		Expect(resolve("connection://shop/orders").URL).To(Equal("http://shop"))
+		Expect(resolve("connection://other/orders").URL).To(Equal("http://any"))
+
+		resource := &crd.Connection{
+			ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "shop"},
+			Spec:       crd.ConnectionSpec{Loki: &crd.ConnectionLoki{URL: "http://shop-2"}},
+		}
+		Expect(connections.Save(store.LayerApp, resource)).To(Succeed())
+		Expect(resolve("connection://shop/orders").Source).To(Equal("file://" + shop))
+		Expect(resolve("connection://shop/orders").URL).To(Equal("http://shop-2"))
+	})
+
+	DescribeTable("refuses to save a connection whose name is not a plain file name",
+		func(name string) {
+			resource := &crd.Connection{ObjectMeta: metav1.ObjectMeta{Name: name}, Spec: crd.ConnectionSpec{Loki: &crd.ConnectionLoki{URL: "http://loki"}}}
+			Expect(connections.Save(store.LayerCWD, resource)).To(MatchError(ContainSubstring("must be a plain file name")))
+			Expect(filepath.Join(cwd, "..", "escaped.yaml")).ToNot(BeAnExistingFile())
+		},
+		Entry("one that climbs out of the layer", "../escaped"),
+		Entry("one in a subdirectory", "nested/logs"),
+		Entry("a hidden one the layer would skip", ".logs"),
+	)
+
 	It("saves a typed connection into a layer, readable by its owner alone, and deletes it", func() {
 		resource := &crd.Connection{
 			ObjectMeta: metav1.ObjectMeta{Name: "logs"},
