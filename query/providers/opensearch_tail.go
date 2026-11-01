@@ -39,7 +39,7 @@ const openSearchDefaultTailPoll = 2 * time.Second
 // The tiebreaker is _id, exactly as NaturalOrder appends it and for the reasons
 // given there — _shard_doc is numbered inside a point-in-time, and a tail must
 // not open one.
-func openSearchTailOrder(req query.ProviderRequest, opts opensearchOptions) (query.Order, error) {
+func openSearchTailOrder(req query.ProviderRequest, opts OpenSearchOptions) (query.Order, error) {
 	leading := ""
 	if opts.Search != nil {
 		leading = strings.TrimSpace(opts.Search.TimeField)
@@ -76,7 +76,7 @@ type openSearchTailSettings struct {
 // difference between "poll every 30 seconds" and "poll every two" is the whole
 // of what the author was configuring, and silently substituting one for the
 // other is the bug they would never find.
-func openSearchTailOptions(opts opensearchOptions) (openSearchTailSettings, error) {
+func openSearchTailOptions(opts OpenSearchOptions) (openSearchTailSettings, error) {
 	settings := openSearchTailSettings{poll: openSearchDefaultTailPoll}
 	if raw := strings.TrimSpace(opts.TailPoll); raw != "" {
 		parsed, err := time.ParseDuration(raw)

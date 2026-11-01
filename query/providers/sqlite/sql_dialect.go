@@ -100,7 +100,7 @@ func sqlConnect(ctx context.Context, req sqlConnectRequest) (*sql.DB, sqlDialect
 type sqlConnectRequest struct {
 	Connection string
 	ConnType   string
-	Options    sqlOptions
+	Options    SQLOptions
 }
 
 // fieldColumn validates a profile-supplied backend field and returns the

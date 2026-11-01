@@ -28,10 +28,10 @@ type jaegerProvider struct{}
 
 func (jaegerProvider) Type() string { return "jaeger" }
 
-// jaegerOptions are decoded from ProviderRequest.Options. When the request Query
+// JaegerOptions are decoded from ProviderRequest.Options. When the request Query
 // is set it is treated as a trace ID (GET /api/traces/{id}); otherwise a search
 // (GET /api/traces?service=...) is performed and Service is required.
-type jaegerOptions struct {
+type JaegerOptions struct {
 	// URL is an inline Jaeger query base URL used when no stored connection is referenced.
 	URL string `json:"url,omitempty"`
 
@@ -46,8 +46,12 @@ type jaegerOptions struct {
 	Tags        string `json:"tags,omitempty"`
 }
 
+// Validate accepts every JaegerOptions: whether a search needs Service depends
+// on the request's query, so it is checked as the endpoint is built.
+func (JaegerOptions) Validate() error { return nil }
+
 func (jaegerProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	opts, err := query.DecodeOptions[jaegerOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[JaegerOptions](req.Options)
 	if err != nil {
 		return nil, err
 	}
@@ -109,7 +113,7 @@ func (jaegerProvider) Execute(ctx context.Context, req query.ProviderRequest) ([
 
 // jaegerEndpoint builds the request URL: a single-trace fetch when traceID is set,
 // otherwise a search (which requires a service).
-func jaegerEndpoint(base, traceID string, opts jaegerOptions) (string, error) {
+func jaegerEndpoint(base, traceID string, opts JaegerOptions) (string, error) {
 	base = strings.TrimRight(base, "/")
 	if traceID != "" {
 		return base + "/api/traces/" + url.PathEscape(traceID), nil
