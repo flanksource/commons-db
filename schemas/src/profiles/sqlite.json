@@ -88,7 +88,8 @@
           "title": "Database path",
           "type": "string",
           "x-clicky-component": "k8s-url-selector",
-          "x-clicky-default-source": "value"
+          "x-clicky-default-source": "value",
+          "x-local-file": "sqlite"
         }
       },
       "title": "Options",

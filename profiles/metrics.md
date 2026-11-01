@@ -87,11 +87,80 @@ Use `coalesce` only when zero is meaningful for the metric. Apply filling after 
 
 Source samples stream into a private SQLite workspace. Complete summary results are stored in SQLite for cursor paging, with a five-minute idle expiry. Resume using the returned cursor to avoid repeating upstream reads; a fresh offset request starts a fresh execution. Cursors are scoped to caller, connection, SQL, parameters, labels, filters, and order. They expire when the process restarts. Query metadata travels in CLI results and the API's `X-Metric-Metadata` header.
 
+## Predicate pushdown
+
+`WHERE` conjuncts on a label column of a `FROM <metric>` table narrow what the source fetches. The `prometheus` provider adds them to the metric selector:
+
+| SQL | Prometheus matcher |
+| --- | --- |
+| `pod = 'api'` | `pod="api"` |
+| `pod != 'api'` | `pod!="api"` |
+| `pod IN ('api', 'web.1')` | `pod=~"^(api\|web\.1)$"` |
+| `pod NOT IN ('api')` | `pod!~"^(api)$"` |
+| `pod LIKE 'api-%'` | `pod=~"(?i)^api-.*$"` |
+| `pod NOT LIKE 'api-%'` | `pod!~"(?i)^api-.*$"` |
+
+Values are regex-escaped; `%` becomes `.*` and `_` becomes `.`. LIKE folds case because SQLite's LIKE does. Bound parameters (`$(.params.pod)`) are pushed the same way when they are strings. Only `AND`-joined conjuncts are pushed, so `OR` and other expressions stay in SQLite. SQLite still evaluates the whole `WHERE` clause after loading, so pushdown never changes the result. It only reduces what is fetched. `cloudwatchmetrics` pushes `=` into dimension filters and leaves the other operators to SQLite.
+
+Filter value lookups list a label column's values through `/api/v1/label/<label>/values`. The column is mapped through `labels`, and the lookup is scoped with `match[]` to the metrics the statement reads.
+
+## PromQL as a table: `prometheus(...)`
+
+When a single PromQL expression is easier than a metric-table query, call it as a table function:
+
+```sql
+SELECT time, json_extract(labels, '$.pod') AS pod, value
+FROM prometheus('sum by (pod) (rate(container_cpu_usage_seconds_total[5m]))')
+```
+
+The columns are `time`, `value`, `series_id`, `metric_name` (from `__name__`) and `labels`, a JSON object of the remaining labels. `prometheus(query, start, end, step)` overrides the profile's `range`. Pass `start` and `end` as RFC3339 timestamps and `step` as a duration. The query can be a bound parameter. A range wider than 9999 steps is fetched in chunks. Each evaluation is reported in the query metadata. An identical call inside one statement is fetched once, so the function can sit on the inner side of a join.
+
+`prometheus` and `time_series` are reserved names, not metric names. Only the `prometheus` provider can evaluate PromQL, so `prometheus(...)` under `cloudwatchmetrics` fails with an error that says so. Never splice a param into the PromQL text. Match it against `labels` in `WHERE` instead, as `pod-cpu-by-pod.yaml` does.
+
+## Profiles over profiles: `profiles.<name>`
+
+Metric SQL can read another profile's result as a table:
+
+```sql
+SELECT pod, max(value) AS peak
+FROM profiles."pod-cpu-by-pod"
+GROUP BY pod
+```
+
+The referenced profile runs through the normal engine. It receives each of the parent's resolved params that it declares by name, and its own defaults fill in the rest. Its rows load into a temporary table. The table's columns are the profile's declared `columns`, or else the keys its rows carry. Quote a profile name that contains `-` or `.`.
+
+A reference is resolved by the profile service that runs the parent, on every read it serves: the execute route, `run`, listing, inspect, replay, reconcile, filter lookups, the sample and sample filter-value routes, series and scheduled queries. That service's read hook prepares it under the caller's context. A profile can therefore only read data its caller could read directly. A reference back to a profile that is already running fails with the cycle's path, such as `profile reference cycle: a -> b -> a`. A database-qualified name in any other schema is still rejected.
+
+## Series: graph-ready output
+
+`series:` projects a profile's rows onto plottable series. Each label set becomes one line, and its points are sorted by time:
+
+```yaml
+series:
+  time: time        # default: time, else timestamp (the column PromQL rows carry)
+  value: value      # default: value
+  labels: [pod]     # default: every column except time and value
+  metric: metric    # optional column holding a metric name; always part of a series' identity
+  unit: millicores  # clicky-ui unit key
+  label: "{{.pod}}" # Go template over the series labels
+```
+
+A series id is `<source>#<k=v,...>` over its sorted labels. When the result has a single series with no labels, the id is the source itself. A value that is not numeric, a NULL value or a time that does not parse fails the projection. It is never dropped silently. A profile with `series:` renders as `timeseries` (`x-clicky-render: timeseries`) unless `render:` says otherwise.
+
+Metrics panels read a series profile as `profile:<name>?k=v&...`. The profile service's `SeriesSource(SeriesSourceOptions{Scope, Timeout})` serves that id prefix to clicky's metrics stream. For each tick it replaces the profile's `range` with the panel window, aligned down to the step, so timestamps stay stable between ticks. A profile without a `range` is refused. It then runs the read hook under the caller's context and executes the profile. Identical requests in a tick share one execution when their `Scope` is equal too. `Scope` names whatever a read takes from its caller's context: the environment a connection resolves in, the tenant, and the principal when the read hook authorizes per caller. A shared execution keeps running when one caller leaves, so each caller waits under its own context, and `Timeout` bounds the execution. The connection browser's Prometheus console returns the same projection in `series`, and it takes `labels` in the request body for `language: sql`.
+
+`pod-cpu-by-pod.yaml` is a runnable example:
+
+```sh
+go run . --db='' --profiles-dir ../../profiles profiles run pod-cpu-by-pod --param namespace=kube-system --all
+```
+
 Focused local checks:
 
 ```sh
 go test ./query/metrics
-go test ./query/providers -run TestProviders -ginkgo.focus='structured metric profiles|CloudWatch batches|prometheus provider'
+go test ./query/providers -run TestProviders -ginkgo.focus='structured metric profiles|CloudWatch batches|prometheus'
+go test ./query -run TestQuery -ginkgo.focus=ProjectSeries
 promtool test rules query/metrics/testdata/counter-resets.yaml
 ```
 
