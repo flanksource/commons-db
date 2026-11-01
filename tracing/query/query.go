@@ -43,11 +43,21 @@ type Row struct {
 	Row map[string]any `json:"row" pretty:"hide"`
 }
 
-type reads struct{ options Options }
+// Reads is the kind's trace handler: a host whose tracing runtime is not
+// commons-db's wraps it in its own handler, adapting the emitter it passes.
+type Reads struct{ options Options }
 
-func (reads) Params() Params { return Params{} }
+// NewReads is the kind's handler over options' seams.
+func NewReads(options Options) (Reads, error) {
+	if options.BeforeExecute == nil {
+		return Reads{}, errors.New("the query kind requires a BeforeExecute to prepare each read")
+	}
+	return Reads{options: options}, nil
+}
 
-func (reads) Schema() recordresults.ResultType[Row] {
+func (Reads) Params() Params { return Params{} }
+
+func (Reads) Schema() recordresults.ResultType[Row] {
 	return recordresults.ResultType[Row]{Title: "Query profile reads", TimeColumn: "time"}
 }
 
@@ -55,7 +65,7 @@ type readerKey struct{}
 
 // Prepare resolves the profile and checks it can be windowed as the params
 // ask, so a capture that could not read refuses its start.
-func (r reads) Prepare(ctx dbcontext.Context, params Params, _ tracing.Emitter[Row]) (dbcontext.Context, func() error, error) {
+func (r Reads) Prepare(ctx dbcontext.Context, params Params, _ tracing.Emitter[Row]) (dbcontext.Context, func() error, error) {
 	read, err := r.reader(ctx, params, time.Now().UTC())
 	if err != nil {
 		return ctx, nil, err
@@ -65,7 +75,7 @@ func (r reads) Prepare(ctx dbcontext.Context, params Params, _ tracing.Emitter[R
 
 // Handle reads once and ends; with UntilStopped it reads when the capture
 // stops, and with Every it reads at each interval until it stops.
-func (reads) Handle(ctx dbcontext.Context, params Params, records tracing.Emitter[Row], _ tracing.Records[Row]) error {
+func (Reads) Handle(ctx dbcontext.Context, params Params, records tracing.Emitter[Row], _ tracing.Records[Row]) error {
 	read, ok := ctx.Value(readerKey{}).(*reader)
 	if !ok {
 		return errors.New("query capture handled without the reader its Prepare set up")
@@ -88,10 +98,15 @@ func (reads) Handle(ctx dbcontext.Context, params Params, records tracing.Emitte
 	}
 }
 
+// Capabilities are what a query capture can do: read a past window, and follow
+// with Every.
+var Capabilities = tracing.Capabilities{Historical: true, Follow: true}
+
 // Kind is the query trace kind over options' seams.
 func Kind(options Options) (*tracing.Handler[Params, Row], error) {
-	if options.BeforeExecute == nil {
-		return nil, errors.New("the query kind requires a BeforeExecute to prepare each read")
+	handler, err := NewReads(options)
+	if err != nil {
+		return nil, err
 	}
-	return tracing.NewHandler[Params, Row](reads{options: options}, tracing.Capabilities{Historical: true, Follow: true}), nil
+	return tracing.NewHandler[Params, Row](handler, Capabilities), nil
 }
