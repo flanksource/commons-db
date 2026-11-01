@@ -54,6 +54,7 @@ type connectionDashboardItem struct {
 	Name             string             `json:"name"`
 	Namespace        string             `json:"namespace"`
 	Type             string             `json:"type"`
+	Source           string             `json:"source,omitempty"`
 	Endpoint         *dashboardEndpoint `json:"endpoint,omitempty"`
 	SecretCount      int                `json:"secretCount"`
 	InlineCredential bool               `json:"inlineCredential"`
@@ -137,12 +138,21 @@ func (h *connectionDashboardHandler) listConnections(ctx context.Context, option
 			return nil, fmt.Errorf("list dashboard connections: %w", err)
 		}
 	}
-	virtual, err := virtualConnections(h.virtual, options)
+	virtual, err := virtualConnections(h.virtual, ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 	if len(virtual) > 0 {
-		connections = append(connections, virtual...)
+		for _, provided := range virtual {
+			connections = slices.DeleteFunc(connections, func(existing *models.Connection) bool {
+				return existing.Namespace == provided.Namespace && existing.Name == provided.Name
+			})
+		}
+		for _, provided := range virtual {
+			if types := connectionTypeFilter(options); len(types) == 0 || slices.Contains(types, provided.Type) || provided.Type == "" && len(provided.Warnings) > 0 {
+				connections = append(connections, provided)
+			}
+		}
 		slices.SortStableFunc(connections, func(a, b *models.Connection) int { return strings.Compare(a.Name, b.Name) })
 	}
 	return connections, nil
@@ -157,7 +167,7 @@ func dashboardItems(connections []*models.Connection, usage map[string]int) []co
 	for index, connection := range connections {
 		items[index] = connectionDashboardItem{
 			ID: connection.ID.String(), Name: connection.Name, Namespace: connection.Namespace,
-			Type: connection.Type, Endpoint: dashboardEndpointFor(connection),
+			Type: connection.Type, Source: connection.Source, Endpoint: dashboardEndpointFor(connection),
 			SecretCount:      dashboardSecretCount(connection),
 			InlineCredential: hasInlineConnectionCredential(connection.URL),
 			InsecureTLS:      connection.InsecureTLS,
@@ -305,9 +315,19 @@ func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 	if spec.Paths == nil {
 		spec.Paths = map[string]rpc.OpenAPIPath{}
 	}
+	spec.Paths["/api/v1/connections/files"] = rpc.OpenAPIPath{"get": {
+		Tags: []string{"Connections"}, Summary: "Browse local file metadata (loopback only)", OperationID: "browseLocalFiles",
+		Parameters: []rpc.OpenAPIParameter{{Name: "path", In: "query", Schema: &rpc.OpenAPISchema{Type: "string"}}},
+		Responses: map[string]rpc.OpenAPIResponse{
+			"200": {Description: "Directory path, parent, and entries with name, path, directory, and optional problem"},
+			"403": {Description: "Local access required or permission denied"},
+			"404": {Description: "Path does not exist"},
+		},
+	}}
 	item := &rpc.OpenAPISchema{Type: "object", Properties: map[string]*rpc.OpenAPISchema{
 		"id": {Type: "string"}, "name": {Type: "string"}, "namespace": {Type: "string"},
-		"type": {Type: "string"}, "endpoint": {Type: "object"}, "secretCount": {Type: "integer"},
+		"source": {Type: "string"},
+		"type":   {Type: "string"}, "endpoint": {Type: "object"}, "secretCount": {Type: "integer"},
 		"inlineCredential": {Type: "boolean"}, "insecureTLS": {Type: "boolean"},
 		"health": {Type: "object"}, "profileCount": {Type: "integer"},
 		"updatedAt": {Type: "string", Format: "date-time"}, "readOnly": {Type: "boolean"},

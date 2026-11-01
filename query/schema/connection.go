@@ -308,6 +308,9 @@ func appendUnique(base []string, values ...string) []string {
 // fields nest under the `properties` object (the connection's Properties map).
 func tailoredBranch(typ string, cfg any) Schema {
 	flat := reflectStruct(cfg)
+	if typ == models.ConnectionTypeSQLite {
+		flat["properties"].(map[string]any)["url"].(map[string]any)["x-local-file"] = "sqlite"
+	}
 
 	props := Schema{}
 	propProps := Schema{}

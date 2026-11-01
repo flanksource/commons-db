@@ -88,7 +88,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	}
 	defer func() { _ = a.snapshots.Close() }()
 	if err := a.Runtime.SetContext(dbcontext.NewContext(ctx).
-		WithConnectionResolver(a.traces.resolveConnection(a.snapshots.ResolveConnection)).
+		WithConnectionResolver(a.connectionCatalog.files.Attach(dbcontext.NewContext(ctx).WithConnectionResolver(a.traces.resolveConnection(a.snapshots.ResolveConnection))).ConnectionResolver()).
 		WithConnectionLeaseResolver(a.snapshots.AcquireConnection)); err != nil {
 		return err
 	}
