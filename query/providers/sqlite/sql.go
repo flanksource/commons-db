@@ -58,6 +58,10 @@ type SQLOptions struct {
 
 	// Database overrides the database from the hydrated connection URL.
 	Database string `json:"database,omitempty"`
+
+	// Partitions reads the query over several SQLite files sharing a schema
+	// and merges their rows. Exclusive with a connection and URL.
+	Partitions *PartitionSet `json:"partitions,omitempty"`
 }
 
 // Validate refuses a Type that names no SQL engine the provider builds for.
@@ -97,6 +101,13 @@ func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]
 // it. Ending the range closes the driver cursor and the connection, so a caller
 // taking a single page does not hold either.
 func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
+	opts, err := query.DecodeOptions[sqlOptions](req.Options)
+	if err != nil {
+		return query.ErrorPage(err)
+	}
+	if opts.Partitions != nil {
+		return p.partitionPages(ctx, req, page, opts)
+	}
 	return func(yield func(query.Page, error) bool) {
 		client, dialect, release, err := p.connect(ctx, req)
 		if err != nil {
@@ -109,43 +120,55 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 			yield(query.Page{}, err)
 			return
 		}
+		readSQLPages(ctx, client, dialect, req, page, yield)
+	}
+}
 
-		request := req
-		current := page
-		remaining := page.Ceiling
-		for {
-			if remaining > 0 && remaining < current.Limit {
-				current.Limit = remaining
-			}
-			read, err := ReadSQLPage(ctx, client, string(dialect), sqlPageRequest(request, current))
+// readSQLPages reads req from client page after page until the source or the
+// consumer is done.
+func readSQLPages(
+	ctx context.Context,
+	client *sql.DB,
+	dialect sqlDialect,
+	req query.ProviderRequest,
+	page query.PageRequest,
+	yield func(query.Page, error) bool,
+) {
+	request := req
+	current := page
+	remaining := page.Ceiling
+	for {
+		if remaining > 0 && remaining < current.Limit {
+			current.Limit = remaining
+		}
+		read, err := ReadSQLPage(ctx, client, string(dialect), sqlPageRequest(request, current))
+		if err != nil {
+			yield(query.Page{}, err)
+			return
+		}
+		batch, total, more := read.Rows, read.Total, read.HasMore
+		capped := remaining > 0 && len(batch) >= remaining && more
+		result := query.Page{Rows: batch, HasMore: more && !capped, Total: total, Truncated: capped}
+		var keys []any
+		if result.HasMore && len(req.Order) > 0 {
+			keys, err = providerkit.OrderKeys(batch[len(batch)-1], req.Order)
 			if err != nil {
 				yield(query.Page{}, err)
 				return
 			}
-			batch, total, more := read.Rows, read.Total, read.HasMore
-			capped := remaining > 0 && len(batch) >= remaining && more
-			result := query.Page{Rows: batch, HasMore: more && !capped, Total: total, Truncated: capped}
-			var keys []any
-			if result.HasMore && len(req.Order) > 0 {
-				keys, err = providerkit.OrderKeys(batch[len(batch)-1], req.Order)
-				if err != nil {
-					yield(query.Page{}, err)
-					return
-				}
-				result.NextKeys = keys
-			}
-			if !yield(result, nil) || !result.HasMore {
-				return
-			}
-			if remaining > 0 {
-				remaining -= len(batch)
-			}
-			if page.Mode() == query.PagingCursor {
-				request.Position = query.CursorPosition{Keys: keys}
-				current.Offset = 0
-			} else {
-				current.Offset += len(batch)
-			}
+			result.NextKeys = keys
+		}
+		if !yield(result, nil) || !result.HasMore {
+			return
+		}
+		if remaining > 0 {
+			remaining -= len(batch)
+		}
+		if page.Mode() == query.PagingCursor {
+			request.Position = query.CursorPosition{Keys: keys}
+			current.Offset = 0
+		} else {
+			current.Offset += len(batch)
 		}
 	}
 }
@@ -277,6 +300,9 @@ func (p sqlProvider) connectRequest(req query.ProviderRequest) (sqlConnectReques
 	opts, err := providerkit.DecodeOptions[SQLOptions](req.Options)
 	if err != nil {
 		return sqlConnectRequest{}, err
+	}
+	if opts.Partitions != nil {
+		return sqlConnectRequest{}, fmt.Errorf("a partitioned sql profile is read through its pages; lookups, column inspection and capability probes do not span partitions yet")
 	}
 	return sqlConnectRequest{
 		Connection: req.Connection, ConnType: p.connType, Options: opts,
