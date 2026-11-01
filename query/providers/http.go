@@ -34,8 +34,8 @@ type httpProvider struct{}
 
 func (httpProvider) Type() string { return "http" }
 
-// httpOptions are decoded from ProviderRequest.Options.
-type httpOptions struct {
+// HTTPOptions are decoded from ProviderRequest.Options.
+type HTTPOptions struct {
 	// URL is an inline HTTP base URL used when no stored connection is referenced.
 	URL string `json:"url,omitempty"`
 
@@ -50,8 +50,42 @@ type httpOptions struct {
 	JSONPath string `json:"jsonpath,omitempty"`
 }
 
+// httpSenders send a request by method; a body is sent only by the methods
+// that carry one.
+var httpSenders = map[string]httpSender{
+	http.MethodGet:    func(r *commonshttp.Request, url, _ string) (*commonshttp.Response, error) { return r.Get(url) },
+	http.MethodDelete: func(r *commonshttp.Request, url, _ string) (*commonshttp.Response, error) { return r.Delete(url) },
+	http.MethodPost:   withBody((*commonshttp.Request).Post),
+	http.MethodPut:    withBody((*commonshttp.Request).Put),
+	http.MethodPatch:  withBody((*commonshttp.Request).Patch),
+}
+
+type httpSender func(request *commonshttp.Request, url, body string) (*commonshttp.Response, error)
+
+func withBody(send func(*commonshttp.Request, string, any) (*commonshttp.Response, error)) httpSender {
+	return func(r *commonshttp.Request, url, body string) (*commonshttp.Response, error) {
+		return send(r, url, body)
+	}
+}
+
+// method is Method upper-cased; empty is GET.
+func (o HTTPOptions) method() string {
+	if o.Method == "" {
+		return http.MethodGet
+	}
+	return strings.ToUpper(o.Method)
+}
+
+// Validate refuses a method the provider does not send.
+func (o HTTPOptions) Validate() error {
+	if _, ok := httpSenders[o.method()]; !ok {
+		return fmt.Errorf("unsupported http method: %s", o.method())
+	}
+	return nil
+}
+
 func (httpProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	opts, err := query.DecodeOptions[httpOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[HTTPOptions](req.Options)
 	if err != nil {
 		return nil, err
 	}
@@ -73,11 +107,6 @@ func (httpProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 		return nil, fmt.Errorf("http query url is required")
 	}
 
-	method := strings.ToUpper(opts.Method)
-	if method == "" {
-		method = http.MethodGet
-	}
-
 	client, err := connection.CreateHTTPClient(ctx, *hydrated)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create http client: %w", err)
@@ -85,23 +114,7 @@ func (httpProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]q
 	// Maintain HAR capture / HTTP logging driven by the context's effective level.
 	observability.ApplyHTTPClientObservability(ctx, "http", client, nil)
 
-	httpReq := client.R(ctx)
-
-	var resp *commonshttp.Response
-	switch method {
-	case http.MethodGet:
-		resp, err = httpReq.Get(url)
-	case http.MethodPost:
-		resp, err = httpReq.Post(url, opts.Body)
-	case http.MethodPut:
-		resp, err = httpReq.Put(url, opts.Body)
-	case http.MethodDelete:
-		resp, err = httpReq.Delete(url)
-	case http.MethodPatch:
-		resp, err = httpReq.Patch(url, opts.Body)
-	default:
-		return nil, fmt.Errorf("unsupported http method: %s", method)
-	}
+	resp, err := httpSenders[opts.method()](client.R(ctx), url, opts.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute http request: %w", err)
 	}

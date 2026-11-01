@@ -33,7 +33,7 @@ func (opensearchProvider) BackendCapabilities(
 	_ context.Context,
 	req query.ProviderRequest,
 ) (dbconnection.BackendCapabilities, error) {
-	options, err := query.DecodeOptions[opensearchOptions](req.Options)
+	options, err := query.DecodeOptions[OpenSearchOptions](req.Options)
 	if err != nil {
 		return dbconnection.BackendCapabilities{}, err
 	}
@@ -51,7 +51,7 @@ func documentArrayCapabilities(backend, database string) dbconnection.BackendCap
 	}
 }
 
-type opensearchOptions struct {
+type OpenSearchOptions struct {
 	// Address is an inline OpenSearch URL used when no stored connection is referenced.
 	Address string `json:"address,omitempty"`
 
@@ -76,6 +76,16 @@ type opensearchOptions struct {
 	TailLag string `json:"tailLag,omitempty"`
 }
 
+// Validate refuses a limit that is no count and a tail pacing that is no
+// usable duration.
+func (o OpenSearchOptions) Validate() error {
+	if _, err := openSearchLimit(o.Limit); err != nil {
+		return err
+	}
+	_, err := openSearchTailOptions(o)
+	return err
+}
+
 type openSearchPagingMode string
 
 const (
@@ -85,7 +95,7 @@ const (
 
 type openSearchRuntime struct {
 	searcher *opensearch.Searcher
-	options  opensearchOptions
+	options  OpenSearchOptions
 	paging   openSearchPagingMode
 }
 
@@ -130,7 +140,7 @@ const openSearchTiebreaker = "_id"
 // package does not parse, and guessing an order for it would fight whatever the
 // query already asked for.
 func (opensearchProvider) NaturalOrder(config query.ProviderConfig) (query.Order, error) {
-	opts, err := query.DecodeOptions[opensearchOptions](config.Options)
+	opts, err := query.DecodeOptions[OpenSearchOptions](config.Options)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +308,7 @@ func (p opensearchProvider) Stream(ctx context.Context, req query.ProviderReques
 }
 
 func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearchRuntime, error) {
-	opts, err := query.DecodeOptions[opensearchOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[OpenSearchOptions](req.Options)
 	if err != nil {
 		return openSearchRuntime{}, err
 	}

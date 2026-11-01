@@ -28,25 +28,42 @@ type prometheusProvider struct{}
 
 func (prometheusProvider) Type() string { return "prometheus" }
 
-// prometheusOptions are decoded from ProviderRequest.Options.
-type prometheusOptions struct {
+// PrometheusOptions are decoded from ProviderRequest.Options.
+type PrometheusOptions struct {
 	// URL is an inline Prometheus address used when no stored connection is referenced.
 	URL string `json:"url,omitempty"`
 
 	// Range, when set, runs a PromQL range query.
-	Range *prometheusRange `json:"range,omitempty"`
+	Range *PrometheusRange `json:"range,omitempty"`
 
 	// SelectLabels restricts result labels to a deterministic subset.
 	SelectLabels []string `json:"selectLabels,omitempty"`
 }
 
-type prometheusRange struct {
+// Validate refuses a range the provider could not query.
+func (o PrometheusOptions) Validate() error {
+	if o.Range == nil {
+		return nil
+	}
+	return o.Range.Validate()
+}
+
+// PrometheusRange is a range query's window: Start and End are times or date
+// math such as now-1h, Step a duration such as 15s.
+type PrometheusRange struct {
 	Start string `json:"start"`
 	End   string `json:"end"`
 	Step  string `json:"step"`
 }
 
-func (pr prometheusRange) toPrometheusRange(now time.Time) (promV1.Range, error) {
+// Validate refuses a range with a missing or unreadable bound or step, a step
+// that is not positive, or an end before its start.
+func (pr PrometheusRange) Validate() error {
+	_, err := pr.toPrometheusRange(time.Now())
+	return err
+}
+
+func (pr PrometheusRange) toPrometheusRange(now time.Time) (promV1.Range, error) {
 	if pr.Start == "" || pr.End == "" || pr.Step == "" {
 		return promV1.Range{}, fmt.Errorf("prometheus range requires start, end and step")
 	}
@@ -80,7 +97,7 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 		return nil, fmt.Errorf("prometheus query is required")
 	}
 
-	opts, err := query.DecodeOptions[prometheusOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[PrometheusOptions](req.Options)
 	if err != nil {
 		return nil, err
 	}
@@ -114,7 +131,7 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 	return transformPrometheusResult(result, opts.SelectLabels)
 }
 
-func runPromQL(ctx context.Context, client promV1.API, promQL string, r *prometheusRange) (model.Value, error) {
+func runPromQL(ctx context.Context, client promV1.API, promQL string, r *PrometheusRange) (model.Value, error) {
 	if r != nil {
 		promRange, err := r.toPrometheusRange(time.Now())
 		if err != nil {

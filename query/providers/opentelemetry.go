@@ -9,6 +9,7 @@ import (
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 func init() {
@@ -25,7 +26,7 @@ func (openTelemetryProvider) BackendCapabilities(
 	_ context.Context,
 	req query.ProviderRequest,
 ) (dbconnection.BackendCapabilities, error) {
-	options, err := query.DecodeOptions[openTelemetryOptions](req.Options)
+	options, err := query.DecodeOptions[OpenTelemetryOptions](req.Options)
 	if err != nil {
 		return dbconnection.BackendCapabilities{}, err
 	}
@@ -33,7 +34,7 @@ func (openTelemetryProvider) BackendCapabilities(
 	return documentArrayCapabilities("opentelemetry", options.Index), nil
 }
 
-type openTelemetryOptions struct {
+type OpenTelemetryOptions struct {
 	Format         string   `json:"format,omitempty"`
 	Index          string   `json:"index,omitempty"`
 	DateField      string   `json:"dateField,omitempty"`
@@ -55,7 +56,7 @@ type openTelemetryOptions struct {
 
 type openTelemetryRuntime struct {
 	searcher *opensearch.Searcher
-	options  openTelemetryOptions
+	options  OpenTelemetryOptions
 	paging   openSearchPagingMode
 }
 
@@ -98,7 +99,7 @@ func (openTelemetryProvider) InspectColumnFilters(
 	)
 }
 
-func openTelemetryInspectionColumns(columns []query.ColumnDef, options openTelemetryOptions) []query.ColumnDef {
+func openTelemetryInspectionColumns(columns []query.ColumnDef, options OpenTelemetryOptions) []query.ColumnDef {
 	statusField := "status"
 	if len(options.StatusFields) > 0 && options.StatusFields[0] != "" {
 		statusField = options.StatusFields[0]
@@ -153,7 +154,7 @@ func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequ
 	}
 }
 
-func openTelemetryRows(result opensearch.Response, options openTelemetryOptions) []query.Row {
+func openTelemetryRows(result opensearch.Response, options OpenTelemetryOptions) []query.Row {
 	rows := make([]query.Row, 0, len(result.Hits.Hits))
 	for _, hit := range result.Hits.Hits {
 		document := make(map[string]any, len(hit.Fields)+len(hit.Source))
@@ -174,7 +175,7 @@ func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (
 	if req.Connection == "" {
 		return openTelemetryRuntime{}, fmt.Errorf("opentelemetry connection is required")
 	}
-	options, err := query.DecodeOptions[openTelemetryOptions](req.Options)
+	options, err := providerkit.DecodeOptions[OpenTelemetryOptions](req.Options)
 	if err != nil {
 		return openTelemetryRuntime{}, err
 	}
@@ -186,9 +187,6 @@ func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (
 			"provider.options.params has been replaced by provider.options.search; re-import the profile to migrate it")
 	}
 	options.withDefaults()
-	if options.Format != "jaeger" && options.Format != "flat" {
-		return openTelemetryRuntime{}, fmt.Errorf("unsupported opentelemetry format %q", options.Format)
-	}
 	outerModel, err := ctx.HydrateConnectionByURL(req.Connection)
 	if err != nil {
 		return openTelemetryRuntime{}, fmt.Errorf("hydrate opentelemetry connection %q: %w", req.Connection, err)
@@ -208,7 +206,16 @@ func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (
 	return openTelemetryRuntime{searcher: runtime.searcher, options: options, paging: runtime.paging}, nil
 }
 
-func (options *openTelemetryOptions) withDefaults() {
+// Validate refuses a format the provider cannot shape rows from; empty is flat.
+func (options OpenTelemetryOptions) Validate() error {
+	switch options.Format {
+	case "", "flat", "jaeger":
+		return nil
+	}
+	return fmt.Errorf("unsupported opentelemetry format %q", options.Format)
+}
+
+func (options *OpenTelemetryOptions) withDefaults() {
 	if options.Format == "" {
 		options.Format = "flat"
 	}
