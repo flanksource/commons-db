@@ -46,9 +46,9 @@ var _ query.BackendCapabilityProvider = sqlProvider{}
 
 func (p sqlProvider) Type() string { return p.key }
 
-// sqlOptions are the provider-specific knobs decoded from ProviderRequest.Options.
-type sqlOptions struct {
-	// Type overrides the connection driver type (postgres, mysql, sql_server, clickhouse).
+// SQLOptions are the provider-specific knobs decoded from ProviderRequest.Options.
+type SQLOptions struct {
+	// Type overrides the connection driver type (postgres, mysql, sql_server, clickhouse, sqlite).
 	Type string `json:"type,omitempty"`
 
 	// URL is an inline DSN used when no stored connection is referenced.
@@ -56,6 +56,16 @@ type sqlOptions struct {
 
 	// Database overrides the database from the hydrated connection URL.
 	Database string `json:"database,omitempty"`
+}
+
+// Validate refuses a Type that names no SQL engine the provider builds for.
+func (o SQLOptions) Validate() error {
+	switch sqlDialect(o.Type) {
+	case "", dialectPostgres, dialectMySQL, dialectSQLServer, dialectClickHouse, dialectSQLite:
+		return nil
+	}
+	return fmt.Errorf("sql type %q is none of %s, %s, %s, %s or %s",
+		o.Type, dialectPostgres, dialectMySQL, dialectSQLServer, dialectClickHouse, dialectSQLite)
 }
 
 // PagingModes reports the two strategies compiled around an author's query.
@@ -262,7 +272,7 @@ func (p sqlProvider) connect(ctx context.Context, req query.ProviderRequest) (*s
 }
 
 func (p sqlProvider) connectRequest(req query.ProviderRequest) (sqlConnectRequest, error) {
-	opts, err := query.DecodeOptions[sqlOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[SQLOptions](req.Options)
 	if err != nil {
 		return sqlConnectRequest{}, err
 	}
