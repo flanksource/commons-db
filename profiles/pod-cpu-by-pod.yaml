@@ -1,0 +1,25 @@
+profile: pod-cpu-by-pod
+provider:
+  type: prometheus
+  connection: connection://prometheus
+  options:
+    language: sql
+    range: {start: now-1h, end: now, step: 30s}
+params:
+  - name: namespace
+    default: default
+columns:
+  - {name: time, type: datetime}
+  - {name: pod, type: string}
+  - {name: value, type: number}
+series:
+  labels: [pod]
+  unit: millicores
+  label: "{{.pod}}"
+# The namespace is matched in SQL rather than spliced into the PromQL text, so
+# a param value can never change the expression Prometheus evaluates.
+query: |
+  SELECT time, json_extract(labels, '$.pod') AS pod, value * 1000 AS value
+  FROM prometheus('sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{job="kubelet",container!="",container!="POD"}[5m]))')
+  WHERE json_extract(labels, '$.namespace') = $(.params.namespace)
+  ORDER BY pod, time

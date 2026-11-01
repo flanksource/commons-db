@@ -95,12 +95,14 @@ func addDatabaseOptions(typ string, props Schema) {
 			"x-enum-display": "combobox",
 		}
 		props["url"] = inlineURLProp("URL / DSN", "Inline database URL used instead of a saved connection")
+		props["url"].(Schema)["x-local-file"] = "sqlite"
 		props["database"] = strProp("Database", "Database override for this query")
 	case "postgres", "mysql", "sqlserver", "clickhouse":
 		props["url"] = inlineURLProp("URL / DSN", "Inline database URL used instead of a saved connection")
 		props["database"] = strProp("Database", "Database override for this query")
 	case "sqlite":
 		props["url"] = inlineURLProp("Database path", "Inline SQLite file path used instead of a saved connection")
+		props["url"].(Schema)["x-local-file"] = "sqlite"
 	}
 }
 
