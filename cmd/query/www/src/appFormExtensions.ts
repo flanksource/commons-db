@@ -10,6 +10,7 @@ import {
   processorPipelineFormExtensions,
 } from "@flanksource/clicky-ui/profiles";
 import { mountPath } from "./mount";
+import { localFileFormExtensions } from "./localFilePicker";
 import { secretFormExtensions } from "./secretKeySelector";
 import { namespaceFormExtensions } from "./namespacePicker";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
@@ -48,6 +49,7 @@ export const formExtensions = {
     ...celEditorFormExtensions.post,
     ...processorPipelineFormExtensions.post,
     ...connectionLoggingFormExtensions.post,
+    ...localFileFormExtensions.post,
   ],
 };
 

@@ -54,6 +54,7 @@ export default defineConfig({
             { label: "sqlite.DB", slug: "sqlite/database" },
             { label: "sqlitetable", slug: "sqlite/sqlitetable" },
             { label: "The sqlite record file", slug: "sqlite/record-file" },
+            { label: "Partitioned SQLite", slug: "sqlite/partitions" },
           ],
         },
       ],

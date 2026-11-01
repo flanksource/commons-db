@@ -137,7 +137,8 @@
       "type": "string",
       "x-clicky-component": "k8s-url-selector",
       "x-clicky-default-source": "value",
-      "x-clicky-order": 2
+      "x-clicky-order": 2,
+      "x-local-file": "sqlite"
     }
   },
   "required": [

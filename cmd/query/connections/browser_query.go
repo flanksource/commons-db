@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/cmd/query/devtools"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/providers/sqlite"
@@ -83,20 +84,7 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 		operation = recorder.Operation(descriptor.Provider)
 		result, err = h.executeOpenSearch(r, conn, descriptor, request)
 	default:
-		var provider query.Provider
-		provider, err = query.GetProvider(descriptor.Provider)
-		if err == nil {
-			providerStarted := time.Now()
-			result.Rows, err = provider.Execute(query.WithRecorder(h.ctx, recorder), query.ProviderRequest{
-				Provider: descriptor.Provider, Connection: conn.ID.String(), Query: request.Query,
-				Options: request.Options, Diagnostics: request.diagnostics,
-				Inspection: query.InspectionOptions{Refresh: request.RefreshInspection},
-			})
-			if len(result.Rows) > 0 {
-				request.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(result.Rows))
-			}
-			request.diagnostics.RecordResponse(providerStarted, len(result.Rows), nil)
-		}
+		result, err = h.executeProvider(query.WithRecorder(h.ctx, recorder), conn, descriptor, request)
 	}
 	elapsed := time.Since(started)
 	result.DurationMS = float64(elapsed.Microseconds()) / 1000
@@ -109,6 +97,50 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 	}
 	result.Diagnostics = request.diagnostics.Snapshot()
 	writeJSON(w, result)
+}
+
+// executeProvider runs a query through its registered provider. A timeseries
+// view whose rows carry a timestamp also answers with their series projection.
+func (h *connectionBrowserHandler) executeProvider(ctx dbcontext.Context, conn *models.Connection, descriptor browserDescriptor, request browserQueryRequest) (browserQueryResult, error) {
+	provider, err := query.GetProvider(descriptor.Provider)
+	if err != nil {
+		return browserQueryResult{}, err
+	}
+	started := time.Now()
+	metadata := &query.MetricMetadata{}
+	rows, err := provider.Execute(ctx, query.ProviderRequest{
+		Provider: descriptor.Provider, Connection: conn.ID.String(), Query: request.Query,
+		Options: request.Options, Labels: request.Labels, MetricMetadata: metadata, Diagnostics: request.diagnostics,
+		Inspection: query.InspectionOptions{Refresh: request.RefreshInspection},
+	})
+	if len(rows) > 0 {
+		request.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(rows))
+	}
+	request.diagnostics.RecordResponse(started, len(rows), nil)
+	if err != nil {
+		return browserQueryResult{}, err
+	}
+	result := browserQueryResult{Rows: rows}
+	if len(metadata.Sources) > 0 || len(metadata.Notices) > 0 {
+		result.Metrics = metadata
+	}
+	if descriptor.ResultView == "timeseries" && rowsCarryTime(rows) {
+		if result.Series, err = query.ProjectSeries(query.Result{Profile: "query", Rows: rows}, query.SeriesSpec{}); err != nil {
+			return browserQueryResult{}, err
+		}
+	}
+	return result, nil
+}
+
+// rowsCarryTime reports whether rows are a series at all: a metric SQL summary
+// grouped away from time is a table, not a failed projection.
+func rowsCarryTime(rows []query.Row) bool {
+	if len(rows) == 0 {
+		return false
+	}
+	_, hasTime := rows[0]["time"]
+	_, hasTimestamp := rows[0]["timestamp"]
+	return hasTime || hasTimestamp
 }
 
 func writeBrowserQueryError(w http.ResponseWriter, err error, diagnostics *query.ProviderDiagnostics, status int) {

@@ -29,20 +29,21 @@ type Options struct {
 }
 
 type App struct {
-	Runtime        *Runtime
-	Connections    *connections.Service
-	Profiles       *profiles.Service
-	Schedules      *schedules.Service
-	Sessions       *sessions.Runner
-	fileStore      *profiles.FileStore
-	snapshots      *snapshots.Manager
-	profileStore   profiles.StoreProvider
-	scheduleStore  schedules.StoreProvider
-	scheduleRunner *schedules.Runner
-	scheduler      *task.Scheduler
-	traces         *tracePlugins
-	stdout         io.Writer
-	stderr         io.Writer
+	Runtime           *Runtime
+	Connections       *connections.Service
+	Profiles          *profiles.Service
+	Schedules         *schedules.Service
+	Sessions          *sessions.Runner
+	fileStore         *profiles.FileStore
+	snapshots         *snapshots.Manager
+	profileStore      profiles.StoreProvider
+	scheduleStore     schedules.StoreProvider
+	scheduleRunner    *schedules.Runner
+	scheduler         *task.Scheduler
+	traces            *tracePlugins
+	connectionCatalog *connectionCatalog
+	stdout            io.Writer
+	stderr            io.Writer
 }
 
 func New(options Options) (*App, error) {
@@ -77,14 +78,18 @@ func New(options Options) (*App, error) {
 		}
 		return tracePlugins.overlay(overlay)
 	}
+	catalog, err := newConnectionCatalog(ResolveConfigDir(options.Args), snapshotManager)
+	if err != nil {
+		return nil, err
+	}
 	if err := runtime.SetContext(runtime.Context().
-		WithConnectionResolver(tracePlugins.resolveConnection(snapshotManager.ResolveConnection)).
+		WithConnectionResolver(catalog.files.Attach(runtime.Context().WithConnectionResolver(tracePlugins.resolveConnection(snapshotManager.ResolveConnection))).ConnectionResolver()).
 		WithConnectionLeaseResolver(snapshotManager.AcquireConnection)); err != nil {
 		return nil, err
 	}
 	connectionService, err := connections.New(connections.Options{
 		Database: runtime.Database, Context: runtime.Context, DecodeBody: DecodeBody,
-		Virtual: snapshotManager,
+		Virtual: catalog,
 		Profiles: func(ctx context.Context) ([]query.Profile, error) {
 			store, err := profileStore()
 			if err != nil {
@@ -141,7 +146,7 @@ func New(options Options) (*App, error) {
 	return &App{
 		Runtime: runtime, Connections: connectionService, Profiles: profileService,
 		Schedules: scheduleService, Sessions: runner,
-		fileStore: fileStore, snapshots: snapshotManager, profileStore: profileStore,
+		fileStore: fileStore, snapshots: snapshotManager, profileStore: profileStore, connectionCatalog: catalog,
 		scheduleStore: scheduleStore, scheduleRunner: scheduleRunner, scheduler: scheduler, traces: tracePlugins,
 		stdout: options.Stdout, stderr: options.Stderr,
 	}, nil

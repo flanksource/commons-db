@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	clickycache "github.com/flanksource/clicky/cache"
+	clickymetrics "github.com/flanksource/clicky/metrics"
 	clickyvalkey "github.com/flanksource/clicky/valkey"
 	"github.com/google/uuid"
 	"github.com/valkey-io/valkey-go"
@@ -119,6 +120,10 @@ type browserQueryRequest struct {
 	// both surfaces.
 	Filters map[string]string `json:"filters,omitempty"`
 
+	// Labels maps metric SQL columns onto upstream labels, as Profile.Labels
+	// does for a stored profile.
+	Labels map[string]string `json:"labels,omitempty"`
+
 	diagnostics *query.ProviderDiagnostics
 }
 
@@ -155,6 +160,11 @@ type browserQueryResult struct {
 	// having one.
 	Truncated bool `json:"truncated,omitempty"`
 	Limit     int  `json:"limit,omitempty"`
+
+	// Series is a timeseries view's rows projected as a timeseries profile's
+	// are (query.ProjectSeries), and Metrics what the query read.
+	Series  []clickymetrics.Series `json:"series,omitempty"`
+	Metrics *query.MetricMetadata  `json:"metrics,omitempty"`
 
 	Metadata    map[string]any             `json:"metadata,omitempty"`
 	Pagination  *query.PageInfo            `json:"pagination,omitempty"`
