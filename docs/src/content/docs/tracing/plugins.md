@@ -207,6 +207,7 @@ Some kinds capture from a system commons-db cannot reach by itself. commons-db o
 | Kind | Records |
 | --- | --- |
 | `jfr` | A JVM profile from a JFR recording, made by the JDK's Flight Recorder (`jfr` engine, JDK 8u262+) or by async-profiler (`async-profiler` engine). Each record is one stack's samples of an event within one dump: `cpu` and `wall` counted in samples, `alloc` weighed in bytes, `lock` (contended monitor enter) and `park` in nanoseconds blocked. Split by thread when asked. |
+| `query` | The rows of a commons-db query profile, read once over a window, once when the capture stops, or every interval. Each record is the provider's row as JSON (`row`), its `time`, and the `profile` and `provider` read. |
 
 `jfr.NewKindFor[P](recorder)` serves the `jfr` kind over a host's params type `P`, whose `JFROptions()` maps the form onto `jfr.Options`:
 - **Engine and events.** The `jfr` engine records every event its `Settings` (a predefined configuration such as `profile`) enables. async-profiler profiles one `Event` per session: `cpu`, `wall`, `alloc` or `lock`. `Options.Validate` refuses anything else; a host's `Validate` should call it, so a start is refused before a session exists.
@@ -215,6 +216,12 @@ Some kinds capture from a system commons-db cannot reach by itself. commons-db o
 - **Report.** It reports a `jfr.Report` (dumps, bytes and samples by event, and its watermark). A recording that cannot be stopped is the session's error.
 
 `decode.Decode` (package `tracing/jfr/decode`, which imports nothing else of commons-db) is the same decoder on its own: it reads a `.jfr` of one or more chunks into samples aggregated by event, thread and collapsed stack (`root;…;leaf`, with dotted frames such as `java.lang.Thread.run`). It refuses a malformed recording, or a stack, frame or thread that is missing from its chunk's constant pool, rather than skipping it.
+
+`query.Kind(query.Options{Profiles, BeforeExecute})` (package `tracing/query`) serves the `query` kind over a host's seams:
+- **What it reads.** Params name exactly one of a saved `profile`, which the host's `ProfileResolver` resolves (a host serving none passes no resolver, and a capture naming one is refused at start), or a `provider` read in place: its `type`, `connection`, `query`, and that one provider's typed options (`sql`, `prometheus`, `opensearch`, `http`, `postgrest`, `bigquery`, `jaeger`, `opentelemetry`), the exported option types of `query/providers` and `query/providers/sqlite`. Options for another provider, or a provider type outside that list, are refused. Provider `sqlite` always reads SQLite; another engine is provider `sql` with `sql.type`.
+- **Gating.** Every read runs the host's `BeforeExecute` first, as every other read of a profile's data does, and executes through `query.Execute`.
+- **Window.** `from` and `to` are a time or date math such as `now-1h`; a window needs a `from`, and an empty `to` is the moment each read runs. `query.WindowProfile` binds the window: a provider `range` option (prometheus) is replaced by it, keeping its declared step, and a provider without one gets it as `params.from` and `params.to` (and every time-role param). A windowed read whose profile has no range and references neither param is refused at start, never read unbounded.
+- **Pace.** With neither `every` nor `untilStopped` the kind reads once and ends. `untilStopped` reads once when the capture stops, over the whole capture. `every` re-reads from the last row it kept up to now at that interval and stores only the rows timed after it; the rows must carry a `time` or `timestamp` column, and a read whose rows carry neither fails the capture. `limit` caps the rows one read keeps, earliest first, and warns of the rows it cut.
 
 ## The query server
 
