@@ -37,11 +37,11 @@ require (
 	github.com/emersion/go-smtp v0.25.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.88-0.20261027204456-34e65b99d69d
-	github.com/flanksource/commons v1.61.1-0.20261027203923-c5cfedcdae97
-	github.com/flanksource/deps v1.0.49-0.20261027204639-46333741a2b2
+	github.com/flanksource/clicky v1.21.89
+	github.com/flanksource/commons v1.63.0
+	github.com/flanksource/deps v1.0.49
 	github.com/flanksource/gomplate/v3 v3.24.90
-	github.com/flanksource/is-healthy v1.0.92
+	github.com/flanksource/is-healthy v1.0.93
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.2
@@ -110,12 +110,12 @@ require (
 	k8s.io/client-go v0.36.1
 	k8s.io/klog/v2 v2.140.0
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2
-	modernc.org/sqlite v1.51.0
+	modernc.org/sqlite v1.55.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
-	github.com/flanksource/sqlglot-go v1.0.4-0.20261022123344-3264e440e925
+	github.com/flanksource/sqlglot-go v1.1.0
 	github.com/yuin/goldmark v1.7.17
 	gorm.io/driver/sqlserver v1.6.4
 )
@@ -240,7 +240,7 @@ require (
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/google/go-github/v57 v57.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
-	github.com/google/pprof v0.0.0-20260402051712-545e8a4df936 // indirect
+	github.com/google/pprof v0.0.0-20260507013755-92041b743c96 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.17 // indirect
 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect
@@ -299,7 +299,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.26 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
-	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
+	github.com/planetscale/vtprotobuf v0.6.1-0.20250313105119-ba97887b0a25 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
 	github.com/prometheus/client_model v0.6.2 // indirect
@@ -367,7 +367,7 @@ require (
 	k8s.io/kube-openapi v0.0.0-20260317180543-43fb72c5454a // indirect
 	k8s.io/streaming v0.36.2 // indirect
 	layeh.com/gopher-json v0.0.0-20201124131017-552bb3c4c3bf // indirect
-	modernc.org/libc v1.72.3 // indirect
+	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 	sigs.k8s.io/gateway-api v1.5.1 // indirect

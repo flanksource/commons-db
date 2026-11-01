@@ -24,7 +24,7 @@ var _ = Describe("column filter statistics", func() {
 	})
 
 	It("maps OpenTelemetry output columns back to their configured index fields", func() {
-		options := openTelemetryOptions{
+		options := OpenTelemetryOptions{
 			ServiceField: "resource.service.name",
 			StatusFields: []string{"span.status.code", "error"},
 		}

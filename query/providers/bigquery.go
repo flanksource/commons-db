@@ -5,6 +5,7 @@ import (
 	"github.com/flanksource/commons-db/logs"
 	"github.com/flanksource/commons-db/logs/bigquery"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 )
 
 func init() {
@@ -20,7 +21,7 @@ type bigqueryProvider struct{}
 
 func (bigqueryProvider) Type() string { return "bigquery" }
 
-type bigqueryOptions struct {
+type BigQueryOptions struct {
 	// Project overrides the project carried by the connection.
 	Project string `json:"project,omitempty"`
 
@@ -30,8 +31,12 @@ type bigqueryOptions struct {
 	Mapping *logs.FieldMappingConfig `json:"mapping,omitempty"`
 }
 
+// Validate accepts every BigQueryOptions: the project and mapping are only
+// checked by BigQuery itself.
+func (BigQueryOptions) Validate() error { return nil }
+
 func (bigqueryProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	opts, err := query.DecodeOptions[bigqueryOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[BigQueryOptions](req.Options)
 	if err != nil {
 		return nil, err
 	}

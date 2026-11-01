@@ -9,7 +9,7 @@ import (
 // composes the runtime column filters onto it.
 func buildOpenTelemetryRequest(
 	req query.ProviderRequest,
-	options openTelemetryOptions,
+	options OpenTelemetryOptions,
 	page openSearchPage,
 	timeFieldMapping *esdsl.TimeFieldMapping,
 ) (openSearchRequest, error) {
@@ -42,7 +42,7 @@ func buildOpenTelemetryRequest(
 // openTelemetrySearch layers the trace-shaped options underneath the
 // specification: they fill what the author left unset and never override it, so
 // a profile can opt out of any default by stating its own.
-func openTelemetrySearch(options openTelemetryOptions) esdsl.Search {
+func openTelemetrySearch(options OpenTelemetryOptions) esdsl.Search {
 	var search esdsl.Search
 	if options.Search != nil {
 		search = *options.Search
