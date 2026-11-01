@@ -1,0 +1,21 @@
+profile: events-by-day
+# One SQLite file per day, all with the same events table. The query runs in
+# every file and the rows merge into one ordered, cursor-paged result.
+provider:
+  type: sqlite
+  options:
+    partitions:
+      glob: .data/events/dt=*/events.sqlite
+      # The dt group becomes a column of every row, and a filter on dt skips
+      # the files it excludes without opening them.
+      labels: 'dt=(?P<dt>[0-9-]+)'
+columns:
+  - {name: dt, type: string, filter: {}}
+  - {name: id, type: number}
+  - {name: service, type: string, filter: {}}
+# id is only unique within one day's file; the merge breaks ties across files
+# by partition, so declaring it unique here is still a total order.
+order:
+  - {column: dt, desc: true}
+  - {column: id, unique: true}
+query: SELECT id, service FROM events

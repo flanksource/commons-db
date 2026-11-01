@@ -131,6 +131,11 @@ func addedEnvironmentValues(before, after []string) []string {
 	base := environmentMap(before)
 	var values []string
 	for key, value := range environmentMap(after) {
+		// Connection setup also injects public settings; redacting booleans corrupts JSON output.
+		switch key {
+		case "AWS_EC2_METADATA_DISABLED", "AWS_DEFAULT_REGION", "AWS_REGION", "OPENSEARCH_INDEX", "OPENSEARCH_INSECURE_SKIP_VERIFY":
+			continue
+		}
 		if previous, exists := base[key]; !exists || previous != value {
 			values = append(values, value)
 		}
@@ -145,6 +150,9 @@ func splitEnv(item string) (string, string, bool) {
 
 func connectionSensitiveValues(connections connection.ExecConnections) []string {
 	var values []string
+	if search := connections.OpenSearch; search != nil {
+		values = append(values, search.Username.ValueStatic, search.Password.ValueStatic)
+	}
 	if aws := connections.AWS; aws != nil {
 		values = append(values, aws.AccessKey.ValueStatic, aws.SecretKey.ValueStatic, aws.SessionToken.ValueStatic)
 	}

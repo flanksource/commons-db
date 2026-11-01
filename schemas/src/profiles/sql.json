@@ -24,6 +24,9 @@
             "cloudwatch": [
               "aws"
             ],
+            "cloudwatchmetrics": [
+              "aws"
+            ],
             "gcpcloudlogging": [
               "google_cloud"
             ],
@@ -109,7 +112,8 @@
           "title": "URL / DSN",
           "type": "string",
           "x-clicky-component": "k8s-url-selector",
-          "x-clicky-default-source": "value"
+          "x-clicky-default-source": "value",
+          "x-local-file": "sqlite"
         }
       },
       "title": "Options",

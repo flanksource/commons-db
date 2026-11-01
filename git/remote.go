@@ -129,12 +129,13 @@ func remoteOf(owner, repo *Repository) string {
 // at Dir, the mirror of Owner. Depth > 0 shallows the fetch; Flags are extra
 // fetch options (e.g. --unshallow).
 type fetchOptions struct {
-	Dir   string
-	Owner *Repository
-	Repo  *Repository
-	Ref   Ref
-	Depth int
-	Flags []string
+	Refspec string
+	Dir     string
+	Owner   *Repository
+	Repo    *Repository
+	Ref     Ref
+	Depth   int
+	Flags   []string
 }
 
 // fetch fetches options.Ref and returns the fetched commit, which may be
@@ -168,7 +169,11 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	if options.Depth > 0 {
 		args = append(args, fmt.Sprintf("--depth=%d", options.Depth))
 	}
-	args = append(args, "--end-of-options", repo.URL.Clone, ref.refspec(remoteOf(options.Owner, repo)))
+	refspec := options.Refspec
+	if refspec == "" {
+		refspec = ref.refspec(remoteOf(options.Owner, repo))
+	}
+	args = append(args, "--end-of-options", repo.URL.Clone, refspec)
 	if _, err := run(ctx, command{dir: options.Dir, env: env, args: args, progress: report}); err != nil {
 		return "", fmt.Errorf("fetch %s from %s: %w", ref.Name, repo.URL.Redacted(), err)
 	}

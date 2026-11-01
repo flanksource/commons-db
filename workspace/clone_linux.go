@@ -1,6 +1,6 @@
 //go:build linux
 
-package shell
+package workspace
 
 import (
 	"errors"

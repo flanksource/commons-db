@@ -161,6 +161,7 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
 	}
 	req.Filters = siblingFilters(filters, request.Key)
+	req.Labels = profile.Labels
 	req.Inspection = request.Inspection
 	return lookupCachedFilterValues(ctx, lookupProvider, req, lookup)
 }
@@ -285,6 +286,7 @@ func filterValueCacheKey(identity filterValueCacheIdentity, req ProviderRequest,
 		ParamRoles       map[string]ParamRole
 		TemplatedParams  []string
 		Filters          []ColumnFilterValue
+		Labels           map[string]string
 		Binding          ColumnFilterBinding
 		Search           string
 		Limit            int
@@ -293,7 +295,7 @@ func filterValueCacheKey(identity filterValueCacheIdentity, req ProviderRequest,
 		Provider: req.Provider, Query: req.Query, QueryArgs: req.QueryArgs,
 		QueryIdentifiers: req.QueryIdentifiers,
 		Options:          req.Options, Params: req.Params, ParamRoles: req.ParamRoles,
-		TemplatedParams: req.TemplatedParams, Filters: req.Filters,
+		TemplatedParams: req.TemplatedParams, Filters: req.Filters, Labels: req.Labels,
 		Binding: lookup.Binding, Search: lookup.Search, Limit: lookup.Limit,
 	})
 	if err != nil {

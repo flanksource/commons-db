@@ -28,6 +28,7 @@ type RowPresenter interface {
 // context objects (Policy/Plan/Integrations side panels, each
 // produced by a SubQuery).
 type Result struct {
+	Metrics *MetricMetadata `json:"metrics,omitempty" yaml:"metrics,omitempty"`
 	// Profile is the name of the Profile that produced this Result.
 	Profile string `json:"profile,omitempty" yaml:"profile,omitempty"`
 
@@ -100,6 +101,7 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 // sub-queries → processors → row mapping (→ top sort/limit). Shared by Execute
 // and each top-session tick.
 func executeResolved(ctx context.Context, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Result, error) {
+	ctx = withProfileFrame(ctx, p.Name)
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return nil, err
@@ -109,6 +111,8 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
 	req.Filters = filters
+	req.Labels = p.Labels
+	req.MetricMetadata = &MetricMetadata{}
 	req.Order, err = p.EffectiveOrder()
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
@@ -126,6 +130,9 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	}
 
 	result := &Result{Profile: p.Name, Rows: rows, Truncated: truncated}
+	if len(req.MetricMetadata.Sources) > 0 || len(req.MetricMetadata.Notices) > 0 {
+		result.Metrics = req.MetricMetadata
+	}
 
 	for name, sub := range p.Context {
 		subRows, err := executeSubQuery(ctx, sub, p.Params, resolved)
@@ -290,10 +297,20 @@ func buildProviderRequest(ctx context.Context, in providerRequestInput) (Provide
 		return ProviderRequest{}, err
 	}
 	template := newParamTemplate(ctx, templateParams)
+	options, err := template.renderOptions(cfg.Options)
+	if err != nil {
+		return ProviderRequest{}, err
+	}
 	var queryText string
 	var queryArgs []any
 	var queryIdentifiers []string
-	if parameterizer, ok := provider.(QueryParameterizer); ok {
+	parameterizer, parameterized := provider.(QueryParameterizer)
+	if selector, ok := provider.(QueryParameterizationSelector); ok {
+		resolvedConfig := cfg
+		resolvedConfig.Options = options
+		parameterized = parameterized && selector.ParameterizesQuery(resolvedConfig)
+	}
+	if parameterized {
 		var parameterized ParameterizedQuery
 		parameterized, err = parameterizer.ParameterizeQuery(QueryParameterizationRequest{
 			Query: rawQuery, Params: templateParams, Definitions: defs,
@@ -312,10 +329,6 @@ func buildProviderRequest(ctx context.Context, in providerRequestInput) (Provide
 		if err != nil {
 			return ProviderRequest{}, err
 		}
-	}
-	options, err := template.renderOptions(cfg.Options)
-	if err != nil {
-		return ProviderRequest{}, err
 	}
 	connection, err := template.render("provider.connection", cfg.Connection)
 	if err != nil {

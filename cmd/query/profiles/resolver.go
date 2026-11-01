@@ -3,6 +3,7 @@ package profiles
 import (
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -88,6 +89,15 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 	if len(overlay.Columns) > 0 {
 		merged.Columns = slices.Clone(overlay.Columns)
 	}
+	if len(overlay.Labels) > 0 {
+		merged.Labels = maps.Clone(merged.Labels)
+		if merged.Labels == nil {
+			merged.Labels = map[string]string{}
+		}
+		for k, v := range overlay.Labels {
+			merged.Labels[k] = v
+		}
+	}
 	if overlay.Presenter != nil {
 		merged.Presenter = overlay.Presenter
 	}
@@ -120,6 +130,9 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 	}
 	if overlay.Render != "" {
 		merged.Render = overlay.Render
+	}
+	if overlay.Series != nil {
+		merged.Series = overlay.Series
 	}
 	if overlay.Trace != nil {
 		merged.Top = nil

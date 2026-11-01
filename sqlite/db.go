@@ -128,7 +128,7 @@ func openWriter(path string) (*sql.DB, error) {
 }
 
 func openReader(path string) (*sql.DB, error) {
-	reader, err := sql.Open("sqlite", readDSN(path))
+	reader, err := sql.Open("sqlite", ReadOnlyDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: open read pool %s: %w", path, err)
 	}
@@ -422,9 +422,11 @@ func (d *DB) Lease() func() {
 func (d *DB) Path() string { return d.path }
 
 // ReadDSN returns a query-only SQLite DSN for the database file.
-func (d *DB) ReadDSN() string { return readDSN(d.path) }
+func (d *DB) ReadDSN() string { return ReadOnlyDSN(d.path) }
 
-func readDSN(path string) string {
+// ReadOnlyDSN is a query-only DSN for the SQLite file at path, for a reader
+// that must never write it, such as one partition of a merged read.
+func ReadOnlyDSN(path string) string {
 	return fileURI(path) + "?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)"
 }
 

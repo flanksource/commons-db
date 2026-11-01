@@ -41,7 +41,7 @@ var providerTypes = []string{
 	"sql", "postgres", "mysql", "sqlserver", "clickhouse", "sqlite",
 	"http", "prometheus", "postgrest", "loki", "opensearch", "jaeger",
 	"opentelemetry", "cloudwatch", "gcpcloudlogging", "bigquery", "k8s",
-	"azureloganalytics",
+	"azureloganalytics", "cloudwatchmetrics",
 }
 
 // providerConnectionTypes maps each profile provider type to the connection
@@ -67,6 +67,7 @@ var providerConnectionTypes = map[string][]string{
 	"jaeger":        {models.ConnectionTypeJaeger},
 
 	"cloudwatch":        {models.ConnectionTypeAWS},
+	"cloudwatchmetrics": {models.ConnectionTypeAWS},
 	"bigquery":          {models.ConnectionTypeGCP},
 	"gcpcloudlogging":   {models.ConnectionTypeGCP},
 	"k8s":               {models.ConnectionTypeKubernetes},
@@ -286,6 +287,21 @@ func profileColumnFilterSchema() Schema {
 	}
 }
 
+func profileSeriesSchema() Schema {
+	return Schema{
+		"type": "object", "title": "Series",
+		"description": "Projects rows onto plottable series, one per label set",
+		"properties": Schema{
+			"time":   strProp("Time column", "Timestamp column (default time, else timestamp)"),
+			"value":  strProp("Value column", "Numeric column (default value)"),
+			"labels": Schema{"type": "array", "title": "Label columns", "description": "Columns identifying a series (default: every other column)", "items": Schema{"type": "string"}},
+			"metric": strProp("Metric column", "Column holding the metric name; always part of a series' identity"),
+			"unit":   strProp("Unit", "clicky-ui unit key (percent, bytes, ms, ...)"),
+			"label":  strProp("Label", "Go template over the series labels, e.g. {{.pod}}"),
+		},
+	}
+}
+
 func profileAliasSchema() Schema {
 	return Schema{
 		"type": "object", "required": []string{"name", "cel"},
@@ -409,6 +425,7 @@ func ProfileSource() Schema {
 				},
 			},
 			"columns": Schema{"type": "array", "title": "Columns", "x-layout": "table", "items": profileColumnSchema()},
+			"labels":  Schema{"type": "object", "title": "Metric labels", "description": "SQL column name to upstream metric label or dimension", "additionalProperties": Schema{"type": "string"}},
 			"aliases": Schema{"type": "array", "title": "Aliases", "x-layout": "table", "items": profileAliasSchema()},
 			"ignore":  Schema{"type": "array", "title": "Ignore", "items": Schema{"type": "string"}},
 			"filters": Schema{"type": "array", "title": "Filters", "x-array-display": "accordion", "items": profileFilterSchema()},
@@ -430,7 +447,8 @@ func ProfileSource() Schema {
 			"replay":    replaySpec(),
 			"reconcile": reconcileSpec(),
 			"output":    Schema{"type": "array", "title": "Output", "items": Schema{"type": "string"}},
-			"render":    Schema{"type": "string", "title": "Render", "enum": []string{"table", "logs"}, "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)"},
+			"render":    Schema{"type": "string", "title": "Render", "enum": []string{"table", "logs", "timeseries"}, "description": "Presentation mode: table (default), logs (canonical LogsTable view for trace/log profiles) or timeseries (charts the series projection; the default when series is set)"},
+			"series":    profileSeriesSchema(),
 		},
 	}
 }

@@ -163,6 +163,12 @@ func (t *Total) Relation() string {
 	}
 }
 
+// ProviderStateKey is the one Page.State entry a provider owns: the position of
+// a read that a single row's NextKeys cannot name, such as a merge over several
+// partitions, where each one resumes from its own last row. No processor may
+// take it as its label.
+const ProviderStateKey = "~provider"
+
 // Page is one batch of an ordered result set together with the position that
 // resumes after it.
 //
@@ -171,7 +177,8 @@ func (t *Total) Relation() string {
 // is something the source can hand back, whereas a position between rows of one
 // fetch is something it would have to be asked to invent.
 type Page struct {
-	Rows []Row
+	Metrics *MetricMetadata `json:"metrics,omitempty"`
+	Rows    []Row
 
 	// Styles are the evaluated cell styles for Rows, positionally parallel to
 	// it. Nil when no column declares a Style.
@@ -203,7 +210,8 @@ type Page struct {
 	// State is what each processor asked to carry into the next page, keyed by
 	// label. Like PIT it travels inside Next rather than being returned to the
 	// caller, so a resumed walk hands each processor back its own memory.
-	// Providers never set it; ProcessPages does.
+	// ProcessPages sets the processor entries; a provider sets only
+	// ProviderStateKey, and reads it back from ProviderRequest.Position.State.
 	State map[string][]byte
 
 	// HasMore reports that the source had rows beyond this Page.

@@ -69,6 +69,10 @@ type QueryParameterizer interface {
 	ParameterizeQuery(request QueryParameterizationRequest) (ParameterizedQuery, error)
 }
 
+type QueryParameterizationSelector interface {
+	ParameterizesQuery(ProviderConfig) bool
+}
+
 type QueryParameterizationRequest struct {
 	Query       string
 	Params      map[string]any
@@ -111,6 +115,8 @@ type FilterValueSearch struct {
 
 // ProviderRequest is the resolved input handed to a Provider by the engine.
 type ProviderRequest struct {
+	Labels         map[string]string
+	MetricMetadata *MetricMetadata
 	// Provider is the resolved registry key. It is carried so optional
 	// diagnostics can identify the native backend without re-deriving it.
 	Provider string

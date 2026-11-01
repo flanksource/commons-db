@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -103,4 +104,58 @@ func (tracer Tracer) init(newExporter func() (sdktrace.SpanExporter, error), new
 			logger.Errorf("%s", err)
 		}
 	}, nil
+}
+
+// Start installs the global tracer provider and returns a shutdown that
+// flushes buffered spans before closing the exporter.
+func (tracer Tracer) Start(ctx context.Context) (func(context.Context) error, error) {
+	client, err := tracer.client()
+	if err != nil {
+		return nil, err
+	}
+	exporter, err := otlptrace.New(ctx, client)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create opentelemetry exporter: %w", err)
+	}
+	resources, err := resource.New(ctx,
+		resource.WithAttributes(attribute.String("service.name", tracer.ServiceName)),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("could not set opentelemetry resources: %w", err)
+	}
+
+	provider := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(NewCustomSampler(sdktrace.AlwaysSample(), tracer.Samplers)),
+		sdktrace.WithBatcher(exporter),
+		sdktrace.WithResource(resources),
+	)
+	otel.SetTracerProvider(provider)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	return provider.Shutdown, nil
+}
+
+// client picks OTLP/HTTP for an http(s):// collector URL, whose scheme decides
+// TLS, and OTLP/gRPC for a bare host:port, which uses TLS unless Insecure. A
+// URL without a path is a base URL, as OTEL_EXPORTER_OTLP_ENDPOINT is, so
+// spans go to its /v1/traces.
+func (tracer Tracer) client() (otlptrace.Client, error) {
+	if strings.HasPrefix(tracer.CollectorURL, "http") {
+		u, err := url.Parse(tracer.CollectorURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid opentelemetry collector url %q: %w", tracer.CollectorURL, err)
+		}
+		if u.Path == "" || u.Path == "/" {
+			u.Path = "/v1/traces"
+		}
+		return otlptracehttp.NewClient(
+			otlptracehttp.WithEndpointURL(u.String()),
+			otlptracehttp.WithCompression(otlptracehttp.GzipCompression),
+		), nil
+	}
+
+	secureOption := otlptracegrpc.WithTLSCredentials(credentials.NewClientTLSFromCert(nil, ""))
+	if tracer.Insecure {
+		secureOption = otlptracegrpc.WithInsecure()
+	}
+	return otlptracegrpc.NewClient(secureOption, otlptracegrpc.WithEndpoint(tracer.CollectorURL)), nil
 }

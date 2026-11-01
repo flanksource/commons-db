@@ -111,11 +111,12 @@ func (b bareRepo) installPushOptionHook() string {
 // httpRemote serves bare repositories over smart HTTP through
 // git-http-backend behind Basic auth, recording each request.
 type httpRemote struct {
-	Server   *httptest.Server
-	User     string
-	Password string
-	mu       sync.Mutex
-	requests []recordedRequest
+	Server    *httptest.Server
+	User      string
+	Password  string
+	mu        sync.Mutex
+	requests  []recordedRequest
+	packBytes int64
 }
 
 type recordedRequest struct {
@@ -137,7 +138,13 @@ func newHTTPRemote(root string, useTLS bool) *httpRemote {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		backend.ServeHTTP(w, r)
+		counter := &packResponseWriter{ResponseWriter: w}
+		backend.ServeHTTP(counter, r)
+		if strings.HasSuffix(r.URL.Path, "/git-upload-pack") {
+			remote.mu.Lock()
+			remote.packBytes += counter.bytes
+			remote.mu.Unlock()
+		}
 	})
 	if useTLS {
 		remote.Server = httptest.NewTLSServer(handler)

@@ -313,7 +313,7 @@ func (s *Service) executeRows(ctx context.Context, name string, opts map[string]
 	// The base profile flow needs no database; only postgres/sqlite processors
 	// do. The context provider supplies the DB-backed context under `serve` and a
 	// DB-less one on the CLI.
-	queryCtx := s.context()
+	queryCtx := s.queryContext(ctx, store)
 	res, err := query.Execute(queryCtx, live.Profile, params)
 	if err != nil {
 		return nil, err

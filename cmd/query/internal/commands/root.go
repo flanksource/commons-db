@@ -47,6 +47,11 @@ func New(options Options) (*cobra.Command, error) {
 	if requestsVersion(options.Args) {
 		return root, nil
 	}
+	if requestsProjections(options.Args) {
+		root.AddCommand(newProjections())
+		return root, nil
+	}
+	clicky.BindAllFlags(root.PersistentFlags(), "format", "tasks")
 
 	database := app.ResolveDatabaseOptions(options.Args)
 	if requestsMetadataOnly(options.Args) {
@@ -64,6 +69,9 @@ func New(options Options) (*cobra.Command, error) {
 		return nil, err
 	}
 	clicky.GenerateCLI(root)
+	if requestsMetadataOnly(options.Args) {
+		root.AddCommand(newProjections())
+	}
 	return root, nil
 }
 
@@ -71,6 +79,7 @@ func New(options Options) (*cobra.Command, error) {
 // as the command name by the scanners below.
 var flagsWithValues = map[string]bool{
 	"--config-dir": true, "--profiles-dir": true, "--db": true, "--data-dir": true,
+	"--format": true,
 }
 
 // metadataOnlyCommands describe the CLI rather than run it. They read neither

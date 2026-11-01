@@ -1,6 +1,7 @@
 package profiles
 
 import (
+	"encoding/json"
 	"fmt"
 	"iter"
 	"net/http"
@@ -101,8 +102,9 @@ func (r exportRequest) pageRequest() query.PageRequest {
 // to write. Every field is resolved before the first byte of the body, because
 // a header cannot be corrected once the body has begun.
 type exportResponse struct {
-	rows iter.Seq2[query.Row, error]
-	mode string
+	metrics *query.MetricMetadata
+	rows    iter.Seq2[query.Row, error]
+	mode    string
 
 	total   *query.Total
 	hasMore bool
@@ -183,6 +185,7 @@ func exportPage(
 			total:     &total,
 			hasMore:   end < len(result.Rows),
 			truncated: result.Truncated,
+			metrics:   result.Metrics,
 		}, nil
 	}
 
@@ -201,6 +204,7 @@ func exportPage(
 			hasMore:   page.HasMore,
 			next:      page.Next,
 			truncated: page.Truncated,
+			metrics:   page.Metrics,
 		}, nil
 	}
 	return exportResponse{rows: query.Rows(query.SlicePages(nil)), mode: "page"}, nil
@@ -231,6 +235,7 @@ func exportAll(
 			mode:      "buffered",
 			total:     &total,
 			truncated: result.Truncated,
+			metrics:   result.Metrics,
 		}, nil
 	}
 
@@ -253,6 +258,7 @@ func exportAll(
 		mode:      "streaming",
 		total:     first.Total,
 		truncated: truncated,
+		metrics:   first.Metrics,
 	}, nil
 }
 
@@ -371,6 +377,7 @@ type exportHeader struct {
 }
 
 var exportHeaderSpecs = []exportHeader{
+	{"X-Metric-Metadata", "JSON metric source ranges, resolution, sample counts and query notices", "string"},
 	{"Content-Disposition", "Attachment filename; present when ?_download or ?filename is given", "string"},
 	{"X-Export-Mode", "How the rows were produced: page, buffered or streaming. Orthogonal to scope — a scope=page request against a profile that cannot stream reports buffered", "string"},
 	{"X-Page-Limit", "Rows this page was limited to. Present when scope=page", "integer"},
@@ -422,6 +429,13 @@ func setExportHeaders(w http.ResponseWriter, r *http.Request, profileName string
 	setCORSHeaders(w)
 	header.Set("Content-Type", exportContentType(request.format))
 	header.Set("X-Export-Mode", response.mode)
+	if response.metrics != nil {
+		encoded, err := json.Marshal(response.metrics)
+		if err != nil {
+			panic(fmt.Errorf("encode metric metadata: %w", err))
+		}
+		header.Set("X-Metric-Metadata", string(encoded))
+	}
 
 	if request.scope == "page" {
 		header.Set("X-Page-Limit", strconv.Itoa(request.limit))

@@ -150,14 +150,23 @@ func publishCommit(ctx context.Context, mirror string, repo *Repository, sha str
 	if request.Tag != nil {
 		tag := *request.Tag
 		tag.Tagger = request.Author
-		if err := createTag(ctx, mirror, sha, tag); err != nil {
+		stored := tag.Name
+		if _, shared := repo.Provider.(RemoteHistoryProvider); shared {
+			unique, err := worktreeName(Ref{FullName: sha}, true)
+			if err != nil {
+				return ChangeResult{}, err
+			}
+			stored = "commons-cache/" + repo.URL.CacheKey() + "/" + unique + "/" + tag.Name
+		}
+		if err := writeNamedTag(ctx, namedTagOptions{Directory: mirror, Commit: sha, Name: stored, Tag: tag}); err != nil {
 			return ChangeResult{}, err
 		}
 		defer func() {
-			_, deleted := run(ctx, command{dir: mirror, args: []string{"tag", "--delete", "--end-of-options", tag.Name}})
+			_, deleted := run(ctx, command{dir: mirror, args: []string{"tag", "--delete", "--end-of-options", stored}})
 			err = errors.Join(err, deleted)
 		}()
 		options.Tags, result.Tag = []string{tag.Name}, tag.Name
+		options.tagRefs = map[string]string{tag.Name: stored}
 	}
 	if err := push(ctx, mirror, repo, options); err != nil {
 		return ChangeResult{}, err

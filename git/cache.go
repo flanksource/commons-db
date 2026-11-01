@@ -16,7 +16,8 @@ import (
 
 const lockRetry = 50 * time.Millisecond
 
-// Cache keeps one bare mirror per repository and worktrees per ref:
+// Cache leases worktrees from cached bare repositories. Provider-backed
+// repositories with common history can share a physical mirror:
 //
 //	<Root>/<RepoURL.CacheKey>/mirror.git
 //	<Root>/<RepoURL.CacheKey>/mirror.lock
@@ -62,12 +63,22 @@ func (c *Cache) checkoutRef(ctx context.Context, repo *Repository, ref Ref, opti
 		return nil, errors.New("git cache root is required")
 	}
 	base := filepath.Join(c.Root, repo.URL.CacheKey())
+	if options.Depth < 0 {
+		return nil, fmt.Errorf("invalid checkout depth %d", options.Depth)
+	}
+	paths, err := c.checkoutPaths(ctx, repo, ref, options.Depth)
+	if err != nil {
+		return nil, err
+	}
+	if options.Depth > 0 {
+		base = paths.dir
+	}
 	name, err := worktreeName(ref, options.Ephemeral)
 	if err != nil {
 		return nil, err
 	}
 	worktree := &Worktree{Dir: filepath.Join(base, "worktrees", name), Ref: ref, repo: repo,
-		mirror: filepath.Join(base, "mirror.git"), mirrorLock: filepath.Join(base, "mirror.lock"), ephemeral: options.Ephemeral}
+		mirror: paths.git, mirrorLock: paths.lock, ephemeral: options.Ephemeral}
 	if worktree.lease, err = acquire(ctx, worktree.Dir+".lock", "worktree lease", exclusiveLock); err != nil {
 		return nil, fmt.Errorf("%s at %s: %w", repo.URL.Redacted(), ref.Name, err)
 	}
@@ -101,9 +112,19 @@ func (w *Worktree) materialize(ctx context.Context, depth int) (err error) {
 		return err
 	}
 	if !hasCommit(ctx, w.mirror, w.Ref.SHA) {
-		if w.Ref.SHA, err = fetch(ctx, fetchOptions{Dir: w.mirror, Owner: w.repo, Repo: w.repo, Ref: w.Ref, Depth: depth}); err != nil {
+		fetchRef := w.Ref
+		if _, shared := w.repo.Provider.(RemoteHistoryProvider); shared {
+			fetchRef = Ref{Name: w.Ref.SHA, FullName: w.Ref.SHA, SHA: w.Ref.SHA, Kind: RefSHA}
+		}
+		if w.Ref.SHA, err = fetch(ctx, fetchOptions{Dir: w.mirror, Owner: w.repo, Repo: w.repo, Ref: fetchRef, Depth: depth}); err != nil {
 			return err
 		}
+	}
+	if err := recordCacheRef(ctx, w.mirror, w.repo, w.Ref); err != nil {
+		return err
+	}
+	if err := newMirrorPaths(filepath.Dir(w.mirror)).pin(ctx, []string{w.Ref.SHA}); err != nil {
+		return err
 	}
 	if _, err := os.Stat(filepath.Join(w.Dir, ".git")); err == nil {
 		return w.reset(ctx)

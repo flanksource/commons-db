@@ -24,6 +24,9 @@
             "cloudwatch": [
               "aws"
             ],
+            "cloudwatchmetrics": [
+              "aws"
+            ],
             "gcpcloudlogging": [
               "google_cloud"
             ],
@@ -80,6 +83,14 @@
     },
     "options": {
       "properties": {
+        "language": {
+          "enum": [
+            "promql",
+            "sql"
+          ],
+          "title": "Language",
+          "type": "string"
+        },
         "range": {
           "properties": {
             "end": {

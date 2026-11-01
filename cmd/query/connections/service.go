@@ -11,6 +11,7 @@ import (
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/entity"
+	"github.com/flanksource/commons-db/cmd/query/localfiles"
 	"github.com/flanksource/commons-db/cmd/query/secretcatalog"
 	dbconnection "github.com/flanksource/commons-db/connection"
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -143,9 +144,9 @@ func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 		Prefix: prefix, Context: ctx, Profiles: s.profiles, Virtual: s.virtual, Policy: s.policy, Next: health,
 	}))
 	if s.secrets == nil {
-		return handler
+		return localfiles.Handler(prefix, handler)
 	}
-	return s.secretsHandler(browser.prefix, ctx, handler)
+	return localfiles.Handler(prefix, s.secretsHandler(browser.prefix, ctx, handler))
 }
 
 // secretsHandler serves the secret pickers' {prefix}/connections/secrets...,
@@ -289,11 +290,17 @@ func (s *Service) optionalStore() (*gorm.DB, error) {
 }
 
 func (s *Service) withVirtual(stored []*models.Connection, options ListOptions) ([]*models.Connection, error) {
-	virtual, err := virtualConnections(s.virtual, options)
+	virtual, err := virtualConnections(s.virtual, ListOptions{})
 	if err != nil {
 		return nil, err
 	}
 	for _, connection := range virtual {
+		stored = slices.DeleteFunc(stored, func(existing *models.Connection) bool {
+			return existing.Namespace == connection.Namespace && existing.Name == connection.Name
+		})
+		if types := connectionTypeFilter(options); len(types) > 0 && !slices.Contains(types, connection.Type) && !(connection.Type == "" && len(connection.Warnings) > 0) {
+			continue
+		}
 		connection = cloneConnection(connection)
 		redactConnection(connection)
 		stored = append(stored, connection)

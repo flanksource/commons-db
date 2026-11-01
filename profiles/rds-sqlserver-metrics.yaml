@@ -1,0 +1,51 @@
+profile: rds-sqlserver-metrics
+provider:
+  type: cloudwatchmetrics
+  connection: connection://aws
+  options:
+    language: sql
+    namespace: AWS/RDS
+    statistic: Average
+    range: {start: now-6h, end: now, step: 60s}
+labels:
+  db_instance: DBInstanceIdentifier
+columns:
+  - {name: db_instance, type: string}
+  - {name: metric, type: string}
+  - {name: unit, type: string}
+  - {name: min, type: number}
+  - {name: avg, type: number}
+  - {name: max, type: number}
+  - {name: p50, type: number}
+  - {name: p90, type: number}
+  - {name: p95, type: number}
+  - {name: p99, type: number}
+  - {name: samples, type: number}
+order:
+  - {column: db_instance}
+  - {column: metric, unique: true}
+query: |
+  WITH samples AS (
+  SELECT time, db_instance, 'cpu_usage' AS metric, 'percent' AS unit, value * 1 AS value FROM CPUUtilization
+  UNION ALL
+  SELECT time, db_instance, 'freeable_memory' AS metric, 'MiB' AS unit, value * 9.5367431640625e-7 AS value FROM FreeableMemory
+  UNION ALL
+  SELECT time, db_instance, 'connections' AS metric, 'count' AS unit, value * 1 AS value FROM DatabaseConnections
+  UNION ALL
+  SELECT time, db_instance, 'read_latency_period_average' AS metric, 'ms' AS unit, value * 1000 AS value FROM ReadLatency
+  UNION ALL
+  SELECT time, db_instance, 'write_latency_period_average' AS metric, 'ms' AS unit, value * 1000 AS value FROM WriteLatency
+  UNION ALL
+  SELECT time, db_instance, 'read_iops' AS metric, 'operations_per_second' AS unit, value * 1 AS value FROM ReadIOPS
+  UNION ALL
+  SELECT time, db_instance, 'write_iops' AS metric, 'operations_per_second' AS unit, value * 1 AS value FROM WriteIOPS
+  )
+  SELECT db_instance, metric, unit,
+         min(value) AS min, avg(value) AS avg, max(value) AS max,
+         percentile(value, 50) AS p50, percentile(value, 90) AS p90,
+         percentile(value, 95) AS p95, percentile(value, 99) AS p99,
+         count(value) AS samples
+  FROM samples
+  GROUP BY db_instance, metric, unit
+  ORDER BY db_instance, metric
+

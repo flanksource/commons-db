@@ -142,6 +142,7 @@ func (p CursorPosition) IsZero() bool { return len(p.Keys) == 0 }
 // request a cursor is checked against is one the cursor helped build, and
 // checking against it would be circular.
 type CursorScope struct {
+	Labels     map[string]string
 	Profile    string
 	Provider   string
 	Connection string
@@ -414,6 +415,27 @@ func floatCursorKey(value float64, bits int) (cursorKey, error) {
 	return cursorKey{Type: "float64", Value: strconv.FormatFloat(value, 'g', -1, bits)}, nil
 }
 
+// MarshalCursorKeys encodes key values with the cursor's own typed codec, for a
+// provider carrying positions of its own under ProviderStateKey. A plain JSON
+// encoding would hand an int64 key back as a float64 and resume from the wrong
+// row once it passes 2^53.
+func MarshalCursorKeys(values []any) (json.RawMessage, error) {
+	keys, err := encodeCursorKeys(values)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(keys)
+}
+
+// UnmarshalCursorKeys decodes what MarshalCursorKeys encoded.
+func UnmarshalCursorKeys(raw json.RawMessage) ([]any, error) {
+	var keys []cursorKey
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return nil, fmt.Errorf("%w: invalid cursor keys: %v", ErrCursorStale, err)
+	}
+	return decodeCursorKeys(keys)
+}
+
 func decodeCursorKeys(encoded []cursorKey) ([]any, error) {
 	keys := make([]any, 0, len(encoded))
 	for index, key := range encoded {
@@ -522,11 +544,13 @@ func (s CursorScope) fingerprint() (string, error) {
 
 func (s CursorScope) inputFingerprint() (string, error) {
 	encoded, err := json.Marshal(struct {
-		Provider   string         `json:"provider"`
-		Connection string         `json:"connection"`
-		Query      string         `json:"query"`
-		Options    map[string]any `json:"options"`
+		Labels     map[string]string `json:"labels,omitempty"`
+		Provider   string            `json:"provider"`
+		Connection string            `json:"connection"`
+		Query      string            `json:"query"`
+		Options    map[string]any    `json:"options"`
 	}{
+		Labels:     s.Labels,
 		Provider:   s.Provider,
 		Connection: s.Connection,
 		Query:      s.Query,

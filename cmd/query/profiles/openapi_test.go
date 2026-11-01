@@ -259,7 +259,7 @@ func TestProfileOpenAPIOffersNoSortForABufferedProvider(t *testing.T) {
 	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
 	if err := addProfileToSpec(spec, query.Profile{
 		Name:     "metrics",
-		Provider: query.ProviderConfig{Type: "prometheus"},
+		Provider: query.ProviderConfig{Type: "http"},
 		Columns:  []query.ColumnDef{{Name: "instance"}, {Name: "value", Type: query.ColumnTypeNumber}},
 	}); err != nil {
 		t.Fatal(err)

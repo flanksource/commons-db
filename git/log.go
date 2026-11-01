@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -273,11 +274,17 @@ func (c *Cache) prepareReadRefs(ctx context.Context, repo *Repository, options r
 // process already pinned cost no git process; any other commit is checked,
 // fetched when missing and pinned under the exclusive lock first.
 func (c *Cache) lockReadRefs(ctx context.Context, repo *Repository, options refReadOptions) (string, []string, func() error, error) {
-	paths, err := c.mirrorPaths(repo)
+	resolved, err := resolveReadRefs(ctx, options.Refs)
 	if err != nil {
 		return "", nil, nil, err
 	}
-	resolved, err := resolveReadRefs(ctx, options.Refs)
+	if len(resolved) == 0 {
+		return "", nil, nil, fmt.Errorf("git read requires at least one revision")
+	}
+	if err := c.prepareShared(ctx, repo, resolved[0]); err != nil {
+		return "", nil, nil, err
+	}
+	paths, err := c.mirrorPaths(repo)
 	if err != nil {
 		return "", nil, nil, err
 	}
@@ -323,12 +330,20 @@ func (c *Cache) pinReadRefs(ctx context.Context, paths mirrorPaths, repo *Reposi
 	for i, ref := range resolved {
 		shas[i] = ref.SHA
 		fetching := fetchOptions{Dir: paths.git, Owner: repo, Repo: options.Refs[i].repo, Ref: ref}
+		_, shared := repo.Provider.(RemoteHistoryProvider)
+		if shared || filepath.Base(paths.dir) != repo.URL.CacheKey() {
+			fetching.Ref = Ref{Name: ref.SHA, FullName: ref.SHA, SHA: ref.SHA, Kind: RefSHA}
+		}
 		if options.History {
 			shas[i], err = fetchHistory(ctx, fetching)
 		} else if !hasCommit(ctx, paths.git, ref.SHA) {
 			shas[i], err = fetch(ctx, fetching)
 		}
 		if err != nil {
+			return nil, err
+		}
+		ref.SHA = shas[i]
+		if err := recordCacheRef(ctx, paths.git, options.Refs[i].repo, ref); err != nil {
 			return nil, err
 		}
 	}
