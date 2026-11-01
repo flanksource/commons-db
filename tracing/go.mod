@@ -6,11 +6,11 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/andybalholm/brotli v1.2.0
 	github.com/elazarl/goproxy v1.7.2
-	github.com/flanksource/clicky v1.21.88-0.20261027204456-34e65b99d69d
-	github.com/flanksource/commons v1.61.1-0.20261027203923-c5cfedcdae97
+	github.com/flanksource/clicky v1.21.89
+	github.com/flanksource/commons v1.63.0
 	github.com/flanksource/commons-db v0.1.67
 	github.com/flanksource/commons-db/recordstore v0.1.67
-	github.com/flanksource/sqlglot-go v1.0.4-0.20261022123344-3264e440e925
+	github.com/flanksource/sqlglot-go v1.1.0
 	github.com/google/gops v0.3.29
 	github.com/google/pprof v0.0.0-20260507013755-92041b743c96
 	github.com/google/uuid v1.6.0
@@ -336,10 +336,10 @@ require (
 	k8s.io/streaming v0.36.2 // indirect
 	k8s.io/utils v0.0.0-20260210185600-b8788abfbbc2 // indirect
 	layeh.com/gopher-json v0.0.0-20201124131017-552bb3c4c3bf // indirect
-	modernc.org/libc v1.72.3 // indirect
+	modernc.org/libc v1.74.1 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.51.0 // indirect
+	modernc.org/sqlite v1.55.0 // indirect
 	sigs.k8s.io/gateway-api v1.5.1 // indirect
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect

@@ -39,9 +39,9 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	// Kept in lockstep with the root module's clicky pin (see ../go.mod):
 	// a workspace build resolves one clicky for every module.
-	github.com/flanksource/clicky v1.21.88-0.20261027204456-34e65b99d69d
-	github.com/flanksource/clicky/valkey v1.21.82
-	github.com/flanksource/commons v1.61.1-0.20261027203923-c5cfedcdae97
+	github.com/flanksource/clicky v1.21.89
+	github.com/flanksource/clicky/valkey v1.21.89
+	github.com/flanksource/commons v1.63.0
 	github.com/flanksource/gomplate/v3 v3.24.90 // indirect
 	github.com/flanksource/is-healthy v1.0.92 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
