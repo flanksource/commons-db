@@ -4278,7 +4278,8 @@
               "title": "URL / DSN",
               "type": "string",
               "x-clicky-component": "k8s-url-selector",
-              "x-clicky-default-source": "value"
+              "x-clicky-default-source": "value",
+              "x-local-file": "sqlite"
             }
           },
           "title": "Options",
@@ -4384,7 +4385,8 @@
               "title": "Database path",
               "type": "string",
               "x-clicky-component": "k8s-url-selector",
-              "x-clicky-default-source": "value"
+              "x-clicky-default-source": "value",
+              "x-local-file": "sqlite"
             }
           },
           "title": "Options",
@@ -5716,10 +5718,11 @@
       "type": "object"
     },
     "render": {
-      "description": "Presentation mode: table (default) or logs (canonical LogsTable view for trace/log profiles)",
+      "description": "Presentation mode: table (default), logs (canonical LogsTable view for trace/log profiles) or timeseries (charts the series projection; the default when series is set)",
       "enum": [
         "table",
-        "logs"
+        "logs",
+        "timeseries"
       ],
       "title": "Render",
       "type": "string"
@@ -5796,6 +5799,46 @@
         }
       },
       "title": "Replay",
+      "type": "object"
+    },
+    "series": {
+      "description": "Projects rows onto plottable series, one per label set",
+      "properties": {
+        "label": {
+          "description": "Go template over the series labels, e.g. {{.pod}}",
+          "title": "Label",
+          "type": "string"
+        },
+        "labels": {
+          "description": "Columns identifying a series (default: every other column)",
+          "items": {
+            "type": "string"
+          },
+          "title": "Label columns",
+          "type": "array"
+        },
+        "metric": {
+          "description": "Column holding the metric name; always part of a series' identity",
+          "title": "Metric column",
+          "type": "string"
+        },
+        "time": {
+          "description": "Timestamp column (default time, else timestamp)",
+          "title": "Time column",
+          "type": "string"
+        },
+        "unit": {
+          "description": "clicky-ui unit key (percent, bytes, ms, ...)",
+          "title": "Unit",
+          "type": "string"
+        },
+        "value": {
+          "description": "Numeric column (default value)",
+          "title": "Value column",
+          "type": "string"
+        }
+      },
+      "title": "Series",
       "type": "object"
     },
     "trace": {
