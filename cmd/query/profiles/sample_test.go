@@ -53,7 +53,7 @@ func (sampleLookupProvider) LookupFilterValues(
 
 var _ = Describe("profile sampling errors", func() {
 	It("returns an Oops JSON error with context for an invalid request", func() {
-		handler := newProfileSampleHandler("/api/v1", dbcontext.New(), http.NotFoundHandler())
+		handler := newProfileSampleHandler("/api/v1", dbcontext.New(), nil, http.NotFoundHandler())
 		response := post(handler, "/api/v1/profile/sample", `{"profile":{"profile":"sample","_id":"ui-only"}}`)
 
 		Expect(response.Code).To(Equal(http.StatusBadRequest))
@@ -68,7 +68,7 @@ var _ = Describe("profile sampling errors", func() {
 	})
 
 	It("accepts the explicit processor preview mode", func() {
-		handler := newProfileSampleHandler("/api/v1", dbcontext.New(), http.NotFoundHandler())
+		handler := newProfileSampleHandler("/api/v1", dbcontext.New(), nil, http.NotFoundHandler())
 		response := post(handler, "/api/v1/profile/sample", `{
 			"profile":{"profile":"sample","provider":{"type":"custom"}},
 			"previewProcessors":true,
@@ -91,7 +91,7 @@ var _ = Describe("profile sampling errors", func() {
 		query.RegisterProvider(sampleInspectionProvider{})
 		DeferCleanup(func() { query.RegisterProvider(original) })
 
-		handler := newProfileSampleHandler("/api/v1", dbcontext.New(), http.NotFoundHandler())
+		handler := newProfileSampleHandler("/api/v1", dbcontext.New(), nil, http.NotFoundHandler())
 		response := post(handler, "/api/v1/profile/sample", `{
 			"profile":{
 				"profile":"sample",
@@ -121,7 +121,7 @@ var _ = Describe("profile sampling errors", func() {
 		query.RegisterProvider(sampleLookupProvider{})
 		DeferCleanup(func() { query.RegisterProvider(original) })
 
-		handler := newProfileSampleFilterValuesHandler("/api/v1", dbcontext.New(), http.NotFoundHandler())
+		handler := newProfileSampleFilterValuesHandler("/api/v1", dbcontext.New(), nil, http.NotFoundHandler())
 		response := post(handler, "/api/v1/profile/sample/filters/values", `{
 			"profile":{"profile":"sample","query":"{}","provider":{"type":"opensearch"}},
 			"filterColumns":[{"name":"service","type":"string"}],
@@ -146,7 +146,7 @@ var _ = Describe("profile sampling errors", func() {
 		query.RegisterProvider(sampleLookupProvider{})
 		DeferCleanup(func() { query.RegisterProvider(original) })
 
-		handler := newProfileSampleFilterValuesHandler("/api/v1", dbcontext.New(), http.NotFoundHandler())
+		handler := newProfileSampleFilterValuesHandler("/api/v1", dbcontext.New(), nil, http.NotFoundHandler())
 		capture := query.NewRecorder(query.RecorderOptions{ID: "sample-filter-values", Level: logger.Debug})
 		request := httptest.NewRequest(http.MethodPost, "/api/v1/profile/sample/filters/values", bytes.NewBufferString(`{
 			"profile":{"profile":"sample","query":"{}","provider":{"type":"opensearch"}},

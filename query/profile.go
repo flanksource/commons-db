@@ -88,6 +88,11 @@ type Profile struct {
 	// via Params regardless of render mode.
 	Render string `json:"render,omitempty" yaml:"render,omitempty"`
 
+	// Series projects the rows onto plottable series (see ProjectSeries). A
+	// profile that declares it renders as a timeseries unless Render says
+	// otherwise, and is servable to metrics panels as `profile:<name>`.
+	Series *SeriesSpec `json:"series,omitempty" yaml:"series,omitempty"`
+
 	// Trace declares the Profile as a long-running streaming session with
 	// explicit setup/teardown; the provider must implement StreamProvider.
 	// Mutually exclusive with Top.
@@ -191,16 +196,18 @@ type AliasDef struct {
 // Render values the frontend keys presentation off (x-clicky-render):
 // RenderLogs selects the canonical LogsTable; RenderTrace and RenderTop select
 // the session-backed live views and are derived from the profile kind when
-// Render is not set explicitly.
+// Render is not set explicitly; RenderTimeseries charts the projected series
+// and is derived from Series.
 const (
-	RenderLogs  = "logs"
-	RenderTrace = "trace"
-	RenderTop   = "top"
+	RenderLogs       = "logs"
+	RenderTrace      = "trace"
+	RenderTop        = "top"
+	RenderTimeseries = "timeseries"
 )
 
 // RenderMode returns the effective render value: the explicit Render when set,
-// otherwise the profile kind for trace/top profiles, otherwise empty (generic
-// table).
+// otherwise the profile kind for trace/top profiles, timeseries for a profile
+// declaring Series, otherwise empty (generic table).
 func (p Profile) RenderMode() string {
 	if p.Render != "" {
 		return p.Render
@@ -210,9 +217,11 @@ func (p Profile) RenderMode() string {
 		return RenderTrace
 	case KindTop:
 		return RenderTop
-	default:
-		return ""
 	}
+	if p.Series != nil {
+		return RenderTimeseries
+	}
+	return ""
 }
 
 // ParamNameForRole returns the first parameter assigned to role, or fallback

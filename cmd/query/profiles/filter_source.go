@@ -38,7 +38,7 @@ func (source profileFilterSource) CountedOptions(fc entity.FilterContext, search
 	defer release()
 
 	options, total, err := query.LookupFilterValues(
-		source.service.context().Wrap(fc.Ctx()),
+		source.service.queryContext(fc.Ctx(), store),
 		query.FilterValueLookupRequest{
 			Profile: resolved.Profile, Input: input,
 			Key: source.key, Search: search, Limit: limit,

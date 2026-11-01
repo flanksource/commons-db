@@ -9,14 +9,17 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 )
 
 const sampleFilterValuesPath = "/profile/" + sampleProfileName + "/filters/values"
 
 type profileSampleFilterValuesHandler struct {
-	prefix string
-	ctx    dbcontext.Context
-	next   http.Handler
+	prefix  string
+	ctx     dbcontext.Context
+	store   profilestore.Store
+	next    http.Handler
+	prepare profilestore.BeforeExecuteFunc
 }
 
 type profileSampleFilterValuesRequest struct {
@@ -45,10 +48,11 @@ type profileSampleFilterValuesResponse struct {
 func newProfileSampleFilterValuesHandler(
 	prefix string,
 	ctx dbcontext.Context,
+	store profilestore.Store,
 	next http.Handler,
 ) *profileSampleFilterValuesHandler {
 	return &profileSampleFilterValuesHandler{
-		prefix: strings.TrimRight(prefix, "/"), ctx: ctx, next: next,
+		prefix: strings.TrimRight(prefix, "/"), ctx: ctx, store: store, next: next,
 	}
 }
 
@@ -83,7 +87,7 @@ func (h *profileSampleFilterValuesHandler) ServeHTTP(w http.ResponseWriter, r *h
 	if strings.TrimSpace(request.Profile.Name) == "" {
 		request.Profile.Name = sampleProfileName
 	}
-	ctx, cancel := h.ctx.WithTimeout(profileSampleTimeout)
+	ctx, cancel := WithProfiles(h.ctx, h.store, h.prepare, r.Context()).WithTimeout(profileSampleTimeout)
 	defer cancel()
 	ctx = devtools.WithRequestRecorder(ctx, r)
 	options, total, err := query.SampleFilterValues(ctx.WithName("sample-filter-values"), request.Profile, query.SampleFilterValuesOptions{

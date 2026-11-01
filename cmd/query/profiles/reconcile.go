@@ -68,7 +68,7 @@ func (s *Service) Reconcile(ctx context.Context, name string, options ReconcileF
 	}
 	defer release()
 
-	queryCtx := s.context().Wrap(ctx)
+	queryCtx := s.queryContext(ctx, store)
 	if request, ok := rpc.RequestFromContext(ctx); ok {
 		queryCtx = devtools.WithRequestRecorder(queryCtx, request)
 	}

@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/profilestore"
 	"github.com/samber/oops"
 )
 
@@ -25,7 +26,11 @@ const sampleProfileName = "sample"
 type profileSampleHandler struct {
 	prefix string
 	ctx    dbcontext.Context
+	store  profilestore.Store
 	next   http.Handler
+	// prepare runs before each `profiles.<name>` the sample reads; nil when
+	// the service has no BeforeExecute hook.
+	prepare profilestore.BeforeExecuteFunc
 }
 
 type profileSampleRequest struct {
@@ -43,8 +48,8 @@ type samplePaginationRequest struct {
 	Cursor query.Cursor `json:"cursor,omitempty"`
 }
 
-func newProfileSampleHandler(prefix string, ctx dbcontext.Context, next http.Handler) *profileSampleHandler {
-	return &profileSampleHandler{prefix: strings.TrimRight(prefix, "/"), ctx: ctx, next: next}
+func newProfileSampleHandler(prefix string, ctx dbcontext.Context, store profilestore.Store, next http.Handler) *profileSampleHandler {
+	return &profileSampleHandler{prefix: strings.TrimRight(prefix, "/"), ctx: ctx, store: store, next: next}
 }
 
 func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +76,7 @@ func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request)
 	if strings.TrimSpace(request.Profile.Name) == "" {
 		request.Profile.Name = "sample"
 	}
-	ctx, cancel := h.ctx.WithTimeout(profileSampleTimeout)
+	ctx, cancel := WithProfiles(h.ctx, h.store, h.prepare, r.Context()).WithTimeout(profileSampleTimeout)
 	defer cancel()
 	// How much this sample explains about itself is the console's decision, sent
 	// as the arming header — the profile builder no longer asks for diagnostics

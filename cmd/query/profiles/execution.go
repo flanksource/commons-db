@@ -210,7 +210,8 @@ func (h *execHandler) executionContext(r *http.Request) (dbcontext.Context, stdc
 	// request's — only cancellation is bridged above — so an armed request's
 	// recorder has to be lifted across explicitly. Nil for every ordinary
 	// request, which query.WithRecorder and every recorder method tolerate.
-	return devtools.WithRequestRecorder(h.ctx.Wrap(base), r), cancel
+	ctx := WithProfiles(h.ctx.Wrap(base), h.store, h.prepare, r.Context())
+	return devtools.WithRequestRecorder(ctx, r), cancel
 }
 
 func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name string) {
