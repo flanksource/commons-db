@@ -37,6 +37,9 @@ func (w *Worktree) replay(ctx context.Context, env []string, sha string) (bool, 
 	if err != nil {
 		return false, fmt.Errorf("replay %s: %w", sha, err)
 	}
+	if len(patch) == 0 {
+		return false, nil
+	}
 	before, err := w.head(ctx)
 	if err != nil {
 		return false, err
@@ -62,7 +65,11 @@ func (w *Worktree) replayFailed(ctx context.Context, sha string, amErr error) er
 	if files := lines(unmerged); len(files) > 0 {
 		return errors.Join(&CherryPickConflictError{Commit: sha, Files: files}, abort())
 	}
-	return errors.Join(fmt.Errorf("replay %s: %w", sha, amErr), abort())
+	patch, err := runBytes(ctx, command{dir: w.Dir, args: []string{"am", "--show-current-patch=diff"}})
+	if err == nil && len(patch) == 0 {
+		return abort()
+	}
+	return errors.Join(fmt.Errorf("replay %s: %w", sha, amErr), err, abort())
 }
 
 // squash folds the commits picked onto the base into one: their original

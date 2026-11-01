@@ -198,12 +198,21 @@ func (r ChangeRequest) validateContent() error {
 		if len(r.Trailers) > 0 {
 			return errors.New("a rebase keeps each commit's message: it takes no trailers")
 		}
+		if r.Pick != "" {
+			return errors.New("a rebase takes no pick strategy")
+		}
 	case r.Head != "":
 		if !fullSHAPattern.MatchString(r.Head) {
 			return fmt.Errorf("change head %q must be a full 40-character lowercase commit SHA", r.Head)
 		}
 		if len(r.Files) > 0 || len(r.CherryPick) > 0 {
 			return errors.New("a change to a head commit takes no files and no commits to cherry-pick")
+		}
+		if len(r.Trailers) > 0 {
+			return errors.New("a change to a head commit pushes it as is: it takes no trailers")
+		}
+		if r.Pick != "" {
+			return errors.New("a change to a head commit takes no pick strategy")
 		}
 	case len(r.Files) == 0 && len(r.CherryPick) == 0:
 		return errors.New("change has no files, no commits to cherry-pick, no head and no rebase")

@@ -128,7 +128,10 @@ func (c *restClient) do(ctx context.Context, options restRequest) (headers http.
 		return nil, fmt.Errorf("%s API %s %s failed: %w", c.provider, method, endpoint, err)
 	}
 	defer func() {
-		_, drainErr := io.Copy(io.Discard, response.Body)
+		var drainErr error
+		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			_, drainErr = io.Copy(io.Discard, response.Body)
+		}
 		closeErr := response.Body.Close()
 		if drainErr != nil || closeErr != nil {
 			err = errors.Join(err, drainErr, closeErr)

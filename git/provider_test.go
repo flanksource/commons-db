@@ -1,7 +1,9 @@
 package git_test
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -94,6 +96,30 @@ func repoURL(raw, hint string) git.RepoURL {
 }
 
 var _ = Describe("REST client rules", func() {
+	DescribeTable("returns an API error without draining an open response",
+		func(status int) {
+			server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, strings.Repeat("x", 512))
+				w.(http.Flusher).Flush()
+				<-r.Context().Done()
+			}))
+			DeferCleanup(server.Close)
+			ctx, cancel := context.WithCancel(context.Background())
+			DeferCleanup(cancel)
+			provider := providerClient(models.ConnectionTypeGithub, server.URL, nil).Provider
+			done := make(chan error, 1)
+			go func() { done <- provider.Verify(ctx) }()
+			var err error
+			Eventually(done).Should(Receive(&err))
+			var apiErr *git.APIError
+			Expect(errors.As(err, &apiErr)).To(BeTrue())
+			Expect([]any{apiErr.StatusCode, apiErr.Body}).To(Equal([]any{status, strings.Repeat("x", 512)}))
+		},
+		Entry("client error", http.StatusBadRequest),
+		Entry("server error", http.StatusInternalServerError),
+	)
+
 	It("refuses an HTTP API URL", func() {
 		_, err := git.FromConnection(dbcontext.New(), models.Connection{Type: models.ConnectionTypeGithub,
 			URL: "http://example.invalid", Password: "test-token"})
