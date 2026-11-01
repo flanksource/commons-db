@@ -312,6 +312,8 @@ github.com/flanksource/clicky v1.21.88-0.20261027204456-34e65b99d69d h1:S8zFjrGZ
 github.com/flanksource/clicky v1.21.88-0.20261027204456-34e65b99d69d/go.mod h1:2hh1pw/svkWomN+Ah946CD7zcwuGxvRSnR0PTSqMe/Y=
 github.com/flanksource/clicky/aichat v1.21.82 h1:ccvtLRaQCQlAN+FVF3jp6I71CdycQwKrpicYB0ZeaX0=
 github.com/flanksource/clicky/aichat v1.21.82/go.mod h1:Wa5PhmTSCimtWVu5KIy+PG7+x9+EICQPNlH6O83+dM0=
+github.com/flanksource/clicky/aichat v1.21.89 h1:1AaI3I/S8InqC+KNpSogixbi1O9+T1blg6WIXkdjeoo=
+github.com/flanksource/clicky/aichat v1.21.89/go.mod h1:aY73k0NXnG5xZC1walrUqMkqFKJJSGgGoQPm5bJtbFw=
 github.com/flanksource/clicky/valkey v1.21.82 h1:6R0Uysg4pJfVu1RmUqdXQqHLhtutHqy24tsAESwa5Ns=
 github.com/flanksource/clicky/valkey v1.21.82/go.mod h1:ulGU+1dpyJZ106CS3fMinoVZ8lec2zaJDhWxqCLFa+o=
 github.com/flanksource/commons v1.61.1-0.20261027203923-c5cfedcdae97 h1:vwBa3L3UPL7+zcJ+gG6NH1cZ8AAH4XxShkd+AQ4uY4Y=
