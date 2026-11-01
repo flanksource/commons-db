@@ -210,7 +210,7 @@ func (r *Runner) read(ctx dbcontext.Context, schedule Schedule) (*query.Result, 
 			}
 			defer release()
 		}
-		result, err := query.Execute(ctx, resolved.Profile, params)
+		result, err := query.Execute(profiles.WithProfiles(ctx, store, r.options.BeforeExecute, ctx), resolved.Profile, params)
 		if err != nil {
 			return nil, nil, fmt.Errorf("profile %q: %w", schedule.Query.Profile, err)
 		}
