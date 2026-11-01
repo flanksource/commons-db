@@ -15,6 +15,7 @@ func init() {
 		panic(err)
 	}
 }
+
 // InitializeWorkspace prepares an owned writable database for metric queries.
 func InitializeWorkspace(ctx context.Context, db *sql.DB) error {
 	db.SetMaxOpenConns(1)

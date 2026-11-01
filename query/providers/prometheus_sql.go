@@ -21,43 +21,80 @@ func executePrometheusSQL(ctx context.Context, req query.ProviderRequest, client
 	if err != nil {
 		return nil, err
 	}
-	return metrics.Execute(ctx, metrics.Request{SQL: req.Query, Args: req.QueryArgs, Labels: req.Labels}, func(s metrics.Source, emit func(metrics.Sample) error) error {
-		matchers := []string{fmt.Sprintf("%s=%q", model.MetricNameLabel, s.Name)}
-		for alias, value := range s.Filters {
-			if label, ok := req.Labels[alias]; ok {
-				if !model.LabelName(label).IsValid() {
-					return fmt.Errorf("unsupported Prometheus label name %q", label)
-				}
-				matchers = append(matchers, fmt.Sprintf("%s=%q", label, value))
-			}
-		}
-		sort.Strings(matchers)
-		expression := "{" + strings.Join(matchers, ",") + "}"
-		if s.Transform != "" {
-			if _, err := model.ParseDuration(s.Window); err != nil {
-				return fmt.Errorf("invalid counter window: %w", err)
-			}
-			expression = fmt.Sprintf("%s(%s[%s])", s.Transform, expression, s.Window)
-		}
-		samples := 0
-		for start := r.Start; !start.After(r.End); {
-			steps := min(int64(r.End.Sub(start)/r.Step), int64(9999))
-			end := start.Add(time.Duration(steps) * r.Step)
-			count, err := readPrometheusSamples(ctx, client, expression, promV1.Range{Start: start, End: end, Step: r.Step}, emit)
-			if err != nil {
-				return err
-			}
-			samples += count
-			if end.Equal(r.End) || r.End.Sub(end) < r.Step {
-				break
-			}
-			start = end.Add(r.Step)
+	window := metrics.Range{Start: r.Start, End: r.End, Step: r.Step}
+	rangeQuery := func(expression string, rr metrics.Range, emit func(metrics.Sample) error) error {
+		samples, err := readPrometheusRange(ctx, client, expression, promV1.Range{Start: rr.Start, End: rr.End, Step: rr.Step}, emit)
+		if err != nil {
+			return err
 		}
 		if req.MetricMetadata != nil {
-			req.MetricMetadata.Sources = append(req.MetricMetadata.Sources, query.MetricSource{Expression: expression, Start: r.Start, End: r.End, Step: r.Step.String(), Samples: samples})
+			req.MetricMetadata.Sources = append(req.MetricMetadata.Sources, query.MetricSource{Expression: expression, Start: rr.Start, End: rr.End, Step: rr.Step.String(), Samples: samples})
 		}
 		return nil
+	}
+	return metrics.Execute(ctx, metrics.Request{
+		SQL: req.Query, Args: req.QueryArgs, Labels: req.Labels,
+		Range:    &metrics.RangeQuery{Window: window, Fetch: rangeQuery},
+		Profiles: query.ProfileTables(ctx, req.Params),
+	}, func(s metrics.Source, emit func(metrics.Sample) error) error {
+		expression, err := prometheusSourceExpression(s, req.Labels)
+		if err != nil {
+			return err
+		}
+		return rangeQuery(expression, window, emit)
 	})
+}
+
+// prometheusSourceExpression is the selector a `FROM <metric>` table reads:
+// the metric name plus every pushed-down matcher on an aliased label, wrapped
+// in its counter transform.
+func prometheusSourceExpression(s metrics.Source, labels map[string]string) (string, error) {
+	matchers := []string{fmt.Sprintf("%s=%q", model.MetricNameLabel, s.Name)}
+	for _, m := range s.Filters {
+		label, ok := labels[m.Label]
+		if !ok {
+			continue
+		}
+		// Matchers are written with bare label names, which only legacy names
+		// can be.
+		if !model.LegacyValidation.IsValidLabelName(label) {
+			return "", fmt.Errorf("unsupported Prometheus label name %q", label)
+		}
+		matchers = append(matchers, fmt.Sprintf("%s%s%q", label, m.Op, m.Value))
+	}
+	sort.Strings(matchers)
+	expression := "{" + strings.Join(matchers, ",") + "}"
+	if s.Transform != "" {
+		if _, err := model.ParseDuration(s.Window); err != nil {
+			return "", fmt.Errorf("invalid counter window: %w", err)
+		}
+		expression = fmt.Sprintf("%s(%s[%s])", s.Transform, expression, s.Window)
+	}
+	return expression, nil
+}
+
+// prometheusMaxSteps keeps each query_range under Prometheus' 11000-point
+// per-series limit.
+const prometheusMaxSteps = 9999
+
+// readPrometheusRange reads r in chunks of at most prometheusMaxSteps steps,
+// emitting every sample, and returns how many it read.
+func readPrometheusRange(ctx context.Context, client promV1.API, expression string, r promV1.Range, emit func(metrics.Sample) error) (int, error) {
+	samples := 0
+	for start := r.Start; !start.After(r.End); {
+		steps := min(int64(r.End.Sub(start)/r.Step), int64(prometheusMaxSteps))
+		end := start.Add(time.Duration(steps) * r.Step)
+		count, err := readPrometheusSamples(ctx, client, expression, promV1.Range{Start: start, End: end, Step: r.Step}, emit)
+		if err != nil {
+			return samples, err
+		}
+		samples += count
+		if end.Equal(r.End) || r.End.Sub(end) < r.Step {
+			break
+		}
+		start = end.Add(r.Step)
+	}
+	return samples, nil
 }
 
 func readPrometheusSamples(ctx context.Context, client promV1.API, expression string, r promV1.Range, emit func(metrics.Sample) error) (int, error) {

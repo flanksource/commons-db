@@ -134,9 +134,11 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 			for name, value := range opts.Dimensions {
 				input.Dimensions = append(input.Dimensions, types.DimensionFilter{Name: aws.String(name), Value: aws.String(value)})
 			}
-			for alias, value := range s.Filters {
-				if dimension, ok := req.Labels[alias]; ok {
-					input.Dimensions = append(input.Dimensions, types.DimensionFilter{Name: aws.String(dimension), Value: aws.String(value)})
+			// Dimensions only express equality; SQLite evaluates every other
+			// predicate after the samples are loaded.
+			for _, m := range s.Filters {
+				if dimension, ok := req.Labels[m.Label]; ok && m.Op == "=" {
+					input.Dimensions = append(input.Dimensions, types.DimensionFilter{Name: aws.String(dimension), Value: aws.String(m.Value)})
 				}
 			}
 			pager := cw.NewListMetricsPaginator(client, input)
@@ -203,7 +205,7 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 	}
 	switch opts.Language {
 	case "sql":
-		return metrics.Execute(ctx, metrics.Request{SQL: req.Query, Args: req.QueryArgs, Labels: req.Labels}, fetch)
+		return metrics.Execute(ctx, metrics.Request{SQL: req.Query, Args: req.QueryArgs, Labels: req.Labels, Profiles: query.ProfileTables(ctx, req.Params)}, fetch)
 	case "", "metrics", "metrics-insights":
 		rows := []query.Row{}
 		err := fetch(metrics.Source{}, func(s metrics.Sample) error {
