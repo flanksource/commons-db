@@ -13,7 +13,7 @@ import (
 	"github.com/prometheus/common/model"
 )
 
-func executePrometheusSQL(ctx context.Context, req query.ProviderRequest, client promV1.API, opts prometheusOptions) ([]query.Row, error) {
+func executePrometheusSQL(ctx context.Context, req query.ProviderRequest, client promV1.API, opts PrometheusOptions) ([]query.Row, error) {
 	if opts.Range == nil {
 		return nil, fmt.Errorf("prometheus SQL requires a range")
 	}

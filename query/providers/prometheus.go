@@ -30,6 +30,9 @@ func (prometheusProvider) Type() string { return "prometheus" }
 
 // PrometheusOptions are decoded from ProviderRequest.Options.
 type PrometheusOptions struct {
+	// Language is promql (the default) or sql, which runs metric SQL over range samples.
+	Language string `json:"language,omitempty"`
+
 	// URL is an inline Prometheus address used when no stored connection is referenced.
 	URL string `json:"url,omitempty"`
 
@@ -40,8 +43,11 @@ type PrometheusOptions struct {
 	SelectLabels []string `json:"selectLabels,omitempty"`
 }
 
-// Validate refuses a range the provider could not query.
+// Validate refuses an unsupported language and a range the provider could not query.
 func (o PrometheusOptions) Validate() error {
+	if o.Language != "" && o.Language != "promql" && o.Language != "sql" {
+		return fmt.Errorf("unsupported prometheus language %q", o.Language)
+	}
 	if o.Range == nil {
 		return nil
 	}
@@ -97,15 +103,12 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 		return nil, fmt.Errorf("prometheus query is required")
 	}
 
-	opts, err := providerkit.DecodeOptions[PrometheusOptions](req.Options)
+	client, opts, err := newPrometheusClient(ctx, req)
 	if err != nil {
 		return nil, err
 	}
 	if opts.Language == "sql" {
 		return executePrometheusSQL(ctx, req, client, opts)
-	}
-	if opts.Language != "" && opts.Language != "promql" {
-		return nil, fmt.Errorf("unsupported prometheus language %q", opts.Language)
 	}
 
 	result, err := runPromQL(ctx, client, req.Query, opts.Range)
@@ -114,6 +117,32 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 	}
 
 	return transformPrometheusResult(result, opts.SelectLabels)
+}
+
+func newPrometheusClient(ctx context.Context, req query.ProviderRequest) (annotatedPrometheus, PrometheusOptions, error) {
+	opts, err := providerkit.DecodeOptions[PrometheusOptions](req.Options)
+	if err != nil {
+		return annotatedPrometheus{}, opts, err
+	}
+	conn := connection.PrometheusConnection{}
+	conn.ConnectionName = req.Connection
+	if opts.URL != "" {
+		conn.URL, err = providerkit.ResolveInlineURL(ctx, opts.URL, "prometheus")
+		if err != nil {
+			return annotatedPrometheus{}, opts, err
+		}
+	}
+	if err := conn.Populate(ctx); err != nil {
+		return annotatedPrometheus{}, opts, fmt.Errorf("failed to populate prometheus connection: %w", err)
+	}
+	// Build the Prometheus client with a HAR-instrumented transport so requests
+	// are captured under the "prometheus" feature.
+	transport := observability.ApplyHTTPObservability(ctx, "prometheus", conn.Transport(), nil)
+	apiClient, err := promAPI.NewClient(promAPI.Config{Address: conn.URL, RoundTripper: transport})
+	if err != nil {
+		return annotatedPrometheus{}, opts, fmt.Errorf("failed to create prometheus client: %w", err)
+	}
+	return annotatedPrometheus{API: promV1.NewAPI(apiClient), client: apiClient, metadata: req.MetricMetadata}, opts, nil
 }
 
 func runPromQL(ctx context.Context, client promV1.API, promQL string, r *PrometheusRange) (model.Value, error) {

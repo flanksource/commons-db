@@ -101,7 +101,7 @@ func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]
 // it. Ending the range closes the driver cursor and the connection, so a caller
 // taking a single page does not hold either.
 func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
-	opts, err := query.DecodeOptions[sqlOptions](req.Options)
+	opts, err := query.DecodeOptions[SQLOptions](req.Options)
 	if err != nil {
 		return query.ErrorPage(err)
 	}

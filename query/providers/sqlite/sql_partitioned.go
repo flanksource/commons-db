@@ -17,7 +17,7 @@ func (p sqlProvider) partitionPages(
 	ctx context.Context,
 	req query.ProviderRequest,
 	page query.PageRequest,
-	opts sqlOptions,
+	opts SQLOptions,
 ) iter.Seq2[query.Page, error] {
 	if err := p.partitionedRead(req, opts); err != nil {
 		return query.ErrorPage(err)
@@ -98,7 +98,7 @@ func aggregatePages(
 	readSQLPages(ctx, workspace.Client, dialectSQLite, final, page, yield)
 }
 
-func (p sqlProvider) partitionedRead(req query.ProviderRequest, opts sqlOptions) error {
+func (p sqlProvider) partitionedRead(req query.ProviderRequest, opts SQLOptions) error {
 	driver := p.connType
 	if driver == "" {
 		driver = opts.Type

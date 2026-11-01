@@ -213,7 +213,7 @@ func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*
 		return nil, err
 	}
 	if provided != nil {
-		if provided.Virtual {
+		if provided.Virtual || provided.ReadOnly {
 			return nil, entity.NewStatusErrorf(http.StatusMethodNotAllowed, "read_only", "virtual connection %q is read-only", provided.Name)
 		}
 		return s.saveProvided(ctx, id, body)
@@ -240,7 +240,7 @@ func (s *Service) Delete(id string) error {
 		return err
 	}
 	if provided != nil {
-		if provided.Virtual {
+		if provided.Virtual || provided.ReadOnly {
 			return entity.NewStatusErrorf(http.StatusMethodNotAllowed, "read_only", "virtual connection %q is read-only", provided.Name)
 		}
 		writer, err := writableProvider(s.virtual)

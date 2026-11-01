@@ -18,6 +18,7 @@ var _ = Describe("exported provider options", func() {
 		Entry("a sql type that is no SQL engine", sqlite.SQLOptions{Type: "oracle"}, `sql type "oracle"`),
 		Entry("a prometheus range without a step", providers.PrometheusOptions{Range: &providers.PrometheusRange{Start: "now-1h", End: "now"}}, "start, end and step"),
 		Entry("a prometheus range ending before it starts", providers.PrometheusOptions{Range: &providers.PrometheusRange{Start: "now", End: "now-1h", Step: "1m"}}, "after start"),
+		Entry("a prometheus language it cannot run", providers.PrometheusOptions{Language: "logql"}, `unsupported prometheus language "logql"`),
 		Entry("an http method the provider does not send", providers.HTTPOptions{Method: "FETCH"}, "unsupported http method"),
 		Entry("an opensearch limit that is no number", providers.OpenSearchOptions{Limit: "many"}, "invalid opensearch limit"),
 		Entry("an opensearch tail poll that never waits", providers.OpenSearchOptions{TailPoll: "0s"}, "tailPoll"),
@@ -30,6 +31,8 @@ var _ = Describe("exported provider options", func() {
 		},
 		Entry("a sql_server override", sqlite.SQLOptions{Type: "sql_server"}),
 		Entry("a prometheus range", providers.PrometheusOptions{Range: &providers.PrometheusRange{Start: "now-1h", End: "now", Step: "15s"}}),
+		Entry("prometheus metric SQL", providers.PrometheusOptions{Language: "sql"}),
+		Entry("explicit promql", providers.PrometheusOptions{Language: "promql"}),
 		Entry("a lowercase http method", providers.HTTPOptions{Method: "post"}),
 		Entry("opentelemetry defaults", providers.OpenTelemetryOptions{}),
 	)
