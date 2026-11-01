@@ -37,7 +37,7 @@ type cloudwatchMetricsOptions struct {
 	Namespace   string             `json:"namespace"`
 	Statistic   string             `json:"statistic"`
 	Unit        string             `json:"unit"`
-	Range       *prometheusRange   `json:"range"`
+	Range       *PrometheusRange   `json:"range"`
 	Metrics     []cloudwatchMetric `json:"metrics"`
 	Dimensions  map[string]string  `json:"dimensions"`
 	Concurrency int                `json:"concurrency"`

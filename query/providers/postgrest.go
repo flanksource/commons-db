@@ -38,7 +38,7 @@ type postgrestProvider struct{}
 
 func (postgrestProvider) Type() string { return "postgrest" }
 
-type postgrestOptions struct {
+type PostgRESTOptions struct {
 	// URL is an inline PostgREST base URL used when no stored connection is referenced.
 	URL string `json:"url,omitempty"`
 
@@ -46,8 +46,12 @@ type postgrestOptions struct {
 	JSONPath string `json:"jsonpath,omitempty"`
 }
 
+// Validate accepts every PostgRESTOptions: the URL and path are only checked
+// once the connection they extend is resolved.
+func (PostgRESTOptions) Validate() error { return nil }
+
 func (postgrestProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	opts, err := query.DecodeOptions[postgrestOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[PostgRESTOptions](req.Options)
 	if err != nil {
 		return nil, err
 	}

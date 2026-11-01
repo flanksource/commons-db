@@ -47,7 +47,7 @@ type openSearchRequest struct {
 // runtime column filters and the page position onto it.
 func buildOpenSearchRequest(
 	req query.ProviderRequest,
-	opts opensearchOptions,
+	opts OpenSearchOptions,
 	page openSearchPage,
 	timeFieldMapping *esdsl.TimeFieldMapping,
 ) (openSearchRequest, error) {
@@ -72,7 +72,7 @@ func buildOpenSearchRequest(
 	return built, nil
 }
 
-func buildOpenSearchRawRequest(req query.ProviderRequest, opts opensearchOptions, page openSearchPage) (openSearchRequest, error) {
+func buildOpenSearchRawRequest(req query.ProviderRequest, opts OpenSearchOptions, page openSearchPage) (openSearchRequest, error) {
 	body, err := decodeOpenSearchBody(req.Query)
 	if err != nil {
 		return openSearchRequest{}, err
@@ -96,7 +96,7 @@ func buildOpenSearchRawRequest(req query.ProviderRequest, opts opensearchOptions
 // precedence is search.size, then options.limit.
 func compileOpenSearchSearch(
 	req query.ProviderRequest,
-	opts opensearchOptions,
+	opts OpenSearchOptions,
 	page openSearchPage,
 	timeFieldMapping *esdsl.TimeFieldMapping,
 ) (openSearchRequest, error) {

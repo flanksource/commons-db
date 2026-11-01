@@ -48,9 +48,9 @@ var _ query.BackendCapabilityProvider = sqlProvider{}
 
 func (p sqlProvider) Type() string { return p.key }
 
-// sqlOptions are the provider-specific knobs decoded from ProviderRequest.Options.
-type sqlOptions struct {
-	// Type overrides the connection driver type (postgres, mysql, sql_server, clickhouse).
+// SQLOptions are the provider-specific knobs decoded from ProviderRequest.Options.
+type SQLOptions struct {
+	// Type overrides the connection driver type (postgres, mysql, sql_server, clickhouse, sqlite).
 	Type string `json:"type,omitempty"`
 
 	// URL is an inline DSN used when no stored connection is referenced.
@@ -62,6 +62,16 @@ type sqlOptions struct {
 	// Partitions reads the query over several SQLite files sharing a schema
 	// and merges their rows. Exclusive with a connection and URL.
 	Partitions *PartitionSet `json:"partitions,omitempty"`
+}
+
+// Validate refuses a Type that names no SQL engine the provider builds for.
+func (o SQLOptions) Validate() error {
+	switch sqlDialect(o.Type) {
+	case "", dialectPostgres, dialectMySQL, dialectSQLServer, dialectClickHouse, dialectSQLite:
+		return nil
+	}
+	return fmt.Errorf("sql type %q is none of %s, %s, %s, %s or %s",
+		o.Type, dialectPostgres, dialectMySQL, dialectSQLServer, dialectClickHouse, dialectSQLite)
 }
 
 // PagingModes reports the two strategies compiled around an author's query.
@@ -91,7 +101,7 @@ func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]
 // it. Ending the range closes the driver cursor and the connection, so a caller
 // taking a single page does not hold either.
 func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
-	opts, err := query.DecodeOptions[sqlOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[SQLOptions](req.Options)
 	if err != nil {
 		return query.ErrorPage(err)
 	}
@@ -287,7 +297,7 @@ func (p sqlProvider) connect(ctx context.Context, req query.ProviderRequest) (*s
 }
 
 func (p sqlProvider) connectRequest(req query.ProviderRequest) (sqlConnectRequest, error) {
-	opts, err := query.DecodeOptions[sqlOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[SQLOptions](req.Options)
 	if err != nil {
 		return sqlConnectRequest{}, err
 	}

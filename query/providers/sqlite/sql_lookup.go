@@ -7,6 +7,7 @@ import (
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
 	"github.com/flanksource/sqlglot-go/sqlglot"
 )
 
@@ -31,7 +32,7 @@ func (p sqlProvider) LookupFilterValues(
 	if limit > query.MaxFilterLookupLimit {
 		return nil, nil, fmt.Errorf("filter value lookup limit must be at most %d, got %d", query.MaxFilterLookupLimit, limit)
 	}
-	opts, err := query.DecodeOptions[sqlOptions](req.Options)
+	opts, err := providerkit.DecodeOptions[SQLOptions](req.Options)
 	if err != nil {
 		return nil, nil, err
 	}

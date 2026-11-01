@@ -54,7 +54,7 @@ func (prometheusProvider) LookupFilterValues(ctx context.Context, req query.Prov
 	return options, total, nil
 }
 
-func prometheusLookupScope(req query.ProviderRequest, opts prometheusOptions, field string) (string, []string, error) {
+func prometheusLookupScope(req query.ProviderRequest, opts PrometheusOptions, field string) (string, []string, error) {
 	label := field
 	var matches []string
 	if opts.Language == "sql" {

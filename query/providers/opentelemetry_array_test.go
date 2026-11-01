@@ -36,7 +36,7 @@ var _ = Describe("OpenTelemetry array filters", func() {
 	)
 
 	It("compiles array elements through the OpenSearch terms DSL", func() {
-		options := openTelemetryOptions{}
+		options := OpenTelemetryOptions{}
 		options.withDefaults()
 		request, err := buildOpenTelemetryRequest(query.ProviderRequest{
 			Filters: []query.ColumnFilterValue{{

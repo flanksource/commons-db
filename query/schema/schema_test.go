@@ -439,7 +439,7 @@ var _ = Describe("Profile schema", func() {
 		Expect(provider["x-discriminator"]).To(Equal("type"))
 		typeProp := provider["properties"].(schema.Schema)["type"].(schema.Schema)
 		Expect(typeProp["x-enum-display"]).To(Equal("combobox"))
-		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(18))
+		Expect(typeProp["x-enum-icons"].(map[string]string)).To(HaveLen(19))
 	})
 
 	It("keeps Kubernetes targets out of provider options", func() {
@@ -487,14 +487,14 @@ var _ = Describe("Profile schema", func() {
 	})
 
 	It("bundles every provider component and enriches inline URLs", func() {
-		Expect(schema.ProfileComponents()).To(HaveLen(18))
+		Expect(schema.ProfileComponents()).To(HaveLen(19))
 		source := schema.ProfileSource()
 		provider := source["properties"].(schema.Schema)["provider"].(schema.Schema)
 		firstSourceBranch := provider["allOf"].([]any)[0].(schema.Schema)
 		Expect(firstSourceBranch["then"].(schema.Schema)["$ref"]).To(HavePrefix("profiles/"))
 
 		bundled := schema.Profile()
-		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(18))
+		Expect(bundled["$defs"].(schema.Schema)).To(HaveLen(19))
 		http := bundled["$defs"].(schema.Schema)["http"].(schema.Schema)
 		options := http["properties"].(schema.Schema)["options"].(schema.Schema)
 		url := options["properties"].(schema.Schema)["url"].(schema.Schema)

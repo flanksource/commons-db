@@ -11,7 +11,7 @@ import (
 	"github.com/flanksource/commons-db/query"
 )
 
-func openTelemetryRow(document map[string]any, options openTelemetryOptions) query.Row {
+func openTelemetryRow(document map[string]any, options OpenTelemetryOptions) query.Row {
 	attributes := flattenTraceDocument(document)
 	duration, durationField := firstTracePathWithName(document, "duration_ms", "duration", "durationNano", "duration_nano")
 	row := query.Row{
@@ -37,7 +37,7 @@ func openTelemetryRow(document map[string]any, options openTelemetryOptions) que
 	return row
 }
 
-func traceParentID(document map[string]any, options openTelemetryOptions) string {
+func traceParentID(document map[string]any, options OpenTelemetryOptions) string {
 	if options.Format == "jaeger" {
 		if references, ok := document["references"].([]any); ok {
 			for _, raw := range references {
@@ -54,7 +54,7 @@ func traceParentID(document map[string]any, options openTelemetryOptions) string
 	return stringTraceValue(firstTracePath(document, options.ParentIDField, "parent_id", "parentID"))
 }
 
-func traceStatus(document, attributes map[string]any, options openTelemetryOptions) string {
+func traceStatus(document, attributes map[string]any, options OpenTelemetryOptions) string {
 	fields := append(append([]string{}, options.StatusFields...), "status", "status.code", "tag.error", "error")
 	for _, field := range fields {
 		value := stringTraceValue(firstTracePath(document, field))
