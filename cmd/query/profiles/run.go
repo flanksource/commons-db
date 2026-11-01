@@ -75,8 +75,7 @@ func (s *Service) Run(ctx context.Context, name string, options RunFlags) (*RunR
 	}
 	defer release()
 
-	queryCtx := s.context().Wrap(ctx)
-	response, err := exportRows(queryCtx, resolved.Profile, params, request)
+	response, err := exportRows(s.queryContext(ctx, store), resolved.Profile, params, request)
 	if err != nil {
 		return nil, err
 	}

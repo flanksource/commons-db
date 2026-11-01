@@ -415,6 +415,27 @@ func floatCursorKey(value float64, bits int) (cursorKey, error) {
 	return cursorKey{Type: "float64", Value: strconv.FormatFloat(value, 'g', -1, bits)}, nil
 }
 
+// MarshalCursorKeys encodes key values with the cursor's own typed codec, for a
+// provider carrying positions of its own under ProviderStateKey. A plain JSON
+// encoding would hand an int64 key back as a float64 and resume from the wrong
+// row once it passes 2^53.
+func MarshalCursorKeys(values []any) (json.RawMessage, error) {
+	keys, err := encodeCursorKeys(values)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(keys)
+}
+
+// UnmarshalCursorKeys decodes what MarshalCursorKeys encoded.
+func UnmarshalCursorKeys(raw json.RawMessage) ([]any, error) {
+	var keys []cursorKey
+	if err := json.Unmarshal(raw, &keys); err != nil {
+		return nil, fmt.Errorf("%w: invalid cursor keys: %v", ErrCursorStale, err)
+	}
+	return decodeCursorKeys(keys)
+}
+
 func decodeCursorKeys(encoded []cursorKey) ([]any, error) {
 	keys := make([]any, 0, len(encoded))
 	for index, key := range encoded {

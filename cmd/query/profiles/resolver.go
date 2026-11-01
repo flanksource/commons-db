@@ -131,6 +131,9 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 	if overlay.Render != "" {
 		merged.Render = overlay.Render
 	}
+	if overlay.Series != nil {
+		merged.Series = overlay.Series
+	}
 	if overlay.Trace != nil {
 		merged.Top = nil
 		merged.Trace = overlay.Trace

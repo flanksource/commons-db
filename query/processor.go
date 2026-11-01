@@ -82,10 +82,16 @@ func newPageProcessorChain(specs []ProcessorSpec, carried map[string][]byte) (*p
 	if chain.state == nil {
 		chain.state = map[string][]byte{}
 	}
+	// The provider's own position comes back to it on the request and goes
+	// forward on its page; carrying it here too would re-emit a stale copy.
+	delete(chain.state, ProviderStateKey)
 	for index, spec := range specs {
 		resolved, err := spec.Resolve()
 		if err != nil {
 			return nil, fmt.Errorf("processor %d: %w", index, err)
+		}
+		if resolved.Label() == ProviderStateKey {
+			return nil, fmt.Errorf("processor %d: label %q is reserved for the provider's cursor state", index, ProviderStateKey)
 		}
 		registered, err := GetProcessor(resolved.Type)
 		if err != nil {
@@ -152,7 +158,11 @@ func ProcessPages(
 			// Only a page that resumes carries state forward; the last page of a
 			// walk has nowhere to carry it to.
 			if len(chain.state) > 0 && page.HasMore {
-				page.State = maps.Clone(chain.state)
+				state := maps.Clone(chain.state)
+				if provider, ok := page.State[ProviderStateKey]; ok {
+					state[ProviderStateKey] = provider
+				}
+				page.State = state
 			}
 			if !yield(page, nil) {
 				return

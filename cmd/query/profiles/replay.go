@@ -119,7 +119,7 @@ func (s *Service) buildReplayPreview(ctx context.Context, name string, options R
 	}
 	defer release()
 
-	queryCtx := s.context().Wrap(ctx)
+	queryCtx := s.queryContext(ctx, store)
 	result, err := query.Execute(queryCtx, resolved.Profile, params)
 	if err != nil {
 		return nil, err

@@ -32,7 +32,7 @@ func (s *Service) Inspect(ctx context.Context, name string, options InspectFlags
 	}
 	defer release()
 
-	sample, err := query.Sample(s.context().Wrap(ctx), resolved.Profile, query.SampleOptions{
+	sample, err := query.Sample(s.queryContext(ctx, store), resolved.Profile, query.SampleOptions{
 		Params: params, Inspection: query.InspectionOptions{Refresh: options.Refresh},
 	})
 	if err != nil {
