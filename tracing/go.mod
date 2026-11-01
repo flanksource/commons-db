@@ -1,6 +1,6 @@
 module github.com/flanksource/commons-db/tracing
 
-go 1.26.10
+go 1.27.1
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
@@ -10,7 +10,7 @@ require (
 	github.com/flanksource/commons v1.63.0
 	github.com/flanksource/commons-db v0.1.68
 	github.com/flanksource/commons-db/recordstore v0.1.68
-	github.com/flanksource/sqlglot-go v1.1.0
+	github.com/flanksource/sqlglot-go v1.1.1
 	github.com/google/gops v0.3.29
 	github.com/google/pprof v0.0.0-20260507013755-92041b743c96
 	github.com/google/uuid v1.6.0
@@ -44,8 +44,8 @@ require (
 	cloud.google.com/go/storage v1.62.3 // indirect
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0 // indirect
-	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.0 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1 // indirect
+	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.14.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.12.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/keyvault/azkeys v0.10.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/keyvault/internal v0.7.1 // indirect
@@ -79,6 +79,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.29 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.30 // indirect
+	github.com/aws/aws-sdk-go-v2/service/cloudwatch v1.56.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs v1.75.2 // indirect
 	github.com/aws/aws-sdk-go-v2/service/eks v1.84.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.12 // indirect
