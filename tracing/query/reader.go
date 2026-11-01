@@ -34,7 +34,7 @@ type reader struct {
 	before profilestore.BeforeExecuteFunc
 }
 
-func (r reads) reader(ctx dbcontext.Context, params Params, now time.Time) (*reader, error) {
+func (r Reads) reader(ctx dbcontext.Context, params Params, now time.Time) (*reader, error) {
 	profile, name, err := r.profile(ctx, params)
 	if err != nil {
 		return nil, err
@@ -64,7 +64,7 @@ func (r reads) reader(ctx dbcontext.Context, params Params, now time.Time) (*rea
 
 // profile is the profile params read: the provider's in-place profile, or the
 // saved one the host resolves.
-func (r reads) profile(ctx context.Context, params Params) (dbquery.Profile, string, error) {
+func (r Reads) profile(ctx context.Context, params Params) (dbquery.Profile, string, error) {
 	if params.Provider != nil {
 		profile, err := params.Provider.profile()
 		return profile, "", err
