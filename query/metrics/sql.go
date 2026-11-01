@@ -18,10 +18,12 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Source is one `FROM <metric>` table. Filters are the WHERE predicates on its
+// label columns, resolved against the request's parameters.
 type Source struct {
 	Name, Transform, Window string
-	Filters                 map[string]string
-	BoundFilters            map[string]int
+	Filters                 []Matcher
+	predicates              []predicate
 }
 type Sample struct {
 	Time                               time.Time
@@ -29,16 +31,25 @@ type Sample struct {
 	Labels                             map[string]string
 	Metric, Namespace, Statistic, Unit string
 }
+
+// Request is one metric SQL statement. Range enables `prometheus(...)` and is
+// nil for providers without range queries; Profiles enables `profiles.<name>`
+// and is nil where no profile resolver is reachable.
 type Request struct {
-	SQL    string
-	Args   []any
-	Labels map[string]string
+	SQL      string
+	Args     []any
+	Labels   map[string]string
+	Range    *RangeQuery
+	Profiles ProfileRows
 }
 type Fetch func(Source, func(Sample) error) error
 
 func Execute(ctx context.Context, req Request, fetch Fetch) ([]map[string]any, error) {
 	plan, err := Plan(req.SQL)
 	if err != nil {
+		return nil, err
+	}
+	if err := plan.requires(req, fetch); err != nil {
 		return nil, err
 	}
 	labels, err := ValidateLabels(req.Labels)
@@ -62,24 +73,56 @@ func Execute(ctx context.Context, req Request, fetch Fetch) ([]map[string]any, e
 	if err := InitializeWorkspace(ctx, db); err != nil {
 		return nil, err
 	}
+	if plan.Prometheus {
+		release, err := attachPrometheus(ctx, db, req.Range)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+	}
+	if err := loadTables(ctx, db, plan, req, labels, fetch); err != nil {
+		return nil, err
+	}
+	return queryRows(ctx, db, plan.SQL, req.Args)
+}
+
+func (plan QueryPlan) requires(req Request, fetch Fetch) error {
+	if plan.Prometheus && (req.Range == nil || req.Range.Fetch == nil) {
+		return fmt.Errorf("prometheus(...) is not available: this provider does not run PromQL range queries")
+	}
+	if len(plan.Profiles) > 0 && req.Profiles == nil {
+		return fmt.Errorf("profiles.%s is not available: no profile resolver is bound to this execution", plan.Profiles[0])
+	}
+	if len(plan.Sources) > 0 && fetch == nil {
+		return fmt.Errorf("metric %s is not available: this provider has no metric source", plan.Sources[0].Name)
+	}
+	return nil
+}
+
+func loadTables(ctx context.Context, db *sql.DB, plan QueryPlan, req Request, labels []string, fetch Fetch) error {
+	for i, name := range plan.Profiles {
+		if err := loadProfile(ctx, db, name, fmt.Sprintf("__profile_%d", i), req.Profiles); err != nil {
+			return err
+		}
+	}
 	for i, source := range plan.Sources {
-		for label, index := range source.BoundFilters {
-			if index < 0 || index >= len(req.Args) {
-				return nil, fmt.Errorf("missing metric SQL parameter %d", index)
-			}
-			if value, ok := req.Args[index].(string); ok {
-				source.Filters[label] = value
-			}
+		var err error
+		if source.Filters, err = resolveMatchers(source.predicates, req.Args); err != nil {
+			return err
 		}
 		if err := load(ctx, db, source, fmt.Sprintf("__metric_%d", i), labels, req.Labels, fetch); err != nil {
-			return nil, fmt.Errorf("metric %s: %w", source.Name, err)
+			return fmt.Errorf("metric %s: %w", source.Name, err)
 		}
 	}
-	bound := make([]any, len(req.Args))
-	for i, v := range req.Args {
+	return nil
+}
+
+func queryRows(ctx context.Context, db *sql.DB, statement string, args []any) ([]map[string]any, error) {
+	bound := make([]any, len(args))
+	for i, v := range args {
 		bound[i] = sql.Named(fmt.Sprintf("metric_param_%d", i), v)
 	}
-	rows, err := db.QueryContext(ctx, plan.SQL, bound...)
+	rows, err := db.QueryContext(ctx, statement, bound...)
 	if err != nil {
 		return nil, err
 	}
@@ -185,10 +228,55 @@ func load(ctx context.Context, db *sql.DB, source Source, table string, labels [
 	return tx.Commit()
 }
 
+// QueryPlan is metric SQL rewritten onto its workspace tables. Prometheus
+// reports a `prometheus(...)` reference; Profiles lists each `profiles.<name>`
+// reference, loaded as table __profile_<index>.
 type QueryPlan struct {
-	SQL     string
-	Sources []Source
+	SQL        string
+	Sources    []Source
+	Prometheus bool
+	Profiles   []string
 }
+
+// reservedTables are workspace virtual tables, never metric names.
+var reservedTables = map[string]bool{"time_series": true, "prometheus": true}
+
+// planReserved reports whether table is a workspace table or table function,
+// recording a prometheus reference on plan.
+func planReserved(table node, plan *QueryPlan) (bool, error) {
+	name := table.Name()
+	if value, ok := table.Args["this"].(node); ok && value.Class == "Anonymous" {
+		name = value.Name()
+		if !reservedTables[strings.ToLower(name)] {
+			return false, fmt.Errorf("unsupported metric table function %q", name)
+		}
+	}
+	if !reservedTables[strings.ToLower(name)] || table.Args["db"] != nil {
+		return false, nil
+	}
+	plan.Prometheus = plan.Prometheus || strings.EqualFold(name, "prometheus")
+	return true, nil
+}
+
+// planProfile rewrites `profiles.<name>` onto its workspace table.
+func planProfile(table node, plan *QueryPlan) (bool, error) {
+	db, _ := table.Args["db"].(node)
+	if db == nil && table.Args["catalog"] == nil {
+		return false, nil
+	}
+	if db == nil || table.Args["catalog"] != nil || !strings.EqualFold(db.Name(), "profiles") {
+		return false, fmt.Errorf("metric names cannot be database qualified (only profiles.<name> is)")
+	}
+	name := table.Name()
+	table.Set("this", ident(fmt.Sprintf("__profile_%d", len(plan.Profiles))))
+	table.Set("db", (*sqlglot.Expression)(nil))
+	if table.Args["alias"] == nil {
+		table.Set("alias", sqlglot.New("TableAlias", arg("this", ident(name))))
+	}
+	plan.Profiles = append(plan.Profiles, name)
+	return true, nil
+}
+
 type node = *sqlglot.Expression
 
 func arg(k string, v any) sqlglot.Arg { return sqlglot.Arg{Key: k, Value: v} }
@@ -203,7 +291,7 @@ func Plan(statement string) (QueryPlan, error) {
 		return QueryPlan{}, fmt.Errorf("metric SQL requires SELECT")
 	}
 	for _, n := range tree.FindAll("Identifier") {
-		if n.Name() == "__counter_value" || strings.HasPrefix(n.Name(), "__metric_") {
+		if n.Name() == "__counter_value" || strings.HasPrefix(n.Name(), "__metric_") || strings.HasPrefix(n.Name(), "__profile_") {
 			return QueryPlan{}, fmt.Errorf("reserved metric SQL identifier %q", n.Name())
 		}
 	}
@@ -242,17 +330,20 @@ func Plan(statement string) (QueryPlan, error) {
 	}
 	plan := QueryPlan{}
 	for _, table := range tree.FindAll("Table") {
-		if value, ok := table.Args["this"].(node); ok && value.Class == "Anonymous" {
-			if strings.EqualFold(value.Name(), "time_series") {
-				continue
+		if reserved, err := planReserved(table, &plan); err != nil || reserved {
+			if err != nil {
+				return plan, err
 			}
-			return plan, fmt.Errorf("unsupported metric table function %q", value.Name())
-		}
-		if ctes[strings.ToLower(table.Name())] {
 			continue
 		}
-		if table.Args["db"] != nil || table.Args["catalog"] != nil {
-			return plan, fmt.Errorf("metric names cannot be database qualified")
+		if ctes[strings.ToLower(table.Name())] && table.Args["db"] == nil {
+			continue
+		}
+		if profile, err := planProfile(table, &plan); err != nil || profile {
+			if err != nil {
+				return plan, err
+			}
+			continue
 		}
 		source := Source{Name: table.Name()}
 		scope := selectOf(table)
@@ -260,7 +351,7 @@ func Plan(statement string) (QueryPlan, error) {
 		if a, ok := table.Args["alias"].(node); ok {
 			alias = a.Name()
 		}
-		source.Filters, source.BoundFilters = sourceFilters(scope, alias)
+		source.predicates = sourcePredicates(scope, alias)
 		for _, fn := range scope.FindAll("Anonymous") {
 			name := strings.ToLower(fn.Name())
 			if (name != "rate" && name != "increase") || selectOf(fn) != scope {
@@ -316,8 +407,8 @@ func Plan(statement string) (QueryPlan, error) {
 			table.Set("alias", sqlglot.New("TableAlias", arg("this", ident(alias))))
 		}
 	}
-	if len(plan.Sources) == 0 {
-		return plan, fmt.Errorf("metric SQL requires a metric table")
+	if len(plan.Sources) == 0 && !plan.Prometheus && len(plan.Profiles) == 0 {
+		return plan, fmt.Errorf("metric SQL requires a metric table, prometheus(...) or profiles.<name>")
 	}
 	for _, fn := range tree.FindAll("Anonymous") {
 		if strings.EqualFold(fn.Name(), "rate") || strings.EqualFold(fn.Name(), "increase") {

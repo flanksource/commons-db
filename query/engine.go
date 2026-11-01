@@ -101,6 +101,7 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 // sub-queries → processors → row mapping (→ top sort/limit). Shared by Execute
 // and each top-session tick.
 func executeResolved(ctx context.Context, p Profile, resolved map[string]any, filters []ColumnFilterValue) (*Result, error) {
+	ctx = withProfileFrame(ctx, p.Name)
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return nil, err

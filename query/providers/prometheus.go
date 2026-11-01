@@ -81,31 +81,10 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 		return nil, fmt.Errorf("prometheus query is required")
 	}
 
-	opts, err := query.DecodeOptions[prometheusOptions](req.Options)
+	client, opts, err := newPrometheusClient(ctx, req)
 	if err != nil {
 		return nil, err
 	}
-
-	conn := connection.PrometheusConnection{}
-	conn.ConnectionName = req.Connection
-	if opts.URL != "" {
-		conn.URL, err = providerkit.ResolveInlineURL(ctx, opts.URL, "prometheus")
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := conn.Populate(ctx); err != nil {
-		return nil, fmt.Errorf("failed to populate prometheus connection: %w", err)
-	}
-
-	// Build the Prometheus client with a HAR-instrumented transport so requests
-	// are captured under the "prometheus" feature.
-	transport := observability.ApplyHTTPObservability(ctx, "prometheus", conn.Transport(), nil)
-	apiClient, err := promAPI.NewClient(promAPI.Config{Address: conn.URL, RoundTripper: transport})
-	if err != nil {
-		return nil, fmt.Errorf("failed to create prometheus client: %w", err)
-	}
-	client := annotatedPrometheus{API: promV1.NewAPI(apiClient), client: apiClient, metadata: req.MetricMetadata}
 	if opts.Language == "sql" {
 		return executePrometheusSQL(ctx, req, client, opts)
 	}
@@ -119,6 +98,32 @@ func (prometheusProvider) Execute(ctx context.Context, req query.ProviderRequest
 	}
 
 	return transformPrometheusResult(result, opts.SelectLabels)
+}
+
+func newPrometheusClient(ctx context.Context, req query.ProviderRequest) (annotatedPrometheus, prometheusOptions, error) {
+	opts, err := query.DecodeOptions[prometheusOptions](req.Options)
+	if err != nil {
+		return annotatedPrometheus{}, opts, err
+	}
+	conn := connection.PrometheusConnection{}
+	conn.ConnectionName = req.Connection
+	if opts.URL != "" {
+		conn.URL, err = providerkit.ResolveInlineURL(ctx, opts.URL, "prometheus")
+		if err != nil {
+			return annotatedPrometheus{}, opts, err
+		}
+	}
+	if err := conn.Populate(ctx); err != nil {
+		return annotatedPrometheus{}, opts, fmt.Errorf("failed to populate prometheus connection: %w", err)
+	}
+	// Build the Prometheus client with a HAR-instrumented transport so requests
+	// are captured under the "prometheus" feature.
+	transport := observability.ApplyHTTPObservability(ctx, "prometheus", conn.Transport(), nil)
+	apiClient, err := promAPI.NewClient(promAPI.Config{Address: conn.URL, RoundTripper: transport})
+	if err != nil {
+		return annotatedPrometheus{}, opts, fmt.Errorf("failed to create prometheus client: %w", err)
+	}
+	return annotatedPrometheus{API: promV1.NewAPI(apiClient), client: apiClient, metadata: req.MetricMetadata}, opts, nil
 }
 
 func runPromQL(ctx context.Context, client promV1.API, promQL string, r *prometheusRange) (model.Value, error) {

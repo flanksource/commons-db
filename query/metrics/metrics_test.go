@@ -17,7 +17,7 @@ func TestMetrics(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Metric 
 var _ = Describe("metric summaries", func() {
 	It("pushes bound label equality values without interpolating SQL", func() {
 		_, err := Execute(context.Background(), Request{SQL: `SELECT pod FROM cpu WHERE pod=__cdb_query_param_0__`, Args: []any{"acme"}, Labels: map[string]string{"pod": "pod"}}, func(s Source, _ func(Sample) error) error {
-			Expect(s.Filters).To(Equal(map[string]string{"pod": "acme"}))
+			Expect(s.Filters).To(Equal([]Matcher{{Label: "pod", Op: "=", Value: "acme"}}))
 			return nil
 		})
 		Expect(err).NotTo(HaveOccurred())
