@@ -3,7 +3,6 @@ package app
 import (
 	"os"
 	"path/filepath"
-	"testing"
 	"time"
 
 	"github.com/flanksource/commons-db/cmd/query/snapshots"
@@ -11,11 +10,6 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
-
-func TestConnectionCatalog(t *testing.T) {
-	RegisterFailHandler(Fail)
-	RunSpecs(t, "Folder connection catalog")
-}
 
 var _ = Describe("Folder connections", func() {
 	It("uses XDG and app folders with live overrides", func() {
