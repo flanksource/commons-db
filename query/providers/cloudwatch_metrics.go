@@ -14,6 +14,7 @@ import (
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/metrics"
+	promV1 "github.com/prometheus/client_golang/api/prometheus/v1"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -64,10 +65,42 @@ func (o CloudWatchMetricsOptions) Validate() error {
 	if o.Concurrency != 0 && (o.Concurrency < 1 || o.Concurrency > 32) {
 		return fmt.Errorf("CloudWatch concurrency must be in 1..32")
 	}
+	_, _, _, err := o.window(time.Now())
+	return err
+}
+
+// window is the range read as of now, its period in seconds and how far back
+// it starts, refused when CloudWatch would not serve that range at that period.
+func (o CloudWatchMetricsOptions) window(now time.Time) (promV1.Range, int32, time.Duration, error) {
 	if o.Range == nil {
-		return fmt.Errorf("cloudwatchmetrics requires range")
+		return promV1.Range{}, 0, 0, fmt.Errorf("cloudwatchmetrics requires range")
 	}
-	return o.Range.Validate()
+	r, err := o.Range.toPrometheusRange(now)
+	if err != nil {
+		return promV1.Range{}, 0, 0, err
+	}
+	if r.Step%time.Second != 0 {
+		return promV1.Range{}, 0, 0, fmt.Errorf("CloudWatch period must be whole seconds")
+	}
+	period := int32(r.Step / time.Second)
+	age := now.Sub(r.Start)
+	if age > 455*24*time.Hour {
+		return promV1.Range{}, 0, 0, fmt.Errorf("CloudWatch range exceeds 455 day metric retention")
+	}
+	multiple := int32(60)
+	if age > 63*24*time.Hour {
+		multiple = 3600
+	} else if age > 15*24*time.Hour {
+		multiple = 300
+	}
+	if period < 60 {
+		if age > 3*time.Hour || period != 1 && period != 5 && period != 10 && period != 20 && period != 30 {
+			return promV1.Range{}, 0, 0, fmt.Errorf("invalid high resolution CloudWatch range/period")
+		}
+	} else if period%multiple != 0 {
+		return promV1.Range{}, 0, 0, fmt.Errorf("CloudWatch period must be a multiple of %d seconds for this range", multiple)
+	}
+	return r, period, age, nil
 }
 
 func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
@@ -78,33 +111,13 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 	if err := opts.Validate(); err != nil {
 		return nil, err
 	}
-	r, err := opts.Range.toPrometheusRange(time.Now())
+	r, period, age, err := opts.window(time.Now())
 	if err != nil {
 		return nil, err
 	}
-	if r.Step%time.Second != 0 {
-		return nil, fmt.Errorf("CloudWatch period must be whole seconds")
-	}
+	// Not in Validate: a read every interval is validated over its first window, still empty.
 	if !r.End.After(r.Start) {
 		return nil, fmt.Errorf("CloudWatch range end must be after start")
-	}
-	period := int32(r.Step / time.Second)
-	age := time.Since(r.Start)
-	if age > 455*24*time.Hour {
-		return nil, fmt.Errorf("CloudWatch range exceeds 455 day metric retention")
-	}
-	multiple := int32(60)
-	if age > 63*24*time.Hour {
-		multiple = 3600
-	} else if age > 15*24*time.Hour {
-		multiple = 300
-	}
-	if period < 60 {
-		if age > 3*time.Hour || period != 1 && period != 5 && period != 10 && period != 20 && period != 30 {
-			return nil, fmt.Errorf("invalid high resolution CloudWatch range/period")
-		}
-	} else if period%multiple != 0 {
-		return nil, fmt.Errorf("CloudWatch period must be a multiple of %d seconds for this range", multiple)
 	}
 	cfg, endpoint, err := awsConfigForRequest(ctx, req.Connection, opts.Region, opts.Endpoint)
 	if err != nil {
