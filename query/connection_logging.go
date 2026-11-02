@@ -82,10 +82,10 @@ func loggingConnection(ctx context.Context, req ProviderRequest) (*models.Connec
 	if isReference && ctx.CanResolveConnectionReferences() {
 		connection, err := context.FindConnectionByURL(ctx, req.Connection)
 		if err != nil {
-			return nil, fmt.Errorf("resolve logging policy for %q: %w", req.Connection, err)
+			return nil, fmt.Errorf("connection %q: %w", req.Connection, err)
 		}
 		if connection == nil {
-			return nil, fmt.Errorf("resolve logging policy for %q: connection not found", req.Connection)
+			return nil, fmt.Errorf("connection %q not found", req.Connection)
 		}
 		return connection, nil
 	}
