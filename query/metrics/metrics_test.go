@@ -10,6 +10,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	. "github.com/onsi/gomega/gstruct"
 )
 
 func TestMetrics(t *testing.T) { RegisterFailHandler(Fail); RunSpecs(t, "Metric SQL") }
@@ -81,7 +82,10 @@ var _ = Describe("metric summaries", func() {
 			return nil
 		})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(rows).To(Equal([]map[string]any{{"p95": 28.5, "continuous": 28.5, "p50": float64(15)}}))
+		// 20 + 0.85*10 rounds differently across architectures, so the interpolated values match within an ulp-scale tolerance.
+		Expect(rows).To(ConsistOf(MatchAllKeys(Keys{
+			"p95": BeNumerically("~", 28.5, 1e-9), "continuous": BeNumerically("~", 28.5, 1e-9), "p50": Equal(float64(15)),
+		})))
 	})
 	It("fills an explicit bucket grid without changing aggregate inputs", func() {
 		rows, err := Execute(context.Background(), Request{SQL: `SELECT g.time,coalesce(s.value,0) AS value FROM time_series('2024-01-01T00:00:00Z','2024-01-01T00:03:00Z','1m') AS g LEFT JOIN cpu AS s ON s.time=g.time ORDER BY g.time`}, func(_ Source, emit func(Sample) error) error {

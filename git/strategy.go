@@ -45,17 +45,18 @@ func (w *Worktree) replay(ctx context.Context, env []string, sha string) (bool, 
 		return false, err
 	}
 	if _, amErr := run(ctx, command{dir: w.Dir, env: env, stdin: patch, args: []string{"am", "-k", "--3way", "--keep-cr"}}); amErr != nil {
-		return false, w.replayFailed(ctx, sha, amErr)
+		return false, w.replayFailed(ctx, env, sha, amErr)
 	}
 	after, err := w.head(ctx)
 	return after != before, err
 }
 
 // replayFailed aborts a stopped git am, reporting a conflict by its unmerged
-// paths and an empty patch as a commit already applied.
-func (w *Worktree) replayFailed(ctx context.Context, sha string, amErr error) error {
+// paths and an empty patch as a commit already applied. Its am commands take
+// the am's own env: git refuses them without a committer identity.
+func (w *Worktree) replayFailed(ctx context.Context, env []string, sha string, amErr error) error {
 	abort := func() error {
-		_, err := run(ctx, command{dir: w.Dir, args: []string{"am", "--abort"}})
+		_, err := run(ctx, command{dir: w.Dir, env: env, args: []string{"am", "--abort"}})
 		return err
 	}
 	unmerged, err := run(ctx, command{dir: w.Dir, args: []string{"-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=U"}})
@@ -65,7 +66,7 @@ func (w *Worktree) replayFailed(ctx context.Context, sha string, amErr error) er
 	if files := lines(unmerged); len(files) > 0 {
 		return errors.Join(&CherryPickConflictError{Commit: sha, Files: files}, abort())
 	}
-	patch, err := runBytes(ctx, command{dir: w.Dir, args: []string{"am", "--show-current-patch=diff"}})
+	patch, err := runBytes(ctx, command{dir: w.Dir, env: env, args: []string{"am", "--show-current-patch=diff"}})
 	if err == nil && len(patch) == 0 {
 		return abort()
 	}
