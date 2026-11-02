@@ -84,7 +84,7 @@ var _ = ginkgo.Describe("a session over a profile whose data is prepared per rea
 		profile := execProfile("plain-top")
 		profile.Top = &query.TopSpec{}
 
-		_, err = runner.startCLISession(profile, map[string]any{"region": "US"})
+		_, err = runner.startCLISession(store, profile, map[string]any{"region": "US"})
 		Expect(errors.Is(err, query.ErrPrepareRead)).To(BeTrue(), "%v", err)
 		Expect(hooked).To(Receive(Equal("plain-top region=US")))
 		Expect(hooked).To(Receive(Equal("release")))

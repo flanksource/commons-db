@@ -130,9 +130,11 @@ type RegistryOptions struct {
 	BeforeRead func(ctx stdcontext.Context, p Profile, params map[string]any) (release func(), err error)
 }
 
-// prepareRead runs BeforeRead, if one is set, and always returns a safe,
-// idempotent cleanup.
-func (r *SessionRegistry) prepareRead(ctx stdcontext.Context, p Profile, params map[string]any) (func(), error) {
+// PrepareRead runs BeforeRead, if one is set, and always returns a safe,
+// idempotent cleanup. It is also what a session's `profiles.<name>` references
+// are prepared with, so a session reads another profile's data only as it
+// reads its own.
+func (r *SessionRegistry) PrepareRead(ctx stdcontext.Context, p Profile, params map[string]any) (func(), error) {
 	if r.opts.BeforeRead == nil {
 		return func() {}, nil
 	}
