@@ -82,7 +82,7 @@ func (r *Runner) RunTrace(ctx context.Context, name string, options TraceOptions
 		return err
 	}
 
-	session, err := r.startCLISession(p, params)
+	session, err := r.startCLISession(store, p, params)
 	if err != nil {
 		return err
 	}
@@ -105,9 +105,9 @@ func (r *Runner) RunTrace(ctx context.Context, name string, options TraceOptions
 	return r.finishCLISession(session)
 }
 
-// startCLISession runs the profile through a single-slot in-memory registry;
-// CLI sessions are not persisted.
-func (r *Runner) startCLISession(p query.Profile, params map[string]any) (*query.Session, error) {
+// startCLISession runs the profile, resolved from store, through a single-slot
+// in-memory registry; CLI sessions are not persisted.
+func (r *Runner) startCLISession(store profilestore.Store, p query.Profile, params map[string]any) (*query.Session, error) {
 	registry := query.NewSessionRegistry(query.RegistryOptions{
 		MaxSessions: 1,
 		MaxDuration: sessionSpecDuration(p),
@@ -115,7 +115,7 @@ func (r *Runner) startCLISession(p query.Profile, params map[string]any) (*query
 			return profilestore.PrepareReads(ctx, r.beforeExecute, []profilestore.ReadRequest{{Profile: p, Params: params}})
 		},
 	})
-	return query.ExecuteStream(r.context(), registry, p, params)
+	return query.ExecuteStream(profiles.WithSessionProfiles(r.context(), store, registry), registry, p, params)
 }
 
 func sessionSpecDuration(p query.Profile) time.Duration {

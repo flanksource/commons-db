@@ -44,7 +44,7 @@ func (r *Runner) RunTop(ctx context.Context, name string, options TopOptions) er
 		return err
 	}
 
-	session, err := r.startCLISession(p, params)
+	session, err := r.startCLISession(store, p, params)
 	if err != nil {
 		return err
 	}
