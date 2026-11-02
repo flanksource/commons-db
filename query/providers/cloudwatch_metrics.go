@@ -23,33 +23,60 @@ type cloudwatchMetricsProvider struct{}
 
 func (cloudwatchMetricsProvider) Type() string { return "cloudwatchmetrics" }
 
-type cloudwatchMetric struct {
+// CloudWatchMetric is one metric identity: its name and namespace, the
+// dimensions that pick its series, and the statistic and unit to read.
+type CloudWatchMetric struct {
 	Name       string            `json:"name"`
 	Namespace  string            `json:"namespace"`
-	Dimensions map[string]string `json:"dimensions"`
-	Statistic  string            `json:"statistic"`
-	Unit       string            `json:"unit"`
+	Dimensions map[string]string `json:"dimensions,omitempty"`
+	Statistic  string            `json:"statistic,omitempty"`
+	Unit       string            `json:"unit,omitempty"`
 }
-type cloudwatchMetricsOptions struct {
-	Language    string             `json:"language"`
-	Region      string             `json:"region"`
-	Endpoint    string             `json:"endpoint"`
-	Namespace   string             `json:"namespace"`
-	Statistic   string             `json:"statistic"`
-	Unit        string             `json:"unit"`
-	Range       *PrometheusRange   `json:"range"`
-	Metrics     []cloudwatchMetric `json:"metrics"`
-	Dimensions  map[string]string  `json:"dimensions"`
-	Concurrency int                `json:"concurrency"`
+
+// CloudWatchMetricsOptions are the cloudwatchmetrics provider's options.
+type CloudWatchMetricsOptions struct {
+	// Language is metrics (explicit metric identities, the default),
+	// metrics-insights (the query is a Metrics Insights query) or sql (metric SQL).
+	Language string `json:"language,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	// Namespace scopes metric SQL discovery and the identities matched by name.
+	Namespace string `json:"namespace,omitempty"`
+	// Statistic and Unit are each identity's default; Statistic defaults to Average.
+	Statistic string `json:"statistic,omitempty"`
+	Unit      string `json:"unit,omitempty"`
+	// Range is the window read, with Step as the CloudWatch period.
+	Range      *PrometheusRange   `json:"range,omitempty"`
+	Metrics    []CloudWatchMetric `json:"metrics,omitempty"`
+	Dimensions map[string]string  `json:"dimensions,omitempty"`
+	// Concurrency bounds parallel GetMetricData batches, 1..32 (default 4).
+	Concurrency int `json:"concurrency,omitempty"`
+}
+
+// Validate refuses an unsupported language, a missing or unreadable range and
+// a concurrency outside 1..32.
+func (o CloudWatchMetricsOptions) Validate() error {
+	switch o.Language {
+	case "", "metrics", "metrics-insights", "sql":
+	default:
+		return fmt.Errorf("unsupported cloudwatchmetrics language %q", o.Language)
+	}
+	if o.Concurrency != 0 && (o.Concurrency < 1 || o.Concurrency > 32) {
+		return fmt.Errorf("CloudWatch concurrency must be in 1..32")
+	}
+	if o.Range == nil {
+		return fmt.Errorf("cloudwatchmetrics requires range")
+	}
+	return o.Range.Validate()
 }
 
 func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
-	opts, err := query.DecodeOptions[cloudwatchMetricsOptions](req.Options)
+	opts, err := query.DecodeOptions[CloudWatchMetricsOptions](req.Options)
 	if err != nil {
 		return nil, err
 	}
-	if opts.Range == nil {
-		return nil, fmt.Errorf("cloudwatchmetrics requires range")
+	if err := opts.Validate(); err != nil {
+		return nil, err
 	}
 	r, err := opts.Range.toPrometheusRange(time.Now())
 	if err != nil {
@@ -96,9 +123,6 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 	}
 	if opts.Concurrency == 0 {
 		opts.Concurrency = 4
-	}
-	if opts.Concurrency < 1 || opts.Concurrency > 32 {
-		return nil, fmt.Errorf("CloudWatch concurrency must be in 1..32")
 	}
 	fetch := func(s metrics.Source, emit func(metrics.Sample) error) error {
 		samples := 0
@@ -152,7 +176,7 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 					for _, d := range m.Dimensions {
 						dims[aws.ToString(d.Name)] = aws.ToString(d.Value)
 					}
-					identities = append(identities, cloudwatchMetric{Name: aws.ToString(m.MetricName), Namespace: aws.ToString(m.Namespace), Dimensions: dims})
+					identities = append(identities, CloudWatchMetric{Name: aws.ToString(m.MetricName), Namespace: aws.ToString(m.Namespace), Dimensions: dims})
 				}
 				queries, err := cloudwatchQueries(identities, cloudwatchQueryDefaults{Statistic: opts.Statistic, Unit: opts.Unit, Period: period})
 				if err != nil {
@@ -227,7 +251,7 @@ type cloudwatchQueryDefaults struct {
 	Period          int32
 }
 
-func cloudwatchQueries(identities []cloudwatchMetric, defaults cloudwatchQueryDefaults) ([]types.MetricDataQuery, error) {
+func cloudwatchQueries(identities []CloudWatchMetric, defaults cloudwatchQueryDefaults) ([]types.MetricDataQuery, error) {
 	queries := make([]types.MetricDataQuery, 0, len(identities))
 	for i, m := range identities {
 		if m.Name == "" || m.Namespace == "" {

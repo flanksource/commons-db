@@ -221,8 +221,17 @@ var _ = Describe("query trace kind", func() {
 		Entry("options of another provider", `{"provider": {"type": "prometheus", "sql": {"type": "sqlite"}}}`, "sql options"),
 		Entry("the sqlite key with another engine", `{"provider": {"type": "sqlite", "sql": {"type": "postgres"}}}`, "provider sql"),
 		Entry("invalid typed options", `{"provider": {"type": "http", "http": {"method": "FETCH"}}}`, "unsupported http method"),
+		Entry("cloudwatch metrics with no range", `{"provider": {"type": "cloudwatchmetrics", "cloudwatchmetrics": {"metrics": [{"name": "CPUUtilization", "namespace": "AWS/EC2"}]}}}`, "requires range"),
 		Entry("an unbounded in-place read every interval", `{"provider": {"type": "sql", "query": "SELECT 1"}, "every": "1s"}`, "neither params.from nor params.to"),
 	)
+
+	It("reads cloudwatch metrics through their typed options", func() {
+		kind, err := query.Kind(query.Options{Profiles: saved, BeforeExecute: (&gate{}).BeforeExecute})
+		Expect(err).ToNot(HaveOccurred())
+		Expect(kind.ValidateParams(json.RawMessage(`{"provider": {"type": "cloudwatchmetrics", "connection": "connection://aws",
+			"cloudwatchmetrics": {"region": "eu-west-1", "range": {"start": "now-1h", "end": "now", "step": "60s"}, "metrics": [{"name": "CPUUtilization", "namespace": "AWS/EC2"}]}},
+			"every": "1m"}`))).To(Succeed())
+	})
 
 	It("refuses at start a saved profile the host does not hold", func() {
 		_, err := env.Runtime.Start(dbcontext.New(), tracing.StartRequest{Kind: "query", Params: json.RawMessage(`{"profile": "missing"}`)})

@@ -52,6 +52,8 @@ type Provider struct {
 	BigQuery      *providers.BigQueryOptions      `json:"bigquery,omitempty"`
 	Jaeger        *providers.JaegerOptions        `json:"jaeger,omitempty"`
 	OpenTelemetry *providers.OpenTelemetryOptions `json:"opentelemetry,omitempty"`
+
+	CloudWatchMetrics *providers.CloudWatchMetricsOptions `json:"cloudwatchmetrics,omitempty"`
 }
 
 // typedOptions is one provider's options field: the provider types it
@@ -83,6 +85,7 @@ func (p Provider) typed() []typedOptions {
 		{"bigquery", []string{"bigquery"}, p.BigQuery, p.BigQuery != nil, checked[providers.BigQueryOptions]},
 		{"jaeger", []string{"jaeger"}, p.Jaeger, p.Jaeger != nil, checked[providers.JaegerOptions]},
 		{"opentelemetry", []string{"opentelemetry"}, p.OpenTelemetry, p.OpenTelemetry != nil, checked[providers.OpenTelemetryOptions]},
+		{"cloudwatchmetrics", []string{"cloudwatchmetrics"}, p.CloudWatchMetrics, p.CloudWatchMetrics != nil, checked[providers.CloudWatchMetricsOptions]},
 	}
 }
 

@@ -23,6 +23,9 @@ var _ = Describe("exported provider options", func() {
 		Entry("an opensearch limit that is no number", providers.OpenSearchOptions{Limit: "many"}, "invalid opensearch limit"),
 		Entry("an opensearch tail poll that never waits", providers.OpenSearchOptions{TailPoll: "0s"}, "tailPoll"),
 		Entry("an opentelemetry format it cannot read", providers.OpenTelemetryOptions{Format: "zipkin"}, `unsupported opentelemetry format "zipkin"`),
+		Entry("cloudwatch metrics with no range", providers.CloudWatchMetricsOptions{}, "requires range"),
+		Entry("a cloudwatch metrics language it cannot run", providers.CloudWatchMetricsOptions{Language: "promql", Range: &providers.PrometheusRange{Start: "now-1h", End: "now", Step: "60s"}}, `unsupported cloudwatchmetrics language "promql"`),
+		Entry("a cloudwatch metrics concurrency over 32", providers.CloudWatchMetricsOptions{Concurrency: 33, Range: &providers.PrometheusRange{Start: "now-1h", End: "now", Step: "60s"}}, "1..32"),
 	)
 
 	DescribeTable("Validate accepts what the provider reads",
@@ -35,6 +38,7 @@ var _ = Describe("exported provider options", func() {
 		Entry("explicit promql", providers.PrometheusOptions{Language: "promql"}),
 		Entry("a lowercase http method", providers.HTTPOptions{Method: "post"}),
 		Entry("opentelemetry defaults", providers.OpenTelemetryOptions{}),
+		Entry("cloudwatch metric SQL over a range", providers.CloudWatchMetricsOptions{Language: "sql", Range: &providers.PrometheusRange{Start: "now-1h", End: "now", Step: "60s"}}),
 	)
 
 	It("refuses invalid options before the provider connects", func() {
