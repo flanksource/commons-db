@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/flanksource/captain v0.0.72
+	github.com/flanksource/captain v0.0.73
 	// Kept in lockstep with the root module's clicky pin (see ../../go.mod):
 	// a workspace build resolves one clicky for both modules.
 	github.com/flanksource/clicky v1.21.93
@@ -153,7 +153,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.13.1 // indirect
-	github.com/flanksource/gomplate/v3 v3.24.90 // indirect
+	github.com/flanksource/gomplate/v3 v3.24.91 // indirect
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
