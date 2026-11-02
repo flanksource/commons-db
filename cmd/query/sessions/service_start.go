@@ -93,9 +93,10 @@ func (h *sessionHandler) writeLive(w http.ResponseWriter, r *http.Request, statu
 // r's cancellation, because a session outlives the request that started it; its
 // own duration bound and Stop end it. The server context's capabilities
 // (connection resolver, logger, tracer, namespace, DB) are laid over them by
-// Wrap, as every profile read does.
+// Wrap, as every profile read does, and `profiles.<name>` resolves from the
+// handler's store.
 func (h *sessionHandler) sessionContext(r *http.Request) dbcontext.Context {
-	return h.ctx.Wrap(context.WithoutCancel(r.Context()))
+	return profiles.WithSessionProfiles(h.ctx.Wrap(context.WithoutCancel(r.Context())), h.store, h.registry)
 }
 
 // sessionSpec is the transport's side of a session request: the HTTP query
