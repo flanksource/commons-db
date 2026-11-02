@@ -7,6 +7,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	context "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -180,6 +181,19 @@ output: [table, html]
 })
 
 var _ = Describe("Execute", func() {
+	DescribeTable("refuses a connection reference its context's resolver does not know",
+		func(name, expected string) {
+			provider := &mockProvider{typ: "unknown-connection"}
+			query.RegisterProvider(provider)
+			ctx := context.New().WithConnectionResolver(func(context.Context, string) (*models.Connection, error) { return nil, nil })
+
+			_, err := query.Execute(ctx, query.Profile{Name: name, Provider: query.ProviderConfig{Type: provider.typ, Connection: "connection://missing"}})
+			Expect(err).To(MatchError(expected))
+		},
+		Entry("a saved profile, by its name", "orders", `profile "orders": connection "connection://missing" not found`),
+		Entry("an unnamed profile its caller names", "", `connection "connection://missing" not found`),
+	)
+
 	It("separates native column filters from declared template parameters", func() {
 		provider := &mockProvider{typ: "opensearch"}
 		query.RegisterProvider(provider)

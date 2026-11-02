@@ -134,7 +134,7 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 	}
 	resolved, filters, err := resolveProfileInput(profile, request.Input, time.Now())
 	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, profileError(profile, err)
 	}
 	lookup, err := profileFilterValueSearch(profile, request)
 	if err != nil {
@@ -158,7 +158,7 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 	}
 	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: profile.Provider, Query: profile.Query, Defs: profile.Params, Resolved: resolved})
 	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, profileError(profile, err)
 	}
 	req.Filters = siblingFilters(filters, request.Key)
 	req.Labels = profile.Labels
