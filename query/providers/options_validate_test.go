@@ -25,6 +25,7 @@ var _ = Describe("exported provider options", func() {
 		Entry("an opentelemetry format it cannot read", providers.OpenTelemetryOptions{Format: "zipkin"}, `unsupported opentelemetry format "zipkin"`),
 		Entry("cloudwatch metrics with no range", providers.CloudWatchMetricsOptions{}, "requires range"),
 		Entry("a cloudwatch metrics language it cannot run", providers.CloudWatchMetricsOptions{Language: "promql", Range: &providers.PrometheusRange{Start: "now-1h", End: "now", Step: "60s"}}, `unsupported cloudwatchmetrics language "promql"`),
+		Entry("a cloudwatch metrics high-resolution period CloudWatch does not serve", providers.CloudWatchMetricsOptions{Range: &providers.PrometheusRange{Start: "now-1h", End: "now", Step: "15s"}}, "invalid high resolution"),
 		Entry("a cloudwatch metrics concurrency over 32", providers.CloudWatchMetricsOptions{Concurrency: 33, Range: &providers.PrometheusRange{Start: "now-1h", End: "now", Step: "60s"}}, "1..32"),
 	)
 
