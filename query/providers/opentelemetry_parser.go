@@ -15,15 +15,18 @@ func openTelemetryRow(document map[string]any, options OpenTelemetryOptions) que
 	attributes := flattenTraceDocument(document)
 	duration, durationField := firstTracePathWithName(document, "duration_ms", "duration", "durationNano", "duration_nano")
 	row := query.Row{
-		"timestamp":   normalizeTraceTimestamp(stringTraceValue(firstTracePath(document, options.DateField, "@timestamp", "timestamp", "startTimeMillis"))),
-		"trace_id":    stringTraceValue(firstTracePath(document, options.TraceIDField, "trace_id", "traceID")),
-		"span_id":     stringTraceValue(firstTracePath(document, options.SpanIDField, "span_id", "spanID")),
-		"parent_id":   traceParentID(document, options),
-		"service":     stringTraceValue(firstTracePath(document, options.ServiceField, "service_name", "process.serviceName")),
-		"operation":   stringTraceValue(firstTracePath(document, options.OperationField, "operation_name", "operationName")),
-		"status":      traceStatus(document, attributes, options),
-		"duration_ms": traceDurationMillis(duration, durationField, options.Format),
-		"_attributes": attributes,
+		"timestamp":        normalizeTraceTimestamp(stringTraceValue(firstTracePath(document, options.DateField, "@timestamp", "timestamp", "startTimeMillis"))),
+		"trace_id":         stringTraceValue(firstTracePath(document, options.TraceIDField, "trace_id", "traceID")),
+		"span_id":          stringTraceValue(firstTracePath(document, options.SpanIDField, "span_id", "spanID")),
+		"parent_id":        traceParentID(document, options),
+		"service":          stringTraceValue(firstTracePath(document, options.ServiceField, "service_name", "process.serviceName")),
+		"operation":        stringTraceValue(firstTracePath(document, options.OperationField, "operation_name", "operationName")),
+		"status":           traceStatus(document, attributes, options),
+		"kind":             stringTraceValue(firstTracePath(document, "kind", "span.kind")),
+		"duration_ms":      traceDurationMillis(duration, durationField, options.Format),
+		"_attributes":      attributes,
+		"_resource":        traceAttributeValues(firstTracePath(document, "resource.attributes", "resource", "process.tags")),
+		"_span_attributes": traceAttributeValues(firstTracePath(document, "attributes", "tags")),
 	}
 	row["id"] = row["span_id"]
 	row["service_name"] = row["service"]
@@ -35,6 +38,24 @@ func openTelemetryRow(document map[string]any, options OpenTelemetryOptions) que
 		}
 	}
 	return row
+}
+
+func traceAttributeValues(value any) map[string]any {
+	if object, ok := value.(map[string]any); ok {
+		return flattenTraceDocument(object)
+	}
+	result := map[string]any{}
+	values, _ := value.([]any)
+	for _, value := range values {
+		tag, ok := value.(map[string]any)
+		if !ok {
+			continue
+		}
+		if key, ok := tag["key"].(string); ok {
+			result[key] = firstTracePath(tag, "value", "vStr", "vDouble", "vBool", "vLong")
+		}
+	}
+	return result
 }
 
 func traceParentID(document map[string]any, options OpenTelemetryOptions) string {
@@ -55,7 +76,7 @@ func traceParentID(document map[string]any, options OpenTelemetryOptions) string
 }
 
 func traceStatus(document, attributes map[string]any, options OpenTelemetryOptions) string {
-	fields := append(append([]string{}, options.StatusFields...), "status", "status.code", "tag.error", "error")
+	fields := append(append([]string{}, options.StatusFields...), "status.code", "status", "tag.error", "error")
 	for _, field := range fields {
 		value := stringTraceValue(firstTracePath(document, field))
 		if value == "" {

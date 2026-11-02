@@ -312,6 +312,7 @@ func dashboardProfileCount(connection *models.Connection, counts map[string]int)
 // AddConnectionsOpenAPI documents the inventory read and its opt-in health
 // trigger without publishing either as an explorer surface.
 func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
+	addBrowserTracePaths(spec)
 	if spec.Paths == nil {
 		spec.Paths = map[string]rpc.OpenAPIPath{}
 	}

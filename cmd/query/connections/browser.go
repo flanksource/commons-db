@@ -228,6 +228,8 @@ func (h *connectionBrowserHandler) ServeHTTP(w http.ResponseWriter, r *http.Requ
 	tail = strings.TrimSuffix(tail, "/")
 
 	switch {
+	case (tail == "/traces" || strings.HasPrefix(tail, "/traces/")) && r.Method == http.MethodGet:
+		h.serveTraces(w, r, conn, tail)
 	case tail == "" && r.Method == http.MethodGet:
 		descriptor, ok := descriptorForConnection(conn.Type)
 		if !ok {

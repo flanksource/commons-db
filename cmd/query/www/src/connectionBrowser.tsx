@@ -1,5 +1,6 @@
 import {
   CacheBrowser,
+  useRouter,
   type EntityDetailBodyRenderContext,
   type EntityDetailHeaderRenderContext,
 } from "@flanksource/clicky-ui";
@@ -13,6 +14,7 @@ import {
 import { ConnectionInfoHeader } from "./connectionInfoHeader";
 import { ConnectionQueryBrowser } from "./connectionQueryBrowser";
 import { ConnectionTrace } from "./connectionTrace";
+import { ConnectionOtel } from "./connectionOtel";
 import { connectionProfileTargetOptions } from "./connectionProfileTarget";
 
 export function connectionDetailBodyRenderer(
@@ -33,7 +35,7 @@ export function connectionDetailBodyRenderer(
   );
 }
 
-type BrowserTab = "browser" | "trace";
+type BrowserTab = "browser" | "trace" | "traces";
 
 function ConnectionBrowser({
   id,
@@ -119,7 +121,10 @@ function ConnectionBrowserBody({
     Record<string, unknown>
   >({});
   const [selectedQuery, setSelectedQuery] = useState<string>();
-  const [activeTab, setActiveTab] = useState<BrowserTab>("browser");
+  const { navigate, pathname } = useRouter();
+  const supportsOtel = descriptor.provider === "opensearch" || descriptor.provider === "opentelemetry";
+  const tab = new URLSearchParams(window.location.search).get("tab");
+  const activeTab: BrowserTab = supportsOtel && (tab === "traces" || (!tab && descriptor.provider === "opentelemetry")) ? "traces" : descriptor.provider === "sqlserver" && tab === "trace" ? "trace" : "browser";
   const profileOptions = useMemo(
     () => connectionProfileTargetOptions(descriptor, selectedOptions),
     [descriptor, selectedOptions],
@@ -140,8 +145,8 @@ function ConnectionBrowserBody({
       {profileAction ? (
         <div className="flex flex-wrap items-center gap-2">{profileAction}</div>
       ) : null}
-      {hasTraceTab ? (
-        <ConnectionToolTabs activeTab={activeTab} onSelect={setActiveTab} />
+      {hasTraceTab || supportsOtel ? (
+        <ConnectionToolTabs activeTab={activeTab} supportsOtel={supportsOtel} onSelect={tab => { const params = new URLSearchParams(window.location.search); params.set("tab", tab); navigate(`${pathname}?${params}`, { replace: true }); }} />
       ) : null}
       <div hidden={activeTab !== "browser"}>
         <ConnectionQueryBrowser
@@ -152,6 +157,7 @@ function ConnectionBrowserBody({
           onQueryChange={setSelectedQuery}
         />
       </div>
+      {supportsOtel && activeTab === "traces" && <ConnectionOtel id={id} name={connectionName} />}
       {hasTraceTab ? (
         <div hidden={activeTab !== "trace"}>
           <ConnectionTrace
@@ -171,9 +177,11 @@ function ConnectionBrowserBody({
 function ConnectionToolTabs({
   activeTab,
   onSelect,
+  supportsOtel = false,
 }: {
   activeTab: BrowserTab;
   onSelect: (tab: BrowserTab) => void;
+  supportsOtel?: boolean;
 }) {
   return (
     <div
@@ -181,7 +189,7 @@ function ConnectionToolTabs({
       role="tablist"
       aria-label="Connection tools"
     >
-      {(["browser", "trace"] as const).map((tab) => (
+      {(supportsOtel ? ["browser", "traces"] as const : ["browser", "trace"] as const).map((tab) => (
         <button
           key={tab}
           role="tab"
