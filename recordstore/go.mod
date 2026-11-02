@@ -8,10 +8,10 @@ require (
 	github.com/apache/arrow-go/v18 v18.5.2
 	// Kept in lockstep with the root module's clicky pin (see ../go.mod):
 	// a workspace build resolves one clicky for every module.
-	github.com/flanksource/clicky v1.21.90
-	github.com/flanksource/clicky/valkey v1.21.89
+	github.com/flanksource/clicky v1.21.93
+	github.com/flanksource/clicky/valkey v1.21.93
 	github.com/flanksource/commons v1.63.0
-	github.com/flanksource/commons-db v0.1.68
+	github.com/flanksource/commons-db v0.1.69
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.7

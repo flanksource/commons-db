@@ -282,6 +282,8 @@ github.com/fergusstrange/embedded-postgres v1.34.0 h1:c6RKhPKFsLVU+Tdxsx8q0UxCHs
 github.com/fergusstrange/embedded-postgres v1.34.0/go.mod h1:w0YvnCgf19o6tskInrOOACtnqfVlOvluz3hlNLY7tRk=
 github.com/flanksource/clicky v1.21.90 h1:8xkBJAwaeVwK2H4O3sfXeZ4LPanNAfd8krfgI35J278=
 github.com/flanksource/clicky v1.21.90/go.mod h1:aigyzJt9FSoGV1v7q9nb7D74vQJHaBYJJ3ShMwq8r34=
+github.com/flanksource/clicky v1.21.93 h1:A528zrmvJPNECbZ7HRCBn0FfDJlm+9r1cHUYvpH8BKU=
+github.com/flanksource/clicky v1.21.93/go.mod h1:aigyzJt9FSoGV1v7q9nb7D74vQJHaBYJJ3ShMwq8r34=
 github.com/flanksource/clicky/valkey v1.21.89 h1:1OCDksleAUViqtn0KGPt533TH6yA0jvQc/wrEnPQj5w=
 github.com/flanksource/clicky/valkey v1.21.89/go.mod h1:rPqFN4S/9KctKpCKaYJrjHpS97TWW6i4BYabB+t9Heg=
 github.com/flanksource/commons v1.63.0 h1:gI5DecATKbay5Q1o1hYRxQUSnbC+yWP7BmdHQjrpvTY=
