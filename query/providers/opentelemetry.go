@@ -7,6 +7,7 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
@@ -191,13 +192,19 @@ func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (
 	if err != nil {
 		return openTelemetryRuntime{}, fmt.Errorf("hydrate opentelemetry connection %q: %w", req.Connection, err)
 	}
-	outer, err := dbconnection.NewOpenTelemetry(outerModel)
-	if err != nil {
-		return openTelemetryRuntime{}, err
+	nested := outerModel
+	if outerModel == nil {
+		return openTelemetryRuntime{}, fmt.Errorf("trace connection %q not found", req.Connection)
 	}
-	nested, err := outer.ResolveOpenSearch(ctx)
-	if err != nil {
-		return openTelemetryRuntime{}, err
+	if outerModel.Type != models.ConnectionTypeOpenSearch {
+		outer, err := dbconnection.NewOpenTelemetry(outerModel)
+		if err != nil {
+			return openTelemetryRuntime{}, err
+		}
+		nested, err = outer.ResolveOpenSearch(ctx)
+		if err != nil {
+			return openTelemetryRuntime{}, err
+		}
 	}
 	runtime, err := openSearchClientForConnection(ctx, nested)
 	if err != nil {
