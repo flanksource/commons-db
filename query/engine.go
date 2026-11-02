@@ -92,7 +92,7 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 	}
 	resolved, filters, err := resolveProfileInput(p, supplied, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	return executeResolved(ctx, p, resolved, filters)
 }
@@ -108,19 +108,19 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	}
 	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	req.Filters = filters
 	req.Labels = p.Labels
 	req.MetricMetadata = &MetricMetadata{}
 	req.Order, err = p.EffectiveOrder()
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	req.Diagnostics = DiagnosticSink(ctx)
 	ctx, req, operation, err := prepareConnectionOperation(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 
 	rows, truncated, err := drainPages(ctx, p, req)
@@ -147,11 +147,11 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 
 	result, err = applyProcessors(ctx, p.Processors, result)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	result.Rows, result.Styles, err = applyRowTransforms(ctx, p, result.Rows)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	if p.Top != nil {
 		var cut bool
@@ -160,11 +160,11 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	}
 	result.ColumnFilterKeys, err = p.ColumnFilterKeys()
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	result.ColumnSortKeys, err = p.ColumnSortKeys()
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	return result, nil
 }

@@ -122,7 +122,7 @@ func validatePageExecution(run pageExecution) error {
 	}
 	label, err := nonPageProcessor(p.Processors)
 	if err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	if label != "" {
 		return fmt.Errorf("profile %q cannot be paged: processor %q needs the whole result", p.Name, label)
@@ -173,7 +173,7 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	// cut under a different sort.
 	order, err := p.RequestedOrder(run.Page.Sort, run.Page.Desc)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 	page, err := resolvePageStrategy(p, run.Page, order)
 	if err != nil {
@@ -198,7 +198,7 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	}
 	resolved, filters, err := resolveProfileInput(p, supplied, now)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 
 	provider, err := GetProvider(p.Provider.Type)
@@ -207,7 +207,7 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	}
 	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 	req.Filters = filters
 	req.Labels = p.Labels
@@ -220,7 +220,7 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	}
 	ctx, req, operation, err := prepareConnectionOperation(ctx, req)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 	scope := CursorScope{
 		Labels:     p.Labels,
@@ -237,7 +237,7 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	}
 	position, err := DecodeCursor(page.Cursor, scope)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 	req.Position = position
 
