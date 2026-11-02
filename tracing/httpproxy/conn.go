@@ -65,11 +65,13 @@ func (c *countingConn) Close() error {
 }
 
 // finish records the tunnel once: goproxy closes both ends of a tunnel and
-// can close the same connection twice.
+// can close the same connection twice. It records before it untracks, so a
+// close racing it either finds the tunnel tracked, and waits on this once, or
+// finds it already recorded.
 func (c *countingConn) finish() {
 	c.once.Do(func() {
-		c.recorder.untrack(c.self)
 		c.recorder.add(connectExchange(c.host, c.serverIP, c.started, time.Since(c.started), c.in.Load(), c.out.Load(), nil))
+		c.recorder.untrack(c.self)
 	})
 }
 
