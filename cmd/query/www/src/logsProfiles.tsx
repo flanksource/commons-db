@@ -22,13 +22,13 @@ function slugify(name: string): string {
 
 // entitySegment returns the trailing path segment of a request URL, e.g.
 // "/api/v1/profiles/profile-logs-http-demo?limit=50" -> "profile-logs-http-demo".
-function entitySegment(url: string): string {
+export function entitySegment(url: string): string {
   const path = url.split("?")[0] ?? "";
   return path.split("/").filter(Boolean).pop() ?? "";
 }
 
-/** What the logs renderer needs to know about a profile beyond that it is one. */
-export type LogsSurfaceProfile = {
+/** Stored profile identity and streaming capability for a custom presentation. */
+export type ProfileRenderSurface = {
   /**
    * The profile as it is stored. The route and the list request both carry the
    * slug, but the session endpoint resolves through `store.Get(name)` — see
@@ -44,15 +44,16 @@ export type LogsSurfaceProfile = {
   follow: boolean;
 };
 
-// logsProfileSurfaces indexes the profiles that declare `render: logs` by the
+// profileRenderSurfaces indexes profiles with the requested presentation by the
 // dynamic-entity name their surface is addressed as ("profile-" + slug), which
 // is what appears in a list-operation request URL.
-export function logsProfileSurfaces(
+export function profileRenderSurfaces(
   documents: readonly ProfileDocument[],
-): Map<string, LogsSurfaceProfile> {
-  const surfaces = new Map<string, LogsSurfaceProfile>();
+  render: "logs" | "traces",
+): Map<string, ProfileRenderSurface> {
+  const surfaces = new Map<string, ProfileRenderSurface>();
   for (const p of documents) {
-    if (p.render !== "logs") continue;
+    if (p.render !== render) continue;
     const name = typeof p.profile === "string" ? p.profile : typeof p.name === "string" ? p.name : "";
     if (name) surfaces.set("profile-" + slugify(name), { profile: name, follow: p.follow === true });
   }
@@ -61,9 +62,9 @@ export function logsProfileSurfaces(
 
 // useLogsSurfaces reads the shared profile query, so a rename does not leave this
 // view resolving against a stale profile list.
-export function useLogsSurfaces(): Map<string, LogsSurfaceProfile> {
+export function useLogsSurfaces(): Map<string, ProfileRenderSurface> {
   const { data } = useProfiles();
-  return logsProfileSurfaces(data ?? []);
+  return profileRenderSurfaces(data ?? [], "logs");
 }
 
 // followParams is the walk's own parameters, handed to the follow session so the
@@ -122,12 +123,12 @@ export function logsColumnFilterKeys(payload: unknown): Record<string, string> {
   );
 }
 
-export function clickyLogsRows(payload: unknown): Record<string, unknown>[] | undefined {
+export function clickyLogsRows(payload: unknown, options: { rawValues?: boolean } = {}): Record<string, unknown>[] | undefined {
   const table = clickyTable(payload);
   if (!table) return undefined;
   return (table.rows ?? []).map((row) =>
     Object.fromEntries(
-      Object.entries(row.cells).map(([key, value]) => [key, clickyNodeValue(value)]),
+      Object.entries(row.cells).map(([key, value]) => [key, clickyNodeValue(value, options)]),
     ),
   );
 }
@@ -147,11 +148,12 @@ export function clickyLogsRows(payload: unknown): Record<string, unknown>[] | un
 export function clickyLogsWalk(
   pages: readonly ExecutionResponse[] | undefined,
   response: ExecutionResponse,
+  options: { rawValues?: boolean } = {},
 ): Record<string, unknown>[] | undefined {
-  if (!pages || pages.length <= 1) return clickyLogsRows(response.parsed);
+  if (!pages || pages.length <= 1) return clickyLogsRows(response.parsed, options);
   const walk: Record<string, unknown>[] = [];
   for (const page of pages) {
-    const rows = clickyLogsRows(page.parsed);
+    const rows = clickyLogsRows(page.parsed, options);
     if (!rows) return undefined;
     walk.push(...rows);
   }
@@ -176,13 +178,17 @@ function clickyTable(payload: unknown): ClickyNode | undefined {
   return undefined;
 }
 
-function clickyNodeValue(node: ClickyNode): unknown {
+function clickyNodeValue(node: ClickyNode, options: { rawValues?: boolean }): unknown {
+  if (options.rawValues && node.kind === "code" && node.language === "json" && node.source !== undefined) {
+    return JSON.parse(node.source) as unknown;
+  }
   if (node.kind === "map") {
     return Object.fromEntries(
-      (node.fields ?? []).map((field) => [field.name, clickyNodeValue(field.value)]),
+      (node.fields ?? []).map((field) => [field.name, clickyNodeValue(field.value, options)]),
     );
   }
-  if (node.kind === "list") return (node.items ?? []).map(clickyNodeValue);
+  if (node.kind === "list") return (node.items ?? []).map(item => clickyNodeValue(item, options));
+  if (options.rawValues && node.filterValue !== undefined) return node.filterValue;
   // A column with a display width is rendered truncated — a twelve-character
   // `timestamp` arrives as "2026-08-18 …" — and the node keeps what it was
   // rendered from in its children. Reading `plain` here would take the
@@ -190,13 +196,13 @@ function clickyNodeValue(node: ClickyNode): unknown {
   // a shorter answer but an unparseable one, so `2026-08-18 07:39:59` becomes
   // Invalid Date and the column renders blank rather than narrow.
   if (node.style?.maxWidth && node.children?.length) {
-    return node.children.map(clickyNodeValue).join("");
+    return node.children.map(child => clickyNodeValue(child, options)).join("");
   }
   if (node.plain !== undefined) return node.plain;
   if (node.text !== undefined) return node.text;
   if (node.source !== undefined) return node.source;
   if (node.filterValue !== undefined) return node.filterValue;
-  if (node.children) return node.children.map(clickyNodeValue).join("");
+  if (node.children) return node.children.map(child => clickyNodeValue(child, options)).join("");
   return "";
 }
 
@@ -209,7 +215,7 @@ function clickyNodeValue(node: ClickyNode): unknown {
 // this function is called during the parent's render, where no hook may run. The
 // component is the seam that can hold it.
 export function logsResultRenderer(
-  logsSurfaces: Map<string, LogsSurfaceProfile>,
+  logsSurfaces: Map<string, ProfileRenderSurface>,
 ): (ctx: ResultRenderContext) => ReactNode {
   return ({ response, loading, defaultView, filterConfig, pagination, download, pages, infinite }) => {
     const requestUrl = response?.requestUrl;

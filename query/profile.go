@@ -194,13 +194,15 @@ type AliasDef struct {
 }
 
 // Render values the frontend keys presentation off (x-clicky-render):
-// RenderLogs selects the canonical LogsTable; RenderTrace and RenderTop select
+// RenderLogs selects the canonical LogsTable; RenderTraces groups OpenTelemetry
+// span rows for the waterfall/inspector; RenderTrace and RenderTop select
 // the session-backed live views and are derived from the profile kind when
 // Render is not set explicitly; RenderTimeseries charts the projected series
 // and is derived from Series.
 const (
 	RenderLogs       = "logs"
 	RenderTrace      = "trace"
+	RenderTraces     = "traces"
 	RenderTop        = "top"
 	RenderTimeseries = "timeseries"
 )

@@ -19,7 +19,7 @@ import {
   clickyLogsWalk,
   followParams,
   logsColumnFilterKeys,
-  logsProfileSurfaces,
+  profileRenderSurfaces,
   logsResultRenderer,
 } from "./logsProfiles";
 
@@ -93,16 +93,16 @@ function surfaceElement(context: ResultRenderContext, surfaces = K8S_SURFACES) {
   >;
 }
 
-describe("logsProfileSurfaces", () => {
+describe("profileRenderSurfaces", () => {
   it("keys each logs surface by its route slug and carries the stored profile name", () => {
     // The route says `profile-kubernetes-pod-logs`; POST /profile/{name}/sessions
     // resolves through the store, which only knows "Kubernetes Pod Logs".
     expect(
-      logsProfileSurfaces([
+      profileRenderSurfaces([
         { profile: "Kubernetes Pod Logs", render: "logs", follow: true },
         { profile: "Audit Trail", render: "logs" },
         { profile: "Ledger", render: "table", follow: true },
-      ]),
+      ], "logs"),
     ).toEqual(
       new Map([
         ["profile-kubernetes-pod-logs", { profile: "Kubernetes Pod Logs", follow: true }],

@@ -20,6 +20,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createConnectionDashboardResultRenderer } from "@flanksource/clicky-ui/connections";
 import { connectionFormActions, connectionsApiBase, formExtensions } from "./appFormExtensions";
 import { logsResultRenderer, useLogsSurfaces } from "./logsProfiles";
+import { tracesResultRenderer, useTraceSurfaces } from "./tracesProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
 import { getMonacoWorker } from "./monacoWorkers";
 import { queryChatConfig } from "./chatWidget";
@@ -70,6 +71,7 @@ function Explorer() {
   const reconcilingProfile = reconcileSurfaceKey(pathname);
   const logsSurfaces = useLogsSurfaces();
   const renderLogsResult = logsResultRenderer(logsSurfaces);
+  const renderTracesResult = tracesResultRenderer(useTraceSurfaces());
   const renderConnectionDashboard = createConnectionDashboardResultRenderer({
     apiBase: connectionsApiBase,
     renderConnectionLink: (connection, link) =>
@@ -78,7 +80,8 @@ function Explorer() {
   const renderResult = (context: ResultRenderContext) => {
     const connectionResult = renderConnectionDashboard(context);
     if (connectionResult !== context.defaultView) return connectionResult;
-    const defaultResult = renderLogsResult(context);
+    const traceResult = renderTracesResult(context);
+    const defaultResult = traceResult === context.defaultView ? renderLogsResult(context) : traceResult;
     const result =
       defaultResult === context.defaultView && isProfileSurface(context.surfaceKey)
         ? profileRowDetailsResult(context, client, context.surfaceKey!)

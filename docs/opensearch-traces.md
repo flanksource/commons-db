@@ -18,3 +18,21 @@ curl 'http://localhost:8080/api/v1/connection/search/browser/traces/0123456789ab
 For Jaeger indexes, add `format=jaeger&index=jaeger-span-*`. Request `Accept: application/schema+json` on the search endpoint for the query schema. The server's OpenAPI document includes both result schemas. Limits are applied after grouping; exceeding the bounded span read is an error, never a sampled count.
 
 Telltale uses the same views and query implementation at `/otel` and `/otel/:traceId`, retaining its Received and Recorded sources alongside configured OpenSearch connections.
+
+## Profile render mode
+
+Choose **Traces** in a profile's Render mode selector, or set `render: traces` in YAML:
+
+```yaml
+profile: Service traces
+render: traces
+provider:
+  type: opentelemetry
+  connection: connection://search
+  options:
+    index: otel-traces-*
+```
+
+The view groups the profile's loaded span rows by `trace_id`. Keep the provider's `trace_id`, `span_id`, `timestamp`, and `duration_ms` fields in the result. `parent_id`, `service`, `operation`, `status`, `kind`, `_resource`, `_span_attributes`, and `_attributes` supply tree structure and inspector details. Profile filters and paging remain available; traces can be incomplete because only loaded rows are grouped. Open a trace to see its waterfall, and select a span to inspect it. Trace and span selection are stored in the URL alongside the profile's filters.
+
+`render: traces` is separate from `render: trace`, which identifies a live streaming session.

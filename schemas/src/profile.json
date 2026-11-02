@@ -1201,10 +1201,11 @@
       "type": "object"
     },
     "render": {
-      "description": "Presentation mode: table (default), logs (canonical LogsTable view for trace/log profiles) or timeseries (charts the series projection; the default when series is set)",
+      "description": "Presentation mode: table (default), logs (canonical LogsTable view), traces (OpenTelemetry span rows grouped into traces with a waterfall and span inspector), or timeseries (charts the series projection; the default when series is set)",
       "enum": [
         "table",
         "logs",
+        "traces",
         "timeseries"
       ],
       "title": "Render",
