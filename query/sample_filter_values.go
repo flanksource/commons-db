@@ -35,12 +35,12 @@ func SampleFilterValues(
 	}
 	input, err := sampleInput(options.Params, options.Filters)
 	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, profileError(profile, err)
 	}
 	filterProfile := sampleFilterProfile(profile, options.FilterColumns)
 	resolved, _, err := resolveProfileInput(filterProfile, input, time.Now())
 	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, profileError(profile, err)
 	}
 	provider, err := GetProvider(profile.Provider.Type)
 	if err != nil {
@@ -48,10 +48,10 @@ func SampleFilterValues(
 	}
 	request, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: profile.Provider, Query: profile.Query, Defs: profile.Params, Resolved: resolved})
 	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, profileError(profile, err)
 	}
 	if err := validateSampleReadOnly(profile.Provider.Type, request.Query, request.Options); err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, profileError(profile, err)
 	}
 	return LookupFilterValues(ctx, FilterValueLookupRequest{
 		Profile: filterProfile, Input: input, Key: options.FilterKey,

@@ -131,6 +131,15 @@ func (s TopSpec) DurationLimit() time.Duration {
 	return s.MaxDuration.Duration
 }
 
+// profileError is err in the context of p, by its name; an unnamed profile,
+// built in place by a caller that names its own source, leaves err as is.
+func profileError(p Profile, err error) error {
+	if p.Name == "" {
+		return err
+	}
+	return fmt.Errorf("profile %q: %w", p.Name, err)
+}
+
 // Kind derives the Profile's execution kind from its Trace/Top blocks.
 func (p Profile) Kind() ProfileKind {
 	switch {
@@ -177,10 +186,10 @@ func (p Profile) Validate() error {
 		return err
 	}
 	if err := p.Limits.Validate(); err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	if err := p.Order.Validate(); err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	for index, processor := range p.Processors {
 		if _, err := processor.Resolve(); err != nil {
@@ -194,16 +203,16 @@ func (p Profile) Validate() error {
 	}
 	for index, filter := range p.Filters {
 		if err := filter.validate(index); err != nil {
-			return fmt.Errorf("profile %q: %w", p.Name, err)
+			return profileError(p, err)
 		}
 	}
 	bindings, err := p.ColumnFilterBindings()
 	if err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	runtimeBindings, err := p.RuntimeFilterBindings()
 	if err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	bindings = append(bindings, runtimeBindings...)
 	params := make(map[string]bool, len(p.Params))
