@@ -40,7 +40,7 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/flanksource/clicky v1.21.93
 	github.com/flanksource/commons v1.63.0
-	github.com/flanksource/deps v1.0.49
+	github.com/flanksource/deps v1.0.50
 	github.com/flanksource/gomplate/v3 v3.24.91
 	github.com/flanksource/is-healthy v1.0.93
 	github.com/flanksource/sqlglot-go v1.1.1
