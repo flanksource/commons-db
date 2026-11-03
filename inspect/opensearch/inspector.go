@@ -81,9 +81,6 @@ type Target struct {
 }
 
 func (t Target) QueryName() string {
-	if t.Kind == "group" {
-		return strings.Join(t.Members, ",")
-	}
 	return t.Name
 }
 

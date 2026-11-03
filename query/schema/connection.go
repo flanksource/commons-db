@@ -383,6 +383,10 @@ func tailoredBranch(typ string, cfg any) Schema {
 }
 
 func customizeOpenSearchPropertiesSchema(properties Schema) {
+	threshold := properties["properties"].(Schema)["paging_threshold"].(Schema)
+	threshold["description"] = "Requested row threshold for normal page/limit paging (0–10000). Larger or unbounded reads use the paging mode. Zero always uses the paging mode."
+	threshold["default"] = "10000"
+	threshold["pattern"] = "^(0|[1-9][0-9]{0,3}|10000)$"
 	field := properties["properties"].(Schema)[models.OpenSearchPropertyPagingMode].(Schema)
 	field["description"] = "Backend cursor used for complete reads and cursor paging."
 	field["enum"] = []string{models.OpenSearchPagingModeScroll, models.OpenSearchPagingModePIT}

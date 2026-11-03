@@ -123,9 +123,8 @@ func (h *connectionBrowserHandler) openSearchCatalog(r *http.Request, conn *mode
 	return browserCatalog{Nodes: inspection.Nodes}, nil
 }
 
-// catalogNodesForOpenSearch nests each rotation under the exact index group it
-// rolls up into, so the catalog remains readable without turning a discovered
-// set into a wildcard that could include future or unrelated indexes.
+// catalogNodesForOpenSearch nests discovered rotations under their wildcard
+// group. OpenSearch resolves the group's members when a query starts.
 func catalogNodesForOpenSearch(targets []opensearchinspect.Target) []browserCatalogNode {
 	nodes := make([]browserCatalogNode, 0, len(targets))
 	positions := map[string]int{}

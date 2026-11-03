@@ -191,9 +191,6 @@ func samplePageRequest(p Profile, options SampleOptions) (PageRequest, error) {
 	if maximum := p.RowLimits().MaxPageSize; pageRequest.Limit > maximum {
 		return PageRequest{}, fmt.Errorf("profile %q: requested page size %d exceeds maximum page size %d", p.Name, pageRequest.Limit, maximum)
 	}
-	if pageRequest.Strategy == 0 && p.Pageable() == nil && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
-		pageRequest.Strategy = PagingCursor
-	}
 	pageRequest.Inspection = options.Inspection
 	return pageRequest, nil
 }

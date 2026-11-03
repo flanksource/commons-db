@@ -136,11 +136,13 @@ func addQueryAPIOptions(typ string, props Schema) {
 		}
 		props["direction"] = Schema{"type": "string", "title": "Direction", "enum": []string{"forward", "backward"}}
 	case "opensearch":
+		addOpenSearchPagingOptions(props)
 		props["address"] = inlineURLProp("Address", "Inline OpenSearch address used instead of a saved connection")
 		props["index"] = strProp("Index", "Index or index pattern")
 		props["limit"] = strProp("Limit", "Maximum number of hits")
 		props["search"] = searchSpecProp()
 	case "opentelemetry":
+		addOpenSearchPagingOptions(props)
 		for _, field := range []string{"format", "index", "dateField", "traceIdField", "spanIdField", "parentIdField", "parentRefType", "serviceField", "operationField"} {
 			props[field] = strProp(titleCase(field), "")
 		}

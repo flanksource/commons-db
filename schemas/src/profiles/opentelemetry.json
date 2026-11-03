@@ -99,6 +99,22 @@
           "title": "operation Field",
           "type": "string"
         },
+        "pagingMode": {
+          "description": "Override the connection's paging mode for reads above the paging threshold. Leave unset to inherit.",
+          "enum": [
+            "scroll",
+            "pit"
+          ],
+          "title": "Paging mode",
+          "type": "string"
+        },
+        "pagingThreshold": {
+          "description": "Override the connection's requested-row threshold (default 10000). Zero always uses scroll/PIT. Leave unset to inherit.",
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Paging threshold",
+          "type": "integer"
+        },
         "parentIdField": {
           "title": "parent IdField",
           "type": "string"

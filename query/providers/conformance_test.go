@@ -260,7 +260,14 @@ func newPagingStub(ids ...string) *pagingStub {
 				return
 			}
 			var start, size int
-			if _, err := fmt.Sscanf(r.URL.Query().Get("scroll_id"), "scroll-%d-%d", &start, &size); err != nil {
+			var body struct {
+				ID string `json:"scroll_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			if _, err := fmt.Sscanf(body.ID, "scroll-%d-%d", &start, &size); err != nil {
 				http.Error(w, err.Error(), http.StatusBadRequest)
 				return
 			}
@@ -348,7 +355,7 @@ var _ = Describe("provider paging contract", func() {
 					Name: "conformance-opensearch",
 					Provider: query.ProviderConfig{
 						Type:    "opensearch",
-						Options: map[string]any{"address": stub.server.URL, "index": "logs"},
+						Options: map[string]any{"address": stub.server.URL, "index": "logs", "pagingThreshold": 0},
 					},
 					Query: `{"query":{"match_all":{}}}`,
 					Order: query.Order{{Column: "seq", Unique: true}},
@@ -376,7 +383,7 @@ var _ = Describe("provider paging contract", func() {
 					Provider: query.ProviderConfig{
 						Type: "opentelemetry", Connection: "connection://traces",
 						Options: map[string]any{
-							"format": "flat", "index": "logs", "dateField": "seq",
+							"format": "flat", "index": "logs", "dateField": "seq", "pagingThreshold": 0,
 							"selectFields": []string{"message", "seq"},
 						},
 					},

@@ -201,6 +201,7 @@ func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, boo
 		batch = maxRows
 	}
 	walk := walkRequest(p, batch)
+	walk.Ceiling = maxRows
 
 	var rows []Row
 	var truncated bool

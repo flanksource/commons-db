@@ -36,6 +36,7 @@ func (openTelemetryProvider) BackendCapabilities(
 }
 
 type OpenTelemetryOptions struct {
+	OpenSearchPagingOptions
 	Format         string   `json:"format,omitempty"`
 	Index          string   `json:"index,omitempty"`
 	DateField      string   `json:"dateField,omitempty"`
@@ -56,9 +57,10 @@ type OpenTelemetryOptions struct {
 }
 
 type openTelemetryRuntime struct {
-	searcher *opensearch.Searcher
-	options  OpenTelemetryOptions
-	paging   openSearchPagingMode
+	threshold int
+	searcher  *opensearch.Searcher
+	options   OpenTelemetryOptions
+	paging    openSearchPagingMode
 }
 
 // PagingModes matches the nested OpenSearch connection: from/size inside the
@@ -141,9 +143,11 @@ func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequ
 			return
 		}
 		walk := openSearchWalk{
-			searcher: runtime.searcher,
-			index:    runtime.options.Index,
-			paging:   runtime.paging,
+			searcher:    runtime.searcher,
+			index:       runtime.options.Index,
+			paging:      runtime.paging,
+			threshold:   runtime.threshold,
+			diagnostics: req.Diagnostics,
 			build: func(position openSearchPage) (openSearchRequest, error) {
 				return buildOpenTelemetryRequest(req, runtime.options, position, timeFieldMapping)
 			},
@@ -210,7 +214,11 @@ func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (
 	if err != nil {
 		return openTelemetryRuntime{}, err
 	}
-	return openTelemetryRuntime{searcher: runtime.searcher, options: options, paging: runtime.paging}, nil
+	policy, err := resolveOpenSearchPagingPolicy(nested, options.OpenSearchPagingOptions)
+	if err != nil {
+		return openTelemetryRuntime{}, err
+	}
+	return openTelemetryRuntime{searcher: runtime.searcher, options: options, paging: policy.mode, threshold: policy.threshold}, nil
 }
 
 // Validate refuses a format the provider cannot shape rows from; empty is flat.

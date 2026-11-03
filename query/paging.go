@@ -49,6 +49,8 @@ func (m PagingMode) String() string {
 // statements can disagree — there is no reading of that request which is
 // obviously right, so it is refused instead of resolved.
 type PageRequest struct {
+	// ReadAll distinguishes a complete read from one requested page; Ceiling bounds it.
+	ReadAll bool
 	// Limit is the most rows one Page may carry. Required and positive.
 	Limit int
 
@@ -195,7 +197,8 @@ type Page struct {
 	// NextKeys are the ordered sort values of this Page's last row, in the
 	// order's column order. A cursoring provider sets them; ExecutePages turns
 	// them into Next.
-	NextKeys []any
+	NextKeys   []any
+	NextOffset int
 
 	// PIT is the backend snapshot this page was read from, when the provider
 	// opened one. It travels inside Next so the next request lands on the same
