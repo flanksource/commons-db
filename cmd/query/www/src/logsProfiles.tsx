@@ -160,7 +160,7 @@ export function clickyLogsWalk(
   return walk;
 }
 
-function clickyTable(payload: unknown): ClickyNode | undefined {
+export function clickyTable(payload: unknown): ClickyNode | undefined {
   if (!payload || typeof payload !== "object") return undefined;
   const candidate = payload as Partial<ClickyNode> & { node?: unknown };
   const node = candidate.node && typeof candidate.node === "object"

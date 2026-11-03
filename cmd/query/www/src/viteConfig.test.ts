@@ -2,9 +2,10 @@ import { describe, expect, it } from "vitest";
 import { clickyUIDevAliases } from "../vite.config";
 
 describe("clicky-ui development resolution", () => {
-  it("uses sibling source only for the Vite development server", () => {
+  it("uses sibling source for explicit development builds and serving", () => {
     expect(clickyUIDevAliases("build", "production")).toEqual([]);
     expect(clickyUIDevAliases("serve", "test")).toEqual([]);
+    expect(clickyUIDevAliases("build", "development")).toEqual(clickyUIDevAliases("serve", "development"));
 
     expect(clickyUIDevAliases("serve", "development")).toEqual(
       expect.arrayContaining([
