@@ -143,10 +143,10 @@ func addQueryAPIOptions(typ string, props Schema) {
 		props["search"] = searchSpecProp()
 	case "opentelemetry":
 		addOpenSearchPagingOptions(props)
-		for _, field := range []string{"format", "index", "dateField", "traceIdField", "spanIdField", "parentIdField", "parentRefType", "serviceField", "operationField"} {
+		for _, field := range []string{"format", "index", "dateField"} {
 			props[field] = strProp(titleCase(field), "")
 		}
-		for _, field := range []string{"statusFields", "selectFields", "sourceExcludes"} {
+		for _, field := range []string{"selectFields", "sourceExcludes"} {
 			props[field] = Schema{"type": "array", "title": titleCase(field), "items": Schema{"type": "string"}}
 		}
 		props["search"] = searchSpecProp()

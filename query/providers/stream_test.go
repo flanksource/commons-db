@@ -289,6 +289,7 @@ type tailDoc struct {
 // a spec that only counted rows, so none of the specs below could fail for the
 // reason they exist.
 type openSearchTailStub struct {
+	spans  bool
 	server *httptest.Server
 
 	mu         sync.Mutex
@@ -384,9 +385,13 @@ func (s *openSearchTailStub) hits(body map[string]any, size int) string {
 		if !past {
 			continue
 		}
+		spanFields := ""
+		if s.spans {
+			spanFields = fmt.Sprintf(`,"trace_id":"trace","span_id":%q,"duration_ms":0.25`, doc.id)
+		}
 		rendered = append(rendered, fmt.Sprintf(
-			`{"_index":"logs","_id":%q,"_source":{"@timestamp":%q,"message":%q},"sort":[%d,%q]}`,
-			doc.id, doc.at.UTC().Format(time.RFC3339Nano), doc.message, at, doc.id))
+			`{"_index":"logs","_id":%q,"_source":{"@timestamp":%q,"message":%q%s},"sort":[%d,%q]}`,
+			doc.id, doc.at.UTC().Format(time.RFC3339Nano), doc.message, spanFields, at, doc.id))
 		if size > 0 && len(rendered) == size {
 			break
 		}

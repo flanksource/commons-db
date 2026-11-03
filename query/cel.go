@@ -93,6 +93,10 @@ func (plan rowTransformPlan) transformRow(ctx context.Context, row Row) (bool, m
 	if err := validateAcyclicValue(row); err != nil {
 		return false, nil, fmt.Errorf("provider row: %w", err)
 	}
+	if err := normalizeTraceRow(ctx, plan.profile, row); err != nil {
+		return false, nil, fmt.Errorf("normalize span: %w", err)
+	}
+	canonical := copyMappingValue(row["_trace"])
 	if err := plan.applyAliases(ctx, row); err != nil {
 		return false, nil, err
 	}
@@ -106,6 +110,9 @@ func (plan rowTransformPlan) transformRow(ctx context.Context, row Row) (bool, m
 		return false, nil, err
 	}
 	plan.renameSources(row)
+	if plan.profile.RenderMode() == RenderTraces || plan.profile.Search != nil {
+		row["_trace"] = canonical
+	}
 	// Styles are evaluated last so an expression can read the projected cell
 	// beside it, not just the provider's original fields.
 	if !plan.styled {

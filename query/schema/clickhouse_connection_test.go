@@ -26,7 +26,9 @@ var _ = Describe("ClickHouse connection schema", func() {
 			models.ClickHousePropertyReadOverflowMode:    models.ClickHouseDefaultReadOverflowMode,
 			models.ClickHousePropertyTimeoutOverflowMode: models.ClickHouseDefaultTimeoutOverflowMode,
 		}
-		Expect(fields).To(HaveLen(len(expectedDefaults)))
+		Expect(fields).To(HaveLen(len(expectedDefaults) + 2))
+		Expect(fields).To(HaveKey("kubeconfig"))
+		Expect(fields).To(HaveKey("kubecontext"))
 		for key, defaultValue := range expectedDefaults {
 			Expect(fields[key].(schema.Schema)).To(HaveKeyWithValue("default", defaultValue), key)
 		}

@@ -14,13 +14,11 @@ var _ = Describe("OpenSearch column filters", func() {
 		profile := query.Profile{
 			Provider: query.ProviderConfig{
 				Type: "opentelemetry",
-				Options: map[string]any{
-					"serviceField": "process.serviceName",
-				},
 			},
+			Spans: query.SpanMappings{"service": {Source: "process.serviceName"}},
 			Columns: []query.ColumnDef{
 				{Name: "service"},
-				{Name: "service_name"},
+				{Name: "backend_service", Source: "service"},
 				{Name: "method", CEL: `span["attributes.http.method"]`},
 				{
 					Name: "status", CEL: `jsonpath("$.status", row.payload)`,
@@ -34,7 +32,7 @@ var _ = Describe("OpenSearch column filters", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(bindings).To(Equal([]query.ColumnFilterBinding{
 			{Column: "service", Key: "filter.service", Field: "process.serviceName", Label: "service", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
-			{Column: "service_name", Key: "filter.service_name", Field: "process.serviceName", Label: "service_name", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
+			{Column: "backend_service", Key: "filter.backend_service", Field: "process.serviceName", Label: "backend_service", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
 			{Column: "method", Key: "filter.method", Field: "attributes.http.method", Label: "method", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
 			{Column: "status", Key: "filter.status", Field: "attributes.http.status_code", Label: "status", Kind: query.ColumnFilterKindTerms, Lookup: true, Multi: true},
 		}))
@@ -136,9 +134,9 @@ var _ = Describe("OpenSearch column filters", func() {
 		// filter that declares options but no field must not lose it.
 		profile := query.Profile{
 			Provider: query.ProviderConfig{
-				Type:    "opentelemetry",
-				Options: map[string]any{"serviceField": "process.serviceName"},
+				Type: "opentelemetry",
 			},
+			Spans: query.SpanMappings{"service": {Source: "process.serviceName"}},
 			Columns: []query.ColumnDef{{
 				Name:   "service",
 				Filter: &query.ColumnFilterDef{Options: []string{"api", "web"}},

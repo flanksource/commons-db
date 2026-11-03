@@ -29,7 +29,7 @@ type openSearchWalk struct {
 
 	// mapRows shapes a response's hits into rows, one row per hit and in hit
 	// order.
-	mapRows func(opensearch.Response) []query.Row
+	mapRows func(opensearch.Response) ([]query.Row, error)
 }
 
 // drainOpenSearch reads every row of an index-backed provider into one slice.
@@ -206,7 +206,10 @@ func (w openSearchWalk) finishScroll(
 		w.diagnostics.RecordResponse(started, 0, details)
 		return opensearch.Response{}, nil, false, err
 	}
-	rows := w.mapRows(raw)
+	rows, err := w.mapRows(raw)
+	if err != nil {
+		return opensearch.Response{}, nil, false, err
+	}
 	if w.diagnostics.WantsPreview() {
 		w.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
 	}
@@ -384,7 +387,10 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 		raw.Hits.Hits = raw.Hits.Hits[:position.size]
 		built.capped = true
 	}
-	rows := w.mapRows(raw)
+	rows, err := w.mapRows(raw)
+	if err != nil {
+		return opensearch.Response{}, nil, false, err
+	}
 	if w.diagnostics.WantsPreview() {
 		w.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
 	}

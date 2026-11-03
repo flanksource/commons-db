@@ -223,6 +223,7 @@ func (s *kubeletStub) context() context.Context {
 // mechanism, not of the answer — a stub that ignored from/size could not fail
 // the conformance suite.
 type pagingStub struct {
+	spans          bool
 	server         *httptest.Server
 	ids            []string
 	openedPITs     int
@@ -307,9 +308,13 @@ func (s *pagingStub) hits(start, size int) string {
 	end := min(start+size, len(s.ids))
 	rendered := make([]string, 0, end-start)
 	for i := start; i < end; i++ {
+		spanFields := ""
+		if s.spans {
+			spanFields = fmt.Sprintf(`,"trace_id":"trace","span_id":%q,"duration_ms":0.25`, s.ids[i])
+		}
 		rendered = append(rendered, fmt.Sprintf(
-			`{"_index":"logs","_id":%q,"_source":{"seq":%d,"message":%q},"sort":[%d]}`,
-			s.ids[i], i, s.ids[i], i))
+			`{"_index":"logs","_id":%q,"_source":{"seq":%d,"message":%q%s},"sort":[%d]}`,
+			s.ids[i], i, s.ids[i], spanFields, i))
 	}
 	return fmt.Sprintf(`{"took":1,"timed_out":false,"hits":{"total":{"value":%d,"relation":"eq"},"hits":[%s]}}`,
 		len(s.ids), strings.Join(rendered, ","))
@@ -370,6 +375,7 @@ var _ = Describe("provider paging contract", func() {
 		var stub *pagingStub
 		BeforeEach(func() {
 			stub = newPagingStub()
+			stub.spans = true
 			DeferCleanup(stub.server.Close)
 		})
 

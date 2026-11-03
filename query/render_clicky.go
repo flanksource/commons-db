@@ -29,11 +29,15 @@ func RenderClickyPage(p Profile, rows []Row) (string, error) {
 			case "_attributes", "_span_attributes", "_resource":
 				column.Type = ColumnTypeJSON
 			}
-			if index, exists := positions[name]; exists {
-				p.Columns[index] = column
-			} else {
+			if _, exists := positions[name]; !exists {
 				p.Columns = append(p.Columns, column)
 			}
+		}
+		metadata := ColumnDef{Name: "_trace", Hidden: true, Type: ColumnTypeJSON}
+		if index, exists := positions["_trace"]; exists {
+			p.Columns[index] = metadata
+		} else {
+			p.Columns = append(p.Columns, metadata)
 		}
 	}
 	filterKeys, err := p.ColumnFilterKeys()

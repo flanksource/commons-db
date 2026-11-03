@@ -67,7 +67,20 @@ func resolveBackendField(profile Profile, column ColumnDef, request backendField
 			return "", false, err
 		}
 	} else {
-		field = openTelemetryFilterField(profile, field)
+		if profile.Search != nil {
+			if suffix, ok := strings.CutPrefix(field, "_span_attributes."); ok {
+				field = "attributes." + suffix
+			}
+			if suffix, ok := strings.CutPrefix(field, "_resource."); ok {
+				field = "resource." + suffix
+			}
+		}
+		if profile.Search == nil {
+			field = openTelemetryFilterField(profile, field)
+		}
+		if field == "" {
+			return "", false, nil
+		}
 		if validateSQLFilterField(profile.Provider.Type, "", field) != nil {
 			return "", false, nil
 		}
@@ -168,35 +181,24 @@ func sortedFieldNames(where map[string]string) []string {
 }
 
 func openTelemetryFilterField(profile Profile, inferred string) string {
+	targets := map[string]string{"timestamp": "startedAt", "trace_id": "traceId", "span_id": "spanId", "parent_id": "parentId", "duration_ms": "durationMs", "service": "service", "operation": "operation", "status": "status", "kind": "kind"}
+	if mapping, ok := profile.Spans[targets[inferred]]; ok {
+		if mapping.CEL != "" || mapping.JSONPath != "" {
+			return ""
+		}
+		return mapping.Source
+	}
 	if profile.Provider.Type != "opentelemetry" {
 		return inferred
 	}
-	defaults := map[string]string{
-		"timestamp":      "@timestamp",
-		"trace_id":       "trace_id",
-		"span_id":        "span_id",
-		"parent_id":      "parent_id",
-		"service":        "service_name",
-		"service_name":   "service_name",
-		"operation":      "operation_name",
-		"operation_name": "operation_name",
+	if inferred == "timestamp" {
+		if field, ok := profile.Provider.Options["dateField"].(string); ok && field != "" {
+			return field
+		}
 	}
-	optionNames := map[string]string{
-		"timestamp":      "dateField",
-		"trace_id":       "traceIdField",
-		"span_id":        "spanIdField",
-		"parent_id":      "parentIdField",
-		"service":        "serviceField",
-		"service_name":   "serviceField",
-		"operation":      "operationField",
-		"operation_name": "operationField",
+	defaults := map[string]string{"timestamp": "@timestamp", "trace_id": "trace_id", "span_id": "span_id", "parent_id": "parent_id", "service": "service_name", "operation": "operation_name"}
+	if field, ok := defaults[inferred]; ok {
+		return field
 	}
-	optionName, known := optionNames[inferred]
-	if !known {
-		return inferred
-	}
-	if configured, ok := profile.Provider.Options[optionName].(string); ok && strings.TrimSpace(configured) != "" {
-		return configured
-	}
-	return defaults[inferred]
+	return inferred
 }

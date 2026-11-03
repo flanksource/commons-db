@@ -2,11 +2,11 @@ package tracequery
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"time"
 
 	"github.com/flanksource/commons-db/connection/store"
+	"github.com/flanksource/commons-db/otel/span"
 )
 
 var ErrTraceNotFound = errors.New("trace not found")
@@ -17,20 +17,7 @@ func (DocumentFormat) JSONSchema() map[string]any {
 	return map[string]any{"type": "string", "enum": []string{"flat", "jaeger"}}
 }
 
-type Span struct {
-	TraceID    string          `json:"traceId"`
-	SpanID     string          `json:"spanId"`
-	ParentID   string          `json:"parentId,omitempty"`
-	Service    string          `json:"service"`
-	Operation  string          `json:"operation"`
-	Kind       string          `json:"kind,omitempty"`
-	StartedAt  time.Time       `json:"startedAt"`
-	DurationMs float64         `json:"durationMs"`
-	Status     string          `json:"status"`
-	Attributes map[string]any  `json:"attributes,omitempty"`
-	Resource   map[string]any  `json:"resource,omitempty"`
-	OTLP       json.RawMessage `json:"otlp,omitempty"`
-}
+type Span = span.Span
 
 type Request struct {
 	Source      string         `json:"source" clicky:"title=Source,required"`

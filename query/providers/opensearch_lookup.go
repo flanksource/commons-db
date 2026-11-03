@@ -1,8 +1,12 @@
 package providers
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
+	"github.com/flanksource/commons-db/otel/span/layout"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
 )
@@ -28,6 +32,9 @@ func (opensearchProvider) LookupFilterValues(ctx context.Context, req query.Prov
 	if err != nil {
 		return nil, nil, err
 	}
+	if req.Search != nil {
+		return lookupCanonicalFilterValues(ctx, runtime.searcher, openSearchValuesSource{Index: runtime.options.Index, Body: request.body}, lookup, runtime.options.Layout)
+	}
 	return lookupOpenSearchFilterValues(ctx, runtime.searcher, openSearchValuesSource{
 		Index: runtime.options.Index, Body: request.body,
 	}, lookup)
@@ -39,16 +46,22 @@ func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.P
 		return nil, nil, err
 	}
 	structured := openTelemetrySearch(runtime.options)
-	timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
-		Searcher: runtime.searcher, Index: runtime.options.Index, Search: structured,
-		Params: openSearchParamBindings(req), Inspection: req.Inspection,
-	})
-	if err != nil {
-		return nil, nil, err
+	var timeFieldMapping *esdsl.TimeFieldMapping
+	if req.Search == nil {
+		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
+			Searcher: runtime.searcher, Index: runtime.options.Index, Search: structured,
+			Params: openSearchParamBindings(req), Inspection: req.Inspection,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
 	}
 	request, err := buildOpenTelemetryRequest(req, runtime.options, openSearchPage{}, timeFieldMapping)
 	if err != nil {
 		return nil, nil, err
+	}
+	if req.Search != nil {
+		return lookupCanonicalFilterValues(ctx, runtime.searcher, openSearchValuesSource{Index: runtime.options.Index, Body: request.body}, lookup, runtime.options.Layout)
 	}
 	return lookupOpenSearchFilterValues(ctx, runtime.searcher, openSearchValuesSource{
 		Index: runtime.options.Index, Body: request.body,
@@ -59,6 +72,44 @@ func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.P
 type openSearchValuesSource struct {
 	Index string
 	Body  map[string]any
+}
+
+func lookupCanonicalFilterValues(ctx context.Context, searcher *opensearch.Searcher, source openSearchValuesSource, lookup query.FilterValueSearch, resolved *layout.Definition) ([]query.FilterOption, *query.Total, error) {
+	canonical := lookup.Binding.Field
+	field, err := resolved.SourceField(canonical)
+	if err != nil {
+		return nil, nil, err
+	}
+	if lookup.Binding.Nested != "" {
+		return nil, nil, fmt.Errorf("canonical value lookups require a reversible nested layout")
+	}
+	if canonical == "status" {
+		options := []query.FilterOption{}
+		for _, value := range []string{"unset", "ok", "error"} {
+			if len(resolved.Fields[canonical].Values) > 0 {
+				if _, ok := resolved.Fields[canonical].Values[value]; !ok {
+					continue
+				}
+			}
+			if lookup.Search == "" || strings.Contains(value, strings.ToLower(lookup.Search)) {
+				options = append(options, query.FilterOption{Value: value})
+			}
+		}
+		return options, &query.Total{Value: int64(len(options)), Exact: true}, nil
+	}
+	lookup.Binding.Field = field
+	options, total, err := lookupOpenSearchFilterValues(ctx, searcher, source, lookup)
+	if err != nil {
+		return nil, nil, err
+	}
+	for index, option := range options {
+		value, err := resolved.CanonicalValue(canonical, option.Value)
+		if err != nil {
+			return nil, nil, err
+		}
+		options[index].Value = fmt.Sprint(value)
+	}
+	return options, total, nil
 }
 
 // lookupOpenSearchFilterValues adapts the searcher's distinct-value lookup to

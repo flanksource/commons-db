@@ -205,11 +205,12 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	if err != nil {
 		return ErrorPage(err)
 	}
-	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Search: p.Search, Spans: p.Spans, Defs: p.Params, Resolved: resolved})
 	if err != nil {
 		return ErrorPage(profileError(p, err))
 	}
 	req.Filters = filters
+	req.RawRows = !applyPipeline || p.RenderMode() == RenderTraces
 	req.Labels = p.Labels
 	req.MetricMetadata = &MetricMetadata{}
 	req.Order = order
@@ -228,6 +229,8 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 		Provider:   p.Provider.Type,
 		Connection: req.Connection,
 		Query:      req.Query,
+		Search:     req.Search,
+		Spans:      req.Spans,
 		Options:    req.Options,
 		Order:      order,
 		Params:     resolved,
