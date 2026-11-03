@@ -155,6 +155,11 @@ func FindConnectionByURL(ctx Context, connectionString string) (*models.Connecti
 		if connection != nil {
 			return connection, nil
 		}
+		if ctx.DB() == nil {
+			// The resolver is every connection this context knows: a reference it
+			// does not resolve is not found, as one missing from the table is.
+			return nil, nil
+		}
 	}
 	db := ctx.DB()
 
