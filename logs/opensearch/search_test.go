@@ -123,7 +123,7 @@ func TestSearchRawPreservesNativeEnvelope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Took != 7 || result.Hits.Total.Value != 1 || result.Hits.Hits[0].Source["custom"] != float64(42) {
+	if result.Took != 7 || result.Hits.Total.Value != 1 || result.Hits.Hits[0].Source["custom"] != int64(42) {
 		t.Fatalf("raw response lost native fields: %#v", result)
 	}
 	if result.Aggregations["levels"] == nil {
