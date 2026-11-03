@@ -11,6 +11,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/connections"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/schedules"
+	"github.com/flanksource/commons-db/cmd/query/secretcatalog"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/cmd/query/snapshots"
 	dbcontext "github.com/flanksource/commons-db/context"
@@ -90,6 +91,7 @@ func New(options Options) (*App, error) {
 	connectionService, err := connections.New(connections.Options{
 		Database: runtime.Database, Context: runtime.Context, DecodeBody: DecodeBody,
 		Virtual: catalog,
+		Secrets: &secretcatalog.Options{},
 		Profiles: func(ctx context.Context) ([]query.Profile, error) {
 			store, err := profileStore()
 			if err != nil {

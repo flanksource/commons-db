@@ -49,6 +49,8 @@ type KubeconfigConnection struct {
 	// Connection name to populate kubeconfig
 	ConnectionName string        `json:"connection,omitempty" yaml:"connection,omitempty"`
 	Kubeconfig     *types.EnvVar `json:"kubeconfig,omitempty" yaml:"kubeconfig,omitempty"`
+	Kubecontext    string        `json:"kubecontext,omitempty" yaml:"kubecontext,omitempty"`
+	KubeconfigPath string        `json:"kubeconfigPath,omitempty" yaml:"kubeconfigPath,omitempty"`
 }
 
 func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interface, *rest.Config, error) {
@@ -63,6 +65,14 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 		// Assigned rather than written through: a caller naming a connection has
 		// no kubeconfig of its own, so there is no EnvVar here to overwrite.
 		t.Kubeconfig = &types.EnvVar{ValueStatic: connection.Certificate}
+		t.Kubecontext = connection.Properties[context.KubeContextProperty]
+		t.KubeconfigPath = connection.Properties[context.KubeconfigProperty]
+	}
+	if t.KubeconfigPath != "" {
+		if t.Kubeconfig != nil && !t.Kubeconfig.IsEmpty() {
+			return nil, nil, fmt.Errorf("specify a kubeconfig file or certificate, not both")
+		}
+		return kubernetesClient(dutyKubernetes.Options{Kubeconfig: t.KubeconfigPath, Kubecontext: t.Kubecontext})
 	}
 
 	if t.Kubeconfig != nil && !t.Kubeconfig.IsEmpty() {
@@ -72,7 +82,13 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 			t.Kubeconfig.ValueStatic = v
 		}
 
-		return dutyKubernetes.NewClientFromPathOrConfig(ctx.Logger, t.Kubeconfig.ValueStatic)
+		if t.Kubecontext == "" {
+			return dutyKubernetes.NewClientFromPathOrConfig(ctx.Logger, t.Kubeconfig.ValueStatic)
+		}
+		return kubeconfigContextClient(t.Kubeconfig.ValueStatic, t.Kubecontext)
+	}
+	if t.Kubecontext != "" {
+		return kubernetesClient(dutyKubernetes.Options{Kubecontext: t.Kubecontext})
 	}
 
 	// No connection and no kubeconfig means "use the ambient cluster" —
@@ -152,7 +168,8 @@ func (c KubernetesConnection) CanExpire() bool {
 func (t KubernetesConnection) ToModel() models.Connection {
 	return models.Connection{
 		Type:        models.ConnectionTypeKubernetes,
-		Certificate: t.Kubeconfig.ValueStatic,
+		Certificate: lo.FromPtr(t.Kubeconfig).String(),
+		Properties:  map[string]string{context.KubeContextProperty: t.Kubecontext, context.KubeconfigProperty: t.KubeconfigPath},
 	}
 }
 

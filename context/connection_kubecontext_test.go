@@ -35,7 +35,8 @@ var _ = Describe("hydrating a connection that names a kubeconfig context", func(
 		requested = nil
 		ctx = dbcontext.NewContext(gocontext.Background()).
 			WithLocalKubernetes(cluster("ambient")).
-			WithKubeContextClients(func(kubeContext string) (*dbkubernetes.Client, error) {
+			WithKubeContextClients(func(options dbkubernetes.Options) (*dbkubernetes.Client, error) {
+				kubeContext := options.Kubecontext
 				requested = append(requested, kubeContext)
 				if client, ok := clusters[kubeContext]; ok {
 					return client, nil
@@ -86,5 +87,17 @@ var _ = Describe("hydrating a connection that names a kubeconfig context", func(
 		hydrated, err := dbcontext.HydrateConnection(ctx.Wrap(gocontext.Background()), connection("production"))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(hydrated.Password).To(Equal("production-password"))
+	})
+	It("passes the kubeconfig file through hydration and invalidation", func() {
+		selected := connection("staging")
+		selected.Properties[dbcontext.KubeconfigProperty] = "/configs/target.yaml"
+		ctx = ctx.WithKubeContextClients(func(options dbkubernetes.Options) (*dbkubernetes.Client, error) {
+			Expect(options).To(Equal(dbkubernetes.Options{Kubeconfig: "/configs/target.yaml", Kubecontext: "staging"}))
+			return clusters["staging"], nil
+		})
+		hydrated, err := dbcontext.HydrateConnection(ctx, selected)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(hydrated.Password).To(Equal("staging-password"))
+		Expect(dbcontext.InvalidateConnectionSecrets(ctx, selected)).To(Succeed())
 	})
 })

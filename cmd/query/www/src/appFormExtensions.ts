@@ -2,6 +2,7 @@ import { createUnitFormExtensions } from "@flanksource/clicky-ui";
 import {
   connectionLoggingFormExtensions,
   createConnectionFormActions,
+  connectionSchemaFormExtensions,
 } from "@flanksource/clicky-ui/connections";
 import {
   celEditorFormExtensions,
@@ -11,8 +12,6 @@ import {
 } from "@flanksource/clicky-ui/profiles";
 import { mountPath } from "./mount";
 import { localFileFormExtensions } from "./localFilePicker";
-import { secretFormExtensions } from "./secretKeySelector";
-import { namespaceFormExtensions } from "./namespacePicker";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
 import { jsonPathFormExtensions } from "./jsonPathPicker";
 import { configureProfileConnectionForm } from "./profileConnectionMapping";
@@ -23,6 +22,7 @@ const unitFormExtensions = createUnitFormExtensions();
 // mounted the app at.
 export const connectionsApiBase = `${mountPath}/api/v1`;
 export const connectionFormActions = createConnectionFormActions({ apiBase: connectionsApiBase });
+const connectionFields = connectionSchemaFormExtensions({apiBase:connectionsApiBase,schema:{}});
 
 // Compose the form extensions: the namespace picker, the secret/workload url
 // selector (which reads the selected namespace from the form's root value), the
@@ -40,8 +40,7 @@ export const formExtensions = {
     ...connectionLoggingFormExtensions.pre,
   ],
   post: [
-    ...namespaceFormExtensions.post,
-    ...secretFormExtensions.post,
+    ...connectionFields.post,
     ...profileBuilderFormExtensions.post,
     ...esQueryBuilderFormExtensions.post,
     ...esParamOptionsFormExtensions.post,

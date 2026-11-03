@@ -281,12 +281,9 @@ func HydrateConnection(ctx Context, connection *models.Connection) (*models.Conn
 		return nil, fmt.Errorf("connection %q cannot be used: %s", connection.Name, strings.Join(connection.Warnings, "; "))
 	}
 
-	if kubeContext := connection.Properties[KubeContextProperty]; kubeContext != "" {
-		client, err := ctx.KubeContextClient(kubeContext)
-		if err != nil {
-			return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
-		}
-		ctx = ctx.WithLocalKubernetes(client)
+	ctx, err = ctx.WithConnectionKubernetes(connection)
+	if err != nil {
+		return nil, err
 	}
 
 	if connection.URL, err = GetEnvStringFromCache(ctx, connection.URL, connection.Namespace); err != nil {
