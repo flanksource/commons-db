@@ -73,7 +73,7 @@ describe("OpenSearch index picker", () => {
     kind: "opensearch" as const,
     targets: [
       {
-        name: "logs-2026.07.12,logs-2026.07.13",
+        name: "logs-*",
         kind: "group" as const,
         pattern: "logs-*",
         members: ["logs-2026.07.12", "logs-2026.07.13"],
@@ -85,10 +85,10 @@ describe("OpenSearch index picker", () => {
     ],
   };
 
-  it("leads with exact rotation groups and lists concrete indexes last", () => {
+  it("leads with wildcard rotation groups and lists concrete indexes last", () => {
     expect(openSearchIndexOptions(rotated)).toEqual([
       expect.objectContaining({
-        value: "logs-2026.07.12,logs-2026.07.13",
+        value: "logs-*",
         group: "Index groups",
         label: "logs-* · 2 indexes",
         selectedLabel: "logs-*",
@@ -100,6 +100,7 @@ describe("OpenSearch index picker", () => {
   });
 
   it("resolves a picked target's kind, treating a typed wildcard as a pattern", () => {
+    expect(openSearchTargetKind(rotated, "logs-*")).toBe("group");
     expect(openSearchTargetKind(rotated, "logs-current")).toBe("alias");
     expect(openSearchTargetKind(rotated, "jaeger-*")).toBe("pattern");
     expect(openSearchTargetKind(rotated, "typo")).toBe("");

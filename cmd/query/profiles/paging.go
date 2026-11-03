@@ -86,6 +86,7 @@ func (r exportRequest) pageRequest() query.PageRequest {
 		// whether the ceiling bit, and X-Total-Relation says "unknown" rather
 		// than implying a count nobody stated.
 		page = query.PageRequest{
+			ReadAll:     true,
 			Limit:       query.DefaultMaxPageSize,
 			Strategy:    query.PagingCursor,
 			Ceiling:     r.maxRows,

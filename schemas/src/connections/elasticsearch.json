@@ -267,6 +267,15 @@
             "pit": "Point in time",
             "scroll": "Scroll"
           }
+        },
+        "paging_threshold": {
+          "default": "10000",
+          "description": "Requested row threshold for normal page/limit paging (0–10000). Larger or unbounded reads use the paging mode. Zero always uses the paging mode.",
+          "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+          "title": "Paging threshold",
+          "type": "string",
+          "x-clicky-order": 6,
+          "x-col-span": "full"
         }
       },
       "required": [

@@ -70,7 +70,7 @@ func SupportsStreaming(providerType string) bool {
 // grow with how far it has already read. A provider that cannot cursor is
 // walked by offset, which is correct and merely slower.
 func walkRequest(p Profile, batch int) PageRequest {
-	page := PageRequest{Limit: batch}
+	page := PageRequest{Limit: batch, ReadAll: true}
 	// A derivation failure is not decided here: ExecutePages resolves the same
 	// order and reports it. This only chooses a strategy, and offset is the
 	// correct one for a profile that turns out to have no order at all.
@@ -268,7 +268,7 @@ func withCursors(scope CursorScope, pages iter.Seq2[Page, error]) iter.Seq2[Page
 			}
 			if len(page.NextKeys) > 0 {
 				cursor, err := EncodeCursor(CursorEncoding{
-					Scope: scope, Keys: page.NextKeys, PIT: page.PIT, Scroll: page.Scroll, State: page.State,
+					Scope: scope, Keys: page.NextKeys, PIT: page.PIT, Scroll: page.Scroll, State: page.State, Offset: page.NextOffset,
 				})
 				if err != nil {
 					yield(Page{}, err)

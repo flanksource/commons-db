@@ -52,6 +52,7 @@ func documentArrayCapabilities(backend, database string) dbconnection.BackendCap
 }
 
 type OpenSearchOptions struct {
+	OpenSearchPagingOptions
 	// Address is an inline OpenSearch URL used when no stored connection is referenced.
 	Address string `json:"address,omitempty"`
 
@@ -94,9 +95,10 @@ const (
 )
 
 type openSearchRuntime struct {
-	searcher *opensearch.Searcher
-	options  OpenSearchOptions
-	paging   openSearchPagingMode
+	threshold int
+	searcher  *opensearch.Searcher
+	options   OpenSearchOptions
+	paging    openSearchPagingMode
 }
 
 // PagingModes reports both caller-facing strategies. Offset is served by
@@ -208,6 +210,7 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 			searcher:    runtime.searcher,
 			index:       runtime.options.Index,
 			paging:      runtime.paging,
+			threshold:   runtime.threshold,
 			diagnostics: req.Diagnostics,
 			build: func(position openSearchPage) (openSearchRequest, error) {
 				return buildOpenSearchRequest(req, runtime.options, position, timeFieldMapping)
@@ -318,7 +321,7 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 		return openSearchRuntime{}, err
 	}
 	backend := opensearch.Backend{Address: address}
-	paging := openSearchPagingScroll
+	var pagingConnection *models.Connection
 	var transport http.RoundTripper
 	if req.Connection != "" {
 		conn, err := ctx.HydrateConnectionByURL(req.Connection)
@@ -328,10 +331,7 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 		if conn == nil {
 			return openSearchRuntime{}, fmt.Errorf("connection[%s] not found", req.Connection)
 		}
-		paging, err = resolveOpenSearchPagingMode(conn)
-		if err != nil {
-			return openSearchRuntime{}, fmt.Errorf("connection[%s]: %w", req.Connection, err)
-		}
+		pagingConnection = conn
 		if backend.Address == "" {
 			backend.Address = conn.URL
 		}
@@ -350,18 +350,22 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 	// A debug run watches the wire as well as the body: which URL the search
 	// went to and which headers the connection put on it are half of "where did
 	// these rows come from", and neither is anywhere in the profile.
+	policy, err := resolveOpenSearchPagingPolicy(pagingConnection, opts.OpenSearchPagingOptions)
+	if err != nil {
+		return openSearchRuntime{}, err
+	}
 	searcher, err := opensearch.NewWithTransport(ctx, backend, nil, req.Diagnostics.HTTPTransport(transport))
 	if err != nil {
 		return openSearchRuntime{}, err
 	}
-	return openSearchRuntime{searcher: searcher, options: opts, paging: paging}, nil
+	return openSearchRuntime{searcher: searcher, options: opts, paging: policy.mode, threshold: policy.threshold}, nil
 }
 
 func openSearchClientForConnection(ctx context.Context, conn *models.Connection) (openSearchRuntime, error) {
 	if conn == nil || conn.URL == "" {
 		return openSearchRuntime{}, fmt.Errorf("OpenSearch connection URL is required")
 	}
-	paging, err := resolveOpenSearchPagingMode(conn)
+	policy, err := resolveOpenSearchPagingPolicy(conn, OpenSearchPagingOptions{})
 	if err != nil {
 		return openSearchRuntime{}, err
 	}
@@ -376,7 +380,7 @@ func openSearchClientForConnection(ctx context.Context, conn *models.Connection)
 	if err != nil {
 		return openSearchRuntime{}, err
 	}
-	return openSearchRuntime{searcher: searcher, paging: paging}, nil
+	return openSearchRuntime{searcher: searcher, paging: policy.mode, threshold: policy.threshold}, nil
 }
 
 func resolveOpenSearchPagingMode(conn *models.Connection) (openSearchPagingMode, error) {

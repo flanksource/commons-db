@@ -1,6 +1,7 @@
 package opensearch
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -194,9 +195,13 @@ func (t *Searcher) ScrollNext(ctx context.Context, request ScrollPageRequest) (R
 	if request.KeepAlive <= 0 {
 		request.KeepAlive = DefaultScrollKeepAlive
 	}
+	body, err := json.Marshal(map[string]string{"scroll_id": request.ID})
+	if err != nil {
+		return Response{}, ctx.Oops().Wrapf(err, "error encoding scroll request")
+	}
 	res, err := t.client.Scroll(
 		t.client.Scroll.WithContext(ctx),
-		t.client.Scroll.WithScrollID(request.ID),
+		t.client.Scroll.WithBody(bytes.NewReader(body)),
 		t.client.Scroll.WithScroll(request.KeepAlive),
 	)
 	if err != nil {
@@ -210,9 +215,13 @@ func (t *Searcher) ClearScroll(ctx context.Context, scrollID string) error {
 	if scrollID == "" {
 		return nil
 	}
+	body, err := json.Marshal(map[string][]string{"scroll_id": {scrollID}})
+	if err != nil {
+		return ctx.Oops().Wrapf(err, "error encoding clear scroll request")
+	}
 	res, err := t.client.ClearScroll(
 		t.client.ClearScroll.WithContext(ctx),
-		t.client.ClearScroll.WithScrollID(scrollID),
+		t.client.ClearScroll.WithBody(bytes.NewReader(body)),
 	)
 	if err != nil {
 		return ctx.Oops().Wrapf(err, "error clearing scroll")
