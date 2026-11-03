@@ -1666,6 +1666,12 @@
                 "oauth": "OAuth"
               }
             },
+            "index": {
+              "title": "Default index",
+              "type": "string",
+              "x-clicky-order": 4,
+              "x-col-span": "full"
+            },
             "kubeconfig": {
               "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
               "title": "Kubeconfig file",
@@ -1704,6 +1710,13 @@
               "title": "Paging threshold",
               "type": "string",
               "x-clicky-order": 6,
+              "x-col-span": "full"
+            },
+            "span_layout": {
+              "format": "textarea",
+              "title": "Span layout overrides",
+              "type": "string",
+              "x-clicky-order": 7,
               "x-col-span": "full"
             }
           },
@@ -6549,6 +6562,12 @@
                 "oauth": "OAuth"
               }
             },
+            "index": {
+              "title": "Default index",
+              "type": "string",
+              "x-clicky-order": 4,
+              "x-col-span": "full"
+            },
             "kubeconfig": {
               "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
               "title": "Kubeconfig file",
@@ -6587,6 +6606,13 @@
               "title": "Paging threshold",
               "type": "string",
               "x-clicky-order": 6,
+              "x-col-span": "full"
+            },
+            "span_layout": {
+              "format": "textarea",
+              "title": "Span layout overrides",
+              "type": "string",
+              "x-clicky-order": 7,
               "x-col-span": "full"
             }
           },
@@ -6841,6 +6867,12 @@
               "x-clicky-order": 2,
               "x-col-span": "full"
             },
+            "index": {
+              "title": "Default index",
+              "type": "string",
+              "x-clicky-order": 3,
+              "x-col-span": "full"
+            },
             "kubeconfig": {
               "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
               "title": "Kubeconfig file",
@@ -6854,6 +6886,13 @@
               "type": "string",
               "x-clicky-component": "k8s-context-selector",
               "x-clicky-order": -1
+            },
+            "span_layout": {
+              "format": "textarea",
+              "title": "Span layout overrides",
+              "type": "string",
+              "x-clicky-order": 4,
+              "x-col-span": "full"
             }
           },
           "required": [

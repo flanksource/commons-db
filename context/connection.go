@@ -274,6 +274,9 @@ func GetConnection(ctx Context, name, namespace string) (*models.Connection, err
 // configmap://, helm:// and service URL references through that kubeconfig
 // context's cluster rather than the context's local client.
 func HydrateConnection(ctx Context, connection *models.Connection) (*models.Connection, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var err error
 
 	// A connection that failed to load is listed with its warnings, but using it fails.

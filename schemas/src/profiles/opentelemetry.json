@@ -95,10 +95,6 @@
           "title": "Index",
           "type": "string"
         },
-        "operationField": {
-          "title": "operation Field",
-          "type": "string"
-        },
         "pagingMode": {
           "description": "Override the connection's paging mode for reads above the paging threshold. Leave unset to inherit.",
           "enum": [
@@ -114,14 +110,6 @@
           "minimum": 0,
           "title": "Paging threshold",
           "type": "integer"
-        },
-        "parentIdField": {
-          "title": "parent IdField",
-          "type": "string"
-        },
-        "parentRefType": {
-          "title": "parent RefType",
-          "type": "string"
         },
         "search": {
           "description": "Structured OpenSearch query. Mutually exclusive with the profile query: set one or the other, never both.",
@@ -1070,31 +1058,12 @@
           "title": "select Fields",
           "type": "array"
         },
-        "serviceField": {
-          "title": "service Field",
-          "type": "string"
-        },
         "sourceExcludes": {
           "items": {
             "type": "string"
           },
           "title": "source Excludes",
           "type": "array"
-        },
-        "spanIdField": {
-          "title": "span IdField",
-          "type": "string"
-        },
-        "statusFields": {
-          "items": {
-            "type": "string"
-          },
-          "title": "status Fields",
-          "type": "array"
-        },
-        "traceIdField": {
-          "title": "trace IdField",
-          "type": "string"
         }
       },
       "title": "Options",
