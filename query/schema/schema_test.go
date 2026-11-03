@@ -167,6 +167,7 @@ var _ = Describe("Connection schema", func() {
 			"enum":        []string{"scroll", "pit"}, "default": "scroll",
 			"x-enum-display": "segmented", "x-enum-labels": map[string]string{"scroll": "Scroll", "pit": "Point in time"},
 			"x-clicky-order": float64(5),
+			"x-col-span":     "full",
 		}))
 	})
 

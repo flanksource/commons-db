@@ -10,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons-db/context"
-	"github.com/flanksource/commons-db/kubernetes"
+	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/logger"
 	"github.com/samber/lo"
 
@@ -226,35 +226,26 @@ func removeConfigDir(configPath string) func() error {
 }
 
 func setupKubernetesConnection(ctx context.Context, conn *KubernetesConnection, cmd *osExec.Cmd, output *ConnectionSetupResult) (func() error, error) {
-	if _, _, err := conn.Populate(ctx, true); err != nil {
+	_, config, err := conn.Populate(ctx, true)
+	if err != nil {
 		return nil, fmt.Errorf("failed to hydrate kubernetes connection: %w", err)
 	}
-
-	if _, pathErr := os.Stat(conn.Kubeconfig.ValueStatic); pathErr == nil {
-		cmd.Env = append(cmd.Env, fmt.Sprintf("KUBECONFIG=%s", conn.Kubeconfig.ValueStatic))
-		f, err := os.ReadFile(conn.Kubeconfig.ValueStatic)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read kubeconfig: %w", err)
-		}
-		apiServer, err := kubernetes.GetAPIServer(f)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get api server: %w", err)
-		}
-		output.ApiServer = apiServer
-		return nil, nil
+	if config == nil {
+		return nil, fmt.Errorf("Kubernetes REST configuration is missing")
 	}
-
-	configPath, err := saveConfig(cmd.Dir, kubernetesConfigTemplate, conn)
+	data, err := kubeconfigBytes(config)
+	if err != nil {
+		return nil, fmt.Errorf("encode Kubernetes credentials: %w", err)
+	}
+	resolved := *conn
+	resolved.Kubeconfig = &types.EnvVar{ValueStatic: string(data)}
+	configPath, err := saveConfig(cmd.Dir, kubernetesConfigTemplate, &resolved)
 	if err != nil {
 		return nil, fmt.Errorf("failed to store kubernetes credentials: %w", err)
 	}
 	cleaner := removeConfigDir(configPath)
 
-	apiServer, err := kubernetes.GetAPIServer([]byte(conn.Kubeconfig.ValueStatic))
-	if err != nil {
-		return cleaner, fmt.Errorf("failed to get api server: %w", err)
-	}
-	output.ApiServer = apiServer
+	output.ApiServer = config.Host
 
 	cmd.Env = append(cmd.Env, fmt.Sprintf("KUBECONFIG=%s", configPath))
 	return cleaner, nil

@@ -173,6 +173,8 @@ func ConnectionComponents() map[string]Schema {
 			}
 			required = appendUnique(required, stringSlice(branch["required"])...)
 		}
+		addKubernetesSelection(props)
+		props["name"].(Schema)["minLength"] = 1
 		components[typ] = Schema{
 			"$schema":    Draft,
 			"$id":        typ + ".json",
@@ -180,6 +182,12 @@ func ConnectionComponents() map[string]Schema {
 			"type":       "object",
 			"required":   required,
 			"properties": props,
+		}
+		if typ == "kubernetes" {
+			components[typ]["not"] = Schema{"description": "Choose either a kubeconfig file or a kubeconfig value, not both.", "required": []string{"certificate", "properties"}, "properties": Schema{
+				"certificate": Schema{"minLength": 1},
+				"properties":  Schema{"required": []string{"kubeconfig"}, "properties": Schema{"kubeconfig": Schema{"minLength": 1}}},
+			}}
 		}
 	}
 	return components

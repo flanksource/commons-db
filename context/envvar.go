@@ -321,6 +321,11 @@ func InvalidateConnectionSecrets(ctx Context, connection *models.Connection) err
 	if connection == nil {
 		return nil
 	}
+	var err error
+	ctx, err = ctx.WithConnectionKubernetes(connection)
+	if err != nil {
+		return err
+	}
 	namespace := connection.Namespace
 	if namespace == "" {
 		namespace = ctx.GetNamespace()
