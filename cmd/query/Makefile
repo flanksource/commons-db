@@ -1,6 +1,7 @@
 ROOT := ../..
 BIN_DIR ?= $(ROOT)/.bin
 PNPM ?= pnpm
+UI_BUILD_MODE ?= production
 
 .PHONY: build lint test ui-build ui-install
 
@@ -17,7 +18,7 @@ test: ui-build
 	$(PNPM) --dir www test
 
 ui-build:
-	$(PNPM) --dir www build
+	$(PNPM) --dir www build --mode $(UI_BUILD_MODE)
 
 ui-install:
 	$(PNPM) --dir www install --frozen-lockfile

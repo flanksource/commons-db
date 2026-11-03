@@ -10,9 +10,8 @@ import tailwindcss from "@tailwindcss/vite";
 const apiTarget = process.env.QUERY_API_URL || "http://localhost:8080";
 const configDir = path.dirname(fileURLToPath(import.meta.url));
 
-// `query serve --dev` runs Vite's serve command, which resolves clicky-ui from
-// the sibling source checkout for hot reload. Production builds keep resolving
-// the published package pinned in package.json.
+// Development serving and builds resolve the sibling checkout. Production
+// builds resolve the published package pinned in package.json.
 const clickyUI = path.resolve(
   configDir,
   "../../../../clicky-ui/packages/ui",
@@ -20,7 +19,7 @@ const clickyUI = path.resolve(
 const clickyUISource = path.resolve(clickyUI, "src");
 
 export function clickyUIDevAliases(command: ConfigEnv["command"], mode: ConfigEnv["mode"]) {
-  if (command !== "serve" || mode !== "development") return [];
+  if ((command !== "serve" && command !== "build") || mode !== "development") return [];
   return [
     {
       find: "@flanksource/clicky-ui/styles.css",

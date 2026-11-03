@@ -82,8 +82,20 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 		merged.Provider.Connection = overlay.Provider.Connection
 	}
 	merged.Provider.Options = mergeMap(merged.Provider.Options, overlay.Provider.Options)
+	if len(base.Spans) > 0 || len(overlay.Spans) > 0 {
+		merged.Spans = maps.Clone(base.Spans)
+		if merged.Spans == nil {
+			merged.Spans = query.SpanMappings{}
+		}
+		for key, value := range overlay.Spans {
+			merged.Spans[key] = value
+		}
+	}
 	if overlay.Query != "" {
 		merged.Query = overlay.Query
+	}
+	if overlay.Search != nil {
+		merged.Search = overlay.Search
 	}
 	merged.Params = mergeParams(merged.Params, overlay.Params)
 	if len(overlay.Columns) > 0 {
