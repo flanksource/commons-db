@@ -35,6 +35,8 @@ type HTTPProvider struct{ httpConnection }
 // OpenSearchProvider extends the HTTP form for an OpenSearch endpoint.
 type OpenSearchProvider struct {
 	httpConnection
+	Index           string `json:"index" clicky:"property=index,title=Default index,order=4"`
+	SpanLayout      string `json:"span_layout" clicky:"property=span_layout,title=Span layout overrides,format=textarea,order=7"`
 	PagingMode      string `json:"paging_mode" clicky:"property=paging_mode,title=Paging mode,order=5"`
 	PagingThreshold string `json:"paging_threshold" clicky:"property=paging_threshold,title=Paging threshold,order=6"`
 }
@@ -42,6 +44,8 @@ type OpenSearchProvider struct {
 // OpenTelemetryProvider delegates trace storage to a nested OpenSearch
 // connection while retaining its own first-class connection identity.
 type OpenTelemetryProvider struct {
+	Index      string `json:"index" clicky:"property=index,title=Default index,order=3"`
+	SpanLayout string `json:"span_layout" clicky:"property=span_layout,title=Span layout overrides,format=textarea,order=4"`
 	Connection string `json:"connection" clicky:"property=connection,title=OpenSearch Connection,required,order=2"`
 }
 

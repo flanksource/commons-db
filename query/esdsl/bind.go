@@ -224,6 +224,12 @@ func EncodeTimeBound(instant time.Time, search Search, mapping *TimeFieldMapping
 	return encoded, nil
 }
 
+// EncodeTimeValue uses the same date math and unit rules as time-role parameters.
+func EncodeTimeValue(value any, search Search, mapping *TimeFieldMapping) (any, error) {
+	encoded, _, err := normalizeTimeBound(value, RoleTimeFrom, search, mapping)
+	return encoded, err
+}
+
 func validateTimeFieldMapping(search Search, mappedType string) error {
 	switch mappedType {
 	case "date", "date_nanos":

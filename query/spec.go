@@ -165,6 +165,21 @@ func (p Profile) ValidateKind() error {
 // happens at execution — by then the profile is already stored, and the author
 // who introduced the conflict is long gone.
 func (p Profile) ValidateQuerySource() error {
+	if p.Search != nil {
+		if p.Provider.Type != "opensearch" && p.Provider.Type != "opentelemetry" {
+			return fmt.Errorf("canonical search requires an OpenSearch or OpenTelemetry provider")
+		}
+		if strings.TrimSpace(p.Query) != "" || p.Provider.Options["search"] != nil {
+			return fmt.Errorf("canonical search cannot be combined with a native query or provider.options.search")
+		}
+		if p.Search.TimeFieldFormat != "" {
+			return fmt.Errorf("canonical timestamps use RFC3339; source units belong to the connection layout")
+		}
+		if err := p.Spans.ValidateReversible(); err != nil {
+			return err
+		}
+		return p.Search.Validate()
+	}
 	if strings.TrimSpace(p.Query) == "" || p.Provider.Options["search"] == nil {
 		return nil
 	}
@@ -174,6 +189,14 @@ func (p Profile) ValidateQuerySource() error {
 
 // Validate rejects invalid execution and column presentation metadata.
 func (p Profile) Validate() error {
+	if p.RenderMode() == RenderTraces {
+		if err := ValidateSpanOptions(p.Provider.Options); err != nil {
+			return err
+		}
+	}
+	if err := p.Spans.Validate(); err != nil {
+		return profileError(p, err)
+	}
 	if err := p.ValidateKind(); err != nil {
 		return err
 	}

@@ -3,6 +3,8 @@ package query
 import (
 	"fmt"
 	"time"
+
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 // Profile is a declarative, CEL-driven view over a data provider. It names the
@@ -41,7 +43,8 @@ type Profile struct {
 	// Query is the provider-native query (SQL, PromQL, HTTP path, etc.). It may
 	// reference declared params as `{{.params.<name>}}` (or `$(...)`), which are
 	// rendered before the provider runs.
-	Query string `json:"query,omitempty" yaml:"query,omitempty"`
+	Query  string        `json:"query,omitempty" yaml:"query,omitempty"`
+	Search *esdsl.Search `json:"search,omitempty" yaml:"search,omitempty"`
 
 	// Params declares the server-side filter parameters the Profile accepts. Their
 	// resolved values are templated into Query (and context sub-queries) and drive
@@ -86,7 +89,8 @@ type Profile struct {
 	// canonical LogsTable view (timestamp/level/pod/logger/thread/message, plus an
 	// optional duration column) for trace/log profiles. Filtering stays server-side
 	// via Params regardless of render mode.
-	Render string `json:"render,omitempty" yaml:"render,omitempty"`
+	Render string       `json:"render,omitempty" yaml:"render,omitempty"`
+	Spans  SpanMappings `json:"spans,omitempty" yaml:"spans,omitempty"`
 
 	// Series projects the rows onto plottable series (see ProjectSeries). A
 	// profile that declares it renders as a timeseries unless Render says
@@ -147,6 +151,22 @@ func (p Profile) RowLimits() RowLimits { return p.Limits.Resolve() }
 func (p Profile) EffectiveOrder() (Order, error) {
 	if len(p.Order) > 0 {
 		return p.Order, nil
+	}
+	if p.Search != nil {
+		order := Order{}
+		for _, sort := range p.Search.Sort {
+			if sort.Field != "_id" {
+				order = append(order, OrderBy{Column: sort.Field, Desc: sort.Order == "desc"})
+			}
+		}
+		if len(order) == 0 {
+			field := p.Search.TimeField
+			if field == "" {
+				field = "timestamp"
+			}
+			order = append(order, OrderBy{Column: field, Desc: true})
+		}
+		return append(order, OrderBy{Column: "_id", Unique: true}), nil
 	}
 	return NaturalOrder(p.Provider)
 }

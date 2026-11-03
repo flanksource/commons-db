@@ -83,7 +83,7 @@ func ReadOpenTelemetrySpans(ctx context.Context, read OpenTelemetryRead, emit fu
 			applyOpenSearchTailBound(built.body, boundField, boundValue)
 			return built, nil
 		},
-		mapRows: func(raw opensearch.Response) []query.Row {
+		mapRows: func(raw opensearch.Response) ([]query.Row, error) {
 			return openTelemetryRows(raw, runtime.options)
 		},
 	}

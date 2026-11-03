@@ -1,6 +1,7 @@
 package query
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 // Row is a single result record keyed by column name. It is a type alias for
@@ -106,10 +108,11 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	if err != nil {
 		return nil, err
 	}
-	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Search: p.Search, Spans: p.Spans, Defs: p.Params, Resolved: resolved})
 	if err != nil {
 		return nil, profileError(p, err)
 	}
+	req.RawRows = p.RenderMode() == RenderTraces
 	req.Filters = filters
 	req.Labels = p.Labels
 	req.MetricMetadata = &MetricMetadata{}
@@ -284,6 +287,8 @@ func executeSubQuery(ctx context.Context, sub SubQuery, defs []ParamDef, params 
 // values separately from their query text. Callers set Filters, Order and
 // Position on the result.
 type providerRequestInput struct {
+	Search   *esdsl.Search
+	Spans    SpanMappings
 	Provider Provider
 	Config   ProviderConfig
 	Query    string
@@ -298,6 +303,29 @@ func buildProviderRequest(ctx context.Context, in providerRequestInput) (Provide
 		return ProviderRequest{}, err
 	}
 	template := newParamTemplate(ctx, templateParams)
+	var logical *esdsl.Search
+	if in.Search != nil {
+		encoded, err := json.Marshal(in.Search)
+		if err != nil {
+			return ProviderRequest{}, err
+		}
+		var searchOptions map[string]any
+		if err := json.Unmarshal(encoded, &searchOptions); err != nil {
+			return ProviderRequest{}, err
+		}
+		rendered, err := template.renderOptions(searchOptions)
+		if err != nil {
+			return ProviderRequest{}, err
+		}
+		encoded, err = json.Marshal(rendered)
+		if err != nil {
+			return ProviderRequest{}, err
+		}
+		logical = &esdsl.Search{}
+		if err := json.Unmarshal(encoded, logical); err != nil {
+			return ProviderRequest{}, err
+		}
+	}
 	options, err := template.renderOptions(cfg.Options)
 	if err != nil {
 		return ProviderRequest{}, err
@@ -336,6 +364,8 @@ func buildProviderRequest(ctx context.Context, in providerRequestInput) (Provide
 		return ProviderRequest{}, err
 	}
 	return ProviderRequest{
+		Search:           logical,
+		Spans:            in.Spans,
 		Provider:         cfg.Type,
 		Connection:       connection,
 		Query:            queryText,

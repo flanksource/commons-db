@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/klauspost/compress/zstd"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -273,6 +274,17 @@ var _ = Describe("Cursor", func() {
 			_, err := query.DecodeCursor(cursor, changed)
 			Expect(err).To(MatchError(query.ErrCursorStale))
 			Expect(err).To(MatchError(ContainSubstring("query inputs changed")))
+		})
+
+		It("rejects a cursor after canonical conditions or source mappings change", func() {
+			changed := scope
+			changed.Search = &esdsl.Search{Query: &esdsl.Condition{Op: esdsl.OpTerm, Field: "service", Value: esdsl.Literal("checkout")}}
+			_, err := query.DecodeCursor(cursor, changed)
+			Expect(err).To(MatchError(query.ErrCursorStale))
+			changed = scope
+			changed.Spans = query.SpanMappings{"service": {Source: "workload"}}
+			_, err = query.DecodeCursor(cursor, changed)
+			Expect(err).To(MatchError(query.ErrCursorStale))
 		})
 
 		It("rejects a cursor it did not issue", func() {

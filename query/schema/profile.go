@@ -449,6 +449,8 @@ func ProfileSource() Schema {
 			"output":    Schema{"type": "array", "title": "Output", "items": Schema{"type": "string"}},
 			"render":    Schema{"type": "string", "title": "Render", "enum": []string{"table", query.RenderLogs, query.RenderTraces, query.RenderTimeseries}, "description": "Presentation mode: table (default), logs (canonical LogsTable view), traces (OpenTelemetry span rows grouped into traces with a waterfall and span inspector), or timeseries (charts the series projection; the default when series is set)"},
 			"series":    profileSeriesSchema(),
+			"spans":     profileSpansSchema(),
+			"search":    canonicalSearchSchema(),
 		},
 	}
 }

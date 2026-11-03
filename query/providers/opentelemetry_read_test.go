@@ -30,6 +30,7 @@ var _ = Describe("ReadOpenTelemetrySpans", func() {
 			tailDoc{id: "c", at: at.Add(2 * time.Second), message: "third"},
 		)
 		DeferCleanup(stub.server.Close)
+		stub.spans = true
 		ctx = dbcontext.New().WithConnectionResolver(func(_ dbcontext.Context, reference string) (*models.Connection, error) {
 			switch reference {
 			case "connection://traces":

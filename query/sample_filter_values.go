@@ -46,7 +46,7 @@ func SampleFilterValues(
 	if err != nil {
 		return nil, nil, err
 	}
-	request, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: profile.Provider, Query: profile.Query, Defs: profile.Params, Resolved: resolved})
+	request, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: profile.Provider, Query: profile.Query, Search: profile.Search, Spans: profile.Spans, Defs: profile.Params, Resolved: resolved})
 	if err != nil {
 		return nil, nil, profileError(profile, err)
 	}

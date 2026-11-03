@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -149,6 +150,8 @@ type CursorScope struct {
 	Provider   string
 	Connection string
 	Query      string
+	Search     *esdsl.Search
+	Spans      SpanMappings
 	Options    map[string]any
 	Order      Order
 	Params     map[string]any
@@ -558,12 +561,16 @@ func (s CursorScope) inputFingerprint() (string, error) {
 		Provider   string            `json:"provider"`
 		Connection string            `json:"connection"`
 		Query      string            `json:"query"`
+		Search     *esdsl.Search     `json:"search,omitempty"`
+		Spans      SpanMappings      `json:"spans,omitempty"`
 		Options    map[string]any    `json:"options"`
 	}{
 		Labels:     s.Labels,
 		Provider:   s.Provider,
 		Connection: s.Connection,
 		Query:      s.Query,
+		Search:     s.Search,
+		Spans:      s.Spans,
 		Options:    s.Options,
 	})
 	if err != nil {

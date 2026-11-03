@@ -23,11 +23,8 @@ var _ = Describe("column filter statistics", func() {
 		}
 	})
 
-	It("maps OpenTelemetry output columns back to their configured index fields", func() {
-		options := OpenTelemetryOptions{
-			ServiceField: "resource.service.name",
-			StatusFields: []string{"span.status.code", "error"},
-		}
+	It("maps OpenTelemetry canonical columns back to native index fields", func() {
+		options := OpenTelemetryOptions{}
 		options.withDefaults()
 		Expect(openTelemetryInspectionColumns([]query.ColumnDef{
 			{Name: "timestamp"},
@@ -37,9 +34,9 @@ var _ = Describe("column filter statistics", func() {
 			{Name: "custom.attribute"},
 		}, options)).To(Equal([]query.ColumnDef{
 			{Name: "timestamp", Source: "@timestamp"},
-			{Name: "service", Source: "resource.service.name"},
-			{Name: "service_name", Source: "resource.service.name"},
-			{Name: "status", Source: "span.status.code"},
+			{Name: "service", Source: "service_name"},
+			{Name: "service_name"},
+			{Name: "status", Source: "status"},
 			{Name: "custom.attribute"},
 		}))
 	})

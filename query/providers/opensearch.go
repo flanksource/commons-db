@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/observability"
+	"github.com/flanksource/commons-db/otel/span/layout"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
@@ -52,6 +53,7 @@ func documentArrayCapabilities(backend, database string) dbconnection.BackendCap
 }
 
 type OpenSearchOptions struct {
+	Layout *layout.Definition `json:"-"`
 	OpenSearchPagingOptions
 	// Address is an inline OpenSearch URL used when no stored connection is referenced.
 	Address string `json:"address,omitempty"`
@@ -196,7 +198,7 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 			return
 		}
 		var timeFieldMapping *esdsl.TimeFieldMapping
-		if runtime.options.Search != nil {
+		if req.Search == nil && runtime.options.Search != nil {
 			timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
 				Searcher: runtime.searcher, Index: runtime.options.Index, Search: *runtime.options.Search,
 				Params: openSearchParamBindings(req), Inspection: req.Inspection,
@@ -215,8 +217,11 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 			build: func(position openSearchPage) (openSearchRequest, error) {
 				return buildOpenSearchRequest(req, runtime.options, position, timeFieldMapping)
 			},
-			mapRows: func(raw opensearch.Response) []query.Row {
-				return logResultToRows(runtime.searcher.ParseResponse(ctx, raw))
+			mapRows: func(raw opensearch.Response) ([]query.Row, error) {
+				if req.RawRows || req.Search != nil {
+					return attachSpanLayout(openSearchRows(raw), runtime.options.Layout)
+				}
+				return attachSpanLayout(logResultToRows(runtime.searcher.ParseResponse(ctx, raw)), runtime.options.Layout)
 			},
 		}
 		walk.run(ctx, req, page, yield)
@@ -303,8 +308,8 @@ func (p opensearchProvider) Stream(ctx context.Context, req query.ProviderReques
 			applyOpenSearchTailBound(built.body, boundField, boundValue)
 			return built, nil
 		},
-		mapRows: func(raw opensearch.Response) []query.Row {
-			return logResultToRows(runtime.searcher.ParseResponse(ctx, raw))
+		mapRows: func(raw opensearch.Response) ([]query.Row, error) {
+			return logResultToRows(runtime.searcher.ParseResponse(ctx, raw)), nil
 		},
 	}
 	return walk.tail(ctx, tailReq, settings, emit)
@@ -322,6 +327,7 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 	}
 	backend := opensearch.Backend{Address: address}
 	var pagingConnection *models.Connection
+	configuredLayout := ""
 	var transport http.RoundTripper
 	if req.Connection != "" {
 		conn, err := ctx.HydrateConnectionByURL(req.Connection)
@@ -332,6 +338,10 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 			return openSearchRuntime{}, fmt.Errorf("connection[%s] not found", req.Connection)
 		}
 		pagingConnection = conn
+		if opts.Index == "" {
+			opts.Index = conn.Properties["index"]
+		}
+		configuredLayout = conn.Properties["span_layout"]
 		if backend.Address == "" {
 			backend.Address = conn.URL
 		}
@@ -355,6 +365,10 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 		return openSearchRuntime{}, err
 	}
 	searcher, err := opensearch.NewWithTransport(ctx, backend, nil, req.Diagnostics.HTTPTransport(transport))
+	if err != nil {
+		return openSearchRuntime{}, err
+	}
+	opts.Layout, err = resolveSpanLayout(ctx, searcher, opts.Index, req, configuredLayout)
 	if err != nil {
 		return openSearchRuntime{}, err
 	}
