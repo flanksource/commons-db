@@ -89,7 +89,7 @@ var _ = Describe("Git server timing", func() {
 		gitFixture(work, "commit", "-q", "-m", "rules")
 		repo := newRepository("file://"+work, git.Auth{})
 		ctx, timings := rpchttp.WithTimings(context.Background())
-		ctx = git.WithFetchObserver(ctx, func(git.FetchProgress) {})
+		ctx = git.WithFetchObserver(ctx, func(context.Context, git.FetchProgress) {})
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
 		worktree, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: "main"})
 		Expect(err).NotTo(HaveOccurred())

@@ -1,6 +1,6 @@
 //go:build unix
 
-package git
+package command
 
 import (
 	"os"

@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/observability"
 	commonshttp "github.com/flanksource/commons/http"
 	"github.com/flanksource/commons/http/middlewares"
@@ -54,13 +55,12 @@ type restClientOptions struct {
 // newRESTClient refuses a non-HTTPS base URL, verifies TLS (unless the
 // connection opts out), refuses redirects to non-HTTPS URLs, times out after
 // 30s and attaches the "git" observability feature.
-func newRESTClient(ctx any, options restClientOptions) (*restClient, error) {
+func newRESTClient(options restClientOptions) (*restClient, error) {
 	provider, tls, authorization := options.Provider, options.TLS, options.Authorization
-	base, err := url.Parse(strings.TrimRight(options.BaseURL, "/"))
-	if err != nil || base.Scheme != "https" || base.Host == "" {
-		return nil, fmt.Errorf("%s API URL must be an HTTPS URL", provider)
+	base, err := parseAPIBase(provider, options.BaseURL)
+	if err != nil {
+		return nil, err
 	}
-	base.RawQuery, base.Fragment = "", ""
 	tlsOptions := commonshttp.TLSConfig{CA: tls.CA, Cert: tls.Cert, Key: tls.Key, InsecureSkipVerify: tls.InsecureSkipVerify}
 	var client *commonshttp.Client
 	if options.Client.TransportPool != nil {
@@ -74,7 +74,11 @@ func newRESTClient(ctx any, options restClientOptions) (*restClient, error) {
 	}
 	client.Timeout(restTimeout).Use(requireHTTPS(provider)).Header("Authorization", authorization).
 		Header("Accept", "application/json")
-	observability.ApplyHTTPClientObservability(ctx, "git", client, nil)
+	client.Use(func(next http.RoundTripper) http.RoundTripper {
+		return middlewares.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
+			return observability.ApplyHTTPObservability(dbcontext.NewContext(request.Context()), "git", next, nil).RoundTrip(request)
+		})
+	})
 	return &restClient{provider: provider, base: base, http: client}, nil
 }
 

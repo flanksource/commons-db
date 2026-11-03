@@ -166,6 +166,12 @@ func hasCommit(ctx context.Context, dir, sha string) bool {
 }
 
 func (c *Cache) Files(ctx context.Context, repo *Repository, sha string) ([]string, error) {
+	return cachedRead(ctx, c.Root, repo, "files", sha, func(ctx context.Context) ([]string, error) {
+		return c.files(ctx, repo, sha)
+	})
+}
+
+func (c *Cache) files(ctx context.Context, repo *Repository, sha string) ([]string, error) {
 	if !fullSHAPattern.MatchString(sha) {
 		return nil, fmt.Errorf("list files: a full 40-character commit SHA is required")
 	}

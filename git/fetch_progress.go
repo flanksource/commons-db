@@ -13,6 +13,7 @@ import (
 // Repository (redacted) and Ref identify the fetch; the last update of every
 // fetch has Done set, with Err when it failed.
 type FetchProgress struct {
+	ID         string
 	Repository string
 	Ref        string
 	// Phase is git's phase label: "Enumerating objects", "Counting objects",
@@ -32,7 +33,7 @@ type FetchProgress struct {
 
 // FetchObserver receives every FetchProgress of the fetches made under a
 // context. Fetches of different repositories may report concurrently.
-type FetchObserver func(FetchProgress)
+type FetchObserver func(context.Context, FetchProgress)
 
 type fetchObserverKey struct{}
 

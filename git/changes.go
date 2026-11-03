@@ -38,6 +38,19 @@ type Change struct {
 // Changes compares endpoint trees without reading file bodies. Without
 // Renames, a rename is a deletion and an addition.
 func (c *Cache) Changes(ctx context.Context, options ChangesOptions) ([]Change, error) {
+	load := func(ctx context.Context) ([]Change, error) { return c.changes(ctx, options) }
+	if options.Repository == nil || !pinnedPair(options.Base, options.Head) {
+		return load(ctx)
+	}
+	key := struct {
+		Base, Head string
+		Paths      []string
+		Renames    bool
+	}{options.Base, options.Head, options.Paths, options.Renames}
+	return cachedRead(ctx, c.Root, options.Repository, "changes", key, load)
+}
+
+func (c *Cache) changes(ctx context.Context, options ChangesOptions) ([]Change, error) {
 	if options.Base == "" || options.Head == "" {
 		return nil, errors.New("tree changes require base and head revisions")
 	}
