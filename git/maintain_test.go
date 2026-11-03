@@ -31,7 +31,7 @@ var _ = Describe("Cache.Maintain", func() {
 		_, err = os.Stat(filepath.Join(repository, "pins", fixture.First))
 		Expect(err).To(MatchError(fs.ErrNotExist))
 		timed, timings = rpchttp.WithTimings(ctx)
-		_, err = cache.Changes(timed, git.ChangesOptions{Repository: repo, Base: fixture.First, Head: fixture.Main})
+		_, err = cache.Changes(timed, git.ChangesOptions{Repository: repo, Base: fixture.First, Head: fixture.Main, Renames: true})
 		Expect(err).NotTo(HaveOccurred())
 		repins, _ := timings.Counter("git_update_ref", "ops")
 		Expect(repins).To(Equal(int64(1)))

@@ -2,13 +2,17 @@ package git
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"time"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/commons-db/git/readcache"
 	"github.com/flanksource/commons/http/middlewares/timing"
 	gogit "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/storage/memory"
+	"github.com/google/uuid"
 )
 
 // Repository is one remote repository with the credentials to reach it and,
@@ -17,7 +21,9 @@ type Repository struct {
 	URL  RepoURL
 	Auth Auth
 	// Provider opens pull requests; nil or a generic git provider has none.
-	Provider Provider
+	Provider          Provider
+	ReadCache         *readcache.Cache
+	SecurityNamespace string
 }
 
 // RepositoryOptions configures NewRepository.
@@ -50,6 +56,16 @@ func NewRepository(options RepositoryOptions) (*Repository, error) {
 // TLS settings are passed per call. A local repository is listed by the git
 // binary (lsRemoteLocal).
 func (r *Repository) LsRemote(ctx context.Context) (refs RemoteRefs, err error) {
+	if FreshRefs(ctx) {
+		if err := r.InvalidateRefs(ctx); err != nil {
+			return RemoteRefs{}, err
+		}
+		return r.lsRemote(ctx)
+	}
+	return cachedLookup(ctx, "", r, "refs", nil, 30*time.Second, r.lsRemote)
+}
+
+func (r *Repository) lsRemote(ctx context.Context) (refs RemoteRefs, err error) {
 	if path, local := r.URL.LocalPath(); local {
 		return lsRemoteLocal(ctx, path)
 	}
@@ -79,6 +95,9 @@ func (r *Repository) LsRemote(ctx context.Context) (refs RemoteRefs, err error) 
 // empty ref is the remote HEAD. A full 40-character SHA is the commit itself,
 // without listing the remote, even if a branch or tag carries that name.
 func (r *Repository) Resolve(ctx context.Context, ref string) (Ref, error) {
+	if err := ctx.Err(); err != nil {
+		return Ref{}, err
+	}
 	if fullSHAPattern.MatchString(ref) {
 		return Ref{Name: ref, FullName: ref, SHA: ref, Kind: RefSHA}, nil
 	}
@@ -88,7 +107,7 @@ func (r *Repository) Resolve(ctx context.Context, ref string) (Ref, error) {
 	}
 	resolved, err := refs.Resolve(ref)
 	if err != nil {
-		return Ref{}, fmt.Errorf("%s: %w", r.URL.Redacted(), err)
+		return Ref{}, fmt.Errorf("%s: %w", r.URL.Redacted(), errors.Join(err, r.InvalidateRefs(ctx)))
 	}
 	return resolved, nil
 }
@@ -150,14 +169,17 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	verbosity, report := "--quiet", func(FetchProgress) {}
 	if observer := fetchObserver(ctx); observer != nil {
 		verbosity = "--progress"
+		id := uuid.NewString()
 		var received string
 		report = func(progress FetchProgress) {
 			if progress.Phase == "Receiving objects" && progress.Transferred != "" {
 				received = progress.Transferred
 			}
 			progress.Repository, progress.Ref = repo.URL.Redacted(), ref.Name
-			observer(progress)
+			progress.ID = id
+			observer(ctx, progress)
 		}
+		report(FetchProgress{Phase: "Starting fetch"})
 		defer func() {
 			if kib, ok := transferredKiB(received); ok {
 				rpchttp.AddTiming(ctx, rpchttp.TimingMetric{Name: "git_fetch", Counters: []rpchttp.TimingCounter{{Name: "received_kib", Value: kib}}})

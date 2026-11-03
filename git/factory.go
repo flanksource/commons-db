@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/git/readcache"
 	"github.com/flanksource/commons-db/models"
 	commonshttp "github.com/flanksource/commons/http"
 )
@@ -20,14 +21,16 @@ type Client struct {
 	Provider Provider
 	Auth     Auth
 
-	connectionURL *url.URL
-	namespace     string
+	scope             ConnectionScope
+	readCache         *readcache.Cache
+	securityNamespace string
 }
 
 // ClientOptions shares transport connections while keeping middleware per client.
 type ClientOptions struct {
 	TransportPool     *commonshttp.TransportPool
 	SecurityNamespace string
+	ReadCache         *readcache.Cache
 }
 
 // FromConnection builds a Client from a hydrated connection (URL, username,
@@ -37,45 +40,46 @@ type ClientOptions struct {
 // the API URL in URL; the namespace comes from Properties organization,
 // group or project respectively.
 func FromConnection(ctx dbcontext.Context, conn models.Connection, options ...ClientOptions) (*Client, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(options) > 1 {
 		return nil, fmt.Errorf("git client accepts one options value")
 	}
 	clientOptions := ClientOptions{}
 	if len(options) == 1 {
 		clientOptions = options[0]
-		encoded, err := json.Marshal(conn)
-		if err != nil {
-			return nil, fmt.Errorf("encode git connection identity: %w", err)
-		}
-		clientOptions.SecurityNamespace += fmt.Sprintf("\x00%x", sha256.Sum256(encoded))
+	}
+	encoded, err := json.Marshal(conn)
+	if err != nil {
+		return nil, fmt.Errorf("encode git connection identity: %w", err)
+	}
+	clientOptions.SecurityNamespace += fmt.Sprintf("\x00%x", sha256.Sum256(encoded))
+	scope, err := ScopeOf(conn)
+	if err != nil {
+		return nil, err
 	}
 	tls := TLS{InsecureSkipVerify: conn.InsecureTLS}
-	switch conn.Type {
-	case models.ConnectionTypeGit:
-		return gitClient(conn, tls)
-	case models.ConnectionTypeGithub, models.ConnectionTypeGitlab, models.ConnectionTypeAzureDevops:
-		return providerClient(ctx, conn, tls, clientOptions)
+	if conn.Type == models.ConnectionTypeGit {
+		client, err := gitClient(conn, scope, tls)
+		if err == nil {
+			client.readCache, client.securityNamespace = clientOptions.ReadCache, clientOptions.SecurityNamespace
+		}
+		return client, err
 	}
-	return nil, fmt.Errorf("connection %q has type %q, which is not a git provider", conn.Name, conn.Type)
+	return providerClient(conn, scope, tls, clientOptions)
 }
 
-func gitClient(conn models.Connection, tls TLS) (*Client, error) {
+func gitClient(conn models.Connection, scope ConnectionScope, tls TLS) (*Client, error) {
 	auth := Auth{Username: conn.Username, Password: conn.Password, PrivateKey: conn.Certificate, TLS: tls}
 	repo, err := NewRepository(RepositoryOptions{URL: conn.URL, Auth: auth, ProviderType: models.ConnectionTypeGit})
 	if err != nil {
 		return nil, fmt.Errorf("git connection %q: %w", conn.Name, err)
 	}
-	return &Client{Type: conn.Type, Provider: &genericProvider{repo: repo}, Auth: auth}, nil
+	return &Client{Type: conn.Type, Provider: &genericProvider{repo: repo}, Auth: auth, scope: scope}, nil
 }
 
-func providerClient(ctx dbcontext.Context, conn models.Connection, tls TLS, options ClientOptions) (*Client, error) {
-	base := conn.URL
-	if base == "" && conn.Type == models.ConnectionTypeGithub {
-		base = githubAPI
-	}
-	if base == "" {
-		return nil, fmt.Errorf("%s API URL is required", conn.Type)
-	}
+func providerClient(conn models.Connection, scope ConnectionScope, tls TLS, options ClientOptions) (*Client, error) {
 	if strings.TrimSpace(conn.Password) == "" {
 		return nil, fmt.Errorf("%s access token is required", conn.Type)
 	}
@@ -84,23 +88,37 @@ func providerClient(ctx dbcontext.Context, conn models.Connection, tls TLS, opti
 	if conn.Type == models.ConnectionTypeAzureDevops {
 		authorization = "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+conn.Password))
 	}
-	api, err := newRESTClient(ctx, restClientOptions{Provider: conn.Type, BaseURL: base, TLS: tls, Authorization: authorization, Client: options})
+	api, err := newRESTClient(restClientOptions{Provider: conn.Type, BaseURL: scope.API.String(), TLS: tls, Authorization: authorization, Client: options})
 	if err != nil {
 		return nil, err
 	}
-	client := &Client{Type: conn.Type, Auth: auth, connectionURL: api.base}
+	client := &Client{Type: conn.Type, Auth: auth, scope: scope}
+	client.readCache, client.securityNamespace = options.ReadCache, options.SecurityNamespace
 	switch conn.Type {
 	case models.ConnectionTypeGithub:
-		client.namespace = conn.Properties["organization"]
-		client.Provider = &githubProvider{api: api, namespace: client.namespace}
+		client.Provider = &githubProvider{api: api, namespace: scope.Namespace}
 	case models.ConnectionTypeGitlab:
-		client.namespace = conn.Properties["group"]
-		client.Provider = &gitlabProvider{api: api, namespace: client.namespace}
+		client.Provider = &gitlabProvider{api: api, namespace: scope.Namespace}
 	default:
-		client.namespace = conn.Properties["project"]
-		client.Provider = &azureProvider{api: api, project: client.namespace}
+		client.Provider = &azureProvider{api: api, project: scope.Namespace}
 	}
 	return client, nil
+}
+
+// Scope is what the connection may open (ScopeOf).
+func (c *Client) Scope() ConnectionScope { return c.scope }
+
+func (c *Client) CacheKey() string {
+	identity, err := json.Marshal(struct {
+		Type                         string
+		Auth                         Auth
+		URL                          *url.URL
+		Namespace, SecurityNamespace string
+	}{c.Type, c.Auth, c.scope.API, c.scope.Namespace, c.securityNamespace})
+	if err != nil {
+		panic(err)
+	}
+	return fmt.Sprintf("%x", sha256.Sum256(identity))
 }
 
 // Repository opens rawURL with the connection's credentials and provider,
@@ -110,79 +128,9 @@ func (c *Client) Repository(rawURL string) (*Repository, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := c.owns(repo.URL); err != nil {
+	if err := c.scope.Owns(repo.URL); err != nil {
 		return nil, fmt.Errorf("repository %s: %w", repo.URL.Redacted(), err)
 	}
+	repo.ReadCache, repo.SecurityNamespace = c.readCache, c.securityNamespace
 	return repo, nil
-}
-
-func (c *Client) owns(repo RepoURL) error {
-	if strings.EqualFold(repo.Scheme, "http") && !strings.EqualFold(c.connectionScheme(), "http") {
-		return fmt.Errorf("scheme %q would send the connection's %s credentials unencrypted: use https", repo.Scheme, c.connectionScheme())
-	}
-	switch c.Type {
-	case models.ConnectionTypeGit:
-		generic := c.Provider.(*genericProvider)
-		if !strings.EqualFold(hostOnly(repo.Host), hostOnly(generic.repo.URL.Host)) {
-			return fmt.Errorf("host %q is not the connection's host %q", repo.Host, generic.repo.URL.Host)
-		}
-	case models.ConnectionTypeGithub, models.ConnectionTypeGitlab:
-		if host := c.webHost(); !strings.EqualFold(hostOnly(repo.Host), host) {
-			return fmt.Errorf("host %q is not the connection's host %q", repo.Host, host)
-		}
-		if c.namespace != "" && !strings.EqualFold(repo.Owner, c.namespace) &&
-			!strings.HasPrefix(strings.ToLower(repo.Owner), strings.ToLower(c.namespace)+"/") {
-			return fmt.Errorf("owner %q is outside the connection's namespace %q", repo.Owner, c.namespace)
-		}
-	case models.ConnectionTypeAzureDevops:
-		return c.ownsAzure(repo)
-	}
-	return nil
-}
-
-// webHost is the host repositories live on: api.github.com serves github.com,
-// any other API (GitHub Enterprise, GitLab) shares its host.
-func (c *Client) webHost() string {
-	host := strings.ToLower(c.connectionURL.Hostname())
-	if host == "api.github.com" {
-		return "github.com"
-	}
-	return host
-}
-
-// connectionScheme is the scheme of the URL the connection was configured
-// with: the repository of a git connection, the API of a provider.
-func (c *Client) connectionScheme() string {
-	if generic, ok := c.Provider.(*genericProvider); ok {
-		return generic.repo.URL.Scheme
-	}
-	return c.connectionURL.Scheme
-}
-
-// ownsAzure accepts a repository of the connection's organization (and
-// project, when set) on Azure DevOps Services when the connection is to
-// Services, or on the connection's own host for Azure DevOps Server.
-func (c *Client) ownsAzure(repo RepoURL) error {
-	repoHost, connHost := strings.ToLower(hostOnly(repo.Host)), strings.ToLower(c.connectionURL.Hostname())
-	if isAzureHost(connHost) != isAzureHost(repoHost) || (!isAzureHost(connHost) && repoHost != connHost) {
-		return fmt.Errorf("host %q is not the connection's Azure DevOps host %q", repo.Host, c.connectionURL.Host)
-	}
-	org := azureOrganization(c.connectionURL)
-	if !strings.EqualFold(repo.Owner, org) {
-		return fmt.Errorf("organization %q is not the connection's organization %q", repo.Owner, org)
-	}
-	if c.namespace != "" && !strings.EqualFold(repo.Project, c.namespace) {
-		return fmt.Errorf("project %q is not the connection's project %q", repo.Project, c.namespace)
-	}
-	return nil
-}
-
-// azureOrganization reads the organization from https://dev.azure.com/{org},
-// https://{org}.visualstudio.com or a server's collection path.
-func azureOrganization(base *url.URL) string {
-	host := strings.ToLower(base.Hostname())
-	if strings.HasSuffix(host, ".visualstudio.com") {
-		return strings.TrimSuffix(host, ".visualstudio.com")
-	}
-	return strings.Trim(base.Path, "/")
 }
