@@ -10,6 +10,15 @@ import (
 )
 
 var _ = Describe("nested cache progress", func() {
+	It("keeps internal executable checks out of user task counts", func() {
+		group := task.StartGroup[bool]("comparison")
+		observer := CacheTasks(TaskOptions{})
+		event := readcache.Event{ID: "version", Metadata: readcache.Metadata{Operation: "version", Internal: true}, Disposition: "lookup"}
+		observer(group.Context(), event)
+		event.Done, event.Disposition = true, "hit"
+		observer(group.Context(), event)
+		Expect(group.GetTasks()).To(BeEmpty())
+	})
 	It("names the read and attaches it to the active child rather than the supplied ancestor", func() {
 		parent := task.StartGroup[bool]("PR")
 		child := task.StartGroup[bool]("left side", task.WithParentGroup(parent.Group))

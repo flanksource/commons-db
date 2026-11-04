@@ -37,7 +37,7 @@ type command struct {
 
 // requireGit retains successful checks for the active executable search path.
 func requireGit(ctx context.Context) error {
-	_, err := gitCheck.Load(readcache.WithMetadata(ctx, readcache.Metadata{Operation: "version"}), os.Getenv("PATH"), 24*time.Hour, func(ctx context.Context) ([]byte, error) {
+	_, err := gitCheck.Load(readcache.WithMetadata(ctx, readcache.Metadata{Operation: "version", Internal: true}), os.Getenv("PATH"), 24*time.Hour, func(ctx context.Context) ([]byte, error) {
 		result, err := gitcommand.Run(ctx, gitcommand.Options{Args: []string{"version"}})
 		if err != nil {
 			return nil, fmt.Errorf("git binary >= %d.%d is required: %w", minGitMajor, minGitMinor, err)

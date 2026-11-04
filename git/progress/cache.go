@@ -18,6 +18,9 @@ func CacheTasks(options TaskOptions) readcache.Observer {
 	var mu sync.Mutex
 	steps := map[string]*task.Step{}
 	return func(ctx context.Context, event readcache.Event) {
+		if event.Internal {
+			return
+		}
 		group := task.GroupFromContext(ctx)
 		if group == nil && options.Group != nil {
 			if supplied := options.Group(ctx); supplied != nil {
