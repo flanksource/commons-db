@@ -17,25 +17,45 @@ func TestProgress(t *testing.T) {
 }
 
 var _ = Describe("fetch progress line", func() {
+	It("renders phase counters natively, retains labels, and clears an earlier phase total", func() {
+		group := task.StartGroup[bool]("native progress", task.WithConcurrency(1))
+		observe := Tasks(TaskOptions{Group: func(context.Context) *task.Group { return group.Group }})
+		event := git.FetchProgress{ID: "phase", Repository: "https://dev.azure.com/acme/tenant-x/_git/rules", Ref: "main", Phase: "Receiving objects", Current: 5, Total: 10, Bytes: 1024, BytesPerSecond: 512}
+		observe(group.Context(), event)
+		snap := task.SnapshotTask(group.GetTasks()[0].GetTask(), group.Group)
+		Expect(snap.Description).To(Equal("Receiving objects"))
+		Expect(snap.Progress).To(Equal(5))
+		Expect(snap.Labels["repository"]).To(Equal("tenant-x/rules"))
+		Expect(snap.ProgressMetrics.Bytes).To(Equal(int64(1024)))
+		event.Phase, event.Current, event.Total, event.PhaseDone = "Enumerating objects", 2, 0, true
+		observe(group.Context(), event)
+		snap = task.SnapshotTask(group.GetTasks()[0].GetTask(), group.Group)
+		Expect(snap.MaxValue).To(BeZero())
+		Expect(snap.Logs).To(BeEmpty())
+		event.Done = true
+		observe(group.Context(), event)
+	})
 	DescribeTable("reads like git's own meter", func(progress git.FetchProgress, expected string) {
 		Expect(fetchProgressLine(progress)).To(Equal(expected))
 	},
 		Entry("server phase", git.FetchProgress{Phase: "Counting objects", Remote: true, Percent: 50, Current: 5, Total: 10},
-			"remote: Counting objects  50% (5/10)"),
+			"Counting objects"),
 		Entry("transfer with throughput", git.FetchProgress{Phase: "Receiving objects", Percent: 45, Current: 450, Total: 1000, Transferred: "12.00 MiB", Rate: "3.00 MiB/s"},
-			"Receiving objects  45% (450/1000), 12.00 MiB | 3.00 MiB/s"),
+			"Receiving objects"),
 		Entry("finished phase", git.FetchProgress{Phase: "Resolving deltas", Percent: 100, Current: 3, Total: 3, PhaseDone: true},
-			"Resolving deltas 100% (3/3), done"),
+			"Resolving deltas"),
 		Entry("unbounded count", git.FetchProgress{Phase: "Enumerating objects", Remote: true, Current: 12, PhaseDone: true},
-			"remote: Enumerating objects 12, done"),
+			"Enumerating objects"),
 	)
 
 	DescribeTable("names the fetch by its repository's last path segments and ref", func(repository, ref, expected string) {
 		Expect(fetchTaskName(git.FetchProgress{Repository: repository, Ref: ref})).To(Equal(expected))
 	},
-		Entry("hosted repository and branch", "https://example.org/acme/rules.git", "main", "git fetch acme/rules#main"),
-		Entry("local repository and commit", "file:///work/acme/rules", "49ec96f75b56e8080a84a4eaf3ae345476f04908", "git fetch acme/rules@49ec96f75b56"),
-		Entry("single-segment path", "file:///rules.git", "v1", "git fetch rules#v1"),
+		Entry("hosted repository and branch", "https://example.org/acme/rules.git", "main", "[acme/rules] Fetch main"),
+		Entry("local repository and commit", "file:///work/acme/rules", "49ec96f75b56e8080a84a4eaf3ae345476f04908", "[acme/rules] Fetch @49ec96f75b56"),
+		Entry("single-segment path", "file:///rules.git", "v1", "[rules] Fetch v1"),
+		Entry("azure project", "https://dev.azure.com/acme/tenant-x/_git/rules", "main", "[tenant-x/rules] Fetch main"),
+		Entry("nested gitlab", "https://gitlab.com/acme/team/rules.git", "main", "[acme/team/rules] Fetch main"),
 	)
 
 	It("keeps simultaneous identical fetches distinct and finishes inline at concurrency one", func() {

@@ -67,6 +67,7 @@ func (s *PreparedSource) materialize(ctx context.Context) (err error) {
 }
 
 func (s *PreparedSource) streamBlobs(ctx context.Context, root *os.Root, entries []sourceEntry) (err error) {
+	ctx = withReadIdentity(ctx, s.info.RepositoryRoot, s.info.TargetCommit)
 	objects := make([]string, len(entries))
 	for index, entry := range entries {
 		objects[index] = entry.object

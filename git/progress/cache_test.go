@@ -18,7 +18,7 @@ var _ = Describe("nested cache progress", func() {
 		observer(child.Context(), event)
 		Expect(parent.GetTasks()).To(BeEmpty())
 		Expect(child.GetTasks()).To(HaveLen(1))
-		Expect(child.GetTasks()[0].GetTask().Name()).To(Equal("Git blame example/repo#main"))
+		Expect(child.GetTasks()[0].GetTask().Name()).To(Equal("[example/repo] Blame main"))
 		event.Done, event.Disposition = true, "hit"
 		observer(child.Context(), event)
 		Expect(parent.WaitFor().Status).To(Equal(task.StatusSuccess))

@@ -32,6 +32,7 @@ func readObjectBatch(ctx context.Context, options objectBatchOptions) (err error
 		return err
 	}
 	defer func() { err = errors.Join(err, stream.close()) }()
+	stream.progress.Total = int64(len(options.Objects))
 	for index, object := range options.Objects {
 		if err := stream.read(object, func(blob batchBlob, content io.Reader) error { return options.Read(index, blob, content) }); err != nil {
 			return err

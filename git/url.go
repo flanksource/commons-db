@@ -202,6 +202,22 @@ func (u RepoURL) FullName() string {
 	return strings.Join(parts, "/")
 }
 
+// DisplayName identifies the repository without transport or Azure organization syntax.
+func (u RepoURL) DisplayName() string {
+	if u.Project != "" {
+		return u.Project + "/" + u.Name
+	}
+	if u.Scheme == "file" {
+		path := strings.TrimSuffix(filepath.Clean(u.Path), ".git")
+		parent := filepath.Base(filepath.Dir(path))
+		if parent == "/" || parent == "." {
+			return filepath.Base(path)
+		}
+		return parent + "/" + filepath.Base(path)
+	}
+	return u.FullName()
+}
+
 // Redacted is the clone URL with any user info removed, for display.
 func (u RepoURL) Redacted() string {
 	if u.Scheme == "ssh" && !strings.Contains(u.Clone, "://") {

@@ -2,8 +2,6 @@ package progress
 
 import (
 	"context"
-	"fmt"
-	"strings"
 	"sync"
 
 	"github.com/flanksource/clicky/task"
@@ -31,9 +29,10 @@ func Tasks(options TaskOptions) git.FetchObserver {
 				group = options.Group(ctx)
 			}
 			if group == nil {
-				group = task.StartGroup[any]("Git", task.WithGroupContext(ctx)).Group
+				group = task.StartGroup[any](taskName(event.Repository, "Fetch", event.Ref), task.WithGroupContext(ctx), task.WithLabels(map[string]string{"repository": repositoryName(event.Repository)})).Group
 			}
 			step = group.StartStep(fetchTaskName(event), task.WithContext(ctx))
+			step.Task().SetLabels(map[string]string{"repository": repositoryName(event.Repository), "ref": event.Ref, "operation": "fetch"})
 			steps[event.ID] = step
 		}
 		if event.Done {
@@ -42,43 +41,19 @@ func Tasks(options TaskOptions) git.FetchObserver {
 			return
 		}
 		step.Task().SetDescription(fetchProgressLine(event))
-		if event.Total > 0 {
-			step.Task().SetProgress(int(event.Current), int(event.Total))
+		step.Task().SetProgress(int(event.Current), int(event.Total))
+		unit := "objects"
+		if event.Phase == "Resolving deltas" {
+			unit = "deltas"
 		}
-		if event.PhaseDone {
-			step.Task().Infof("%s", fetchProgressLine(event))
-		}
+		step.Task().SetProgressMetrics(task.ProgressMetrics{Unit: unit, Bytes: event.Bytes, BytesPerSecond: event.BytesPerSecond})
 	}
 }
 
 func fetchTaskName(progress git.FetchProgress) string {
-	segments := strings.Split(strings.TrimSuffix(strings.TrimRight(progress.Repository, "/"), ".git"), "/")
-	repository := segments[len(segments)-1]
-	if len(segments) > 1 && segments[len(segments)-2] != "" {
-		repository = segments[len(segments)-2] + "/" + repository
-	}
-	if ref, err := (git.RemoteRefs{}).Resolve(progress.Ref); err == nil && ref.Kind == git.RefSHA {
-		return fmt.Sprintf("git fetch %s@%s", repository, progress.Ref[:12])
-	}
-	return fmt.Sprintf("git fetch %s#%s", repository, progress.Ref)
+	return taskName(progress.Repository, "Fetch", progress.Ref)
 }
 
 func fetchProgressLine(progress git.FetchProgress) string {
-	var line strings.Builder
-	if progress.Remote {
-		line.WriteString("remote: ")
-	}
-	line.WriteString(progress.Phase)
-	if progress.Total > 0 {
-		fmt.Fprintf(&line, " %3d%% (%d/%d)", progress.Percent, progress.Current, progress.Total)
-	} else if progress.Current > 0 {
-		fmt.Fprintf(&line, " %d", progress.Current)
-	}
-	if progress.Transferred != "" {
-		fmt.Fprintf(&line, ", %s | %s", progress.Transferred, progress.Rate)
-	}
-	if progress.PhaseDone {
-		line.WriteString(", done")
-	}
-	return line.String()
+	return progress.Phase
 }

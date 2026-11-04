@@ -59,8 +59,10 @@ func (c *Cache) OpenTree(ctx context.Context, options TreeOptions) (result *Tree
 		}
 	}()
 	if options.Directory != "" {
+		tree.ctx = withReadIdentity(ctx, options.Directory, options.Revision)
 		err = tree.openLocal(c.Root, options)
 	} else {
+		tree.ctx = withReadIdentity(ctx, options.Repository.URL.Redacted(), options.Revision)
 		err = tree.openRepository(c, options.Repository, options.Revision)
 	}
 	if err != nil {
