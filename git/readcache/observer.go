@@ -14,7 +14,11 @@ type Event struct {
 type Observer func(context.Context, Event)
 type observerKey struct{}
 
-type Metadata struct{ Operation, Repository, Ref string }
+type Metadata struct {
+	Operation, Repository, Ref string
+	// Internal lookups remain observable for diagnostics but are not user work.
+	Internal bool
+}
 type metadataKey struct{}
 
 func WithMetadata(ctx context.Context, metadata Metadata) context.Context {
