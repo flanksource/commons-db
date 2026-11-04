@@ -11,7 +11,7 @@ import (
 )
 
 func WithTasks(ctx context.Context, options TaskOptions) context.Context {
-	return readcache.WithObserver(git.WithFetchObserver(ctx, Tasks(options)), CacheTasks(options))
+	return readcache.WithObserver(git.WithReadObserver(git.WithFetchObserver(ctx, Tasks(options)), Reads(options)), CacheTasks(options))
 }
 
 func CacheTasks(options TaskOptions) readcache.Observer {
@@ -31,17 +31,12 @@ func CacheTasks(options TaskOptions) readcache.Observer {
 		defer mu.Unlock()
 		step := steps[event.ID]
 		if step == nil {
-			name := "Git " + event.Operation
+			name := strings.Title(event.Operation)
 			if event.Operation == "" {
-				name = "Git cache lookup"
+				name = "Cache lookup"
 			}
-			if event.Repository != "" {
-				name += " " + event.Repository
-			}
-			if event.Ref != "" {
-				name += "#" + event.Ref
-			}
-			step = group.StartStep(strings.TrimSpace(name), task.WithContext(ctx))
+			step = group.StartStep(taskName(event.Repository, name, event.Ref), task.WithContext(ctx))
+			step.Task().SetLabels(map[string]string{"repository": repositoryName(event.Repository), "ref": event.Ref, "operation": event.Operation})
 			steps[event.ID] = step
 		}
 		description := "Loading source"

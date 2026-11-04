@@ -97,6 +97,7 @@ func cachedLookup[T any](ctx context.Context, root string, repo *Repository, ope
 	if repo == nil {
 		return zero, fmt.Errorf("git %s requires repository", operation)
 	}
+	ctx = withReadIdentity(ctx, repo.URL.Redacted(), "")
 	cache, ok := ctx.Value(readCacheKey{}).(*readcache.Cache)
 	if !ok && repo.ReadCache != nil {
 		cache, ok = repo.ReadCache, true

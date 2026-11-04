@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
@@ -177,6 +178,12 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 			}
 			progress.Repository, progress.Ref = repo.URL.Redacted(), ref.Name
 			progress.ID = id
+			if kib, ok := transferredKiB(progress.Transferred); ok {
+				progress.Bytes = kib * 1024
+			}
+			if kib, ok := transferredKiB(strings.TrimSuffix(progress.Rate, "/s")); ok {
+				progress.BytesPerSecond = float64(kib * 1024)
+			}
 			observer(ctx, progress)
 		}
 		report(FetchProgress{Phase: "Starting fetch"})

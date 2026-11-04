@@ -19,16 +19,18 @@ type FetchProgress struct {
 	// Phase is git's phase label: "Enumerating objects", "Counting objects",
 	// "Compressing objects" (Remote, on the server), "Receiving objects",
 	// "Resolving deltas".
-	Phase       string
-	Remote      bool
-	Percent     int
-	Current     int64
-	Total       int64 // 0 when git reports no bound
-	Transferred string
-	Rate        string
-	PhaseDone   bool
-	Done        bool
-	Err         error
+	Phase          string
+	Remote         bool
+	Percent        int
+	Current        int64
+	Total          int64 // 0 when git reports no bound
+	Transferred    string
+	Rate           string
+	Bytes          int64
+	BytesPerSecond float64
+	PhaseDone      bool
+	Done           bool
+	Err            error
 }
 
 // FetchObserver receives every FetchProgress of the fetches made under a
