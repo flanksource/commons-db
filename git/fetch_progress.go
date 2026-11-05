@@ -16,6 +16,12 @@ type FetchProgress struct {
 	ID         string
 	Repository string
 	Ref        string
+	// Mirror is the cache key of the shared mirror the fetch writes into when
+	// another repository owns it, and MirrorRepository that owner's recorded
+	// repository (empty when unrecorded). Both are empty for the repository's
+	// own mirror and for a clone.
+	Mirror           string
+	MirrorRepository string
 	// Phase is git's phase label: "Enumerating objects", "Counting objects",
 	// "Compressing objects" (Remote, on the server), "Receiving objects",
 	// "Resolving deltas".

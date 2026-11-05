@@ -14,7 +14,7 @@ func AddOpenAPI(spec *rpc.OpenAPISpec, prefix string) {
 	}
 	for _, operation := range Operations {
 		parameters := []rpc.OpenAPIParameter{}
-		if operation != "connections" {
+		if operation != "connections" && operation != "cache" {
 			parameters = append(parameters, rpc.OpenAPIParameter{Name: "connection", In: "query", Required: true, Schema: &rpc.OpenAPISchema{Type: "string"}})
 		}
 		for _, name := range operationParameters(operation) {
@@ -34,11 +34,43 @@ func AddOpenAPI(spec *rpc.OpenAPISpec, prefix string) {
 				"400": {Description: "Invalid source or query"}, "403": {Description: "Access denied"}, "404": {Description: "Unknown connection or file"}, "501": {Description: "Provider capability unsupported"}, "502": {Description: "Git provider failure"}},
 		}}
 	}
+	for _, action := range Actions {
+		spec.Paths[strings.TrimRight(prefix, "/")+"/"+action] = rpc.OpenAPIPath{"post": {
+			Tags: []string{"Git"}, Summary: actionSummaries[action], OperationID: "git-" + action, Description: actionDescriptions[action],
+			RequestBody: &rpc.OpenAPIRequestBody{Required: true, Content: map[string]rpc.OpenAPIMediaType{"application/json": {Schema: rpc.SchemaForStruct(browse.CacheAction{})}}},
+			Responses: map[string]rpc.OpenAPIResponse{"200": {Description: "Git cache action result", Content: map[string]rpc.OpenAPIMediaType{"application/json": {Schema: actionSchema(action)}}},
+				"400": {Description: "Invalid action or cache entry"}, "403": {Description: "Access denied"}, "404": {Description: "Unknown connection"}, "409": {Description: "A worktree of the entry is leased"}, "502": {Description: "Git provider failure"}},
+		}}
+	}
+}
+
+var actionSummaries = map[string]string{
+	"cache-prune":  "Prune a Git cache mirror",
+	"cache-evict":  "Evict a Git cache mirror",
+	"cache-rebind": "Rebind a repository to another Git cache mirror",
+}
+
+var actionDescriptions = map[string]string{
+	"cache-prune":  "Expires the owner mirror's commit pins unused for the configured pin TTL and garbage-collects it. Body: owner (cache key).",
+	"cache-evict":  "Deletes the owner mirror with its pins and worktrees, and the bindings of repositories reading it; each clones again on its next read. Body: owner (cache key).",
+	"cache-rebind": "Moves a repository reading another repository's mirror onto the named owner mirror, or the mirror sharing the most history when owner is empty. Body: connection, repo (for provider connections), owner.",
+}
+
+func actionSchema(action string) *rpc.OpenAPISchema {
+	switch action {
+	case "cache-prune":
+		return rpc.SchemaForStruct(git.CacheEntry{})
+	case "cache-evict":
+		return rpc.SchemaForStruct(git.EvictResult{})
+	case "cache-rebind":
+		return rpc.SchemaForStruct(git.RebindResult{})
+	}
+	panic("unknown Git cache action " + action)
 }
 
 func operationParameters(operation string) []string {
 	switch operation {
-	case "refs":
+	case "refs", "cache-owners":
 		return []string{"repo"}
 	case "files":
 		return []string{"repo", "ref", "extension"}
@@ -68,6 +100,10 @@ func responseSchema(operation string) *rpc.OpenAPISchema {
 		return rpc.SchemaForStruct(git.Page[git.Pipeline]{})
 	case "pipeline-executions":
 		return rpc.SchemaForStruct(git.Page[git.PipelineExecution]{})
+	case "cache":
+		return rpc.SchemaForStruct(browse.CacheInventory{})
+	case "cache-owners":
+		return &rpc.OpenAPISchema{Type: "array", Items: rpc.SchemaForStruct(git.SharedOwner{})}
 	}
 	panic("unknown Git operation " + operation)
 }

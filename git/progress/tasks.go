@@ -32,7 +32,11 @@ func Tasks(options TaskOptions) git.FetchObserver {
 				group = task.StartGroup[any](taskName(event.Repository, "Fetch", event.Ref), task.WithGroupContext(ctx), task.WithLabels(map[string]string{"repository": repositoryName(event.Repository)})).Group
 			}
 			step = group.StartStep(fetchTaskName(event), task.WithContext(ctx))
-			step.Task().SetLabels(map[string]string{"repository": repositoryName(event.Repository), "ref": event.Ref, "operation": "fetch"})
+			labels := map[string]string{"repository": repositoryName(event.Repository), "ref": event.Ref, "operation": "fetch"}
+			if event.Mirror != "" {
+				labels["mirror"] = event.Mirror
+			}
+			step.Task().SetLabels(labels)
 			steps[event.ID] = step
 		}
 		if event.Done {
@@ -50,8 +54,17 @@ func Tasks(options TaskOptions) git.FetchObserver {
 	}
 }
 
+// fetchTaskName names the fetch, and the other repository's mirror it writes
+// into when the mirror is shared.
 func fetchTaskName(progress git.FetchProgress) string {
-	return taskName(progress.Repository, "Fetch", progress.Ref)
+	name := taskName(progress.Repository, "Fetch", progress.Ref)
+	switch {
+	case progress.MirrorRepository != "":
+		return name + " → " + repositoryName(progress.MirrorRepository)
+	case progress.Mirror != "":
+		return name + " → " + progress.Mirror
+	}
+	return name
 }
 
 func fetchProgressLine(progress git.FetchProgress) string {
