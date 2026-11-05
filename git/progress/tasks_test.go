@@ -58,6 +58,30 @@ var _ = Describe("fetch progress line", func() {
 		Entry("nested gitlab", "https://gitlab.com/acme/team/rules.git", "main", "[acme/team/rules] Fetch main"),
 	)
 
+	DescribeTable("names the other repository's mirror a shared fetch writes into", func(progress git.FetchProgress, expected string) {
+		progress.Repository, progress.Ref = "https://dev.azure.com/acme/tenant-x/_git/rules-bot", "49ec96f75b56e8080a84a4eaf3ae345476f04908"
+		Expect(fetchTaskName(progress)).To(Equal(expected))
+	},
+		Entry("own mirror", git.FetchProgress{}, "[tenant-x/rules-bot] Fetch @49ec96f75b56"),
+		Entry("recorded owner", git.FetchProgress{Mirror: "dev.azure.com_acme_tenant-x__git_rules-mal-0123456789ab", MirrorRepository: "https://dev.azure.com/acme/tenant-x/_git/rules-mal"},
+			"[tenant-x/rules-bot] Fetch @49ec96f75b56 → tenant-x/rules-mal"),
+		Entry("unrecorded owner", git.FetchProgress{Mirror: "dev.azure.com_acme_tenant-x__git_rules-mal-0123456789ab"},
+			"[tenant-x/rules-bot] Fetch @49ec96f75b56 → dev.azure.com_acme_tenant-x__git_rules-mal-0123456789ab"),
+	)
+
+	It("labels a shared fetch with the mirror it writes into", func() {
+		group := task.StartGroup[bool]("shared mirror", task.WithConcurrency(1))
+		observe := Tasks(TaskOptions{Group: func(context.Context) *task.Group { return group.Group }})
+		event := git.FetchProgress{ID: "shared", Repository: "https://dev.azure.com/acme/tenant-x/_git/rules-bot", Ref: "main",
+			Mirror: "dev.azure.com_acme_tenant-x__git_rules-mal-0123456789ab", Phase: "Receiving objects"}
+		observe(group.Context(), event)
+		snap := task.SnapshotTask(group.GetTasks()[0].GetTask(), group.Group)
+		Expect(snap.Labels).To(Equal(map[string]string{"repository": "tenant-x/rules-bot", "ref": "main", "operation": "fetch",
+			"mirror": "dev.azure.com_acme_tenant-x__git_rules-mal-0123456789ab"}))
+		event.Done = true
+		observe(group.Context(), event)
+	})
+
 	It("keeps simultaneous identical fetches distinct and finishes inline at concurrency one", func() {
 		parent := task.StartGroup[bool]("git owner", task.WithConcurrency(1))
 		group := task.StartGroup[bool]("git reads", task.WithParentGroup(parent.Group))

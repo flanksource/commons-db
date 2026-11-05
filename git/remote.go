@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
+	registry "github.com/flanksource/commons-db/git/internal/cache"
 	"github.com/flanksource/commons-db/git/readcache"
 	"github.com/flanksource/commons/http/middlewares/timing"
 	gogit "github.com/go-git/go-git/v5"
@@ -158,6 +160,24 @@ type fetchOptions struct {
 	Flags   []string
 }
 
+// sharedMirrorOf is the binding of the cache mirror at dir when a repository
+// other than repo owns it, and the zero binding for repo's own mirrors
+// (including its -depth-N mirrors) and for directories outside the cache.
+func sharedMirrorOf(dir string, repo *Repository) (registry.Binding, error) {
+	if filepath.Base(dir) != "mirror.git" {
+		return registry.Binding{}, nil
+	}
+	owner, own := filepath.Base(filepath.Dir(dir)), repo.URL.CacheKey()
+	if owner == own || strings.HasPrefix(owner, own+"-depth-") {
+		return registry.Binding{}, nil
+	}
+	binding, err := registry.Load(filepath.Dir(filepath.Dir(dir)), owner)
+	if err != nil {
+		return registry.Binding{}, fmt.Errorf("fetch %s into %s: %w", repo.URL.Redacted(), owner, err)
+	}
+	return binding, nil
+}
+
 // fetch fetches options.Ref and returns the fetched commit, which may be
 // newer than the SHA ls-remote reported.
 func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
@@ -171,12 +191,17 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	if observer := fetchObserver(ctx); observer != nil {
 		verbosity = "--progress"
 		id := uuid.NewString()
+		owner, mirrorErr := sharedMirrorOf(options.Dir, repo)
+		if mirrorErr != nil {
+			return "", mirrorErr
+		}
 		var received string
 		report = func(progress FetchProgress) {
 			if progress.Phase == "Receiving objects" && progress.Transferred != "" {
 				received = progress.Transferred
 			}
 			progress.Repository, progress.Ref = repo.URL.Redacted(), ref.Name
+			progress.Mirror, progress.MirrorRepository = owner.Owner, owner.Repository
 			progress.ID = id
 			if kib, ok := transferredKiB(progress.Transferred); ok {
 				progress.Bytes = kib * 1024
