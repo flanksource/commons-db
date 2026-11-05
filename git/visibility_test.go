@@ -10,6 +10,13 @@ import (
 )
 
 var _ = Describe("Immediate Git visibility", func() {
+	It("retains native nonmatching records when every supplied path is visible", func(ctx SpecContext) {
+		directory := fixtureTempDir()
+		gitFixture(directory, "init", "-q")
+		result, err := git.CheckVisibility(ctx, git.VisibilityOptions{Directory: directory, Paths: []git.VisibilityPath{{Path: "docs", Directory: true}, {Path: "guide.md"}}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result).To(Equal([]git.PathVisibility{{Path: "docs", Visible: true}, {Path: "guide.md", Visible: true}}))
+	})
 	It("applies ordered overrides after native ignore rules without enumerating descendants", func(ctx SpecContext) {
 		directory := fixtureTempDir()
 		gitFixture(directory, "init", "-q")

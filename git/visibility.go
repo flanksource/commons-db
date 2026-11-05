@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	gitcommand "github.com/flanksource/commons-db/git/internal/command"
 	"io/fs"
 	"os/exec"
 	"strings"
@@ -17,9 +18,10 @@ type VisibilityPath struct {
 }
 
 type VisibilityOptions struct {
-	Directory string
-	Paths     []VisibilityPath
-	Overrides []string
+	Directory         string
+	Paths             []VisibilityPath
+	Overrides         []string
+	OverrideDirectory string
 }
 
 type PathVisibility struct {
@@ -39,18 +41,20 @@ func CheckVisibility(ctx context.Context, options VisibilityOptions) ([]PathVisi
 		}
 		result[index] = PathVisibility{Path: path.Path, Visible: true}
 		input += path.Path
-		if path.Directory { input += "/" }
+		if path.Directory {
+			input += "/"
+		}
 		input += "\x00"
 	}
 	if len(result) == 0 {
 		return result, nil
 	}
-	output, err := runBytes(ctx, command{dir: options.Directory, stdin: []byte(input), args: []string{"check-ignore", "--stdin", "-z", "-v", "--non-matching"}})
+	checked, err := gitcommand.Run(ctx, gitcommand.Options{Directory: options.Directory, Input: []byte(input), Args: []string{"check-ignore", "--stdin", "-z", "-v", "--non-matching"}})
 	var exit *exec.ExitError
 	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
-		return nil, err
+		return nil, fmt.Errorf("check Git visibility: %w: %s", err, checked.Stderr)
 	}
-	fields := strings.Split(string(output), "\x00")
+	fields := strings.Split(string(checked.Output), "\x00")
 	if len(fields) != len(result)*4+1 {
 		return nil, fmt.Errorf("unexpected Git ignore response for %d paths", len(result))
 	}
@@ -61,11 +65,22 @@ func CheckVisibility(ctx context.Context, options VisibilityOptions) ([]PathVisi
 		}
 		result[index].Rule = rule
 		result[index].Visible = rule == "" || strings.HasPrefix(rule, "!")
+		overridePath := path.Path
+		if options.OverrideDirectory != "" && options.OverrideDirectory != "." {
+			if !fs.ValidPath(options.OverrideDirectory) {
+				return nil, fmt.Errorf("invalid override directory")
+			}
+			var inside bool
+			overridePath, inside = strings.CutPrefix(path.Path, options.OverrideDirectory+"/")
+			if !inside {
+				continue
+			}
+		}
 		for _, override := range options.Overrides {
 			if strings.ContainsAny(override, "\x00\r\n") {
 				return nil, fmt.Errorf("ignore overrides must contain one pattern per entry")
 			}
-			match := gitignore.ParsePattern(override, nil).Match(strings.Split(path.Path, "/"), path.Directory)
+			match := gitignore.ParsePattern(override, nil).Match(strings.Split(overridePath, "/"), path.Directory)
 			if match == gitignore.NoMatch {
 				continue
 			}
