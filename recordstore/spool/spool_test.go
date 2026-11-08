@@ -111,6 +111,16 @@ var _ = Describe("spool", func() {
 		}
 	})
 
+	It("preserves atomic batch semantics through the published manifest", func() {
+		batch := batchOf("atomic", appendOf("run-1", everyRow(1)))
+		batch.Atomic = true
+		_, err := dir.Publish(batch, spool.FormatNDJSON)
+		Expect(err).NotTo(HaveOccurred())
+		name, loaded := loadOnly()
+		Expect(loaded.Atomic).To(BeTrue())
+		Expect(manifestOf(name)["format"]).To(Equal(float64(2)))
+	})
+
 	DescribeTable("round-trips every entry and column type through a codec",
 		func(format string) {
 			before := time.Date(2026, 9, 29, 9, 0, 0, 0, time.UTC)

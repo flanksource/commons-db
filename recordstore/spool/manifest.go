@@ -13,7 +13,7 @@ import (
 )
 
 // ManifestFormat is the manifest format this build writes and reads.
-const ManifestFormat = 1
+const ManifestFormat = 2
 
 // ErrManifestFormat reports a batch published in a manifest format this build
 // does not read.
@@ -22,6 +22,7 @@ var ErrManifestFormat = errors.New("spool manifest format unsupported")
 const manifestFile = "manifest.json"
 
 type manifest struct {
+	Atomic   bool                 `json:"atomic,omitempty"`
 	Format   int                  `json:"format"`
 	ID       string               `json:"id"`
 	Producer recordstore.Producer `json:"producer"`

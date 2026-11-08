@@ -70,6 +70,9 @@ func (b *Backend) AppendBatch(ctx context.Context, batch recordstore.Batch) (rec
 				if result.Entries[index], err = b.applyEntry(ctx, tx, index, entry, now); err != nil {
 					return err
 				}
+				if batch.Atomic && result.Entries[index].Error != nil {
+					return fmt.Errorf("atomic batch %q entry %d: %w", batch.ID, index, result.Entries[index].Error)
+				}
 			}
 			return recordBatchTx(ctx, tx, batch.Producer, result, now)
 		})
