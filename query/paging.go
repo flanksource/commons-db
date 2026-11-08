@@ -60,6 +60,9 @@ type PageRequest struct {
 	// Cursor resumes immediately after the position it encodes. Cursor paging
 	// only.
 	Cursor Cursor
+	// After resumes a trusted in-process merged read from native order keys.
+	// HTTP callers use Cursor, which validates the query scope.
+	After []any `json:"-"`
 
 	// Sort names the column this request orders by, overriding the order the
 	// profile declared. It is a public column name, not a backend field: the

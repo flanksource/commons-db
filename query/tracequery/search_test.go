@@ -81,6 +81,20 @@ var _ = Describe("trace search", func() {
 		Expect(result.Total).To(Equal(2))
 		Expect(result.Traces).To(HaveExactElements(HaveField("TraceID", "trace-b")))
 	})
+	DescribeTable("pages the newest-first traces by offset, keeping the total of every match",
+		func(offset int, want []string) {
+			result, err := Search(spans, Request{Limit: 1, Offset: offset})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(result.Total).To(Equal(2))
+			ids := []string{}
+			for _, trace := range result.Traces {
+				ids = append(ids, trace.TraceID)
+			}
+			Expect(ids).To(Equal(want))
+		},
+		Entry("the second page", 1, []string{"trace-a"}),
+		Entry("past the last page", 2, []string{}),
+	)
 	It("reports missing parents and refuses cycles or conflicting duplicate span IDs", func() {
 		detail, err := Trace(spans, "trace-a")
 		Expect(err).NotTo(HaveOccurred())
@@ -114,5 +128,6 @@ var _ = Describe("trace search", func() {
 	DescribeTable("refuses invalid filters", func(request Request) { _, err := Search(spans, request); Expect(err).To(HaveOccurred()) },
 		Entry("negative duration", Request{MinDuration: "-1ms"}), Entry("duration order", Request{MinDuration: "2s", MaxDuration: "1s"}), Entry("limit", Request{Limit: 1001}),
 		Entry("status", Request{Statuses: Modes{"maybe": Include}}), Entry("mode", Request{Services: Modes{"checkout": "only"}}),
-		Entry("attribute key", Request{Attributes: Modes{"=500": Include}}), Entry("span count", Request{MinSpans: -1}))
+		Entry("attribute key", Request{Attributes: Modes{"=500": Include}}), Entry("span count", Request{MinSpans: -1}),
+		Entry("offset", Request{Offset: -1}))
 })
