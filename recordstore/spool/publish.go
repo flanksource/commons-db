@@ -63,7 +63,10 @@ func (d Dir) Publish(batch recordstore.Batch, format string) (string, error) {
 func (d Dir) publishStaged(stage string, batch recordstore.Batch, schemas map[string]recordstore.KindSchema,
 	codec Codec, format string, created time.Time,
 ) (string, error) {
-	written := manifest{Format: ManifestFormat, ID: batch.ID, Producer: batch.Producer, Created: created}
+	written := manifest{Format: ManifestFormat, ID: batch.ID, Producer: batch.Producer, Created: created, Atomic: batch.Atomic}
+	if !batch.Atomic {
+		written.Format = 1
+	}
 	for _, schema := range batch.Schemas {
 		written.Schemas = append(written.Schemas, schemaOf(schema))
 	}

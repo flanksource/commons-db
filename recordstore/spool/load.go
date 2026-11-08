@@ -37,13 +37,13 @@ func load(path string) (recordstore.Batch, error) {
 	if err := json.Unmarshal(encoded, &read); err != nil {
 		return recordstore.Batch{}, fmt.Errorf("decode manifest: %w", err)
 	}
-	if read.Format != ManifestFormat {
+	if read.Format != ManifestFormat && read.Format != 1 || read.Atomic != (read.Format == ManifestFormat) {
 		return recordstore.Batch{}, fmt.Errorf("manifest format %d, this build reads %d: %w", read.Format, ManifestFormat, ErrManifestFormat)
 	}
 	if err := validIdentity(read.ID, read.Producer.Instance); err != nil {
 		return recordstore.Batch{}, err
 	}
-	batch := recordstore.Batch{ID: read.ID, Producer: read.Producer}
+	batch := recordstore.Batch{ID: read.ID, Producer: read.Producer, Atomic: read.Atomic}
 	types := map[string]map[string]query.ColumnType{}
 	for _, encoded := range read.Schemas {
 		schema, err := encoded.schema()
