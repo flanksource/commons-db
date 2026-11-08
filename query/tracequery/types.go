@@ -36,6 +36,7 @@ type Request struct {
 	MinDuration string         `json:"minDuration,omitempty" clicky:"title=Minimum trace duration,desc=Duration such as 100ms or 2s"`
 	MaxDuration string         `json:"maxDuration,omitempty" clicky:"title=Maximum trace duration,desc=Duration such as 100ms or 2s"`
 	Limit       int            `json:"limit,omitempty" clicky:"title=Trace limit,desc=Maximum traces (1 to 1000); spans of a trace stay together"`
+	Offset      int            `json:"offset,omitempty" clicky:"title=Trace offset,desc=Matching traces to skip, newest first, before the limit applies"`
 }
 
 type Source struct {

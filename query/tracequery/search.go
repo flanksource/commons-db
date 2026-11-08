@@ -42,6 +42,9 @@ func (r Request) validate() error {
 	if r.MinSpans < 0 {
 		return fmt.Errorf("minimum spans must not be negative")
 	}
+	if r.Offset < 0 {
+		return fmt.Errorf("trace offset must not be negative")
+	}
 	anyValue := func(string) error { return nil }
 	if err := errors.Join(r.Services.validate("service", anyValue), r.Operations.validate("operation", anyValue), r.Statuses.validate("status", validStatus), r.Attributes.validate("attribute", validAttribute)); err != nil {
 		return err
@@ -148,8 +151,8 @@ func Search(spans []Span, r Request) (SearchResult, error) {
 	if err != nil {
 		return result, err
 	}
-	min, _ := duration(r.MinDuration)
-	max, _ := duration(r.MaxDuration)
+	minMs, _ := duration(r.MinDuration)
+	maxMs, _ := duration(r.MaxDuration)
 	services := map[string]bool{}
 	facets := newFacets()
 	for _, trace := range grouped {
@@ -160,7 +163,7 @@ func Search(spans []Span, r Request) (SearchResult, error) {
 		for _, service := range summary.Services {
 			services[service] = true
 		}
-		if !r.passes(summary, trace, min, max) {
+		if !r.passes(summary, trace, minMs, maxMs) {
 			continue
 		}
 		facets.add(summary, root)
@@ -180,9 +183,8 @@ func Search(spans []Span, r Request) (SearchResult, error) {
 	if limit == 0 {
 		limit = 100
 	}
-	if len(result.Traces) > limit {
-		result.Traces = result.Traces[:limit]
-	}
+	start := min(r.Offset, len(result.Traces))
+	result.Traces = result.Traces[start:min(start+limit, len(result.Traces))]
 	for key := range services {
 		result.Services = append(result.Services, key)
 	}

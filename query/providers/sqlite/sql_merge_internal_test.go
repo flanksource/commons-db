@@ -122,6 +122,29 @@ func walkInline(request SQLMergeRequest) []query.Row {
 }
 
 var _ = Describe("MergeSQLPages", func() {
+	It("merges heterogeneous profile readers with independent resume positions", func() {
+		order := query.Order{{Column: "seq", Unique: true}}
+		members := []SQLMember{}
+		for _, name := range []string{"http", "terminal"} {
+			members = append(members, SQLMember{Name: name, ReadPage: func(ctx context.Context, request SQLPageRequest) (SQLPageResult, error) {
+				after := int64(0)
+				if len(request.Position.Keys) > 0 {
+					after = request.Position.Keys[0].(int64)
+				}
+				rows := []query.Row{}
+				for seq := after + 1; seq <= 3 && len(rows) < request.Page.Limit; seq++ {
+					rows = append(rows, query.Row{"seq": seq, "source": name})
+				}
+				return SQLPageResult{Rows: rows, HasMore: len(rows) > 0 && rows[len(rows)-1]["seq"].(int64) < 3}, nil
+			}})
+		}
+		request := SQLMergeRequest{Members: members, Read: SQLPageRequest{Order: order, Page: query.PageRequest{Limit: 1, Strategy: query.PagingCursor}}}
+		Expect(walkResumed(request)).To(Equal([]query.Row{
+			{"seq": int64(1), "source": "http"}, {"seq": int64(1), "source": "terminal"},
+			{"seq": int64(2), "source": "http"}, {"seq": int64(2), "source": "terminal"},
+			{"seq": int64(3), "source": "http"}, {"seq": int64(3), "source": "terminal"},
+		}))
+	})
 	byTimeDesc := query.Order{{Column: "ts", Desc: true}, {Column: "id", Unique: true}}
 	byVal := query.Order{{Column: "val"}, {Column: "id", Unique: true}}
 	byValDesc := query.Order{{Column: "val", Desc: true}, {Column: "id", Unique: true}}

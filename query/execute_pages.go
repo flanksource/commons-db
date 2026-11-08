@@ -242,6 +242,15 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	if err != nil {
 		return ErrorPage(profileError(p, err))
 	}
+	if len(page.After) > 0 {
+		if !page.Cursor.IsZero() || page.Offset != 0 {
+			return ErrorPage(fmt.Errorf("After cannot combine with cursor or offset"))
+		}
+		if err := order.ValidatePosition(page.After); err != nil {
+			return ErrorPage(err)
+		}
+		position.Keys = page.After
+	}
 	req.Position = position
 
 	// The processors run on raw rows and before the cursor is minted. A processor
