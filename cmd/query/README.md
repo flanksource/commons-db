@@ -204,6 +204,8 @@ API calls and routes with that path (`www/src/mount.ts`).
 
 ## Reusable connection stores
 
+`query connections list/add/edit/validate/delete` manages file-backed connections by default, creating new connections in the shared global directory and editing existing files in their owning layer. Use `--source=db` to manage database records instead, and `-i` for Clicky's interactive forms. See the [connection CLI guide](connections/cli/README.md) for flags, examples, validation behavior, and layer precedence.
+
 Standalone hosts can reuse `connection/store` without Mission Control or a database. `store.Open(app)` loads `$XDG_CONFIG_HOME/flanksource/connections`, `$XDG_CONFIG_HOME/<app>/connections`, then `./.connections`; when `XDG_CONFIG_HOME` is unset, the first two paths start at `~/.config`. Later layers replace earlier connections with the same namespace/name. Attach the store to the execution context to resolve files before an existing resolver and the database.
 
 See the [commons-db connection documentation](../../README.md#reusable-connections) for typed YAML syntax, bare-name and `connection://` references, lookup precedence, credential sources, and the generic `WithConnectionResolver` API for application-owned configuration. `connections.NewStoreProvider` exposes this store through connection CRUD with an explicit writable layer. This is an embedding option; `query serve` uses the database-backed connection lifecycle described above.
