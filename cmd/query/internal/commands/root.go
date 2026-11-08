@@ -52,6 +52,10 @@ func New(options Options) (*cobra.Command, error) {
 		return root, nil
 	}
 	clicky.BindAllFlags(root.PersistentFlags(), "format", "tasks")
+	root.AddCommand(newConnections(options.Args))
+	if requestsConnections(options.Args) {
+		return root, nil
+	}
 
 	database := app.ResolveDatabaseOptions(options.Args)
 	if requestsMetadataOnly(options.Args) {
