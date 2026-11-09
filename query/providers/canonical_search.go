@@ -36,8 +36,14 @@ func resolveSpanLayout(ctx context.Context, searcher *opensearch.Searcher, index
 		return nil, fmt.Errorf("span layout inspection is incomplete: %s", catalog.TruncateReason)
 	}
 	fields := map[string]string{}
+	// Nested leaves are kept apart: a key/value attribute list is only queryable
+	// through a nested clause, never as a scalar field.
+	nested := map[string]layout.NestedLeaf{}
 	for _, field := range catalog.Fields {
 		if field.Nested() {
+			if !field.Conflicting && len(field.Types) == 1 {
+				nested[field.Name] = layout.NestedLeaf{Type: field.Types[0], Container: field.Container}
+			}
 			continue
 		}
 		if field.Conflicting || len(field.Types) != 1 {
@@ -67,7 +73,7 @@ func resolveSpanLayout(ctx context.Context, searcher *opensearch.Searcher, index
 		}
 		overrides.Fields[canonical] = layout.Field{Source: mapping.Source, Unit: mapping.Unit}
 	}
-	resolved, err := layout.Discover(layout.Discovery{Fields: fields, Overrides: overrides.Fields})
+	resolved, err := layout.Discover(layout.Discovery{Fields: fields, Nested: nested, Overrides: overrides.Fields, NestedOverrides: overrides.Nested})
 	if err != nil {
 		return nil, err
 	}

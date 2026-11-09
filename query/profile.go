@@ -43,7 +43,21 @@ type Profile struct {
 	// Query is the provider-native query (SQL, PromQL, HTTP path, etc.). It may
 	// reference declared params as `{{.params.<name>}}` (or `$(...)`), which are
 	// rendered before the provider runs.
-	Query  string        `json:"query,omitempty" yaml:"query,omitempty"`
+	Query string `json:"query,omitempty" yaml:"query,omitempty"`
+
+	// QueryFile names a file holding the query, relative to the profile's own
+	// directory, for a query too long to inline — a SQL program of GO-separated
+	// batches, say. It is mutually exclusive with an authored Query. A store
+	// reading the profile from a directory, or a caller holding an inline
+	// profile, reads it into Query with ResolveQueryFile; until then the
+	// profile does not validate.
+	QueryFile string `json:"queryFile,omitempty" yaml:"queryFile,omitempty"`
+
+	// QueryDir is the directory QueryFile was read from. It is set only by
+	// ResolveQueryFile and marks Query as the file's contents rather than an
+	// authored query.
+	QueryDir string `json:"-" yaml:"-"`
+
 	Search *esdsl.Search `json:"search,omitempty" yaml:"search,omitempty"`
 
 	// Params declares the server-side filter parameters the Profile accepts. Their

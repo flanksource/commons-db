@@ -86,7 +86,8 @@ type ProviderDiagnostics struct {
 	detail    DiagnosticDetail
 	// armed says the provider has just described a request it is about to issue,
 	// so the next HTTP exchange is the one carrying it. See HTTPTransport.
-	armed bool
+	armed     bool
+	onRequest func(ProviderDiagnosticRequest)
 }
 
 type ProviderDiagnosticRequest struct {
@@ -145,13 +146,18 @@ type DiagnosticOptions struct {
 	Options  map[string]any
 	Detail   DiagnosticDetail
 	Walk     bool
+	// OnRequest is called with the request each time RecordRequest records
+	// one (once for a walk), as the provider is about to issue it, so a live
+	// view shows the statement and its arguments while it runs.
+	OnRequest func(ProviderDiagnosticRequest)
 }
 
 func NewDiagnostics(options DiagnosticOptions) *ProviderDiagnostics {
 	return &ProviderDiagnostics{
-		Provider: options.Provider,
-		walk:     options.Walk,
-		detail:   options.Detail,
+		Provider:  options.Provider,
+		walk:      options.Walk,
+		detail:    options.Detail,
+		onRequest: options.OnRequest,
 		Request: ProviderDiagnosticRequest{
 			Query:   options.Query,
 			Options: sanitizeDiagnosticMap(options.Options),
@@ -207,8 +213,8 @@ func (d *ProviderDiagnostics) RecordRequest(query string, arguments []any, detai
 		return
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.walk && d.requested {
+		d.mu.Unlock()
 		return
 	}
 	d.requested = true
@@ -218,6 +224,11 @@ func (d *ProviderDiagnostics) RecordRequest(query string, arguments []any, detai
 	d.Request.Query = query
 	d.Request.Arguments = cloneDiagnosticValues(arguments)
 	d.Request.Details = sanitizeDiagnosticMap(details)
+	request, onRequest := d.Request, d.onRequest
+	d.mu.Unlock()
+	if onRequest != nil {
+		onRequest(request)
+	}
 }
 
 func (d *ProviderDiagnostics) RecordResponse(started time.Time, rows int, details map[string]any) {

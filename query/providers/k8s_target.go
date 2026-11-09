@@ -135,7 +135,7 @@ func kubernetesFilterSelector(filter query.ColumnFilterValue) (workload.Selector
 		return workloadSelector(filter.Include[0])
 	case filter.Kind == query.ColumnFilterKindLabels && filter.Field == "labels":
 		return groupedLabelSelector(filter.Include, filter.Exclude)
-	case strings.HasPrefix(filter.Field, "labels."):
+	case strings.HasPrefix(filter.Field, "labels."), filter.Field == "namespace":
 		return labelValueSelector(filter.Field, filter.Include, filter.Exclude)
 	default:
 		return workload.Selector{}, fmt.Errorf("field %q is not a Kubernetes target filter", filter.Field)
