@@ -2,6 +2,7 @@ package layout
 
 import (
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -24,11 +25,46 @@ type Field struct {
 
 type Definition struct {
 	Fields map[string]Field `json:"fields"`
+	// Nested resolves canonical attributes no scalar field maps, from a key/value
+	// list such as Jaeger's nested `tags`, whose entries are never flattened.
+	Nested []NestedAttributes `json:"nested,omitempty"`
+}
+
+// NestedAttributes maps every canonical name under Prefix to the Value of the
+// entry of the nested list at Path whose Key equals the rest of the name.
+type NestedAttributes struct {
+	Prefix string `json:"prefix"`
+	Path   string `json:"path"`
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+}
+
+// Target is where a canonical field is read in the source index: a scalar
+// Field, or Field inside the Nested list entry Where pins.
+type Target struct {
+	Field  string
+	Nested string
+	Where  map[string]string
+}
+
+// NestedLeaf is a field mapped inside a nested container.
+type NestedLeaf struct {
+	Type      string
+	Container string
 }
 
 type Discovery struct {
-	Fields    map[string]string
-	Overrides map[string]Field
+	Fields map[string]string
+	// Nested holds the leaves of nested containers, keyed by full field name.
+	Nested          map[string]NestedLeaf
+	Overrides       map[string]Field
+	NestedOverrides []NestedAttributes
+}
+
+// nestedAttributeLists are the key/value lists span stores keep attributes in.
+var nestedAttributeLists = []NestedAttributes{
+	{Prefix: "attributes.", Path: "tags", Key: "tags.key", Value: "tags.value"},
+	{Prefix: "resource.", Path: "process.tags", Key: "process.tags.key", Value: "process.tags.value"},
 }
 
 var core = []string{"trace_id", "span_id", "parent_id", "timestamp", "duration_ms", "service", "operation", "status", "kind"}
@@ -169,7 +205,38 @@ func Discover(options Discovery) (Definition, error) {
 			return d, fmt.Errorf("cannot discover canonical %s from index mappings", name)
 		}
 	}
+	nested, err := discoverNested(options)
+	if err != nil {
+		return d, err
+	}
+	d.Nested = nested
 	return d, nil
+}
+
+// discoverNested finds the key/value attribute lists the index maps as nested
+// keyword pairs, then validates any declared by the connection layout.
+func discoverNested(options Discovery) ([]NestedAttributes, error) {
+	keywordPair := func(list NestedAttributes) bool {
+		key, value := options.Nested[list.Key], options.Nested[list.Value]
+		return key.Type == "keyword" && key.Container == list.Path && value.Type == "keyword" && value.Container == list.Path
+	}
+	lists := []NestedAttributes{}
+	for _, list := range nestedAttributeLists {
+		if keywordPair(list) {
+			lists = append(lists, list)
+		}
+	}
+	for _, list := range options.NestedOverrides {
+		if list.Prefix != "attributes." && list.Prefix != "resource." {
+			return nil, fmt.Errorf("nested layout prefix %q must be attributes. or resource.", list.Prefix)
+		}
+		if !keywordPair(list) {
+			return nil, fmt.Errorf("nested layout %s requires keyword %s and %s inside nested %s", list.Prefix, list.Key, list.Value, list.Path)
+		}
+		lists = slices.DeleteFunc(lists, func(existing NestedAttributes) bool { return existing.Prefix == list.Prefix })
+		lists = append(lists, list)
+	}
+	return lists, nil
 }
 
 func (d Definition) resolve(name string, direction Direction) (string, Field, error) {
@@ -209,9 +276,50 @@ func (d Definition) resolve(name string, direction Direction) (string, Field, er
 	return keys[0], d.Fields[keys[0]], nil
 }
 
+// SourceField is the scalar source field of canonical. An attribute only a
+// nested list holds has none; read it through SourceTarget.
 func (d Definition) SourceField(canonical string) (string, error) {
+	if _, ok := d.Fields[canonical]; !ok {
+		if list, ok := d.nestedList(canonical); ok {
+			return "", fmt.Errorf("canonical field %q is held in nested %s; resolve it with SourceTarget", canonical, list.Path)
+		}
+	}
 	name, _, err := d.resolve(canonical, ToSource)
 	return name, err
+}
+
+// SourceTarget is where canonical is read: its scalar field when the index maps
+// one, else the value of the nested list entry keyed by the attribute name.
+func (d Definition) SourceTarget(canonical string) (Target, error) {
+	if _, ok := d.Fields[canonical]; !ok {
+		if list, ok := d.nestedList(canonical); ok {
+			return Target{Field: list.Value, Nested: list.Path, Where: map[string]string{list.Key: strings.TrimPrefix(canonical, list.Prefix)}}, nil
+		}
+	}
+	name, _, err := d.resolve(canonical, ToSource)
+	return Target{Field: name}, err
+}
+
+// nestedList is the nested attribute list holding canonical, by longest prefix.
+func (d Definition) nestedList(canonical string) (NestedAttributes, bool) {
+	var found NestedAttributes
+	for _, list := range d.Nested {
+		if strings.HasPrefix(canonical, list.Prefix) && len(canonical) > len(list.Prefix) && len(list.Prefix) > len(found.Prefix) {
+			found = list
+		}
+	}
+	return found, found.Path != ""
+}
+
+// nestedSource is the list whose Path is path, for folding a nested source
+// clause back to its canonical attribute.
+func (d Definition) nestedSource(path string) (NestedAttributes, bool) {
+	for _, list := range d.Nested {
+		if list.Path == path {
+			return list, true
+		}
+	}
+	return NestedAttributes{}, false
 }
 func (d Definition) CanonicalValue(canonical string, value any) (any, error) {
 	field, ok := d.Fields[canonical]

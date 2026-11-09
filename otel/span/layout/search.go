@@ -22,6 +22,9 @@ func (d Definition) TranslateSearch(search esdsl.Search, direction Direction) (e
 		}
 	}
 	for i, sort := range result.Sort {
+		if list, _, ok := d.nestedTarget(sort.Field, direction); ok {
+			return result, fmt.Errorf("sort on %s reads nested %s, which a structured search sort cannot express; sort the compiled query instead", sort.Field, list.Path)
+		}
 		mapped, field, err := d.resolve(sort.Field, direction)
 		if err != nil {
 			return result, err
@@ -51,7 +54,24 @@ func (d Definition) TranslateSearch(search esdsl.Search, direction Direction) (e
 
 func (d Definition) searchCondition(c *esdsl.Condition, direction Direction) error {
 	if c.Op == esdsl.OpNested {
-		return fmt.Errorf("nested conditions require a reversible nested layout")
+		if direction != ToCanonical {
+			return fmt.Errorf("nested conditions require a reversible nested layout")
+		}
+		return d.foldNestedCondition(c)
+	}
+	if list, key, ok := d.nestedTarget(c.Field, direction); ok && c.Field != "" {
+		if c.Op == esdsl.OpRange {
+			return fmt.Errorf("range on %s is unsupported: nested %s values are keyword strings and would compare lexically; index a typed field (Jaeger tags-as-fields or an ingest pipeline) to filter it by range", c.Field, list.Path)
+		}
+		pin := esdsl.Condition{Op: esdsl.OpTerm, Occur: esdsl.OccurFilter, Field: list.Key, Value: esdsl.Literal(key)}
+		group := esdsl.Condition{Op: esdsl.OpNested, Path: list.Path, Occur: c.Occur, When: c.When, Optional: c.Optional, Conditions: []esdsl.Condition{pin}}
+		if c.Op != esdsl.OpExists {
+			leaf := *c
+			leaf.Field, leaf.Occur, leaf.When, leaf.Optional = list.Value, esdsl.OccurFilter, "", false
+			group.Conditions = append(group.Conditions, leaf)
+		}
+		*c = group
+		return nil
 	}
 	if c.Field != "" {
 		mapped, field, err := d.resolve(c.Field, direction)
@@ -124,4 +144,38 @@ func (d Definition) searchCondition(c *esdsl.Condition, direction Direction) err
 		}
 	}
 	return nil
+}
+
+// foldNestedCondition restores the canonical leaf searchCondition wrapped into
+// a nested group; any other nested group has no canonical meaning.
+func (d Definition) foldNestedCondition(c *esdsl.Condition) error {
+	list, ok := d.nestedSource(c.Path)
+	if !ok {
+		return fmt.Errorf("nested path %q is not a canonical attribute list", c.Path)
+	}
+	if c.ScoreMode != "" || len(c.Conditions) < 1 || len(c.Conditions) > 2 {
+		return fmt.Errorf("nested %s group must pin one %s and at most one value condition", c.Path, list.Key)
+	}
+	pin := c.Conditions[0]
+	key, isString := literal(pin.Value).(string)
+	if pin.Op != esdsl.OpTerm || pin.Field != list.Key || !isString || key == "" {
+		return fmt.Errorf("nested %s group must pin the entry with a term on %s", c.Path, list.Key)
+	}
+	restored := esdsl.Condition{Op: esdsl.OpExists}
+	if len(c.Conditions) == 2 {
+		restored = c.Conditions[1]
+		if restored.Field != list.Value {
+			return fmt.Errorf("nested %s value condition must target %s", c.Path, list.Value)
+		}
+	}
+	restored.Field, restored.Occur, restored.When, restored.Optional = list.Prefix+key, c.Occur, c.When, c.Optional
+	*c = restored
+	return nil
+}
+
+func literal(value *esdsl.Value) any {
+	if value == nil {
+		return nil
+	}
+	return value.Literal
 }

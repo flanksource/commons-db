@@ -69,6 +69,9 @@ func (d Definition) condition(value any, direction Direction) (any, error) {
 			if !ok {
 				return nil, fmt.Errorf("exists requires field")
 			}
+			if list, key, ok := d.nestedTarget(name, direction); ok {
+				return nestedClause(list, key, nil), nil
+			}
 			mapped, _, err := d.resolve(name, direction)
 			if err != nil {
 				return nil, err
@@ -77,6 +80,11 @@ func (d Definition) condition(value any, direction Direction) (any, error) {
 			return node, nil
 		case "term", "terms", "range", "match", "match_phrase", "match_phrase_prefix", "prefix", "wildcard", "regexp", "fuzzy":
 			return d.leaf(op, operand, direction)
+		case "nested":
+			if direction != ToCanonical {
+				return nil, fmt.Errorf("operator %q has no reversible canonical translation", op)
+			}
+			return d.foldNested(operand)
 		case "multi_match", "query_string", "simple_query_string":
 			object, ok := operand.(map[string]any)
 			if !ok {
@@ -139,6 +147,12 @@ func (d Definition) leaf(op string, operand any, direction Direction) (any, erro
 		return nil, fmt.Errorf("%s requires exactly one field", op)
 	}
 	for name, value := range object {
+		if list, key, ok := d.nestedTarget(name, direction); ok {
+			if op == "range" {
+				return nil, fmt.Errorf("range on %s is unsupported: nested %s values are keyword strings and would compare lexically; index a typed field (Jaeger tags-as-fields or an ingest pipeline) to filter it by range", name, list.Path)
+			}
+			return nestedClause(list, key, map[string]any{op: map[string]any{list.Value: value}}), nil
+		}
 		mapped, field, err := d.resolve(name, direction)
 		if err != nil {
 			return nil, err
@@ -295,6 +309,10 @@ func (d Definition) sort(value any, direction Direction) (any, error) {
 	}
 	for i, item := range list {
 		if name, ok := item.(string); ok {
+			if nestedList, key, ok := d.nestedTarget(name, direction); ok {
+				list[i] = nestedSort(nestedList, key, map[string]any{})
+				continue
+			}
 			mapped, field, err := d.resolve(name, direction)
 			if err != nil {
 				return nil, err
@@ -310,6 +328,22 @@ func (d Definition) sort(value any, direction Direction) (any, error) {
 			return nil, fmt.Errorf("sort requires one field")
 		}
 		for name, options := range object {
+			if nestedList, key, ok := d.nestedTarget(name, direction); ok {
+				settings, ok := options.(map[string]any)
+				if !ok {
+					settings = map[string]any{"order": options}
+				}
+				list[i] = nestedSort(nestedList, key, settings)
+				continue
+			}
+			if direction == ToCanonical {
+				if canonical, settings, ok, err := d.foldNestedSort(name, options); err != nil {
+					return nil, err
+				} else if ok {
+					list[i] = map[string]any{canonical: settings}
+					continue
+				}
+			}
 			mapped, field, err := d.resolve(name, direction)
 			if err != nil {
 				return nil, err
@@ -321,4 +355,114 @@ func (d Definition) sort(value any, direction Direction) (any, error) {
 		}
 	}
 	return list, nil
+}
+
+// nestedTarget reports that canonical name, translated to source, is read from
+// a nested key/value list rather than a scalar field.
+func (d Definition) nestedTarget(name string, direction Direction) (NestedAttributes, string, bool) {
+	if direction != ToSource {
+		return NestedAttributes{}, "", false
+	}
+	if _, scalar := d.Fields[name]; scalar {
+		return NestedAttributes{}, "", false
+	}
+	list, ok := d.nestedList(name)
+	if !ok {
+		return NestedAttributes{}, "", false
+	}
+	return list, strings.TrimPrefix(name, list.Prefix), true
+}
+
+// nestedClause selects the list entry keyed key, and with inner also requires
+// that entry's value to match. Without inner it is the attribute's `exists`.
+func nestedClause(list NestedAttributes, key string, inner map[string]any) map[string]any {
+	filter := []any{map[string]any{"term": map[string]any{list.Key: key}}}
+	if inner != nil {
+		filter = append(filter, inner)
+	}
+	return map[string]any{"nested": map[string]any{"path": list.Path, "query": map[string]any{"bool": map[string]any{"filter": filter}}}}
+}
+
+func nestedSort(list NestedAttributes, key string, settings map[string]any) map[string]any {
+	settings["nested"] = map[string]any{"path": list.Path, "filter": map[string]any{"term": map[string]any{list.Key: key}}}
+	return map[string]any{list.Value: settings}
+}
+
+// foldNested restores the canonical condition nestedClause produced. Any other
+// nested query has no canonical meaning and is rejected.
+func (d Definition) foldNested(operand any) (any, error) {
+	body, ok := operand.(map[string]any)
+	if !ok || len(body) != 2 {
+		return nil, fmt.Errorf("nested query has no reversible canonical translation")
+	}
+	path, _ := body["path"].(string)
+	list, ok := d.nestedSource(path)
+	if !ok {
+		return nil, fmt.Errorf("nested path %q is not a canonical attribute list", path)
+	}
+	query, _ := body["query"].(map[string]any)
+	boolean, _ := query["bool"].(map[string]any)
+	filter, _ := boolean["filter"].([]any)
+	if len(query) != 1 || len(boolean) != 1 || len(filter) < 1 || len(filter) > 2 {
+		return nil, fmt.Errorf("nested %s query must pin one %s and at most one value condition", path, list.Key)
+	}
+	key, err := pinnedKey(filter[0], list.Key)
+	if err != nil {
+		return nil, err
+	}
+	canonical := list.Prefix + key
+	if len(filter) == 1 {
+		return map[string]any{"exists": map[string]any{"field": canonical}}, nil
+	}
+	leaf, ok := filter[1].(map[string]any)
+	if !ok || len(leaf) != 1 {
+		return nil, fmt.Errorf("nested %s value condition must contain one operator", path)
+	}
+	for op, operand := range leaf {
+		fields, ok := operand.(map[string]any)
+		value, has := fields[list.Value]
+		if !ok || len(fields) != 1 || !has {
+			return nil, fmt.Errorf("nested %s value condition must target %s", path, list.Value)
+		}
+		return map[string]any{op: map[string]any{canonical: value}}, nil
+	}
+	return nil, fmt.Errorf("empty nested value condition")
+}
+
+func (d Definition) foldNestedSort(name string, options any) (string, any, bool, error) {
+	settings, ok := options.(map[string]any)
+	if !ok {
+		return "", nil, false, nil
+	}
+	nested, ok := settings["nested"].(map[string]any)
+	if !ok {
+		return "", nil, false, nil
+	}
+	path, _ := nested["path"].(string)
+	list, ok := d.nestedSource(path)
+	if !ok || list.Value != name || len(nested) != 2 {
+		return "", nil, false, fmt.Errorf("nested sort on %s has no reversible canonical translation", name)
+	}
+	key, err := pinnedKey(nested["filter"], list.Key)
+	if err != nil {
+		return "", nil, false, err
+	}
+	restored := map[string]any{}
+	for option, value := range settings {
+		if option != "nested" {
+			restored[option] = value
+		}
+	}
+	return list.Prefix + key, restored, true, nil
+}
+
+// pinnedKey reads the attribute name from the `term` selecting a list entry.
+func pinnedKey(clause any, keyField string) (string, error) {
+	object, _ := clause.(map[string]any)
+	term, _ := object["term"].(map[string]any)
+	key, ok := term[keyField].(string)
+	if !ok || len(term) != 1 || len(object) != 1 || key == "" {
+		return "", fmt.Errorf("nested condition must pin the entry with a term on %s", keyField)
+	}
+	return key, nil
 }
