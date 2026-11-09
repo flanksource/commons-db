@@ -1,5 +1,6 @@
 import {
   type ClickyNode,
+  type DataTableMenuAction,
   type ExecutionResponse,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
@@ -58,6 +59,24 @@ export function profileRenderSurfaces(
     if (name) surfaces.set("profile-" + slugify(name), { profile: name, follow: p.follow === true });
   }
   return surfaces;
+}
+
+/**
+ * connectionLogsSurface finds the logs profile the server generates for a
+ * Kubernetes connection (cmd/query/internal/app/connection_logs.go) by the
+ * connection it reads, and returns the surface key it is listed under.
+ */
+export function connectionLogsSurface(
+  documents: readonly ProfileDocument[],
+  connection: { name: string; namespace?: string | undefined },
+): string | undefined {
+  const reference = `connection://${connection.namespace ? `${connection.namespace}/` : ""}${connection.name}`;
+  const generated = documents.find((p) => {
+    const provider = p.provider as { connection?: unknown } | undefined;
+    return p.render === "logs" && p.virtual === true && provider?.connection === reference;
+  });
+  const name = typeof generated?.profile === "string" ? generated.profile : "";
+  return name ? "profile-" + slugify(name) : undefined;
 }
 
 // useLogsSurfaces reads the shared profile query, so a rename does not leave this
@@ -216,10 +235,12 @@ function clickyNodeValue(node: ClickyNode, options: { rawValues?: boolean }): un
 // component is the seam that can hold it.
 export function logsResultRenderer(
   logsSurfaces: Map<string, ProfileRenderSurface>,
+  menuActionsFor: (surfaceKey: string) => DataTableMenuAction[],
 ): (ctx: ResultRenderContext) => ReactNode {
   return ({ response, loading, defaultView, filterConfig, pagination, download, pages, infinite }) => {
     const requestUrl = response?.requestUrl;
-    const surface = requestUrl ? logsSurfaces.get(entitySegment(requestUrl)) : undefined;
+    const surfaceKey = requestUrl ? entitySegment(requestUrl) : undefined;
+    const surface = surfaceKey ? logsSurfaces.get(surfaceKey) : undefined;
     if (!requestUrl || !surface) return defaultView;
     const logs = clickyLogsWalk(pages, response);
     if (!logs) return defaultView;
@@ -236,6 +257,7 @@ export function logsResultRenderer(
         params={followParams(requestUrl)}
         loading={loading}
         columnFilterKeys={logsColumnFilterKeys(response.parsed)}
+        menuActions={menuActionsFor(surfaceKey!)}
         {...(filterConfig ? { filterConfig } : {})}
         {...(infinite ? { infinite } : {})}
         {...(pagination ? { pagination } : {})}

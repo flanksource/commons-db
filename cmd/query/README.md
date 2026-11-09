@@ -4,6 +4,8 @@ A clicky + clicky-ui app for managing **connections** and query **profiles** and
 running them. `query serve` starts an embedded postgres, exposes a REST API, and
 serves the web UI.
 
+See [connection addresses and storage](../../docs/connection-storage.md) for Host/Database or URL inputs, storage layers, moving a saved connection, and the KEK status indicator.
+
 ```bash
 go -C cmd/query run . serve --port 8080 --profiles-dir ../../profiles
 # UI:      http://localhost:8080/

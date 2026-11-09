@@ -92,7 +92,7 @@ func mergeProfile(base, overlay query.Profile) query.Profile {
 		}
 	}
 	if overlay.Query != "" {
-		merged.Query = overlay.Query
+		merged.Query, merged.QueryFile, merged.QueryDir = overlay.Query, overlay.QueryFile, overlay.QueryDir
 	}
 	if overlay.Search != nil {
 		merged.Search = overlay.Search
