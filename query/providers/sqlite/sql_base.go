@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/sqlglot-go/sqlglot"
@@ -46,7 +47,7 @@ func (s *sqlStatement) parseBase(query sqlQuery) (sqlNode, error) {
 	// wrapper is about to supply would bind to the author's marker instead of
 	// to the wrapper's — and a query that today fails cleanly with "there is no
 	// parameter $1" would start returning confidently wrong rows.
-	if len(tree.FindAll("Placeholder", "Parameter")) > 0 {
+	if slices.ContainsFunc(tree.FindAll("Placeholder", "Parameter"), isBindMarker) {
 		return nil, fmt.Errorf(
 			"the query already contains a bind placeholder, which a column filter's own values would be numbered against; inline the value or remove the placeholder to filter this query")
 	}
@@ -57,6 +58,19 @@ func (s *sqlStatement) parseBase(query sqlQuery) (sqlNode, error) {
 		return nil, err
 	}
 	return tree, nil
+}
+
+// isBindMarker reports whether a Placeholder/Parameter node is a driver bind
+// marker. A T-SQL system function such as @@SPID parses as a Parameter wrapping
+// a Parameter; neither node of that pair is a marker.
+func isBindMarker(node sqlNode) bool {
+	if node.Class != "Parameter" {
+		return true
+	}
+	if inner, ok := node.Args["this"].(sqlNode); ok && inner != nil && inner.Class == "Parameter" {
+		return false
+	}
+	return node.Parent == nil || node.Parent.Class != "Parameter"
 }
 
 // wrapAsBaseCTE makes base the __cdb_base CTE of outer, hoisting any CTEs the
