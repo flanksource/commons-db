@@ -1,7 +1,15 @@
 import { useMemo, type ReactNode } from "react";
-import { useRouter, type ResultRenderContext } from "@flanksource/clicky-ui";
+import {
+  ExplorerNavPortal,
+  useClickyTableMenu,
+  useRouter,
+  type DataTableMenuAction,
+  type ResultRenderContext,
+} from "@flanksource/clicky-ui";
 import {
   OtelTraceTable,
+  parseServerTiming,
+  profileListingSort,
   profileSpans,
   profileTraceListing,
 } from "@flanksource/clicky-ui/data";
@@ -19,15 +27,23 @@ export function useTraceSurfaces() {
   return profileRenderSurfaces(data ?? [], "traces");
 }
 
+// Trace listings page by offset: the reader steps through grouped traces with
+// prev/next rather than a cursor walk that only grows on scroll.
+export function tracePaginationMode(
+  surfaces: Map<string, ProfileRenderSurface>,
+): (surfaceKey: string) => "paged" | undefined {
+  return (surfaceKey) => (surfaces.has(surfaceKey) ? "paged" : undefined);
+}
+
 export function tracesResultRenderer(
   surfaces: Map<string, ProfileRenderSurface>,
+  menuActionsFor: (surfaceKey: string) => DataTableMenuAction[],
 ): (context: ResultRenderContext) => ReactNode {
   return (context) => {
-    if (
-      !context.response?.requestUrl ||
-      !surfaces.has(entitySegment(context.response.requestUrl))
-    )
-      return context.defaultView;
+    const surfaceKey = context.response?.requestUrl
+      ? entitySegment(context.response.requestUrl)
+      : undefined;
+    if (!surfaceKey || !surfaces.has(surfaceKey)) return context.defaultView;
     const rows = clickyLogsWalk(context.pages, context.response, {
       rawValues: true,
     });
@@ -36,7 +52,12 @@ export function tracesResultRenderer(
         <p role="alert">Traces render mode requires a table of span rows.</p>
       );
     return (
-      <ProfileTraces key={context.surfaceKey} rows={rows} context={context} />
+      <ProfileTraces
+        key={context.surfaceKey}
+        rows={rows}
+        context={context}
+        hostMenuActions={menuActionsFor(surfaceKey)}
+      />
     );
   };
 }
@@ -44,9 +65,11 @@ export function tracesResultRenderer(
 function ProfileTraces({
   rows,
   context,
+  hostMenuActions,
 }: {
   rows: Record<string, unknown>[];
   context: ResultRenderContext;
+  hostMenuActions: DataTableMenuAction[];
 }) {
   const { navigate, pathname } = useRouter();
   const params = new URLSearchParams(window.location.search);
@@ -64,11 +87,17 @@ function ProfileTraces({
           ...table,
           rows: pages.flatMap((page) => clickyTable(page.parsed)?.rows ?? []),
         }),
+        sorting: context.sort ? profileListingSort(table, context.sort) : undefined,
       };
     } catch (error) {
       return { error: error instanceof Error ? error.message : String(error) };
     }
-  }, [rows, context.pages, context.response]);
+  }, [rows, context.pages, context.response, context.sort]);
+  const menu = useClickyTableMenu({
+    url: context.response?.requestUrl,
+    download: context.download,
+    pagination: context.pagination,
+  });
   const href = (trace?: string, span?: string) => {
     const query = new URLSearchParams(window.location.search);
     query.delete("trace");
@@ -80,9 +109,23 @@ function ProfileTraces({
   if (result.error)
     return <p role="alert">Cannot render traces: {result.error}</p>;
   return (
+    <>
+    {menu.dialog}
     <OtelTraceTable
+      menuActions={[...hostMenuActions, ...menu.actions]}
+      {...(result.sorting ?? {})}
+      {...(context.filterConfig?.cellFilters
+        ? { cellFilters: context.filterConfig.cellFilters }
+        : {})}
+      {...(context.filterConfig?.onCellFilterChange
+        ? { onCellFilterChange: context.filterConfig.onCellFilterChange }
+        : {})}
       spans={result.spans!}
+      serverTiming={parseServerTiming(context.response?.responseHeaders?.["server-timing"])}
       traceHref={href}
+      renderTraceTitle={(title) => (
+        <ExplorerNavPortal parentHref={href()}>{title}</ExplorerNavPortal>
+      )}
       onSelectTrace={(trace) => navigate(href(trace))}
       onSelectSpan={(span) =>
         navigate(href(params.get("trace") ?? undefined, span), {
@@ -107,5 +150,6 @@ function ProfileTraces({
       {...(context.pagination ? { pagination: context.pagination } : {})}
       {...(context.infinite ? { infinite: context.infinite } : {})}
     />
+    </>
   );
 }

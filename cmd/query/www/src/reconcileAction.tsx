@@ -1,6 +1,6 @@
 /**
- * The entry point to the reconcile route: a button beside Edit on a profile
- * surface, with that profile fixed as the source.
+ * The entry point to the reconcile route: an icon in the app shell's top-bar
+ * actions on a profile surface, with that profile fixed as the source.
  *
  * The bench needs the viewport, a URL and the back button, so — like the profile
  * editor — it is a route of its own rather than the generic action modal that
@@ -32,18 +32,18 @@ export function ReconcileButton({
   return (
     <Button
       type="button"
-      variant="outline"
-      size="sm"
+      variant="ghost"
+      size="icon"
       disabled={isLoading || !available}
+      aria-label="Reconcile"
       title={
         available
-          ? "Join this profile against another on a shared identity"
+          ? "Reconcile: join this profile against another on a shared identity"
           : "Reconciling is unavailable"
       }
       onClick={() => router.navigate(reconcileRoute(surfaceKey))}
     >
       <Icon icon={UiDiff} className="size-4" />
-      Reconcile
     </Button>
   );
 }

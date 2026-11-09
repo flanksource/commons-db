@@ -20,20 +20,23 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createConnectionDashboardResultRenderer } from "@flanksource/clicky-ui/connections";
 import { connectionFormActions, connectionsApiBase, formExtensions } from "./appFormExtensions";
 import { logsResultRenderer, useLogsSurfaces } from "./logsProfiles";
-import { tracesResultRenderer, useTraceSurfaces } from "./tracesProfiles";
+import { tracePaginationMode, tracesResultRenderer, useTraceSurfaces } from "./tracesProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
 import { getMonacoWorker } from "./monacoWorkers";
 import { queryChatConfig } from "./chatWidget";
 import { isQueryChatOperation } from "./chatOperations";
 import { profileEditSurfaceKey } from "@flanksource/clicky-ui/profiles";
 import { BuildProfileButton } from "./buildProfileAction";
-import { EditProfileButton, ProfileEditorPage } from "./editProfileAction";
+import {
+  EditProfileButton,
+  ProfileEditorPage,
+  useEditProfileMenuAction,
+} from "./editProfileAction";
 import { isProfileSurface } from "./profileUpdateOperation";
 import { profileRowDetailsResult } from "./profileRowDetails";
 import { ReconcileButton } from "./reconcileAction";
 import { ReconcilePage } from "./reconcilePage";
 import { reconcileSurfaceKey } from "./reconcileModel";
-import { ProfileInspectButton } from "./profileInspectAction";
 import { useProfileConnectionMapping } from "./profileConnectionMapping";
 
 // The Go server (query serve) exposes:
@@ -69,9 +72,13 @@ function Explorer() {
   const { pathname, renderLink } = useRouter();
   const editingProfile = profileEditSurfaceKey(pathname);
   const reconcilingProfile = reconcileSurfaceKey(pathname);
+  const editProfileMenuAction = useEditProfileMenuAction(client);
+  const profileMenuActions = (surfaceKey: string) => [editProfileMenuAction(surfaceKey)];
+  const currentSurfaceKey = pathname.split("/")[1] ?? "";
   const logsSurfaces = useLogsSurfaces();
-  const renderLogsResult = logsResultRenderer(logsSurfaces);
-  const renderTracesResult = tracesResultRenderer(useTraceSurfaces());
+  const renderLogsResult = logsResultRenderer(logsSurfaces, profileMenuActions);
+  const traceSurfaces = useTraceSurfaces();
+  const renderTracesResult = tracesResultRenderer(traceSurfaces, profileMenuActions);
   const renderConnectionDashboard = createConnectionDashboardResultRenderer({
     apiBase: connectionsApiBase,
     renderConnectionLink: (connection, link) =>
@@ -84,18 +91,12 @@ function Explorer() {
     const defaultResult = traceResult === context.defaultView ? renderLogsResult(context) : traceResult;
     const result =
       defaultResult === context.defaultView && isProfileSurface(context.surfaceKey)
-        ? profileRowDetailsResult(context, client, context.surfaceKey!)
+        ? profileRowDetailsResult(context, client, context.surfaceKey!, profileMenuActions(context.surfaceKey!))
         : defaultResult;
+    // A profile's own controls live in the top bar (edit beside the title,
+    // reconcile with the shell actions) and the table menu, not in a row here.
     const action =
-      context.surfaceKey === "profiles" ? (
-        <BuildProfileButton client={client} />
-      ) : isProfileSurface(context.surfaceKey) ? (
-        <>
-          <EditProfileButton client={client} surfaceKey={context.surfaceKey!} />
-          <ProfileInspectButton client={client} surfaceKey={context.surfaceKey!} />
-          <ReconcileButton client={client} surfaceKey={context.surfaceKey!} />
-        </>
-      ) : null;
+      context.surfaceKey === "profiles" ? <BuildProfileButton client={client} /> : null;
     if (!action) return result;
     return (
       <div className="flex h-full min-h-0 flex-col gap-4">
@@ -117,9 +118,17 @@ function Explorer() {
           client={client}
           actions={
             <>
+              {isProfileSurface(currentSurfaceKey) ? (
+                <ReconcileButton client={client} surfaceKey={currentSurfaceKey} />
+              ) : null}
               <DebugConsoleButton />
               <ChatButton label="Open query assistant" />
             </>
+          }
+          surfaceTitleActions={(surfaceKey) =>
+            isProfileSurface(surfaceKey) ? (
+              <EditProfileButton client={client} surfaceKey={surfaceKey} />
+            ) : null
           }
           formExtensions={formExtensions}
           formActions={connectionFormActions}
@@ -128,10 +137,10 @@ function Explorer() {
             profiles: { create: "Add Profile" },
           }}
           resultRenderer={renderResult}
+          surfacePaginationMode={tracePaginationMode(traceSurfaces)}
           entityDetailBodyRenderer={(context) =>
-            connectionDetailBodyRenderer(
-              context,
-              ({ connectionName, providerType, providerOptions, profileQuery }) => (
+            connectionDetailBodyRenderer(context, {
+              renderProfileAction: ({ connectionName, providerType, providerOptions, profileQuery }) => (
                 <BuildProfileButton
                   client={client}
                   connectionName={connectionName}
@@ -140,7 +149,8 @@ function Explorer() {
                   {...(profileQuery ? { profileQuery } : {})}
                 />
               ),
-            )
+              logs: { client, resultRenderer: renderResult },
+            })
           }
           entityDetailHeaderRenderer={connectionDetailHeaderRenderer}
         />

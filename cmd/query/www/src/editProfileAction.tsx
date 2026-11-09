@@ -5,6 +5,7 @@ import {
   useRouter,
   type OperationsApiClient,
 } from "@flanksource/clicky-ui";
+import type { DataTableMenuAction } from "@flanksource/clicky-ui/data";
 import { UiEdit } from "@flanksource/clicky-ui/icons";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ReactNode } from "react";
@@ -18,7 +19,8 @@ import { PROFILES_QUERY_KEY } from "./profilesQuery";
 import { findProfileUpdateOperation } from "./profileUpdateOperation";
 
 /** Opens the editor route, so the edit surface is deep-linkable and survives a
- *  refresh — it used to be a dialog with no address of its own. */
+ *  refresh — it used to be a dialog with no address of its own. A pencil beside
+ *  the profile's title in the top bar. */
 export function EditProfileButton({
   client,
   surfaceKey,
@@ -29,20 +31,39 @@ export function EditProfileButton({
   const router = useRouter();
   const { operations, isLoading } = useOperations(client);
   const available = Boolean(findProfileUpdateOperation(operations));
+  const label = available ? "Edit profile" : "Profile editing is unavailable";
 
   return (
     <Button
       type="button"
-      variant="outline"
-      size="sm"
+      variant="ghost"
+      size="icon"
+      className="size-7"
       disabled={isLoading || !available}
-      title={available ? "Edit this profile" : "Profile editing is unavailable"}
+      aria-label={label}
+      title={label}
       onClick={() => router.navigate(profileEditRoute(surfaceKey))}
     >
       <Icon icon={UiEdit} className="size-4" />
-      Edit
     </Button>
   );
+}
+
+/** The same entry as a row in a profile result table's overflow menu. */
+export function useEditProfileMenuAction(
+  client: OperationsApiClient,
+): (surfaceKey: string) => DataTableMenuAction {
+  const router = useRouter();
+  const { operations, isLoading } = useOperations(client);
+  const available = Boolean(findProfileUpdateOperation(operations));
+  return (surfaceKey) => ({
+    id: "edit-profile",
+    label: "Edit profile",
+    icon: UiEdit,
+    section: "",
+    disabled: isLoading || !available,
+    onSelect: () => router.navigate(profileEditRoute(surfaceKey)),
+  });
 }
 
 /** The `/profile-<name>/edit` route: loads the profile document, then hands it

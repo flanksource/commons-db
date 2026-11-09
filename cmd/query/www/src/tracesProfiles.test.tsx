@@ -5,7 +5,7 @@ import type { OtelTraceTable } from "@flanksource/clicky-ui/data";
 import type { ResultRenderContext } from "@flanksource/clicky-ui";
 import { afterEach, expect, it, vi } from "vitest";
 import { profileRenderSurfaces } from "./logsProfiles";
-import { tracesResultRenderer } from "./tracesProfiles";
+import { tracePaginationMode, tracesResultRenderer } from "./tracesProfiles";
 
 const observed = vi.hoisted(() => ({
   props: undefined as ComponentProps<typeof OtelTraceTable> | undefined,
@@ -101,7 +101,39 @@ it("uses only the traces render mode and leaves other results alone", () => {
     loading: false,
     defaultView: "table",
   };
-  expect(tracesResultRenderer(new Map())(context)).toBe("table");
+  expect(tracesResultRenderer(new Map(), () => [])(context)).toBe("table");
+});
+
+it("pages trace surfaces by offset and leaves every other surface on automatic paging", () => {
+  const mode = tracePaginationMode(surfaces);
+  expect(["profile-service-traces", "profile-live-stream", "connection"].map(mode)).toEqual([
+    "paged",
+    undefined,
+    undefined,
+  ]);
+});
+
+it("hands the listing response's Server-Timing phases to the trace table", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  const context: ResultRenderContext = {
+    surfaceKey: "profile-service-traces",
+    response: {
+      ...page("root"),
+      responseHeaders: {
+        "server-timing": 'total;dur=1200, provider;dur=1150;desc="rows=100"',
+      },
+    },
+    loading: false,
+    defaultView: "table",
+  };
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
+  expect(observed.props?.serverTiming).toEqual([
+    { name: "total", duration: 1200, counters: {} },
+    { name: "provider", duration: 1150, counters: { rows: 100 }, description: "rows=100" },
+  ]);
 });
 
 it("keeps all cursor pages, typed fields and server controls while preserving route filters", async () => {
@@ -130,7 +162,7 @@ it("keeps all cursor pages, typed fields and server controls while preserving ro
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => root.render(tracesResultRenderer(surfaces)(context)));
+  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
   expect(
     observed.props?.spans.map((span) => ({
       id: span.spanId,
@@ -158,7 +190,7 @@ it("keeps all cursor pages, typed fields and server controls while preserving ro
   expect(new URLSearchParams(window.location.search).get("trace")).toBe(
     "trace-a",
   );
-  await act(async () => root.render(tracesResultRenderer(surfaces)(context)));
+  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
   await act(async () => container.querySelectorAll("button")[1]!.click());
   expect(new URLSearchParams(window.location.search).get("span")).toBe("child");
   await act(async () => container.querySelectorAll("button")[2]!.click());

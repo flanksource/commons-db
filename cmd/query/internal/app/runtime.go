@@ -36,6 +36,13 @@ func NewRuntime(ctx dbcontext.Context, fileStore profilestore.Store, dbOptions D
 	return &Runtime{context: ctx, store: fileStore, dbOptions: dbOptions}, nil
 }
 
+// DatabaseEnabled reports whether a database is configured, without opening it.
+func (r *Runtime) DatabaseEnabled() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.dbOptions.Enabled()
+}
+
 // SetDatabaseOptions replaces the options resolved from the command line. It
 // must be called before anything opens the database — `serve` uses it to own
 // the embedded cluster it starts.

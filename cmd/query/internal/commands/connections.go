@@ -16,9 +16,9 @@ import (
 )
 
 func newConnections(args []string) *cobra.Command {
-	return connectioncli.New(connectioncli.Options{Open: func(source string) (*connections.Service, func() error, error) {
+	return connectioncli.New(connectioncli.Options{Open: func(commandContext context.Context, source string) (connectioncli.Backend, func() error, error) {
 		close := func() error { return nil }
-		ctx := dbcontext.New()
+		ctx := dbcontext.NewContext(commandContext)
 		options := connections.Options{
 			Context: func() dbcontext.Context { return ctx }, DecodeBody: app.DecodeBody,
 			Profiles: func(context.Context) ([]query.Profile, error) { return nil, nil },

@@ -312,3 +312,40 @@ func names(ps []query.Profile) []string {
 	}
 	return out
 }
+
+func TestFileStoreReadsQueryFileFromItsDirectory(t *testing.T) {
+	dir := t.TempDir()
+	program := "DELETE FROM a\nGO\nSELECT count(*) AS n FROM a\n"
+	if err := os.WriteFile(filepath.Join(dir, "purge.sql"), []byte(program), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	authored := "profile: purge\nprovider: {type: sqlite}\nqueryFile: purge.sql\n"
+	if err := os.WriteFile(filepath.Join(dir, "purge.yaml"), []byte(authored), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := store.Get(context.Background(), "purge")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Query != program || got.Validate() != nil {
+		t.Fatalf("Get read query %q from queryFile %q in %q (validate: %v), want the file's program", got.Query, got.QueryFile, got.QueryDir, got.Validate())
+	}
+	if err := store.Save(context.Background(), got); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	saved, err := os.ReadFile(filepath.Join(dir, "purge.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reread map[string]any
+	if err := yaml.Unmarshal(saved, &reread); err != nil {
+		t.Fatal(err)
+	}
+	if reread["queryFile"] != "purge.sql" || reread["query"] != nil {
+		t.Fatalf("Save wrote %s, want the queryFile reference and no inlined query", saved)
+	}
+}

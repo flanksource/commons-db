@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"path/filepath"
 
 	"github.com/flanksource/commons-db/cmd/query/connections"
@@ -11,6 +12,7 @@ import (
 
 type connectionCatalog struct {
 	files     *store.Store
+	writer    *connections.StoreProvider
 	snapshots connections.VirtualConnectionProvider
 }
 
@@ -24,20 +26,21 @@ func newConnectionCatalog(configDir string, snapshots connections.VirtualConnect
 	if err != nil {
 		return nil, err
 	}
-	return &connectionCatalog{files: files, snapshots: snapshots}, nil
+	writer, err := connections.NewStoreProvider(connections.StoreProviderOptions{Store: files, WriteLayer: store.LayerApp, WritableLayers: []string{store.LayerGlobal, store.LayerApp, store.LayerCWD}})
+	if err != nil {
+		return nil, err
+	}
+	return &connectionCatalog{files: files, writer: writer, snapshots: snapshots}, nil
 }
 
 func (c *connectionCatalog) ListConnections() ([]*models.Connection, error) {
-	files, err := c.files.ListConnections()
+	files, err := c.writer.ListConnections()
 	if err != nil {
 		return nil, err
 	}
 	snapshots, err := c.snapshots.ListConnections()
 	if err != nil {
 		return nil, err
-	}
-	for _, file := range files {
-		file.ReadOnly = true
 	}
 	for _, snapshot := range snapshots {
 		found := false
@@ -55,12 +58,21 @@ func (c *connectionCatalog) ListConnections() ([]*models.Connection, error) {
 }
 
 func (c *connectionCatalog) ResolveConnection(ctx dbcontext.Context, reference string) (*models.Connection, error) {
-	file, err := c.files.ResolveConnection(ctx, reference)
-	if file != nil {
-		file.ReadOnly = true
-	}
+	file, err := c.writer.ResolveConnection(ctx, reference)
 	if file != nil || err != nil {
 		return file, err
 	}
 	return c.snapshots.ResolveConnection(ctx, reference)
+}
+
+func (c *connectionCatalog) Writable() bool       { return c.writer.Writable() }
+func (c *connectionCatalog) DefaultLayer() string { return c.writer.DefaultLayer() }
+func (c *connectionCatalog) StorageLayers() []connections.StorageLayer {
+	return c.writer.StorageLayers()
+}
+func (c *connectionCatalog) SaveConnection(ctx context.Context, value *models.Connection) (*models.Connection, error) {
+	return c.writer.SaveConnection(ctx, value)
+}
+func (c *connectionCatalog) DeleteConnection(ctx context.Context, id string) error {
+	return c.writer.DeleteConnection(ctx, id)
 }
