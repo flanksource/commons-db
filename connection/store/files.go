@@ -81,6 +81,7 @@ func brokenEntry(layer Layer, path string, problem error) Entry {
 		Name:      resource.Metadata.Name,
 		Namespace: resource.Metadata.Namespace,
 		Source:    "file://" + path,
+		Layer:     layer.Name,
 		Virtual:   true,
 		Warnings:  []string{problem.Error()},
 	}
@@ -126,6 +127,7 @@ func readFile(layer Layer, path string) (Entry, error) {
 	connection.UpdatedAt = info.ModTime()
 	connection.CreatedAt = info.ModTime()
 	connection.Source = "file://" + path
+	connection.Layer = layer.Name
 	connection.Virtual = true
 	return Entry{Layer: layer, Path: path, Connection: connection}, nil
 }
@@ -133,6 +135,9 @@ func readFile(layer Layer, path string) (Entry, error) {
 // connectionID is stable for a connection of a layer however often, or after
 // whichever edit, its file is read.
 func connectionID(layer Layer, connection models.Connection) uuid.UUID {
+	if connection.ID != uuid.Nil {
+		return connection.ID
+	}
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("connection://"+layer.Name+"/"+connection.Namespace+"/"+connection.Name))
 }
 

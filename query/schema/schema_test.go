@@ -100,10 +100,11 @@ var _ = Describe("Connection schema", func() {
 		Expect(props["properties"].(schema.Schema)["x-clicky-order"]).To(BeNumerically("==", 7))
 	})
 
-	It("gives the postgres (SQL) branch url+credentials but no certificate", func() {
+	It("gives the postgres branch alternative addresses and credentials but no certificate", func() {
 		then := branchFor(s, models.ConnectionTypePostgres)
 		Expect(then).ToNot(BeNil())
-		Expect(then["required"]).To(ContainElement("url"))
+		Expect(then["required"]).NotTo(ContainElement("url"))
+		Expect(then["anyOf"]).To(HaveLen(2))
 		props := then["properties"].(schema.Schema)
 		Expect(props).To(HaveKey("url"))
 		Expect(props).To(HaveKey("username"))
@@ -112,6 +113,19 @@ var _ = Describe("Connection schema", func() {
 		Expect(props).ToNot(HaveKey("insecure_tls"))
 		Expect(props["url"].(schema.Schema)["x-clicky-component"]).To(Equal("k8s-url-selector"))
 		Expect(props["url"].(schema.Schema)["x-clicky-order"]).To(BeNumerically("==", 2))
+		// Database credentials are typed in as values by default, like the username,
+		// rather than opening on a secret reference.
+		Expect(props["username"].(schema.Schema)).To(HaveKeyWithValue("x-clicky-default-source", "value"))
+		Expect(props["password"].(schema.Schema)).To(HaveKeyWithValue("x-clicky-default-source", "value"))
+		// Host, port and database are an alternative to the URL, so the form lifts
+		// them out of the properties section to sit directly under it.
+		address := props["properties"].(schema.Schema)["properties"].(schema.Schema)
+		for name, order := range map[string]float64{"host": 2.1, "port": 2.2, "database": 2.3} {
+			Expect(address[name].(schema.Schema)).To(And(
+				HaveKeyWithValue("x-clicky-hoist", true),
+				HaveKeyWithValue("x-clicky-order", order),
+			), name)
+		}
 	})
 
 	It("gives SQLite a required database path without network credentials", func() {
@@ -199,6 +213,8 @@ var _ = Describe("Connection schema", func() {
 		Expect(k8sProperties).To(HaveKey("certificate"))
 		settings := k8sProperties["properties"].(schema.Schema)["properties"].(schema.Schema)
 		Expect(settings["max_resources"].(schema.Schema)["type"]).To(Equal("integer"))
+		// An optional namespace restricts the connection's logs view.
+		Expect(settings["namespace"].(schema.Schema)).To(HaveKeyWithValue("type", "string"))
 		// Kubernetes cert is optional: only the universal name/type fields are required.
 		Expect(k8s["required"]).To(ConsistOf("name", "type"))
 

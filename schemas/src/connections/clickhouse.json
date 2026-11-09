@@ -1,6 +1,42 @@
 {
   "$id": "clickhouse.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "properties": {
+        "url": {
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "required": [
+        "url"
+      ]
+    },
+    {
+      "properties": {
+        "properties": {
+          "properties": {
+            "database": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "host": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "host",
+            "database"
+          ]
+        }
+      },
+      "required": [
+        "properties"
+      ]
+    }
+  ],
   "properties": {
     "logging": {
       "additionalProperties": false,
@@ -124,12 +160,25 @@
       "title": "Password",
       "type": "string",
       "x-clicky-component": "k8s-secret-selector",
-      "x-clicky-default-source": "secret",
+      "x-clicky-default-source": "value",
       "x-clicky-order": 5
     },
     "properties": {
       "description": "Applied to every query opened through this connection. Missing values use these safe defaults.",
       "properties": {
+        "database": {
+          "title": "Database",
+          "type": "string",
+          "x-clicky-hoist": true,
+          "x-clicky-order": 2.3
+        },
+        "host": {
+          "description": "Database hostname or IP address (without a scheme)",
+          "title": "Host",
+          "type": "string",
+          "x-clicky-hoist": true,
+          "x-clicky-order": 2.1
+        },
         "kubeconfig": {
           "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
           "title": "Kubeconfig file",
@@ -190,6 +239,13 @@
           "x-clicky-order": 4,
           "x-input-suffix": "threads"
         },
+        "port": {
+          "description": "Optional TCP port; uses the driver default when empty",
+          "title": "Port",
+          "type": "string",
+          "x-clicky-hoist": true,
+          "x-clicky-order": 2.2
+        },
         "read_overflow_mode": {
           "default": "throw",
           "description": "Action when a row or byte read limit is exceeded",
@@ -235,8 +291,8 @@
       "type": "string"
     },
     "url": {
-      "description": "clickhouse://user:pass@host:9000/db",
-      "title": "URL",
+      "description": "Provide a database URL or fill in Host and Database below. A URL takes precedence when supplied.",
+      "title": "Database URL",
       "type": "string",
       "x-clicky-component": "k8s-url-selector",
       "x-clicky-default-source": "value",
@@ -252,8 +308,7 @@
   },
   "required": [
     "name",
-    "type",
-    "url"
+    "type"
   ],
   "title": "Connection: clickhouse",
   "type": "object"

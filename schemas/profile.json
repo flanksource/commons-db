@@ -5636,6 +5636,11 @@
       "type": "string",
       "x-clicky-component": "profile-query-builder"
     },
+    "queryFile": {
+      "description": "File holding the query, relative to the profile's directory; mutually exclusive with query",
+      "title": "Query file",
+      "type": "string"
+    },
     "reconcile": {
       "description": "Join this profile's rows against another profile on a shared identity",
       "properties": {
