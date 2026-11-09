@@ -36,10 +36,6 @@ func (s *Service) saveProvided(ctx context.Context, id string, body map[string]a
 	if err != nil {
 		return nil, err
 	}
-	body, err = s.decodeBody(ctx, body)
-	if err != nil {
-		return nil, err
-	}
 	candidate, err := connectionFromBody(body)
 	if err != nil {
 		return nil, err
@@ -51,6 +47,7 @@ func (s *Service) saveProvided(ctx context.Context, id string, body map[string]a
 		}
 		existing = cloneConnection(existing)
 		applyConnectionUpdate(existing, candidate)
+		existing.Layer = candidate.Layer
 		candidate = existing
 	}
 	if err := s.policy.check(candidate); err != nil {

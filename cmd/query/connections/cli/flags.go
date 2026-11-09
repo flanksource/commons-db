@@ -15,6 +15,7 @@ func BuildConnectionFromFlags(flags *ConnectionFlags) (models.Connection, error)
 	conn := models.Connection{
 		Name:        flags.Name,
 		Namespace:   flags.Namespace,
+		Layer:       flags.Layer,
 		Type:        flags.Type,
 		URL:         flags.URL,
 		Username:    flags.Username,
@@ -476,6 +477,7 @@ func addTypeSpecificFlags(cmd *cobra.Command, flags *ConnectionFlags, connType s
 type ConnectionFlags struct {
 	Name      string
 	Namespace string
+	Layer     string
 	Type      string
 	Test      bool
 	DryRun    bool

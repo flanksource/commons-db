@@ -1,15 +1,19 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"net/url"
+	"reflect"
 	"slices"
 	"strings"
 
 	"github.com/flanksource/clicky"
 	"github.com/flanksource/clicky/extensions"
+	"github.com/flanksource/clicky/text"
 	"github.com/flanksource/commons-db/cmd/query/connections"
 	"github.com/flanksource/commons-db/models"
 	queryschema "github.com/flanksource/commons-db/query/schema"
@@ -17,13 +21,26 @@ import (
 	"github.com/spf13/pflag"
 )
 
+type Backend interface {
+	Create(context.Context, map[string]any) (*models.Connection, error)
+	Update(context.Context, string, map[string]any) (*models.Connection, error)
+	ResolveReference(string) (*models.Connection, error)
+	Inventory(connections.ListOptions) ([]connections.ConnectionInventory, error)
+	Validate(context.Context, connections.ValidateOptions) (connections.ValidationResult, error)
+	Delete(string) error
+}
 type Options struct {
-	Open func(string) (*connections.Service, func() error, error)
+	Open    func(context.Context, string) (Backend, func() error, error)
+	Sources []string
 }
 
 func New(options Options) *cobra.Command {
 	root := &cobra.Command{Use: "connections", Short: "Manage layered connection files (or --source=db)", SilenceUsage: true}
-	root.PersistentFlags().String("source", "file", "Connection source: file or db")
+	sources := options.Sources
+	if len(sources) == 0 {
+		sources = []string{"file", "db"}
+	}
+	root.PersistentFlags().String("source", "file", "Connection source: "+strings.Join(sources, ", "))
 	add := &cobra.Command{Use: "add", Short: "Add a connection by type"}
 	root.AddCommand(add)
 	for _, typ := range queryschema.ConnectionTypes() {
@@ -33,7 +50,7 @@ func New(options Options) *cobra.Command {
 		_ = cmd.MarkFlagRequired("name")
 		addTypeSpecificFlags(cmd, f, typ)
 		cmd.RunE = func(cmd *cobra.Command, _ []string) error {
-			return withService(cmd, options, func(s *connections.Service) (any, error) {
+			return withService(cmd, options, func(s Backend) (any, error) {
 				c, err := BuildConnectionFromFlags(f)
 				if err != nil {
 					return nil, err
@@ -55,7 +72,7 @@ func New(options Options) *cobra.Command {
 	list := &cobra.Command{Use: "list", Short: "List effective connections and source paths", Args: cobra.NoArgs}
 	list.Flags().String("type", "", "Filter by connection type")
 	list.RunE = func(cmd *cobra.Command, _ []string) error {
-		return withService(cmd, options, func(s *connections.Service) (any, error) {
+		return withService(cmd, options, func(s Backend) (any, error) {
 			typ, _ := cmd.Flags().GetString("type")
 			return s.Inventory(connections.ListOptions{Type: typ})
 		})
@@ -76,11 +93,13 @@ func New(options Options) *cobra.Command {
 	*f = ConnectionFlags{}
 	edit.Flags().BoolP("interactive", "i", false, "Edit the existing connection with Clicky's form")
 	edit.RunE = func(cmd *cobra.Command, args []string) error {
-		return withService(cmd, options, func(s *connections.Service) (any, error) {
+		return withService(cmd, options, func(s Backend) (any, error) {
 			c, err := s.ResolveReference(args[0])
 			if err != nil {
 				return nil, err
 			}
+			before := body(*c)
+			before["properties"] = maps.Clone(c.Properties)
 			if err := editModel(cmd, f, c); err != nil {
 				return nil, err
 			}
@@ -94,19 +113,27 @@ func New(options Options) *cobra.Command {
 				if err != nil {
 					return nil, err
 				}
-				return s.Update(cmd.Context(), c.ID.String(), values)
+				patch, err := connectionPatch(before, values)
+				if err != nil {
+					return nil, err
+				}
+				return s.Update(cmd.Context(), c.ID.String(), patch)
 			}
 			if err := queryschema.ValidateConnection(*c); err != nil {
 				return nil, err
 			}
-			return s.Update(cmd.Context(), c.ID.String(), body(*c))
+			patch, err := connectionPatch(before, body(*c))
+			if err != nil {
+				return nil, err
+			}
+			return s.Update(cmd.Context(), c.ID.String(), patch)
 		})
 	}
 	root.AddCommand(edit)
 	for _, verb := range []string{"validate", "delete"} {
 		cmd := &cobra.Command{Use: verb + " <reference>", Short: verb + " a saved connection", Args: cobra.ExactArgs(1)}
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
-			return withService(cmd, options, func(s *connections.Service) (any, error) {
+			return withService(cmd, options, func(s Backend) (any, error) {
 				c, err := s.ResolveReference(args[0])
 				if err != nil {
 					return nil, err
@@ -123,28 +150,66 @@ func New(options Options) *cobra.Command {
 	return root
 }
 
+func connectionPatch(before, after map[string]any) (map[string]any, error) {
+	normalized := make([]map[string]any, 2)
+	for i, value := range []map[string]any{before, after} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		if err = json.Unmarshal(encoded, &normalized[i]); err != nil {
+			return nil, err
+		}
+	}
+	patch := normalized[1]
+	for key, value := range patch {
+		if reflect.DeepEqual(value, normalized[0][key]) {
+			delete(patch, key)
+			continue
+		}
+		if key == "properties" {
+			props, ok := value.(map[string]any)
+			if !ok {
+				continue
+			}
+			previous, _ := normalized[0][key].(map[string]any)
+			for name, v := range props {
+				if reflect.DeepEqual(v, previous[name]) {
+					delete(props, name)
+				}
+			}
+		}
+	}
+	return patch, nil
+}
+
 func bindCommon(cmd *cobra.Command, f *ConnectionFlags) {
 	cmd.Flags().StringVar(&f.Name, "name", "", "Connection name")
 	cmd.Flags().StringVar(&f.Namespace, "namespace", "", "Connection namespace")
+	cmd.Flags().StringVar(&f.Layer, "layer", "", "Save to a writable storage layer: db, global, app or cwd")
 	cmd.Flags().StringSliceVar(&f.Properties, "properties", nil, "Additional property key=value (repeatable)")
 }
 
 func body(c models.Connection) map[string]any {
-	return map[string]any{"name": c.Name, "namespace": c.Namespace, "type": c.Type, "url": c.URL, "username": c.Username, "password": c.Password, "certificate": c.Certificate, "insecure_tls": c.InsecureTLS, "properties": c.Properties}
+	return map[string]any{"name": c.Name, "namespace": c.Namespace, "layer": c.Layer, "type": c.Type, "url": c.URL, "username": c.Username, "password": c.Password, "certificate": c.Certificate, "insecure_tls": c.InsecureTLS, "properties": c.Properties}
 }
 
-func withService(cmd *cobra.Command, options Options, run func(*connections.Service) (any, error)) (err error) {
+func withService(cmd *cobra.Command, options Options, run func(Backend) (any, error)) (err error) {
 	source, _ := cmd.Flags().GetString("source")
-	if source != "file" && source != "db" {
-		return fmt.Errorf("invalid --source %q: expected file or db", source)
+	sources := options.Sources
+	if len(sources) == 0 {
+		sources = []string{"file", "db"}
 	}
-	service, close, err := options.Open(source)
+	if !slices.Contains(sources, source) {
+		return fmt.Errorf("invalid --source %q: expected %s", source, strings.Join(sources, ", "))
+	}
+	service, close, err := options.Open(cmd.Context(), source)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if closeErr := close(); closeErr != nil {
-			err = fmt.Errorf("close connections: %w", closeErr)
+			err = errors.Join(err, fmt.Errorf("close connections: %w", closeErr))
 		}
 	}()
 	result, err := run(service)
@@ -158,6 +223,10 @@ func withService(cmd *cobra.Command, options Options, run func(*connections.Serv
 			return encodeErr
 		}
 		redact(safe)
+		if rows, ok := safe.([]any); ok && len(rows) == 0 {
+			_, err = fmt.Fprintln(cmd.OutOrStdout(), "[]")
+			return err
+		}
 		formatted, printErr := clicky.Format(safe, clicky.Flags.FormatOptions)
 		if printErr != nil {
 			return printErr
@@ -195,6 +264,7 @@ func editModel(cmd *cobra.Command, f *ConnectionFlags, c *models.Connection) err
 	}
 	common := map[string]*string{"name": &c.Name, "namespace": &c.Namespace, "url": &c.URL, "username": &c.Username, "password": &c.Password, "certificate": &c.Certificate}
 	values := map[string]string{"name": f.Name, "namespace": f.Namespace, "url": f.URL, "username": f.Username, "password": f.Password, "certificate": f.Certificate}
+	common["layer"], values["layer"] = &c.Layer, f.Layer
 	for key, ptr := range common {
 		if cmd.Flags().Changed(key) {
 			*ptr = values[key]
@@ -264,7 +334,7 @@ func applyProperties(c *models.Connection, properties []string) error {
 	for _, property := range properties {
 		key, value, ok := strings.Cut(property, "=")
 		if !ok || key == "" {
-			return fmt.Errorf("invalid property %q: expected key=value", property)
+			return fmt.Errorf("invalid property %q: expected key=value", text.NewSensitiveString(property))
 		}
 		c.Properties[key] = value
 	}
@@ -281,7 +351,11 @@ func redact(value any) {
 		for key, item := range v {
 			lower := strings.ToLower(key)
 			if strings.Contains(lower, "password") || strings.Contains(lower, "secret") || strings.Contains(lower, "token") || slices.Contains([]string{"certificate", "key", "bearer", "apikey", "api_key", "accesskey", "access_key", "privatekey", "private_key", "pwd", "passwd"}, lower) {
-				v[key] = ""
+				if raw, ok := item.(string); ok {
+					v[key] = text.NewSensitiveString(raw)
+				} else {
+					v[key] = text.NewSensitiveString("")
+				}
 			} else if key == "url" {
 				if raw, ok := item.(string); ok {
 					v[key] = redactURL(raw)
@@ -301,7 +375,7 @@ func redactURL(raw string) string {
 		for key := range q {
 			entry := map[string]any{key: q.Get(key)}
 			redact(entry)
-			if entry[key] == "" {
+			if _, sensitive := entry[key].(text.SensitiveString); sensitive {
 				q.Set(key, "redacted")
 			}
 		}
@@ -314,7 +388,7 @@ func redactURL(raw string) string {
 		if ok {
 			entry := map[string]any{strings.TrimSpace(key): "value"}
 			redact(entry)
-			if entry[strings.TrimSpace(key)] == "" {
+			if _, sensitive := entry[strings.TrimSpace(key)].(text.SensitiveString); sensitive {
 				parts[i] = key + "=redacted"
 			}
 		}

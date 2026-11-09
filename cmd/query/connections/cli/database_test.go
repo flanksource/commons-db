@@ -32,7 +32,7 @@ var _ = Describe("database connection management", func() {
 		service, err := connections.New(connections.Options{Database: func() (*gorm.DB, error) { return database, nil }, Context: func() dbcontext.Context { return ctx }, DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil }, Profiles: func(context.Context) ([]query.Profile, error) { return nil, nil }})
 		Expect(err).NotTo(HaveOccurred())
 		run := func(args ...string) error {
-			root := New(Options{Open: func(source string) (*connections.Service, func() error, error) {
+			root := New(Options{Open: func(_ context.Context, source string) (Backend, func() error, error) {
 				Expect(source).To(Equal("db"))
 				return service, func() error { return nil }, nil
 			}})
