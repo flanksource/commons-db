@@ -43,6 +43,9 @@ type Notifier struct {
 	// closed once it has ended.
 	stopWatching context.CancelFunc
 	watched      chan struct{}
+	watchErr     error
+	closeOnce    sync.Once
+	closeErr     error
 
 	mu      sync.Mutex
 	signals map[string]*appendSignal
@@ -85,6 +88,7 @@ func (n *Notifier) watch(ctx context.Context) {
 		return
 	}
 	if err := source.WatchChanges(ctx, n.wakeAll); err != nil {
+		n.watchErr = err
 		logger.Errorf("record store notifier: watch changes: %v", err)
 	}
 }
@@ -178,11 +182,17 @@ func (n *Notifier) Delete(ctx context.Context, stream string) error {
 	return err
 }
 
-// Close stops watching the backend and closes it.
-func (n *Notifier) Close() error {
+// StopWatching releases observation without closing the shared backend.
+func (n *Notifier) StopWatching() error {
 	n.stopWatching()
 	<-n.watched
-	return n.backend.Close()
+	return n.watchErr
+}
+
+// Close stops watching the backend and closes it once.
+func (n *Notifier) Close() error {
+	n.closeOnce.Do(func() { n.closeErr = errors.Join(n.StopWatching(), n.backend.Close()) })
+	return n.closeErr
 }
 
 // wakeAll wakes the waiters on every stream.
