@@ -131,6 +131,9 @@ var _ = Describe("SQL statements built as sqlglot trees", func() {
 		Entry("a jsonb key test", dialectPostgres, `SELECT * FROM t WHERE payload ? 'k'`),
 		Entry("a question mark in a literal", dialectMySQL, `SELECT 'huh?' AS note`),
 		Entry("a dollar-quoted body", dialectPostgres, `SELECT $$a $1 b$$ AS note`),
+		// @@SPID is the session-id system function, not a bind marker.
+		Entry("a sqlserver @@ system function", dialectSQLServer,
+			`SELECT COUNT(*) AS Sessions FROM sys.dm_exec_sessions WHERE database_id = DB_ID() AND session_id <> @@SPID`),
 	)
 
 	// clickhouse-go binds client-side, and its positional "?" cannot be

@@ -88,7 +88,7 @@ func (p sqlProvider) SupportsRequestSort() bool { return true }
 
 func (p sqlProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
 	var result []query.Row
-	for page, err := range p.Pages(ctx, req, query.PageRequest{Limit: query.DefaultMaxPageSize}) {
+	for page, err := range p.Pages(ctx, req, query.PageRequest{Limit: query.DefaultMaxPageSize, ReadAll: true}) {
 		if err != nil {
 			return nil, err
 		}
@@ -116,6 +116,15 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 		}
 		defer release()
 		defer func() { _ = client.Close() }()
+		batches, program, err := sqlProgram(dialect, req.Query)
+		if err != nil {
+			yield(query.Page{}, err)
+			return
+		}
+		if program {
+			yield(readSQLProgram(ctx, client, dialect, req, page, batches))
+			return
+		}
 		if err := requireSQLArrayFilters(ctx, client, dialect, filtersUseArrays(req.Filters)); err != nil {
 			yield(query.Page{}, err)
 			return

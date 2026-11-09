@@ -113,11 +113,7 @@ func (p sqlProvider) assertBareMarkers(statement string, references map[string]s
 			return err
 		}
 	}
-	tokenizer, err := sqlglot.NewTokenizer(glot)
-	if err != nil {
-		return err
-	}
-	tokens, err := tokenizer.Tokenize(statement)
+	tokens, err := sqlTokens(glot, statement)
 	if err != nil {
 		return fmt.Errorf("SQL query cannot be tokenized: %w", err)
 	}
