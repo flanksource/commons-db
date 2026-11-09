@@ -402,6 +402,11 @@ func ProfileSource() Schema {
 				"description":        "Provider-native query; may reference {{.params.<name>}}",
 				"x-clicky-component": "profile-query-builder",
 			},
+			"queryFile": Schema{
+				"type":        "string",
+				"title":       "Query file",
+				"description": "File holding the query, relative to the profile's directory; mutually exclusive with query",
+			},
 			// Ten properties per parameter stacked in full costs ~700px of screen
 			// each, and nothing in the list says which parameter is which. The
 			// accordion collapses each to one scannable row; `x-item` names the

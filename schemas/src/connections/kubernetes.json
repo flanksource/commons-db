@@ -251,6 +251,13 @@
           "type": "integer",
           "x-clicky-order": 7,
           "x-col-span": "full"
+        },
+        "namespace": {
+          "description": "The logs view reads only this namespace and offers no namespace picker; leave empty to choose any namespace",
+          "title": "Restrict to namespace",
+          "type": "string",
+          "x-clicky-order": 8,
+          "x-col-span": "full"
         }
       },
       "title": "Properties",

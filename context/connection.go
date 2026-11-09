@@ -214,6 +214,16 @@ func findConnectionByName(ctx Context, name string) (*models.Connection, error) 
 
 // FindConnection returns the connection with the given type and name
 func FindConnection(ctx Context, name, namespace string) (*models.Connection, error) {
+	if resolver := ctx.connectionResolver(); resolver != nil {
+		reference := "connection://" + name
+		if namespace != "" {
+			reference = "connection://" + namespace + "/" + name
+		}
+		resolved, err := resolver(ctx, reference)
+		if err != nil || resolved != nil {
+			return resolved, err
+		}
+	}
 	var connection models.Connection
 
 	if namespace == "" {
