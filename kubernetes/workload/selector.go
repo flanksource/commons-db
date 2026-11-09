@@ -172,6 +172,34 @@ func valueMatches(value, pattern string, fold bool) bool {
 	return err == nil && matched
 }
 
+// Namespace returns the one namespace every match must be in, or "" when the
+// selector leaves it open — no clause, a pattern, or alternatives under an `or`.
+func (s Selector) Namespace() string {
+	return pinnedNamespace(s.root)
+}
+
+func pinnedNamespace(field *grammar.QueryField) string {
+	if field == nil {
+		return ""
+	}
+	if field.Field == "" {
+		if field.Op != "and" {
+			return ""
+		}
+		for _, child := range field.Fields {
+			if namespace := pinnedNamespace(child); namespace != "" {
+				return namespace
+			}
+		}
+		return ""
+	}
+	value := fmt.Sprint(field.Value)
+	if field.Field != "namespace" || field.Op != grammar.Eq || strings.ContainsAny(value, ",*?[") {
+		return ""
+	}
+	return value
+}
+
 func collectExact(field *grammar.QueryField, values map[string]string) bool {
 	if field == nil {
 		return true
