@@ -5,6 +5,7 @@ import (
 	"iter"
 	"time"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons-db/context"
 )
 
@@ -303,9 +304,9 @@ func providerPages(ctx context.Context, p Profile, req ProviderRequest, page Pag
 		return ErrorPage(err)
 	}
 	if paging, ok := provider.(PagingProvider); ok {
-		return paging.Pages(ctx, req, page)
+		return withProviderTiming(ctx, paging.Pages(ctx, req, page))
 	}
-	return func(yield func(Page, error) bool) {
+	return withProviderTiming(ctx, func(yield func(Page, error) bool) {
 		rows, err := provider.Execute(ctx, req)
 		if err != nil {
 			yield(Page{}, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err))
@@ -318,6 +319,27 @@ func providerPages(ctx context.Context, p Profile, req ProviderRequest, page Pag
 			if !yield(pg, err) {
 				return
 			}
+		}
+	})
+}
+
+// withProviderTiming attributes the time spent waiting on the provider for each
+// page, and the rows it returned, to the request's Server-Timing "provider"
+// phase. The clock restarts after each yield, so the consumer's own work on a
+// page is never billed to the backend.
+func withProviderTiming(ctx context.Context, pages iter.Seq2[Page, error]) iter.Seq2[Page, error] {
+	return func(yield func(Page, error) bool) {
+		started := time.Now()
+		for page, err := range pages {
+			rpchttp.AddTiming(ctx, rpchttp.TimingMetric{
+				Name:     "provider",
+				Duration: time.Since(started),
+				Counters: []rpchttp.TimingCounter{{Name: "rows", Value: int64(len(page.Rows))}},
+			})
+			if !yield(page, err) {
+				return
+			}
+			started = time.Now()
 		}
 	}
 }

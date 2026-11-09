@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/flanksource/commons-db/connection"
@@ -26,6 +27,20 @@ func (k8sLogsProvider) LookupFilterValues(
 	client, _, err := (connection.KubeconfigConnection{ConnectionName: req.Connection}).Populate(ctx)
 	if err != nil {
 		return nil, nil, fmt.Errorf("populate Kubernetes connection: %w", err)
+	}
+	// Namespaces are listed from the cluster rather than read off the workloads:
+	// those are capped, and a namespace whose workloads fall past the cap is
+	// still one an author can narrow to.
+	if binding.Field == "namespace" {
+		options, err := kubernetesNamespaceOptions(ctx, client, search)
+		if err != nil {
+			return nil, nil, err
+		}
+		total := &query.Total{Value: int64(len(options)), Exact: true}
+		if limit > 0 && len(options) > limit {
+			options = options[:limit]
+		}
+		return options, total, nil
 	}
 	// The same cap an execution reads under. Offering a workload the query would
 	// refuse to read is a choice that answers with nothing.
@@ -64,6 +79,24 @@ func (k8sLogsProvider) LookupFilterValues(
 		options = options[:limit]
 	}
 	return options, total, nil
+}
+
+// kubernetesNamespaceOptions lists the cluster's namespaces containing search,
+// in name order. A namespace carries no count: counting would mean listing
+// every workload in the cluster, which is the read the cap exists to prevent.
+func kubernetesNamespaceOptions(ctx context.Context, client kubernetes.Interface, search string) ([]query.FilterOption, error) {
+	namespaces, err := client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list Kubernetes namespaces: %w", err)
+	}
+	options := []query.FilterOption{}
+	for _, namespace := range namespaces.Items {
+		if search == "" || strings.Contains(strings.ToLower(namespace.Name), strings.ToLower(search)) {
+			options = append(options, query.FilterOption{Value: namespace.Name})
+		}
+	}
+	sort.Slice(options, func(i, j int) bool { return options[i].Value < options[j].Value })
+	return options, nil
 }
 
 // kubernetesChildPods lists the pods the selected controllers resolve to, minus

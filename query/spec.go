@@ -165,6 +165,9 @@ func (p Profile) ValidateKind() error {
 // happens at execution — by then the profile is already stored, and the author
 // who introduced the conflict is long gone.
 func (p Profile) ValidateQuerySource() error {
+	if err := p.validateQueryFile(); err != nil {
+		return err
+	}
 	if p.Search != nil {
 		if p.Provider.Type != "opensearch" && p.Provider.Type != "opentelemetry" {
 			return fmt.Errorf("canonical search requires an OpenSearch or OpenTelemetry provider")

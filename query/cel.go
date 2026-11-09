@@ -5,6 +5,7 @@ import (
 	"regexp"
 	"strings"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/gomplate/v3"
 	"github.com/ohler55/ojg/jp"
 
@@ -22,6 +23,7 @@ var celIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // first and nil when no column declares a Style. Styles ride alongside the rows
 // rather than inside them so that presentation never reaches an export.
 func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) ([]Row, []map[string]string, error) {
+	defer rpchttp.Track(ctx, "transform")()
 	plan, err := newRowTransformPlan(profile)
 	if err != nil {
 		return nil, nil, err

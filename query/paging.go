@@ -185,6 +185,10 @@ type Page struct {
 	Metrics *MetricMetadata `json:"metrics,omitempty"`
 	Rows    []Row
 
+	// Batches are the batches of a SQL program the provider ran as written; a
+	// program is one Page whose Rows are its last result set with columns.
+	Batches []BatchResult
+
 	// Styles are the evaluated cell styles for Rows, positionally parallel to
 	// it. Nil when no column declares a Style.
 	Styles []map[string]string

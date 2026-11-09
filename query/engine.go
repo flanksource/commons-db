@@ -63,6 +63,11 @@ type Result struct {
 	// applying a cap of its own. It travels with the Result so a partial answer
 	// is never mistaken for a complete one.
 	Truncated bool `json:"truncated,omitempty" yaml:"truncated,omitempty"`
+
+	// Batches are what each batch of a SQL program returned, in order, when the
+	// query ran as a program rather than as a pageable query (see BatchResult).
+	// Rows then holds the last result set with columns.
+	Batches []BatchResult `json:"batches,omitempty" yaml:"batches,omitempty"`
 }
 
 // Execute runs a Profile end-to-end: resolve the supplied params, render the
@@ -126,13 +131,13 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 		return nil, profileError(p, err)
 	}
 
-	rows, truncated, err := drainPages(ctx, p, req)
-	operation.Finish(len(rows), err)
+	drained, err := drainPages(ctx, p, req)
+	operation.Finish(len(drained.Rows), err)
 	if err != nil {
 		return nil, err
 	}
 
-	result := &Result{Profile: p.Name, Rows: rows, Truncated: truncated}
+	result := &Result{Profile: p.Name, Rows: drained.Rows, Truncated: drained.Truncated, Batches: drained.Batches}
 	if len(req.MetricMetadata.Sources) > 0 || len(req.MetricMetadata.Notices) > 0 {
 		result.Metrics = req.MetricMetadata
 	}
@@ -197,7 +202,7 @@ func sortAndLimit(rows []Row, sortBy string, limit int) ([]Row, bool) {
 // invisible — a backend default quietly limiting a read is otherwise
 // indistinguishable from a small table, which is how "read everything" came to
 // mean "read the first 500 and say nothing".
-func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, bool, error) {
+func drainPages(ctx context.Context, p Profile, req ProviderRequest) (drainedPages, error) {
 	maxRows := p.RowLimits().MaxExportRows
 	batch := walkBatchSize
 	if maxRows > 0 && maxRows < batch {
@@ -206,21 +211,29 @@ func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, boo
 	walk := walkRequest(p, batch)
 	walk.Ceiling = maxRows
 
-	var rows []Row
-	var truncated bool
+	var drained drainedPages
 	for page, err := range providerPages(ctx, p, req, walk) {
 		if err != nil {
-			return nil, false, err
+			return drainedPages{}, err
 		}
-		truncated = truncated || page.Truncated
-		rows = append(rows, page.Rows...)
-		if maxRows > 0 && len(rows) >= maxRows {
-			truncated = truncated || len(rows) > maxRows || page.HasMore
-			rows = rows[:maxRows]
+		drained.Truncated = drained.Truncated || page.Truncated
+		drained.Rows = append(drained.Rows, page.Rows...)
+		drained.Batches = append(drained.Batches, page.Batches...)
+		if maxRows > 0 && len(drained.Rows) >= maxRows {
+			drained.Truncated = drained.Truncated || len(drained.Rows) > maxRows || page.HasMore
+			drained.Rows = drained.Rows[:maxRows]
 			break
 		}
 	}
-	return rows, truncated, nil
+	return drained, nil
+}
+
+// drainedPages is everything a full walk read: the rows, whether the walk
+// stopped short of the source, and the batches of a SQL program.
+type drainedPages struct {
+	Rows      []Row
+	Truncated bool
+	Batches   []BatchResult
 }
 
 // compareRowValues orders numbers numerically and everything else by its

@@ -1,12 +1,15 @@
 package query_test
 
 import (
+	gocontext "context"
 	"iter"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/samber/lo"
 )
 
 // cappedProvider is a provider that silently applies a cap of its own — an
@@ -137,6 +140,23 @@ var _ = Describe("ExecutePages", func() {
 		}
 		Expect(seen).To(Equal(rows(5)))
 		Expect(totals).To(HaveEach(query.Total{Value: 5, Exact: true}))
+	})
+
+	It("attributes provider fetch and row transforms to the request's server timings", func() {
+		const pageSize, rowCount = 2, 5
+		query.RegisterProvider(&cappedProvider{typ: "pages-timed", rows: rows(rowCount)})
+		base, timings := rpchttp.WithTimings(gocontext.Background())
+
+		collected, err := query.CollectRows(query.Rows(query.ExecutePages(
+			context.NewContext(base), pagedProfile("timed", "pages-timed"), query.PageRequest{Limit: pageSize})))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(collected).To(HaveLen(rowCount))
+
+		names := lo.Map(timings.Metrics(), func(metric rpchttp.TimingMetric, _ int) string { return metric.Name })
+		Expect(names).To(Equal([]string{"provider", "transform"}))
+		fetched, ok := timings.Counter("provider", "rows")
+		Expect(ok).To(BeTrue())
+		Expect(fetched).To(Equal(int64(rowCount)))
 	})
 })
 
