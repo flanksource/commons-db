@@ -148,6 +148,7 @@ func (r *Results) open(options OpenOptions) error {
 	if err != nil {
 		return fmt.Errorf("result store: %w", err)
 	}
+	r.closers = append(r.closers, closerFunc(notifier.StopWatching))
 	registry, err := NewRegistry(RegistryOptions{
 		Prefix: options.Prefix, Schemas: schemas, Index: index, Source: notifier, ConnectionName: options.ConnectionName,
 	})
