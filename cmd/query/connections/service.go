@@ -52,7 +52,8 @@ type Options struct {
 	// namespace, workload and 1Password pickers under {prefix}/connections.
 	// Its Prefix and Next are set by Handler; an unset Context is the
 	// service's, and an unset Kube that context's local Kubernetes client.
-	Secrets *secretcatalog.Options
+	Secrets   *secretcatalog.Options
+	KEKStatus func(context.Context) KEKStatus
 }
 
 type Service struct {
@@ -63,6 +64,7 @@ type Service struct {
 	virtual    VirtualConnectionProvider
 	policy     Policy
 	secrets    *secretcatalog.Options
+	kekStatus  func(context.Context) KEKStatus
 	browser    *connectionBrowserHandler
 }
 
@@ -85,7 +87,7 @@ func New(options Options) (*Service, error) {
 	return &Service{
 		database: options.Database, context: options.Context,
 		decodeBody: options.DecodeBody, profiles: options.Profiles, virtual: options.Virtual,
-		policy: options.Policy, secrets: options.Secrets,
+		policy: options.Policy, secrets: options.Secrets, kekStatus: options.KEKStatus,
 		browser: newConnectionBrowserHandler("", options.Context(), http.NotFoundHandler()),
 	}, nil
 }
@@ -140,9 +142,9 @@ func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	browser.next = actions
 	health := newConnectionHealthHandler(prefix, ctx, browser)
 	health.virtual = s.virtual
-	handler := newConnectionSchemaHandler(browser.prefix, s.policy, newConnectionDashboardHandler(connectionDashboardHandlerOptions{
+	handler := s.storageHandler(browser.prefix, newConnectionSchemaHandler(browser.prefix, s, newConnectionDashboardHandler(connectionDashboardHandlerOptions{
 		Prefix: prefix, Context: ctx, Profiles: s.profiles, Virtual: s.virtual, Policy: s.policy, Next: health,
-	}))
+	})))
 	if s.secrets == nil {
 		return localfiles.Handler(prefix, handler)
 	}
@@ -193,14 +195,15 @@ func (s *Service) Get(id string) (*models.Connection, error) {
 }
 
 func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Connection, error) {
-	if s.database == nil {
-		return s.saveProvided(ctx, "", body)
-	}
-	db, err := s.store()
+	body, err := s.decodeBody(ctx, body)
 	if err != nil {
 		return nil, err
 	}
-	body, err = s.decodeBody(ctx, body)
+	layer, _ := body["layer"].(string)
+	if s.database == nil || layer != "" && layer != "db" {
+		return s.saveProvided(ctx, "", body)
+	}
+	db, err := s.store()
 	if err != nil {
 		return nil, err
 	}
@@ -208,6 +211,21 @@ func (s *Service) Create(ctx context.Context, body map[string]any) (*models.Conn
 }
 
 func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*models.Connection, error) {
+	body, decodeErr := s.decodeBody(ctx, body)
+	if decodeErr != nil {
+		return nil, decodeErr
+	}
+	existing, patchErr := s.findConnection(id)
+	if patchErr != nil {
+		return nil, patchErr
+	}
+	body, patchErr = mergeConnectionPatch(existing, body)
+	if patchErr != nil {
+		return nil, patchErr
+	}
+	if layer, ok := body["layer"].(string); ok && layer != "" && layer != connectionLayer(existing) {
+		return s.moveConnection(ctx, existing, body)
+	}
 	provided, err := resolveVirtualConnection(s.context(), s.virtual, id)
 	if err != nil {
 		return nil, err
@@ -219,10 +237,6 @@ func (s *Service) Update(ctx context.Context, id string, body map[string]any) (*
 		return s.saveProvided(ctx, id, body)
 	}
 	db, err := s.store()
-	if err != nil {
-		return nil, err
-	}
-	body, err = s.decodeBody(ctx, body)
 	if err != nil {
 		return nil, err
 	}
@@ -481,6 +495,15 @@ func updateConnection(db *gorm.DB, policy Policy, id string, body map[string]any
 }
 
 func validateConnection(ctx dbcontext.Context, candidate *models.Connection) error {
+	if slices.Contains([]string{models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse}, candidate.Type) {
+		var sql dbconnection.SQLConnection
+		if err := sql.FromModel(*candidate); err != nil {
+			return err
+		}
+		if err := sql.Validate(); err != nil {
+			return err
+		}
+	}
 	if _, err := observability.PolicyFor(candidate); err != nil {
 		return err
 	}

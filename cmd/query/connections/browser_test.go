@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -351,7 +352,7 @@ func TestBrowserPageRequestUsesBoundedOffsetPaging(t *testing.T) {
 			if err != nil {
 				t.Fatalf("PageRequest: %v", err)
 			}
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("PageRequest = %#v, want %#v", got, tt.want)
 			}
 		})

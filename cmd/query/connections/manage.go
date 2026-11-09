@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons-db/models"
 	queryschema "github.com/flanksource/commons-db/query/schema"
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 type ValidateOptions struct{ Reference string }
@@ -84,19 +85,9 @@ func (s *Service) Inventory(options ListOptions) ([]ConnectionInventory, error) 
 	if err != nil {
 		return nil, err
 	}
-	layers := map[string]string{}
-	if provider, ok := s.virtual.(*StoreProvider); ok {
-		entries, err := provider.store.Entries()
-		if err != nil {
-			return nil, err
-		}
-		for _, entry := range entries {
-			layers[entry.Connection.ID.String()] = entry.Layer.Name
-		}
-	}
 	inventory := make([]ConnectionInventory, 0, len(listed))
 	for _, c := range listed {
-		inventory = append(inventory, ConnectionInventory{Connection: c, Layer: layers[c.ID.String()]})
+		inventory = append(inventory, ConnectionInventory{Connection: c, Layer: connectionLayer(c)})
 	}
 	return inventory, nil
 }
@@ -126,7 +117,7 @@ func (s *Service) ResolveReference(reference string) (*models.Connection, error)
 		found = c
 	}
 	if found == nil {
-		return nil, fmt.Errorf("connection %q not found", reference)
+		return nil, fmt.Errorf("connection %q not found: %w", reference, gorm.ErrRecordNotFound)
 	}
 	return found, nil
 }

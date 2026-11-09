@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"github.com/flanksource/clicky/prompt"
+	"github.com/flanksource/clicky/text"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -39,7 +40,7 @@ var _ = Describe("connection management", func() {
 		service, err := connections.New(connections.Options{Virtual: provider, Context: func() dbcontext.Context { return ctx }, DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil }, Profiles: func(context.Context) ([]query.Profile, error) { return nil, nil }})
 		Expect(err).NotTo(HaveOccurred())
 		run = func(args ...string) error {
-			root := New(Options{Open: func(source string) (*connections.Service, func() error, error) {
+			root := New(Options{Open: func(_ context.Context, source string) (Backend, func() error, error) {
 				Expect(source).To(Equal("file"))
 				return service, func() error { return nil }, nil
 			}})
@@ -73,6 +74,18 @@ var _ = Describe("connection management", func() {
 		entry, err := files.Find("interactive")
 		Expect(err).NotTo(HaveOccurred())
 		Expect(entry.Connection.URL).To(Equal("file:original.db"))
+	})
+	It("selects and changes the storage layer through the CLI", func() {
+		Expect(run("add", "sqlite", "--name", "movable", "--url", "file:example.db", "--layer", "app")).To(Succeed())
+		entry, err := files.Find("movable")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entry.Layer.Name).To(Equal("app"))
+		id := entry.Connection.ID
+		Expect(run("edit", "movable", "--layer", "cwd")).To(Succeed())
+		entry, err = files.Find("movable")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(entry.Layer.Name).To(Equal("cwd"))
+		Expect(entry.Connection.ID).To(Equal(id))
 	})
 	It("edits owning files and preserves credentials, properties and explicit false", func() {
 		for _, layer := range []string{"global", "app", "cwd"} {
@@ -121,7 +134,7 @@ var _ = Describe("connection management", func() {
 		output := map[string]any{"url": "https://tester:example@localhost?token=example", "properties": map[string]any{"clientSecret": "example", "region": "local"}}
 		redact(output)
 		Expect(output["url"]).To(Equal("https://localhost?token=redacted"))
-		Expect(output["properties"]).To(Equal(map[string]any{"clientSecret": "", "region": "local"}))
+		Expect(output["properties"]).To(Equal(map[string]any{"clientSecret": text.NewSensitiveString("example"), "region": "local"}))
 		Expect(redactURL("server=localhost;password=example")).To(Equal("server=localhost;password=redacted"))
 	})
 })

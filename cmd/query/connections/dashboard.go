@@ -55,6 +55,7 @@ type connectionDashboardItem struct {
 	Namespace        string             `json:"namespace"`
 	Type             string             `json:"type"`
 	Source           string             `json:"source,omitempty"`
+	Layer            string             `json:"layer,omitempty"`
 	Endpoint         *dashboardEndpoint `json:"endpoint,omitempty"`
 	SecretCount      int                `json:"secretCount"`
 	InlineCredential bool               `json:"inlineCredential"`
@@ -167,7 +168,7 @@ func dashboardItems(connections []*models.Connection, usage map[string]int) []co
 	for index, connection := range connections {
 		items[index] = connectionDashboardItem{
 			ID: connection.ID.String(), Name: connection.Name, Namespace: connection.Namespace,
-			Type: connection.Type, Source: connection.Source, Endpoint: dashboardEndpointFor(connection),
+			Type: connection.Type, Source: connection.Source, Layer: connectionLayer(connection), Endpoint: dashboardEndpointFor(connection),
 			SecretCount:      dashboardSecretCount(connection),
 			InlineCredential: hasInlineConnectionCredential(connection.URL),
 			InsecureTLS:      connection.InsecureTLS,
@@ -188,6 +189,12 @@ func dashboardEndpointFor(connection *models.Connection) *dashboardEndpoint {
 		raw = strings.TrimSpace(connection.Properties["connection"])
 	}
 	if raw == "" {
+		if host := connection.Properties["host"]; host != "" {
+			if port := connection.Properties["port"]; port != "" {
+				host += ":" + port
+			}
+			return &dashboardEndpoint{Scheme: connection.Type, Host: host, Path: "/" + connection.Properties["database"]}
+		}
 		return nil
 	}
 	if strings.Contains(raw, "=") && !strings.Contains(raw, "://") {
@@ -316,6 +323,7 @@ func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 	if spec.Paths == nil {
 		spec.Paths = map[string]rpc.OpenAPIPath{}
 	}
+	addStorageOpenAPI(spec)
 	addKubernetesCatalogOpenAPI(spec)
 	spec.Paths["/api/v1/connections/files"] = rpc.OpenAPIPath{"get": {
 		Tags: []string{"Connections"}, Summary: "Browse local file metadata (loopback only)", OperationID: "browseLocalFiles",
@@ -328,8 +336,8 @@ func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 	}}
 	item := &rpc.OpenAPISchema{Type: "object", Properties: map[string]*rpc.OpenAPISchema{
 		"id": {Type: "string"}, "name": {Type: "string"}, "namespace": {Type: "string"},
-		"source": {Type: "string"},
-		"type":   {Type: "string"}, "endpoint": {Type: "object"}, "secretCount": {Type: "integer"},
+		"source": {Type: "string"}, "layer": {Type: "string"},
+		"type": {Type: "string"}, "endpoint": {Type: "object"}, "secretCount": {Type: "integer"},
 		"inlineCredential": {Type: "boolean"}, "insecureTLS": {Type: "boolean"},
 		"health": {Type: "object"}, "profileCount": {Type: "integer"},
 		"updatedAt": {Type: "string", Format: "date-time"}, "readOnly": {Type: "boolean"},

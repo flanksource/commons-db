@@ -111,6 +111,20 @@ func (p *StoreProvider) project(entry store.Entry, writable bool) *models.Connec
 // SaveConnection creates connection (a zero ID) or updates the connection its
 // ID names, renaming its file when its name changes.
 func (p *StoreProvider) SaveConnection(ctx context.Context, connection *models.Connection) (*models.Connection, error) {
+	if connection.Layer != "" {
+		if connection.ID == uuid.Nil && connection.Layer != p.layer.Name {
+			return p.saveToLayer(ctx, connection)
+		}
+		if connection.ID != uuid.Nil {
+			entry, err := p.store.Find(connection.ID.String())
+			if err != nil {
+				return nil, err
+			}
+			if entry == nil || entry.Layer.Name != connection.Layer {
+				return p.saveToLayer(ctx, connection)
+			}
+		}
+	}
 	if connection.ID != uuid.Nil {
 		owner, err := p.owner(connection.ID.String())
 		if err != nil {
