@@ -16,6 +16,8 @@ const (
 	// aggregation under, so the response is read back by walking a chain rather
 	// than by rebuilding the shape that was sent.
 	scopedAggregation = "__clicky_scope"
+	// documentsAggregation counts, per nested value, the parent documents.
+	documentsAggregation = "__clicky_documents"
 	// DefaultValueLimit caps how many distinct values one lookup returns when the
 	// caller does not say.
 	DefaultValueLimit = 1000
@@ -86,8 +88,14 @@ func (t *Searcher) DistinctValues(ctx context.Context, req ValuesRequest) (Value
 	// query carries. Both spellings are cleared: OpenSearch rejects a body that
 	// declares aggs and aggregations together.
 	delete(body, "aggs")
+	values := map[string]any{"terms": terms}
+	if req.Nested != "" {
+		// A bucket inside a nested field counts entries, not the documents that
+		// carry them; reverse_nested climbs back to the documents.
+		values["aggregations"] = map[string]any{documentsAggregation: map[string]any{"reverse_nested": map[string]any{}}}
+	}
 	body["aggregations"] = map[string]any{
-		valuesAggregation: scopeAggregation(req, map[string]any{"terms": terms}),
+		valuesAggregation: scopeAggregation(req, values),
 		totalAggregation:  scopeAggregation(req, totalValuesAggregation(req.Field, search)),
 	}
 	encoded, err := json.Marshal(body)
@@ -205,7 +213,11 @@ func parseValueAggregations(aggregations map[string]any, searched bool) (ValuesR
 		if !ok || bucket["key"] == nil {
 			return ValuesResult{}, fmt.Errorf("OpenSearch value lookup returned an invalid bucket")
 		}
-		count, ok := numberToInt64(bucket["doc_count"])
+		counted := bucket["doc_count"]
+		if documents, ok := bucket[documentsAggregation].(map[string]any); ok {
+			counted = documents["doc_count"]
+		}
+		count, ok := numberToInt64(counted)
 		if !ok {
 			return ValuesResult{}, fmt.Errorf("OpenSearch value lookup bucket %v has invalid doc_count", bucket["key"])
 		}

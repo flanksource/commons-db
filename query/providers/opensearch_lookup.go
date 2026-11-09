@@ -76,13 +76,20 @@ type openSearchValuesSource struct {
 
 func lookupCanonicalFilterValues(ctx context.Context, searcher *opensearch.Searcher, source openSearchValuesSource, lookup query.FilterValueSearch, resolved *layout.Definition) ([]query.FilterOption, *query.Total, error) {
 	canonical := lookup.Binding.Field
-	field, err := resolved.SourceField(canonical)
+	if lookup.Binding.Nested != "" {
+		return nil, nil, fmt.Errorf("canonical value lookups resolve nested attributes from the span layout, not the column binding")
+	}
+	target, err := resolved.SourceTarget(canonical)
 	if err != nil {
 		return nil, nil, err
 	}
-	if lookup.Binding.Nested != "" {
-		return nil, nil, fmt.Errorf("canonical value lookups require a reversible nested layout")
+	if target.Nested != "" {
+		// Nested attribute values are the keyword strings the tags carry: there is
+		// no unit or enum to map back, so the options are returned as read.
+		lookup.Binding.Field, lookup.Binding.Nested, lookup.Binding.Where = target.Field, target.Nested, target.Where
+		return lookupOpenSearchFilterValues(ctx, searcher, source, lookup)
 	}
+	field := target.Field
 	if canonical == "status" {
 		options := []query.FilterOption{}
 		for _, value := range []string{"unset", "ok", "error"} {

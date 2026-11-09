@@ -172,6 +172,36 @@ func TestDistinctValuesDescendsIntoOneEntryOfANestedField(t *testing.T) {
 	}
 }
 
+// A nested bucket counts entries; a document repeating the pinned key would be
+// counted once per entry. The lookup reports the documents that carry each value.
+func TestDistinctValuesCountsDocumentsNotNestedEntries(t *testing.T) {
+	server, recorded := valuesServer(t, `{
+		"__clicky_values":{"doc_count":6,"__clicky_scope":{"doc_count":5,"__clicky_scope":{
+			"buckets":[{"key":"SELECT","doc_count":5,"__clicky_documents":{"doc_count":3}}]}}},
+		"__clicky_total":{"doc_count":6,"__clicky_scope":{"doc_count":5,"__clicky_scope":{"value":1}}}
+	}`)
+	defer server.Close()
+
+	searcher, ctx := newTestSearcher(t, server.URL)
+	result, err := searcher.DistinctValues(ctx, ValuesRequest{
+		Index: "jaeger-span-*", Field: "tags.value", Limit: 10,
+		Nested: "tags", Where: map[string]string{"tags.key": "db.operation"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := (ValuesResult{Values: []Value{{Value: "SELECT", Count: 3}}, Total: 1}); !reflect.DeepEqual(result, want) {
+		t.Fatalf("got %#v, want %#v", result, want)
+	}
+	values := (*recorded)["aggregations"].(map[string]any)["__clicky_values"].(map[string]any)
+	entry := values["aggregations"].(map[string]any)["__clicky_scope"].(map[string]any)
+	terms := entry["aggregations"].(map[string]any)["__clicky_scope"].(map[string]any)
+	documents := terms["aggregations"].(map[string]any)["__clicky_documents"]
+	if !reflect.DeepEqual(documents, map[string]any{"reverse_nested": map[string]any{}}) {
+		t.Fatalf("nested values must count their parent documents, got %v", terms)
+	}
+}
+
 func TestDistinctValuesRejectsPinningWithoutANestedField(t *testing.T) {
 	server, _ := valuesServer(t, `{}`)
 	defer server.Close()
