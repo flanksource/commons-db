@@ -1,7 +1,6 @@
 import {
   CacheBrowser,
   EntitySurface,
-  useRouter,
   type EntityDetailBodyRenderContext,
   type EntityDetailHeaderRenderContext,
   type OperationsApiClient,
@@ -18,6 +17,7 @@ import { ConnectionInfoHeader } from "./connectionInfoHeader";
 import { ConnectionQueryBrowser } from "./connectionQueryBrowser";
 import { ConnectionTrace } from "./connectionTrace";
 import { ConnectionOtel } from "./connectionOtel";
+import { useConnectionTools, type BrowserTab } from "./connectionTools";
 import { connectionProfileTargetOptions } from "./connectionProfileTarget";
 import { connectionLogsSurface } from "./logsProfiles";
 import { useProfiles } from "./profilesQuery";
@@ -48,8 +48,6 @@ export function connectionDetailBodyRenderer(
     />
   );
 }
-
-type BrowserTab = "browser" | "trace" | "traces" | "logs";
 
 function ConnectionBrowser({
   id,
@@ -145,15 +143,7 @@ function ConnectionBrowserBody({
     Record<string, unknown>
   >({});
   const [selectedQuery, setSelectedQuery] = useState<string>();
-  const { navigate, pathname } = useRouter();
-  const supportsOtel = descriptor.provider === "opensearch" || descriptor.provider === "opentelemetry";
-  // A Kubernetes connection opens on its logs: the browser is for authoring a
-  // target, the logs are what the connection is usually opened to read.
-  const supportsLogs = descriptor.provider === "k8s";
-  const tab = new URLSearchParams(window.location.search).get("tab");
-  const activeTab: BrowserTab = supportsLogs && (tab === "logs" || !tab)
-    ? "logs"
-    : supportsOtel && (tab === "traces" || (!tab && descriptor.provider === "opentelemetry")) ? "traces" : descriptor.provider === "sqlserver" && tab === "trace" ? "trace" : "browser";
+  const { activeTab, tabs, selectTab } = useConnectionTools(descriptor.provider);
   const profileOptions = useMemo(
     () => connectionProfileTargetOptions(descriptor, selectedOptions),
     [descriptor, selectedOptions],
@@ -174,14 +164,14 @@ function ConnectionBrowserBody({
       {profileAction ? (
         <div className="flex flex-wrap items-center gap-2">{profileAction}</div>
       ) : null}
-      {hasTraceTab || supportsOtel || supportsLogs ? (
+      {tabs.length > 1 ? (
         <ConnectionToolTabs
           activeTab={activeTab}
-          tabs={supportsLogs ? ["logs", "browser"] : supportsOtel ? ["browser", "traces"] : ["browser", "trace"]}
-          onSelect={tab => { const params = new URLSearchParams(window.location.search); params.set("tab", tab); navigate(`${pathname}?${params}`, { replace: true }); }}
+          tabs={tabs}
+          onSelect={selectTab}
         />
       ) : null}
-      {supportsLogs && activeTab === "logs" ? (
+      {activeTab === "logs" ? (
         <ConnectionLogs connection={{ name: connectionName, namespace }} {...logs} />
       ) : null}
       <div hidden={activeTab !== "browser"}>
@@ -193,7 +183,7 @@ function ConnectionBrowserBody({
           onQueryChange={setSelectedQuery}
         />
       </div>
-      {supportsOtel && activeTab === "traces" && <ConnectionOtel id={id} name={connectionName} />}
+      {activeTab === "traces" && <ConnectionOtel id={id} name={connectionName} />}
       {hasTraceTab ? (
         <div hidden={activeTab !== "trace"}>
           <ConnectionTrace

@@ -3,6 +3,8 @@ package context_test
 import (
 	gocontext "context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/flanksource/commons/logger"
 	. "github.com/onsi/ginkgo/v2"
@@ -99,5 +101,18 @@ var _ = Describe("hydrating a connection that names a kubeconfig context", func(
 		Expect(err).NotTo(HaveOccurred())
 		Expect(hydrated.Password).To(Equal("staging-password"))
 		Expect(dbcontext.InvalidateConnectionSecrets(ctx, selected)).To(Succeed())
+	})
+	It("passes static certificate content without treating it as a file path", func() {
+		file := filepath.Join(GinkgoT().TempDir(), "config")
+		Expect(os.WriteFile(file, []byte("not certificate content"), 0600)).To(Succeed())
+		selected := connection("staging")
+		selected.Type = models.ConnectionTypeKubernetes
+		selected.Certificate = file
+		ctx = ctx.WithKubeContextClients(func(options dbkubernetes.Options) (*dbkubernetes.Client, error) {
+			Expect(options).To(Equal(dbkubernetes.Options{Config: []byte(file), Kubecontext: "staging"}))
+			return clusters["staging"], nil
+		})
+		_, err := ctx.WithConnectionKubernetes(selected)
+		Expect(err).NotTo(HaveOccurred())
 	})
 })

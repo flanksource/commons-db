@@ -82,10 +82,7 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 			t.Kubeconfig.ValueStatic = v
 		}
 
-		if t.Kubecontext == "" {
-			return dutyKubernetes.NewClientFromPathOrConfig(ctx.Logger, t.Kubeconfig.ValueStatic)
-		}
-		return kubeconfigContextClient(t.Kubeconfig.ValueStatic, t.Kubecontext)
+		return kubernetesClient(dutyKubernetes.Options{Config: []byte(t.Kubeconfig.ValueStatic), Kubecontext: t.Kubecontext})
 	}
 	if t.Kubecontext != "" {
 		return kubernetesClient(dutyKubernetes.Options{Kubecontext: t.Kubecontext})

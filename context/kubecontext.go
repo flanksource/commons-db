@@ -2,7 +2,6 @@ package context
 
 import (
 	"fmt"
-	"os"
 	"sync"
 
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
@@ -55,11 +54,7 @@ func (k Context) WithConnectionKubernetes(connection *models.Connection) (Contex
 			return k, err
 		}
 		if certificate.ValueFrom == nil {
-			if _, err := os.Stat(certificate.ValueStatic); err == nil {
-				options.Kubeconfig = certificate.ValueStatic
-			} else {
-				options.Config = []byte(certificate.ValueStatic)
-			}
+			options.Config = []byte(certificate.ValueStatic)
 		}
 	}
 	client, err := k.KubeContextClient(options)

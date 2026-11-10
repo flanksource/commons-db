@@ -44,7 +44,7 @@ type CacheEntry struct {
 type MirrorState struct {
 	SizeBytes int64      `json:"sizeBytes"`
 	Objects   int64      `json:"objects"`
-	Packs     int        `json:"packs"`
+	Packs     int64      `json:"packs"`
 	Shallow   bool       `json:"shallow"`
 	Pins      int        `json:"pins"`
 	LastUsed  *time.Time `json:"lastUsed,omitempty"`
@@ -169,7 +169,7 @@ func mirrorState(ctx context.Context, paths mirrorPaths) (*MirrorState, error) {
 			return nil, fmt.Errorf("unexpected count-objects line %q in %s", line, paths.git)
 		}
 	}
-	state := &MirrorState{SizeBytes: (counts["size"] + counts["size-pack"]) * 1024, Objects: counts["count"] + counts["in-pack"], Packs: int(counts["packs"])}
+	state := &MirrorState{SizeBytes: (counts["size"] + counts["size-pack"]) * 1024, Objects: counts["count"] + counts["in-pack"], Packs: counts["packs"]}
 	if _, err := os.Stat(filepath.Join(paths.git, "shallow")); err == nil {
 		state.Shallow = true
 	} else if !errors.Is(err, fs.ErrNotExist) {

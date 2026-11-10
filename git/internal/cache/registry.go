@@ -23,7 +23,18 @@ var ErrOwnerMissing = errors.New("cache owner has no mirror")
 
 // Load reads key's binding; a key without one owns its mirror.
 func Load(root, key string) (Binding, error) {
-	data, err := os.ReadFile(filepath.Join(root, key, "repository.json"))
+	if key == "." || key != filepath.Base(key) || !filepath.IsLocal(key) {
+		return Binding{}, fmt.Errorf("invalid cache key %q", key)
+	}
+	dir, err := os.OpenRoot(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return Binding{Version: 1, Owner: key}, nil
+	}
+	if err != nil {
+		return Binding{}, err
+	}
+	defer dir.Close()
+	data, err := dir.ReadFile(filepath.Join(key, "repository.json"))
 	if errors.Is(err, os.ErrNotExist) {
 		return Binding{Version: 1, Owner: key}, nil
 	}
@@ -37,7 +48,7 @@ func Load(root, key string) (Binding, error) {
 	if binding.Version != 1 || binding.Owner == "" || binding.Owner == "." || binding.Owner != filepath.Base(binding.Owner) || !filepath.IsLocal(binding.Owner) {
 		return Binding{}, fmt.Errorf("invalid cache binding for %s", key)
 	}
-	if _, err := os.Stat(filepath.Join(root, binding.Owner, "mirror.git", "HEAD")); errors.Is(err, os.ErrNotExist) {
+	if _, err := dir.Stat(filepath.Join(binding.Owner, "mirror.git", "HEAD")); errors.Is(err, os.ErrNotExist) {
 		return binding, fmt.Errorf("binding of %s to %s: %w", key, binding.Owner, ErrOwnerMissing)
 	} else if err != nil {
 		return Binding{}, fmt.Errorf("cache owner %s: %w", binding.Owner, err)

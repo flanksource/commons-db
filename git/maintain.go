@@ -33,6 +33,14 @@ func (c *Cache) Maintain(ctx context.Context, options MaintainOptions) error {
 	if options.PinTTL <= 0 {
 		return fmt.Errorf("maintain git cache: pin TTL must be positive, got %s", options.PinTTL)
 	}
+	root, err := os.OpenRoot(c.Root)
+	if errors.Is(err, fs.ErrNotExist) && len(options.Owners) == 0 {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("maintain git cache %s: %w", c.Root, err)
+	}
+	defer root.Close()
 	owners := options.Owners
 	if len(owners) == 0 {
 		entries, err := os.ReadDir(c.Root)
@@ -43,20 +51,25 @@ func (c *Cache) Maintain(ctx context.Context, options MaintainOptions) error {
 			return fmt.Errorf("maintain git cache %s: %w", c.Root, err)
 		}
 		for _, entry := range entries {
-			if _, err := os.Stat(filepath.Join(c.Root, entry.Name(), "mirror.git", "HEAD")); err == nil {
+			if !entry.IsDir() {
+				continue
+			}
+			if _, err := root.Stat(filepath.Join(entry.Name(), "mirror.git", "HEAD")); err == nil {
 				owners = append(owners, entry.Name())
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("maintain git mirror %s: %w", entry.Name(), err)
 			}
 		}
 	}
 	cutoff := time.Now().Add(-options.PinTTL)
 	for _, owner := range owners {
-		paths := newMirrorPaths(filepath.Join(c.Root, owner))
-		if !filepath.IsLocal(owner) || owner != filepath.Base(owner) {
+		if owner == "." || !filepath.IsLocal(owner) || owner != filepath.Base(owner) {
 			return fmt.Errorf("maintain git cache: invalid mirror %q", owner)
 		}
-		if _, err := os.Stat(filepath.Join(paths.git, "HEAD")); err != nil {
+		if _, err := root.Stat(filepath.Join(owner, "mirror.git", "HEAD")); err != nil {
 			return fmt.Errorf("maintain git mirror %s: %w", owner, err)
 		}
+		paths := newMirrorPaths(filepath.Join(c.Root, owner))
 		if err := maintainMirror(ctx, paths, cutoff); err != nil {
 			return fmt.Errorf("maintain git mirror %s: %w", paths.git, err)
 		}
