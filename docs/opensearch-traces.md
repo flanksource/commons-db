@@ -104,6 +104,8 @@ Set `properties.index` on each connection (for example `jaeger-span-*` or `otel-
 
 Canonical query fields are `trace_id`, `span_id`, `parent_id`, `timestamp` (RFC3339), `duration_ms` (milliseconds), `service`, `operation`, `status`, and `kind`. Attributes use `attributes.http.method` and resources use `resource.service.name`, with the suffix treated as a literal attribute key. Mapped Jaeger, canonical and flat OTLP fields resolve automatically, including keyword multifields, known timestamp/duration units and status encodings. Queries, sorts, listing filters and returned spans use the same resolved layout. Normalization runs before aliases and column mapping.
 
+Jaeger indices that keep attributes in the nested `tags` and `process.tags` key/value lists (no tags-as-fields) resolve `attributes.<key>` and `resource.<key>` through nested queries: term, terms, match, prefix, wildcard and exists filters, listing include/exclude, column sorts and facet lookups all pin the entry by its key and read its `value`. Facet counts are spans, not tag entries. A scalar mapping such as Jaeger's `tag.db@operation` wins over the nested list when both exist. Ranges on nested attributes return an error, because the values are indexed as keyword strings and would compare lexically. For typed numeric ranges, enable Jaeger `--es.tags-as-fields.all` (or an allowlist) or flatten the tags with an ingest pipeline; both apply only to newly written indices.
+
 For custom source names or units, set `properties.span_layout` on the connection to a JSON string such as:
 
 ```json
@@ -111,5 +113,7 @@ For custom source names or units, set `properties.span_layout` on the connection
 ```
 
 Each entry's `source` identifies the document path. Optional `query` selects an exact-match keyword multifield; `unit` specifies numeric time units (`s`, `ms`, `us`, `ns`); `values` maps canonical enum values to native values. Live mappings validate these paths. Keep connection-specific layouts on connections so the same logical profile can move between them. Computed CEL/JSONPath span mappings and aggregate attribute/resource mappings cannot be inverted into source conditions and return an error for portable searches; configure their individual fields on the connection instead.
+
+Other key/value attribute lists can be declared in the same JSON with `nested` rules, for example `{"nested":[{"prefix":"attributes.","path":"labels","key":"labels.name","value":"labels.value"}]}`. The prefix must be `attributes.` or `resource.`, and the key and value must be keyword leaves of the nested `path`.
 
 `POST /api/v1/profile/sample/query` accepts `{ "profile": <draft>, "direction": "source" | "canonical", "query": <optional raw DSL>, "params": <parameter values> }`. It inspects metadata without searching documents and returns the canonical structured `search`, canonical/native DSL and resolved layout. The endpoint imports supported boolean, term, range, existence and text conditions. Missing or ambiguous fields, nested queries, embedded query-string field references, unsupported source projections/aggregations, and non-invertible source-specific parameter values produce explicit errors. Top-level `search` is mutually exclusive with raw `query` and native `provider.options.search`.
