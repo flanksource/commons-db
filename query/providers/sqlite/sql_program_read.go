@@ -38,7 +38,7 @@ func readSQLProgram(
 		}
 		req.Diagnostics.RecordResponse(started, len(result.Rows), map[string]any{"dialect": string(dialect)})
 	}()
-	result, err = runSQLProgram(ctx, client, dialect, bound)
+	result, err = runSQLProgram(ctx, client, dialect, req.Diagnostics, bound)
 	if err != nil {
 		return query.Page{}, err
 	}

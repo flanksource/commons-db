@@ -146,11 +146,13 @@ func readSQLPages(
 	request := req
 	current := page
 	remaining := page.Ceiling
-	for {
+	for number := 1; ; number++ {
 		if remaining > 0 && remaining < current.Limit {
 			current.Limit = remaining
 		}
-		read, err := ReadSQLPage(ctx, client, string(dialect), sqlPageRequest(request, current))
+		pageRequest := sqlPageRequest(request, current)
+		pageRequest.PageNumber = number
+		read, err := ReadSQLPage(ctx, client, string(dialect), pageRequest)
 		if err != nil {
 			yield(query.Page{}, err)
 			return
