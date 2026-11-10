@@ -132,13 +132,21 @@ func programRequest(batches []boundBatch) (string, []any, []map[string]any) {
 }
 
 // runSQLProgram runs every batch on one session and returns the single Page a
-// program is.
-func runSQLProgram(ctx context.Context, client *sql.DB, dialect sqlDialect, batches []boundBatch) (query.Page, error) {
+// program is. When the diagnostics want it, that session is recorded before the
+// first batch and, past AutoDiagnose, sampled until the program ends.
+func runSQLProgram(ctx context.Context, client *sql.DB, dialect sqlDialect, diagnostics *query.ProviderDiagnostics, batches []boundBatch) (query.Page, error) {
 	conn, err := client.Conn(ctx)
 	if err != nil {
 		return query.Page{}, fmt.Errorf("open a session for the SQL program: %w", err)
 	}
 	defer func() { _ = conn.Close() }()
+	if diagnostics.WantsSession() {
+		session, err := recordSession(ctx, conn, sessionRequest{Dialect: dialect, Diagnostics: diagnostics})
+		if err != nil {
+			return query.Page{}, err
+		}
+		defer startAutoDiagnose(ctx, client, session, diagnostics)()
+	}
 	observe := query.BatchObserver(ctx)
 	var results []query.BatchResult
 	for _, batch := range batches {

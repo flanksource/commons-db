@@ -21,7 +21,10 @@ type SQLPageRequest struct {
 	Order            query.Order
 	Position         query.CursorPosition
 	Page             query.PageRequest
-	Diagnostics      *query.ProviderDiagnostics
+	// PageNumber is the 1-based page of a walk this read is, for the server
+	// session it records; zero when the caller does not count pages.
+	PageNumber  int
+	Diagnostics *query.ProviderDiagnostics
 }
 
 type SQLPageResult struct {
@@ -46,9 +49,10 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 	// Gated on WantsPreview rather than on the sink existing: a reconciliation
 	// records itself on every run, and turning on server debug logging for every
 	// page of an ordinary read is a debug-run price an ordinary read must not pay.
+	// A wanted session needs the query id too: it is how ClickHouse names one.
 	queryContext, queryID, providerDetails := clickHouseDiagnosticContext(
 		ctx,
-		dialect == dialectClickHouse && request.Diagnostics.WantsPreview(),
+		dialect == dialectClickHouse && (request.Diagnostics.WantsPreview() || request.Diagnostics.WantsSession()),
 	)
 	trace.queryID, trace.providerDetails = queryID, providerDetails
 	defer func() { trace.recordResponse(result, err) }()
@@ -75,12 +79,37 @@ func ReadSQLPage(ctx context.Context, client *sql.DB, driver string, request SQL
 	// readOnlyStatementError), wrapped by nodes, with every request-supplied
 	// value a bind node whose value travels in args and every identifier an
 	// Identifier node the generator quotes.
-	rows, err := client.QueryContext(queryContext, statement, driverArgs(dialect, args)...)
+	runner, release, err := pageSession(ctx, client, dialect, request, queryID)
+	if err != nil {
+		return SQLPageResult{}, err
+	}
+	defer release()
+	rows, err := runner.QueryContext(queryContext, statement, driverArgs(dialect, args)...)
 	if err != nil {
 		return SQLPageResult{}, sqlExecError(dialect, request.Filters, err)
 	}
 	defer func() { _ = rows.Close() }()
 	return scanSQLPage(rows, request)
+}
+
+// pageSession is what a page's statement runs on: the pool, unless the
+// diagnostics want the server session, which is then pinned, recorded and,
+// past AutoDiagnose, sampled until release.
+func pageSession(ctx context.Context, client *sql.DB, dialect sqlDialect, request SQLPageRequest, queryID string) (queryer, func(), error) {
+	if !request.Diagnostics.WantsSession() || dialect == dialectSQLite {
+		return client, func() {}, nil
+	}
+	conn, session, err := pinSession(ctx, client, sessionRequest{
+		Dialect: dialect, Diagnostics: request.Diagnostics, Page: request.PageNumber, QueryID: queryID,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	stop := startAutoDiagnose(ctx, client, session, request.Diagnostics)
+	return conn, func() {
+		stop()
+		_ = conn.Close()
+	}, nil
 }
 
 // sqlPageTrace records one page read into the request's diagnostics.
