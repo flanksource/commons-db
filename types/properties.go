@@ -122,7 +122,7 @@ func (p *Property) String() string {
 		s += fmt.Sprintf("text=%s ", p.Text)
 	}
 	if p.Value != nil {
-		s += fmt.Sprintf("value=%d ", p.Value)
+		s += fmt.Sprintf("value=%d ", *p.Value)
 	}
 	if p.Unit != "" {
 		s += fmt.Sprintf("unit=%s ", p.Unit)
