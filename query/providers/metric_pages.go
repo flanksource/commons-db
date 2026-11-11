@@ -61,7 +61,6 @@ func metricPages(ctx context.Context, req query.ProviderRequest, page query.Page
 			return
 		}
 		id := req.Position.PIT
-		var item *metricSnapshot
 		if id == "" {
 			rows, err := execute(ctx, req)
 			if err != nil {
@@ -72,7 +71,7 @@ func metricPages(ctx context.Context, req query.ProviderRequest, page query.Page
 				yield(query.Page{Rows: rows, Total: &query.Total{Exact: true}, Metrics: req.MetricMetadata}, nil)
 				return
 			}
-			id, item, err = createMetricSnapshot(ctx, scope, rows, req.MetricMetadata)
+			id, err = createMetricSnapshot(ctx, scope, rows, req.MetricMetadata)
 			if err != nil {
 				yield(query.Page{}, err)
 				return
@@ -109,16 +108,16 @@ func metricScope(ctx context.Context, req query.ProviderRequest) (string, error)
 	}
 	return fmt.Sprintf("%x", sha256.Sum256(b)), nil
 }
-func createMetricSnapshot(ctx context.Context, scope string, rows []query.Row, metadata *query.MetricMetadata) (string, *metricSnapshot, error) {
+func createMetricSnapshot(ctx context.Context, scope string, rows []query.Row, metadata *query.MetricMetadata) (string, error) {
 	dir := filepath.Join(".tmp", "metric-results")
 	if err := os.MkdirAll(dir, 0700); err != nil {
-		return "", nil, err
+		return "", err
 	}
 	id := uuid.NewString()
 	path := filepath.Join(dir, id+".sqlite")
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		return "", nil, err
+		return "", err
 	}
 	defer db.Close()
 	keys := []string{}
@@ -145,17 +144,17 @@ func createMetricSnapshot(ctx context.Context, scope string, rows []query.Row, m
 	table, err := sqlitetable.Write(ctx, db, sqlitetable.Table{Name: "metric_results", Columns: columns}, rows)
 	if err != nil {
 		os.Remove(path)
-		return "", nil, err
+		return "", err
 	}
 	if err := os.Chmod(path, 0600); err != nil {
 		os.Remove(path)
-		return "", nil, err
+		return "", err
 	}
 	projection := make([]string, len(keys))
 	for i, k := range keys {
 		physical, err := table.Physical(k)
 		if err != nil {
-			return "", nil, err
+			return "", err
 		}
 		projection[i] = physical
 		for _, r := range rows {
@@ -173,7 +172,7 @@ func createMetricSnapshot(ctx context.Context, scope string, rows []query.Row, m
 	metricSnapshots.items[id] = item
 	scheduleMetricExpiry(id, item)
 	metricSnapshots.Unlock()
-	return id, item, nil
+	return id, nil
 }
 func acquireMetricSnapshot(id, scope string) (*metricSnapshot, func(), error) {
 	metricSnapshots.Lock()

@@ -52,7 +52,7 @@ func (c annotatedPrometheus) read(ctx stdctx.Context, path string, params url.Va
 		return nil, nil, fmt.Errorf("decode Prometheus response: %w", err)
 	}
 	if response.StatusCode/100 != 2 || envelope.Status != "success" {
-		return nil, nil, fmt.Errorf("Prometheus status %d: %s", response.StatusCode, envelope.Error)
+		return nil, nil, fmt.Errorf("prometheus status %d: %s", response.StatusCode, envelope.Error)
 	}
 	if c.metadata != nil {
 		for _, msg := range envelope.Warnings {

@@ -28,6 +28,34 @@ var _ = Describe("SQLite DDL", func() {
 		copy.addConstraint("uq_body", "CONSTRAINT uq_body UNIQUE (body)")
 		Expect(copy.hasConstraint("uq_body")).To(BeTrue())
 	})
+	It("parses a quoted table name containing spaces", func() {
+		parsed, err := parseDDL(`CREATE TABLE "team notes" (id integer, body text)`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.head).To(Equal(`CREATE TABLE "team notes"`))
+		Expect(parsed.renameTable("team notes__temp", "team notes")).To(Succeed())
+		Expect(parsed.compile()).To(HavePrefix("CREATE TABLE `team notes__temp` "))
+	})
+	It("rejects a partially matched table name", func() {
+		_, err := parseDDL("CREATE TABLE main.notes (id integer)")
+		Expect(err).To(MatchError("invalid DDL"))
+	})
+	It("only closes a quote with its own delimiter", func() {
+		parsed, err := parseDDL(`CREATE TABLE notes (id integer, body text DEFAULT "can't,stop", note text DEFAULT 'say "hi", ''ok''')`)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.fields).To(Equal([]string{"id integer", `body text DEFAULT "can't,stop"`, `note text DEFAULT 'say "hi", ''ok'''`}))
+	})
+	It("excludes unnamed table constraints from copied columns", func() {
+		parsed, err := parseDDL("CREATE TABLE notes (id integer, parent_id integer, unique_code text, checked integer, body text, UNIQUE (body), FOREIGN KEY (parent_id) REFERENCES parents(id), CHECK (checked IN (0, 1)))")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.getColumns()).To(Equal([]string{"`id`", "`parent_id`", "`unique_code`", "`checked`", "`body`"}))
+	})
+	It("removes an unquoted column", func() {
+		parsed, err := parseDDL("CREATE TABLE notes (id integer, obsolete text, obsolete_at text)")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(parsed.removeColumn("obsolete")).To(BeTrue())
+		Expect(parsed.fields).To(Equal([]string{"id integer", "obsolete_at text"}))
+		Expect(parsed.removeColumn("obsolete")).To(BeFalse())
+	})
 	It("rejects unbalanced column expressions", func() {
 		_, err := parseDDL("CREATE TABLE broken (body text DEFAULT (lower('acme'))")
 		Expect(err).To(MatchError("invalid DDL, unbalanced brackets"))

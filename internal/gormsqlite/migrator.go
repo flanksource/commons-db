@@ -19,19 +19,40 @@ type Migrator struct {
 	migrator.Migrator
 }
 
-func (m *Migrator) RunWithoutForeignKey(fc func() error) (err error) {
+// RunWithoutForeignKey runs fc with foreign key enforcement disabled. PRAGMA foreign_keys is
+// connection-local, so fc receives a Migrator pinned to the connection the pragma was changed on,
+// along with whether enforcement was enabled beforehand. The original setting is restored afterwards.
+func (m Migrator) RunWithoutForeignKey(fc func(m Migrator, enforced bool) error) error {
+	switch m.DB.Statement.ConnPool.(type) {
+	case gorm.TxCommitter, *sql.Conn:
+		return m.withoutForeignKey(m.DB, fc)
+	}
+	return m.DB.Connection(func(conn *gorm.DB) error {
+		return m.withoutForeignKey(conn.Session(&gorm.Session{}), fc)
+	})
+}
+
+func (m Migrator) withoutForeignKey(conn *gorm.DB, fc func(m Migrator, enforced bool) error) (err error) {
+	pinned := m
+	pinned.DB = conn
 	var enabled int
-	if err := m.DB.Raw("PRAGMA foreign_keys").Scan(&enabled).Error; err != nil {
+	if err := conn.Raw("PRAGMA foreign_keys").Scan(&enabled).Error; err != nil {
 		return err
 	}
-	if enabled == 1 {
-		if err := m.DB.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
-			return err
-		}
-		defer func() { err = errors.Join(err, m.DB.Exec("PRAGMA foreign_keys = ON").Error) }()
+	if enabled == 0 {
+		return fc(pinned, false)
 	}
-
-	return fc()
+	if err := conn.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, conn.Exec("PRAGMA foreign_keys = ON").Error) }()
+	if err := conn.Raw("PRAGMA foreign_keys").Scan(&enabled).Error; err != nil {
+		return err
+	}
+	if enabled != 0 {
+		return errors.New("cannot disable foreign_keys inside a transaction")
+	}
+	return fc(pinned, true)
 }
 
 func (m Migrator) HasTable(value interface{}) bool {
@@ -45,7 +66,7 @@ func (m Migrator) HasTable(value interface{}) bool {
 }
 
 func (m Migrator) DropTable(values ...interface{}) error {
-	return m.RunWithoutForeignKey(func() error {
+	return m.RunWithoutForeignKey(func(m Migrator, _ bool) error {
 		values = m.ReorderModels(values, false)
 		tx := m.DB.Session(&gorm.Session{})
 
@@ -88,32 +109,30 @@ func (m Migrator) HasColumn(value interface{}, name string) bool {
 }
 
 func (m Migrator) AlterColumn(value interface{}, name string) error {
-	return m.RunWithoutForeignKey(func() error {
-		return m.recreateTable(value, nil, func(ddl *ddl, stmt *gorm.Statement) (*ddl, []interface{}, error) {
-			if field := stmt.Schema.LookUpField(name); field != nil {
-				var sqlArgs []interface{}
-				for i, f := range ddl.fields {
-					if matches := columnRegexp.FindStringSubmatch(f); len(matches) > 1 && matches[1] == field.DBName {
-						ddl.fields[i] = fmt.Sprintf("`%v` ?", field.DBName)
-						sqlArgs = []interface{}{m.FullDataTypeOf(field)}
-						// table created by old version might look like `CREATE TABLE ? (? varchar(10) UNIQUE)`.
-						// FullDataTypeOf doesn't contain UNIQUE, so we need to add unique constraint.
-						if strings.Contains(strings.ToUpper(matches[3]), " UNIQUE") {
-							uniName := m.DB.NamingStrategy.UniqueName(stmt.Table, field.DBName)
-							uni, _ := m.GuessConstraintInterfaceAndTable(stmt, uniName)
-							if uni != nil {
-								uniSQL, uniArgs := uni.Build()
-								ddl.addConstraint(uniName, uniSQL)
-								sqlArgs = append(sqlArgs, uniArgs...)
-							}
+	return m.recreateTable(value, nil, func(ddl *ddl, stmt *gorm.Statement) (*ddl, []interface{}, error) {
+		if field := stmt.Schema.LookUpField(name); field != nil {
+			var sqlArgs []interface{}
+			for i, f := range ddl.fields {
+				if matches := columnRegexp.FindStringSubmatch(f); len(matches) > 1 && matches[1] == field.DBName {
+					ddl.fields[i] = fmt.Sprintf("`%v` ?", field.DBName)
+					sqlArgs = []interface{}{m.FullDataTypeOf(field)}
+					// table created by old version might look like `CREATE TABLE ? (? varchar(10) UNIQUE)`.
+					// FullDataTypeOf doesn't contain UNIQUE, so we need to add unique constraint.
+					if strings.Contains(strings.ToUpper(matches[3]), " UNIQUE") {
+						uniName := m.DB.NamingStrategy.UniqueName(stmt.Table, field.DBName)
+						uni, _ := m.GuessConstraintInterfaceAndTable(stmt, uniName)
+						if uni != nil {
+							uniSQL, uniArgs := uni.Build()
+							ddl.addConstraint(uniName, uniSQL)
+							sqlArgs = append(sqlArgs, uniArgs...)
 						}
-						break
 					}
+					break
 				}
-				return ddl, sqlArgs, nil
 			}
-			return nil, nil, fmt.Errorf("failed to alter field with name %v", name)
-		})
+			return ddl, sqlArgs, nil
+		}
+		return nil, nil, fmt.Errorf("failed to alter field with name %v", name)
 	})
 }
 
@@ -172,7 +191,9 @@ func (m Migrator) DropColumn(value interface{}, name string) error {
 			name = field.DBName
 		}
 
-		ddl.removeColumn(name)
+		if !ddl.removeColumn(name) {
+			return nil, nil, fmt.Errorf("failed to find column %v in table %v", name, stmt.Table)
+		}
 		return ddl, nil, nil
 	})
 }
@@ -319,13 +340,15 @@ func (m Migrator) RenameIndex(value interface{}, oldName, newName string) error 
 		if err := m.DB.Raw("SELECT sql FROM sqlite_master WHERE type = ? AND tbl_name = ? AND name = ?", "index", stmt.Table, oldName).Row().Scan(&sql); err != nil {
 			return err
 		}
-		if sql != "" {
-			if err := m.DropIndex(value, oldName); err != nil {
+		if sql == "" {
+			return fmt.Errorf("failed to find index with name %v", oldName)
+		}
+		return m.DB.Transaction(func(tx *gorm.DB) error {
+			if err := tx.Exec("DROP INDEX ?", clause.Column{Name: oldName}).Error; err != nil {
 				return err
 			}
-			return m.DB.Exec(strings.Replace(sql, oldName, newName, 1)).Error
-		}
-		return fmt.Errorf("failed to find index with name %v", oldName)
+			return tx.Exec(strings.Replace(sql, oldName, newName, 1)).Error
+		})
 	})
 }
 
@@ -393,54 +416,75 @@ func (m Migrator) recreateTable(
 	value interface{}, tablePtr *string,
 	getCreateSQL func(ddl *ddl, stmt *gorm.Statement) (sql *ddl, sqlArgs []interface{}, err error),
 ) error {
-	return m.RunWithValue(value, func(stmt *gorm.Statement) error {
-		table := stmt.Table
-		if tablePtr != nil {
-			table = *tablePtr
-		}
+	return m.RunWithoutForeignKey(func(m Migrator, enforced bool) error {
+		return m.RunWithValue(value, func(stmt *gorm.Statement) error {
+			table := stmt.Table
+			if tablePtr != nil {
+				table = *tablePtr
+			}
 
-		rawDDL, err := m.getRawDDL(table)
-		if err != nil {
-			return err
-		}
-
-		originDDL, err := parseDDL(rawDDL)
-		if err != nil {
-			return err
-		}
-
-		createDDL, sqlArgs, err := getCreateSQL(originDDL.clone(), stmt)
-		if err != nil {
-			return err
-		}
-		if createDDL == nil {
-			return nil
-		}
-
-		newTableName := table + "__temp"
-		if err := createDDL.renameTable(newTableName, table); err != nil {
-			return err
-		}
-
-		columns := createDDL.getColumns()
-		createSQL := createDDL.compile()
-
-		return m.DB.Transaction(func(tx *gorm.DB) error {
-			if err := tx.Exec(createSQL, sqlArgs...).Error; err != nil {
+			rawDDL, err := m.getRawDDL(table)
+			if err != nil {
 				return err
 			}
 
-			queries := []string{
-				fmt.Sprintf("INSERT INTO `%v`(%v) SELECT %v FROM `%v`", newTableName, strings.Join(columns, ","), strings.Join(columns, ","), table),
-				fmt.Sprintf("DROP TABLE `%v`", table),
-				fmt.Sprintf("ALTER TABLE `%v` RENAME TO `%v`", newTableName, table),
+			originDDL, err := parseDDL(rawDDL)
+			if err != nil {
+				return err
 			}
-			for _, query := range queries {
-				if err := tx.Exec(query).Error; err != nil {
+
+			createDDL, sqlArgs, err := getCreateSQL(originDDL.clone(), stmt)
+			if err != nil {
+				return err
+			}
+			if createDDL == nil {
+				return nil
+			}
+
+			newTableName := table + "__temp"
+			if err := createDDL.renameTable(newTableName, table); err != nil {
+				return err
+			}
+
+			columns := createDDL.getColumns()
+			createSQL := createDDL.compile()
+
+			return m.DB.Transaction(func(tx *gorm.DB) error {
+				if err := tx.Exec(createSQL, sqlArgs...).Error; err != nil {
 					return err
 				}
-			}
-			return nil
+
+				// DROP TABLE removes the table's explicit indexes and triggers, so they are recreated after the rename.
+				var dependents []string
+				if err := tx.Raw(
+					"SELECT sql FROM sqlite_master WHERE type IN ? AND tbl_name = ? AND sql IS NOT NULL ORDER BY type = ?",
+					[]string{"index", "trigger"}, table, "trigger",
+				).Scan(&dependents).Error; err != nil {
+					return err
+				}
+
+				queries := append([]string{
+					fmt.Sprintf("INSERT INTO `%v`(%v) SELECT %v FROM `%v`", newTableName, strings.Join(columns, ","), strings.Join(columns, ","), table),
+					fmt.Sprintf("DROP TABLE `%v`", table),
+					fmt.Sprintf("ALTER TABLE `%v` RENAME TO `%v`", newTableName, table),
+				}, dependents...)
+				for _, query := range queries {
+					if err := tx.Exec(query).Error; err != nil {
+						return fmt.Errorf("recreate table %v: %s: %w", table, query, err)
+					}
+				}
+
+				if enforced {
+					var violations []map[string]interface{}
+					if err := tx.Raw("PRAGMA foreign_key_check").Scan(&violations).Error; err != nil {
+						return err
+					}
+					if len(violations) > 0 {
+						return fmt.Errorf("recreate table %v: foreign key violations: %v", table, violations)
+					}
+				}
+				return nil
+			})
 		})
 	})
 }
