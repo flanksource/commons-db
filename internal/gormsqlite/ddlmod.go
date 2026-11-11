@@ -15,15 +15,20 @@ import (
 )
 
 var (
-	sqliteSeparator    = "`|\"|'|\t"
-	uniqueRegexp       = regexp.MustCompile(fmt.Sprintf(`^CONSTRAINT [%v]?[\w-]+[%v]? UNIQUE (.*)$`, sqliteSeparator, sqliteSeparator))
-	indexRegexp        = regexp.MustCompile(fmt.Sprintf(`(?is)CREATE(?: UNIQUE)? INDEX [%v]?[\w\d-]+[%v]?(?s:.*?)ON (.*)$`, sqliteSeparator, sqliteSeparator))
-	tableRegexp        = regexp.MustCompile(fmt.Sprintf(`(?is)(CREATE TABLE [%v]?[\w\d-]+[%v]?)(?:\s*\((.*)\))?`, sqliteSeparator, sqliteSeparator))
-	separatorRegexp    = regexp.MustCompile(fmt.Sprintf("[%v]", sqliteSeparator))
-	columnsRegexp      = regexp.MustCompile(fmt.Sprintf(`[(,][%v]?(\w+)[%v]?`, sqliteSeparator, sqliteSeparator))
-	columnRegexp       = regexp.MustCompile(fmt.Sprintf(`^[%v]?([\w\d]+)[%v]?\s+([\w\(\)\d]+)(.*)$`, sqliteSeparator, sqliteSeparator))
-	defaultValueRegexp = regexp.MustCompile(`(?i) DEFAULT \(?(.+)?\)?( |COLLATE|GENERATED|$)`)
-	regRealDataType    = regexp.MustCompile(`[^\d](\d+)[^\d]?`)
+	sqliteSeparator = "`|\"|'|\t"
+	uniqueRegexp    = regexp.MustCompile(fmt.Sprintf(`^CONSTRAINT [%v]?[\w-]+[%v]? UNIQUE (.*)$`, sqliteSeparator, sqliteSeparator))
+	indexRegexp     = regexp.MustCompile(fmt.Sprintf(`(?is)CREATE(?: UNIQUE)? INDEX [%v]?[\w\d-]+[%v]?(?s:.*?)ON (.*)$`, sqliteSeparator, sqliteSeparator))
+	// The table name must be followed by the column list or the end of the
+	// statement, so a partially matched identifier is rejected.
+	tableRegexp = regexp.MustCompile(
+		`(?is)^\s*(CREATE TABLE (?:IF NOT EXISTS\s+)?(?:"(?:[^"]|"")+"|` + "`(?:[^`]|``)+`" + `|'(?:[^']|'')+'|\[[^\]]+\]|[\w-]+))(?:\s*\((.*)\)|\s*$)`,
+	)
+	ddlQuotes             = map[rune]rune{'"': '"', '`': '`', '\'': '\'', '[': ']'}
+	tableConstraintRegexp = regexp.MustCompile(`(?i)^(?:CONSTRAINT\s|(?:PRIMARY\s+KEY|UNIQUE|CHECK|FOREIGN\s+KEY)\s*\()`)
+	columnsRegexp         = regexp.MustCompile(fmt.Sprintf(`[(,][%v]?(\w+)[%v]?`, sqliteSeparator, sqliteSeparator))
+	columnRegexp          = regexp.MustCompile(fmt.Sprintf(`^[%v]?([\w\d]+)[%v]?\s+([\w\(\)\d]+)(.*)$`, sqliteSeparator, sqliteSeparator))
+	defaultValueRegexp    = regexp.MustCompile(`(?i) DEFAULT \(?(.+)?\)?( |COLLATE|GENERATED|$)`)
+	regRealDataType       = regexp.MustCompile(`[^\d](\d+)[^\d]?`)
 )
 
 func getAllColumns(s string) []string {
@@ -67,27 +72,25 @@ func parseDDL(strs ...string) (*ddl, error) {
 					next = ddlBodyRunes[idx+1]
 				}
 
-				if sc := string(c); separatorRegexp.MatchString(sc) {
-					if c == next {
-						buf += sc // Skip escaped quote
-						idx++
-					} else if quote > 0 {
-						quote = 0
-					} else {
-						quote = c
-					}
-				} else if quote == 0 {
-					if c == '(' {
-						bracketLevel++
-					} else if c == ')' {
-						bracketLevel--
-					} else if bracketLevel == 0 {
-						if c == ',' {
-							result.fields = append(result.fields, strings.TrimSpace(buf))
-							buf = ""
-							continue
+				if quote != 0 {
+					if c == quote {
+						if next == quote {
+							buf += string(c) // Skip escaped quote
+							idx++
+						} else {
+							quote = 0
 						}
 					}
+				} else if closing, ok := ddlQuotes[c]; ok {
+					quote = closing
+				} else if c == '(' {
+					bracketLevel++
+				} else if c == ')' {
+					bracketLevel--
+				} else if c == ',' && bracketLevel == 0 {
+					result.fields = append(result.fields, strings.TrimSpace(buf))
+					buf = ""
+					continue
 				}
 
 				if bracketLevel < 0 {
@@ -97,6 +100,9 @@ func parseDDL(strs ...string) (*ddl, error) {
 				buf += string(c)
 			}
 
+			if quote != 0 {
+				return nil, errors.New("invalid DDL, unterminated quote")
+			}
 			if bracketLevel != 0 {
 				return nil, errors.New("invalid DDL, unbalanced brackets")
 			}
@@ -260,11 +266,7 @@ func (d *ddl) getColumns() []string {
 	res := []string{}
 
 	for _, f := range d.fields {
-		fUpper := strings.ToUpper(f)
-		if strings.HasPrefix(fUpper, "PRIMARY KEY") ||
-			strings.HasPrefix(fUpper, "CHECK") ||
-			strings.HasPrefix(fUpper, "CONSTRAINT") ||
-			strings.Contains(fUpper, "GENERATED ALWAYS AS") {
+		if tableConstraintRegexp.MatchString(f) || strings.Contains(strings.ToUpper(f), "GENERATED ALWAYS AS") {
 			continue
 		}
 
@@ -279,7 +281,8 @@ func (d *ddl) getColumns() []string {
 }
 
 func (d *ddl) removeColumn(name string) bool {
-	reg := regexp.MustCompile("^(`|'|\"| )" + regexp.QuoteMeta(name) + "(`|'|\"| ) .*?$")
+	quoted := regexp.QuoteMeta(name)
+	reg := regexp.MustCompile("(?i)^(?:`" + quoted + "`|\"" + quoted + "\"|'" + quoted + "'|\\[" + quoted + "\\]|" + quoted + ")(?:\\s|$)")
 
 	for i := 0; i < len(d.fields); i++ {
 		if reg.MatchString(d.fields[i]) {
