@@ -11,9 +11,9 @@ import (
 	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
-	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"

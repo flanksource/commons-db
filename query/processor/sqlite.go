@@ -19,16 +19,11 @@ import (
 	"strings"
 	"time"
 
-	// glebarez/sqlite is a gorm dialector only — it registers no driver. The
-	// github.com/clarkmcc/gorm-sqlite replace (see the downstream go.mod files)
-	// points it at modernc's engine, keeping this CGO-free. gorm.io/driver/sqlite
-	// would instead drag in the CGO driver mattn/go-sqlite3, which is dead weight
-	// in a CGO_ENABLED=0 binary.
-	"github.com/glebarez/sqlite"
 	"gorm.io/gorm"
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/db"
+	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/metrics"
 )

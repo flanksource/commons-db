@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
+	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	commons "github.com/flanksource/commons/logger"
-	"github.com/glebarez/sqlite"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"gorm.io/gorm"

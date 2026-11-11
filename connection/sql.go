@@ -14,15 +14,8 @@ import (
 	_ "github.com/jackc/pgx/v5/stdlib"
 	_ "github.com/microsoft/go-mssqldb"
 	"github.com/microsoft/go-mssqldb/msdsn"
-	// modernc.org/sqlite is the ONLY sqlite driver commons-db may import. It and
-	// github.com/glebarez/go-sqlite (the same engine, repackaged) both call
-	// sql.Register("sqlite"), so linking both panics at init with
-	// "sql: Register called twice for driver sqlite". Downstream binaries
-	// Downstream binaries already link modernc directly and route the gorm
-	// dialector github.com/glebarez/sqlite through the
-	// github.com/clarkmcc/gorm-sqlite replace, which imports modernc's engine
-	// rather than vendoring its own — so modernc is the one shared registration.
-	// Do not "fix" a build error by swapping this for glebarez/go-sqlite.
+	// Share the canonical modernc driver with internal/gormsqlite so GORM and
+	// direct SQL connections use the same engine and function registrations.
 	_ "modernc.org/sqlite"
 
 	"github.com/flanksource/commons-db/context"

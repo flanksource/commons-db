@@ -5,7 +5,7 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	dbcontext "github.com/flanksource/commons-db/context"
-	"github.com/glebarez/sqlite"
+	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"gorm.io/gorm"
