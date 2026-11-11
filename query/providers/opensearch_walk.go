@@ -14,9 +14,10 @@ import (
 // provider read the same index the same way and differ only in how they shape a
 // hit into a row, so the walk is shared and the shaping is injected.
 type openSearchWalk struct {
-	searcher *opensearch.Searcher
-	index    string
-	paging   openSearchPagingMode
+	searcher  *opensearch.Searcher
+	index     string
+	paging    openSearchPagingMode
+	threshold int
 
 	// diagnostics is non-nil only for a debug run, and records the search this
 	// walk actually issues — the body with every runtime filter and time range
@@ -28,7 +29,7 @@ type openSearchWalk struct {
 
 	// mapRows shapes a response's hits into rows, one row per hit and in hit
 	// order.
-	mapRows func(opensearch.Response) []query.Row
+	mapRows func(opensearch.Response) ([]query.Row, error)
 }
 
 // drainOpenSearch reads every row of an index-backed provider into one slice.
@@ -41,7 +42,7 @@ type openSearchWalk struct {
 // unordered profile has no position to resume from and is walked by from/size,
 // so it is still held to the window and still says so.
 func drainOpenSearch(ctx context.Context, provider query.PagingProvider, req query.ProviderRequest) ([]query.Row, error) {
-	page := query.PageRequest{Limit: openSearchWalkBatch}
+	page := query.PageRequest{Limit: openSearchWalkBatch, ReadAll: true}
 	if len(req.Order) > 0 {
 		page.Strategy = query.PagingCursor
 	}
@@ -55,25 +56,38 @@ func drainOpenSearch(ctx context.Context, provider query.PagingProvider, req que
 	return result, nil
 }
 
-// run serves the strategy the request asked for.
-//
-// It is the request's choice rather than the profile's, because both are useful
-// on the same profile: offset can jump to an arbitrary page and cursor cannot,
-// while cursor reads past the index result window and offset cannot. A caller
-// that wants page numbers near the front and a walk further in gets both by
-// asking for both.
+// run chooses the backend once from the read budget, or resumes the mechanism
+// recorded by the previous page.
 func (w openSearchWalk) run(
 	ctx context.Context,
 	req query.ProviderRequest,
 	page query.PageRequest,
 	yield func(query.Page, error) bool,
 ) {
-	if page.Mode() == query.PagingCursor {
-		if len(req.Order) == 0 {
-			yield(query.Page{}, fmt.Errorf(
-				"this profile declares no order, so a cursor has nothing to resume after; declare `order:` ending in a unique column"))
+	if page.ReadAll {
+		built, err := w.build(openSearchPage{})
+		if err != nil {
+			yield(query.Page{}, err)
 			return
 		}
+		if built.limit > 0 && (page.Ceiling == 0 || built.limit < page.Ceiling) {
+			page.Ceiling = built.limit
+		}
+		if page.Ceiling > 0 {
+			yield = boundedOpenSearchYield(page.Ceiling, yield)
+		}
+	}
+	if page.Mode() == query.PagingCursor && len(req.Order) == 0 {
+		yield(query.Page{}, fmt.Errorf("this profile declares no order, so a cursor has nothing to resume after; declare `order:` ending in a unique column"))
+		return
+	}
+	if req.Position.Offset > 0 {
+		page.Offset = req.Position.Offset
+		w.byOffset(ctx, req, page, yield)
+		return
+	}
+	stateful := req.Position.Scroll != "" || req.Position.PIT != ""
+	if stateful || page.Offset == 0 && (openSearchPagingPolicy{mode: w.paging, threshold: w.threshold}).usesCursor(page) {
 		if req.Position.PIT != "" && w.paging != openSearchPagingPIT {
 			yield(query.Page{}, fmt.Errorf(
 				"this cursor uses point-in-time paging, but the connection is configured for scroll paging; restart the walk without the cursor"))
@@ -140,7 +154,11 @@ func (w openSearchWalk) byScroll(
 			current.NextKeys = keys
 		}
 		releaseScroll = !current.HasMore
-		if !yield(current, nil) || !current.HasMore {
+		if !yield(current, nil) {
+			releaseScroll = page.ReadAll || releaseScroll
+			return
+		}
+		if !current.HasMore {
 			return
 		}
 	}
@@ -167,6 +185,7 @@ func (w openSearchWalk) scroll(
 		return opensearch.Response{}, nil, false, err
 	}
 	details := map[string]any{"index": w.index, "limit": built.limitParam(), "paging": "scroll"}
+	details["pagingThreshold"] = w.threshold
 	w.diagnostics.RecordRequest(body, nil, details)
 	started := time.Now()
 	raw, err := w.searcher.OpenScroll(ctx, opensearch.ScrollRequest{
@@ -187,7 +206,10 @@ func (w openSearchWalk) finishScroll(
 		w.diagnostics.RecordResponse(started, 0, details)
 		return opensearch.Response{}, nil, false, err
 	}
-	rows := w.mapRows(raw)
+	rows, err := w.mapRows(raw)
+	if err != nil {
+		return opensearch.Response{}, nil, false, err
+	}
 	if w.diagnostics.WantsPreview() {
 		w.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
 	}
@@ -205,16 +227,8 @@ func (w openSearchWalk) finishScroll(
 
 // byOffset serves from/size pages, bounded by the index result window.
 //
-// The window is reported rather than worked around. Reading past it used to
-// switch the whole read to a scroll, which quietly changed both the cost and
-// the consistency of a walk at a boundary no caller could see. An ordered
-// profile still gets a cursor off every page, so a caller can carry on past the
-// window by following it rather than by asking for a deeper offset.
-//
-// It pins nothing. Every order it serves sorts on document values — a declared
-// one by construction, a derived one because its tiebreaker is _id — so the
-// position a page hands over as a cursor means the same thing in the request
-// that resumes it, and no point-in-time has to be held open between the two.
+// Its continuation carries the next offset and stays stateless. Reads beyond
+// the result window must start a new complete read using scroll or PIT.
 func (w openSearchWalk) byOffset(
 	ctx context.Context,
 	req query.ProviderRequest,
@@ -246,6 +260,7 @@ func (w openSearchWalk) byOffset(
 				return
 			}
 			current.NextKeys = keys
+			current.NextOffset = from + len(rows)
 		}
 		if !yield(current, nil) || !current.HasMore {
 			return
@@ -323,6 +338,7 @@ func (w openSearchWalk) byCursor(
 		}
 		releasePIT = !current.HasMore
 		if !yield(current, nil) {
+			releasePIT = page.ReadAll || releasePIT
 			return
 		}
 		if !current.HasMore {
@@ -348,6 +364,11 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 		index = ""
 	}
 	details := openSearchDiagnosticDetails(w.index, built.limitParam(), position)
+	details["pagingThreshold"] = w.threshold
+	details["paging"] = "offset"
+	if position.pit != "" {
+		details["paging"] = "pit"
+	}
 	w.diagnostics.RecordRequest(body, nil, details)
 	started := time.Now()
 	search := opensearch.Request{
@@ -366,7 +387,10 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 		raw.Hits.Hits = raw.Hits.Hits[:position.size]
 		built.capped = true
 	}
-	rows := w.mapRows(raw)
+	rows, err := w.mapRows(raw)
+	if err != nil {
+		return opensearch.Response{}, nil, false, err
+	}
 	if w.diagnostics.WantsPreview() {
 		w.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
 	}

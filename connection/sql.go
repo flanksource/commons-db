@@ -108,10 +108,6 @@ func (s *SQLConnection) Client(ctx context.Context) (*databasesql.DB, error) {
 		return nil, err
 	}
 
-	if s.URL.ValueStatic == "" {
-		return nil, fmt.Errorf("sql connection url cannot be empty")
-	}
-
 	if s.Type == models.ConnectionTypeClickHouse {
 		options, err := s.clickHouseOptions()
 		if err != nil {
@@ -209,6 +205,14 @@ func (s SQLConnection) UseDatabase(database string) (SQLConnection, error) {
 	if database == "" {
 		return SQLConnection{}, fmt.Errorf("sql database cannot be empty")
 	}
+	if s.URL.ValueStatic == "" && isSupportedSQLType(s.Type) && s.Type != models.ConnectionTypeSQLite {
+		if err := s.Validate(); err != nil {
+			return SQLConnection{}, err
+		}
+		s.Properties = maps.Clone(s.Properties)
+		s.Properties["database"] = database
+		return s, nil
+	}
 	raw := s.URL.ValueStatic
 	switch s.Type {
 	case "", models.ConnectionTypePostgres:
@@ -255,7 +259,11 @@ func (s SQLConnection) UseDefaultDatabase() (SQLConnection, error) {
 	if s.Type != models.ConnectionTypeSQLServer {
 		return SQLConnection{}, fmt.Errorf("default database selection is only supported for sqlserver connections")
 	}
-	cfg, err := msdsn.Parse(s.URL.ValueStatic)
+	raw, err := s.address()
+	if err != nil {
+		return SQLConnection{}, err
+	}
+	cfg, err := msdsn.Parse(raw)
 	if err != nil {
 		return SQLConnection{}, fmt.Errorf("invalid sqlserver connection string: %w", err)
 	}
@@ -282,7 +290,10 @@ func setURLDatabase(raw, database string) (string, error) {
 // for secret:// references, but database/sql drivers only receive the DSN passed
 // to Open and otherwise fall back to process defaults (for pgx, the OS user).
 func (s SQLConnection) connectionString() (string, error) {
-	raw := s.URL.ValueStatic
+	raw, err := s.address()
+	if err != nil {
+		return "", err
+	}
 	if s.Type == models.ConnectionTypeSQLite && strings.HasPrefix(strings.ToLower(raw), "sqlite://") {
 		raw = raw[len("sqlite://"):]
 		if raw == "" {

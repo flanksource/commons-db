@@ -19,6 +19,7 @@ import (
 // processors unless PreviewProcessors was explicitly requested, but always
 // applies the profile's row mapping. Columns are inferred from top-level keys.
 type SampleResult struct {
+	MappingInputRows []Row                `json:"mappingInputRows"`
 	Rows             []Row                `json:"rows"`
 	Columns          []ColumnDef          `json:"columns"`
 	ResultColumns    []ResultColumn       `json:"resultColumns"`
@@ -76,17 +77,17 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	}
 	input, err := sampleInput(options.Params, options.Filters)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	filterProfile := sampleFilterProfile(p, options.FilterColumns)
 	resolved, filters, err := resolveProfileInput(filterProfile, input, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	provider, providerErr := GetProvider(p.Provider.Type)
-	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Search: p.Search, Spans: p.Spans, Defs: p.Params, Resolved: resolved})
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	req.Filters = filters
 	req.Labels = p.Labels
@@ -94,7 +95,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	// proven read-only — a templated options.method would otherwise slip a
 	// non-GET request past the check.
 	if err := validateSampleReadOnly(p.Provider.Type, req.Query, req.Options); err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	if providerErr != nil {
 		return nil, providerErr
@@ -126,9 +127,9 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 		rows = []Row{}
 	}
 	rawColumns := mergeInspectionColumns(InferSampleColumns(rows), options.InspectionColumns)
-	processorPreview, rows, err := mapSampleRows(ctx, p, rows, options.PreviewProcessors)
+	processorPreview, mappingInput, rows, err := mapSampleRows(ctx, p, rows, options.PreviewProcessors)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	columns, inspectionStatus, err := inspectColumns(ctx, columnInspectionOptions{
 		Profile: p, Request: req, RawColumns: rawColumns,
@@ -148,6 +149,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 		return nil, fmt.Errorf("profile %q: resolve sample metadata: %w", p.Name, err)
 	}
 	return &SampleResult{
+		MappingInputRows: mappingInput,
 		Rows:             rows,
 		Columns:          columns,
 		ResultColumns:    resultColumns,
@@ -164,23 +166,27 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 
 // mapSampleRows runs the optional processor preview and then the profile's row
 // mapping over a raw sample page.
-func mapSampleRows(ctx context.Context, p Profile, rows []Row, previewProcessors bool) (*ProcessorPreview, []Row, error) {
+func mapSampleRows(ctx context.Context, p Profile, rows []Row, previewProcessors bool) (*ProcessorPreview, []Row, []Row, error) {
 	var processorPreview *ProcessorPreview
 	var err error
 	if previewProcessors {
 		processorPreview, rows, err = previewSampleProcessors(ctx, p, rows)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
+	}
+	input, err := copyMappingRows(rows)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 	rows, _, err = applyRowTransforms(ctx, p, rows)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	if rows == nil {
 		rows = []Row{}
 	}
-	return processorPreview, rows, nil
+	return processorPreview, input, rows, nil
 }
 
 func samplePageRequest(p Profile, options SampleOptions) (PageRequest, error) {
@@ -190,9 +196,6 @@ func samplePageRequest(p Profile, options SampleOptions) (PageRequest, error) {
 	}
 	if maximum := p.RowLimits().MaxPageSize; pageRequest.Limit > maximum {
 		return PageRequest{}, fmt.Errorf("profile %q: requested page size %d exceeds maximum page size %d", p.Name, pageRequest.Limit, maximum)
-	}
-	if pageRequest.Strategy == 0 && p.Pageable() == nil && SupportsPaging(p.Provider.Type).Supports(PagingCursor) {
-		pageRequest.Strategy = PagingCursor
 	}
 	pageRequest.Inspection = options.Inspection
 	return pageRequest, nil
@@ -421,6 +424,10 @@ func InferSampleColumns(rows []Row) []ColumnDef {
 	sort.Strings(names)
 	columns := make([]ColumnDef, 0, len(names))
 	for _, name := range names {
+		if name == "_trace" || name == "_span_layout" {
+			columns = append(columns, ColumnDef{Name: name, Type: ColumnTypeJSON, Hidden: true})
+			continue
+		}
 		kind := ColumnType("")
 		for _, row := range rows {
 			value, ok := row[name]

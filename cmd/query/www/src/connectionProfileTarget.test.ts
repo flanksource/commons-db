@@ -49,7 +49,7 @@ describe("connection profile target options", () => {
           provider: "opensearch",
           target: { kind: "index", label: "Index", option: "index" },
         },
-        { index: "logs-*", targetKind: "pattern" },
+        { index: "logs-*", targetKind: "group" },
       ),
     ).toEqual({ index: "logs-*" });
   });

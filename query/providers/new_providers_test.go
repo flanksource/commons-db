@@ -71,13 +71,13 @@ var _ = Describe("opentelemetry provider", func() {
 				Type: "opentelemetry", Connection: "connection://traces",
 				Options: map[string]any{
 					"format": "jaeger", "index": "jaeger-span*", "dateField": "startTimeMillis",
-					"traceIdField": "traceID", "spanIdField": "spanID", "serviceField": "process.serviceName",
-					"operationField": "operationName", "statusFields": []string{"tag.otel@status_code"}, "selectFields": []string{"custom_field"},
+					"selectFields": []string{"custom_field"},
 					"search": map[string]any{"query": map[string]any{
 						"op": "term", "field": "process.serviceName", "value": map[string]any{"param": "namespace"},
 					}},
 				},
 			},
+			Spans:   query.SpanMappings{"service": {Source: "process.serviceName"}},
 			Params:  []query.ParamDef{{Name: "namespace", Template: "{value}-api"}},
 			Columns: []query.ColumnDef{{Name: "service"}},
 		}, map[string]any{"namespace": "prod", "filter.service": "prod,!staging"})

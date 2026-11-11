@@ -44,6 +44,33 @@ var _ = Describe("Kubernetes runtime filters", func() {
 		Expect(bindings).To(Equal([]ColumnFilterBinding{timeBinding, workloadBinding, labelsBinding}))
 	})
 
+	namespaceBinding := ColumnFilterBinding{
+		Key: "namespace", Field: "namespace", Label: "Namespace",
+		Kind: ColumnFilterKindTerms, Lookup: true, Multi: true,
+	}
+
+	// A scope that leaves the namespace open offers it as its own picker, ahead of
+	// the workload one it narrows; a scope pinned to one namespace has none to offer.
+	It("offers a namespace control only when the profile scope leaves the namespace open", func() {
+		open, err := profile("").RuntimeFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(open).To(Equal([]ColumnFilterBinding{timeBinding, namespaceBinding, workloadBinding, labelsBinding}))
+
+		alternatives, err := profile("namespace=payments | namespace=billing").RuntimeFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(alternatives).To(ContainElement(namespaceBinding))
+
+		pinned, err := profile("kind=Deployment namespace=payments").RuntimeFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(pinned).ToNot(ContainElement(namespaceBinding))
+
+		parameterised := profile("namespace={{.params.namespace}}")
+		parameterised.Params = []ParamDef{{Name: "namespace", Label: "Namespace", Required: true}}
+		owned, err := parameterised.RuntimeFilterBindings()
+		Expect(err).ToNot(HaveOccurred())
+		Expect(owned).ToNot(ContainElement(namespaceBinding))
+	})
+
 	It("resolves runtime values without adding them to profile template params", func() {
 		params, filters, err := partitionProfileInput(profile("kind=Deployment"), map[string]any{
 			"time":     ">=now-15m,<now",

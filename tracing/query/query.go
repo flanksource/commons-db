@@ -23,6 +23,8 @@ type ProfileResolver interface {
 
 // Options are the host seams the kind reads through.
 type Options struct {
+	// Sampled requires an emitter that atomically publishes complete read windows.
+	Sampled bool
 	// Profiles resolves a params' saved profile; nil refuses every capture
 	// that names one.
 	Profiles ProfileResolver
@@ -40,7 +42,7 @@ type Row struct {
 	Profile  string `json:"profile,omitempty" filter:"terms"`
 	Provider string `json:"provider" filter:"terms"`
 	// Row is the provider's row as it returned it.
-	Row map[string]any `json:"row" pretty:"hide"`
+	Values map[string]any `json:"row" pretty:"hide"`
 }
 
 // Reads is the kind's trace handler: a host whose tracing runtime is not

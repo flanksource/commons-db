@@ -31,8 +31,8 @@ var _ = Describe("Folder connections", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(connection.Warnings).To(BeEmpty())
 		Expect(connection.URL).To(Equal("file:/global.db"))
-		Expect(connection.ReadOnly).To(BeTrue())
-		Expect(connection.Virtual).To(BeTrue())
+		Expect(connection.ReadOnly).To(BeFalse())
+		Expect(connection.Virtual).To(BeFalse())
 		override := "apiVersion: mission-control.flanksource.com/v1\nkind: Connection\nmetadata:\n  name: local-picker-example\nspec:\n  type: sqlite\n  url: {value: 'file:/app.db'}\n"
 		Expect(os.WriteFile(filepath.Join(local, "example.yaml"), []byte(override), 0600)).To(Succeed())
 		connection, err = catalog.ResolveConnection(dbcontext.New(), "connection://local-picker-example")

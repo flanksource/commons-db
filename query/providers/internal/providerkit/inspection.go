@@ -7,6 +7,7 @@ import (
 
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 // ResolveInlineURL resolves an inline connection URL for connectionType; an
@@ -59,6 +60,8 @@ func InspectionRequestKey(prefix string, req query.ProviderRequest, fields []str
 		Provider         string
 		Connection       string
 		Query            string
+		Search           *esdsl.Search
+		Spans            query.SpanMappings
 		QueryArgs        []any
 		QueryIdentifiers []string
 		Options          map[string]any
@@ -66,6 +69,7 @@ func InspectionRequestKey(prefix string, req query.ProviderRequest, fields []str
 		Fields           []string
 	}{
 		Provider: req.Provider, Connection: req.Connection, Query: req.Query,
+		Search: req.Search, Spans: req.Spans,
 		QueryArgs: req.QueryArgs, QueryIdentifiers: req.QueryIdentifiers,
 		Options: req.Options, Params: req.Params, Fields: fields,
 	})

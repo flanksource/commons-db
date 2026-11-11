@@ -42,11 +42,11 @@ func (c *Cache) mirrorPaths(repo *Repository) (mirrorPaths, error) {
 	if repo == nil {
 		return mirrorPaths{}, errors.New("git repository is required")
 	}
-	owner, err := registry.Load(c.Root, repo.URL.CacheKey())
+	binding, err := registry.Load(c.Root, repo.URL.CacheKey())
 	if err != nil {
 		return mirrorPaths{}, err
 	}
-	return newMirrorPaths(filepath.Join(c.Root, owner)), nil
+	return newMirrorPaths(filepath.Join(c.Root, binding.Owner)), nil
 }
 
 func (m mirrorPaths) pinned() (*sync.Map, error) {

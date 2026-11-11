@@ -155,6 +155,11 @@ func FindConnectionByURL(ctx Context, connectionString string) (*models.Connecti
 		if connection != nil {
 			return connection, nil
 		}
+		if ctx.DB() == nil {
+			// The resolver is every connection this context knows: a reference it
+			// does not resolve is not found, as one missing from the table is.
+			return nil, nil
+		}
 	}
 	db := ctx.DB()
 
@@ -209,6 +214,16 @@ func findConnectionByName(ctx Context, name string) (*models.Connection, error) 
 
 // FindConnection returns the connection with the given type and name
 func FindConnection(ctx Context, name, namespace string) (*models.Connection, error) {
+	if resolver := ctx.connectionResolver(); resolver != nil {
+		reference := "connection://" + name
+		if namespace != "" {
+			reference = "connection://" + namespace + "/" + name
+		}
+		resolved, err := resolver(ctx, reference)
+		if err != nil || resolved != nil {
+			return resolved, err
+		}
+	}
 	var connection models.Connection
 
 	if namespace == "" {
@@ -269,6 +284,9 @@ func GetConnection(ctx Context, name, namespace string) (*models.Connection, err
 // configmap://, helm:// and service URL references through that kubeconfig
 // context's cluster rather than the context's local client.
 func HydrateConnection(ctx Context, connection *models.Connection) (*models.Connection, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var err error
 
 	// A connection that failed to load is listed with its warnings, but using it fails.
@@ -276,12 +294,9 @@ func HydrateConnection(ctx Context, connection *models.Connection) (*models.Conn
 		return nil, fmt.Errorf("connection %q cannot be used: %s", connection.Name, strings.Join(connection.Warnings, "; "))
 	}
 
-	if kubeContext := connection.Properties[KubeContextProperty]; kubeContext != "" {
-		client, err := ctx.KubeContextClient(kubeContext)
-		if err != nil {
-			return nil, fmt.Errorf("connection %q: %w", connection.Name, err)
-		}
-		ctx = ctx.WithLocalKubernetes(client)
+	ctx, err = ctx.WithConnectionKubernetes(connection)
+	if err != nil {
+		return nil, err
 	}
 
 	if connection.URL, err = GetEnvStringFromCache(ctx, connection.URL, connection.Namespace); err != nil {

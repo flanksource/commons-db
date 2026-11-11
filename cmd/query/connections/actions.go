@@ -153,6 +153,13 @@ func maskedConnection(c *models.Connection) resolvedConnection {
 // testConnection probes the resolved URL: a TCP connect proves the host:port is
 // reachable, and http/https URLs additionally report the response status.
 func testConnection(ctx dbcontext.Context, c *models.Connection) testResult {
+	if c.Type == models.ConnectionTypeKubernetes {
+		info, err := discoverKubernetes(ctx, ctx, c)
+		if err != nil {
+			return testResult{OK: false, Message: err.Error()}
+		}
+		return testResult{OK: true, Message: info.Product + " " + info.Version}
+	}
 	if c.Type == models.ConnectionTypeOpenTelemetry {
 		openTelemetry, err := dbconnection.NewOpenTelemetry(c)
 		if err != nil {

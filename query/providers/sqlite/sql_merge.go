@@ -26,6 +26,9 @@ type SQLMember struct {
 	// Labels become constant columns of every row this member returns, so
 	// filters, order and projections can address them like stored columns.
 	Labels map[string]string
+	// ReadPage reads a member through its native profile. When supplied, Client
+	// is unused; rows must expose the common order keys declared by Read.Order.
+	ReadPage func(context.Context, SQLPageRequest) (SQLPageResult, error)
 }
 
 // labelledQuery wraps statement so each label is a column of its rows. The
@@ -221,7 +224,13 @@ func (r SQLMergeRequest) refill(ctx context.Context, members []*mergeMember, lim
 			read.Query = labelledQuery(read.Query, member.Labels)
 			read.Position = query.CursorPosition{Keys: member.keys}
 			read.Page = query.PageRequest{Limit: limit, SkipTotal: r.Read.Page.SkipTotal, Strategy: query.PagingCursor}
-			result, err := ReadSQLPage(groupCtx, member.Client, r.Driver, read)
+			reader := member.ReadPage
+			if reader == nil {
+				reader = func(ctx context.Context, request SQLPageRequest) (SQLPageResult, error) {
+					return ReadSQLPage(ctx, member.Client, r.Driver, request)
+				}
+			}
+			result, err := reader(groupCtx, read)
 			if err != nil {
 				return fmt.Errorf("partition %q: %w", member.Name, err)
 			}

@@ -44,9 +44,12 @@ tasks:
       - go mod tidy
 
   build:
-    desc: Build all packages
+    desc: Build all library packages (excluding local hack scripts)
     cmds:
-      - go build ./...
+      - |
+        set -euo pipefail
+        packages=$(go list -f '{{`{{if or .GoFiles .CgoFiles}}{{.ImportPath}}{{end}}`}}' ./... | rg -v '^($|github.com/flanksource/commons-db/hack(/|$))')
+        go build $packages
 
   install:
     desc: Build and install the query CLI to the default Go bin

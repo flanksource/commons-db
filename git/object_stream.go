@@ -6,20 +6,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"io/fs"
 	"os"
 	"os/exec"
+	"time"
 )
 
 type objectStream struct {
-	ctx    context.Context
-	cmd    *exec.Cmd
-	input  io.WriteCloser
-	output *bufio.Reader
-	stderr bytes.Buffer
-	finish func(error, string, *os.ProcessState)
-	closed bool
+	ctx          context.Context
+	cmd          *exec.Cmd
+	input        io.WriteCloser
+	output       *bufio.Reader
+	stderr       bytes.Buffer
+	finish       func(error, string, *os.ProcessState)
+	closed       bool
+	progress     ReadProgress
+	observer     ReadObserver
+	started      time.Time
+	lastProgress time.Time
 }
 
 func openObjectStream(ctx context.Context, options command) (stream *objectStream, err error) {
@@ -33,6 +39,12 @@ func openObjectStream(ctx context.Context, options command) (stream *objectStrea
 		return nil, err
 	}
 	stream = &objectStream{ctx: ctx, finish: finish, cmd: exec.CommandContext(ctx, "git", "cat-file", "--batch-command", "-Z")}
+	stream.observer, _ = ctx.Value(readObserverKey{}).(ReadObserver)
+	identity, ok := ctx.Value(readIdentityKey{}).(readIdentity)
+	if !ok {
+		identity.repository = options.dir
+	}
+	stream.progress = ReadProgress{ID: uuid.NewString(), Repository: identity.repository, Ref: identity.ref}
 	stream.cmd.Dir, stream.cmd.Env = options.dir, options.env
 	if stream.cmd.Env == nil {
 		stream.cmd.Env = baseEnv()
@@ -54,12 +66,20 @@ func openObjectStream(ctx context.Context, options command) (stream *objectStrea
 }
 
 func (stream *objectStream) read(object string, read func(batchBlob, io.Reader) error) error {
+	if stream.started.IsZero() {
+		stream.started = time.Now()
+		stream.reportProgress()
+	}
 	if err := stream.request("contents", object); err != nil {
 		return err
 	}
-	if err := readBatchObject(stream.output, object, read); err != nil {
+	if err := readBatchObject(stream.output, object, func(blob batchBlob, reader io.Reader) error {
+		return read(blob, progressReader{Reader: reader, stream: stream})
+	}); err != nil {
 		return stream.stop(err)
 	}
+	stream.progress.Current++
+	stream.reportProgress()
 	return nil
 }
 
@@ -113,5 +133,32 @@ func (stream *objectStream) stop(cause error) error {
 		err = errors.Join(err, stream.ctx.Err())
 	}
 	stream.finish(err, "cat-file", stream.cmd.ProcessState)
+	if !stream.started.IsZero() {
+		stream.progress.Done, stream.progress.Err = true, errors.Join(err, stream.ctx.Err())
+		stream.reportProgress()
+	}
 	return err
+}
+
+type progressReader struct {
+	io.Reader
+	stream *objectStream
+}
+
+func (r progressReader) Read(buffer []byte) (int, error) {
+	n, err := r.Reader.Read(buffer)
+	r.stream.progress.Bytes += int64(n)
+	if time.Since(r.stream.lastProgress) >= 100*time.Millisecond {
+		r.stream.reportProgress()
+	}
+	return n, err
+}
+
+func (stream *objectStream) reportProgress() {
+	if stream.observer == nil {
+		return
+	}
+	stream.lastProgress = time.Now()
+	stream.progress.BytesPerSecond = float64(stream.progress.Bytes) / time.Since(stream.started).Seconds()
+	stream.observer(stream.ctx, stream.progress)
 }

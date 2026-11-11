@@ -104,6 +104,7 @@ func (h *profileOpenAPIHandler) document(ctx context.Context, representation ope
 	for _, extend := range h.extensions {
 		extend(spec)
 	}
+	addMappingPreviewOpenAPI(spec)
 	document, err := encodeOpenAPIDocument(spec, representation)
 	if err != nil {
 		return openAPIDocument{}, err

@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -31,8 +32,8 @@ func (c Cursor) IsZero() bool { return c == "" }
 
 // cursorVersion is stamped into every cursor so a format change invalidates
 // outstanding cursors loudly rather than decoding them into wrong positions.
-// Version 6 carries null keys and was cut under nulls-last ordering.
-const cursorVersion = 6
+// Version 7 distinguishes stateless offset continuations from backend cursors.
+const cursorVersion = 7
 
 // cursorNullType is the encoded type of a null key: a nullable order column
 // sorts its nulls last, so a page can end on one.
@@ -85,6 +86,7 @@ var ErrCursorStale = errors.New("cursor no longer matches this query")
 
 // cursorPayload is a Cursor's decoded form.
 type cursorPayload struct {
+	Offset  int               `json:"a,omitempty"`
 	Version int               `json:"v"`
 	Profile string            `json:"n"`
 	Order   string            `json:"o"`
@@ -111,6 +113,7 @@ type cursorKey struct {
 // CursorPosition is a validated cursor: where to resume, and the point-in-time
 // the walk is pinned to when the backend supports one.
 type CursorPosition struct {
+	Offset int
 	// Keys are the ordered sort values of the last row of the previous page.
 	// A provider resumes strictly after them.
 	Keys []any
@@ -147,6 +150,8 @@ type CursorScope struct {
 	Provider   string
 	Connection string
 	Query      string
+	Search     *esdsl.Search
+	Spans      SpanMappings
 	Options    map[string]any
 	Order      Order
 	Params     map[string]any
@@ -162,6 +167,7 @@ type CursorScope struct {
 
 // CursorEncoding is everything carried by one opaque cursor.
 type CursorEncoding struct {
+	Offset int
 	Scope  CursorScope
 	Keys   []any
 	PIT    string
@@ -171,6 +177,9 @@ type CursorEncoding struct {
 
 // EncodeCursor issues a cursor resuming after the last row of a page.
 func EncodeCursor(encoding CursorEncoding) (Cursor, error) {
+	if encoding.Offset < 0 || encoding.Offset > 0 && (encoding.PIT != "" || encoding.Scroll != "") {
+		return "", fmt.Errorf("invalid cursor offset or mixed paging mechanisms")
+	}
 	if err := encoding.Scope.Order.Pageable(); err != nil {
 		return "", err
 	}
@@ -197,6 +206,7 @@ func EncodeCursor(encoding CursorEncoding) (Cursor, error) {
 	}
 	payload, err := json.Marshal(cursorPayload{
 		Version: cursorVersion,
+		Offset:  encoding.Offset,
 		Profile: encoding.Scope.Profile,
 		Order:   encoding.Scope.Order.Fingerprint(),
 		Inputs:  inputs,
@@ -340,7 +350,10 @@ func DecodeCursor(c Cursor, scope CursorScope) (CursorPosition, error) {
 	if payload.PIT != "" && payload.Scroll != "" {
 		return CursorPosition{}, fmt.Errorf("%w: it carries two backend cursor mechanisms", ErrCursorStale)
 	}
-	return CursorPosition{Keys: keys, PIT: payload.PIT, Scroll: payload.Scroll, State: payload.State}, nil
+	if payload.Offset < 0 || payload.Offset > 0 && (payload.PIT != "" || payload.Scroll != "") {
+		return CursorPosition{}, fmt.Errorf("%w: invalid cursor offset or mixed paging mechanisms", ErrCursorStale)
+	}
+	return CursorPosition{Keys: keys, PIT: payload.PIT, Scroll: payload.Scroll, State: payload.State, Offset: payload.Offset}, nil
 }
 
 func encodeCursorKeys(values []any) ([]cursorKey, error) {
@@ -548,12 +561,16 @@ func (s CursorScope) inputFingerprint() (string, error) {
 		Provider   string            `json:"provider"`
 		Connection string            `json:"connection"`
 		Query      string            `json:"query"`
+		Search     *esdsl.Search     `json:"search,omitempty"`
+		Spans      SpanMappings      `json:"spans,omitempty"`
 		Options    map[string]any    `json:"options"`
 	}{
 		Labels:     s.Labels,
 		Provider:   s.Provider,
 		Connection: s.Connection,
 		Query:      s.Query,
+		Search:     s.Search,
+		Spans:      s.Spans,
 		Options:    s.Options,
 	})
 	if err != nil {

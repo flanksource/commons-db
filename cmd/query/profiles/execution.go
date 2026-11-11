@@ -15,6 +15,7 @@ import (
 	"github.com/flanksource/clicky/formatters"
 	"github.com/flanksource/clicky/formatters/excel"
 	"github.com/flanksource/clicky/formatters/pdf"
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons-db/cmd/query/devtools"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
@@ -199,6 +200,11 @@ func (h *execHandler) resolveExecution(w http.ResponseWriter, r *http.Request, n
 // server's, cancelled when the caller hangs up.
 func (h *execHandler) executionContext(r *http.Request) (dbcontext.Context, stdcontext.CancelFunc) {
 	base, cancel := stdcontext.WithCancel(h.ctx.Context)
+	// The engine's Server-Timing phases land in an accumulator of the execution's
+	// own; liftTimings moves them onto the request's before its headers go out.
+	if _, timed := rpchttp.TimingsFromContext(r.Context()); timed {
+		base, _ = rpchttp.WithTimings(base)
+	}
 	go func() {
 		select {
 		case <-r.Context().Done():
@@ -212,6 +218,20 @@ func (h *execHandler) executionContext(r *http.Request) (dbcontext.Context, stdc
 	// request, which query.WithRecorder and every recorder method tolerate.
 	ctx := WithProfiles(h.ctx.Wrap(base), h.store, h.prepare, r.Context())
 	return devtools.WithRequestRecorder(ctx, r), cancel
+}
+
+// liftTimings adds the execution's Server-Timing phases to the request's
+// accumulator, which TimingMiddleware stamps on the first write. It runs once,
+// after the rows a header can describe are resolved: phases a streaming export
+// spends after the headers are written could not be reported anyway.
+func liftTimings(execCtx stdcontext.Context, r *http.Request) {
+	timings, ok := rpchttp.TimingsFromContext(execCtx)
+	if !ok {
+		return
+	}
+	for _, metric := range timings.Metrics() {
+		rpchttp.AddTiming(r.Context(), metric)
+	}
 }
 
 func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name string) {
@@ -257,6 +277,7 @@ func (h *execHandler) execute(w http.ResponseWriter, r *http.Request, name strin
 	}
 
 	response, err := exportRows(execCtx, p, params, export)
+	liftTimings(execCtx, r)
 	if err != nil {
 		// A stale cursor is the caller's to fix by starting the walk again, so
 		// it is a 400 rather than a 500 — and it says which input moved.

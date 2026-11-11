@@ -645,7 +645,19 @@ func (k Context) HydrateConnectionByURL(connectionString string) (*models.Connec
 	return HydrateConnectionByURL(k, connectionString)
 }
 
-func (k Context) HydrateConnection(connection *models.Connection) (*models.Connection, error) {
+func (k Context) HydrateConnection(connection *models.Connection, options ...HydrationOptions) (*models.Connection, error) {
+	if len(options) > 1 {
+		return nil, fmt.Errorf("connection hydration accepts one options value")
+	}
+	if len(options) == 1 {
+		if options[0].Context == nil {
+			return nil, fmt.Errorf("connection hydration context is nil")
+		}
+		k = k.Wrap(options[0].Context)
+	}
+	if err := k.Err(); err != nil {
+		return nil, err
+	}
 	return HydrateConnection(k, connection)
 }
 

@@ -17,7 +17,7 @@ import (
 // secretCreds is the shared username/password pair rendered with the secret picker.
 type secretCreds struct {
 	Username types.EnvVar `json:"username" clicky:"type=k8s-secret-selector,title=Username,source=value,order=4"`
-	Password types.EnvVar `json:"password" clicky:"type=k8s-secret-selector,title=Password,format=password,source=secret,order=5"`
+	Password types.EnvVar `json:"password" clicky:"type=k8s-secret-selector,title=Password,format=password,source=value,order=5"`
 }
 
 // httpConnection contains the transport fields shared by HTTP-family backends.
@@ -35,12 +35,17 @@ type HTTPProvider struct{ httpConnection }
 // OpenSearchProvider extends the HTTP form for an OpenSearch endpoint.
 type OpenSearchProvider struct {
 	httpConnection
-	PagingMode string `json:"paging_mode" clicky:"property=paging_mode,title=Paging mode,order=5"`
+	Index           string `json:"index" clicky:"property=index,title=Default index,order=4"`
+	SpanLayout      string `json:"span_layout" clicky:"property=span_layout,title=Span layout overrides,format=textarea,order=7"`
+	PagingMode      string `json:"paging_mode" clicky:"property=paging_mode,title=Paging mode,order=5"`
+	PagingThreshold string `json:"paging_threshold" clicky:"property=paging_threshold,title=Paging threshold,order=6"`
 }
 
 // OpenTelemetryProvider delegates trace storage to a nested OpenSearch
 // connection while retaining its own first-class connection identity.
 type OpenTelemetryProvider struct {
+	Index      string `json:"index" clicky:"property=index,title=Default index,order=3"`
+	SpanLayout string `json:"span_layout" clicky:"property=span_layout,title=Span layout overrides,format=textarea,order=4"`
 	Connection string `json:"connection" clicky:"property=connection,title=OpenSearch Connection,required,order=2"`
 }
 
@@ -55,14 +60,12 @@ type JaegerProvider struct{ httpConnection }
 
 // PostgresProvider models a postgres SQL DSN connection.
 type PostgresProvider struct {
-	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=URL,source=value,required,order=2,desc=postgres://user:pass@host:5432/db?sslmode=disable"`
-	secretCreds
+	sqlAddress
 }
 
 // MySQLProvider models a MySQL DSN connection.
 type MySQLProvider struct {
-	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=URL,source=value,required,order=2,desc=user:pass@tcp(host:3306)/db"`
-	secretCreds
+	sqlAddress
 }
 
 type SQLiteProvider struct {
@@ -71,14 +74,20 @@ type SQLiteProvider struct {
 
 // SQLServerProvider models a SQL Server DSN connection.
 type SQLServerProvider struct {
-	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=URL,source=value,required,order=2,desc=sqlserver://user:pass@host:1433?database=db"`
+	sqlAddress
+}
+
+type sqlAddress struct {
+	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=Database URL,source=value,order=2,desc=Provide a database URL or fill in Host and Database below. A URL takes precedence when supplied."`
 	secretCreds
+	Host     string `json:"host" clicky:"property=host,title=Host,order=0,desc=Database hostname or IP address (without a scheme)"`
+	Port     string `json:"port" clicky:"property=port,title=Port,order=1,desc=Optional TCP port; uses the driver default when empty"`
+	Database string `json:"database" clicky:"property=database,title=Database,order=2"`
 }
 
 // ClickHouseProvider models a ClickHouse DSN connection.
 type ClickHouseProvider struct {
-	URL types.EnvVar `json:"url" clicky:"type=k8s-url-selector,title=URL,source=value,required,order=2,desc=clickhouse://user:pass@host:9000/db"`
-	secretCreds
+	sqlAddress
 	MaxExecutionTime    string `json:"max_execution_time"    clicky:"property=max_execution_time,title=Maximum execution time,order=0,desc=Server-side query execution limit in seconds"`
 	MaxRowsToRead       string `json:"max_rows_to_read"       clicky:"property=max_rows_to_read,title=Maximum rows to read,order=1,desc=Maximum source rows a query may scan"`
 	MaxBytesToRead      string `json:"max_bytes_to_read"      clicky:"property=max_bytes_to_read,title=Maximum bytes to read,order=2,desc=Maximum uncompressed source bytes a query may scan"`
@@ -101,6 +110,7 @@ type RedisProvider struct {
 type KubernetesProvider struct {
 	Certificate  types.EnvVar `json:"certificate" clicky:"type=k8s-secret-selector,title=Kubeconfig,source=secret,order=6,desc=Leave empty to use the ambient cluster ($KUBECONFIG or the in-cluster service account)"`
 	MaxResources int          `json:"max_resources" clicky:"property=max_resources,title=Maximum resources,order=7,desc=Maximum matching workloads read by one query (default 20)"`
+	Namespace    string       `json:"namespace" clicky:"property=namespace,title=Restrict to namespace,order=8,desc=The logs view reads only this namespace and offers no namespace picker; leave empty to choose any namespace"`
 }
 
 // GCPProvider models a Google Cloud connection: optional endpoint + the required

@@ -95,17 +95,21 @@
           "title": "Index",
           "type": "string"
         },
-        "operationField": {
-          "title": "operation Field",
+        "pagingMode": {
+          "description": "Override the connection's paging mode for reads above the paging threshold. Leave unset to inherit.",
+          "enum": [
+            "scroll",
+            "pit"
+          ],
+          "title": "Paging mode",
           "type": "string"
         },
-        "parentIdField": {
-          "title": "parent IdField",
-          "type": "string"
-        },
-        "parentRefType": {
-          "title": "parent RefType",
-          "type": "string"
+        "pagingThreshold": {
+          "description": "Override the connection's requested-row threshold (default 10000). Zero always uses scroll/PIT. Leave unset to inherit.",
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Paging threshold",
+          "type": "integer"
         },
         "search": {
           "description": "Structured OpenSearch query. Mutually exclusive with the profile query: set one or the other, never both.",
@@ -1054,31 +1058,12 @@
           "title": "select Fields",
           "type": "array"
         },
-        "serviceField": {
-          "title": "service Field",
-          "type": "string"
-        },
         "sourceExcludes": {
           "items": {
             "type": "string"
           },
           "title": "source Excludes",
           "type": "array"
-        },
-        "spanIdField": {
-          "title": "span IdField",
-          "type": "string"
-        },
-        "statusFields": {
-          "items": {
-            "type": "string"
-          },
-          "title": "status Fields",
-          "type": "array"
-        },
-        "traceIdField": {
-          "title": "trace IdField",
-          "type": "string"
         }
       },
       "title": "Options",

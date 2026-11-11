@@ -40,7 +40,7 @@ var _ = Describe("read preparation", func() {
 		Expect(map[string]int64{
 			"git_cat_file": counter(timings, "git_cat_file"), "git_update_ref": counter(timings, "git_update_ref"),
 			"git_diff_tree": counter(timings, "git_diff_tree"), "git_fetch": counter(timings, "git_fetch"),
-		}).To(Equal(map[string]int64{"git_cat_file": 0, "git_update_ref": 0, "git_diff_tree": 1, "git_fetch": 0}))
+		}).To(Equal(map[string]int64{"git_cat_file": 0, "git_update_ref": 0, "git_diff_tree": 0, "git_fetch": 0}))
 	})
 
 	It("reads a pinned commit while another reader holds the mirror lock shared", func(ctx SpecContext) {

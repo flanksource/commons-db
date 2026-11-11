@@ -166,13 +166,17 @@ func ConnectionComponents() map[string]Schema {
 		props["type"] = Schema{"type": "string", "title": "Type", "const": typ}
 		props["logging"] = connectionLoggingSchema(typ)
 		required := []string{"name", "type"}
+		var addressOptions any
 		if cfg, ok := tailoredProviders[typ]; ok {
 			branch := tailoredBranch(typ, cfg)["then"].(Schema)
+			addressOptions = branch["anyOf"]
 			for name, raw := range branch["properties"].(Schema) {
 				props[name] = raw
 			}
 			required = appendUnique(required, stringSlice(branch["required"])...)
 		}
+		addKubernetesSelection(props)
+		props["name"].(Schema)["minLength"] = 1
 		components[typ] = Schema{
 			"$schema":    Draft,
 			"$id":        typ + ".json",
@@ -180,6 +184,15 @@ func ConnectionComponents() map[string]Schema {
 			"type":       "object",
 			"required":   required,
 			"properties": props,
+		}
+		if addressOptions != nil {
+			components[typ]["anyOf"] = addressOptions
+		}
+		if typ == "kubernetes" {
+			components[typ]["not"] = Schema{"description": "Choose either a kubeconfig file or a kubeconfig value, not both.", "required": []string{"certificate", "properties"}, "properties": Schema{
+				"certificate": Schema{"minLength": 1},
+				"properties":  Schema{"required": []string{"kubeconfig"}, "properties": Schema{"kubeconfig": Schema{"minLength": 1}}},
+			}}
 		}
 	}
 	return components
@@ -372,6 +385,23 @@ func tailoredBranch(typ string, cfg any) Schema {
 	if len(required) > 0 {
 		then["required"] = required
 	}
+	if slices.Contains([]string{models.ConnectionTypePostgres, models.ConnectionTypeMySQL, models.ConnectionTypeSQLServer, models.ConnectionTypeClickHouse}, typ) {
+		// Host, port and database are stored in Properties but are an alternative
+		// to the URL, so the form lifts them up to render directly under it.
+		address := props["properties"].(Schema)["properties"].(Schema)
+		for name, order := range map[string]float64{"host": 2.1, "port": 2.2, "database": 2.3} {
+			address[name].(Schema)["x-clicky-hoist"] = true
+			address[name].(Schema)["x-clicky-order"] = order
+		}
+		then["anyOf"] = []any{
+			Schema{"required": []string{"url"}, "properties": Schema{"url": Schema{"type": "string", "minLength": 1}}},
+			Schema{"required": []string{"properties"}, "properties": Schema{"properties": Schema{
+				"required": []string{"host", "database"}, "properties": Schema{
+					"host": Schema{"type": "string", "minLength": 1}, "database": Schema{"type": "string", "minLength": 1},
+				},
+			}}},
+		}
+	}
 
 	return Schema{
 		"if": Schema{
@@ -383,6 +413,10 @@ func tailoredBranch(typ string, cfg any) Schema {
 }
 
 func customizeOpenSearchPropertiesSchema(properties Schema) {
+	threshold := properties["properties"].(Schema)["paging_threshold"].(Schema)
+	threshold["description"] = "Requested row threshold for normal page/limit paging (0–10000). Larger or unbounded reads use the paging mode. Zero always uses the paging mode."
+	threshold["default"] = "10000"
+	threshold["pattern"] = "^(0|[1-9][0-9]{0,3}|10000)$"
 	field := properties["properties"].(Schema)[models.OpenSearchPropertyPagingMode].(Schema)
 	field["description"] = "Backend cursor used for complete reads and cursor paging."
 	field["enum"] = []string{models.OpenSearchPagingModeScroll, models.OpenSearchPagingModePIT}

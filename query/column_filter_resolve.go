@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/inspect"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 type FilterValueLookupRequest struct {
@@ -134,7 +135,7 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 	}
 	resolved, filters, err := resolveProfileInput(profile, request.Input, time.Now())
 	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, profileError(profile, err)
 	}
 	lookup, err := profileFilterValueSearch(profile, request)
 	if err != nil {
@@ -156,9 +157,9 @@ func LookupFilterValues(ctx context.Context, request FilterValueLookupRequest) (
 	if !ok {
 		return nil, nil, fmt.Errorf("provider %q does not support column filter lookups", profile.Provider.Type)
 	}
-	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: profile.Provider, Query: profile.Query, Defs: profile.Params, Resolved: resolved})
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: profile.Provider, Query: profile.Query, Search: profile.Search, Spans: profile.Spans, Defs: profile.Params, Resolved: resolved})
 	if err != nil {
-		return nil, nil, fmt.Errorf("profile %q: %w", profile.Name, err)
+		return nil, nil, profileError(profile, err)
 	}
 	req.Filters = siblingFilters(filters, request.Key)
 	req.Labels = profile.Labels
@@ -279,6 +280,8 @@ func filterValueCacheKey(identity filterValueCacheIdentity, req ProviderRequest,
 		Capabilities     string
 		Provider         string
 		Query            string
+		CanonicalSearch  *esdsl.Search
+		Spans            SpanMappings
 		QueryArgs        []any
 		QueryIdentifiers []string
 		Options          map[string]any
@@ -293,6 +296,7 @@ func filterValueCacheKey(identity filterValueCacheIdentity, req ProviderRequest,
 	}{
 		Identity: identity.Connection, ProviderIdentity: identity.Provider, Capabilities: identity.Capabilities,
 		Provider: req.Provider, Query: req.Query, QueryArgs: req.QueryArgs,
+		CanonicalSearch: req.Search, Spans: req.Spans,
 		QueryIdentifiers: req.QueryIdentifiers,
 		Options:          req.Options, Params: req.Params, ParamRoles: req.ParamRoles,
 		TemplatedParams: req.TemplatedParams, Filters: req.Filters, Labels: req.Labels,

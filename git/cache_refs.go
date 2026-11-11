@@ -19,7 +19,7 @@ func recordCacheRef(ctx context.Context, mirror string, repo *Repository, ref Re
 	case RefTag:
 		return nil
 	}
-	_, err := run(ctx, command{dir: mirror, args: []string{"update-ref", "refs/commons-cache/repos/" + repo.URL.CacheKey() + "/" + kind + "/" + name, ref.SHA}})
+	_, err := run(ctx, command{dir: mirror, args: []string{"update-ref", cacheRefPrefix + repo.URL.CacheKey() + "/" + kind + "/" + name, ref.SHA}})
 	return err
 }
 

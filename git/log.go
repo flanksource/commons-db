@@ -108,7 +108,7 @@ var logFormat = "--format=" + logRecord + strings.Join([]string{"%H", "%h", "%P"
 // cherry-pick of it, by patch-id) is omitted: git log --cherry-pick
 // --right-only base...head. Merge commits are kept. options.Base and
 // options.Head resolve like Checkout refs; both are fetched into the mirror first.
-func (c *Cache) Log(ctx context.Context, repo *Repository, options LogOptions) ([]Commit, error) {
+func (c *Cache) readLog(ctx context.Context, repo *Repository, options LogOptions) ([]Commit, error) {
 	if options.Limit < 0 {
 		return nil, fmt.Errorf("invalid log limit %d", options.Limit)
 	}
@@ -135,7 +135,7 @@ func (c *Cache) Log(ctx context.Context, repo *Repository, options LogOptions) (
 // (--topo-order), with each commit's per-file changes (--name-status, renames
 // detected). ref resolves like a Checkout ref and its full history is fetched
 // into the mirror, unshallowing it when needed.
-func (c *Cache) History(ctx context.Context, repo *Repository, ref string, options HistoryOptions) ([]Commit, error) {
+func (c *Cache) readHistory(ctx context.Context, repo *Repository, ref string, options HistoryOptions) ([]Commit, error) {
 	if options.Limit < 0 || options.Offset < 0 {
 		return nil, fmt.Errorf("invalid history limit %d", options.Limit)
 	}
@@ -182,7 +182,7 @@ func (c *Cache) History(ctx context.Context, repo *Repository, ref string, optio
 
 // Compare counts the commits head is ahead of and behind base and finds
 // their merge base; refs without a common ancestor are an error.
-func (c *Cache) Compare(ctx context.Context, repo *Repository, base, head string) (Comparison, error) {
+func (c *Cache) readComparison(ctx context.Context, repo *Repository, base, head string) (Comparison, error) {
 	var comparison Comparison
 	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {repo, head}}, History: true}, func(mirror string, shas []string) error {
 		baseSHA, headSHA := shas[0], shas[1]
@@ -213,7 +213,7 @@ type MergeBaseOptions struct {
 // MergeBase is the best common ancestor of base and head, both fetched with
 // their full history into repo's mirror; refs sharing no history fail with
 // ErrUnrelatedHistories.
-func (c *Cache) MergeBase(ctx context.Context, repo *Repository, options MergeBaseOptions) (string, error) {
+func (c *Cache) readMergeBase(ctx context.Context, repo *Repository, options MergeBaseOptions) (string, error) {
 	base, head := options.Base, options.Head
 	headFrom := cmp.Or(options.HeadFrom, repo)
 	var found string

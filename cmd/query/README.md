@@ -4,6 +4,8 @@ A clicky + clicky-ui app for managing **connections** and query **profiles** and
 running them. `query serve` starts an embedded postgres, exposes a REST API, and
 serves the web UI.
 
+See [connection addresses and storage](../../docs/connection-storage.md) for Host/Database or URL inputs, storage layers, moving a saved connection, and the KEK status indicator.
+
 ```bash
 go -C cmd/query run . serve --port 8080 --profiles-dir ../../profiles
 # UI:      http://localhost:8080/
@@ -203,6 +205,8 @@ The app works under any mount path: the served `index.html` carries
 API calls and routes with that path (`www/src/mount.ts`).
 
 ## Reusable connection stores
+
+`query connections list/add/edit/validate/delete` manages file-backed connections by default, creating new connections in the shared global directory and editing existing files in their owning layer. Use `--source=db` to manage database records instead, and `-i` for Clicky's interactive forms. See the [connection CLI guide](connections/cli/README.md) for flags, examples, validation behavior, and layer precedence.
 
 Standalone hosts can reuse `connection/store` without Mission Control or a database. `store.Open(app)` loads `$XDG_CONFIG_HOME/flanksource/connections`, `$XDG_CONFIG_HOME/<app>/connections`, then `./.connections`; when `XDG_CONFIG_HOME` is unset, the first two paths start at `~/.config`. Later layers replace earlier connections with the same namespace/name. Attach the store to the execution context to resolve files before an existing resolver and the database.
 

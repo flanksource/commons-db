@@ -58,7 +58,7 @@ func TestRollupTargetsFoldsRotations(t *testing.T) {
 	if span.Count != 2 {
 		t.Errorf("jaeger-span-* count = %d, want 2", span.Count)
 	}
-	if got := span.QueryName(); got != "jaeger-span-2026-07-11,jaeger-span-2026-07-12" {
+	if got := span.QueryName(); got != "jaeger-span-*" {
 		t.Errorf("jaeger-span-* query target = %q", got)
 	}
 

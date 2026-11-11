@@ -34,6 +34,20 @@ var _ = Describe("ProviderDiagnostics", func() {
 		}))
 	})
 
+	It("hands OnRequest the statement and arguments as it is recorded, once for a walk", func() {
+		var seen []query.ProviderDiagnosticRequest
+		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{
+			Provider: "sql", Walk: true,
+			OnRequest: func(request query.ProviderDiagnosticRequest) { seen = append(seen, request) },
+		})
+		diagnostics.RecordRequest("SELECT guid FROM activities WHERE size >= $1", []any{20}, nil)
+		diagnostics.RecordRequest("SELECT guid FROM activities WHERE size >= $1 OFFSET 50", []any{20}, nil)
+
+		Expect(seen).To(HaveLen(1))
+		Expect(seen[0].Query).To(Equal("SELECT guid FROM activities WHERE size >= $1"))
+		Expect(seen[0].Arguments).To(Equal([]any{20}))
+	})
+
 	It("strips the credentials out of a connection string an option carries", func() {
 		diagnostics := query.NewDiagnostics(query.DiagnosticOptions{
 			Provider: "sql", Query: "SELECT 1", Detail: query.DiagnosticFull,

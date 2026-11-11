@@ -53,6 +53,14 @@ func newProfileSampleHandler(prefix string, ctx dbcontext.Context, store profile
 }
 
 func (h *profileSampleHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == h.prefix+"/profile/"+sampleProfileName+"/query" {
+		h.translateQuery(w, r)
+		return
+	}
+	if r.URL.Path == h.prefix+"/profile/"+sampleProfileName+"/mapping" {
+		h.mapping(w, r)
+		return
+	}
 	if r.URL.Path != h.prefix+"/profile/"+sampleProfileName {
 		h.next.ServeHTTP(w, r)
 		return

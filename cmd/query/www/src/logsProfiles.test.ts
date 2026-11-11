@@ -19,7 +19,8 @@ import {
   clickyLogsWalk,
   followParams,
   logsColumnFilterKeys,
-  logsProfileSurfaces,
+  connectionLogsSurface,
+  profileRenderSurfaces,
   logsResultRenderer,
 } from "./logsProfiles";
 
@@ -88,21 +89,38 @@ const K8S_SURFACES = new Map([
 ]);
 
 function surfaceElement(context: ResultRenderContext, surfaces = K8S_SURFACES) {
-  return logsResultRenderer(surfaces)(context) as ReactElement<
+  return logsResultRenderer(surfaces, () => [])(context) as ReactElement<
     ComponentProps<typeof LogsSurface>
   >;
 }
 
-describe("logsProfileSurfaces", () => {
+describe("connectionLogsSurface", () => {
+  const generated = (profile: string, connection: string) => ({
+    profile, render: "logs", virtual: true, provider: { type: "k8s", connection },
+  });
+  const documents = [
+    { profile: "Pod logs", render: "logs", provider: { type: "k8s", connection: "connection://oipa/k3s" } },
+    generated("Logs: k3s", "connection://k3s"),
+    generated("Logs: oipa/k3s", "connection://oipa/k3s"),
+  ];
+
+  it("finds the generated profile by the namespaced connection it reads, not a stored one over it", () => {
+    expect(connectionLogsSurface(documents, { name: "k3s", namespace: "oipa" })).toBe("profile-logs-oipa-k3s");
+    expect(connectionLogsSurface(documents, { name: "k3s" })).toBe("profile-logs-k3s");
+    expect(connectionLogsSurface(documents, { name: "orders" })).toBeUndefined();
+  });
+});
+
+describe("profileRenderSurfaces", () => {
   it("keys each logs surface by its route slug and carries the stored profile name", () => {
     // The route says `profile-kubernetes-pod-logs`; POST /profile/{name}/sessions
     // resolves through the store, which only knows "Kubernetes Pod Logs".
     expect(
-      logsProfileSurfaces([
+      profileRenderSurfaces([
         { profile: "Kubernetes Pod Logs", render: "logs", follow: true },
         { profile: "Audit Trail", render: "logs" },
         { profile: "Ledger", render: "table", follow: true },
-      ]),
+      ], "logs"),
     ).toEqual(
       new Map([
         ["profile-kubernetes-pod-logs", { profile: "Kubernetes Pod Logs", follow: true }],
@@ -208,7 +226,7 @@ describe("logsResultRenderer", () => {
       loading: true,
     };
 
-    const result = logsResultRenderer(K8S_SURFACES)(context);
+    const result = logsResultRenderer(K8S_SURFACES, () => [])(context);
 
     expect(isValidElement(result)).toBe(true);
     const element = result as ReactElement<ComponentProps<typeof LogsSurface>>;
@@ -259,7 +277,7 @@ describe("logsResultRenderer", () => {
       loading: false,
     };
 
-    expect(logsResultRenderer(K8S_SURFACES)(context)).toBe(context.defaultView);
+    expect(logsResultRenderer(K8S_SURFACES, () => [])(context)).toBe(context.defaultView);
   });
 
   it("renders every page of a cursor walk, oldest first, and forwards the load-more handle", () => {

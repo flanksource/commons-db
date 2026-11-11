@@ -11,9 +11,11 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/connections"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
 	"github.com/flanksource/commons-db/cmd/query/schedules"
+	"github.com/flanksource/commons-db/cmd/query/secretcatalog"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
 	"github.com/flanksource/commons-db/cmd/query/snapshots"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/profilestore"
 )
@@ -67,18 +69,37 @@ func New(options Options) (*App, error) {
 		return nil, err
 	}
 	tracePlugins := &tracePlugins{}
+	// Bound below: the connection service needs the profile store to count each
+	// connection's profiles, and the logs profiles need its connections.
+	var connectionService *connections.Service
+	var catalog *connectionCatalog
+	connectionLogs := connectionLogProfiles{list: func(types string) ([]*models.Connection, error) {
+		// With no database configured there are no stored connections, only the
+		// folder and virtual ones the catalog holds.
+		if !runtime.DatabaseEnabled() {
+			return catalog.ListConnections()
+		}
+		if connectionService == nil {
+			return nil, fmt.Errorf("the connection service is not open yet")
+		}
+		return connectionService.List(connections.ListOptions{Type: types})
+	}}
 	profileStore := func() (profilestore.Store, error) {
 		base, err := runtime.ProfileStore()
 		if err != nil {
 			return nil, err
 		}
-		overlay, err := profiles.NewOverlayStore(base, snapshotManager)
+		snapshotOverlay, err := profiles.NewOverlayStore(base, snapshotManager)
+		if err != nil {
+			return nil, err
+		}
+		overlay, err := profiles.NewOverlayStore(snapshotOverlay, connectionLogs)
 		if err != nil {
 			return nil, err
 		}
 		return tracePlugins.overlay(overlay)
 	}
-	catalog, err := newConnectionCatalog(ResolveConfigDir(options.Args), snapshotManager)
+	catalog, err = newConnectionCatalog(ResolveConfigDir(options.Args), snapshotManager)
 	if err != nil {
 		return nil, err
 	}
@@ -87,9 +108,10 @@ func New(options Options) (*App, error) {
 		WithConnectionLeaseResolver(snapshotManager.AcquireConnection)); err != nil {
 		return nil, err
 	}
-	connectionService, err := connections.New(connections.Options{
+	connectionService, err = connections.New(connections.Options{
 		Database: runtime.Database, Context: runtime.Context, DecodeBody: DecodeBody,
 		Virtual: catalog,
+		Secrets: &secretcatalog.Options{},
 		Profiles: func(ctx context.Context) ([]query.Profile, error) {
 			store, err := profileStore()
 			if err != nil {

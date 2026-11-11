@@ -7,6 +7,8 @@ import (
 	dbconnection "github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs/opensearch"
+	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/otel/span/layout"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
@@ -35,16 +37,12 @@ func (openTelemetryProvider) BackendCapabilities(
 }
 
 type OpenTelemetryOptions struct {
+	Layout  *layout.Definition `json:"-"`
+	RawRows bool               `json:"-"`
+	OpenSearchPagingOptions
 	Format         string   `json:"format,omitempty"`
 	Index          string   `json:"index,omitempty"`
 	DateField      string   `json:"dateField,omitempty"`
-	TraceIDField   string   `json:"traceIdField,omitempty"`
-	SpanIDField    string   `json:"spanIdField,omitempty"`
-	ParentIDField  string   `json:"parentIdField,omitempty"`
-	ParentRefType  string   `json:"parentRefType,omitempty"`
-	ServiceField   string   `json:"serviceField,omitempty"`
-	OperationField string   `json:"operationField,omitempty"`
-	StatusFields   []string `json:"statusFields,omitempty"`
 	SelectFields   []string `json:"selectFields,omitempty"`
 	SourceExcludes []string `json:"sourceExcludes,omitempty"`
 	Limit          int      `json:"limit,omitempty"`
@@ -55,9 +53,10 @@ type OpenTelemetryOptions struct {
 }
 
 type openTelemetryRuntime struct {
-	searcher *opensearch.Searcher
-	options  OpenTelemetryOptions
-	paging   openSearchPagingMode
+	threshold int
+	searcher  *opensearch.Searcher
+	options   OpenTelemetryOptions
+	paging    openSearchPagingMode
 }
 
 // PagingModes matches the nested OpenSearch connection: from/size inside the
@@ -100,17 +99,10 @@ func (openTelemetryProvider) InspectColumnFilters(
 }
 
 func openTelemetryInspectionColumns(columns []query.ColumnDef, options OpenTelemetryOptions) []query.ColumnDef {
-	statusField := "status"
-	if len(options.StatusFields) > 0 && options.StatusFields[0] != "" {
-		statusField = options.StatusFields[0]
-	}
 	fields := map[string]string{
-		"timestamp": options.DateField, "trace_id": options.TraceIDField,
-		"span_id": options.SpanIDField, "id": options.SpanIDField,
-		"parent_id": options.ParentIDField,
-		"service":   options.ServiceField, "service_name": options.ServiceField,
-		"operation": options.OperationField, "operation_name": options.OperationField,
-		"status": statusField,
+		"timestamp": options.DateField, "trace_id": "trace_id",
+		"span_id": "span_id", "parent_id": "parent_id",
+		"service": "service_name", "operation": "operation_name", "status": "status",
 	}
 	mapped := append([]query.ColumnDef(nil), columns...)
 	for index := range mapped {
@@ -125,50 +117,60 @@ func openTelemetryInspectionColumns(columns []query.ColumnDef, options OpenTelem
 // index; only the row shape differs.
 func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequest, page query.PageRequest) iter.Seq2[query.Page, error] {
 	return func(yield func(query.Page, error) bool) {
+		if !req.RawRows {
+			if err := query.ValidateSpanOptions(req.Options); err != nil {
+				yield(query.Page{}, err)
+				return
+			}
+		}
 		runtime, err := openTelemetrySearchClient(ctx, req)
 		if err != nil {
 			yield(query.Page{}, err)
 			return
 		}
 		search := openTelemetrySearch(runtime.options)
-		timeFieldMapping, err := ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
-			Searcher: runtime.searcher, Index: runtime.options.Index, Search: search,
-			Params: openSearchParamBindings(req), Inspection: req.Inspection,
-		})
-		if err != nil {
-			yield(query.Page{}, err)
-			return
+		var timeFieldMapping *esdsl.TimeFieldMapping
+		if req.Search == nil {
+			timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
+				Searcher: runtime.searcher, Index: runtime.options.Index, Search: search,
+				Params: openSearchParamBindings(req), Inspection: req.Inspection,
+			})
+			if err != nil {
+				yield(query.Page{}, err)
+				return
+			}
 		}
 		walk := openSearchWalk{
-			searcher: runtime.searcher,
-			index:    runtime.options.Index,
-			paging:   runtime.paging,
+			searcher:    runtime.searcher,
+			index:       runtime.options.Index,
+			paging:      runtime.paging,
+			threshold:   runtime.threshold,
+			diagnostics: req.Diagnostics,
 			build: func(position openSearchPage) (openSearchRequest, error) {
 				return buildOpenTelemetryRequest(req, runtime.options, position, timeFieldMapping)
 			},
-			mapRows: func(raw opensearch.Response) []query.Row {
-				return openTelemetryRows(raw, runtime.options)
+			mapRows: func(raw opensearch.Response) ([]query.Row, error) {
+				rows, err := openTelemetryRows(raw, runtime.options)
+				if err != nil {
+					return nil, err
+				}
+				return attachSpanLayout(rows, runtime.options.Layout)
 			},
 		}
 		walk.run(ctx, req, page, yield)
 	}
 }
 
-func openTelemetryRows(result opensearch.Response, options OpenTelemetryOptions) []query.Row {
-	rows := make([]query.Row, 0, len(result.Hits.Hits))
-	for _, hit := range result.Hits.Hits {
-		document := make(map[string]any, len(hit.Fields)+len(hit.Source))
-		for name, value := range hit.Fields {
-			document[name] = unwrapTraceValue(value)
+func openTelemetryRows(result opensearch.Response, options OpenTelemetryOptions) ([]query.Row, error) {
+	rows := openSearchRows(result)
+	for index, document := range rows {
+		row, err := openTelemetryRow(document, options)
+		if err != nil {
+			return nil, fmt.Errorf("span %s/%s: %w", document["source_index"], document["source_id"], err)
 		}
-		for name, value := range hit.Source {
-			document[name] = value
-		}
-		row := openTelemetryRow(document, options)
-		row["source_index"], row["source_id"] = hit.Index, hit.ID
-		rows = append(rows, row)
+		rows[index] = row
 	}
-	return rows
+	return rows, nil
 }
 
 func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (openTelemetryRuntime, error) {
@@ -187,23 +189,49 @@ func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (
 			"provider.options.params has been replaced by provider.options.search; re-import the profile to migrate it")
 	}
 	options.withDefaults()
+	options.RawRows = req.RawRows || req.Search != nil
 	outerModel, err := ctx.HydrateConnectionByURL(req.Connection)
 	if err != nil {
 		return openTelemetryRuntime{}, fmt.Errorf("hydrate opentelemetry connection %q: %w", req.Connection, err)
 	}
-	outer, err := dbconnection.NewOpenTelemetry(outerModel)
-	if err != nil {
-		return openTelemetryRuntime{}, err
+	nested := outerModel
+	if outerModel == nil {
+		return openTelemetryRuntime{}, fmt.Errorf("trace connection %q not found", req.Connection)
 	}
-	nested, err := outer.ResolveOpenSearch(ctx)
-	if err != nil {
-		return openTelemetryRuntime{}, err
+	if outerModel.Type != models.ConnectionTypeOpenSearch {
+		outer, err := dbconnection.NewOpenTelemetry(outerModel)
+		if err != nil {
+			return openTelemetryRuntime{}, err
+		}
+		nested, err = outer.ResolveOpenSearch(ctx)
+		if err != nil {
+			return openTelemetryRuntime{}, err
+		}
 	}
 	runtime, err := openSearchClientForConnection(ctx, nested)
 	if err != nil {
 		return openTelemetryRuntime{}, err
 	}
-	return openTelemetryRuntime{searcher: runtime.searcher, options: options, paging: runtime.paging}, nil
+	policy, err := resolveOpenSearchPagingPolicy(nested, options.OpenSearchPagingOptions)
+	if err != nil {
+		return openTelemetryRuntime{}, err
+	}
+	if req.Options["index"] == nil {
+		if index := outerModel.Properties["index"]; index != "" {
+			options.Index = index
+		} else if index := nested.Properties["index"]; index != "" {
+			options.Index = index
+		}
+	}
+	configured := outerModel.Properties["span_layout"]
+	if configured == "" {
+		configured = nested.Properties["span_layout"]
+	}
+	options.Layout, err = resolveSpanLayout(ctx, runtime.searcher, options.Index, req, configured)
+	if err != nil {
+		return openTelemetryRuntime{}, err
+	}
+	return openTelemetryRuntime{searcher: runtime.searcher, options: options, paging: policy.mode, threshold: policy.threshold}, nil
 }
 
 // Validate refuses a format the provider cannot shape rows from; empty is flat.
@@ -216,28 +244,10 @@ func (options OpenTelemetryOptions) Validate() error {
 }
 
 func (options *OpenTelemetryOptions) withDefaults() {
-	if options.Format == "" {
-		options.Format = "flat"
-	}
 	if options.Index == "" {
 		options.Index = "otel-traces-*"
 	}
 	if options.DateField == "" {
 		options.DateField = "@timestamp"
-	}
-	if options.TraceIDField == "" {
-		options.TraceIDField = "trace_id"
-	}
-	if options.SpanIDField == "" {
-		options.SpanIDField = "span_id"
-	}
-	if options.ParentIDField == "" {
-		options.ParentIDField = "parent_id"
-	}
-	if options.ServiceField == "" {
-		options.ServiceField = "service_name"
-	}
-	if options.OperationField == "" {
-		options.OperationField = "operation_name"
 	}
 }

@@ -396,7 +396,7 @@ func (p Profile) ParamFilterBindings() []ColumnFilterBinding {
 func (p Profile) filterBinding(key string) (ColumnFilterBinding, error) {
 	bindings, err := p.allFilterBindings()
 	if err != nil {
-		return ColumnFilterBinding{}, fmt.Errorf("profile %q: %w", p.Name, err)
+		return ColumnFilterBinding{}, profileError(p, err)
 	}
 	for _, binding := range bindings {
 		if binding.Key == key {

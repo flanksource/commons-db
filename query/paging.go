@@ -49,6 +49,8 @@ func (m PagingMode) String() string {
 // statements can disagree — there is no reading of that request which is
 // obviously right, so it is refused instead of resolved.
 type PageRequest struct {
+	// ReadAll distinguishes a complete read from one requested page; Ceiling bounds it.
+	ReadAll bool
 	// Limit is the most rows one Page may carry. Required and positive.
 	Limit int
 
@@ -58,6 +60,9 @@ type PageRequest struct {
 	// Cursor resumes immediately after the position it encodes. Cursor paging
 	// only.
 	Cursor Cursor
+	// After resumes a trusted in-process merged read from native order keys.
+	// HTTP callers use Cursor, which validates the query scope.
+	After []any `json:"-"`
 
 	// Sort names the column this request orders by, overriding the order the
 	// profile declared. It is a public column name, not a backend field: the
@@ -180,6 +185,10 @@ type Page struct {
 	Metrics *MetricMetadata `json:"metrics,omitempty"`
 	Rows    []Row
 
+	// Batches are the batches of a SQL program the provider ran as written; a
+	// program is one Page whose Rows are its last result set with columns.
+	Batches []BatchResult
+
 	// Styles are the evaluated cell styles for Rows, positionally parallel to
 	// it. Nil when no column declares a Style.
 	Styles []map[string]string
@@ -195,7 +204,8 @@ type Page struct {
 	// NextKeys are the ordered sort values of this Page's last row, in the
 	// order's column order. A cursoring provider sets them; ExecutePages turns
 	// them into Next.
-	NextKeys []any
+	NextKeys   []any
+	NextOffset int
 
 	// PIT is the backend snapshot this page was read from, when the provider
 	// opened one. It travels inside Next so the next request lands on the same

@@ -30,6 +30,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sqs v1.44.0
 	github.com/aws/aws-sdk-go-v2/service/sts v1.43.3
 	github.com/aws/smithy-go v1.27.3
+	github.com/bluekeyes/go-gitdiff v0.8.1
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/eko/gocache/lib/v4 v4.2.3
 	github.com/eko/gocache/store/go_cache/v4 v4.2.5
@@ -38,10 +39,10 @@ require (
 	github.com/emersion/go-smtp v0.25.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.90
+	github.com/flanksource/clicky v1.21.93
 	github.com/flanksource/commons v1.63.0
-	github.com/flanksource/deps v1.0.49
-	github.com/flanksource/gomplate/v3 v3.24.90
+	github.com/flanksource/deps v1.0.50
+	github.com/flanksource/gomplate/v3 v3.24.91
 	github.com/flanksource/is-healthy v1.0.93
 	github.com/flanksource/sqlglot-go v1.1.1
 	github.com/fxamacker/cbor/v2 v2.9.1
@@ -51,6 +52,7 @@ require (
 	github.com/goccy/go-yaml v1.19.2
 	github.com/gofrs/flock v0.13.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
+	github.com/golang-sql/sqlexp v0.1.0
 	github.com/google/cel-go v0.31.0
 	github.com/google/go-cmp v0.7.0
 	github.com/google/uuid v1.6.0
@@ -86,6 +88,7 @@ require (
 	github.com/stretchr/testify v1.12.1
 	github.com/timberio/go-datemath v0.1.0
 	github.com/yuin/goldmark v1.7.17
+	github.com/zalando/go-keyring v0.2.8
 	github.com/zclconf/go-cty v1.18.1
 	go.opentelemetry.io/otel v1.45.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.45.0
@@ -183,6 +186,7 @@ require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/cncf/xds/go v0.0.0-20260202195803-dba9d589def2 // indirect
 	github.com/cyphar/filepath-securejoin v0.6.1 // indirect
+	github.com/danieljoos/wincred v1.2.3 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
@@ -226,8 +230,8 @@ require (
 	github.com/go-xmlfmt/xmlfmt v1.1.3 // indirect
 	github.com/gobwas/glob v0.2.3 // indirect
 	github.com/goccy/go-json v0.10.6 // indirect
+	github.com/godbus/dbus/v5 v5.2.2 // indirect
 	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
-	github.com/golang-sql/sqlexp v0.1.0 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/flatbuffers v25.12.19+incompatible // indirect

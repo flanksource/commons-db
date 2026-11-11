@@ -57,13 +57,25 @@ func newOpenSearchStub(hits func(call int) string) *openSearchStub {
 			_, _ = fmt.Fprint(w, `{"pit_id":"pit-1","creation_time":1}`)
 			return
 		case strings.Contains(r.URL.Path, "/_search/scroll"):
+			defer GinkgoRecover()
+			Expect(r.URL.Path).To(Equal("/_search/scroll"))
+			Expect(r.URL.Query()).NotTo(HaveKey("scroll_id"))
 			if r.Method == http.MethodDelete {
+				var body struct {
+					IDs []string `json:"scroll_id"`
+				}
+				Expect(json.NewDecoder(r.Body).Decode(&body)).To(Succeed())
+				Expect(body.IDs).To(Equal([]string{"scroll-1"}))
 				stub.clearedScrolls++
 				_, _ = fmt.Fprint(w, `{"succeeded":true,"num_freed":1}`)
 				return
 			}
 			stub.continuedScrolls++
-			stub.scrollIDs = append(stub.scrollIDs, r.URL.Query().Get("scroll_id"))
+			var body struct {
+				ID string `json:"scroll_id"`
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&body)).To(Succeed())
+			stub.scrollIDs = append(stub.scrollIDs, body.ID)
 			response := hits(calls)
 			calls++
 			_, _ = fmt.Fprint(w, withScrollID(response, "scroll-1"))
@@ -319,7 +331,7 @@ var _ = Describe("opensearch provider", func() {
 			defer stub.server.Close()
 
 			var seen []query.Row
-			for page, err := range query.ExecutePages(context.New(), stub.profile("cursored", order), query.PageRequest{Limit: 2, Strategy: query.PagingCursor}) {
+			for page, err := range query.ExecutePages(context.New(), stub.profile("cursored", order), query.PageRequest{Limit: 2, Strategy: query.PagingCursor, ReadAll: true}) {
 				Expect(err).ToNot(HaveOccurred())
 				seen = append(seen, page.Rows...)
 			}
@@ -343,7 +355,9 @@ var _ = Describe("opensearch provider", func() {
 			defer stub.server.Close()
 
 			var next query.Cursor
-			for page, err := range query.ExecutePages(context.New(), stub.profile("cursored", order), query.PageRequest{Limit: 2, Strategy: query.PagingCursor}) {
+			profile := stub.profile("cursored", order)
+			profile.Provider.Options["pagingThreshold"] = 0
+			for page, err := range query.ExecutePages(context.New(), profile, query.PageRequest{Limit: 2, Strategy: query.PagingCursor}) {
 				Expect(err).ToNot(HaveOccurred())
 				next = page.Next
 				break
@@ -351,7 +365,7 @@ var _ = Describe("opensearch provider", func() {
 			Expect(next).ToNot(BeEmpty())
 			Expect(stub.clearedScrolls).To(BeZero())
 
-			for page, err := range query.ExecutePages(context.New(), stub.profile("cursored", order), query.PageRequest{Limit: 2, Cursor: next}) {
+			for page, err := range query.ExecutePages(context.New(), profile, query.PageRequest{Limit: 2, Cursor: next}) {
 				Expect(err).ToNot(HaveOccurred())
 				Expect(page.Rows).To(HaveLen(1))
 				Expect(page.Rows[0]).To(HaveKeyWithValue("message", "three"))
@@ -373,7 +387,9 @@ var _ = Describe("opensearch provider", func() {
 			})
 			defer stub.server.Close()
 
-			for _, err := range query.ExecutePages(context.New(), stub.profile("cursored", order), query.PageRequest{Limit: 2, Strategy: query.PagingCursor}) {
+			profile := stub.profile("cursored", order)
+			profile.Provider.Options["pagingThreshold"] = 0
+			for _, err := range query.ExecutePages(context.New(), profile, query.PageRequest{Limit: 2, Strategy: query.PagingCursor}) {
 				Expect(err).ToNot(HaveOccurred())
 				break
 			}
@@ -396,7 +412,7 @@ var _ = Describe("opensearch provider", func() {
 			})
 			var next query.Cursor
 			for page, err := range query.ExecutePages(context.New().WithDB(pitDatabase, nil), profile,
-				query.PageRequest{Limit: 2, Strategy: query.PagingCursor}) {
+				query.PageRequest{Limit: 2, Strategy: query.PagingCursor, ReadAll: true}) {
 				Expect(err).ToNot(HaveOccurred())
 				next = page.Next
 				break

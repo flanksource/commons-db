@@ -152,7 +152,9 @@ func discoverKubernetes(
 	connection *models.Connection,
 ) (serverInfo, error) {
 	_, config, err := (dbconnection.KubeconfigConnection{
-		Kubeconfig: &types.EnvVar{ValueStatic: connection.Certificate},
+		Kubeconfig:     &types.EnvVar{ValueStatic: connection.Certificate},
+		KubeconfigPath: connection.Properties[dbcontext.KubeconfigProperty],
+		Kubecontext:    connection.Properties[dbcontext.KubeContextProperty],
 	}).Populate(connectionContext)
 	if err != nil {
 		return serverInfo{}, fmt.Errorf("configure Kubernetes client: %w", err)

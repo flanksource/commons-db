@@ -362,7 +362,7 @@ var _ = Describe("Result.Render", func() {
 		Expect(out).To(ContainSubstring(`"language": "json"`))
 	})
 
-	It("uses a typed row presenter only for interactive clicky JSON", func() {
+	It("uses a typed row presenter for interactive output and preserves raw exports", func() {
 		presented := &query.Result{
 			Rows:             []query.Row{{"duration": 125.0, "detail": map[string]any{"id": "span-1"}}},
 			ColumnFilterKeys: map[string]string{"duration": "filter.duration"},
@@ -382,6 +382,9 @@ var _ = Describe("Result.Render", func() {
 		rawJSON, err := presented.Render([]query.ColumnDef{{Name: "duration"}, {Name: "detail"}}, "json")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rawJSON).To(And(ContainSubstring(`125`), Not(ContainSubstring("125ms"))))
+		terminal, err := presented.Render([]query.ColumnDef{{Name: "duration"}, {Name: "detail"}}, "table")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(terminal).To(ContainSubstring("125ms"))
 	})
 
 	DescribeTable("keeps a presenter's DefaultHidden column listed and flagged in clicky JSON",

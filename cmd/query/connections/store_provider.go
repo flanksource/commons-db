@@ -24,9 +24,10 @@ import (
 type StoreProviderOptions struct {
 	// Store holds the connection files, in layers.
 	Store *store.Store
-	// WriteLayer names the store layer connections are created and edited in;
-	// every other layer's connections are read-only.
+	// WriteLayer is the creation layer and default writable layer.
 	WriteLayer string
+	// WritableLayers permits editing existing files in these layers. Defaults to WriteLayer.
+	WritableLayers []string
 	// ValidateDelete, when set, may veto deleting a connection, such as one
 	// the host's own configuration still names.
 	ValidateDelete func(context.Context, models.Connection) error
@@ -39,7 +40,8 @@ type StoreProvider struct {
 	store          *store.Store
 	layer          store.Layer
 	validateDelete func(context.Context, models.Connection) error
-	writes         sync.Mutex
+	writes         *sync.Mutex
+	writableLayers []string
 }
 
 // NewStoreProvider is the provider over options.Store, writing to its
@@ -52,11 +54,23 @@ func NewStoreProvider(options StoreProviderOptions) (*StoreProvider, error) {
 	if index < 0 {
 		return nil, fmt.Errorf("store provider: the connection store has no layer %q to write to", options.WriteLayer)
 	}
-	return &StoreProvider{store: options.Store, layer: options.Store.Layers()[index], validateDelete: options.ValidateDelete}, nil
+	for _, name := range options.WritableLayers {
+		if !slices.ContainsFunc(options.Store.Layers(), func(l store.Layer) bool { return l.Name == name }) {
+			return nil, fmt.Errorf("unknown writable connection layer %q", name)
+		}
+	}
+	return &StoreProvider{store: options.Store, layer: options.Store.Layers()[index], validateDelete: options.ValidateDelete, writableLayers: slices.Clone(options.WritableLayers), writes: &sync.Mutex{}}, nil
 }
 
 // Writable reports whether the write layer's directory accepts files.
-func (p *StoreProvider) Writable() bool { return dirWritable(p.layer.Dir) }
+func (p *StoreProvider) Writable() bool {
+	if dirWritable(p.layer.Dir) {
+		return true
+	}
+	return slices.ContainsFunc(p.store.Layers(), func(layer store.Layer) bool {
+		return slices.Contains(p.writableLayers, layer.Name) && dirWritable(layer.Dir)
+	})
+}
 
 func (p *StoreProvider) ListConnections() ([]*models.Connection, error) {
 	entries, err := p.store.Entries()
@@ -85,7 +99,8 @@ func (p *StoreProvider) ResolveConnection(_ dbcontext.Context, reference string)
 func (p *StoreProvider) project(entry store.Entry, writable bool) *models.Connection {
 	connection := entry.Connection
 	connection.Properties = maps.Clone(connection.Properties)
-	if entry.Layer.Name == p.layer.Name {
+	if entry.Layer.Name == p.layer.Name || slices.Contains(p.writableLayers, entry.Layer.Name) {
+		writable = dirWritable(entry.Layer.Dir)
 		connection.Virtual, connection.ReadOnly = false, !writable
 	} else {
 		connection.Virtual, connection.ReadOnly = true, true
@@ -96,6 +111,29 @@ func (p *StoreProvider) project(entry store.Entry, writable bool) *models.Connec
 // SaveConnection creates connection (a zero ID) or updates the connection its
 // ID names, renaming its file when its name changes.
 func (p *StoreProvider) SaveConnection(ctx context.Context, connection *models.Connection) (*models.Connection, error) {
+	if connection.Layer != "" {
+		if connection.ID == uuid.Nil && connection.Layer != p.layer.Name {
+			return p.saveToLayer(ctx, connection)
+		}
+		if connection.ID != uuid.Nil {
+			entry, err := p.store.Find(connection.ID.String())
+			if err != nil {
+				return nil, err
+			}
+			if entry == nil || entry.Layer.Name != connection.Layer {
+				return p.saveToLayer(ctx, connection)
+			}
+		}
+	}
+	if connection.ID != uuid.Nil {
+		owner, err := p.owner(connection.ID.String())
+		if err != nil {
+			return nil, err
+		}
+		if owner != nil {
+			return owner.SaveConnection(ctx, connection)
+		}
+	}
 	if err := validateConnectionName(connection.Name); err != nil {
 		return nil, err
 	}
@@ -132,6 +170,13 @@ func (p *StoreProvider) SaveConnection(ctx context.Context, connection *models.C
 
 // DeleteConnection removes the write layer's file for the connection id names.
 func (p *StoreProvider) DeleteConnection(ctx context.Context, id string) error {
+	owner, err := p.owner(id)
+	if err != nil {
+		return err
+	}
+	if owner != nil {
+		return owner.DeleteConnection(ctx, id)
+	}
 	p.writes.Lock()
 	defer p.writes.Unlock()
 	if err := p.writableNow(ctx); err != nil {
@@ -155,11 +200,27 @@ func (p *StoreProvider) DeleteConnection(ctx context.Context, id string) error {
 	return p.store.Delete(p.layer.Name, entry.Connection.ID.String())
 }
 
+func (p *StoreProvider) owner(reference string) (*StoreProvider, error) {
+	entry, err := p.store.Find(reference)
+	if err != nil || entry == nil {
+		return nil, err
+	}
+	if entry.Layer.Name == p.layer.Name || !slices.Contains(p.writableLayers, entry.Layer.Name) {
+		return nil, nil
+	}
+	owner, err := NewStoreProvider(StoreProviderOptions{Store: p.store, WriteLayer: entry.Layer.Name, ValidateDelete: p.validateDelete})
+	if err != nil {
+		return nil, err
+	}
+	owner.writes = p.writes
+	return owner, nil
+}
+
 func (p *StoreProvider) writableNow(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if !p.Writable() {
+	if !dirWritable(p.layer.Dir) {
 		return entity.NewStatusErrorf(http.StatusMethodNotAllowed, "read_only", "connections in %s are read-only", p.layer.Dir)
 	}
 	return nil

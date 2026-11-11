@@ -12,3 +12,4 @@ hack/
 .pnpm-store/
 specs/
 out.*
+/docs/plans/

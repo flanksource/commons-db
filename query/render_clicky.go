@@ -17,6 +17,29 @@ const ClickyPageFormat = "clicky-json"
 // page and a session's presented rows go through, so a row a session streams
 // is the row a page of the same result serves.
 func RenderClickyPage(p Profile, rows []Row) (string, error) {
+	if p.RenderMode() == RenderTraces {
+		p.Columns = append([]ColumnDef(nil), p.Columns...)
+		positions := map[string]int{}
+		for index, column := range p.Columns {
+			positions[column.Name] = index
+		}
+		for _, name := range []string{"trace_id", "span_id", "parent_id", "timestamp", "duration_ms", "service", "operation", "status", "kind", "_attributes", "_span_attributes", "_resource"} {
+			column := ColumnDef{Name: name, Hidden: true}
+			switch name {
+			case "_attributes", "_span_attributes", "_resource":
+				column.Type = ColumnTypeJSON
+			}
+			if _, exists := positions[name]; !exists {
+				p.Columns = append(p.Columns, column)
+			}
+		}
+		metadata := ColumnDef{Name: "_trace", Hidden: true, Type: ColumnTypeJSON}
+		if index, exists := positions["_trace"]; exists {
+			p.Columns[index] = metadata
+		} else {
+			p.Columns = append(p.Columns, metadata)
+		}
+	}
 	filterKeys, err := p.ColumnFilterKeys()
 	if err != nil {
 		return "", err

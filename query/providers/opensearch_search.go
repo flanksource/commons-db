@@ -51,6 +51,9 @@ func buildOpenSearchRequest(
 	page openSearchPage,
 	timeFieldMapping *esdsl.TimeFieldMapping,
 ) (openSearchRequest, error) {
+	if req.Search != nil {
+		return canonicalSearchRequest(req, page, opts.Layout)
+	}
 	raw := strings.TrimSpace(req.Query)
 	var built openSearchRequest
 	var err error

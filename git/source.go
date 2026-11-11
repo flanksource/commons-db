@@ -127,18 +127,14 @@ func validSourceOptions(options SourceOptions) bool {
 }
 
 func sourceRepository(ctx context.Context, directory string) (string, error) {
-	bare, err := run(ctx, command{dir: directory, args: []string{"rev-parse", "--is-bare-repository"}})
-	if err != nil {
-		return "", fmt.Errorf("%w: %w", ErrNotRepository, err)
-	}
-	if bare == "true" {
-		return "", fmt.Errorf("%w: bare repository %q", ErrUnsupportedSource, directory)
-	}
-	root, err := run(ctx, command{dir: directory, args: []string{"rev-parse", "--show-toplevel"}})
+	found, err := Discover(ctx, DiscoverOptions{Path: directory})
 	if err != nil {
 		return "", err
 	}
-	return filepath.EvalSymlinks(root)
+	if found.Bare {
+		return "", fmt.Errorf("%w: bare repository %q", ErrUnsupportedSource, directory)
+	}
+	return found.Root, nil
 }
 
 func (s *PreparedSource) Info() SourceInfo { return s.info }
