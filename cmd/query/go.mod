@@ -14,7 +14,6 @@ require (
 	github.com/flanksource/commons-db v0.1.70
 	github.com/flanksource/commons-db/recordstore v0.1.70
 	github.com/flanksource/commons-db/tracing v0.1.70
-	github.com/glebarez/sqlite v1.11.0
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.10.0
@@ -398,11 +397,6 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.0 // indirect
 )
-
-// See the root go.mod for why this replace is required: without it the gorm
-// dialector links github.com/glebarez/go-sqlite, which registers the "sqlite"
-// driver a second time alongside modernc.org/sqlite and panics at init.
-replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311
 
 replace github.com/flanksource/commons-db => ../..
 

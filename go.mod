@@ -45,7 +45,6 @@ require (
 	github.com/flanksource/is-healthy v1.0.93
 	github.com/flanksource/sqlglot-go v1.1.1
 	github.com/fxamacker/cbor/v2 v2.9.1
-	github.com/glebarez/sqlite v1.11.0
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/goccy/go-yaml v1.19.2
@@ -369,12 +368,3 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.0 // indirect
 )
-
-// github.com/glebarez/sqlite is a gorm dialector that, unreplaced, links its own
-// copy of the modernc engine (github.com/glebarez/go-sqlite) and calls
-// sql.Register("sqlite"). commons-db also registers modernc.org/sqlite (see
-// connection/sql.go), so the unreplaced dialector panics at init with
-// "sql: Register called twice for driver sqlite". The clarkmcc fork imports
-// modernc.org/sqlite/lib instead of vendoring, so there is exactly one
-// registration. gavel and oipa-cli carry the identical replace.
-replace github.com/glebarez/sqlite => github.com/clarkmcc/gorm-sqlite v0.0.0-20240426202654-00ed082c0311

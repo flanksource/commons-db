@@ -14,15 +14,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"gorm.io/gorm"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+
 	// Registers the processors and the named library presets a profile reaches
 	// by `use:`, so a spec can page one the way a real profile would.
 	_ "github.com/flanksource/commons-db/query/processor"

@@ -13,8 +13,8 @@ import (
 	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	"github.com/flanksource/commons-db/models"
-	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )

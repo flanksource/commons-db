@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
+	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/models"
 	commons "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
-	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 	corev1 "k8s.io/api/core/v1"

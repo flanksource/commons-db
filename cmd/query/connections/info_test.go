@@ -9,9 +9,9 @@ import (
 	"testing"
 
 	dbcontext "github.com/flanksource/commons-db/context"
+	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
-	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
