@@ -1,0 +1,1 @@
+var e={};throw Error(`Could not resolve "@shikijs/langs/javascript" imported by "@flanksource/clicky-ui". Is it installed?`);export{e as default};
