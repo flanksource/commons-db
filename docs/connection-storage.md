@@ -44,6 +44,12 @@ gavel connections edit example --layer global
 
 Hosts advertise destinations at `GET /api/v1/connections/storage` and include the `layer` field in connection form schemas. Create and update requests use `layer: "db"`, `"global"`, `"app"` or `"cwd"`. The exact choices and default are supplied by the host; hosts with an encrypted database catalog can expose only that destination.
 
+Hosts mounting `connections.Service.Handler` also serve saved-connection choices at `GET /api/v1/connection?__lookup=filters&__lookup_filter=connection`. The `type` or comma-separated `types` parameter limits accepted connection types; `__lookup_q` searches names. The response uses Clicky's `filters.connection` contract with at most 100 options, the full match count and a truncation indicator. Values retain their namespace as `connection://namespace/name`; labels show the name and type. Credentials are excluded from lookup responses. A field declares `x-clicky-lookup: {url: "/api/v1/connection?types=postgres,sql_server", filter: "connection"}` and its web host passes Clicky UI's `useOperationLookupFetcher` to `JsonSchemaForm`.
+
+```sh
+curl -fsS 'http://localhost:8080/api/v1/connection?types=postgres,sql_server&__lookup=filters&__lookup_filter=connection&__lookup_q=orders'
+```
+
 The upper-right KEK indicator shows **ready**, **missing**, **unavailable** or **not configured**. Reading status never initializes or replaces a key. A host without encrypted connection storage reports **not configured**; Query's ordinary database store does not claim KEK protection. Gavel exposes its status at `GET /api/connections/storage`, using the same response shape, and a missing local macOS key can be initialized with:
 
 ```bash

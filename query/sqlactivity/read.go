@@ -43,7 +43,7 @@ func Read(ctx context.Context, db *sql.DB, engine string, filter Filter) (Snapsh
 	}
 	for i := range snapshot.Rows {
 		snapshot.Rows[i].Engine = engine
-		snapshot.Rows[i].derive(snapshot.ServerTime)
+		snapshot.Rows[i].Derive(snapshot.ServerTime)
 	}
 	return snapshot, nil
 }

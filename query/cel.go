@@ -95,6 +95,9 @@ func (plan rowTransformPlan) transformRow(ctx context.Context, row Row) (bool, m
 	if err := validateAcyclicValue(row); err != nil {
 		return false, nil, fmt.Errorf("provider row: %w", err)
 	}
+	if err := normalizeBooleanColumns(plan.profile.Columns, row); err != nil {
+		return false, nil, err
+	}
 	if err := normalizeTraceRow(ctx, plan.profile, row); err != nil {
 		return false, nil, fmt.Errorf("normalize span: %w", err)
 	}

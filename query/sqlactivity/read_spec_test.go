@@ -87,15 +87,15 @@ var _ = Describe("reading SQL Server requests", func() {
 			sqlmock.NewRows(sqlServerColumns).
 				AddRow(55, 0, 54, "warehouse", "etl", "loader", "host-a", "suspended", "UPDATE", "LCK_M_X", "KEY: 5:72057594043236352 (8194443284a0)",
 					1200, started(1300*time.Millisecond), started(5*time.Second), 1300, 40, 900, 12, 3, 16384, 1, []byte{0xab, 0x01}, "UPDATE dbo.ledger SET v = 1").
-				AddRow(54, 0, 0, "warehouse", "etl", "loader", "host-a", "sleeping", "", "", "", 0, started(time.Minute), started(time.Minute), nil, 0, 0, 0, 0, 0, 1, nil, "BEGIN TRAN"),
+				AddRow(54, 0, 0, "warehouse", "etl", "loader", "host-a", "sleeping", "", "", "", nil, started(time.Minute), started(time.Minute), nil, nil, nil, nil, nil, nil, 1, nil, "BEGIN TRAN"),
 		)
 		got, err := readSQLServer(context.Background(), pool, Filter{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got).To(Equal(Snapshot{ServerTime: serverTime, Rows: []Sample{
 			{SessionID: 55, BlockedBy: 54, Database: "warehouse", User: "etl", Application: "loader", ClientHost: "host-a",
-				State: "suspended", Command: "UPDATE", WaitType: "LCK_M_X", WaitResource: "KEY: 5:72057594043236352 (8194443284a0)", WaitMs: 1200,
-				StartedAt: started(1300 * time.Millisecond), TransactionStartedAt: started(5 * time.Second), ElapsedMs: 1300, CPUMs: 40,
-				LogicalReads: 900, Reads: 12, Writes: 3, MemoryBytes: 16384, OpenTransactions: 1, QueryID: "0xAB01", SQL: "UPDATE dbo.ledger SET v = 1"},
+				State: "suspended", Command: "UPDATE", WaitType: "LCK_M_X", WaitResource: "KEY: 5:72057594043236352 (8194443284a0)", WaitMs: new(float64(1200)),
+				StartedAt: started(1300 * time.Millisecond), TransactionStartedAt: started(5 * time.Second), ElapsedMs: 1300, CPUMs: new(float64(40)),
+				LogicalReads: new(int64(900)), Reads: new(int64(12)), Writes: new(int64(3)), MemoryBytes: new(int64(16384)), OpenTransactions: 1, QueryID: "0xAB01", SQL: "UPDATE dbo.ledger SET v = 1"},
 			{SessionID: 54, Database: "warehouse", User: "etl", Application: "loader", ClientHost: "host-a", State: "sleeping",
 				StartedAt: started(time.Minute), TransactionStartedAt: started(time.Minute), OpenTransactions: 1, SQL: "BEGIN TRAN"},
 		}}))

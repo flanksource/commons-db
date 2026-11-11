@@ -10,6 +10,7 @@ import (
 	dbquery "github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/datetime"
 	"github.com/flanksource/commons-db/query/profilestore"
+	"github.com/flanksource/commons-db/recordstore/sampleframe"
 	"github.com/flanksource/commons-db/tracing"
 )
 
@@ -19,6 +20,8 @@ var timeColumns = []string{"time", "timestamp"}
 // reader is one capture's read: the profile and params it executes, and the
 // window it binds onto them.
 type reader struct {
+	columns []dbquery.ColumnDef
+	sampled bool
 	profile dbquery.Profile
 	params  map[string]any
 	// name is the saved profile read, empty for a provider read in place.
@@ -44,6 +47,7 @@ func (r Reads) reader(ctx dbcontext.Context, params Params, now time.Time) (*rea
 		return nil, err
 	}
 	read := &reader{
+		sampled: r.options.Sampled,
 		profile: profile, params: params.Params, name: name, windowed: params.windowed(),
 		start: window.start, end: window.end, limit: params.Limit, timed: params.Every != "", before: r.options.BeforeExecute,
 	}
@@ -132,9 +136,11 @@ func (r *reader) records(rows []dbquery.Row, readAt time.Time) ([]Row, error) {
 				return nil, fmt.Errorf("%s row %d %s: %w", r.label(), index, column, err)
 			}
 		}
-		records = append(records, Row{Time: at, Profile: r.name, Provider: r.profile.Provider.Type, Row: row})
+		records = append(records, Row{Time: at, Profile: r.name, Provider: r.profile.Provider.Type, Values: row})
 	}
-	sort.SliceStable(records, func(i, j int) bool { return records[i].Time.Before(records[j].Time) })
+	if r.timed {
+		sort.SliceStable(records, func(i, j int) bool { return records[i].Time.Before(records[j].Time) })
+	}
 	return records, nil
 }
 
@@ -172,12 +178,7 @@ func (r *reader) once(ctx dbcontext.Context, end time.Time, records tracing.Emit
 	if err != nil {
 		return err
 	}
-	for _, row := range r.kept(rows, records) {
-		if err := records.Emit(ctx, row); err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.emit(ctx, r.start, end, rows, records)
 }
 
 // follow reads [last, now] every interval, emitting only the rows timed past
@@ -188,7 +189,8 @@ func (r *reader) follow(ctx dbcontext.Context, every time.Duration, records trac
 	defer ticker.Stop()
 	last, seen := r.start, false
 	for {
-		rows, err := r.read(ctx, last, time.Now().UTC())
+		end := time.Now().UTC()
+		rows, err := r.read(ctx, last, end)
 		if err != nil && ctx.Err() == nil {
 			return err
 		}
@@ -198,10 +200,16 @@ func (r *reader) follow(ctx dbcontext.Context, every time.Duration, records trac
 				fresh = append(fresh, row)
 			}
 		}
-		for _, row := range r.kept(fresh, records) {
-			if err := records.Emit(emitCtx, row); err != nil {
+		if err == nil {
+			if err := r.emit(emitCtx, last, end, fresh, records); err != nil {
 				return err
 			}
+		}
+		retained := fresh
+		if r.limit > 0 && len(retained) > r.limit {
+			retained = retained[:r.limit]
+		}
+		for _, row := range retained {
 			last, seen = row.Time, true
 		}
 		select {
@@ -210,4 +218,37 @@ func (r *reader) follow(ctx dbcontext.Context, every time.Duration, records trac
 		case <-ticker.C:
 		}
 	}
+}
+
+func (r *reader) emit(ctx context.Context, start, end time.Time, rows []Row, records tracing.Emitter[Row]) error {
+	kept := r.kept(rows, records)
+	if r.sampled {
+		publisher, ok := records.(interface {
+			EmitFrame(context.Context, sampleframe.Frame, []Row) error
+		})
+		if !ok {
+			return fmt.Errorf("sampled query requires an atomic frame emitter")
+		}
+		if start.IsZero() {
+			start = end
+		}
+		columns := r.profile.Columns
+		if len(columns) == 0 {
+			values := make([]dbquery.Row, len(rows))
+			for i, row := range rows {
+				values[i] = row.Values
+			}
+			if len(values) > 0 {
+				r.columns = dbquery.InferSampleColumns(values)
+			}
+			columns = r.columns
+		}
+		return publisher.EmitFrame(ctx, sampleframe.Frame{Source: r.label(), StartedAt: start, CompletedAt: end, Observed: len(rows), Limit: r.limit, Summary: map[string]any{"columns": columns, "order": r.profile.Order}}, kept)
+	}
+	for _, row := range kept {
+		if err := records.Emit(ctx, row); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -11,7 +11,7 @@ import (
 
 var _ = Describe("query record presentation", func() {
 	It("sorts dynamic fields without changing their stored values", func() {
-		r := tracequery.Row{Profile: "request-rate", Provider: "prometheus", Row: map[string]any{"z": 9, "a": 2}}
+		r := tracequery.Row{Profile: "request-rate", Provider: "prometheus", Values: map[string]any{"z": 9, "a": 2}}
 		before, err := json.Marshal(r)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(strings.Join(strings.Fields(r.Pretty().String()), " ")).To(Equal("request-rate prometheus a=2 z=9"))

@@ -60,7 +60,11 @@ func connectionOptions(conns []*models.Connection, query string, limit int) (map
 		if c.Type != "" {
 			label = label.AddText(" ("+c.Type+")", "text-muted-foreground")
 		}
-		options["connection://"+c.Name] = label
+		reference := c.Name
+		if c.Namespace != "" {
+			reference = c.Namespace + "/" + c.Name
+		}
+		options["connection://"+reference] = label
 	}
 	return options, total
 }
