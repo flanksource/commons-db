@@ -132,7 +132,7 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 		opts.Statistic = "Average"
 	}
 	if opts.Language == "metrics-insights" && (req.Query == "" || age > 14*24*time.Hour || period < 60) {
-		return nil, fmt.Errorf("Metrics Insights requires a query, at most two weeks of history and period >= 60s")
+		return nil, fmt.Errorf("metrics insights requires a query, at most two weeks of history and period >= 60s")
 	}
 	if opts.Concurrency == 0 {
 		opts.Concurrency = 4
@@ -317,7 +317,7 @@ func readCloudwatch(ctx stdctx.Context, client cloudwatchReader, queries []types
 				if r.StatusCode == types.StatusCodeComplete {
 					complete[aws.ToString(r.Id)] = true
 				}
-				if r.StatusCode != types.StatusCodeComplete && !(r.StatusCode == types.StatusCodePartialData && aws.ToString(out.NextToken) != "") {
+				if r.StatusCode != types.StatusCodeComplete && (r.StatusCode != types.StatusCodePartialData || aws.ToString(out.NextToken) == "") {
 					return fmt.Errorf("CloudWatch query %s returned %s: %v", aws.ToString(r.Id), r.StatusCode, r.Messages)
 				}
 				if len(r.Timestamps) != len(r.Values) {
@@ -332,7 +332,7 @@ func readCloudwatch(ctx stdctx.Context, client cloudwatchReader, queries []types
 					s.Labels["series"] = aws.ToString(r.Label)
 					s.Metric = aws.ToString(q.Expression)
 					if len(out.MetricDataResults) >= 500 {
-						return fmt.Errorf("Metrics Insights returned its series ceiling; completeness cannot be established")
+						return fmt.Errorf("metrics insights returned its series ceiling; completeness cannot be established")
 					}
 				}
 				if q.MetricStat != nil {

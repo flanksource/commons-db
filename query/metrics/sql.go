@@ -180,7 +180,7 @@ func load(ctx context.Context, db *sql.DB, source Source, table string, labels [
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	stmt, err := tx.PrepareContext(ctx, "INSERT INTO "+quote(table)+" VALUES ("+strings.TrimSuffix(strings.Repeat("?,", len(defs)), ",")+") ON CONFLICT(series_id,time) DO NOTHING")
 	if err != nil {
 		return err
