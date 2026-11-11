@@ -11,9 +11,9 @@ require (
 	github.com/flanksource/clicky/aichat v1.21.89
 	github.com/flanksource/clicky/valkey v1.21.89
 	github.com/flanksource/commons v1.63.0
-	github.com/flanksource/commons-db v0.1.70
-	github.com/flanksource/commons-db/recordstore v0.1.70
-	github.com/flanksource/commons-db/tracing v0.1.70
+	github.com/flanksource/commons-db v0.1.71
+	github.com/flanksource/commons-db/recordstore v0.1.71
+	github.com/flanksource/commons-db/tracing v0.1.71
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.10.0
