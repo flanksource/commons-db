@@ -9,7 +9,7 @@ require (
 	// Kept in lockstep with the root module's clicky pin (see ../go.mod):
 	// a workspace build resolves one clicky for every module.
 	github.com/flanksource/clicky v1.21.95-0.20261112060413-ae2c0bb79614
-	github.com/flanksource/clicky/valkey v1.21.93
+	github.com/flanksource/clicky/valkey v1.21.94
 	github.com/flanksource/commons v1.64.1
 	github.com/flanksource/commons-db v0.1.71
 	github.com/gofrs/flock v0.13.0
