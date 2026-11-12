@@ -83,7 +83,11 @@ func sqlConnect(ctx context.Context, req sqlConnectRequest) (*sql.DB, sqlDialect
 		conn = hydrated
 	}
 
-	client, err := conn.Client(ctx)
+	options := connection.SQLClientOptions{}
+	if notices, ok := ctx.Value(sqlNoticesKey{}).(*sqlNotices); ok {
+		options.OnMessage = notices.send
+	}
+	client, err := conn.Client(ctx, options)
 	if err != nil {
 		release()
 		return nil, "", nil, fmt.Errorf("failed to create sql client: %w", err)

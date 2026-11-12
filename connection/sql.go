@@ -91,7 +91,10 @@ func (s SQLConnection) ToModel() models.Connection {
 // Client creates and returns a database/sql DB client.
 //
 // NOTE: Must be run on a hydrated SQLConnection.
-func (s *SQLConnection) Client(ctx context.Context) (*databasesql.DB, error) {
+func (s *SQLConnection) Client(ctx context.Context, options ...SQLClientOptions) (*databasesql.DB, error) {
+	if len(options) > 1 {
+		return nil, fmt.Errorf("SQL client accepts at most one options value")
+	}
 	if s.Type == "" {
 		s.Type = models.ConnectionTypePostgres
 	}
@@ -112,6 +115,9 @@ func (s *SQLConnection) Client(ctx context.Context) (*databasesql.DB, error) {
 	connectionString, err := s.connectionString()
 	if err != nil {
 		return nil, err
+	}
+	if s.Type == models.ConnectionTypePostgres && len(options) == 1 && options[0].OnMessage != nil {
+		return postgresMessageClient(connectionString, options[0])
 	}
 
 	client, err := databasesql.Open(driverName, connectionString)

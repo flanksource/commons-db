@@ -180,6 +180,15 @@ func runSQLBatch(ctx context.Context, conn *sql.Conn, dialect sqlDialect, text s
 	if dialect == dialectSQLServer {
 		return runSQLServerBatch(ctx, conn, text, args, notice)
 	}
+	var messages []string
+	if dialect == dialectPostgres {
+		if notices, ok := ctx.Value(sqlNoticesKey{}).(*sqlNotices); ok {
+			defer notices.listen(func(message string) {
+				messages = append(messages, message)
+				notice(message)
+			})()
+		}
+	}
 	var before int64
 	if dialect == dialectSQLite {
 		if err := conn.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
@@ -194,7 +203,7 @@ func runSQLBatch(ctx context.Context, conn *sql.Conn, dialect sqlDialect, text s
 	if err != nil {
 		return query.BatchResult{}, err
 	}
-	result := query.BatchResult{ResultSets: sets}
+	result := query.BatchResult{ResultSets: sets, Messages: messages}
 	if dialect == dialectSQLite {
 		var after int64
 		if err := conn.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {

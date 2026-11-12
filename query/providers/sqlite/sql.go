@@ -109,6 +109,7 @@ func (p sqlProvider) Pages(ctx context.Context, req query.ProviderRequest, page 
 		return p.partitionPages(ctx, req, page, opts)
 	}
 	return func(yield func(query.Page, error) bool) {
+		ctx := withSQLNotices(ctx)
 		client, dialect, release, err := p.connect(ctx, req)
 		if err != nil {
 			yield(query.Page{}, err)
