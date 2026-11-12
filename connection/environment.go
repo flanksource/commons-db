@@ -231,7 +231,7 @@ func setupKubernetesConnection(ctx context.Context, conn *KubernetesConnection, 
 		return nil, fmt.Errorf("failed to hydrate kubernetes connection: %w", err)
 	}
 	if config == nil {
-		return nil, fmt.Errorf("Kubernetes REST configuration is missing")
+		return nil, fmt.Errorf("kubernetes REST configuration is missing")
 	}
 	data, err := kubeconfigBytes(config)
 	if err != nil {

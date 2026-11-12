@@ -30,7 +30,7 @@ func (o Options) RESTConfig() (*rest.Config, error) {
 	}
 	cfg, err := client.ClientConfig()
 	if err != nil {
-		return nil, fmt.Errorf("Kubernetes selection (kubeconfig %q, kubecontext %q): %w", o.Kubeconfig, o.Kubecontext, err)
+		return nil, fmt.Errorf("kubernetes selection (kubeconfig %q, kubecontext %q): %w", o.Kubeconfig, o.Kubecontext, err)
 	}
 	return cfg, nil
 }

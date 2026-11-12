@@ -40,11 +40,13 @@ export function tracesResultRenderer(
   menuActionsFor: (surfaceKey: string) => DataTableMenuAction[],
 ): (context: ResultRenderContext) => ReactNode {
   return (context) => {
-    const surfaceKey = context.response?.requestUrl
-      ? entitySegment(context.response.requestUrl)
+    const response = context.response;
+    const surfaceKey = response?.requestUrl
+      ? entitySegment(response.requestUrl)
       : undefined;
-    if (!surfaceKey || !surfaces.has(surfaceKey)) return context.defaultView;
-    const rows = clickyLogsWalk(context.pages, context.response, {
+    if (!response || !surfaceKey || !surfaces.has(surfaceKey))
+      return context.defaultView;
+    const rows = clickyLogsWalk(context.pages, response, {
       rawValues: true,
     });
     if (!rows)

@@ -66,7 +66,7 @@ func read(options Options) (text.SensitiveString, error) {
 	return text.NewSensitiveString(value), err
 }
 
-func initialize(ctx context.Context, options Options) (text.SensitiveString, error) {
+func initialize(ctx context.Context, options Options) (_ text.SensitiveString, err error) {
 	config, err := os.UserConfigDir()
 	if err != nil {
 		return "", err
@@ -80,7 +80,11 @@ func initialize(ctx context.Context, options Options) (text.SensitiveString, err
 	if err = lock.Lock(); err != nil {
 		return "", err
 	}
-	defer lock.Unlock()
+	defer func() {
+		if unlockErr := lock.Unlock(); unlockErr != nil {
+			err = errors.Join(err, fmt.Errorf("release Keychain KEK lock: %w", unlockErr))
+		}
+	}()
 	if err = ctx.Err(); err != nil {
 		return "", err
 	}

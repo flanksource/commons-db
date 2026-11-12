@@ -162,11 +162,11 @@ func (s Span) Row() map[string]any {
 func duration(d map[string]any, format string, start time.Time) (float64, error) {
 	v, key := first(d, "duration_ms", "durationMs", "durationNano", "duration_nano", "durationNanos", "duration")
 	if v == nil {
-		end, key := first(d, "endTimeUnixNano", "endTimeMillis")
+		end, endKey := first(d, "endTimeUnixNano", "endTimeMillis")
 		if end == nil {
 			return 0, fmt.Errorf("span requires duration or end time")
 		}
-		at, err := timestamp(end, key, format)
+		at, err := timestamp(end, endKey, format)
 		if err != nil {
 			return 0, err
 		}

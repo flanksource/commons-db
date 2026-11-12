@@ -228,7 +228,7 @@ func discoverNested(options Discovery) ([]NestedAttributes, error) {
 	}
 	for _, list := range options.NestedOverrides {
 		if list.Prefix != "attributes." && list.Prefix != "resource." {
-			return nil, fmt.Errorf("nested layout prefix %q must be attributes. or resource.", list.Prefix)
+			return nil, fmt.Errorf("nested layout prefix %q must be %q or %q", list.Prefix, "attributes.", "resource.")
 		}
 		if !keywordPair(list) {
 			return nil, fmt.Errorf("nested layout %s requires keyword %s and %s inside nested %s", list.Prefix, list.Key, list.Value, list.Path)

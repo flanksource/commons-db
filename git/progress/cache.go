@@ -34,9 +34,9 @@ func CacheTasks(options TaskOptions) readcache.Observer {
 		defer mu.Unlock()
 		step := steps[event.ID]
 		if step == nil {
-			name := strings.Title(event.Operation)
-			if event.Operation == "" {
-				name = "Cache lookup"
+			name := "Cache lookup"
+			if event.Operation != "" {
+				name = strings.ToUpper(event.Operation[:1]) + event.Operation[1:]
 			}
 			step = group.StartStep(taskName(event.Repository, name, event.Ref), task.WithContext(ctx))
 			step.Task().SetLabels(map[string]string{"repository": repositoryName(event.Repository), "ref": event.Ref, "operation": event.Operation})

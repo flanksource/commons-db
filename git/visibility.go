@@ -51,7 +51,7 @@ func CheckVisibility(ctx context.Context, options VisibilityOptions) ([]PathVisi
 	}
 	checked, err := gitcommand.Run(ctx, gitcommand.Options{Directory: options.Directory, Input: []byte(input), Args: []string{"check-ignore", "--stdin", "-z", "-v", "--non-matching"}})
 	var exit *exec.ExitError
-	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 1) {
+	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() != 1) {
 		return nil, fmt.Errorf("check Git visibility: %w: %s", err, checked.Stderr)
 	}
 	fields := strings.Split(string(checked.Output), "\x00")
@@ -61,7 +61,7 @@ func CheckVisibility(ctx context.Context, options VisibilityOptions) ([]PathVisi
 	for index, path := range options.Paths {
 		rule := fields[index*4+2]
 		if strings.TrimSuffix(fields[index*4+3], "/") != path.Path {
-			return nil, fmt.Errorf("Git ignore returned an unexpected path")
+			return nil, fmt.Errorf("git check-ignore returned an unexpected path")
 		}
 		result[index].Rule = rule
 		result[index].Visible = rule == "" || strings.HasPrefix(rule, "!")
