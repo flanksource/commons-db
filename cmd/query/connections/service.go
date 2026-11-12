@@ -137,7 +137,7 @@ func (s *Service) Handler(prefix string, next http.Handler) http.Handler {
 	browser.prefix = strings.TrimRight(prefix, "/")
 	browser.ctx = ctx
 	browser.virtual = s.virtual
-	actions := newConnectionActionsHandler(prefix, ctx, next)
+	actions := newConnectionActionsHandler(prefix, ctx, s.lookupHandler(browser.prefix, next))
 	actions.virtual = s.virtual
 	browser.next = actions
 	health := newConnectionHealthHandler(prefix, ctx, browser)

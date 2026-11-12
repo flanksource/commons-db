@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 	"github.com/google/uuid"
 	"github.com/samber/lo"
 	"gorm.io/gorm"

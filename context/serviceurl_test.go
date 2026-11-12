@@ -8,7 +8,7 @@ import (
 	"github.com/flanksource/commons-db/models"
 	commons "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
