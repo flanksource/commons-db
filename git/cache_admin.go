@@ -42,27 +42,31 @@ type EvictResult struct {
 // flight, and fails with ErrCacheBusy while one of those worktrees is leased.
 // A Tree opened before Evict fails on its next read.
 func (c *Cache) Evict(ctx context.Context, options EvictOptions) (result EvictResult, err error) {
-	if err := c.requireMirror(options.Owner); err != nil {
+	owner := options.Owner
+	if !validCacheKey(owner) {
+		return result, fmt.Errorf("%w: invalid cache key %q", ErrCacheEntry, owner)
+	}
+	if err := c.requireMirror(owner); err != nil {
 		return result, err
 	}
-	binding, err := registry.Load(c.Root, options.Owner)
+	binding, err := registry.Load(c.Root, owner)
 	if err != nil {
 		return result, err
 	}
-	if binding.Owner != options.Owner {
-		return result, fmt.Errorf("%w: %s reads the mirror of %s; rebind it instead", ErrCacheEntry, options.Owner, binding.Owner)
+	if binding.Owner != owner {
+		return result, fmt.Errorf("%w: %s reads the mirror of %s; rebind it instead", ErrCacheEntry, owner, binding.Owner)
 	}
-	paths := newMirrorPaths(filepath.Join(c.Root, options.Owner))
+	paths := newMirrorPaths(filepath.Join(c.Root, owner))
 	lock, err := acquire(ctx, paths.lock, "mirror lock", exclusiveLock)
 	if err != nil {
 		return result, err
 	}
 	defer func() { err = errors.Join(err, lock.Unlock()) }()
-	result.Owner = options.Owner
-	if result.Dependents, err = c.dependentsOf(options.Owner); err != nil {
+	result.Owner = owner
+	if result.Dependents, err = c.dependentsOf(owner); err != nil {
 		return result, err
 	}
-	keys := append([]string{options.Owner}, result.Dependents...)
+	keys := append([]string{owner}, result.Dependents...)
 	leases, err := c.leaseWorktrees(keys)
 	if err != nil {
 		return result, err
@@ -75,7 +79,7 @@ func (c *Cache) Evict(ctx context.Context, options EvictOptions) (result EvictRe
 	pinnedCommits.Delete(absolute)
 	for _, dir := range []string{paths.git, paths.pins} {
 		if err := os.RemoveAll(dir); err != nil {
-			return result, fmt.Errorf("evict %s: %w", options.Owner, err)
+			return result, fmt.Errorf("evict %s: %w", owner, err)
 		}
 	}
 	for _, key := range keys {
@@ -124,13 +128,20 @@ func (c *Cache) Rebind(ctx context.Context, repo *Repository, options RebindOpti
 	if err != nil {
 		return result, err
 	}
-	result = RebindResult{Key: key, Previous: previous, Owner: options.Owner}
-	if result.Owner == "" {
+	result = RebindResult{Key: key, Previous: previous}
+	owner := options.Owner
+	switch {
+	case owner == "":
 		if result.Owner, err = c.findSharedOwner(ctx, repo, ref, api); err != nil {
 			return result, err
 		}
-	} else if err := c.requireRelated(ctx, result.Owner, sharedCandidateOptions{Repository: repo, Ref: ref, API: api}); err != nil {
-		return result, err
+	case !validCacheKey(owner):
+		return result, fmt.Errorf("%w: invalid cache key %q", ErrCacheEntry, owner)
+	default:
+		if err := c.requireRelated(ctx, owner, sharedCandidateOptions{Repository: repo, Ref: ref, API: api}); err != nil {
+			return result, err
+		}
+		result.Owner = owner
 	}
 	if result.Owner == previous {
 		return result, nil
@@ -189,8 +200,14 @@ func (c *Cache) dependentsOf(owner string) ([]string, error) {
 	return dependents, nil
 }
 
+// validCacheKey reports whether key names one entry directly under the cache
+// root, so a key from a request cannot address a path outside it.
+func validCacheKey(key string) bool {
+	return key != "" && key == filepath.Base(key) && filepath.IsLocal(key)
+}
+
 func (c *Cache) requireMirror(key string) error {
-	if key == "" || key != filepath.Base(key) || !filepath.IsLocal(key) {
+	if !validCacheKey(key) {
 		return fmt.Errorf("%w: invalid cache key %q", ErrCacheEntry, key)
 	}
 	if _, err := os.Stat(filepath.Join(c.Root, key, "mirror.git", "HEAD")); errors.Is(err, fs.ErrNotExist) {

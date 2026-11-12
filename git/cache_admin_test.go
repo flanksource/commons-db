@@ -131,6 +131,19 @@ var _ = Describe("git cache administration", func() {
 			_, err := cache.Evict(ctx, git.EvictOptions{Owner: forkKey})
 			Expect(err).To(MatchError(git.ErrCacheEntry))
 		})
+
+		DescribeTable("refuses an owner that does not name one entry under the cache root",
+			func(ctx SpecContext, owner string) {
+				readForkThroughKey(ctx)
+				_, err := cache.Evict(ctx, git.EvictOptions{Owner: owner})
+				Expect(err).To(MatchError(git.ErrCacheEntry))
+				Expect(mirrorOf(donorKey)).To(BeADirectory())
+			},
+			Entry("a parent traversal", "../escape"),
+			Entry("a nested path", "owner/mirror.git"),
+			Entry("an absolute path", "/var/cache"),
+			Entry("the root itself", "."),
+		)
 	})
 
 	Describe("rebinding a repository", func() {
@@ -172,6 +185,12 @@ var _ = Describe("git cache administration", func() {
 			forkHistory.bases = map[string]string{}
 			_, err := cache.Rebind(ctx, forkRepo, git.RebindOptions{Owner: altKey})
 			Expect(err).To(MatchError(git.ErrUnrelatedHistories))
+			Expect(cacheOwner(cache, forkRepo)).To(Equal(donorKey))
+		})
+
+		It("refuses an owner that escapes the cache root and keeps the binding", func(ctx SpecContext) {
+			_, err := cache.Rebind(ctx, forkRepo, git.RebindOptions{Owner: "../" + altKey})
+			Expect(err).To(MatchError(git.ErrCacheEntry))
 			Expect(cacheOwner(cache, forkRepo)).To(Equal(donorKey))
 		})
 

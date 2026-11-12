@@ -93,6 +93,9 @@ func (m mirrorPaths) usePinned(shas []string, history bool) (bool, error) {
 func (m mirrorPaths) pin(ctx context.Context, shas []string) error {
 	var updates strings.Builder
 	for _, sha := range shas {
+		if !fullSHAPattern.MatchString(sha) {
+			return fmt.Errorf("pin %q: a full 40-character commit SHA is required", sha)
+		}
 		fmt.Fprintf(&updates, "update %s%s %s\n", pinRefPrefix, sha, sha)
 	}
 	if _, err := run(ctx, command{dir: m.git, args: []string{"update-ref", "--stdin"}, stdin: []byte(updates.String())}); err != nil {
