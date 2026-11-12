@@ -110,12 +110,21 @@ var _ = Describe("a connection policy", func() {
 		Expect(document["x-clicky-url-sources"]).To(Equal([]any{SourceValue, SourceSecret}))
 	})
 
-	It("serves the committed form schema unchanged without a policy", func() {
+	It("serves the committed form schema unchanged without a policy, plus the store's save layer", func() {
 		open := newStoreService(newAppStoreProvider(layers, nil), Policy{})
 		recorder := serveConnections(open, http.MethodGet, "/api/v1/connections", profiles.SchemaContentType)
-		committed, err := os.ReadFile(filepath.Join("..", "..", "..", "schemas", "connection.json"))
+		Expect(recorder.Code).To(Equal(http.StatusOK))
+		committedBody, err := os.ReadFile(filepath.Join("..", "..", "..", "schemas", "connection.json"))
 		Expect(err).NotTo(HaveOccurred())
-		Expect(append(recorder.Body.Bytes(), '\n')).To(Equal(committed))
+		var served, committed map[string]any
+		Expect(json.Unmarshal(recorder.Body.Bytes(), &served)).To(Succeed())
+		Expect(json.Unmarshal(committedBody, &committed)).To(Succeed())
+		// The layered store adds where a connection is saved; the storage spec
+		// covers that field, and everything else is the committed schema.
+		properties := served["properties"].(map[string]any)
+		Expect(properties).To(HaveKey("layer"))
+		delete(properties, "layer")
+		Expect(served).To(Equal(committed))
 		Expect(open.List(ListOptions{})).To(HaveLen(2))
 	})
 
