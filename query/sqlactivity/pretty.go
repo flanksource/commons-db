@@ -27,10 +27,20 @@ func (s Sample) PrettyFull() api.Textable {
 	return s.Pretty().NewLine().Add(clicky.CodeBlock("sql", s.SQL)).NewLine().Add(clicky.Map(map[string]any{
 		"Engine": s.Engine, "User": s.User, "Application": s.Application, "Client host": s.ClientHost,
 		"Command": s.Command, "Wait resource": s.WaitResource,
-		"Waited":      api.Human(time.Duration(s.WaitMs * float64(time.Millisecond))),
+		"Waited":      durationReading(s.WaitMs),
 		"Transaction": api.Human(time.Duration(s.TransactionMs * float64(time.Millisecond))),
-		"CPU":         api.Human(time.Duration(s.CPUMs * float64(time.Millisecond))),
+		"CPU":         durationReading(s.CPUMs),
 		"Reads":       s.LogicalReads, "Physical reads": s.Reads, "Writes": s.Writes,
-		"Memory": api.HumanizeBytes(s.MemoryBytes), "Open transactions": s.OpenTransactions, "Query id": s.QueryID,
+		"Memory": bytesReading(s.MemoryBytes), "Open transactions": s.OpenTransactions, "Query id": s.QueryID,
 	}))
+}
+
+func durationReading(value *float64)api.Textable{
+	if value==nil{return clicky.Text("—","muted")}
+	return api.Human(time.Duration(*value*float64(time.Millisecond)))
+}
+
+func bytesReading(value *int64)api.Textable{
+	if value==nil{return clicky.Text("—","muted")}
+	return api.HumanizeBytes(*value)
 }

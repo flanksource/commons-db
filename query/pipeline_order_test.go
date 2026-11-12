@@ -104,7 +104,7 @@ var _ = Describe("processor and row mapping order", func() {
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(result.Rows).To(Equal([]query.Row{{
-			"key": "alpha", "batchSize": int64(1), "aliased": "alpha-processed-aliased", "mapped": "alpha-processed-aliased-mapped",
+			"key": "alpha", "batchSize": 1, "aliased": "alpha-processed-aliased", "mapped": "alpha-processed-aliased-mapped",
 		}}))
 	})
 
@@ -116,7 +116,7 @@ var _ = Describe("processor and row mapping order", func() {
 
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rows).To(Equal([]query.Row{{
-			"key": "alpha", "batchSize": int64(1), "aliased": "alpha-processed-aliased", "mapped": "alpha-processed-aliased-mapped",
+			"key": "alpha", "batchSize": 1, "aliased": "alpha-processed-aliased", "mapped": "alpha-processed-aliased-mapped",
 		}}))
 	})
 

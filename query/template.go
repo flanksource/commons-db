@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/gomplate/v3"
-
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // paramRefPattern matches the two ways a template reaches a resolved parameter:

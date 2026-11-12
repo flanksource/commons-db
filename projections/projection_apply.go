@@ -11,7 +11,7 @@ import (
 
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/clicky/api/icons"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 	"github.com/goccy/go-yaml"
 	"github.com/goccy/go-yaml/ast"
 	"github.com/goccy/go-yaml/parser"

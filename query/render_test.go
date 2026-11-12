@@ -135,18 +135,35 @@ var _ = Describe("CEL columns", func() {
 				ContainSubstring("references its destination container"),
 			)))
 		},
-		Entry("from a CEL column", query.Profile{
-			Name:    "cyclic-cel-column",
-			Columns: []query.ColumnDef{{Name: "snapshot", CEL: "row"}},
-		}, `row 0: column "snapshot"`),
 		Entry("from a root JSONPath column", query.Profile{
 			Name:    "cyclic-jsonpath-column",
 			Columns: []query.ColumnDef{{Name: "snapshot", JSONPath: "$"}},
 		}, `row 0: column "snapshot"`),
+	)
+
+	// CEL hands results back as plain copies, so a CEL projection of the row (or a
+	// container in it) is a snapshot that cannot reference its own destination.
+	DescribeTable("stores CEL projections of the row as independent snapshots",
+		func(profile query.Profile, read func(query.Row) any, expected map[string]any) {
+			query.RegisterProvider(&mockProvider{typ: "snapshot-projection", rows: []query.Row{{
+				"metadata": map[string]any{"service": "api"},
+			}}})
+			profile.Provider = query.ProviderConfig{Type: "snapshot-projection"}
+
+			result, err := query.Execute(context.New(), profile)
+			Expect(err).ToNot(HaveOccurred())
+			Expect(read(result.Rows[0])).To(Equal(expected))
+		},
+		Entry("from a CEL column", query.Profile{
+			Name:    "snapshot-cel-column",
+			Columns: []query.ColumnDef{{Name: "snapshot", CEL: "row"}},
+		}, func(row query.Row) any { return row["snapshot"] },
+			map[string]any{"metadata": map[string]any{"service": "api"}}),
 		Entry("from a nested alias", query.Profile{
-			Name:    "cyclic-alias",
+			Name:    "snapshot-alias",
 			Aliases: []query.AliasDef{{Name: "metadata.snapshot", CEL: "row.metadata"}},
-		}, `row 0: alias "metadata.snapshot"`),
+		}, func(row query.Row) any { return row["metadata"].(map[string]any)["snapshot"] },
+			map[string]any{"service": "api"}),
 	)
 })
 
@@ -362,7 +379,7 @@ var _ = Describe("Result.Render", func() {
 		Expect(out).To(ContainSubstring(`"language": "json"`))
 	})
 
-	It("uses a typed row presenter only for interactive clicky JSON", func() {
+	It("uses a typed row presenter for interactive output and preserves raw exports", func() {
 		presented := &query.Result{
 			Rows:             []query.Row{{"duration": 125.0, "detail": map[string]any{"id": "span-1"}}},
 			ColumnFilterKeys: map[string]string{"duration": "filter.duration"},
@@ -382,6 +399,9 @@ var _ = Describe("Result.Render", func() {
 		rawJSON, err := presented.Render([]query.ColumnDef{{Name: "duration"}, {Name: "detail"}}, "json")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(rawJSON).To(And(ContainSubstring(`125`), Not(ContainSubstring("125ms"))))
+		terminal, err := presented.Render([]query.ColumnDef{{Name: "duration"}, {Name: "detail"}}, "table")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(terminal).To(ContainSubstring("125ms"))
 	})
 
 	DescribeTable("keeps a presenter's DefaultHidden column listed and flagged in clicky JSON",

@@ -6,7 +6,7 @@ import (
 	"strings"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 	"github.com/ohler55/ojg/jp"
 
 	"github.com/flanksource/commons-db/context"
@@ -94,6 +94,9 @@ func newRowTransformPlan(profile Profile) (rowTransformPlan, error) {
 func (plan rowTransformPlan) transformRow(ctx context.Context, row Row) (bool, map[string]string, error) {
 	if err := validateAcyclicValue(row); err != nil {
 		return false, nil, fmt.Errorf("provider row: %w", err)
+	}
+	if err := normalizeBooleanColumns(plan.profile.Columns, row); err != nil {
+		return false, nil, err
 	}
 	if err := normalizeTraceRow(ctx, plan.profile, row); err != nil {
 		return false, nil, fmt.Errorf("normalize span: %w", err)

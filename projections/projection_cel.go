@@ -3,8 +3,8 @@ package projections
 import (
 	"fmt"
 
-	"github.com/flanksource/gomplate/v3"
-	"github.com/google/cel-go/cel"
+	"cel.dev/cel-go/cel"
+	"github.com/flanksource/gomplate/v4"
 )
 
 // Projections evaluate through gomplate, which is the expression stack the rest

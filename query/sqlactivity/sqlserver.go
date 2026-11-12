@@ -23,12 +23,12 @@ SELECT s.session_id, COALESCE(r.request_id, 0) AS request_id, COALESCE(r.blockin
 	COALESCE(DB_NAME(COALESCE(r.database_id, s.database_id)), '') AS database_name,
 	COALESCE(s.login_name, '') AS login_name, COALESCE(s.program_name, '') AS program_name, COALESCE(s.host_name, '') AS host_name,
 	COALESCE(r.status, s.status) AS state, COALESCE(r.command, '') AS command,
-	COALESCE(r.wait_type, '') AS wait_type, COALESCE(r.wait_resource, '') AS wait_resource, COALESCE(r.wait_time, 0) AS wait_time,
+	COALESCE(r.wait_type, '') AS wait_type, COALESCE(r.wait_resource, '') AS wait_resource, r.wait_time,
 	TODATETIMEOFFSET(COALESCE(r.start_time, s.last_request_start_time), DATEPART(TZOFFSET, @sampled_at)) AS started_at,
 	TODATETIMEOFFSET(tx.begin_time, DATEPART(TZOFFSET, @sampled_at)) AS transaction_started_at,
-	r.total_elapsed_time, COALESCE(r.cpu_time, 0) AS cpu_time, COALESCE(r.logical_reads, 0) AS logical_reads,
-	COALESCE(r.reads, 0) AS reads, COALESCE(r.writes, 0) AS writes,
-	CAST(COALESCE(r.granted_query_memory, 0) AS bigint) * 8192 AS memory_bytes,
+	r.total_elapsed_time, r.cpu_time, r.logical_reads,
+	r.reads, r.writes,
+	CAST(r.granted_query_memory AS bigint) * 8192 AS memory_bytes,
 	s.open_transaction_count, r.query_hash,
 	COALESCE(CASE WHEN r.session_id IS NULL OR r.statement_start_offset IS NULL THEN st.text
 		ELSE SUBSTRING(st.text, r.statement_start_offset / 2 + 1,
@@ -81,14 +81,15 @@ func scanSQLServer(rows *sql.Rows) (Sample, error) {
 	var s Sample
 	var startedAt, transactionStartedAt sql.NullTime
 	var elapsedMs sql.NullInt64
-	var waitMs, cpuMs int64
+	var waitMs, cpuMs sql.NullInt64
 	var queryHash []byte
 	if err := rows.Scan(&s.SessionID, &s.RequestID, &s.BlockedBy, &s.Database, &s.User, &s.Application, &s.ClientHost,
 		&s.State, &s.Command, &s.WaitType, &s.WaitResource, &waitMs, &startedAt, &transactionStartedAt,
 		&elapsedMs, &cpuMs, &s.LogicalReads, &s.Reads, &s.Writes, &s.MemoryBytes, &s.OpenTransactions, &queryHash, &s.SQL); err != nil {
 		return s, fmt.Errorf("read sys.dm_exec_requests row: %w", err)
 	}
-	s.WaitMs, s.CPUMs = float64(waitMs), float64(cpuMs)
+	if waitMs.Valid {s.WaitMs=new(float64(waitMs.Int64))}
+	if cpuMs.Valid {s.CPUMs=new(float64(cpuMs.Int64))}
 	s.ElapsedMs = float64(elapsedMs.Int64)
 	s.StartedAt, s.TransactionStartedAt = nullTime(startedAt), nullTime(transactionStartedAt)
 	s.QueryID = encodeHandle(queryHash)
