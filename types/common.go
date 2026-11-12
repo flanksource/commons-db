@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flanksource/gomplate/v3"
+	"github.com/flanksource/gomplate/v4"
 	"github.com/lib/pq"
 	"gorm.io/gorm"
 	"k8s.io/apimachinery/pkg/labels"

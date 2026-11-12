@@ -13,6 +13,9 @@ func buildOpenTelemetryRequest(
 	page openSearchPage,
 	timeFieldMapping *esdsl.TimeFieldMapping,
 ) (openSearchRequest, error) {
+	if req.Search != nil {
+		return canonicalSearchRequest(req, page, options.Layout)
+	}
 	search := openTelemetrySearch(options)
 	// A declared order is the profile's, and it is what a cursor is cut from,
 	// so it wins over the trace-shaped default sort.

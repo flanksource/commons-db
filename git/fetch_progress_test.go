@@ -16,7 +16,7 @@ var _ = Describe("fetch progress", func() {
 		repo := newRepository(bare.FileURL(), git.Auth{})
 		var mu sync.Mutex
 		var events []git.FetchProgress
-		ctx := git.WithFetchObserver(context.Background(), func(progress git.FetchProgress) {
+		ctx := git.WithFetchObserver(context.Background(), func(_ context.Context, progress git.FetchProgress) {
 			mu.Lock()
 			defer mu.Unlock()
 			events = append(events, progress)
@@ -50,7 +50,7 @@ var _ = Describe("fetch progress", func() {
 		bare := newBareRepo("progress-missing")
 		repo := newRepository(bare.FileURL(), git.Auth{})
 		var events []git.FetchProgress
-		ctx := git.WithFetchObserver(context.Background(), func(progress git.FetchProgress) { events = append(events, progress) })
+		ctx := git.WithFetchObserver(context.Background(), func(_ context.Context, progress git.FetchProgress) { events = append(events, progress) })
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
 		missing := strings.Repeat("e", 40)
 		_, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: missing})

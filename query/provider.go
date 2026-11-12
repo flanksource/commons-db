@@ -9,6 +9,7 @@ import (
 
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 // Provider executes a Profile's query against a single backend type and returns
@@ -115,6 +116,9 @@ type FilterValueSearch struct {
 
 // ProviderRequest is the resolved input handed to a Provider by the engine.
 type ProviderRequest struct {
+	Search         *esdsl.Search
+	Spans          SpanMappings
+	RawRows        bool
 	Labels         map[string]string
 	MetricMetadata *MetricMetadata
 	// Provider is the resolved registry key. It is carried so optional

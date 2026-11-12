@@ -254,7 +254,7 @@ var _ = Describe("a layered connection store", func() {
 		Expect(err).ToNot(HaveOccurred())
 		Expect(connection.Type).To(Equal(models.ConnectionTypeLoki))
 		_, err = dbcontext.HydrateConnectionByURL(attached, "connection://missing")
-		Expect(err).To(MatchError(ContainSubstring("db is not configured")))
+		Expect(err).To(MatchError(`connection "connection://missing" not found`))
 	})
 })
 

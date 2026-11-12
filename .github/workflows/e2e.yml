@@ -44,7 +44,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest]
-        go-version: ["1.27"]
+        go-version: ["1.27.4"]
 
     steps:
       - name: Checkout code
@@ -100,7 +100,7 @@ jobs:
         run: docker logs --tail 40 deps-start-opensearch
 
       - name: Test with gavel
-        uses: flanksource/gavel@c5d04cc61316c8a3147aa5141c01df1a7465f69d # v0.0.67
+        uses: flanksource/gavel@fa6cc17dc723d13a354febfee843b3323a9a9251 # v0.0.79
         with:
           args: test ./e2e --framework ginkgo --timeout 30m --test-timeout 10m
           artifact-name: gavel-e2e-${{ matrix.os }}

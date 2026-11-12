@@ -6,6 +6,7 @@ import {
   useLogTail,
   type ClickyDownloadOptions,
   type DataTableInfinite,
+  type DataTableMenuAction,
   type DataTablePagination,
   type LogTailError,
   type OperationResultFilterConfig,
@@ -37,6 +38,8 @@ export interface LogsSurfaceProps {
   pagination?: DataTablePagination;
   download?: ClickyDownloadOptions;
   infinite?: DataTableInfinite;
+  /** Host rows for the table's overflow menu, such as editing the profile. */
+  menuActions: DataTableMenuAction[];
 }
 
 type LogsTableProps = ComponentProps<typeof LogsTable>;
@@ -124,6 +127,7 @@ export function LogsSurface({
   pagination,
   download,
   infinite,
+  menuActions,
 }: LogsSurfaceProps) {
   const [following, setFollowing] = useState(false);
 
@@ -170,6 +174,7 @@ export function LogsSurface({
           showFullscreenControl
           cellFilters={filterConfig?.cellFilters}
           onCellFilterChange={filterConfig?.onCellFilterChange}
+          menuActions={menuActions}
           {...(tailed
             ? {
                 grouping: followGrouping(runs, {

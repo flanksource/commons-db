@@ -24,6 +24,15 @@ type BlobResult struct {
 // ReadBlobs reads files in request order using one native Git object batch.
 // Directories, invalid revisions and command failures return errors.
 func (c *Cache) ReadBlobs(ctx context.Context, repo *Repository, requests []BlobRequest) ([]BlobResult, error) {
+	if len(requests) == 0 {
+		return []BlobResult{}, ctx.Err()
+	}
+	return cachedRead(ctx, c.Root, repo, "blobs", requests, func(ctx context.Context) ([]BlobResult, error) {
+		return c.readBlobs(ctx, repo, requests)
+	})
+}
+
+func (c *Cache) readBlobs(ctx context.Context, repo *Repository, requests []BlobRequest) ([]BlobResult, error) {
 	results := make([]BlobResult, len(requests))
 	if len(requests) == 0 {
 		return results, nil
@@ -42,6 +51,9 @@ func (c *Cache) ReadBlobs(ctx context.Context, repo *Repository, requests []Blob
 		}
 	}
 	err := c.readRefs(ctx, repo, refReadOptions{Refs: refs}, func(mirror string, _ []string) error {
+		if len(refs) == 1 {
+			ctx = withReadIdentity(ctx, repo.URL.Redacted(), requests[0].SHA)
+		}
 		return readObjectBatch(ctx, objectBatchOptions{Dir: mirror, Objects: objects, Read: func(index int, blob batchBlob, content io.Reader) error {
 			if blob.Missing {
 				return nil

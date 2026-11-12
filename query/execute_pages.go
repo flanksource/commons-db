@@ -5,6 +5,7 @@ import (
 	"iter"
 	"time"
 
+	rpchttp "github.com/flanksource/clicky/rpc/http"
 	"github.com/flanksource/commons-db/context"
 )
 
@@ -70,7 +71,7 @@ func SupportsStreaming(providerType string) bool {
 // grow with how far it has already read. A provider that cannot cursor is
 // walked by offset, which is correct and merely slower.
 func walkRequest(p Profile, batch int) PageRequest {
-	page := PageRequest{Limit: batch}
+	page := PageRequest{Limit: batch, ReadAll: true}
 	// A derivation failure is not decided here: ExecutePages resolves the same
 	// order and reports it. This only chooses a strategy, and offset is the
 	// correct one for a profile that turns out to have no order at all.
@@ -122,7 +123,7 @@ func validatePageExecution(run pageExecution) error {
 	}
 	label, err := nonPageProcessor(p.Processors)
 	if err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	if label != "" {
 		return fmt.Errorf("profile %q cannot be paged: processor %q needs the whole result", p.Name, label)
@@ -173,7 +174,7 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	// cut under a different sort.
 	order, err := p.RequestedOrder(run.Page.Sort, run.Page.Desc)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 	page, err := resolvePageStrategy(p, run.Page, order)
 	if err != nil {
@@ -198,18 +199,19 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	}
 	resolved, filters, err := resolveProfileInput(p, supplied, now)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 
 	provider, err := GetProvider(p.Provider.Type)
 	if err != nil {
 		return ErrorPage(err)
 	}
-	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Search: p.Search, Spans: p.Spans, Defs: p.Params, Resolved: resolved})
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 	req.Filters = filters
+	req.RawRows = !applyPipeline || p.RenderMode() == RenderTraces
 	req.Labels = p.Labels
 	req.MetricMetadata = &MetricMetadata{}
 	req.Order = order
@@ -220,7 +222,7 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	}
 	ctx, req, operation, err := prepareConnectionOperation(ctx, req)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
 	}
 	scope := CursorScope{
 		Labels:     p.Labels,
@@ -228,6 +230,8 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 		Provider:   p.Provider.Type,
 		Connection: req.Connection,
 		Query:      req.Query,
+		Search:     req.Search,
+		Spans:      req.Spans,
 		Options:    req.Options,
 		Order:      order,
 		Params:     resolved,
@@ -237,7 +241,16 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	}
 	position, err := DecodeCursor(page.Cursor, scope)
 	if err != nil {
-		return ErrorPage(fmt.Errorf("profile %q: %w", p.Name, err))
+		return ErrorPage(profileError(p, err))
+	}
+	if len(page.After) > 0 {
+		if !page.Cursor.IsZero() || page.Offset != 0 {
+			return ErrorPage(fmt.Errorf("After cannot combine with cursor or offset"))
+		}
+		if err := order.ValidatePosition(page.After); err != nil {
+			return ErrorPage(err)
+		}
+		position.Keys = page.After
 	}
 	req.Position = position
 
@@ -268,7 +281,7 @@ func withCursors(scope CursorScope, pages iter.Seq2[Page, error]) iter.Seq2[Page
 			}
 			if len(page.NextKeys) > 0 {
 				cursor, err := EncodeCursor(CursorEncoding{
-					Scope: scope, Keys: page.NextKeys, PIT: page.PIT, Scroll: page.Scroll, State: page.State,
+					Scope: scope, Keys: page.NextKeys, PIT: page.PIT, Scroll: page.Scroll, State: page.State, Offset: page.NextOffset,
 				})
 				if err != nil {
 					yield(Page{}, err)
@@ -291,9 +304,9 @@ func providerPages(ctx context.Context, p Profile, req ProviderRequest, page Pag
 		return ErrorPage(err)
 	}
 	if paging, ok := provider.(PagingProvider); ok {
-		return paging.Pages(ctx, req, page)
+		return withProviderTiming(ctx, paging.Pages(ctx, req, page))
 	}
-	return func(yield func(Page, error) bool) {
+	return withProviderTiming(ctx, func(yield func(Page, error) bool) {
 		rows, err := provider.Execute(ctx, req)
 		if err != nil {
 			yield(Page{}, fmt.Errorf("profile %q: provider %q failed: %w", p.Name, p.Provider.Type, err))
@@ -306,6 +319,27 @@ func providerPages(ctx context.Context, p Profile, req ProviderRequest, page Pag
 			if !yield(pg, err) {
 				return
 			}
+		}
+	})
+}
+
+// withProviderTiming attributes the time spent waiting on the provider for each
+// page, and the rows it returned, to the request's Server-Timing "provider"
+// phase. The clock restarts after each yield, so the consumer's own work on a
+// page is never billed to the backend.
+func withProviderTiming(ctx context.Context, pages iter.Seq2[Page, error]) iter.Seq2[Page, error] {
+	return func(yield func(Page, error) bool) {
+		started := time.Now()
+		for page, err := range pages {
+			rpchttp.AddTiming(ctx, rpchttp.TimingMetric{
+				Name:     "provider",
+				Duration: time.Since(started),
+				Counters: []rpchttp.TimingCounter{{Name: "rows", Value: int64(len(page.Rows))}},
+			})
+			if !yield(page, err) {
+				return
+			}
+			started = time.Now()
 		}
 	}
 }

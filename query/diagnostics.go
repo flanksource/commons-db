@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/sqlactivity"
 )
 
 const DiagnosticPreviewLimit = 256 << 10
@@ -86,7 +87,20 @@ type ProviderDiagnostics struct {
 	detail    DiagnosticDetail
 	// armed says the provider has just described a request it is about to issue,
 	// so the next HTTP exchange is the one carrying it. See HTTPTransport.
-	armed bool
+	armed     bool
+	onRequest func(ProviderDiagnosticRequest)
+
+	// The server session a statement ran on and the activity samples taken of
+	// it, written into the details by applySessionDetails. See
+	// diagnostics_session.go.
+	autoDiagnose   time.Duration
+	onSession      func(ServerSession)
+	onSample       func(sqlactivity.Sample)
+	onSampleError  func(error)
+	session        *ServerSession
+	samples        []sqlactivity.Sample
+	samplesDropped int
+	sampleError    string
 }
 
 type ProviderDiagnosticRequest struct {
@@ -145,13 +159,30 @@ type DiagnosticOptions struct {
 	Options  map[string]any
 	Detail   DiagnosticDetail
 	Walk     bool
+	// OnRequest is called with the request each time RecordRequest records
+	// one (once for a walk), as the provider is about to issue it, so a live
+	// view shows the statement and its arguments while it runs.
+	OnRequest func(ProviderDiagnosticRequest)
+	// AutoDiagnose, when positive, samples the server session of a statement
+	// that has run this long, every few seconds until it ends, on a second
+	// connection; when negative it samples from the start, zero never. Each sample goes to OnSample; a sampling failure goes to
+	// OnSampleError and stops sampling without failing the statement.
+	AutoDiagnose  time.Duration
+	OnSession     func(ServerSession)
+	OnSample      func(sqlactivity.Sample)
+	OnSampleError func(error)
 }
 
 func NewDiagnostics(options DiagnosticOptions) *ProviderDiagnostics {
 	return &ProviderDiagnostics{
-		Provider: options.Provider,
-		walk:     options.Walk,
-		detail:   options.Detail,
+		Provider:      options.Provider,
+		walk:          options.Walk,
+		detail:        options.Detail,
+		onRequest:     options.OnRequest,
+		autoDiagnose:  options.AutoDiagnose,
+		onSession:     options.OnSession,
+		onSample:      options.OnSample,
+		onSampleError: options.OnSampleError,
 		Request: ProviderDiagnosticRequest{
 			Query:   options.Query,
 			Options: sanitizeDiagnosticMap(options.Options),
@@ -207,8 +238,8 @@ func (d *ProviderDiagnostics) RecordRequest(query string, arguments []any, detai
 		return
 	}
 	d.mu.Lock()
-	defer d.mu.Unlock()
 	if d.walk && d.requested {
+		d.mu.Unlock()
 		return
 	}
 	d.requested = true
@@ -218,6 +249,12 @@ func (d *ProviderDiagnostics) RecordRequest(query string, arguments []any, detai
 	d.Request.Query = query
 	d.Request.Arguments = cloneDiagnosticValues(arguments)
 	d.Request.Details = sanitizeDiagnosticMap(details)
+	d.applySessionDetails()
+	request, onRequest := d.Request, d.onRequest
+	d.mu.Unlock()
+	if onRequest != nil {
+		onRequest(request)
+	}
 }
 
 func (d *ProviderDiagnostics) RecordResponse(started time.Time, rows int, details map[string]any) {
@@ -226,6 +263,7 @@ func (d *ProviderDiagnostics) RecordResponse(started time.Time, rows int, detail
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	defer d.applySessionDetails()
 	elapsed := float64(time.Since(started)) / float64(time.Millisecond)
 	if d.walk {
 		d.Response.DurationMS += elapsed
@@ -234,7 +272,7 @@ func (d *ProviderDiagnostics) RecordResponse(started time.Time, rows int, detail
 		// The first page's details describe the walk — dialect, and the paging
 		// mode the rest of the pages follow. Later pages differ only in offset,
 		// so keeping the last would report the tail as the shape.
-		if d.Response.Details == nil {
+		if d.Response.Pages == 1 {
 			d.Response.Details = sanitizeDiagnosticMap(details)
 		}
 		return

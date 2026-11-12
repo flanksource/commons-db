@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -28,47 +29,113 @@ func (c *Cache) prepareShared(ctx context.Context, repo *Repository, ref Ref) (e
 	finish := startGitTiming(ctx, "cache_discovery")
 	defer func() { finish(err, "", nil) }()
 	key := repo.URL.CacheKey()
-	lease, err := acquire(ctx, filepath.Join(c.Root, key, "repository.lock"), "repository discovery", exclusiveLock)
+	lease, err := acquire(ctx, c.repositoryLock(key), "repository discovery", exclusiveLock)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, lease.Unlock()) }()
-	owner, err := registry.Load(c.Root, key)
+	binding, err := registry.Load(c.Root, key)
+	if errors.Is(err, registry.ErrOwnerMissing) {
+		err = registry.Remove(c.Root, key)
+	}
 	if err != nil {
 		return err
 	}
 	if _, err := os.Stat(filepath.Join(c.Root, key, "repository.json")); err == nil {
-		return nil
+		if binding.Repository != "" {
+			return nil
+		}
+		binding.Repository = repo.URL.Redacted()
+		return registry.Save(c.Root, key, binding)
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
+	owner := key
 	if _, err := os.Stat(filepath.Join(c.Root, key, "mirror.git", "HEAD")); errors.Is(err, os.ErrNotExist) {
-		owner, err = c.findSharedOwner(ctx, repo, ref, api)
-		if err != nil {
+		if owner, err = c.findSharedOwner(ctx, repo, ref, api); err != nil {
 			return err
 		}
 	} else if err != nil {
 		return err
 	}
-	paths := newMirrorPaths(filepath.Join(c.Root, owner))
-	if err := c.populateShared(ctx, paths, repo, ref); err != nil {
+	return c.bindShared(ctx, repo, ref, owner)
+}
+
+func (c *Cache) repositoryLock(key string) string {
+	return filepath.Join(c.Root, key, "repository.lock")
+}
+
+// bindShared makes ref's commit present in owner's mirror, then publishes
+// repo's binding to owner. The caller holds repo's repository lock.
+func (c *Cache) bindShared(ctx context.Context, repo *Repository, ref Ref, owner string) error {
+	if err := c.populateShared(ctx, newMirrorPaths(filepath.Join(c.Root, owner)), repo, ref); err != nil {
 		return err
 	}
-	if err := registry.Save(c.Root, key, owner); err != nil {
+	if err := registry.Save(c.Root, repo.URL.CacheKey(), registry.Binding{Owner: owner, Repository: repo.URL.Redacted()}); err != nil {
 		return err
 	}
 	shared := int64(0)
-	if owner != key {
+	if owner != repo.URL.CacheKey() {
 		shared = 1
 	}
 	rpchttp.AddTiming(ctx, rpchttp.TimingMetric{Name: "git_cache", Counters: []rpchttp.TimingCounter{{Name: "shared", Value: shared}, {Name: "dedicated", Value: 1 - shared}}})
 	return nil
 }
 
+// findSharedOwner is the mirror sharing the most history with ref, or repo's
+// own cache key when no cached mirror shares any.
 func (c *Cache) findSharedOwner(ctx context.Context, repo *Repository, ref Ref, api RemoteHistoryProvider) (string, error) {
+	owners, err := c.sharedOwners(ctx, repo, ref, api)
+	if err != nil || len(owners) == 0 {
+		return repo.URL.CacheKey(), err
+	}
+	return owners[0].Owner, nil
+}
+
+// SharedOwner is a cached mirror holding part of a repository's history: Base
+// is the merge base of the probed ref with the mirror's newest commit, Commits
+// the number of commits in Base's history and Committed when Base was
+// committed.
+type SharedOwner struct {
+	Owner     string    `json:"owner"`
+	Base      string    `json:"base"`
+	Commits   int       `json:"commits"`
+	Committed time.Time `json:"committed"`
+}
+
+// SharedOwners ranks the cached mirrors, other than repo's own, that share
+// history with repo's remote HEAD: the most shared commits (the fewest left to
+// fetch) first, then the most recently modified mirror. Rebind without an
+// Owner binds repo to the first.
+func (c *Cache) SharedOwners(ctx context.Context, repo *Repository) ([]SharedOwner, error) {
+	api, ref, err := c.sharedProbe(ctx, repo)
+	if err != nil {
+		return nil, err
+	}
+	return c.sharedOwners(ctx, repo, ref, api)
+}
+
+// sharedProbe is repo's remote history API and the commit (its remote HEAD)
+// mirrors are compared against when choosing an owner outside a read.
+func (c *Cache) sharedProbe(ctx context.Context, repo *Repository) (RemoteHistoryProvider, Ref, error) {
+	if c.Root == "" || repo == nil {
+		return nil, Ref{}, fmt.Errorf("git cache root and repository are required")
+	}
+	api, supported := repo.Provider.(RemoteHistoryProvider)
+	if !supported {
+		return nil, Ref{}, fmt.Errorf("%w: %s cannot compare remote history, so it never shares a mirror", ErrSharedCacheUnsupported, repo.URL.Redacted())
+	}
+	head, err := repo.Resolve(ctx, "")
+	if err != nil {
+		return nil, Ref{}, err
+	}
+	return api, Ref{Name: head.SHA, FullName: head.SHA, SHA: head.SHA, Kind: RefSHA}, nil
+}
+
+func (c *Cache) sharedOwners(ctx context.Context, repo *Repository, ref Ref, api RemoteHistoryProvider) ([]SharedOwner, error) {
 	entries, err := os.ReadDir(c.Root)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	type candidate struct {
 		name     string
@@ -81,27 +148,30 @@ func (c *Cache) findSharedOwner(ctx context.Context, repo *Repository, ref Ref, 
 		}
 		info, err := entry.Info()
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		candidates = append(candidates, candidate{entry.Name(), info.ModTime()})
 	}
 	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].modified.After(candidates[j].modified) })
+	var owners []SharedOwner
 	for _, entry := range candidates {
 		paths := newMirrorPaths(filepath.Join(c.Root, entry.name))
 		if _, err := os.Stat(filepath.Join(paths.git, "HEAD")); errors.Is(err, os.ErrNotExist) {
 			continue
 		} else if err != nil {
-			return "", err
+			return nil, err
 		}
-		matched, err := sharedCandidate(ctx, sharedCandidateOptions{Paths: paths, Repository: repo, Ref: ref, API: api})
+		owner, matched, err := sharedCandidate(ctx, sharedCandidateOptions{Paths: paths, Repository: repo, Ref: ref, API: api})
 		if err != nil {
-			return "", err
+			return nil, err
 		}
 		if matched {
-			return entry.name, nil
+			owner.Owner = entry.name
+			owners = append(owners, owner)
 		}
 	}
-	return repo.URL.CacheKey(), nil
+	sort.SliceStable(owners, func(i, j int) bool { return owners[i].Commits > owners[j].Commits })
+	return owners, nil
 }
 
 type sharedCandidateOptions struct {
@@ -111,26 +181,28 @@ type sharedCandidateOptions struct {
 	API        RemoteHistoryProvider
 }
 
-func sharedCandidate(ctx context.Context, o sharedCandidateOptions) (matched bool, err error) {
+// sharedCandidate probes whether the mirror at o.Paths shares history with
+// o.Ref, through its newest commit first and then its root commits.
+func sharedCandidate(ctx context.Context, o sharedCandidateOptions) (owner SharedOwner, matched bool, err error) {
 	lock, err := acquire(ctx, o.Paths.lock, "candidate mirror", sharedLock)
 	if err != nil {
-		return false, err
+		return owner, false, err
 	}
 	defer func() { err = errors.Join(err, lock.Unlock()) }()
 	shallow, err := run(ctx, command{dir: o.Paths.git, args: []string{"rev-parse", "--is-shallow-repository"}})
 	if err != nil {
-		return false, err
+		return owner, false, err
 	}
 	if shallow == "true" {
-		return false, nil
+		return owner, false, nil
 	}
 	tips, err := run(ctx, command{dir: o.Paths.git, args: []string{"for-each-ref", "--count=1", "--sort=-committerdate", "--format=%(objectname)"}})
 	if err != nil || tips == "" {
-		return false, err
+		return owner, false, err
 	}
 	roots, err := run(ctx, command{dir: o.Paths.git, args: []string{"rev-list", "--all", "--max-parents=0"}})
 	if err != nil {
-		return false, err
+		return owner, false, err
 	}
 	seen := map[string]bool{}
 	for _, sha := range strings.Fields(tips + "\n" + roots) {
@@ -149,17 +221,39 @@ func sharedCandidate(ctx context.Context, o sharedCandidateOptions) (matched boo
 			continue
 		}
 		if err != nil {
-			return false, fmt.Errorf("probe cached history for %s: %w", o.Repository.URL.Redacted(), err)
+			return owner, false, fmt.Errorf("probe cached history for %s: %w", o.Repository.URL.Redacted(), err)
 		}
 		if !fullSHAPattern.MatchString(base) {
-			return false, fmt.Errorf("remote returned invalid merge base %q", base)
+			return owner, false, fmt.Errorf("remote returned invalid merge base %q", base)
 		}
 		if !hasCommit(ctx, o.Paths.git, base) {
-			return false, fmt.Errorf("remote merge base %s is absent from candidate %s", base, o.Paths.git)
+			return owner, false, fmt.Errorf("remote merge base %s is absent from candidate %s", base, o.Paths.git)
 		}
-		return true, nil
+		owner, err = describeBase(ctx, o.Paths.git, base)
+		return owner, err == nil, err
 	}
-	return false, nil
+	return owner, false, nil
+}
+
+// describeBase counts the history of base in mirror and reads its commit time.
+func describeBase(ctx context.Context, mirror, base string) (SharedOwner, error) {
+	count, err := run(ctx, command{dir: mirror, args: []string{"rev-list", "--count", "--end-of-options", base}})
+	if err != nil {
+		return SharedOwner{}, err
+	}
+	commits, err := strconv.Atoi(count)
+	if err != nil {
+		return SharedOwner{}, fmt.Errorf("count history of %s in %s: unexpected %q", base, mirror, count)
+	}
+	seconds, err := run(ctx, command{dir: mirror, args: []string{"show", "-s", "--format=%ct", "--end-of-options", base}})
+	if err != nil {
+		return SharedOwner{}, err
+	}
+	unix, err := strconv.ParseInt(seconds, 10, 64)
+	if err != nil {
+		return SharedOwner{}, fmt.Errorf("commit time of %s in %s: unexpected %q", base, mirror, seconds)
+	}
+	return SharedOwner{Base: base, Commits: commits, Committed: time.Unix(unix, 0).UTC()}, nil
 }
 
 func (c *Cache) populateShared(ctx context.Context, paths mirrorPaths, repo *Repository, ref Ref) (err error) {

@@ -1,4 +1,6 @@
 node_modules/
 .vite/
 *.tsbuildinfo
-dist/
+!dist/
+dist/*
+!dist/stub.txt

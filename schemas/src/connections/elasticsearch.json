@@ -91,6 +91,7 @@
       "x-clicky-order": 8
     },
     "name": {
+      "minLength": 1,
       "title": "Name",
       "type": "string",
       "x-clicky-order": 0
@@ -244,6 +245,7 @@
           "title": "Authentication",
           "type": "string",
           "x-clicky-order": 0,
+          "x-col-span": "full",
           "x-enum-display": "segmented",
           "x-enum-labels": {
             "basic": "Basic",
@@ -251,6 +253,26 @@
             "none": "None",
             "oauth": "OAuth"
           }
+        },
+        "index": {
+          "title": "Default index",
+          "type": "string",
+          "x-clicky-order": 4,
+          "x-col-span": "full"
+        },
+        "kubeconfig": {
+          "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+          "title": "Kubeconfig file",
+          "type": "string",
+          "x-clicky-component": "k8s-kubeconfig-selector",
+          "x-clicky-order": -2
+        },
+        "kubecontext": {
+          "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+          "title": "Kubecontext",
+          "type": "string",
+          "x-clicky-component": "k8s-context-selector",
+          "x-clicky-order": -1
         },
         "paging_mode": {
           "default": "scroll",
@@ -262,11 +284,28 @@
           "title": "Paging mode",
           "type": "string",
           "x-clicky-order": 5,
+          "x-col-span": "full",
           "x-enum-display": "segmented",
           "x-enum-labels": {
             "pit": "Point in time",
             "scroll": "Scroll"
           }
+        },
+        "paging_threshold": {
+          "default": "10000",
+          "description": "Requested row threshold for normal page/limit paging (0–10000). Larger or unbounded reads use the paging mode. Zero always uses the paging mode.",
+          "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+          "title": "Paging threshold",
+          "type": "string",
+          "x-clicky-order": 6,
+          "x-col-span": "full"
+        },
+        "span_layout": {
+          "format": "textarea",
+          "title": "Span layout overrides",
+          "type": "string",
+          "x-clicky-order": 7,
+          "x-col-span": "full"
         }
       },
       "required": [
@@ -274,7 +313,8 @@
       ],
       "title": "Authentication",
       "type": "object",
-      "x-clicky-order": 4
+      "x-clicky-order": 4,
+      "x-columns": 2
     },
     "type": {
       "const": "elasticsearch",

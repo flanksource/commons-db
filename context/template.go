@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"strconv"
 
+	"cel.dev/cel-go/cel"
 	"github.com/flanksource/commons/collections"
-	"github.com/flanksource/gomplate/v3"
-	"github.com/google/cel-go/cel"
+	"github.com/flanksource/gomplate/v4"
 )
 
 var CelEnvFuncs = make(map[string]func(Context) cel.EnvOption)

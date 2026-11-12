@@ -76,7 +76,7 @@ var _ = Describe("Sample processor previews", func() {
 			"message": "first", "processed": true, "count": 2,
 		}}))
 		Expect(result.Rows).To(Equal([]Row{{
-			"message": "first", "count": int64(2), "summary": "first:2", "mapped": "first:2:mapped",
+			"message": "first", "count": 2, "summary": "first:2", "mapped": "first:2:mapped",
 		}}))
 		Expect(result.Columns).To(ContainElements(
 			ColumnDef{Name: "count", Type: ColumnTypeNumber},

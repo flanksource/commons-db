@@ -11,7 +11,7 @@ func (s *Service) Repositories(ctx context.Context, request Request) ([]Reposito
 	if err != nil {
 		return nil, err
 	}
-	repos, err := client.Provider.ListRepositories(ctx, git.ListRepositoriesOptions{})
+	repos, err := s.repositories(ctx, request.Connection, client)
 	if err != nil {
 		return nil, err
 	}
@@ -28,7 +28,7 @@ func (s *Service) Refs(ctx context.Context, request Request) (Refs, error) {
 	if err != nil {
 		return Refs{}, err
 	}
-	remote, err := repo.LsRemote(ctx)
+	remote, err := s.RemoteRefs(ctx, repo)
 	if err != nil {
 		return Refs{}, err
 	}

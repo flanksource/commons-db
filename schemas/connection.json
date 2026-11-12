@@ -86,6 +86,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -100,9 +101,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "anthropic",
@@ -208,6 +226,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -231,16 +250,34 @@
             "assumeRole": {
               "title": "Assume Role ARN",
               "type": "string",
-              "x-clicky-order": 8
+              "x-clicky-order": 8,
+              "x-col-span": "full"
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
             },
             "region": {
               "title": "Region",
               "type": "string",
-              "x-clicky-order": 7
+              "x-clicky-order": 7,
+              "x-col-span": "full"
             }
           },
           "title": "Properties",
-          "type": "object"
+          "type": "object",
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "aws",
@@ -356,6 +393,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -370,9 +408,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "aws_kms",
@@ -473,6 +528,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -493,17 +549,34 @@
         },
         "properties": {
           "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            },
             "tenant": {
               "title": "Tenant ID",
               "type": "string",
-              "x-clicky-order": 7
+              "x-clicky-order": 7,
+              "x-col-span": "full"
             }
           },
           "required": [
             "tenant"
           ],
           "title": "Properties",
-          "type": "object"
+          "type": "object",
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "azure",
@@ -614,6 +687,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -634,9 +708,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "azure_devops",
@@ -744,6 +835,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -758,9 +850,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "azure_key_vault",
@@ -776,6 +885,42 @@
       "type": "object"
     },
     "clickhouse": {
+      "anyOf": [
+        {
+          "properties": {
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        },
+        {
+          "properties": {
+            "properties": {
+              "properties": {
+                "database": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "host": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host",
+                "database"
+              ]
+            }
+          },
+          "required": [
+            "properties"
+          ]
+        }
+      ],
       "properties": {
         "logging": {
           "additionalProperties": false,
@@ -883,6 +1028,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -898,12 +1044,39 @@
           "title": "Password",
           "type": "string",
           "x-clicky-component": "k8s-secret-selector",
-          "x-clicky-default-source": "secret",
+          "x-clicky-default-source": "value",
           "x-clicky-order": 5
         },
         "properties": {
           "description": "Applied to every query opened through this connection. Missing values use these safe defaults.",
           "properties": {
+            "database": {
+              "title": "Database",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.3
+            },
+            "host": {
+              "description": "Database hostname or IP address (without a scheme)",
+              "title": "Host",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.1
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            },
             "max_bytes_to_read": {
               "default": "268435456",
               "description": "Maximum uncompressed source bytes a query may scan",
@@ -950,6 +1123,13 @@
               "x-clicky-order": 4,
               "x-input-suffix": "threads"
             },
+            "port": {
+              "description": "Optional TCP port; uses the driver default when empty",
+              "title": "Port",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.2
+            },
             "read_overflow_mode": {
               "default": "throw",
               "description": "Action when a row or byte read limit is exceeded",
@@ -995,8 +1175,8 @@
           "type": "string"
         },
         "url": {
-          "description": "clickhouse://user:pass@host:9000/db",
-          "title": "URL",
+          "description": "Provide a database URL or fill in Host and Database below. A URL takes precedence when supplied.",
+          "title": "Database URL",
           "type": "string",
           "x-clicky-component": "k8s-url-selector",
           "x-clicky-default-source": "value",
@@ -1012,8 +1192,7 @@
       },
       "required": [
         "name",
-        "type",
-        "url"
+        "type"
       ],
       "title": "Connection: clickhouse",
       "type": "object"
@@ -1104,6 +1283,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -1118,9 +1298,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "discord",
@@ -1221,6 +1418,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -1235,9 +1433,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "dynatrace",
@@ -1343,6 +1558,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -1496,6 +1712,7 @@
               "title": "Authentication",
               "type": "string",
               "x-clicky-order": 0,
+              "x-col-span": "full",
               "x-enum-display": "segmented",
               "x-enum-labels": {
                 "basic": "Basic",
@@ -1503,6 +1720,26 @@
                 "none": "None",
                 "oauth": "OAuth"
               }
+            },
+            "index": {
+              "title": "Default index",
+              "type": "string",
+              "x-clicky-order": 4,
+              "x-col-span": "full"
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
             },
             "paging_mode": {
               "default": "scroll",
@@ -1514,11 +1751,28 @@
               "title": "Paging mode",
               "type": "string",
               "x-clicky-order": 5,
+              "x-col-span": "full",
               "x-enum-display": "segmented",
               "x-enum-labels": {
                 "pit": "Point in time",
                 "scroll": "Scroll"
               }
+            },
+            "paging_threshold": {
+              "default": "10000",
+              "description": "Requested row threshold for normal page/limit paging (0–10000). Larger or unbounded reads use the paging mode. Zero always uses the paging mode.",
+              "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+              "title": "Paging threshold",
+              "type": "string",
+              "x-clicky-order": 6,
+              "x-col-span": "full"
+            },
+            "span_layout": {
+              "format": "textarea",
+              "title": "Span layout overrides",
+              "type": "string",
+              "x-clicky-order": 7,
+              "x-col-span": "full"
             }
           },
           "required": [
@@ -1526,7 +1780,8 @@
           ],
           "title": "Authentication",
           "type": "object",
-          "x-clicky-order": 4
+          "x-clicky-order": 4,
+          "x-columns": 2
         },
         "type": {
           "const": "elasticsearch",
@@ -1636,6 +1891,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -1650,9 +1906,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "email",
@@ -1753,6 +2026,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -1767,9 +2041,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "folder",
@@ -1877,6 +2168,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -1891,9 +2183,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "gcp_kms",
@@ -2009,6 +2318,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -2023,9 +2333,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "gcs",
@@ -2134,6 +2461,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -2148,9 +2476,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "gemini",
@@ -2251,6 +2596,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -2265,9 +2611,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "generic_webhook",
@@ -2375,6 +2738,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -2390,16 +2754,33 @@
           "title": "Password",
           "type": "string",
           "x-clicky-component": "k8s-secret-selector",
-          "x-clicky-default-source": "secret",
+          "x-clicky-default-source": "value",
           "x-clicky-order": 5
         },
         "properties": {
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "git",
@@ -2515,6 +2896,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -2535,9 +2917,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "github",
@@ -2645,6 +3044,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -2665,9 +3065,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "gitlab",
@@ -2775,6 +3192,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -2789,9 +3207,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "google_chat",
@@ -2899,6 +3334,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -2911,15 +3347,32 @@
         },
         "properties": {
           "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            },
             "project": {
               "description": "Default project for queries on this connection",
               "title": "Project",
               "type": "string",
-              "x-clicky-order": 7
+              "x-clicky-order": 7,
+              "x-col-span": "full"
             }
           },
           "title": "Properties",
-          "type": "object"
+          "type": "object",
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "google_cloud",
@@ -3134,6 +3587,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -3287,6 +3741,7 @@
               "title": "Authentication",
               "type": "string",
               "x-clicky-order": 0,
+              "x-col-span": "full",
               "x-enum-display": "segmented",
               "x-enum-labels": {
                 "basic": "Basic",
@@ -3294,6 +3749,20 @@
                 "none": "None",
                 "oauth": "OAuth"
               }
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
             }
           },
           "required": [
@@ -3301,7 +3770,8 @@
           ],
           "title": "Authentication",
           "type": "object",
-          "x-clicky-order": 4
+          "x-clicky-order": 4,
+          "x-columns": 2
         },
         "type": {
           "const": "http",
@@ -3411,6 +3881,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -3425,9 +3896,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "ifttt",
@@ -3634,6 +4122,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -3787,6 +4276,7 @@
               "title": "Authentication",
               "type": "string",
               "x-clicky-order": 0,
+              "x-col-span": "full",
               "x-enum-display": "segmented",
               "x-enum-labels": {
                 "basic": "Basic",
@@ -3794,6 +4284,20 @@
                 "none": "None",
                 "oauth": "OAuth"
               }
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
             }
           },
           "required": [
@@ -3801,7 +4305,8 @@
           ],
           "title": "Authentication",
           "type": "object",
-          "x-clicky-order": 4
+          "x-clicky-order": 4,
+          "x-columns": 2
         },
         "type": {
           "const": "jaeger",
@@ -3911,6 +4416,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -3925,9 +4431,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "jmeter",
@@ -3943,6 +4466,28 @@
       "type": "object"
     },
     "kubernetes": {
+      "not": {
+        "description": "Choose either a kubeconfig file or a kubeconfig value, not both.",
+        "properties": {
+          "certificate": {
+            "minLength": 1
+          },
+          "properties": {
+            "properties": {
+              "kubeconfig": {
+                "minLength": 1
+              }
+            },
+            "required": [
+              "kubeconfig"
+            ]
+          }
+        },
+        "required": [
+          "certificate",
+          "properties"
+        ]
+      },
       "properties": {
         "certificate": {
           "description": "Leave empty to use the ambient cluster ($KUBECONFIG or the in-cluster service account)",
@@ -4137,6 +4682,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -4149,16 +4695,40 @@
         },
         "properties": {
           "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            },
             "max_resources": {
               "description": "Maximum matching workloads read by one query (default 20)",
               "format": "int32",
               "title": "Maximum resources",
               "type": "integer",
-              "x-clicky-order": 7
+              "x-clicky-order": 7,
+              "x-col-span": "full"
+            },
+            "namespace": {
+              "description": "The logs view reads only this namespace and offers no namespace picker; leave empty to choose any namespace",
+              "title": "Restrict to namespace",
+              "type": "string",
+              "x-clicky-order": 8,
+              "x-col-span": "full"
             }
           },
           "title": "Properties",
-          "type": "object"
+          "type": "object",
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "kubernetes",
@@ -4259,6 +4829,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -4273,9 +4844,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "ldap",
@@ -4482,6 +5070,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -4635,6 +5224,7 @@
               "title": "Authentication",
               "type": "string",
               "x-clicky-order": 0,
+              "x-col-span": "full",
               "x-enum-display": "segmented",
               "x-enum-labels": {
                 "basic": "Basic",
@@ -4642,6 +5232,20 @@
                 "none": "None",
                 "oauth": "OAuth"
               }
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
             }
           },
           "required": [
@@ -4649,7 +5253,8 @@
           ],
           "title": "Authentication",
           "type": "object",
-          "x-clicky-order": 4
+          "x-clicky-order": 4,
+          "x-columns": 2
         },
         "type": {
           "const": "loki",
@@ -4759,6 +5364,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -4773,9 +5379,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "matrix",
@@ -4876,6 +5499,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -4890,9 +5514,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "mattermost",
@@ -4993,6 +5634,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -5007,9 +5649,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "mongo",
@@ -5025,6 +5684,42 @@
       "type": "object"
     },
     "mysql": {
+      "anyOf": [
+        {
+          "properties": {
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        },
+        {
+          "properties": {
+            "properties": {
+              "properties": {
+                "database": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "host": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host",
+                "database"
+              ]
+            }
+          },
+          "required": [
+            "properties"
+          ]
+        }
+      ],
       "properties": {
         "logging": {
           "additionalProperties": false,
@@ -5132,6 +5827,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -5147,16 +5843,53 @@
           "title": "Password",
           "type": "string",
           "x-clicky-component": "k8s-secret-selector",
-          "x-clicky-default-source": "secret",
+          "x-clicky-default-source": "value",
           "x-clicky-order": 5
         },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "database": {
+              "title": "Database",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.3,
+              "x-col-span": "full"
+            },
+            "host": {
+              "description": "Database hostname or IP address (without a scheme)",
+              "title": "Host",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.1,
+              "x-col-span": "full"
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            },
+            "port": {
+              "description": "Optional TCP port; uses the driver default when empty",
+              "title": "Port",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.2,
+              "x-col-span": "full"
+            }
           },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "mysql",
@@ -5164,8 +5897,8 @@
           "type": "string"
         },
         "url": {
-          "description": "user:pass@tcp(host:3306)/db",
-          "title": "URL",
+          "description": "Provide a database URL or fill in Host and Database below. A URL takes precedence when supplied.",
+          "title": "Database URL",
           "type": "string",
           "x-clicky-component": "k8s-url-selector",
           "x-clicky-default-source": "value",
@@ -5181,8 +5914,7 @@
       },
       "required": [
         "name",
-        "type",
-        "url"
+        "type"
       ],
       "title": "Connection: mysql",
       "type": "object"
@@ -5273,6 +6005,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -5287,9 +6020,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "ntfy",
@@ -5390,6 +6140,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -5404,9 +6155,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "ollama",
@@ -5507,6 +6275,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -5521,9 +6290,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "openai",
@@ -5730,6 +6516,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -5883,6 +6670,7 @@
               "title": "Authentication",
               "type": "string",
               "x-clicky-order": 0,
+              "x-col-span": "full",
               "x-enum-display": "segmented",
               "x-enum-labels": {
                 "basic": "Basic",
@@ -5890,6 +6678,26 @@
                 "none": "None",
                 "oauth": "OAuth"
               }
+            },
+            "index": {
+              "title": "Default index",
+              "type": "string",
+              "x-clicky-order": 4,
+              "x-col-span": "full"
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
             },
             "paging_mode": {
               "default": "scroll",
@@ -5901,11 +6709,28 @@
               "title": "Paging mode",
               "type": "string",
               "x-clicky-order": 5,
+              "x-col-span": "full",
               "x-enum-display": "segmented",
               "x-enum-labels": {
                 "pit": "Point in time",
                 "scroll": "Scroll"
               }
+            },
+            "paging_threshold": {
+              "default": "10000",
+              "description": "Requested row threshold for normal page/limit paging (0–10000). Larger or unbounded reads use the paging mode. Zero always uses the paging mode.",
+              "pattern": "^(0|[1-9][0-9]{0,3}|10000)$",
+              "title": "Paging threshold",
+              "type": "string",
+              "x-clicky-order": 6,
+              "x-col-span": "full"
+            },
+            "span_layout": {
+              "format": "textarea",
+              "title": "Span layout overrides",
+              "type": "string",
+              "x-clicky-order": 7,
+              "x-col-span": "full"
             }
           },
           "required": [
@@ -5913,7 +6738,8 @@
           ],
           "title": "Authentication",
           "type": "object",
-          "x-clicky-order": 4
+          "x-clicky-order": 4,
+          "x-columns": 2
         },
         "type": {
           "const": "opensearch",
@@ -6124,6 +6950,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -6154,14 +6981,44 @@
                 "searchParam": "__lookup_q",
                 "url": "/api/v1/connection"
               },
-              "x-clicky-order": 2
+              "x-clicky-order": 2,
+              "x-col-span": "full"
+            },
+            "index": {
+              "title": "Default index",
+              "type": "string",
+              "x-clicky-order": 3,
+              "x-col-span": "full"
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            },
+            "span_layout": {
+              "format": "textarea",
+              "title": "Span layout overrides",
+              "type": "string",
+              "x-clicky-order": 4,
+              "x-col-span": "full"
             }
           },
           "required": [
             "connection"
           ],
           "title": "Properties",
-          "type": "object"
+          "type": "object",
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "opentelemetry",
@@ -6263,6 +7120,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -6277,9 +7135,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "opsgenie",
@@ -6295,6 +7170,42 @@
       "type": "object"
     },
     "postgres": {
+      "anyOf": [
+        {
+          "properties": {
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        },
+        {
+          "properties": {
+            "properties": {
+              "properties": {
+                "database": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "host": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host",
+                "database"
+              ]
+            }
+          },
+          "required": [
+            "properties"
+          ]
+        }
+      ],
       "properties": {
         "logging": {
           "additionalProperties": false,
@@ -6402,6 +7313,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -6417,16 +7329,53 @@
           "title": "Password",
           "type": "string",
           "x-clicky-component": "k8s-secret-selector",
-          "x-clicky-default-source": "secret",
+          "x-clicky-default-source": "value",
           "x-clicky-order": 5
         },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "database": {
+              "title": "Database",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.3,
+              "x-col-span": "full"
+            },
+            "host": {
+              "description": "Database hostname or IP address (without a scheme)",
+              "title": "Host",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.1,
+              "x-col-span": "full"
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            },
+            "port": {
+              "description": "Optional TCP port; uses the driver default when empty",
+              "title": "Port",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.2,
+              "x-col-span": "full"
+            }
           },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "postgres",
@@ -6434,8 +7383,8 @@
           "type": "string"
         },
         "url": {
-          "description": "postgres://user:pass@host:5432/db?sslmode=disable",
-          "title": "URL",
+          "description": "Provide a database URL or fill in Host and Database below. A URL takes precedence when supplied.",
+          "title": "Database URL",
           "type": "string",
           "x-clicky-component": "k8s-url-selector",
           "x-clicky-default-source": "value",
@@ -6451,8 +7400,7 @@
       },
       "required": [
         "name",
-        "type",
-        "url"
+        "type"
       ],
       "title": "Connection: postgres",
       "type": "object"
@@ -6649,6 +7597,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -6802,6 +7751,7 @@
               "title": "Authentication",
               "type": "string",
               "x-clicky-order": 0,
+              "x-col-span": "full",
               "x-enum-display": "segmented",
               "x-enum-labels": {
                 "basic": "Basic",
@@ -6809,6 +7759,20 @@
                 "none": "None",
                 "oauth": "OAuth"
               }
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
             }
           },
           "required": [
@@ -6816,7 +7780,8 @@
           ],
           "title": "Authentication",
           "type": "object",
-          "x-clicky-order": 4
+          "x-clicky-order": 4,
+          "x-columns": 2
         },
         "type": {
           "const": "prometheus",
@@ -6926,6 +7891,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -6940,9 +7906,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "pushbullet",
@@ -7043,6 +8026,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -7057,9 +8041,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "pushover",
@@ -7160,6 +8161,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -7175,16 +8177,33 @@
           "title": "Password",
           "type": "string",
           "x-clicky-component": "k8s-secret-selector",
-          "x-clicky-default-source": "secret",
+          "x-clicky-default-source": "value",
           "x-clicky-order": 5
         },
         "properties": {
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "redis",
@@ -7301,6 +8320,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -7315,9 +8335,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "restic",
@@ -7418,6 +8455,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -7432,9 +8470,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "rocketchat",
@@ -7540,6 +8595,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -7563,28 +8619,48 @@
             "assumeRole": {
               "title": "Assume Role ARN",
               "type": "string",
-              "x-clicky-order": 8
+              "x-clicky-order": 8,
+              "x-col-span": "full"
             },
             "bucket": {
               "description": "Optional bucket for scoped access",
               "title": "Bucket",
               "type": "string",
-              "x-clicky-order": 7
+              "x-clicky-order": 7,
+              "x-col-span": "full"
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
             },
             "region": {
               "title": "Region",
               "type": "string",
-              "x-clicky-order": 7
+              "x-clicky-order": 7,
+              "x-col-span": "full"
             },
             "usePathStyle": {
               "description": "Set to true for path-style S3 endpoints",
               "title": "Use path-style requests",
               "type": "string",
-              "x-clicky-order": 8
+              "x-clicky-order": 8,
+              "x-col-span": "full"
             }
           },
           "title": "Properties",
-          "type": "object"
+          "type": "object",
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "s3",
@@ -7700,6 +8776,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -7714,9 +8791,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "sftp",
@@ -7817,6 +8911,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -7831,9 +8926,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "slack",
@@ -7934,6 +9046,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -7948,9 +9061,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "slackwebhook",
@@ -8051,6 +9181,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -8065,9 +9196,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "smb",
@@ -8083,6 +9231,42 @@
       "type": "object"
     },
     "sql_server": {
+      "anyOf": [
+        {
+          "properties": {
+            "url": {
+              "minLength": 1,
+              "type": "string"
+            }
+          },
+          "required": [
+            "url"
+          ]
+        },
+        {
+          "properties": {
+            "properties": {
+              "properties": {
+                "database": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "host": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": [
+                "host",
+                "database"
+              ]
+            }
+          },
+          "required": [
+            "properties"
+          ]
+        }
+      ],
       "properties": {
         "logging": {
           "additionalProperties": false,
@@ -8190,6 +9374,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -8205,16 +9390,53 @@
           "title": "Password",
           "type": "string",
           "x-clicky-component": "k8s-secret-selector",
-          "x-clicky-default-source": "secret",
+          "x-clicky-default-source": "value",
           "x-clicky-order": 5
         },
         "properties": {
-          "additionalProperties": {
-            "type": "string"
+          "properties": {
+            "database": {
+              "title": "Database",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.3,
+              "x-col-span": "full"
+            },
+            "host": {
+              "description": "Database hostname or IP address (without a scheme)",
+              "title": "Host",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.1,
+              "x-col-span": "full"
+            },
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            },
+            "port": {
+              "description": "Optional TCP port; uses the driver default when empty",
+              "title": "Port",
+              "type": "string",
+              "x-clicky-hoist": true,
+              "x-clicky-order": 2.2,
+              "x-col-span": "full"
+            }
           },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "sql_server",
@@ -8222,8 +9444,8 @@
           "type": "string"
         },
         "url": {
-          "description": "sqlserver://user:pass@host:1433?database=db",
-          "title": "URL",
+          "description": "Provide a database URL or fill in Host and Database below. A URL takes precedence when supplied.",
+          "title": "Database URL",
           "type": "string",
           "x-clicky-component": "k8s-url-selector",
           "x-clicky-default-source": "value",
@@ -8239,8 +9461,7 @@
       },
       "required": [
         "name",
-        "type",
-        "url"
+        "type"
       ],
       "title": "Connection: sql_server",
       "type": "object"
@@ -8353,6 +9574,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -8367,9 +9589,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "sqlite",
@@ -8480,6 +9719,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -8494,9 +9734,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "teams",
@@ -8597,6 +9854,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -8611,9 +9869,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "telegram",
@@ -8714,6 +9989,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -8728,9 +10004,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "webhook",
@@ -8831,6 +10124,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -8845,9 +10139,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "windows",
@@ -8948,6 +10259,7 @@
           "x-clicky-order": 8
         },
         "name": {
+          "minLength": 1,
           "title": "Name",
           "type": "string",
           "x-clicky-order": 0
@@ -8962,9 +10274,26 @@
           "additionalProperties": {
             "type": "string"
           },
+          "properties": {
+            "kubeconfig": {
+              "description": "Optional path on the server. Leave empty to use normal Kubernetes configuration discovery.",
+              "title": "Kubeconfig file",
+              "type": "string",
+              "x-clicky-component": "k8s-kubeconfig-selector",
+              "x-clicky-order": -2
+            },
+            "kubecontext": {
+              "description": "Optional context in the selected kubeconfig. Leave empty to use its current context.",
+              "title": "Kubecontext",
+              "type": "string",
+              "x-clicky-component": "k8s-context-selector",
+              "x-clicky-order": -1
+            }
+          },
           "title": "Properties",
           "type": "object",
-          "x-clicky-order": 7
+          "x-clicky-order": 7,
+          "x-columns": 2
         },
         "type": {
           "const": "zulip_chat",

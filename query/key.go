@@ -93,8 +93,7 @@ func enrichCELError(err error, row Row) error {
 	if err == nil || !strings.Contains(err.Error(), "undeclared reference") {
 		return err
 	}
-	names := make([]string, 0, len(row)+2)
-	names = append(names, "row", "span")
+	names := []string{"row", "span"}
 	for name := range row {
 		if celIdentifier.MatchString(name) {
 			names = append(names, name)

@@ -5,7 +5,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/flanksource/gomplate/v3"
+	rpchttp "github.com/flanksource/clicky/rpc/http"
+	"github.com/flanksource/gomplate/v4"
 	"github.com/ohler55/ojg/jp"
 
 	"github.com/flanksource/commons-db/context"
@@ -22,6 +23,7 @@ var celIdentifier = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // first and nil when no column declares a Style. Styles ride alongside the rows
 // rather than inside them so that presentation never reaches an export.
 func applyRowTransforms(ctx context.Context, profile Profile, rows []Row) ([]Row, []map[string]string, error) {
+	defer rpchttp.Track(ctx, "transform")()
 	plan, err := newRowTransformPlan(profile)
 	if err != nil {
 		return nil, nil, err
@@ -93,6 +95,13 @@ func (plan rowTransformPlan) transformRow(ctx context.Context, row Row) (bool, m
 	if err := validateAcyclicValue(row); err != nil {
 		return false, nil, fmt.Errorf("provider row: %w", err)
 	}
+	if err := normalizeBooleanColumns(plan.profile.Columns, row); err != nil {
+		return false, nil, err
+	}
+	if err := normalizeTraceRow(ctx, plan.profile, row); err != nil {
+		return false, nil, fmt.Errorf("normalize span: %w", err)
+	}
+	canonical := copyMappingValue(row["_trace"])
 	if err := plan.applyAliases(ctx, row); err != nil {
 		return false, nil, err
 	}
@@ -106,6 +115,9 @@ func (plan rowTransformPlan) transformRow(ctx context.Context, row Row) (bool, m
 		return false, nil, err
 	}
 	plan.renameSources(row)
+	if plan.profile.RenderMode() == RenderTraces || plan.profile.Search != nil {
+		row["_trace"] = canonical
+	}
 	// Styles are evaluated last so an expression can read the projected cell
 	// beside it, not just the provider's original fields.
 	if !plan.styled {

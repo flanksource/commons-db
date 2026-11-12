@@ -3,7 +3,6 @@ package opensearchinspect
 import (
 	"regexp"
 	"sort"
-	"strings"
 )
 
 // A rotated index carries a date, and optionally a rollover sequence, in its
@@ -60,7 +59,7 @@ func RollupTargets(targets []Target) []Target {
 		}
 		sort.Strings(exactMembers)
 		patterns = append(patterns, Target{
-			Name: strings.Join(exactMembers, ","), Pattern: pattern, Kind: "group",
+			Name: pattern, Pattern: pattern, Kind: "group",
 			Count: len(indexes), Members: exactMembers, Hidden: hidden, System: system,
 		})
 	}

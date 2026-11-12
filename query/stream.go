@@ -104,7 +104,7 @@ func ExecuteStream(ctx context.Context, reg *SessionRegistry, p Profile, params 
 	if _, _, err := resolveProfileInput(p, supplied, now); err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
-	release, err := reg.prepareRead(ctx, p, supplied)
+	release, err := reg.PrepareRead(ctx, p, supplied)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +148,7 @@ func startTrace(ctx context.Context, reg *SessionRegistry, start traceStart) (*S
 	if !ok {
 		return nil, fmt.Errorf("profile %q: provider %q does not support streaming", p.Name, p.Provider.Type)
 	}
-	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Search: p.Search, Spans: p.Spans, Defs: p.Params, Resolved: resolved})
 	if err != nil {
 		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
 	}
@@ -478,7 +478,7 @@ func (t topSampler) sample(ctx context.Context, prepared bool) (*Result, error) 
 	release := t.release
 	if !prepared {
 		var err error
-		release, err = t.registry.prepareRead(ctx, t.profile, t.supplied)
+		release, err = t.registry.PrepareRead(ctx, t.profile, t.supplied)
 		if err != nil {
 			return nil, err
 		}

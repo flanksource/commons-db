@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -76,8 +77,11 @@ type ManagedSession struct {
 	operation   context.Context
 	stopTimeout time.Duration
 
-	callMu sync.Mutex
-	closed bool
+	calls          chan struct{}
+	sampling       context.Context
+	cancelSampling context.CancelFunc
+	ending         atomic.Bool
+	status         atomic.Pointer[ManagedStatus]
 
 	endOnce sync.Once
 	result  any
@@ -155,13 +159,16 @@ func (r *SessionRegistry) manageTracked(ctx context.Context, start managedStart)
 		return nil, err
 	}
 
+	sampling, cancelSampling := context.WithCancel(context.WithoutCancel(ctx))
 	managed := &ManagedSession{
 		registry: r, session: session, run: run, options: options,
 		operation: context.WithoutCancel(ctx), stopTimeout: start.stopTimeout,
+		calls: make(chan struct{}, 1), sampling: sampling, cancelSampling: cancelSampling,
 	}
+	status := run.Status()
+	managed.status.Store(&status)
 	r.registerManaged(managed)
 	session.OnStop(managed.stopForSession)
-	status := run.Status()
 	if err := session.Running(RunningUpdate{Handle: status.Handle, Events: status.Events, Metadata: status.Metadata, Exports: status.Exports}); err != nil {
 		_, stopErr := managed.Stop(context.Background())
 		r.forgetManaged(managed)
@@ -195,29 +202,51 @@ func (m *ManagedSession) Context() context.Context { return m.session.Context() 
 // Status returns the external run's current status under the same serialization
 // used by Sample, Stop and background polling.
 func (m *ManagedSession) Status() ManagedStatus {
-	m.callMu.Lock()
-	defer m.callMu.Unlock()
-	return m.run.Status()
+	select {
+	case <-m.sampling.Done():
+		return *m.status.Load()
+	case m.calls <- struct{}{}:
+		defer func() { <-m.calls }()
+		if m.ending.Load() {
+			return *m.status.Load()
+		}
+		status := m.run.Status()
+		m.status.Store(&status)
+		return status
+	}
 }
 
 // Sample pulls one capture window and publishes the resulting progress.
 func (m *ManagedSession) Sample(ctx context.Context) (any, error) {
-	m.callMu.Lock()
-	defer m.callMu.Unlock()
-	if m.closed {
+	if m.ending.Load() {
+		return nil, fmt.Errorf("managed session %s: %w", m.session.ID(), ErrSessionEnded)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(m.sampling, cancel)
+	defer stop()
+	defer cancel()
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case m.calls <- struct{}{}:
+	}
+	defer func() { <-m.calls }()
+	if m.ending.Load() {
 		return nil, fmt.Errorf("managed session %s: %w", m.session.ID(), ErrSessionEnded)
 	}
 	result, err := m.run.Sample(ctx)
-	m.publish(m.run.Status())
+	status := m.run.Status()
+	m.status.Store(&status)
+	if !m.ending.Load() {
+		m.publish(status)
+	}
 	return result, err
 }
 
 // ReportProgress publishes the run's current status without sampling it.
 func (m *ManagedSession) ReportProgress() {
-	m.callMu.Lock()
-	defer m.callMu.Unlock()
-	if !m.closed {
-		m.publish(m.run.Status())
+	if !m.ending.Load() {
+		m.publish(m.Status())
 	}
 }
 
@@ -291,13 +320,20 @@ func (m *ManagedSession) Detach(ctx context.Context, reason string) error {
 
 func (m *ManagedSession) end(request context.Context, detach bool, reason string, cause error) {
 	defer m.registry.forgetManaged(m)
+	m.ending.Store(true)
+	m.cancelSampling()
 	ctx, cancel := context.WithTimeout(m.operation, m.stopTimeout)
 	stopCancel := context.AfterFunc(request, cancel)
 	defer stopCancel()
 	defer cancel()
 
-	m.callMu.Lock()
-	m.closed = true
+	select {
+	case <-ctx.Done():
+		m.err = errors.Join(cause, fmt.Errorf("managed session %s: waiting for sample to stop: %w", m.session.ID(), ctx.Err()))
+		m.session.Finish(FinishUpdate{Err: m.err, Summary: m.status.Load().Summary})
+		return
+	case m.calls <- struct{}{}:
+	}
 	var finish ManagedFinish
 	if detach {
 		finish, m.err = m.run.Detach(ctx)
@@ -305,7 +341,8 @@ func (m *ManagedSession) end(request context.Context, detach bool, reason string
 		finish, m.err = m.run.Stop(ctx)
 	}
 	status := m.run.Status()
-	m.callMu.Unlock()
+	m.status.Store(&status)
+	<-m.calls
 	finish = mergeManagedFinish(finish, status)
 	m.result = finish.Result
 	if cause != nil {

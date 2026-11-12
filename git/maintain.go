@@ -12,9 +12,11 @@ import (
 )
 
 // MaintainOptions configures Cache.Maintain. PinTTL is how long a commit pin
-// survives without a read using it.
+// survives without a read using it. Owners limits maintenance to those
+// mirrors (cache keys owning a mirror); empty maintains every mirror.
 type MaintainOptions struct {
 	PinTTL time.Duration
+	Owners []string
 }
 
 // Maintain expires, in every mirror under Root, the commit pins no read has
@@ -31,19 +33,43 @@ func (c *Cache) Maintain(ctx context.Context, options MaintainOptions) error {
 	if options.PinTTL <= 0 {
 		return fmt.Errorf("maintain git cache: pin TTL must be positive, got %s", options.PinTTL)
 	}
-	entries, err := os.ReadDir(c.Root)
-	if errors.Is(err, fs.ErrNotExist) {
+	root, err := os.OpenRoot(c.Root)
+	if errors.Is(err, fs.ErrNotExist) && len(options.Owners) == 0 {
 		return nil
 	}
 	if err != nil {
 		return fmt.Errorf("maintain git cache %s: %w", c.Root, err)
 	}
-	cutoff := time.Now().Add(-options.PinTTL)
-	for _, entry := range entries {
-		paths := newMirrorPaths(filepath.Join(c.Root, entry.Name()))
-		if _, err := os.Stat(filepath.Join(paths.git, "HEAD")); errors.Is(err, fs.ErrNotExist) {
-			continue
+	defer root.Close()
+	owners := options.Owners
+	if len(owners) == 0 {
+		entries, err := os.ReadDir(c.Root)
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
 		}
+		if err != nil {
+			return fmt.Errorf("maintain git cache %s: %w", c.Root, err)
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			if _, err := root.Stat(filepath.Join(entry.Name(), "mirror.git", "HEAD")); err == nil {
+				owners = append(owners, entry.Name())
+			} else if !errors.Is(err, fs.ErrNotExist) {
+				return fmt.Errorf("maintain git mirror %s: %w", entry.Name(), err)
+			}
+		}
+	}
+	cutoff := time.Now().Add(-options.PinTTL)
+	for _, owner := range owners {
+		if owner == "." || !filepath.IsLocal(owner) || owner != filepath.Base(owner) {
+			return fmt.Errorf("maintain git cache: invalid mirror %q", owner)
+		}
+		if _, err := root.Stat(filepath.Join(owner, "mirror.git", "HEAD")); err != nil {
+			return fmt.Errorf("maintain git mirror %s: %w", owner, err)
+		}
+		paths := newMirrorPaths(filepath.Join(c.Root, owner))
 		if err := maintainMirror(ctx, paths, cutoff); err != nil {
 			return fmt.Errorf("maintain git mirror %s: %w", paths.git, err)
 		}

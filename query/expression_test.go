@@ -116,13 +116,18 @@ var _ = Describe("EvalExpression", func() {
 			Expect(results[0].Value).To(Equal("WARN"))
 		})
 
-		It("reports an un-dyn'd comprehension as the checker's own message", func() {
+		It("maps over a batch without dyn(), since CEL reads the host rows lazily", func() {
 			results, err := query.EvalExpression(ctx, "batch.map(line, line.message)", query.ExpressionOptions{
 				Scope: query.ScopeBatch,
 				Rows:  rows,
 			})
 			Expect(err).ToNot(HaveOccurred())
-			Expect(results[0].Error).ToNot(BeEmpty())
+			Expect(results[0].Error).To(BeEmpty())
+			Expect(results[0].Value).To(Equal([]any{
+				"Timeout after 5006ms",
+				"\tat com.acme.pay.Gateway.charge(Gateway.java:88)",
+				"Timeout after 31ms calling risk-service",
+			}))
 		})
 	})
 

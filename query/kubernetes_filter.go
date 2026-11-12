@@ -3,9 +3,10 @@ package query
 import "github.com/flanksource/commons-db/kubernetes/workload"
 
 const (
-	kubernetesWorkloadFilterKey = "workload"
-	kubernetesLabelsFilterKey   = "labels"
-	kubernetesTimeFilterKey     = "time"
+	kubernetesWorkloadFilterKey  = "workload"
+	kubernetesNamespaceFilterKey = "namespace"
+	kubernetesLabelsFilterKey    = "labels"
+	kubernetesTimeFilterKey      = "time"
 
 	// KubernetesDefaultStart is how far back a Kubernetes log profile reads when
 	// nothing bounds it. An unbounded read is every line the container still
@@ -36,14 +37,23 @@ func (p Profile) RuntimeFilterBindings() ([]ColumnFilterBinding, error) {
 	if p.Provider.Type != "k8s" {
 		return nil, nil
 	}
-	if _, err := workload.ParseSelector(p.Query); err != nil {
+	selector, err := workload.ParseSelector(p.Query)
+	if err != nil {
 		return nil, err
 	}
-	bindings := make([]ColumnFilterBinding, 0, 3)
+	bindings := make([]ColumnFilterBinding, 0, 4)
 	if !p.HasTimeRangeParams() {
 		bindings = append(bindings, ColumnFilterBinding{
 			Key: kubernetesTimeFilterKey, Field: "timestamp", Label: "Time",
 			Kind: ColumnFilterKindTime, Default: KubernetesDefaultTimeRange,
+		})
+	}
+	// A scope pinned to one namespace has no other to offer, and a profile that
+	// declares its own namespace parameter already has the control.
+	if selector.Namespace() == "" && !p.declaresParam(kubernetesNamespaceFilterKey) {
+		bindings = append(bindings, ColumnFilterBinding{
+			Key: kubernetesNamespaceFilterKey, Field: kubernetesNamespaceFilterKey, Label: "Namespace",
+			Kind: ColumnFilterKindTerms, Lookup: true, Multi: true,
 		})
 	}
 	return append(bindings, []ColumnFilterBinding{
@@ -56,6 +66,15 @@ func (p Profile) RuntimeFilterBindings() ([]ColumnFilterBinding, error) {
 			Label: "Labels", Kind: ColumnFilterKindLabels, Lookup: true, Multi: true,
 		},
 	}...), nil
+}
+
+func (p Profile) declaresParam(name string) bool {
+	for _, param := range p.Params {
+		if param.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // TimeRangeParams returns the parameters a profile declares as its own time

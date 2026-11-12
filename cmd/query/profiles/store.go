@@ -128,7 +128,7 @@ func (s *FileStore) Save(_ context.Context, profile query.Profile) error {
 	if err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(profile)
+	data, err := yaml.Marshal(profile.Authored())
 	if err != nil {
 		return fmt.Errorf("marshal profile %q: %w", name, err)
 	}
@@ -165,7 +165,7 @@ func (s *FileStore) read(path string) (query.Profile, error) {
 	if profile.Name == "" {
 		return query.Profile{}, fmt.Errorf("profile %q is missing a name", path)
 	}
-	return profile, nil
+	return profile.ResolveQueryFile(s.Dir)
 }
 
 func (s *DBStore) List(ctx context.Context) ([]query.Profile, error) {

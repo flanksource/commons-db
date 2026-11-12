@@ -3,6 +3,7 @@ package browse
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
@@ -13,15 +14,35 @@ var (
 	ErrUnknownConnection = errors.New("unknown git connection")
 )
 
+// Options configures New. PinTTL is how long a commit pin survives without a
+// read when CachePrune prunes a mirror (prune is refused without one).
 type Options struct {
-	Catalog  func(context.Context) ([]models.Connection, error)
-	Resolve  func(context.Context, string) (models.Connection, error)
-	CacheDir string
+	Catalog     func(context.Context) ([]models.Connection, error)
+	Resolve     func(context.Context, string) (models.Connection, error)
+	CacheDir    string
+	PinTTL      time.Duration
+	Client      func(context.Context, string) (*git.Client, models.Connection, error)
+	ClientScope func(context.Context) (string, error)
 }
 
 type Service struct {
-	options Options
-	cache   *git.Cache
+	options  Options
+	cache    *git.Cache
+	clients  readMemo[openedClient]
+	catalogs readMemo[[]git.RepositoryInfo]
+	refs     readMemo[git.RemoteRefs]
+}
+
+type openedClient struct {
+	Client     *git.Client
+	Connection models.Connection
+}
+
+type Opened struct {
+	Client     *git.Client
+	Repository *git.Repository
+	Name       string
+	Info       git.RepositoryInfo
 }
 
 type Request struct {

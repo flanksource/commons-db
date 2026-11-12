@@ -4,59 +4,62 @@ import (
 	"fmt"
 	"sync"
 
+	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
+	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/logger"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/clientcmd"
-
-	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 )
 
-// KubeContextProperty is the connection property naming the kubeconfig
-// context whose cluster a connection's secret://, configmap:// and helm://
-// references are read from.
 const KubeContextProperty = "kubecontext"
+const KubeconfigProperty = "kubeconfig"
 
-// KubeContextClients returns the Kubernetes client for a kubeconfig context.
-type KubeContextClients func(kubeContext string) (*dutyKubernetes.Client, error)
-
+type KubeContextClients func(options dutyKubernetes.Options) (*dutyKubernetes.Client, error)
 type kubeContextClientsKey struct{}
 
-// WithKubeContextClients is k building the client for a connection's
-// kubecontext property with clients instead of from the default kubeconfig.
 func (k Context) WithKubeContextClients(clients KubeContextClients) Context {
 	return k.WithValue(kubeContextClientsKey{}, clients)
 }
 
-// KubeContextClient is the Kubernetes client for kubeContext: from the
-// context's KubeContextClients when it has one, otherwise from the default
-// kubeconfig loading rules with kubeContext as the current context.
-func (k Context) KubeContextClient(kubeContext string) (*dutyKubernetes.Client, error) {
-	if clients, ok := k.Value(kubeContextClientsKey{}).(KubeContextClients); ok && clients != nil {
-		return clients(kubeContext)
-	}
-	return kubeconfigContextClient(kubeContext)
-}
-
 var kubeconfigContextClients sync.Map
 
-// kubeconfigContextClient builds a client for one context of the default
-// kubeconfig, once per context; a failure is not cached so a fixed kubeconfig
-// applies on the next call.
-func kubeconfigContextClient(kubeContext string) (*dutyKubernetes.Client, error) {
-	if client, ok := kubeconfigContextClients.Load(kubeContext); ok {
-		return client.(*dutyKubernetes.Client), nil
+func (k Context) KubeContextClient(options dutyKubernetes.Options) (*dutyKubernetes.Client, error) {
+	if clients, ok := k.Value(kubeContextClientsKey{}).(KubeContextClients); ok && clients != nil {
+		return clients(options)
 	}
-	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		clientcmd.NewDefaultClientConfigLoadingRules(),
-		&clientcmd.ConfigOverrides{CurrentContext: kubeContext},
-	).ClientConfig()
+	config, err := options.RESTConfig()
 	if err != nil {
-		return nil, fmt.Errorf("load kubeconfig context %q: %w", kubeContext, err)
+		return nil, err
+	}
+	key := dutyKubernetes.RestConfigFingerprint(config)
+	if client, ok := kubeconfigContextClients.Load(key); ok {
+		return client.(*dutyKubernetes.Client), nil
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, fmt.Errorf("create kubernetes client for context %q: %w", kubeContext, err)
+		return nil, fmt.Errorf("create Kubernetes client: %w", err)
 	}
-	client, _ := kubeconfigContextClients.LoadOrStore(kubeContext, dutyKubernetes.NewKubeClient(logger.GetLogger("k8s."+kubeContext), clientset, config))
+	client, _ := kubeconfigContextClients.LoadOrStore(key, dutyKubernetes.NewKubeClient(logger.GetLogger("k8s"), clientset, config))
 	return client.(*dutyKubernetes.Client), nil
+}
+
+func (k Context) WithConnectionKubernetes(connection *models.Connection) (Context, error) {
+	options := dutyKubernetes.Options{Kubeconfig: connection.Properties[KubeconfigProperty], Kubecontext: connection.Properties[KubeContextProperty]}
+	if !options.Explicit() {
+		return k, nil
+	}
+	if connection.Type == models.ConnectionTypeKubernetes && options.Kubeconfig == "" && connection.Certificate != "" {
+		var certificate types.EnvVar
+		if err := certificate.Scan(connection.Certificate); err != nil {
+			return k, err
+		}
+		if certificate.ValueFrom == nil {
+			options.Config = []byte(certificate.ValueStatic)
+		}
+	}
+	client, err := k.KubeContextClient(options)
+	if err != nil {
+		return k, fmt.Errorf("connection %q: %w", connection.Name, err)
+	}
+	return k.WithLocalKubernetes(client), nil
 }

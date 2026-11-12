@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/flanksource/gomplate/v3"
-	"github.com/google/cel-go/common/types/ref"
+	"cel.dev/cel-go/common/types/ref"
+	"github.com/flanksource/gomplate/v4"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/flanksource/commons-db/context"

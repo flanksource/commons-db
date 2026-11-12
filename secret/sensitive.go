@@ -1,10 +1,21 @@
 package secret
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+
+	"github.com/flanksource/clicky/text"
+)
 
 const sensitivePlaceholder = "[REDACTED]"
 
 type Sensitive []byte
+
+func (t Sensitive) GoString() string { return sensitivePlaceholder }
+
+func (t Sensitive) Format(state fmt.State, verb rune) {
+	text.NewSensitiveString(t.String()).Format(state, verb)
+}
 
 func (t Sensitive) String() string {
 	return sensitivePlaceholder

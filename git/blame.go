@@ -36,7 +36,7 @@ type BlameLine struct {
 	Commit       *BlameCommit `json:"commit"`
 }
 
-func (c *Cache) Blame(ctx context.Context, repo *Repository, options BlameOptions) (lines []BlameLine, err error) {
+func (c *Cache) readBlame(ctx context.Context, repo *Repository, options BlameOptions) (lines []BlameLine, err error) {
 	if !fullSHAPattern.MatchString(options.SHA) {
 		return nil, fmt.Errorf("blame %q: give the full 40-character commit SHA", options.SHA)
 	}

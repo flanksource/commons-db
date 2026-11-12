@@ -12,12 +12,18 @@ import (
 // api.TableProvider so the Result can be rendered through every clicky
 // formatter (table, csv, json, xlsx, html-react, ...).
 type rowProvider struct {
-	cols []api.ColumnDef
-	row  Row
+	cols   []api.ColumnDef
+	row    Row
+	detail api.Textable
 }
 
 func (r rowProvider) Columns() []api.ColumnDef { return r.cols }
 func (r rowProvider) Row() map[string]any      { return r.row }
+func (r rowProvider) RowDetail() api.Textable  { return r.detail }
+
+type RowDetailPresenter interface {
+	Detail(Row) (api.Textable, error)
+}
 
 // Table builds a clicky TextTable from the Result. When columns is empty, the
 // columns are derived from the union of row keys (sorted for determinism).
@@ -53,7 +59,7 @@ func styledRow(row Row, styles map[string]string) Row {
 	out := make(Row, len(row))
 	for name, value := range row {
 		if class, ok := styles[name]; ok {
-			out[name] = api.Text{Content: fmt.Sprint(value), Style: class}
+			out[name] = api.TableCell{Value: api.Text{}.Append(fmt.Sprint(value), class), FilterValue: value}
 			continue
 		}
 		out[name] = value
@@ -69,7 +75,7 @@ func (r *Result) Render(columns []ColumnDef, format string) (string, error) {
 			return "", fmt.Errorf("row %d cannot be rendered: %w", index, err)
 		}
 	}
-	if format == "clicky-json" && r.Presenter != nil {
+	if usesPresentation(format) && r.Presenter != nil {
 		table, err := r.presentedTable(columns)
 		if err != nil {
 			return "", err
@@ -77,6 +83,15 @@ func (r *Result) Render(columns []ColumnDef, format string) (string, error) {
 		return clicky.Format(table, clicky.FormatOptions{Format: format})
 	}
 	return clicky.Format(r.Table(columns), clicky.FormatOptions{Format: format})
+}
+
+func usesPresentation(format string) bool {
+	switch format {
+	case "clicky-json", "table", "pretty", "ansi", "html", "markdown", "pdf":
+		return true
+	default:
+		return false
+	}
 }
 
 func (r *Result) presentedTable(columns []ColumnDef) (api.TextTable, error) {
@@ -101,9 +116,24 @@ func (r *Result) presentedTable(columns []ColumnDef) (api.TextTable, error) {
 		if err := validateAcyclicValue(row); err != nil {
 			return api.TextTable{}, fmt.Errorf("presented row %d cannot be rendered: %w", index, err)
 		}
-		providers[index] = rowProvider{cols: cols, row: row}
+		var detail api.Textable
+		if presenter, ok := r.Presenter.(RowDetailPresenter); ok {
+			detail, err = presenter.Detail(raw)
+			if err != nil {
+				return api.TextTable{}, fmt.Errorf("present row %d detail: %w", index, err)
+			}
+		}
+		providers[index] = rowProvider{cols: cols, row: row, detail: detail}
 	}
 	return api.NewTableFrom(providers), nil
+}
+
+// DisplayTable restores typed rows and details for terminal and web table hosts.
+func (r *Result) DisplayTable(columns []ColumnDef) (api.TextTable, error) {
+	if r.Presenter == nil {
+		return r.Table(columns), nil
+	}
+	return r.presentedTable(columns)
 }
 
 func mergePresentedColumns(presented, declared []api.ColumnDef) []api.ColumnDef {
@@ -134,6 +164,13 @@ func mergePresentedColumns(presented, declared []api.ColumnDef) []api.ColumnDef 
 			column.SortKey = declaredColumn.SortKey
 		}
 		out[index] = column
+		delete(byName, column.Name)
+	}
+	for _, column := range declared {
+		if _, exists := byName[column.Name]; exists && !column.Hidden {
+			column.DefaultHidden = true
+			out = append(out, column)
+		}
 	}
 	return out
 }

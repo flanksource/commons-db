@@ -13,6 +13,17 @@ import (
 )
 
 var _ = Describe("Cache.Maintain", func() {
+	It("rejects a mirror symlink that escapes the cache root before running git", func(ctx SpecContext) {
+		cache := &git.Cache{Root: GinkgoT().TempDir()}
+		outside := newBareRepo("outside-cache")
+		Expect(os.MkdirAll(filepath.Join(cache.Root, "owner"), 0700)).To(Succeed())
+		Expect(os.Symlink(outside.Path, filepath.Join(cache.Root, "owner", "mirror.git"))).To(Succeed())
+		timed, timings := rpchttp.WithTimings(ctx)
+		Expect(cache.Maintain(timed, git.MaintainOptions{PinTTL: time.Hour, Owners: []string{"owner"}})).NotTo(Succeed())
+		collections, _ := timings.Counter("git_maintenance", "ops")
+		Expect(collections).To(BeZero())
+	})
+
 	It("expires pins unused for the TTL, collects garbage and re-pins an expired commit on its next read", func(ctx SpecContext) {
 		fixture := newBareRepo("maintain")
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
@@ -31,7 +42,7 @@ var _ = Describe("Cache.Maintain", func() {
 		_, err = os.Stat(filepath.Join(repository, "pins", fixture.First))
 		Expect(err).To(MatchError(fs.ErrNotExist))
 		timed, timings = rpchttp.WithTimings(ctx)
-		_, err = cache.Changes(timed, git.ChangesOptions{Repository: repo, Base: fixture.First, Head: fixture.Main})
+		_, err = cache.Changes(timed, git.ChangesOptions{Repository: repo, Base: fixture.First, Head: fixture.Main, Renames: true})
 		Expect(err).NotTo(HaveOccurred())
 		repins, _ := timings.Counter("git_update_ref", "ops")
 		Expect(repins).To(Equal(int64(1)))

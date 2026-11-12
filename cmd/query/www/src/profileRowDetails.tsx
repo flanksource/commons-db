@@ -15,6 +15,7 @@ import {
   type OperationResultFilterConfig,
   type ResultRenderContext,
 } from "@flanksource/clicky-ui";
+import type { DataTableMenuAction } from "@flanksource/clicky-ui/data";
 import { UiColumns } from "@flanksource/clicky-ui/icons";
 import { useQuery } from "@tanstack/react-query";
 import { isValidElement, useMemo, useState, type ReactNode } from "react";
@@ -104,6 +105,7 @@ export function profileRowDetailsResult(
   context: ResultRenderContext,
   client: OperationsApiClient,
   surfaceKey: string,
+  menuActions: DataTableMenuAction[],
 ): ReactNode {
   const table = clickyTableNode(context.response?.parsed);
   if (!table) return context.defaultView;
@@ -114,6 +116,7 @@ export function profileRowDetailsResult(
       {...(context.filterConfig ? { filterConfig: context.filterConfig } : {})}
       client={client}
       surfaceKey={surfaceKey}
+      menuActions={menuActions}
     />
   );
 }
@@ -124,12 +127,14 @@ function ProfileRowDetailsTable({
   filterConfig,
   client,
   surfaceKey,
+  menuActions,
 }: {
   table: ClickyTableNode;
   remoteProps: ProfileRowDetailsRemoteProps;
   filterConfig?: OperationResultFilterConfig;
   client: OperationsApiClient;
   surfaceKey: string;
+  menuActions: DataTableMenuAction[];
 }) {
   const [detailRow, setDetailRow] = useState<ClickyRow | null>(null);
   return (
@@ -143,6 +148,7 @@ function ProfileRowDetailsTable({
         timeRange={filterConfig?.timeRange}
         cellFilters={filterConfig?.cellFilters}
         onCellFilterChange={filterConfig?.onCellFilterChange}
+        menuActions={menuActions}
         className="flex min-h-0 flex-1 flex-col"
       />
       <RowDetailsModal

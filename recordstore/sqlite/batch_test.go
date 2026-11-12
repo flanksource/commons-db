@@ -97,6 +97,23 @@ var _ = Describe("sqlite backend batches", func() {
 		Expect(outcome).To(Equal(result))
 	})
 
+	It("rolls back every entry of an atomic batch when a later entry fails", func() {
+		batch := recordstore.Batch{ID: "atomic-observation", Atomic: true, Producer: producer, Entries: []recordstore.BatchEntry{
+			appendEntry("atomic-first", recordstoretest.SampleRows(1, 1)...),
+			{Op: recordstore.BatchAppend, Stream: "atomic-second", Kind: "unknown_kind", Rows: recordstoretest.SampleRows(1, 1)},
+		}}
+		_, err := backend.AppendBatch(ctx, batch)
+		Expect(err).To(HaveOccurred())
+		_, err = backend.Meta(ctx, "atomic-first")
+		Expect(err).To(MatchError(recordstore.ErrNotFound))
+		_, found, err := backend.BatchOutcome(ctx, batch.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeFalse())
+		batch.Entries = batch.Entries[:1]
+		Expect(apply(batch).Entries).To(HaveLen(1))
+		Expect(names("atomic-first")).To(Equal([]string{"row-001"}))
+	})
+
 	It("applies a batch id once, answering a repeat with the recorded outcome", func() {
 		batch := recordstore.Batch{ID: "b-1", Producer: producer, Entries: []recordstore.BatchEntry{
 			appendEntry("run-1", recordstoretest.SampleRows(1, 2)...),

@@ -133,9 +133,9 @@ var _ = Describe("ExecuteStream trace", func() {
 
 		events := session.Events()
 		Expect(events).To(HaveLen(3))
-		Expect(events[0].Row).To(HaveKeyWithValue("batchSize", int64(2)))
-		Expect(events[1].Row).To(HaveKeyWithValue("batchSize", int64(2)))
-		Expect(events[2].Row).To(HaveKeyWithValue("batchSize", int64(1)))
+		Expect(events[0].Row).To(HaveKeyWithValue("batchSize", 2))
+		Expect(events[1].Row).To(HaveKeyWithValue("batchSize", 2))
+		Expect(events[2].Row).To(HaveKeyWithValue("batchSize", 1))
 		Expect(events[2].Row).To(HaveKeyWithValue("mapped", "gamma-processed-aliased-mapped"))
 	})
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/commons-db/cmd/query/kubecatalog"
 	dbcontext "github.com/flanksource/commons-db/context"
+	dbkubernetes "github.com/flanksource/commons-db/kubernetes"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 )
@@ -106,7 +107,7 @@ func NewHandler(options Options) http.Handler {
 func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), h.prefix), "/")
 	switch rel {
-	case "secrets", "secrets/preview", "namespaces", "workloads",
+	case "contexts", "secrets", "secrets/preview", "namespaces", "workloads",
 		"secrets/onepassword/vaults", "secrets/onepassword/items", "secrets/onepassword/fields":
 	default:
 		h.next.ServeHTTP(w, r)
@@ -121,7 +122,27 @@ func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client, err := h.kube()
+	options := dbkubernetes.Options{Kubeconfig: r.URL.Query().Get("kubeconfig"), Kubecontext: r.URL.Query().Get("kubecontext")}
+	if rel == "contexts" {
+		contexts, err := options.Contexts()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, contexts)
+		return
+	}
+	scoped := *h
+	if options.Explicit() {
+		client, err := h.ctx.KubeContextClient(options)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		scoped.ctx = h.ctx.WithLocalKubernetes(client)
+		scoped.kube = func() (kubernetes.Interface, error) { return client, nil }
+	}
+	client, err := scoped.kube()
 	if err != nil {
 		http.Error(w, fmt.Sprintf("kubernetes client unavailable: %v", err), http.StatusServiceUnavailable)
 		return
@@ -144,7 +165,7 @@ func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "name is required", http.StatusBadRequest)
 			return
 		}
-		payload, err = h.previewKeys(r.Context(), client, q.Get("kind"), name, ns)
+		payload, err = scoped.previewKeys(r.Context(), client, q.Get("kind"), name, ns)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

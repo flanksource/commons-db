@@ -68,9 +68,9 @@ var _ = Describe("cached immutable reads", func() {
 			}
 		}
 		finished := make(chan error, 4)
-		for range 4 {
+		for limit := 2; limit <= 5; limit++ {
 			go func() {
-				_, err := cache.History(ctx, repo, fixture.Main, git.HistoryOptions{Limit: 1})
+				_, err := cache.History(ctx, repo, fixture.Main, git.HistoryOptions{Limit: limit})
 				finished <- err
 			}()
 		}
@@ -79,7 +79,7 @@ var _ = Describe("cached immutable reads", func() {
 		defer cancel()
 		cancelled := make(chan error, 1)
 		go func() {
-			_, err := cache.History(queued, repo, fixture.Main, git.HistoryOptions{Limit: 1})
+			_, err := cache.History(queued, repo, fixture.Main, git.HistoryOptions{Limit: 6})
 			cancelled <- err
 		}()
 		Consistently(count(gate.started), time.Second, 200*time.Millisecond).Should(Equal(4))

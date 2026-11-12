@@ -12,6 +12,7 @@ import (
 	"github.com/flanksource/commons-db/logs/opensearch"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/observability"
+	"github.com/flanksource/commons-db/otel/span/layout"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/esdsl"
 	"github.com/flanksource/commons-db/query/providers/internal/providerkit"
@@ -52,6 +53,8 @@ func documentArrayCapabilities(backend, database string) dbconnection.BackendCap
 }
 
 type OpenSearchOptions struct {
+	Layout *layout.Definition `json:"-"`
+	OpenSearchPagingOptions
 	// Address is an inline OpenSearch URL used when no stored connection is referenced.
 	Address string `json:"address,omitempty"`
 
@@ -94,9 +97,10 @@ const (
 )
 
 type openSearchRuntime struct {
-	searcher *opensearch.Searcher
-	options  OpenSearchOptions
-	paging   openSearchPagingMode
+	threshold int
+	searcher  *opensearch.Searcher
+	options   OpenSearchOptions
+	paging    openSearchPagingMode
 }
 
 // PagingModes reports both caller-facing strategies. Offset is served by
@@ -194,7 +198,7 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 			return
 		}
 		var timeFieldMapping *esdsl.TimeFieldMapping
-		if runtime.options.Search != nil {
+		if req.Search == nil && runtime.options.Search != nil {
 			timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
 				Searcher: runtime.searcher, Index: runtime.options.Index, Search: *runtime.options.Search,
 				Params: openSearchParamBindings(req), Inspection: req.Inspection,
@@ -208,12 +212,16 @@ func (p opensearchProvider) Pages(ctx context.Context, req query.ProviderRequest
 			searcher:    runtime.searcher,
 			index:       runtime.options.Index,
 			paging:      runtime.paging,
+			threshold:   runtime.threshold,
 			diagnostics: req.Diagnostics,
 			build: func(position openSearchPage) (openSearchRequest, error) {
 				return buildOpenSearchRequest(req, runtime.options, position, timeFieldMapping)
 			},
-			mapRows: func(raw opensearch.Response) []query.Row {
-				return logResultToRows(runtime.searcher.ParseResponse(ctx, raw))
+			mapRows: func(raw opensearch.Response) ([]query.Row, error) {
+				if req.RawRows || req.Search != nil {
+					return attachSpanLayout(openSearchRows(raw), runtime.options.Layout)
+				}
+				return attachSpanLayout(logResultToRows(runtime.searcher.ParseResponse(ctx, raw)), runtime.options.Layout)
 			},
 		}
 		walk.run(ctx, req, page, yield)
@@ -300,8 +308,8 @@ func (p opensearchProvider) Stream(ctx context.Context, req query.ProviderReques
 			applyOpenSearchTailBound(built.body, boundField, boundValue)
 			return built, nil
 		},
-		mapRows: func(raw opensearch.Response) []query.Row {
-			return logResultToRows(runtime.searcher.ParseResponse(ctx, raw))
+		mapRows: func(raw opensearch.Response) ([]query.Row, error) {
+			return logResultToRows(runtime.searcher.ParseResponse(ctx, raw)), nil
 		},
 	}
 	return walk.tail(ctx, tailReq, settings, emit)
@@ -318,7 +326,8 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 		return openSearchRuntime{}, err
 	}
 	backend := opensearch.Backend{Address: address}
-	paging := openSearchPagingScroll
+	var pagingConnection *models.Connection
+	configuredLayout := ""
 	var transport http.RoundTripper
 	if req.Connection != "" {
 		conn, err := ctx.HydrateConnectionByURL(req.Connection)
@@ -328,10 +337,11 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 		if conn == nil {
 			return openSearchRuntime{}, fmt.Errorf("connection[%s] not found", req.Connection)
 		}
-		paging, err = resolveOpenSearchPagingMode(conn)
-		if err != nil {
-			return openSearchRuntime{}, fmt.Errorf("connection[%s]: %w", req.Connection, err)
+		pagingConnection = conn
+		if opts.Index == "" {
+			opts.Index = conn.Properties["index"]
 		}
+		configuredLayout = conn.Properties["span_layout"]
 		if backend.Address == "" {
 			backend.Address = conn.URL
 		}
@@ -350,18 +360,26 @@ func openSearchClient(ctx context.Context, req query.ProviderRequest) (openSearc
 	// A debug run watches the wire as well as the body: which URL the search
 	// went to and which headers the connection put on it are half of "where did
 	// these rows come from", and neither is anywhere in the profile.
+	policy, err := resolveOpenSearchPagingPolicy(pagingConnection, opts.OpenSearchPagingOptions)
+	if err != nil {
+		return openSearchRuntime{}, err
+	}
 	searcher, err := opensearch.NewWithTransport(ctx, backend, nil, req.Diagnostics.HTTPTransport(transport))
 	if err != nil {
 		return openSearchRuntime{}, err
 	}
-	return openSearchRuntime{searcher: searcher, options: opts, paging: paging}, nil
+	opts.Layout, err = resolveSpanLayout(ctx, searcher, opts.Index, req, configuredLayout)
+	if err != nil {
+		return openSearchRuntime{}, err
+	}
+	return openSearchRuntime{searcher: searcher, options: opts, paging: policy.mode, threshold: policy.threshold}, nil
 }
 
 func openSearchClientForConnection(ctx context.Context, conn *models.Connection) (openSearchRuntime, error) {
 	if conn == nil || conn.URL == "" {
 		return openSearchRuntime{}, fmt.Errorf("OpenSearch connection URL is required")
 	}
-	paging, err := resolveOpenSearchPagingMode(conn)
+	policy, err := resolveOpenSearchPagingPolicy(conn, OpenSearchPagingOptions{})
 	if err != nil {
 		return openSearchRuntime{}, err
 	}
@@ -376,7 +394,7 @@ func openSearchClientForConnection(ctx context.Context, conn *models.Connection)
 	if err != nil {
 		return openSearchRuntime{}, err
 	}
-	return openSearchRuntime{searcher: searcher, paging: paging}, nil
+	return openSearchRuntime{searcher: searcher, paging: policy.mode, threshold: policy.threshold}, nil
 }
 
 func resolveOpenSearchPagingMode(conn *models.Connection) (openSearchPagingMode, error) {

@@ -131,6 +131,15 @@ func (s TopSpec) DurationLimit() time.Duration {
 	return s.MaxDuration.Duration
 }
 
+// profileError is err in the context of p, by its name; an unnamed profile,
+// built in place by a caller that names its own source, leaves err as is.
+func profileError(p Profile, err error) error {
+	if p.Name == "" {
+		return err
+	}
+	return fmt.Errorf("profile %q: %w", p.Name, err)
+}
+
 // Kind derives the Profile's execution kind from its Trace/Top blocks.
 func (p Profile) Kind() ProfileKind {
 	switch {
@@ -156,6 +165,24 @@ func (p Profile) ValidateKind() error {
 // happens at execution — by then the profile is already stored, and the author
 // who introduced the conflict is long gone.
 func (p Profile) ValidateQuerySource() error {
+	if err := p.validateQueryFile(); err != nil {
+		return err
+	}
+	if p.Search != nil {
+		if p.Provider.Type != "opensearch" && p.Provider.Type != "opentelemetry" {
+			return fmt.Errorf("canonical search requires an OpenSearch or OpenTelemetry provider")
+		}
+		if strings.TrimSpace(p.Query) != "" || p.Provider.Options["search"] != nil {
+			return fmt.Errorf("canonical search cannot be combined with a native query or provider.options.search")
+		}
+		if p.Search.TimeFieldFormat != "" {
+			return fmt.Errorf("canonical timestamps use RFC3339; source units belong to the connection layout")
+		}
+		if err := p.Spans.ValidateReversible(); err != nil {
+			return err
+		}
+		return p.Search.Validate()
+	}
 	if strings.TrimSpace(p.Query) == "" || p.Provider.Options["search"] == nil {
 		return nil
 	}
@@ -165,6 +192,14 @@ func (p Profile) ValidateQuerySource() error {
 
 // Validate rejects invalid execution and column presentation metadata.
 func (p Profile) Validate() error {
+	if p.RenderMode() == RenderTraces {
+		if err := ValidateSpanOptions(p.Provider.Options); err != nil {
+			return err
+		}
+	}
+	if err := p.Spans.Validate(); err != nil {
+		return profileError(p, err)
+	}
 	if err := p.ValidateKind(); err != nil {
 		return err
 	}
@@ -177,10 +212,10 @@ func (p Profile) Validate() error {
 		return err
 	}
 	if err := p.Limits.Validate(); err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	if err := p.Order.Validate(); err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	for index, processor := range p.Processors {
 		if _, err := processor.Resolve(); err != nil {
@@ -194,16 +229,16 @@ func (p Profile) Validate() error {
 	}
 	for index, filter := range p.Filters {
 		if err := filter.validate(index); err != nil {
-			return fmt.Errorf("profile %q: %w", p.Name, err)
+			return profileError(p, err)
 		}
 	}
 	bindings, err := p.ColumnFilterBindings()
 	if err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	runtimeBindings, err := p.RuntimeFilterBindings()
 	if err != nil {
-		return fmt.Errorf("profile %q: %w", p.Name, err)
+		return profileError(p, err)
 	}
 	bindings = append(bindings, runtimeBindings...)
 	params := make(map[string]bool, len(p.Params))

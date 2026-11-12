@@ -1,6 +1,7 @@
 package query
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/flanksource/clicky/api"
 	"github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/query/esdsl"
 )
 
 // Row is a single result record keyed by column name. It is a type alias for
@@ -61,6 +63,11 @@ type Result struct {
 	// applying a cap of its own. It travels with the Result so a partial answer
 	// is never mistaken for a complete one.
 	Truncated bool `json:"truncated,omitempty" yaml:"truncated,omitempty"`
+
+	// Batches are what each batch of a SQL program returned, in order, when the
+	// query ran as a program rather than as a pageable query (see BatchResult).
+	// Rows then holds the last result set with columns.
+	Batches []BatchResult `json:"batches,omitempty" yaml:"batches,omitempty"`
 }
 
 // Execute runs a Profile end-to-end: resolve the supplied params, render the
@@ -92,7 +99,7 @@ func Execute(ctx context.Context, p Profile, params ...map[string]any) (*Result,
 	}
 	resolved, filters, err := resolveProfileInput(p, supplied, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	return executeResolved(ctx, p, resolved, filters)
 }
@@ -106,30 +113,31 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	if err != nil {
 		return nil, err
 	}
-	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
+	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Search: p.Search, Spans: p.Spans, Defs: p.Params, Resolved: resolved})
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
+	req.RawRows = p.RenderMode() == RenderTraces
 	req.Filters = filters
 	req.Labels = p.Labels
 	req.MetricMetadata = &MetricMetadata{}
 	req.Order, err = p.EffectiveOrder()
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	req.Diagnostics = DiagnosticSink(ctx)
 	ctx, req, operation, err := prepareConnectionOperation(ctx, req)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 
-	rows, truncated, err := drainPages(ctx, p, req)
-	operation.Finish(len(rows), err)
+	drained, err := drainPages(ctx, p, req)
+	operation.Finish(len(drained.Rows), err)
 	if err != nil {
 		return nil, err
 	}
 
-	result := &Result{Profile: p.Name, Rows: rows, Truncated: truncated}
+	result := &Result{Profile: p.Name, Rows: drained.Rows, Truncated: drained.Truncated, Batches: drained.Batches}
 	if len(req.MetricMetadata.Sources) > 0 || len(req.MetricMetadata.Notices) > 0 {
 		result.Metrics = req.MetricMetadata
 	}
@@ -147,11 +155,11 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 
 	result, err = applyProcessors(ctx, p.Processors, result)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	result.Rows, result.Styles, err = applyRowTransforms(ctx, p, result.Rows)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	if p.Top != nil {
 		var cut bool
@@ -160,11 +168,11 @@ func executeResolved(ctx context.Context, p Profile, resolved map[string]any, fi
 	}
 	result.ColumnFilterKeys, err = p.ColumnFilterKeys()
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	result.ColumnSortKeys, err = p.ColumnSortKeys()
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	return result, nil
 }
@@ -194,29 +202,38 @@ func sortAndLimit(rows []Row, sortBy string, limit int) ([]Row, bool) {
 // invisible — a backend default quietly limiting a read is otherwise
 // indistinguishable from a small table, which is how "read everything" came to
 // mean "read the first 500 and say nothing".
-func drainPages(ctx context.Context, p Profile, req ProviderRequest) ([]Row, bool, error) {
+func drainPages(ctx context.Context, p Profile, req ProviderRequest) (drainedPages, error) {
 	maxRows := p.RowLimits().MaxExportRows
 	batch := walkBatchSize
 	if maxRows > 0 && maxRows < batch {
 		batch = maxRows
 	}
 	walk := walkRequest(p, batch)
+	walk.Ceiling = maxRows
 
-	var rows []Row
-	var truncated bool
+	var drained drainedPages
 	for page, err := range providerPages(ctx, p, req, walk) {
 		if err != nil {
-			return nil, false, err
+			return drainedPages{}, err
 		}
-		truncated = truncated || page.Truncated
-		rows = append(rows, page.Rows...)
-		if maxRows > 0 && len(rows) >= maxRows {
-			truncated = truncated || len(rows) > maxRows || page.HasMore
-			rows = rows[:maxRows]
+		drained.Truncated = drained.Truncated || page.Truncated
+		drained.Rows = append(drained.Rows, page.Rows...)
+		drained.Batches = append(drained.Batches, page.Batches...)
+		if maxRows > 0 && len(drained.Rows) >= maxRows {
+			drained.Truncated = drained.Truncated || len(drained.Rows) > maxRows || page.HasMore
+			drained.Rows = drained.Rows[:maxRows]
 			break
 		}
 	}
-	return rows, truncated, nil
+	return drained, nil
+}
+
+// drainedPages is everything a full walk read: the rows, whether the walk
+// stopped short of the source, and the batches of a SQL program.
+type drainedPages struct {
+	Rows      []Row
+	Truncated bool
+	Batches   []BatchResult
 }
 
 // compareRowValues orders numbers numerically and everything else by its
@@ -283,6 +300,8 @@ func executeSubQuery(ctx context.Context, sub SubQuery, defs []ParamDef, params 
 // values separately from their query text. Callers set Filters, Order and
 // Position on the result.
 type providerRequestInput struct {
+	Search   *esdsl.Search
+	Spans    SpanMappings
 	Provider Provider
 	Config   ProviderConfig
 	Query    string
@@ -297,6 +316,29 @@ func buildProviderRequest(ctx context.Context, in providerRequestInput) (Provide
 		return ProviderRequest{}, err
 	}
 	template := newParamTemplate(ctx, templateParams)
+	var logical *esdsl.Search
+	if in.Search != nil {
+		encoded, err := json.Marshal(in.Search)
+		if err != nil {
+			return ProviderRequest{}, err
+		}
+		var searchOptions map[string]any
+		if err := json.Unmarshal(encoded, &searchOptions); err != nil {
+			return ProviderRequest{}, err
+		}
+		rendered, err := template.renderOptions(searchOptions)
+		if err != nil {
+			return ProviderRequest{}, err
+		}
+		encoded, err = json.Marshal(rendered)
+		if err != nil {
+			return ProviderRequest{}, err
+		}
+		logical = &esdsl.Search{}
+		if err := json.Unmarshal(encoded, logical); err != nil {
+			return ProviderRequest{}, err
+		}
+	}
 	options, err := template.renderOptions(cfg.Options)
 	if err != nil {
 		return ProviderRequest{}, err
@@ -335,6 +377,8 @@ func buildProviderRequest(ctx context.Context, in providerRequestInput) (Provide
 		return ProviderRequest{}, err
 	}
 	return ProviderRequest{
+		Search:           logical,
+		Spans:            in.Spans,
 		Provider:         cfg.Type,
 		Connection:       connection,
 		Query:            queryText,

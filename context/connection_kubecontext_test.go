@@ -3,6 +3,8 @@ package context_test
 import (
 	gocontext "context"
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/flanksource/commons/logger"
 	. "github.com/onsi/ginkgo/v2"
@@ -35,7 +37,8 @@ var _ = Describe("hydrating a connection that names a kubeconfig context", func(
 		requested = nil
 		ctx = dbcontext.NewContext(gocontext.Background()).
 			WithLocalKubernetes(cluster("ambient")).
-			WithKubeContextClients(func(kubeContext string) (*dbkubernetes.Client, error) {
+			WithKubeContextClients(func(options dbkubernetes.Options) (*dbkubernetes.Client, error) {
+				kubeContext := options.Kubecontext
 				requested = append(requested, kubeContext)
 				if client, ok := clusters[kubeContext]; ok {
 					return client, nil
@@ -86,5 +89,30 @@ var _ = Describe("hydrating a connection that names a kubeconfig context", func(
 		hydrated, err := dbcontext.HydrateConnection(ctx.Wrap(gocontext.Background()), connection("production"))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(hydrated.Password).To(Equal("production-password"))
+	})
+	It("passes the kubeconfig file through hydration and invalidation", func() {
+		selected := connection("staging")
+		selected.Properties[dbcontext.KubeconfigProperty] = "/configs/target.yaml"
+		ctx = ctx.WithKubeContextClients(func(options dbkubernetes.Options) (*dbkubernetes.Client, error) {
+			Expect(options).To(Equal(dbkubernetes.Options{Kubeconfig: "/configs/target.yaml", Kubecontext: "staging"}))
+			return clusters["staging"], nil
+		})
+		hydrated, err := dbcontext.HydrateConnection(ctx, selected)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(hydrated.Password).To(Equal("staging-password"))
+		Expect(dbcontext.InvalidateConnectionSecrets(ctx, selected)).To(Succeed())
+	})
+	It("passes static certificate content without treating it as a file path", func() {
+		file := filepath.Join(GinkgoT().TempDir(), "config")
+		Expect(os.WriteFile(file, []byte("not certificate content"), 0600)).To(Succeed())
+		selected := connection("staging")
+		selected.Type = models.ConnectionTypeKubernetes
+		selected.Certificate = file
+		ctx = ctx.WithKubeContextClients(func(options dbkubernetes.Options) (*dbkubernetes.Client, error) {
+			Expect(options).To(Equal(dbkubernetes.Options{Config: []byte(file), Kubecontext: "staging"}))
+			return clusters["staging"], nil
+		})
+		_, err := ctx.WithConnectionKubernetes(selected)
+		Expect(err).NotTo(HaveOccurred())
 	})
 })

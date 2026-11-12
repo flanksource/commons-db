@@ -61,6 +61,9 @@ type BatchEntry struct {
 // kinds as the producer declares them, which the store reconciles additively
 // with the kinds it holds; a kind without one is resolved as for any append.
 type Batch struct {
+	// Atomic rolls back all entries when any entry is refused. Failed atomic
+	// batches leave no ledger outcome and may be retried with the same ID.
+	Atomic   bool         `json:"atomic,omitempty"`
 	ID       string       `json:"id"`
 	Producer Producer     `json:"producer"`
 	Schemas  []KindSchema `json:"-"`

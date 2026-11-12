@@ -6,7 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/flanksource/gomplate/v3/funcs" //nolint:staticcheck // SA1019: gomplate has no other export of ParseDateTime
+	//nolint:staticcheck // SA1019: gomplate has no other export of ParseDateTime
+	"github.com/flanksource/gomplate/v4/funcs"
 	"github.com/timberio/go-datemath"
 )
 

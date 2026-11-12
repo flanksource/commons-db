@@ -13,26 +13,35 @@ import (
 // Repository (redacted) and Ref identify the fetch; the last update of every
 // fetch has Done set, with Err when it failed.
 type FetchProgress struct {
+	ID         string
 	Repository string
 	Ref        string
+	// Mirror is the cache key of the shared mirror the fetch writes into when
+	// another repository owns it, and MirrorRepository that owner's recorded
+	// repository (empty when unrecorded). Both are empty for the repository's
+	// own mirror and for a clone.
+	Mirror           string
+	MirrorRepository string
 	// Phase is git's phase label: "Enumerating objects", "Counting objects",
 	// "Compressing objects" (Remote, on the server), "Receiving objects",
 	// "Resolving deltas".
-	Phase       string
-	Remote      bool
-	Percent     int
-	Current     int64
-	Total       int64 // 0 when git reports no bound
-	Transferred string
-	Rate        string
-	PhaseDone   bool
-	Done        bool
-	Err         error
+	Phase          string
+	Remote         bool
+	Percent        int
+	Current        int64
+	Total          int64 // 0 when git reports no bound
+	Transferred    string
+	Rate           string
+	Bytes          int64
+	BytesPerSecond float64
+	PhaseDone      bool
+	Done           bool
+	Err            error
 }
 
 // FetchObserver receives every FetchProgress of the fetches made under a
 // context. Fetches of different repositories may report concurrently.
-type FetchObserver func(FetchProgress)
+type FetchObserver func(context.Context, FetchProgress)
 
 type fetchObserverKey struct{}
 
