@@ -34,12 +34,12 @@ type document struct {
 	Key     text.SensitiveString `json:"key"`
 }
 
-var ErrMissing = errors.New("Keychain KEK missing; run gavel connections kek init interactively on the database host")
+var ErrMissing = errors.New("keychain KEK missing; run gavel connections kek init interactively on the database host")
 
 // Open loads the existing key or initializes a missing one after confirmation.
 func Open(ctx context.Context, options Options) (*secrets.Keeper, string, error) {
 	if options.Service == "" || options.Account == "" {
-		return nil, "", fmt.Errorf("Keychain service and account are required")
+		return nil, "", fmt.Errorf("keychain service and account are required")
 	}
 	raw, err := read(options)
 	if errors.Is(err, keyring.ErrNotFound) {

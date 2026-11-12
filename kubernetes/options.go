@@ -46,7 +46,7 @@ func (o Options) Namespace() (string, error) {
 	}
 	ns, _, err := client.Namespace()
 	if err != nil {
-		return "", fmt.Errorf("Kubernetes namespace: %w", err)
+		return "", fmt.Errorf("resolve kubernetes namespace: %w", err)
 	}
 	return ns, nil
 }
