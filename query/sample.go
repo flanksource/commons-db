@@ -76,17 +76,17 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	}
 	input, err := sampleInput(options.Params, options.Filters)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	filterProfile := sampleFilterProfile(p, options.FilterColumns)
 	resolved, filters, err := resolveProfileInput(filterProfile, input, time.Now())
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	provider, providerErr := GetProvider(p.Provider.Type)
 	req, err := buildProviderRequest(ctx, providerRequestInput{Provider: provider, Config: p.Provider, Query: p.Query, Defs: p.Params, Resolved: resolved})
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	req.Filters = filters
 	req.Labels = p.Labels
@@ -94,7 +94,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	// proven read-only — a templated options.method would otherwise slip a
 	// non-GET request past the check.
 	if err := validateSampleReadOnly(p.Provider.Type, req.Query, req.Options); err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	if providerErr != nil {
 		return nil, providerErr
@@ -128,7 +128,7 @@ func Sample(ctx context.Context, p Profile, options SampleOptions) (*SampleResul
 	rawColumns := mergeInspectionColumns(InferSampleColumns(rows), options.InspectionColumns)
 	processorPreview, rows, err := mapSampleRows(ctx, p, rows, options.PreviewProcessors)
 	if err != nil {
-		return nil, fmt.Errorf("profile %q: %w", p.Name, err)
+		return nil, profileError(p, err)
 	}
 	columns, inspectionStatus, err := inspectColumns(ctx, columnInspectionOptions{
 		Profile: p, Request: req, RawColumns: rawColumns,

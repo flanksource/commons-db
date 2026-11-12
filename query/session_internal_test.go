@@ -259,7 +259,7 @@ var _ = Describe("SessionRegistry", func() {
 			return func() { releases++ }, nil
 		}})
 
-		release, err := r.prepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
+		release, err := r.PrepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
 		Expect(err).ToNot(HaveOccurred())
 		release()
 		release()
@@ -272,7 +272,7 @@ var _ = Describe("SessionRegistry", func() {
 			return func() { releases++ }, errors.New("index unavailable")
 		}})
 
-		release, err := r.prepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
+		release, err := r.PrepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
 		Expect(errors.Is(err, ErrPrepareRead)).To(BeTrue(), "%v", err)
 		release()
 		Expect(releases).To(Equal(1))
@@ -283,7 +283,7 @@ var _ = Describe("SessionRegistry", func() {
 			return nil, nil
 		}})
 
-		release, err := r.prepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
+		release, err := r.PrepareRead(stdcontext.Background(), Profile{Name: "prepared"}, nil)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(release).ToNot(BeNil())
 		Expect(release).ToNot(Panic())

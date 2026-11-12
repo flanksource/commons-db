@@ -8,8 +8,8 @@ require (
 	github.com/apache/arrow-go/v18 v18.5.2
 	// Kept in lockstep with the root module's clicky pin (see ../go.mod):
 	// a workspace build resolves one clicky for every module.
-	github.com/flanksource/clicky v1.21.90
-	github.com/flanksource/clicky/valkey v1.21.89
+	github.com/flanksource/clicky v1.21.93
+	github.com/flanksource/clicky/valkey v1.21.93
 	github.com/flanksource/commons v1.63.0
 	github.com/flanksource/commons-db v0.1.71
 	github.com/gofrs/flock v0.13.0
@@ -124,7 +124,7 @@ require (
 	github.com/exaring/otelpgx v0.11.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
-	github.com/flanksource/gomplate/v3 v3.24.90 // indirect
+	github.com/flanksource/gomplate/v3 v3.24.91 // indirect
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sqlglot-go v1.1.1 // indirect
