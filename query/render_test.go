@@ -416,6 +416,14 @@ var _ = Describe("Result.Render", func() {
 		Entry("with zero rows", []query.Row{}),
 	)
 
+	It("lists a declared column the presenter does not present as default-hidden, and serves no Hidden one", func() {
+		presented := &query.Result{Rows: []query.Row{{"sessionId": 53, "clientHost": "azure-app-1", "program": "sqlcmd", "stream_id": "run-1"}}, Presenter: hostPresenter{}}
+
+		out, err := presented.Render([]query.ColumnDef{{Name: "sessionId"}, {Name: "clientHost"}, {Name: "program"}, {Name: "stream_id", Hidden: true}}, "clicky-json")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(clickyColumnFlags(out)).To(Equal(map[string]any{"sessionId": "absent", "clientHost": true, "program": true}))
+	})
+
 	It("presents a reflected integer read back as a float64 without decimals, and a time cell as its zoned instant", func() {
 		type capturedEvent struct {
 			At        time.Time `json:"at" pretty:"kind=timestamp"`

@@ -167,7 +167,7 @@ func mergePresentedColumns(presented, declared []api.ColumnDef) []api.ColumnDef 
 		delete(byName, column.Name)
 	}
 	for _, column := range declared {
-		if _, exists := byName[column.Name]; exists {
+		if _, exists := byName[column.Name]; exists && !column.Hidden {
 			column.DefaultHidden = true
 			out = append(out, column)
 		}
