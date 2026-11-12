@@ -12,6 +12,7 @@ package recordresults
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"reflect"
 	"regexp"
@@ -376,7 +377,14 @@ func newTypedRowPresenter[T any]() (query.RowPresenter, error) {
 	if !ok {
 		return nil, fmt.Errorf("%s declares TableProvider but cannot be instantiated", typeOfT)
 	}
-	columns := append([]api.ColumnDef{api.Column(seqColumn).Label("Seq").Build()}, provider.Columns()...)
+	declared, err := query.ColumnsFor(typeOfT)
+	if err != nil {
+		return nil, err
+	}
+	if err := query.ValidateTableColumns(provider.Columns(), declared); err != nil {
+		return nil, err
+	}
+	columns := append([]api.ColumnDef{api.Column(seqColumn).Label("Seq").DefaultHidden().Build()}, provider.Columns()...)
 	return typedRowPresenter[T]{columns: columns}, nil
 }
 
@@ -398,12 +406,34 @@ func (typedRowPresenter[T]) Present(row query.Row) (map[string]any, error) {
 	if !ok {
 		return nil, fmt.Errorf("decoded %s does not implement TableProvider", reflect.TypeFor[T]())
 	}
-	presented := provider.Row()
-	if presented == nil {
+	values := provider.Row()
+	if values == nil {
 		return nil, fmt.Errorf("%s TableProvider returned a nil row", reflect.TypeFor[T]())
+	}
+	presented := maps.Clone(map[string]any(row))
+	for key, value := range values {
+		presented[key] = value
 	}
 	presented[seqColumn] = row[seqColumn]
 	return presented, nil
+}
+
+func (typedRowPresenter[T]) Detail(row query.Row) (api.Textable, error) {
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		return nil, err
+	}
+	var value T
+	if err := json.Unmarshal(encoded, &value); err != nil {
+		return nil, err
+	}
+	if provider, ok := any(value).(api.DetailProvider); ok {
+		return provider.RowDetail(), nil
+	}
+	if provider, ok := any(&value).(api.DetailProvider); ok {
+		return provider.RowDetail(), nil
+	}
+	return nil, nil
 }
 
 func markTimeColumn(columns []query.ColumnDef, name string) error {
