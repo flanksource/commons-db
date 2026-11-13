@@ -6,8 +6,8 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/andybalholm/brotli v1.2.0
 	github.com/elazarl/goproxy v1.7.2
-	github.com/flanksource/clicky v1.21.95-0.20261112060413-ae2c0bb79614
-	github.com/flanksource/commons v1.64.1
+	github.com/flanksource/clicky v1.21.95
+	github.com/flanksource/commons v1.64.2
 	github.com/flanksource/commons-db v0.1.72
 	github.com/flanksource/commons-db/recordstore v0.1.72
 	github.com/flanksource/sqlglot-go v1.1.1
@@ -130,7 +130,7 @@ require (
 	github.com/exaring/otelpgx v0.11.1 // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
-	github.com/flanksource/gomplate/v4 v4.0.0-20261111091247-6aab4d0463bd // indirect
+	github.com/flanksource/gomplate/v4 v4.0.2 // indirect
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
