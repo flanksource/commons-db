@@ -11,7 +11,7 @@ require (
 	github.com/flanksource/clicky v1.21.95
 	github.com/flanksource/clicky/valkey v1.21.94
 	github.com/flanksource/commons v1.64.2
-	github.com/flanksource/commons-db v0.1.72
+	github.com/flanksource/commons-db v0.1.73
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.7
