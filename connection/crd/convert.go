@@ -3,6 +3,7 @@ package crd
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"reflect"
 	"strconv"
 	"strings"
@@ -31,6 +32,7 @@ func ToModel(obj *Connection) (models.Connection, error) {
 		Password:    obj.Spec.Password.String(),
 		Certificate: obj.Spec.Certificate.String(),
 		InsecureTLS: obj.Spec.InsecureTLS,
+		Secrets:     maps.Clone(obj.Spec.Secrets),
 	}
 
 	if obj.GetUID() != "" {

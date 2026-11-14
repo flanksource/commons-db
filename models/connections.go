@@ -5,12 +5,14 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"maps"
 	"math/rand"
 	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -92,24 +94,28 @@ var passwordRegexp = regexp.MustCompile(`password=([^;]*)`)
 var _ types.ResourceSelectable = (*Connection)(nil)
 
 type Connection struct {
-	ID          uuid.UUID           `gorm:"primaryKey;unique_index;not null;column:id;default:generate_ulid()" json:"id" faker:"uuid_hyphenated"  `
-	Name        string              `gorm:"column:name" json:"name" faker:"name"  `
-	Namespace   string              `gorm:"column:namespace" json:"namespace"`
-	Source      string              `json:"source"`
-	Layer       string              `gorm:"-" json:"layer,omitempty" faker:"-"`
-	Type        string              `gorm:"column:type" json:"type" faker:"oneof:  postgres, mysql, aws, gcp, http" `
-	URL         string              `gorm:"column:url" json:"url,omitempty" faker:"url" template:"true"`
-	Username    string              `gorm:"column:username" json:"username,omitempty" faker:"username"  `
-	Password    string              `gorm:"column:password" json:"password,omitempty" faker:"password"  `
-	Properties  types.JSONStringMap `gorm:"column:properties" json:"properties,omitempty" faker:"-" template:"true"`
-	Certificate string              `gorm:"column:certificate" json:"certificate,omitempty" faker:"-"  `
-	InsecureTLS bool                `gorm:"column:insecure_tls;default:false" json:"insecure_tls,omitempty" faker:"-"  `
-	CreatedAt   time.Time           `gorm:"column:created_at;default:now();<-:create" json:"created_at,omitempty" faker:"-"  `
-	UpdatedAt   time.Time           `gorm:"column:updated_at;default:now()" json:"updated_at,omitempty" faker:"-"  `
-	CreatedBy   *uuid.UUID          `gorm:"column:created_by" json:"created_by,omitempty" faker:"-"  `
-	Virtual     bool                `gorm:"-" json:"virtual,omitempty" faker:"-"`
-	ReadOnly    bool                `gorm:"-" json:"read_only,omitempty" faker:"-"`
-	ExpiresAt   *time.Time          `gorm:"-" json:"expires_at,omitempty" faker:"-"`
+	ID         uuid.UUID           `gorm:"primaryKey;unique_index;not null;column:id;default:generate_ulid()" json:"id" faker:"uuid_hyphenated"  `
+	Name       string              `gorm:"column:name" json:"name" faker:"name"  `
+	Namespace  string              `gorm:"column:namespace" json:"namespace"`
+	Source     string              `json:"source"`
+	Layer      string              `gorm:"-" json:"layer,omitempty" faker:"-"`
+	Type       string              `gorm:"column:type" json:"type" faker:"oneof:  postgres, mysql, aws, gcp, http" `
+	URL        string              `gorm:"column:url" json:"url,omitempty" faker:"url" template:"true"`
+	Username   string              `gorm:"column:username" json:"username,omitempty" faker:"username"  `
+	Password   string              `gorm:"column:password" json:"password,omitempty" faker:"password"  `
+	Properties types.JSONStringMap `gorm:"column:properties" json:"properties,omitempty" faker:"-" template:"true"`
+	// Secrets are further named credentials a consumer needs beside the
+	// password, such as a manager login and a signing key on one connection.
+	// HydrateConnection resolves each one in place; read them with Secret.
+	Secrets     types.EnvVarMap `gorm:"column:secrets" json:"secrets,omitempty" faker:"-"`
+	Certificate string          `gorm:"column:certificate" json:"certificate,omitempty" faker:"-"  `
+	InsecureTLS bool            `gorm:"column:insecure_tls;default:false" json:"insecure_tls,omitempty" faker:"-"  `
+	CreatedAt   time.Time       `gorm:"column:created_at;default:now();<-:create" json:"created_at,omitempty" faker:"-"  `
+	UpdatedAt   time.Time       `gorm:"column:updated_at;default:now()" json:"updated_at,omitempty" faker:"-"  `
+	CreatedBy   *uuid.UUID      `gorm:"column:created_by" json:"created_by,omitempty" faker:"-"  `
+	Virtual     bool            `gorm:"-" json:"virtual,omitempty" faker:"-"`
+	ReadOnly    bool            `gorm:"-" json:"read_only,omitempty" faker:"-"`
+	ExpiresAt   *time.Time      `gorm:"-" json:"expires_at,omitempty" faker:"-"`
 	// Warnings are problems loading the connection, such as a file that is not
 	// a valid Connection resource; a connection with warnings cannot be used.
 	Warnings []string `gorm:"-" json:"warnings,omitempty" faker:"-"`
@@ -153,6 +159,20 @@ func (c *Connection) SetProperty(key, value string) {
 	}
 
 	c.Properties[key] = value
+}
+
+// Secret is the hydrated value of the named secret. It fails for a name the
+// connection does not declare and for a secret that is still a reference,
+// i.e. on a connection HydrateConnection has not resolved.
+func (c *Connection) Secret(name string) (string, error) {
+	secret, ok := c.Secrets[name]
+	if !ok {
+		return "", fmt.Errorf("connection %q has no secret %q (declared: %s)", c.Name, name, strings.Join(slices.Sorted(maps.Keys(c.Secrets)), ", "))
+	}
+	if secret.ValueFrom != nil {
+		return "", fmt.Errorf("connection %q secret %q is not hydrated: %s", c.Name, name, secret.ValueFrom)
+	}
+	return secret.ValueStatic, nil
 }
 
 func (c Connection) TableName() string {
