@@ -49,6 +49,7 @@ type resolvedConnection struct {
 	Password    string            `json:"password,omitempty"`
 	Certificate string            `json:"certificate,omitempty"`
 	Properties  map[string]string `json:"properties,omitempty"`
+	Secrets     map[string]string `json:"secrets,omitempty"`
 }
 
 // testResult is the outcome returned by /connection/test.
@@ -133,13 +134,22 @@ func (h *connectionActionsHandler) mergeStoredDraftSecrets(draftID string, draft
 	if draft.Certificate == "" {
 		draft.Certificate = existing.Certificate
 	}
+	draft.Secrets = mergeBlankSecrets(existing.Secrets, draft.Secrets)
 	return nil
 }
 
 // maskedConnection returns the hydrated connection with secrets mid-masked so
 // resolved values are visible without exposing credentials.
 func maskedConnection(c *models.Connection) resolvedConnection {
+	var secrets map[string]string
+	if c.Secrets != nil {
+		secrets = make(map[string]string, len(c.Secrets))
+		for name, secret := range c.Secrets {
+			secrets[name] = MaskValue(secret.String())
+		}
+	}
 	return resolvedConnection{
+		Secrets:     secrets,
 		Type:        c.Type,
 		Namespace:   c.Namespace,
 		URL:         redactConnectionURL(c.URL),

@@ -84,6 +84,7 @@ func (h *connectionBrowserHandler) serveConnectionInfo(w http.ResponseWriter, r 
 func cloneConnection(source *models.Connection) *models.Connection {
 	clone := *source
 	clone.Properties = maps.Clone(source.Properties)
+	clone.Secrets = maps.Clone(source.Secrets)
 	return &clone
 }
 
@@ -96,7 +97,11 @@ func sanitizeConnectionError(err error, connections ...*models.Connection) strin
 		if connection == nil {
 			continue
 		}
-		for _, secret := range []string{connection.Password, connection.Certificate} {
+		secrets := []string{connection.Password, connection.Certificate}
+		for _, secret := range connection.Secrets {
+			secrets = append(secrets, secret.ValueStatic)
+		}
+		for _, secret := range secrets {
 			if strings.TrimSpace(secret) != "" {
 				message = strings.ReplaceAll(message, secret, "redacted")
 			}

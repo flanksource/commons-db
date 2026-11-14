@@ -25,7 +25,7 @@ var _ = Describe("database connection management", func() {
 		DeferCleanup(sqlDB.Close)
 		Expect(database.Exec(`CREATE TABLE connections (
    id TEXT PRIMARY KEY DEFAULT ('00000000-0000-4000-8000-' || lower(hex(randomblob(6)))), name TEXT, namespace TEXT, source TEXT, type TEXT,
-   url TEXT, username TEXT, password TEXT, properties TEXT, certificate TEXT,
+   url TEXT, username TEXT, password TEXT, properties TEXT, secrets TEXT, certificate TEXT,
    insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
   )`).Error).To(Succeed())
 		ctx := dbcontext.New().WithDB(database, nil)
