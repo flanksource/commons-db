@@ -17,13 +17,13 @@ func TestServiceTargetPortResolvesNumericAndNamedTargets(t *testing.T) {
 			{Port: 6432, TargetPort: intstr.FromString("postgres")},
 		}},
 	}
-	if got, err := serviceTargetPort(service, &pod, 5432); err != nil || got != 15432 {
+	if got, err := serviceTargetPort(service, &pod, "5432"); err != nil || got != 15432 {
 		t.Fatalf("numeric target = %d, %v", got, err)
 	}
-	if got, err := serviceTargetPort(service, &pod, 6432); err != nil || got != 15432 {
+	if got, err := serviceTargetPort(service, &pod, "6432"); err != nil || got != 15432 {
 		t.Fatalf("named target = %d, %v", got, err)
 	}
-	if _, err := serviceTargetPort(service, &pod, 9999); err == nil {
+	if _, err := serviceTargetPort(service, &pod, "9999"); err == nil {
 		t.Fatal("expected missing service port error")
 	}
 }
