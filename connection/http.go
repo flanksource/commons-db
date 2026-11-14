@@ -13,6 +13,7 @@ import (
 	"github.com/flanksource/commons/http/middlewares/oauth"
 	"github.com/labstack/echo/v4"
 
+	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
 )
@@ -225,6 +226,13 @@ type httpConnectionRoundTripper struct {
 
 func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.Response, error) {
 	conn := rt.HTTPConnection
+	proxy, err := dutyKubernetes.APIServerProxyFor(req.URL)
+	if err != nil {
+		return nil, err
+	}
+	if proxy != nil {
+		return conn.roundTripAPIServerProxy(proxy, req)
+	}
 	base := rt.Base
 	if !conn.TLS.IsEmpty() {
 		transport, ok := base.(*netHTTP.Transport)
@@ -288,6 +296,11 @@ func (t TLSConfig) TLSClientConfig() (*tls.Config, error) {
 
 // CreateHTTPClient requires a hydrated connection
 func CreateHTTPClient(ctx ConnectionContext, conn HTTPConnection) (*http.Client, error) {
+	if proxy, err := conn.apiServerProxy(); err != nil {
+		return nil, err
+	} else if proxy != nil {
+		return apiServerProxyClient(conn, proxy)
+	}
 	client := http.NewClient()
 	if !conn.HTTPBasicAuth.IsEmpty() {
 		client.Auth(conn.GetUsername(), conn.GetPassword())
