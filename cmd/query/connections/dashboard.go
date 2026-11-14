@@ -325,6 +325,7 @@ func AddConnectionsOpenAPI(spec *rpc.OpenAPISpec) {
 	}
 	addStorageOpenAPI(spec)
 	addKubernetesCatalogOpenAPI(spec)
+	addProxyOpenAPI(spec)
 	spec.Paths["/api/v1/connections/files"] = rpc.OpenAPIPath{"get": {
 		Tags: []string{"Connections"}, Summary: "Browse local file metadata (loopback only)", OperationID: "browseLocalFiles",
 		Parameters: []rpc.OpenAPIParameter{{Name: "path", In: "query", Schema: &rpc.OpenAPISchema{Type: "string"}}},
