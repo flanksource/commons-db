@@ -14,6 +14,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/types"
 )
 
 var (
@@ -279,6 +280,26 @@ func GetConnection(ctx Context, name, namespace string) (*models.Connection, err
 	return HydrateConnection(ctx, connection)
 }
 
+// hydrateConnectionSecrets resolves each named secret into a new map, so a
+// connection shared with a cache keeps its references.
+func hydrateConnectionSecrets(ctx Context, connection *models.Connection) (types.EnvVarMap, error) {
+	if connection.Secrets == nil {
+		return nil, nil
+	}
+	hydrated := make(types.EnvVarMap, len(connection.Secrets))
+	for name, secret := range connection.Secrets {
+		if secret.IsEmpty() {
+			return nil, fmt.Errorf("connection %q secret %q has no value or valueFrom", connection.Name, name)
+		}
+		value, err := GetEnvValueFromCache(ctx, secret, connection.Namespace)
+		if err != nil {
+			return nil, fmt.Errorf("connection %q secret %q: %w", connection.Name, name, err)
+		}
+		hydrated[name] = types.EnvVar{ValueStatic: value}
+	}
+	return hydrated, nil
+}
+
 // HydrateConnection resolves connection's references and templates in place.
 // A connection whose kubecontext property is set reads its secret://,
 // configmap://, helm:// and service URL references through that kubeconfig
@@ -321,6 +342,10 @@ func HydrateConnection(ctx Context, connection *models.Connection) (*models.Conn
 		} else {
 			connection.Properties[k] = v
 		}
+	}
+
+	if connection.Secrets, err = hydrateConnectionSecrets(ctx, connection); err != nil {
+		return nil, err
 	}
 
 	// Remove newlines and spaces around username,password & url
