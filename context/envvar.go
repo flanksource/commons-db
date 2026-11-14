@@ -336,6 +336,9 @@ func InvalidateConnectionSecrets(ctx Context, connection *models.Connection) err
 	for _, value := range connection.Properties {
 		values = append(values, value)
 	}
+	for _, secret := range connection.Secrets {
+		values = append(values, secret.String())
+	}
 	for _, value := range values {
 		var envvar types.EnvVar
 		if err := envvar.Scan(value); err != nil || envvar.ValueFrom == nil {
