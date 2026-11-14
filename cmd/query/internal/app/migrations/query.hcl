@@ -80,6 +80,10 @@ table "connections" {
     null = true
     type = jsonb
   }
+  column "secrets" {
+    null = true
+    type = jsonb
+  }
   column "certificate" {
     null = true
     type = text
