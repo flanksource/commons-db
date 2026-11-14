@@ -2,6 +2,7 @@ package context
 
 import (
 	"context"
+	"net/url"
 	"testing"
 
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
@@ -11,6 +12,7 @@ import (
 	"github.com/flanksource/gomplate/v4"
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +39,8 @@ var _ = ginkgo.Describe("parseServiceRef", func() {
 		{"svc://db:5432", want{ok: true, strategy: "svc", name: "db", port: "5432"}},
 		{"ip://db.prod:5432", want{ok: true, strategy: "ip", name: "db", ns: "prod", port: "5432"}},
 		{"proxy://app.prod:8080/PASJava", want{ok: true, strategy: "proxy", name: "app", ns: "prod", port: "8080", pth: "/PASJava"}},
+		{"proxy://orders.prod/x?kind=pod&port=http", want{ok: true, strategy: "proxy", name: "orders", ns: "prod", port: "http", pth: "/x", kind: "pod"}},
+		{"proxy://.prod:8080?kind=deployment&selector=app%3Dorders", want{ok: true, strategy: "proxy", ns: "prod", port: "8080", kind: "deployment", selector: "app=orders"}},
 		{"host://ingress.prod", want{ok: true, strategy: "host", name: "ingress", ns: "prod"}},
 		{"portforward://db.prod:5432", want{ok: true, strategy: "portforward", name: "db", ns: "prod", port: "5432"}},
 		{"portforward://db.prod:5432?kind=service", want{ok: true, strategy: "portforward", name: "db", ns: "prod", port: "5432", kind: "service"}},
@@ -69,8 +73,30 @@ var _ = ginkgo.Describe("parseServiceRef", func() {
 })
 
 var _ = ginkgo.Describe("expandServiceURL", func() {
+	ordersLabels := map[string]string{"app": "orders"}
+	ordersPod := func(name string, ready corev1.ConditionStatus) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod", Labels: ordersLabels},
+			Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Ports: []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}}}}},
+			Status: corev1.PodStatus{
+				Phase:      corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: ready}},
+			},
+		}
+	}
 	newCtx := func() Context {
 		clientset := fake.NewSimpleClientset(
+			ordersPod("orders-0", corev1.ConditionFalse),
+			ordersPod("orders-2", corev1.ConditionTrue),
+			ordersPod("orders-1", corev1.ConditionTrue),
+			&appsv1.StatefulSet{
+				ObjectMeta: metav1.ObjectMeta{Name: "orders", Namespace: "prod"},
+				Spec:       appsv1.StatefulSetSpec{Selector: &metav1.LabelSelector{MatchLabels: ordersLabels}},
+			},
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "idle", Namespace: "prod"},
+				Spec:       appsv1.DeploymentSpec{Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "idle"}}},
+			},
 			&corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{Name: "db", Namespace: "prod"},
 				Spec:       corev1.ServiceSpec{ClusterIP: "10.0.0.5"},
@@ -132,6 +158,51 @@ var _ = ginkgo.Describe("expandServiceURL", func() {
 		got, err := newCtx().expandServiceURL("proxy://app.prod:8080/PASJava", models.ConnectionTypeHTTP, "")
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got).To(Equal("https://api.k8s.local/api/v1/namespaces/prod/services/http:app:8080/proxy/PASJava"))
+	})
+
+	ginkgo.It("proxy:// with ?kind=service keeps the service-proxy URL", func() {
+		got, err := newCtx().expandServiceURL("proxy://app.prod:8080/PASJava?kind=service", models.ConnectionTypeHTTP, "")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(Equal("https://api.k8s.local/api/v1/namespaces/prod/services/http:app:8080/proxy/PASJava"))
+	})
+
+	ginkgo.It("proxy:// with ?kind=pod builds the pod-proxy URL with the named port resolved", func() {
+		got, err := newCtx().expandServiceURL("proxy://orders-1.prod/orders?kind=pod&port=http", models.ConnectionTypeHTTP, "")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(Equal("https://api.k8s.local/api/v1/namespaces/prod/pods/http:orders-1:8080/proxy/orders"))
+	})
+
+	ginkgo.It("proxy:// with a workload kind proxies to its first Ready pod and keeps other query params", func() {
+		got, err := newCtx().expandServiceURL("proxy://orders.prod:8080/orders?kind=statefulset&token=abc", models.ConnectionTypeHTTP, "")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(Equal("https://api.k8s.local/api/v1/namespaces/prod/pods/http:orders-1:8080/proxy/orders?token=abc"))
+	})
+
+	ginkgo.It("proxy:// with a selector proxies to a Ready pod it selects", func() {
+		got, err := newCtx().expandServiceURL("proxy://.prod:8080/?kind=deployment&selector=app%3Dorders", models.ConnectionTypeHTTP, "")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(Equal("https://api.k8s.local/api/v1/namespaces/prod/pods/http:orders-1:8080/proxy/"))
+	})
+
+	ginkgo.It("proxy:// registers the apiserver identity for the resolved URL", func() {
+		got, err := newCtx().expandServiceURL("proxy://orders-1.prod:8080/orders?kind=pod", models.ConnectionTypeHTTP, "")
+		Expect(err).ToNot(HaveOccurred())
+		u, err := url.Parse(got + "/health")
+		Expect(err).ToNot(HaveOccurred())
+		proxy, err := dutyKubernetes.APIServerProxyFor(u)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(proxy).ToNot(BeNil())
+		Expect(proxy.Config().Host).To(Equal("https://api.k8s.local"))
+	})
+
+	ginkgo.It("proxy:// fails naming the workload when no pod is Ready", func() {
+		_, err := newCtx().expandServiceURL("proxy://idle.prod:8080?kind=deployment", models.ConnectionTypeHTTP, "")
+		Expect(err).To(MatchError(ContainSubstring("deployment/idle in namespace prod")))
+	})
+
+	ginkgo.It("proxy:// rejects an unknown kind", func() {
+		_, err := newCtx().expandServiceURL("proxy://orders.prod:8080?kind=cronjob", models.ConnectionTypeHTTP, "")
+		Expect(err).To(MatchError(ContainSubstring(`kind "cronjob" is not one of`)))
 	})
 
 	ginkgo.It("proxy:// rejects non-HTTP connection types", func() {
