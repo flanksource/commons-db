@@ -61,7 +61,7 @@ var _ = Describe("OpenSearch trace browser integration", func() {
 		DeferCleanup(upstream.Close)
 		db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(db.Exec(`CREATE TABLE connections (id TEXT PRIMARY KEY, name TEXT, namespace TEXT, source TEXT, type TEXT, url TEXT, username TEXT, password TEXT, properties TEXT, certificate TEXT, insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT)`).Error).To(Succeed())
+		Expect(db.Exec(`CREATE TABLE connections (id TEXT PRIMARY KEY, name TEXT, namespace TEXT, source TEXT, type TEXT, url TEXT, username TEXT, password TEXT, properties TEXT, secrets TEXT, certificate TEXT, insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT)`).Error).To(Succeed())
 		connection := models.Connection{ID: uuid.New(), Name: "search", Type: models.ConnectionTypeOpenSearch, URL: upstream.URL}
 		Expect(db.Create(&connection).Error).To(Succeed())
 		handler := newConnectionBrowserHandler("/api/v1", dbcontext.NewContext(context.Background()).WithDB(db, nil), http.NotFoundHandler())

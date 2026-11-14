@@ -86,6 +86,11 @@ func (p Policy) check(connection *models.Connection) error {
 			return err
 		}
 	}
+	for name, secret := range connection.Secrets {
+		if err := checkSource(connection.Name, "secret "+name, secret.String(), p.SecretSources); err != nil {
+			return err
+		}
+	}
 	return checkSource(connection.Name, "url", connection.URL, p.URLSources)
 }
 

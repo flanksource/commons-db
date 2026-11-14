@@ -55,7 +55,7 @@ func openSQLiteConflictDB() *gorm.DB {
 func createReferencedConnectionTables(database *gorm.DB, onDelete string) {
 	Expect(database.Exec(`CREATE TABLE connections (
         id text PRIMARY KEY, name text NOT NULL UNIQUE, namespace text, source text, type text NOT NULL,
-        url text, username text, password text, properties jsonb, certificate text,
+        url text, username text, password text, properties jsonb, secrets jsonb, certificate text,
         insecure_tls boolean DEFAULT false, created_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP,
         updated_at timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP, created_by text
     )`).Error).To(Succeed())
