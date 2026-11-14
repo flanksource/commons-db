@@ -210,7 +210,7 @@ func TestExecHandlerPersistsOpenTelemetryMappingOnImportRoot(t *testing.T) {
 	}
 	if err := database.Exec(`CREATE TABLE connections (
 id TEXT PRIMARY KEY, name TEXT, namespace TEXT, source TEXT, type TEXT,
-url TEXT, username TEXT, password TEXT, properties TEXT, certificate TEXT,
+url TEXT, username TEXT, password TEXT, properties TEXT, secrets TEXT, certificate TEXT,
 insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
 )`).Error; err != nil {
 		t.Fatal(err)

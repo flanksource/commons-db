@@ -8,6 +8,7 @@ import (
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
+	"github.com/flanksource/commons-db/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -21,7 +22,10 @@ func TestMigrateSchemaAndProfileStore(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, gdb.Exec(string(pgulidSQL)).Error)
 	require.NoError(t, gdb.AutoMigrate(&models.Connection{}), "create the pre-HCL GORM schema")
-	require.NoError(t, gdb.Create(&models.Connection{Name: "existing", Type: models.ConnectionTypePostgres}).Error)
+	secrets := types.EnvVarMap{"jwt": {ValueFrom: &types.EnvVarSource{SecretKeyRef: &types.SecretKeySelector{
+		LocalObjectReference: types.LocalObjectReference{Name: "tomcat"}, Key: "jwt",
+	}}}}
+	require.NoError(t, gdb.Create(&models.Connection{Name: "existing", Type: models.ConnectionTypePostgres, Secrets: secrets}).Error)
 	require.NoError(t, gdb.Exec("CREATE TABLE migration_api_unmanaged (id integer PRIMARY KEY)").Error)
 	require.NoError(t, migrateSchema(t.Context(), dsn))
 	require.NoError(t, migrateSchema(t.Context(), dsn), "migration must be idempotent")
@@ -37,6 +41,7 @@ func TestMigrateSchemaAndProfileStore(t *testing.T) {
 	var existing models.Connection
 	require.NoError(t, gdb.Where("name = ?", "existing").First(&existing).Error)
 	require.Equal(t, models.ConnectionTypePostgres, existing.Type)
+	require.Equal(t, secrets, existing.Secrets, "named secrets survive the jsonb column")
 	require.NoError(t, gdb.Create(&models.AppProperty{Name: "query.page-size", Value: "100"}).Error)
 	var property models.AppProperty
 	require.NoError(t, gdb.First(&property, "name = ?", "query.page-size").Error)
