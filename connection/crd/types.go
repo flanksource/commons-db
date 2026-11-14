@@ -325,6 +325,9 @@ type ConnectionOpenSearch struct {
 // ConnectionSpec defines the desired state of Connection
 type ConnectionSpec struct {
 	Properties types.JSONStringMap `json:"properties,omitempty"`
+	// Secrets are further named credentials beside the typed spec's own, each a
+	// value or a valueFrom reference; see models.Connection.Secret.
+	Secrets types.EnvVarMap `json:"secrets,omitempty"`
 
 	AWS    *ConnectionAWS    `json:"aws,omitempty"`
 	AWSKMS *ConnectionAWSKMS `json:"awskms,omitempty"`

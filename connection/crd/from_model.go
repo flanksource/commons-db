@@ -30,6 +30,7 @@ func FromModel(connection models.Connection) (*Connection, error) {
 			Type:        connection.Type,
 			InsecureTLS: connection.InsecureTLS,
 			Properties:  maps.Clone(connection.Properties),
+			Secrets:     maps.Clone(connection.Secrets),
 		},
 	}
 	if connection.ID != uuid.Nil {

@@ -12,11 +12,15 @@ func (c Connection) logFields() map[string]any {
 	for key, value := range c.Properties {
 		properties[key] = text.NewSensitiveString(value)
 	}
+	secrets := make(map[string]text.SensitiveString, len(c.Secrets))
+	for name, value := range c.Secrets {
+		secrets[name] = text.NewSensitiveString(value.String())
+	}
 	return map[string]any{
 		"id": c.ID, "name": c.Name, "namespace": c.Namespace, "type": c.Type,
 		"url": text.NewSensitiveString(c.URL), "username": text.NewSensitiveString(c.Username),
 		"password": text.NewSensitiveString(c.Password), "certificate": text.NewSensitiveString(c.Certificate),
-		"source": text.NewSensitiveString(c.Source), "properties": properties,
+		"source": text.NewSensitiveString(c.Source), "properties": properties, "secrets": secrets,
 	}
 }
 
