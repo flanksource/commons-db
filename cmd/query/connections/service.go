@@ -597,6 +597,23 @@ func applyConnectionUpdate(existing, incoming *models.Connection) {
 	if incoming.Certificate != "" {
 		existing.Certificate = incoming.Certificate
 	}
+	existing.Secrets = mergeBlankSecrets(existing.Secrets, incoming.Secrets)
+}
+
+// mergeBlankSecrets is incoming with each secret it leaves blank taken from
+// stored: the API returns literal secrets blanked, so an unchanged edit sends
+// them back empty. A name incoming omits is dropped.
+func mergeBlankSecrets(stored, incoming types.EnvVarMap) types.EnvVarMap {
+	if incoming == nil {
+		return nil
+	}
+	merged := maps.Clone(incoming)
+	for name, secret := range incoming {
+		if previous, ok := stored[name]; ok && secret.IsEmpty() {
+			merged[name] = previous
+		}
+	}
+	return merged
 }
 
 // redactConnection blanks literal credentials while preserving source references.
@@ -615,6 +632,17 @@ func redactConnection(c *models.Connection) {
 	}
 	c.Password = redactCredential(c.Password)
 	c.Certificate = redactCredential(c.Certificate)
+	if c.Secrets != nil {
+		redacted := make(types.EnvVarMap, len(c.Secrets))
+		for name, secret := range c.Secrets {
+			if secret.ValueFrom != nil {
+				redacted[name] = secret
+			} else {
+				redacted[name] = types.EnvVar{}
+			}
+		}
+		c.Secrets = redacted
+	}
 	if c.Virtual {
 		c.URL = ""
 	}
