@@ -26,7 +26,7 @@ func traceConnections(address string) *gorm.DB {
 	Expect(err).ToNot(HaveOccurred())
 	Expect(database.Exec(`CREATE TABLE connections (
 id TEXT PRIMARY KEY, name TEXT, namespace TEXT, source TEXT, type TEXT,
-url TEXT, username TEXT, password TEXT, properties TEXT, certificate TEXT,
+url TEXT, username TEXT, password TEXT, properties TEXT, secrets TEXT, certificate TEXT,
 insecure_tls NUMERIC, created_at DATETIME, updated_at DATETIME, created_by TEXT
 )`).Error).ToNot(HaveOccurred())
 	Expect(database.Create(&models.Connection{
