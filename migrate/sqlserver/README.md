@@ -17,6 +17,10 @@ Module definitions execute in separate nested batches so `CREATE OR ALTER` is fi
 
 The fixed application-lock resource `commons-db/migrate/schema` serializes artifacts across different hashes and scopes within a database. Every cooperating migration runner must use this resource. Out-of-band schema writers must be quiesced during deployment. The application owns target identity, permissions, artifact storage and immutable attempt records.
 
+## Post-deployment scripts
+
+`RenderScript(artifact, ScriptOptions{Acknowledgements: ids})` renders the same reviewed artifact as one self-contained, re-runnable T-SQL batch for tools that run scripts rather than call `Apply` (for example a `PostDeployment_*` script). It validates the artifact hash and the acknowledgements exactly as `Apply` does, then emits one transaction under the same `commons-db/migrate/schema` application lock, so a direct run and a script run serialise. Each change gets a state guard evaluated before any step runs, and the script contains no `GO` line. See the sqlglot-go `migrate/ARTIFACTS.md` for the guard table.
+
 Run control-flow tests with `go test ./migrate/sqlserver ./inspect/sql/snapshot -count=1`. These tests use SQL mocks and do not prove SQL Server runtime behavior.
 
 The real engine suite is opt-in through the `integration` build tag. Set `COMMONS_DB_SQLSERVER_ARTIFACT_TEST_URL` to an admin URL for an explicitly isolated SQL Server test instance, with no database or with `database=master`, then run:
