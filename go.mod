@@ -45,7 +45,7 @@ require (
 	github.com/flanksource/deps v1.0.51
 	github.com/flanksource/gomplate/v4 v4.0.2
 	github.com/flanksource/is-healthy v1.0.93
-	github.com/flanksource/sqlglot-go v1.1.1
+	github.com/flanksource/sqlglot-go v1.1.3
 	github.com/fxamacker/cbor/v2 v2.9.1
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-sql-driver/mysql v1.10.0

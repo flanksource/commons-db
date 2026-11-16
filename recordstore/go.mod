@@ -129,7 +129,7 @@ require (
 	github.com/flanksource/gomplate/v4 v4.0.2 // indirect
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
-	github.com/flanksource/sqlglot-go v1.1.1 // indirect
+	github.com/flanksource/sqlglot-go v1.1.3 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
