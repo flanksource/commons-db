@@ -1,6 +1,6 @@
 # Projections
 
-Project JSON from local commands or HTTP APIs into existing YAML files, using CEL for matching and mapping and JSONPath for field selection. Comments, flow collections and indentation are preserved. The engine is copied from Faro; Faro keeps its native Mission Control sources and authentication.
+Project JSON from local commands, HTTP APIs or Query profiles into existing YAML files, using CEL for matching and mapping and JSONPath for field selection. Comments, flow collections and indentation are preserved. The engine is copied from Faro; Faro keeps its native Mission Control sources and authentication.
 
 ## CLI workflow
 
@@ -14,7 +14,7 @@ query projections syntax --help --no-color
 
 `verify` checks manifests, CEL, JSONPaths, existing targets and optional schemas offline. It never runs commands, resolves credentials or makes HTTP requests. `run` executes sources and returns `projection`, `context`, `items`, `filtered` and `warnings`. `apply --dry-run` executes sources and evaluates mappings without writing targets. `apply` writes successful projections sequentially and continues after individual failures; any failure makes the command exit nonzero. Successful earlier writes remain on disk.
 
-All three commands accept positional files/directories, repeatable `--file/-f`, and `--name` to select an exact `metadata.name`. Directories are searched recursively for `.yaml` and `.yml` in lexical order, skipping foreign documents. Explicit files must contain Projections. Use `---` between documents. Names must be unique across all loaded files. Paths are relative to each manifest. `--context` supplies `context.name`; it does not load a query profile or choose a Faro context. `context.observed_at` and `context.date` are generated per run. Output flags include `--json`, `--yaml`, `--csv`, `--markdown`, `--no-progress` and `--no-color`; `NO_COLOR` also disables color.
+All three commands accept positional files/directories, repeatable `--file/-f`, and `--name` to select an exact `metadata.name`. Directories are searched recursively for `.yaml` and `.yml` in lexical order, skipping foreign documents. Explicit files must contain Projections. Use `---` between documents. Names must be unique across all loaded files. Paths are relative to each manifest. `--context` supplies `context.name`; it does not load a query profile or choose a Faro context. `--context-file collection.yaml` supplies every key of a YAML mapping as `context.<key>` (nested values stay nested, e.g. `{{.context.assessmentWindow.from}}`), so one params document feeds every source template and CEL expression of the run; a `name` in the file together with `--context` is an error. `context.observed_at` and `context.date` are generated per run and cannot be supplied. Output flags include `--json`, `--yaml`, `--csv`, `--markdown`, `--no-progress` and `--no-color`; `NO_COLOR` also disables color.
 
 ## Exec: once per projection
 
@@ -172,9 +172,39 @@ spec:
 
 `http` requires `target` and `url`. It accepts shared HTTPConnection authentication, including a named `connection`, basic auth, bearer, OAuth and TLS settings. Requests have a 30-second timeout and default to GET. Each response becomes `source.body`, with `source.url` and the target's scalar fields. `select` must match exactly one value. HTTP 202 is retried up to `attempts` (default 5), waiting `wait` (default 2s). Other failed requests, malformed responses and exhausted 202 waits omit the row and emit a warning. Cancellation stops the source. Verify validates URL templates against existing entries without requests.
 
+## Profile: a Query profile's rows
+
+A `profile` source runs a named Query profile, the same read as `query profiles run <name> [--all] --param key=value…`, and each row becomes a source item:
+
+```yaml
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: rds-window
+spec:
+  source:
+    query:
+      profile:
+        name: env-rds-metrics
+        mode: once
+        all: true
+        params:
+          start: "2026-11-01T00:00:00Z"
+          end: "2026-11-02T00:00:00Z"
+          db_instance: '{{.context.name}}'
+```
+
+`name` is required. `params` values are Go templates with `missingkey=error`, rendered with `.context`, and `.target` in `perTarget` mode; `shellQuote` is not available because no shell runs. `all: true` reads every page up to the profile's export ceiling. `mode` defaults to `once`: the profile's `rows`, after optional `select`, must be a JSON object or array of objects. With `mode: perTarget` the profile runs once per eligible target entry and its rows (after `select`) become `source.body` beside the target's scalar fields. `select` is a JSONPath over the `rows` array, matching exactly one value, as for exec.
+
+The source fails rather than returning a partial answer when the result is `truncated`, has more pages (`hasMore`; set `all: true`), carries any `metrics.notices`, or, when `start` and/or `end` params were passed and the result lists `metrics.sources`, any source's `start`/`end` is a different instant from the requested one.
+
+`start` and `end` params, after templating, accept an RFC3339 instant or datemath such as `now`, `now-1h` or `now-24h/h`, parsed by the same parser Query profiles use for date params. Both are resolved once per source run against a single `now` and passed to the profile as absolute RFC3339 instants, so the profile and the completeness gate see the same window. Any other value fails the source, naming the param and value. `verify` checks literal `start`/`end` values this way; templated ones are only template-parsed. Rows are JSON round-tripped, so they carry the same value types as exec rows.
+
+Profiles are resolved by the caller's profile runner (`Options.Profiles`). The query CLI provides one over the global `--profiles-dir` and `--db` flags, opened only when a profile source runs, so `verify` and exec/http projections still need no profiles or database. `verify` checks `name`, `mode`, the param templates and `select` without running the profile.
+
 ## Matching, mapping and validation
 
-`source.query` contains exactly one of `exec` or `http`. `source.where` is an optional CEL predicate over each row and `context`; rejected rows count as `filtered`. Source-only documents omit `target`, `match` and `set`.
+`source.query` contains exactly one of `exec`, `http` or `profile`. `source.where` is an optional CEL predicate over each row and `context`; rejected rows count as `filtered`. Source-only documents omit `target`, `match` and `set`.
 
 `target.path` names an existing YAML file. `target.select` is a JSONPath ending in `[*]` selecting mapping entries. `target.filter` limits eligible targets. `target.schema` optionally names a local JSON Schema; the complete target is checked before and after mapping. Verify checks the existing document, not future source data.
 
@@ -235,7 +265,7 @@ Other existing Faro source manifests can be consumed with the same exec shape, c
 
 Put the script and select in the complete source-only exec manifest above. Pass `--context {{shellQuote .context.name}}` in each Faro script to select a Faro context explicitly. Selecting `$[0].items` extracts rows; Faro's envelope warnings/context are not merged into the outer result. Use the native command directly when that metadata is required.
 
-The `examples/` directory contains runnable `exec-once.yaml` and `exec-per-target.yaml` with their target, an HTTP manifest, and a complete `faro.yaml` containing all four CLI recipes. Run `query projections verify examples/` from this package directory to check every example offline. Faro recipes make live queries only when explicitly run.
+The `examples/` directory contains runnable `exec-once.yaml` and `exec-per-target.yaml` with their target, an HTTP manifest, `profile.yaml` with Query profile sources, and a complete `faro.yaml` containing all four CLI recipes. Run `query projections verify examples/` from this package directory to check every example offline. Faro recipes make live queries only when explicitly run.
 
 ## Go package
 
@@ -250,7 +280,10 @@ if _, err := projections.Verify(docs); err != nil {
 results, err := projections.Apply(ctx, docs, projections.Options{
     Context: map[string]any{"name": "staging"},
     DryRun: true,
+    Profiles: runner, // a projections.ProfileRunner; required only for profile sources
 })
 ```
+
+`ProfileRunner` has one method, `RunProfile(ctx context.Context, request ProfileRunRequest) (ProfileRunResult, error)`. Run and Apply refuse a profile source, before any source runs, when `Options.Profiles` is nil.
 
 Import `github.com/flanksource/commons-db/projections` and use a commons-db `context.Context`. `Load`, `Verify`, `Run` and `Apply` return typed results; the library does not parse flags or print output. Preserve returned Apply results even when the aggregate error is non-nil, since they describe projections that succeeded and failed.

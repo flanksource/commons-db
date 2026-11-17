@@ -20,6 +20,9 @@ type LoadOptions struct {
 type Options struct {
 	Context map[string]any
 	DryRun  bool
+	// Profiles runs spec.source.query.profile sources; Run and Apply refuse a
+	// profile source when it is nil.
+	Profiles ProfileRunner
 }
 
 type ProjectionRunResult struct {
@@ -75,14 +78,20 @@ func Run(ctx context.Context, projections []Projection, options Options) ([]Proj
 	if err := preflightProjections(projections); err != nil {
 		return nil, err
 	}
+	if err := requireProfileRunner(projections, options.Profiles); err != nil {
+		return nil, err
+	}
 	ctx, err := localConnections(ctx)
 	if err != nil {
 		return nil, err
 	}
-	values := projectionContext(options.Context)
+	values, err := projectionContext(options.Context)
+	if err != nil {
+		return nil, err
+	}
 	results := make([]ProjectionRunResult, 0, len(projections))
 	for _, p := range projections {
-		source, err := queryProjection(ctx, p, values)
+		source, err := queryProjection(ctx, p, values, options.Profiles)
 		if err != nil {
 			return results, fmt.Errorf("projection %s: %w", p.Metadata.Name, err)
 		}
@@ -100,18 +109,24 @@ func Apply(ctx context.Context, projections []Projection, options Options) ([]Pr
 	if err := preflightProjections(projections); err != nil {
 		return nil, err
 	}
+	if err := requireProfileRunner(projections, options.Profiles); err != nil {
+		return nil, err
+	}
 	ctx, err := localConnections(ctx)
 	if err != nil {
 		return nil, err
 	}
-	values := projectionContext(options.Context)
+	values, err := projectionContext(options.Context)
+	if err != nil {
+		return nil, err
+	}
 	results := make([]ProjectionApplyResult, 0, len(projections))
 	failed, applicable := 0, 0
 	for _, p := range projections {
 		result := ProjectionApplyResult{Projection: p.Metadata.Name, Status: projectionSkipped, DryRun: options.DryRun}
 		if p.Spec.Target != nil {
 			applicable++
-			source, applyErr := queryProjection(ctx, p, values)
+			source, applyErr := queryProjection(ctx, p, values, options.Profiles)
 			if applyErr == nil {
 				result, applyErr = applyProjection(p, source, options.DryRun)
 			}
@@ -153,21 +168,29 @@ func preflightProjections(projections []Projection) error {
 	return nil
 }
 
-func queryProjection(ctx context.Context, p Projection, values map[string]any) (projectionSourceResult, error) {
+func queryProjection(ctx context.Context, p Projection, values map[string]any, profiles ProfileRunner) (projectionSourceResult, error) {
 	result := projectionSourceResult{Context: values}
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
 	var err error
-	if p.Spec.Source.Query.Exec != nil {
+	switch query := p.Spec.Source.Query; {
+	case query.Exec != nil:
 		result.Items, err = queryExecProjection(ctx, p, values)
-	} else {
+	case query.Profile != nil:
+		result.Items, err = queryProfileProjection(ctx, p, values, profileSource{runner: profiles, now: time.Now().UTC()})
+	default:
 		result.Items, result.Warnings, err = queryHTTPProjection(ctx, p, values)
 	}
 	return result, err
 }
 
-func projectionContext(values map[string]any) map[string]any {
+func projectionContext(values map[string]any) (map[string]any, error) {
+	for _, key := range reservedContextKeys {
+		if _, exists := values[key]; exists {
+			return nil, fmt.Errorf("context.%s is set by every run and cannot be supplied", key)
+		}
+	}
 	result := maps.Clone(values)
 	if result == nil {
 		result = map[string]any{}
@@ -177,7 +200,7 @@ func projectionContext(values map[string]any) map[string]any {
 	if _, exists := result["name"]; !exists {
 		result["name"] = ""
 	}
-	return result
+	return result, nil
 }
 
 func localConnections(ctx context.Context) (context.Context, error) {

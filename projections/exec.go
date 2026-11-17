@@ -160,12 +160,12 @@ func projectionRows(payload any) ([]map[string]any, error) {
 		for i, item := range value {
 			row, ok := item.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("exec row %d is %T, expected JSON object", i, item)
+				return nil, fmt.Errorf("source row %d is %T, expected JSON object", i, item)
 			}
 			rows = append(rows, row)
 		}
 		return rows, nil
 	default:
-		return nil, fmt.Errorf("exec output is %T, expected JSON object or array of objects", payload)
+		return nil, fmt.Errorf("source output is %T, expected JSON object or array of objects", payload)
 	}
 }

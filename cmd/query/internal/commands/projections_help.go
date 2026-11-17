@@ -45,11 +45,11 @@ func documentProjections(root *cobra.Command) {
 	root.SetUsageTemplate(usage)
 }
 
-const projectionOverviewHelp = `Project JSON from local commands or HTTP APIs into existing YAML files using CEL for matching and mapping and JSONPath for field selection. Comments, flow collections and indentation are preserved.
+const projectionOverviewHelp = `Project JSON from local commands, HTTP APIs or Query profiles into existing YAML files using CEL for matching and mapping and JSONPath for field selection. Comments, flow collections and indentation are preserved.
 
 Syntax:
 
-  query projections <verify|run|apply> [path...] [-f PATH ...] [--name NAME] [--context NAME] [flags]
+  query projections <verify|run|apply> [path...] [-f PATH ...] [--name NAME] [--context NAME] [--context-file FILE] [flags]
 
 Workflow:
 
@@ -57,7 +57,7 @@ Use verify to check manifests and existing targets offline. Use run to inspect s
 
 Manifest syntax:
 
-Each YAML document requires apiVersion: projections.flanksource.com/v1alpha1, kind: Projection, a unique metadata.name, and a spec. Separate multiple documents with ---. Choose exactly one spec.source.query: exec or http. A source-only exec projection in once mode can omit target, match, and set.
+Each YAML document requires apiVersion: projections.flanksource.com/v1alpha1, kind: Projection, a unique metadata.name, and a spec. Separate multiple documents with ---. Choose exactly one spec.source.query: exec, http or profile. A source-only exec or profile projection in once mode can omit target, match, and set.
 
 ` + "```yaml\n" + `apiVersion: projections.flanksource.com/v1alpha1
 kind: Projection
@@ -86,7 +86,7 @@ const projectionInputHelp = `
 
 Selecting manifests:
 
-Supply at least one file or directory as a positional path or repeatable --file/-f flag; both forms can be combined. Directories are searched recursively for .yaml and .yml files in lexical order, skipping non-Projection documents. Explicit files must contain Projection documents. Repeated paths are loaded once; names must be unique across all loaded documents. --name selects one exact metadata.name after loading. Target and schema paths resolve relative to each manifest. No query profile or database is needed.
+Supply at least one file or directory as a positional path or repeatable --file/-f flag; both forms can be combined. Directories are searched recursively for .yaml and .yml files in lexical order, skipping non-Projection documents. Explicit files must contain Projection documents. Repeated paths are loaded once; names must be unique across all loaded documents. --name selects one exact metadata.name after loading. Target and schema paths resolve relative to each manifest. No query profile or database is needed, except to run a profile source.
 
 Output:
 
@@ -96,13 +96,13 @@ Full syntax reference:
 
   query projections syntax --help
 
-The syntax reference includes complete exec and HTTP manifests, target YAML, connections, environment settings and Faro recipes.`
+The syntax reference includes complete exec, HTTP and profile manifests, target YAML, connections, environment settings and Faro recipes.`
 
 const projectionRunHelp = `Execute each selected Projection's source query and return its rows without applying mappings or writing target files.
 
 Syntax:
 
-  query projections run [path...] [-f PATH ...] [--name NAME] [--context NAME] [--yaml|--json]
+  query projections run [path...] [-f PATH ...] [--name NAME] [--context NAME] [--context-file FILE] [--yaml|--json]
 
 Source queries:
 
@@ -110,15 +110,17 @@ exec runs a local script in the manifest's directory. mode defaults to once: std
 
 http requires existing targets and sends one request per eligible entry. Its URL is a Go template over the entry's fields, such as {{.id}}. method defaults to GET. source.body holds the response or the single value selected by select; source.url and the target's scalar fields are included. HTTP 202 responses are retried according to accepted.attempts and accepted.wait. Other request or response failures omit the row and produce warnings.
 
+profile runs a named Query profile through the global --profiles-dir and --db flags, the same read as query profiles run <name> [--all] --param key=value. name is required; params values are Go templates over .context and, in perTarget mode, .target; all: true reads every page. In once mode the profile's rows, after optional select over the rows array, become source rows; in perTarget mode they become source.body per eligible target entry. The source fails on a truncated result, unread pages (hasMore), any metrics.notices, or a metrics.sources start/end instant that differs from the requested start/end params. start and end accept an RFC3339 instant or datemath such as now-1h or now-24h/h; both are resolved once per source run against one now and passed to the profile as RFC3339 instants. Any other value fails the source.
+
 Filtering and validation:
 
-spec.source.where is a CEL predicate over source and context, evaluated per source row. False rows are excluded and counted as filtered. spec.target.filter limits eligible targets before per-target exec or HTTP requests.
+spec.source.where is a CEL predicate over source and context, evaluated per source row. False rows are excluded and counted as filtered. spec.target.filter limits eligible targets before per-target exec, HTTP or profile runs.
 
 All selected CEL expressions are compiled before querying, including target filters, matches and set mappings. Invalid mappings therefore fail run even though they are not applied. Use verify to check existing targets and their schemas.
 
 Results and connections:
 
-Each result contains projection, context, items, filtered, and any warnings. --context supplies context.name; it does not select a query profile or Faro context. context.observed_at is an RFC3339 timestamp and context.date is YYYY-MM-DD, generated per run.
+Each result contains projection, context, items, filtered, and any warnings. --context supplies context.name; it does not select a query profile or Faro context. --context-file FILE supplies each key of a YAML mapping as context.<key>, nested values included, such as {{.context.assessmentWindow.from}}; a name in the file together with --context is an error. context.observed_at is an RFC3339 timestamp and context.date is YYYY-MM-DD, generated per run; neither can be supplied.
 
 Named connections resolve only from the local Flanksource connection store. Exec sources support typed connections, env and passthroughEnv; HTTP sources support shared HTTPConnection authentication. run executes scripts and sends HTTP requests using the configured method.`
 
@@ -126,13 +128,13 @@ const projectionApplyHelp = `Execute sources, match source rows to target entrie
 
 Syntax:
 
-  query projections apply [path...] [-f PATH ...] [--name NAME] [--dry-run] [--context NAME] [flags]
+  query projections apply [path...] [-f PATH ...] [--name NAME] [--dry-run] [--context NAME] [--context-file FILE] [flags]
 
 Matching and mapping syntax:
 
 spec.target.path names an existing YAML file. spec.target.select is a JSONPath ending in [*], such as $.entries[*], selecting mapping entries. spec.target.filter optionally limits eligible targets with CEL. Each spec.match expression is a CEL predicate over source, target, and context; a target matches when any expression is true. A source matching multiple targets is an error.
 
-Each spec.set key is a JSONPath relative to the selected entry, such as $.name. Its value is a CEL expression, such as source.name; when is an optional CEL guard. Quote CEL string literals inside YAML, for example value: '"managed"'. Expressions can use source, target, context.name, context.observed_at, and context.date. Guards see the original target for that source row and can protect optional fields, for example when: '"email" in source'.
+Each spec.set key is a JSONPath relative to the selected entry, such as $.name. Its value is a CEL expression, such as source.name; when is an optional CEL guard. Quote CEL string literals inside YAML, for example value: '"managed"'. Expressions can use source, target, context.name, any --context-file key, context.observed_at, and context.date. Guards see the original target for that source row and can protect optional fields, for example when: '"email" in source'.
 
 List strategies:
 
@@ -152,7 +154,7 @@ Dry runs and results:
 
 --dry-run still executes sources and validates the mapped document, but leaves target files unchanged. It reports a summary, not a rendered target or patch. Results include status (applied, warned, skipped, or failed), source and match counts, changed fields, created and missing entries, stale entries, warnings, and errors.`
 
-const projectionVerifyHelp = `Validate selected Projection manifests and their existing target files offline, without executing scripts, resolving credentials, making HTTP requests or writing target files.
+const projectionVerifyHelp = `Validate selected Projection manifests and their existing target files offline, without executing scripts, running profiles, resolving credentials, making HTTP requests or writing target files.
 
 Syntax:
 
@@ -160,13 +162,13 @@ Syntax:
 
 Manifest checks:
 
-Check YAML fields, apiVersion, kind, unique metadata.name values, exactly one source query, and exec or HTTP options. Compile CEL expressions in source.where, target.filter, match, set.value, set.when and set.match. Validate mapping JSONPaths and list strategies.
+Check YAML fields, apiVersion, kind, unique metadata.name values, exactly one source query, and exec, HTTP or profile options. Compile CEL expressions in source.where, target.filter, match, set.value, set.when and set.match. Validate mapping JSONPaths and list strategies.
 
 Target checks:
 
 If spec.target is present, read its existing file, check that target.select returns mapping entries, and validate writable mapping paths. target.select must end in [*], for example $.entries[*]. Validate the complete target document against spec.target.schema when provided. Target and schema paths resolve relative to the manifest, regardless of the current working directory.
 
-For HTTP sources, validate the URL template against existing target entries without making requests. Exec script templates are parsed without running commands. Source-only exec projections in once mode are valid and require no target file.
+For HTTP sources, validate the URL template against existing target entries without making requests. Exec script templates are parsed without running commands. Profile sources check name, mode, param templates and select without loading profiles or a database. Source-only exec and profile projections in once mode are valid and require no target file.
 
 Results and limits:
 

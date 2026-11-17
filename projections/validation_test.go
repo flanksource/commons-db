@@ -12,6 +12,14 @@ import (
 )
 
 var _ = ginkgo.Describe("Projection validation", func() {
+	for _, key := range reservedContextKeys {
+		ginkgo.It("refuses a supplied context."+key+" that every run stamps", func() {
+			unreachable := execProjection("exit 1")
+			_, err := Run(context.NewContext(ginkgo.GinkgoT().Context()), []Projection{unreachable}, Options{Context: map[string]any{key: "2026-01-01"}})
+
+			Expect(err).To(MatchError("context." + key + " is set by every run and cannot be supplied"))
+		})
+	}
 	for _, test := range []struct {
 		name    string
 		query   ProjectionQuery
