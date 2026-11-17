@@ -193,7 +193,7 @@ func (w openSearchWalk) tail(
 
 	after := req.Position.Keys
 	for {
-		raw, rows, _, err := w.search(ctx, openSearchPage{size: openSearchTailBatch, after: after})
+		hits, err := w.search(ctx, openSearchPage{size: openSearchTailBatch, after: after})
 		if err != nil {
 			// Stopping a tail is how every tail ends, and the read failure that
 			// cancellation raises is that stop rather than a fault. The error is
@@ -204,11 +204,11 @@ func (w openSearchWalk) tail(
 			}
 			return err
 		}
-		for _, row := range rows {
+		for _, row := range hits.rows {
 			emit(row)
 		}
-		if len(rows) > 0 {
-			if after, err = openSearchSortKeys(raw, req.Order); err != nil {
+		if len(hits.rows) > 0 {
+			if after, err = openSearchSortKeys(hits.raw, req.Order); err != nil {
 				return err
 			}
 		}
@@ -217,7 +217,7 @@ func (w openSearchWalk) tail(
 		// this copy of the walk, which is the whole of the tail's lifetime.
 		w.diagnostics = nil
 
-		if size > 0 && len(rows) >= size {
+		if size > 0 && len(hits.rows) >= size {
 			continue
 		}
 		if settings.untilCaughtUp {

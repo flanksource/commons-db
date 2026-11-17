@@ -131,21 +131,21 @@ func (w openSearchWalk) byScroll(
 	}()
 
 	for {
-		raw, rows, capped, err := w.scroll(ctx, page.Limit, scrollID)
+		hits, err := w.scroll(ctx, page.Limit, scrollID)
 		if err != nil {
 			releaseScroll = true
 			yield(query.Page{}, err)
 			return
 		}
-		if raw.ScrollID != "" {
-			scrollID = raw.ScrollID
+		if hits.raw.ScrollID != "" {
+			scrollID = hits.raw.ScrollID
 		}
 		current := query.Page{
-			Rows: rows, Total: openSearchTotal(raw), Truncated: capped, Scroll: scrollID,
+			Rows: hits.rows, Total: openSearchTotal(hits.raw), Truncated: hits.capped, Scroll: scrollID,
 		}
-		current.HasMore = len(rows) == page.Limit && scrollID != ""
+		current.HasMore = hits.full() && scrollID != ""
 		if current.HasMore {
-			keys, err := openSearchSortKeys(raw, req.Order)
+			keys, err := openSearchSortKeys(hits.raw, req.Order)
 			if err != nil {
 				releaseScroll = true
 				yield(query.Page{}, err)
@@ -168,21 +168,24 @@ func (w openSearchWalk) scroll(
 	ctx context.Context,
 	pageSize int,
 	scrollID string,
-) (opensearch.Response, []query.Row, bool, error) {
+) (openSearchHits, error) {
+	// Built on every page, a resumed scroll included: the size the scroll was
+	// opened with is the request's, and a profile's own size can hold it below
+	// pageSize, which is what a full page is measured against.
+	built, err := w.build(openSearchPage{size: pageSize})
+	if err != nil {
+		return openSearchHits{}, err
+	}
 	if scrollID != "" {
-		details := map[string]any{"index": w.index, "limit": pageSize, "paging": "scroll", "scroll": scrollID}
+		details := map[string]any{"index": w.index, "limit": built.limitParam(), "paging": "scroll", "scroll": scrollID}
 		w.diagnostics.RecordRequest("", nil, details)
 		started := time.Now()
 		raw, err := w.searcher.ScrollNext(ctx, opensearch.ScrollPageRequest{ID: scrollID})
-		return w.finishScroll(started, raw, openSearchRequest{limit: pageSize}, err)
-	}
-	built, err := w.build(openSearchPage{size: pageSize})
-	if err != nil {
-		return opensearch.Response{}, nil, false, err
+		return w.finishScroll(started, raw, built, err)
 	}
 	body, err := built.encode()
 	if err != nil {
-		return opensearch.Response{}, nil, false, err
+		return openSearchHits{}, err
 	}
 	details := map[string]any{"index": w.index, "limit": built.limitParam(), "paging": "scroll"}
 	details["pagingThreshold"] = w.threshold
@@ -199,16 +202,16 @@ func (w openSearchWalk) finishScroll(
 	raw opensearch.Response,
 	built openSearchRequest,
 	err error,
-) (opensearch.Response, []query.Row, bool, error) {
+) (openSearchHits, error) {
 	details := map[string]any{"index": w.index, "paging": "scroll"}
 	if err != nil {
 		w.diagnostics.RecordError(err)
 		w.diagnostics.RecordResponse(started, 0, details)
-		return opensearch.Response{}, nil, false, err
+		return openSearchHits{}, err
 	}
 	rows, err := w.mapRows(raw)
 	if err != nil {
-		return opensearch.Response{}, nil, false, err
+		return openSearchHits{}, err
 	}
 	if w.diagnostics.WantsPreview() {
 		w.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
@@ -218,12 +221,24 @@ func (w openSearchWalk) finishScroll(
 		"total": raw.Hits.Total.Value, "relation": raw.Hits.Total.Relation,
 	})
 	if len(rows) != len(raw.Hits.Hits) {
-		return opensearch.Response{}, nil, false, fmt.Errorf(
+		return openSearchHits{}, fmt.Errorf(
 			"opensearch returned %d hits but mapped to %d rows; their positions no longer line up",
 			len(raw.Hits.Hits), len(rows))
 	}
-	return raw, rows, built.capped, nil
+	return openSearchHits{raw: raw, rows: rows, size: built.limit, capped: built.capped}, nil
 }
+
+// openSearchHits is one response mapped to rows, beside the hit cap the request
+// actually sent. A profile's own size can hold that cap below the page asked
+// for; the page is still full, and the walk goes on, when it fills the cap.
+type openSearchHits struct {
+	raw    opensearch.Response
+	rows   []query.Row
+	size   int
+	capped bool
+}
+
+func (h openSearchHits) full() bool { return h.size > 0 && len(h.rows) == h.size }
 
 // byOffset serves from/size pages, bounded by the index result window.
 //
@@ -235,36 +250,39 @@ func (w openSearchWalk) byOffset(
 	page query.PageRequest,
 	yield func(query.Page, error) bool,
 ) {
-	for from := page.Offset; ; from += page.Limit {
+	// The next page starts after the rows this one read, not a page.Limit
+	// later: a page the profile's size capped holds fewer.
+	for from := page.Offset; ; {
 		if from+page.Limit > openSearchResultWindow {
 			yield(query.Page{}, fmt.Errorf(
 				"reading past row %d needs a cursor: OpenSearch refuses a from/size search beyond the index result window (%d); follow the cursor this profile returns with each page, or declare `order:` ending in a unique column so it can return one",
 				openSearchResultWindow, openSearchResultWindow))
 			return
 		}
-		raw, rows, capped, err := w.search(ctx, openSearchPage{from: from, size: page.Limit})
+		hits, err := w.search(ctx, openSearchPage{from: from, size: page.Limit})
 		if err != nil {
 			yield(query.Page{}, err)
 			return
 		}
 		current := query.Page{
-			Rows:      rows,
-			HasMore:   len(rows) == page.Limit && openSearchHasMore(raw, from+len(rows)),
-			Total:     openSearchTotal(raw),
-			Truncated: capped,
+			Rows:      hits.rows,
+			HasMore:   hits.full() && openSearchHasMore(hits.raw, from+len(hits.rows)),
+			Total:     openSearchTotal(hits.raw),
+			Truncated: hits.capped,
 		}
-		if current.HasMore && len(req.Order) > 0 && len(rows) > 0 {
-			keys, err := openSearchSortKeys(raw, req.Order)
+		if current.HasMore && len(req.Order) > 0 && len(hits.rows) > 0 {
+			keys, err := openSearchSortKeys(hits.raw, req.Order)
 			if err != nil {
 				yield(query.Page{}, err)
 				return
 			}
 			current.NextKeys = keys
-			current.NextOffset = from + len(rows)
+			current.NextOffset = from + len(hits.rows)
 		}
 		if !yield(current, nil) || !current.HasMore {
 			return
 		}
+		from += len(hits.rows)
 	}
 }
 
@@ -311,7 +329,7 @@ func (w openSearchWalk) byCursor(
 
 	after := req.Position.Keys
 	for {
-		raw, rows, capped, err := w.search(ctx, openSearchPage{size: page.Limit, after: after, pit: pit})
+		hits, err := w.search(ctx, openSearchPage{size: page.Limit, after: after, pit: pit})
 		if err != nil {
 			releasePIT = true
 			yield(query.Page{}, err)
@@ -319,19 +337,19 @@ func (w openSearchWalk) byCursor(
 		}
 
 		current := query.Page{
-			Rows:      rows,
-			Total:     openSearchTotal(raw),
-			Truncated: capped,
+			Rows:      hits.rows,
+			Total:     openSearchTotal(hits.raw),
+			Truncated: hits.capped,
 			PIT:       pit,
 		}
-		if len(rows) > 0 {
-			keys, err := openSearchSortKeys(raw, req.Order)
+		if len(hits.rows) > 0 {
+			keys, err := openSearchSortKeys(hits.raw, req.Order)
 			if err != nil {
 				yield(query.Page{}, err)
 				return
 			}
 			after = keys
-			current.HasMore = len(rows) == page.Limit
+			current.HasMore = hits.full()
 			if current.HasMore {
 				current.NextKeys = keys
 			}
@@ -349,14 +367,14 @@ func (w openSearchWalk) byCursor(
 
 // search issues one search and maps its hits, keeping the raw response beside
 // the rows so the sort values and the total survive the mapping.
-func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (opensearch.Response, []query.Row, bool, error) {
+func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (openSearchHits, error) {
 	built, err := w.build(position)
 	if err != nil {
-		return opensearch.Response{}, nil, false, err
+		return openSearchHits{}, err
 	}
 	body, err := built.encode()
 	if err != nil {
-		return opensearch.Response{}, nil, false, err
+		return openSearchHits{}, err
 	}
 	index := w.index
 	if position.pit != "" {
@@ -381,7 +399,7 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 	if err != nil {
 		w.diagnostics.RecordError(err)
 		w.diagnostics.RecordResponse(started, 0, details)
-		return opensearch.Response{}, nil, false, openSearchFailure(err, search)
+		return openSearchHits{}, openSearchFailure(err, search)
 	}
 	if position.size > 0 && len(raw.Hits.Hits) > position.size {
 		raw.Hits.Hits = raw.Hits.Hits[:position.size]
@@ -389,7 +407,7 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 	}
 	rows, err := w.mapRows(raw)
 	if err != nil {
-		return opensearch.Response{}, nil, false, err
+		return openSearchHits{}, err
 	}
 	if w.diagnostics.WantsPreview() {
 		w.diagnostics.RecordPreview("application/json", query.MarshalDiagnosticPreview(raw))
@@ -403,11 +421,11 @@ func (w openSearchWalk) search(ctx context.Context, position openSearchPage) (op
 	// or reordered one would resume the walk somewhere other than where it
 	// stopped — silently, and only for the rows that went missing.
 	if len(rows) != len(raw.Hits.Hits) {
-		return opensearch.Response{}, nil, false, fmt.Errorf(
+		return openSearchHits{}, fmt.Errorf(
 			"opensearch returned %d hits but mapped to %d rows; their positions no longer line up",
 			len(raw.Hits.Hits), len(rows))
 	}
-	return raw, rows, built.capped, nil
+	return openSearchHits{raw: raw, rows: rows, size: built.limit, capped: built.capped}, nil
 }
 
 // openSearchDiagnosticDetails says which slice of the index a recorded search

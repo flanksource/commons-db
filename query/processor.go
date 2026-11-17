@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"iter"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 
@@ -125,36 +126,69 @@ func (c *pageProcessorChain) Process(ctx context.Context, page Page) (Page, erro
 	return page, nil
 }
 
+// ProcessPagesRequest is one processor chain applied to a walk's pages.
+type ProcessPagesRequest struct {
+	Specs []ProcessorSpec
+
+	// Carried is the state each processor left on the previous page, keyed by
+	// label. A preview or a sample passes none: it reads one bounded batch
+	// rather than walking.
+	Carried map[string][]byte
+
+	// Limit is the page size the reader asked for. A processed page left short
+	// of it while the source has more — a dedupe that dropped rows, a provider
+	// whose own size capped the read — is filled from the source's next pages.
+	// Zero passes each source page through as one page.
+	Limit int
+}
+
 // ProcessPages applies a streamable processor chain to each page while
 // preserving its cursor, totals and provider metadata.
 //
-// carried is the state each processor left on the previous page, keyed by
-// label, and each page's own state is written back onto Page.State for the
-// cursor to carry. ExecutePages calls this before the cursor is minted; a
-// preview or a sample calls it with no carried state because it reads one
-// bounded batch rather than walking.
-func ProcessPages(
-	ctx context.Context,
-	specs []ProcessorSpec,
-	carried map[string][]byte,
-	pages iter.Seq2[Page, error],
-) iter.Seq2[Page, error] {
-	chain, err := newPageProcessorChain(specs, carried)
-	if err != nil {
+// Each served page's processor state is written back onto Page.State for the
+// cursor to carry. ExecutePages calls this before the cursor is minted.
+//
+// A page is filled by merging the source's next pages into one bucket and
+// running the chain over the whole bucket again from the state the page
+// started with. Re-running rather than appending keeps a processor that reads
+// across rows — a dedupe, a batch — seeing the bucket as one page, and the
+// served page resumes after the last source page the bucket read.
+func ProcessPages(ctx context.Context, req ProcessPagesRequest, pages iter.Seq2[Page, error]) iter.Seq2[Page, error] {
+	if _, err := newPageProcessorChain(req.Specs, req.Carried); err != nil {
 		return ErrorPage(err)
 	}
 
 	return func(yield func(Page, error) bool) {
-		for page, err := range pages {
+		next, stop := iter.Pull2(pages)
+		defer stop()
+		carried := req.Carried
+		for {
+			bucket, err, ok := next()
+			if !ok {
+				return
+			}
 			if err != nil {
 				yield(Page{}, err)
 				return
 			}
-			page, err = chain.Process(ctx, page)
+			chain, page, err := processBucket(ctx, req.Specs, carried, bucket)
+			for err == nil && req.Limit > 0 && len(page.Rows) < req.Limit && bucket.HasMore {
+				more, moreErr, ok := next()
+				if !ok {
+					break
+				}
+				if moreErr != nil {
+					err = moreErr
+					break
+				}
+				bucket = mergePages(bucket, more)
+				chain, page, err = processBucket(ctx, req.Specs, carried, bucket)
+			}
 			if err != nil {
 				yield(Page{}, err)
 				return
 			}
+			carried = chain.state
 			// Only a page that resumes carries state forward; the last page of a
 			// walk has nowhere to carry it to.
 			if len(chain.state) > 0 && page.HasMore {
@@ -169,6 +203,36 @@ func ProcessPages(
 			}
 		}
 	}
+}
+
+func processBucket(ctx context.Context, specs []ProcessorSpec, carried map[string][]byte, bucket Page) (*pageProcessorChain, Page, error) {
+	chain, err := newPageProcessorChain(specs, carried)
+	if err != nil {
+		return nil, Page{}, err
+	}
+	page, err := chain.Process(ctx, bucket)
+	return chain, page, err
+}
+
+// mergePages appends next onto into as one page. The position, the backend
+// cursor and HasMore are next's: the merged page resumes where next does.
+func mergePages(into, next Page) Page {
+	merged := next
+	merged.Rows = append(slices.Clone(into.Rows), next.Rows...)
+	merged.Batches = append(slices.Clone(into.Batches), next.Batches...)
+	if into.Styles != nil || next.Styles != nil {
+		styles := make([]map[string]string, len(merged.Rows))
+		copy(styles, into.Styles)
+		copy(styles[len(into.Rows):], next.Styles)
+		merged.Styles = styles
+	}
+	if merged.Metrics == nil {
+		merged.Metrics = into.Metrics
+	}
+	if merged.Total == nil {
+		merged.Total = into.Total
+	}
+	return merged
 }
 
 var processorRegistry = map[string]Processor{}

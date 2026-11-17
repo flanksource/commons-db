@@ -22,7 +22,7 @@ func (statefulPageProcessor) ProcessPage(_ context.Context, _ query.ProcessorSpe
 
 func processedState(specs []query.ProcessorSpec, carried map[string][]byte, page query.Page) (map[string][]byte, error) {
 	pages := func(yield func(query.Page, error) bool) { yield(page, nil) }
-	for processed, err := range query.ProcessPages(context.Context{}, specs, carried, pages) {
+	for processed, err := range query.ProcessPages(context.Context{}, query.ProcessPagesRequest{Specs: specs, Carried: carried}, pages) {
 		return processed.State, err
 	}
 	Fail("ProcessPages yielded nothing")

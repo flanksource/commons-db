@@ -254,14 +254,14 @@ func executePages(ctx context.Context, run pageExecution) iter.Seq2[Page, error]
 	}
 	req.Position = position
 
-	// The processors run on raw rows and before the cursor is minted. A processor
-	// that folds rows across pages contributes to the position: the token has to
-	// carry what it has already emitted, or the page after it emits the same
-	// group again. That is why the chain is assembled here rather than wrapped
-	// around ExecutePages by the caller, which is where it used to live.
+	// The processors run on raw rows and before the cursor is minted: a page
+	// they leave short is filled from the provider's next pages, and the cursor
+	// resumes after the last one read — which is why the chain is assembled here
+	// rather than wrapped around ExecutePages by the caller. A processor that
+	// carries state across pages contributes it to the position too.
 	rows := providerPages(ctx, p, req, page)
 	if applyPipeline && len(p.Processors) > 0 {
-		rows = ProcessPages(ctx, p.Processors, position.State, rows)
+		rows = ProcessPages(ctx, ProcessPagesRequest{Specs: p.Processors, Carried: position.State, Limit: page.Limit}, rows)
 	}
 	if applyPipeline {
 		rows = withRowTransforms(ctx, p, rows)

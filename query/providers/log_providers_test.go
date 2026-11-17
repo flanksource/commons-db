@@ -617,9 +617,10 @@ var _ = Describe("k8s logs provider", func() {
 	})
 
 	// The pipeline end to end: the provider resumes from SinceTime, dedupe folds
-	// each page, and the groups it has already emitted ride in the cursor so a
-	// line repeated three pages later is not shown again.
-	It("carries dedupe's memory across a cursor walk", func() {
+	// each page, and a page dedupe left short is filled from the provider's next
+	// pages until it holds the page size. Nothing about emitted groups rides in
+	// the cursor, so a group can surface again on a later page.
+	It("fills each deduped page from the next source pages across a cursor walk", func() {
 		base := time.Now().Add(-10 * time.Minute).UTC().Truncate(time.Second)
 		messages := []string{"boom", "boom", "ok", "boom", "ok", "done"}
 		lines := make([]string, 0, len(messages))
@@ -637,7 +638,7 @@ var _ = Describe("k8s logs provider", func() {
 		}
 		Expect(profile.Streamable()).To(BeTrue())
 
-		var seen []string
+		var served [][]string
 		request := query.PageRequest{Limit: 2, Strategy: query.PagingCursor}
 		for {
 			var page query.Page
@@ -646,16 +647,18 @@ var _ = Describe("k8s logs provider", func() {
 				page = next
 				break
 			}
-			seen = append(seen, rowValues(page.Rows, "message")...)
+			Expect(page.State).ToNot(HaveKey("logs.dedupe"))
+			served = append(served, rowValues(page.Rows, "message"))
 			if !page.HasMore {
 				break
 			}
 			request = query.PageRequest{Limit: 2, Cursor: page.Next}
 		}
 
-		// "boom" spans pages one and two and "ok" pages two and three; each
-		// surfaces once across the whole walk.
-		Expect(seen).To(Equal([]string{"boom", "ok", "done"}))
+		// Source pages are [boom boom] [ok boom] [ok done]. The first folds to one
+		// row, so the second is read into the same page; "ok" opens the third
+		// source page too, and surfaces again there.
+		Expect(served).To(Equal([][]string{{"boom", "ok"}, {"ok", "done"}}))
 	})
 
 	It("declares an ascending order a page can be cut from", func() {
