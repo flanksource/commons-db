@@ -336,6 +336,31 @@ entries:
 
 		Expect(err).To(MatchError(ContainSubstring("NaN")))
 	})
+	ginkgo.It("summarises a sample series with nearest-rank order statistics", func() {
+		program, err := compileProjectionExpression(`{"p95": source.samples.percentile(95), "stats": source.samples.stats()}`)
+		Expect(err).ToNot(HaveOccurred())
+
+		samples := []any{40.0, 10.0, 30.0, 20.0, 50.0}
+		value, err := evalProjectionValue(program, map[string]any{"source": map[string]any{"samples": samples}})
+
+		Expect(err).ToNot(HaveOccurred())
+		Expect(value).To(Equal(map[string]any{
+			"p95": 50.0,
+			"stats": map[string]any{
+				"min": 10.0, "avg": 30.0, "max": 50.0,
+				"p50": 30.0, "p90": 50.0, "p95": 50.0, "p99": 50.0,
+				"samples": int64(5),
+			},
+		}))
+	})
+	ginkgo.It("refuses order statistics over an empty series rather than reporting zero", func() {
+		program, err := compileProjectionExpression(`source.samples.stats()`)
+		Expect(err).ToNot(HaveOccurred())
+
+		_, err = evalProjectionValue(program, map[string]any{"source": map[string]any{"samples": []any{}}})
+
+		Expect(err).To(MatchError(ContainSubstring("stats requires at least one sample")))
+	})
 	ginkgo.It("rejects a date() argument that is not a timestamp", func() {
 		program, err := compileProjectionExpression(`date(source.first_observed)`)
 		Expect(err).ToNot(HaveOccurred())

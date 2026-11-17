@@ -11,8 +11,19 @@ import (
 )
 
 type ProjectionQuery struct {
-	Exec *ProjectionExecQuery `json:"exec,omitempty" yaml:"exec,omitempty"`
-	HTTP *ProjectionHTTPQuery `json:"http,omitempty" yaml:"http,omitempty"`
+	Exec    *ProjectionExecQuery    `json:"exec,omitempty" yaml:"exec,omitempty"`
+	HTTP    *ProjectionHTTPQuery    `json:"http,omitempty" yaml:"http,omitempty"`
+	Profile *ProjectionProfileQuery `json:"profile,omitempty" yaml:"profile,omitempty"`
+}
+
+// ProjectionProfileQuery runs a named Query profile through Options.Profiles.
+// Params are Go templates over .context, and .target in perTarget mode.
+type ProjectionProfileQuery struct {
+	Name   string            `json:"name" yaml:"name"`
+	Mode   string            `json:"mode,omitempty" yaml:"mode,omitempty"`
+	Params map[string]string `json:"params,omitempty" yaml:"params,omitempty"`
+	All    bool              `json:"all,omitempty" yaml:"all,omitempty"`
+	Select string            `json:"select,omitempty" yaml:"select,omitempty"`
 }
 
 type ProjectionExecQuery struct {
@@ -69,6 +80,52 @@ func (q ProjectionHTTPQuery) validate() error {
 	return validateSourceSelect(q.Select)
 }
 
+func (q ProjectionProfileQuery) validate() error {
+	if strings.TrimSpace(q.Name) == "" {
+		return fmt.Errorf("spec.source.query.profile.name is required")
+	}
+	if q.Mode != "" && q.Mode != "once" && q.Mode != "perTarget" {
+		return fmt.Errorf("spec.source.query.profile.mode must be once or perTarget")
+	}
+	if _, err := parseProfileParams(q.Params); err != nil {
+		return err
+	}
+	for _, key := range profileWindowParams {
+		value, ok := q.Params[key]
+		if !ok || strings.Contains(value, "{{") {
+			continue
+		}
+		if _, err := resolveProfileInstant(key, value, time.Now()); err != nil {
+			return fmt.Errorf("spec.source.query.profile: %w", err)
+		}
+	}
+	return validateSourceSelect(q.Select)
+}
+
+func (q ProjectionQuery) validate() error {
+	sources := 0
+	for _, set := range []bool{q.Exec != nil, q.HTTP != nil, q.Profile != nil} {
+		if set {
+			sources++
+		}
+	}
+	if sources != 1 {
+		return fmt.Errorf("spec.source.query must contain exactly one of exec, http or profile")
+	}
+	switch {
+	case q.Exec != nil:
+		return q.Exec.validate()
+	case q.HTTP != nil:
+		return q.HTTP.validate()
+	default:
+		return q.Profile.validate()
+	}
+}
+
+func (q ProjectionQuery) perTarget() bool {
+	return q.HTTP != nil || q.Exec != nil && q.Exec.Mode == "perTarget" || q.Profile != nil && q.Profile.Mode == "perTarget"
+}
+
 func validateSourceSelect(selector string) error {
 	if selector != "" {
 		if _, err := jp.ParseString(selector); err != nil {
@@ -89,21 +146,11 @@ func (p Projection) validate() error {
 		return fmt.Errorf("metadata.name is required")
 	}
 	query := p.Spec.Source.Query
-	if (query.Exec == nil) == (query.HTTP == nil) {
-		return fmt.Errorf("spec.source.query must contain exactly one of exec or http")
-	}
-	if query.Exec != nil {
-		if err := query.Exec.validate(); err != nil {
-			return err
-		}
-	}
-	if query.HTTP != nil {
-		if err := query.HTTP.validate(); err != nil {
-			return err
-		}
+	if err := query.validate(); err != nil {
+		return err
 	}
 	if p.Spec.Target == nil {
-		if query.HTTP != nil || query.Exec != nil && query.Exec.Mode == "perTarget" {
+		if query.perTarget() {
 			return fmt.Errorf("per-target sources require spec.target")
 		}
 		if len(p.Spec.Match) != 0 || len(p.Spec.Set) != 0 {

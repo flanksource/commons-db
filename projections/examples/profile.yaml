@@ -1,0 +1,27 @@
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: container-cpu
+spec:
+  source:
+    query:
+      profile:
+        name: container-metrics
+        all: true
+    where: source.metric == "cpu_usage"
+---
+# A windowed metric profile declaring start, end and db_instance params; its metrics.sources must cover exactly this window.
+apiVersion: projections.flanksource.com/v1alpha1
+kind: Projection
+metadata:
+  name: rds-window
+spec:
+  source:
+    query:
+      profile:
+        name: env-rds-metrics
+        all: true
+        params:
+          start: "2026-11-01T00:00:00Z"
+          end: "2026-11-02T00:00:00Z"
+          db_instance: '{{.context.name}}'
