@@ -18,7 +18,17 @@ type Options struct {
 	BuildInfo BuildInfo
 }
 
-func New(options Options) (*cobra.Command, error) {
+func New(options Options) (*Root, error) {
+	root, err := newTree(options)
+	if err != nil {
+		return nil, err
+	}
+	capture := bindCaptureFlags(root)
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error { return capture.arm(cmd) }
+	return &Root{Command: root, capture: capture}, nil
+}
+
+func newTree(options Options) (*cobra.Command, error) {
 	if options.BuildInfo.Version == "" {
 		return nil, fmt.Errorf("query build version is required")
 	}
@@ -48,7 +58,7 @@ func New(options Options) (*cobra.Command, error) {
 		return root, nil
 	}
 	if requestsProjections(options.Args) {
-		root.AddCommand(newProjections())
+		root.AddCommand(newProjections(options))
 		return root, nil
 	}
 	clicky.BindAllFlags(root.PersistentFlags(), "format", "tasks")
@@ -74,7 +84,7 @@ func New(options Options) (*cobra.Command, error) {
 	}
 	clicky.GenerateCLI(root)
 	if requestsMetadataOnly(options.Args) {
-		root.AddCommand(newProjections())
+		root.AddCommand(newProjections(options))
 	}
 	return root, nil
 }
@@ -83,7 +93,7 @@ func New(options Options) (*cobra.Command, error) {
 // as the command name by the scanners below.
 var flagsWithValues = map[string]bool{
 	"--config-dir": true, "--profiles-dir": true, "--db": true, "--data-dir": true,
-	"--format": true,
+	"--format": true, "--har": true, "--har-level": true, "-P": true, "--properties": true,
 }
 
 // metadataOnlyCommands describe the CLI rather than run it. They read neither

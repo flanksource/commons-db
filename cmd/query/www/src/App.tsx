@@ -17,8 +17,12 @@ import {
 } from "@flanksource/clicky-ui/devtools";
 import { ChatButton, ChatWindowManagerProvider } from "@flanksource/clicky-ui/ai";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { createConnectionDashboardResultRenderer } from "@flanksource/clicky-ui/connections";
-import { connectionFormActions, connectionsApiBase, formExtensions } from "./appFormExtensions";
+import {
+  createConnectionDashboardResultRenderer,
+  useConnectionFormExtensions,
+  useConnectionSchema,
+} from "@flanksource/clicky-ui/connections";
+import { appFormExtensions, connectionFormActions, connectionsApiBase } from "./appFormExtensions";
 import { logsResultRenderer, useLogsSurfaces } from "./logsProfiles";
 import { tracePaginationMode, tracesResultRenderer, useTraceSurfaces } from "./tracesProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
@@ -72,6 +76,13 @@ function Explorer() {
   const { pathname, renderLink } = useRouter();
   const editingProfile = profileEditSurfaceKey(pathname);
   const reconcilingProfile = reconcileSurfaceKey(pathname);
+  const connectionSchema = useConnectionSchema(client);
+  const { extensions: formExtensions, error: formExtensionsError } = useConnectionFormExtensions({
+    apiBase: connectionsApiBase,
+    schema: connectionSchema.data,
+    host: appFormExtensions,
+  });
+  if (formExtensionsError) throw new Error(`connection form extensions: ${formExtensionsError}`);
   const editProfileMenuAction = useEditProfileMenuAction(client);
   const profileMenuActions = (surfaceKey: string) => [editProfileMenuAction(surfaceKey)];
   const currentSurfaceKey = pathname.split("/")[1] ?? "";

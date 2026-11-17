@@ -2,6 +2,7 @@ package secretcatalog
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -22,6 +23,26 @@ func TestMaskValue(t *testing.T) {
 		if got := maskValue(in); got != want {
 			t.Errorf("maskValue(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestMaskHelmValuesKeepsShapeAndMasksScalars(t *testing.T) {
+	merged := map[string]any{
+		"auth":     map[string]any{"password": "hunter2", "host": "sql-server.example.com"},
+		"replicas": float64(3),
+		"hosts":    []any{"primary.example.com", map[string]any{"port": float64(5432)}},
+		"enabled":  true,
+		"extra":    nil,
+	}
+	want := map[string]any{
+		"auth":     map[string]any{"password": "••••", "host": "sql-••••.com"},
+		"replicas": "••••",
+		"hosts":    []any{"prim••••.com", map[string]any{"port": "••••"}},
+		"enabled":  "••••",
+		"extra":    nil,
+	}
+	if got := maskHelmValues(merged); !reflect.DeepEqual(got, want) {
+		t.Errorf("maskHelmValues = %#v, want %#v", got, want)
 	}
 }
 
