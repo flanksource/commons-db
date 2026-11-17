@@ -162,4 +162,19 @@ var _ = Describe("Recorder HAR capture", func() {
 
 		Expect(buffer.GetLogs()).ToNot(BeEmpty())
 	})
+
+	// A CLI --har arms the whole command through its context, with no console
+	// recorder and the operator's logger left at Info.
+	It("forwards every request to a context-held collector armed with a request HAR level", func() {
+		provider := &harProvider{typ: "recorder-har-context", url: server.URL}
+		ctx, buffer := quietContext()
+		collector := har.NewCollector(har.DefaultConfig())
+		run(ctx.WithHARCollector(collector).WithRequestHARLevel(logger.Trace), provider)
+
+		entries := collector.Entries()
+		Expect(entries).To(HaveLen(1))
+		Expect(entries[0].Request.URL).To(HavePrefix(server.URL))
+		Expect(entries[0].Response.Content.Text).To(ContainSubstring(`"hits"`))
+		Expect(buffer.GetLogs()).To(BeEmpty(), "capture must not raise the terminal log")
+	})
 })

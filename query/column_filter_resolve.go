@@ -69,6 +69,16 @@ func partitionProfileInput(profile Profile, input map[string]any) (map[string]an
 	for _, binding := range bindings {
 		byKey[binding.Key] = binding
 	}
+	if _, declared := byKey[TraceScopeKey]; !declared {
+		scope, ok, err := profile.traceScopeBinding()
+		if err != nil {
+			return nil, nil, err
+		}
+		if ok {
+			bindings = append(bindings, scope)
+			byKey[TraceScopeKey] = scope
+		}
+	}
 	params := make(map[string]any, len(input))
 	values := make(map[string]ColumnFilterValue, len(bindings))
 	for key, value := range input {
