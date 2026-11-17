@@ -15,9 +15,9 @@ var ErrNoIdentity = errors.New("no git user.name/user.email configured")
 
 // DefaultIdentity reads user.name and user.email from the calling process's
 // own global git config, as the git binary resolves it from the process
-// environment (HOME, XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL). Every other command
-// in this package runs with the global config isolated (baseEnv); this is the
-// one read of it, so a server can author a commit as itself. A missing name
+// environment (HOME, XDG_CONFIG_HOME, GIT_CONFIG_GLOBAL), so a server can author
+// a commit as itself. Other commands isolate global configuration, except for
+// the visibility helpers' core.excludesFile lookup. A missing name
 // or email is ErrNoIdentity.
 func DefaultIdentity(ctx context.Context) (Signature, error) {
 	name, err := globalConfigValue(ctx, "user.name")

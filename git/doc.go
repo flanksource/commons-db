@@ -21,6 +21,7 @@
 //     blobs.go reads selected files in one batch; blame.go attributes supplied
 //     contents directly against an immutable commit in the bare mirror.
 //   - ignore.go lists tracked and unignored paths in a local checkout.
+//     WalkDir walks folders with the same rules, including nested repositories.
 //   - source.go prepares local working, commit and staged sources with their
 //     changed paths, isolating immutable sources from the original index and checkout.
 //   - provider*.go and rest.go talk to the hosting provider's REST API.
@@ -70,7 +71,9 @@
 //     a traced Authorization header out of the stderr an error carries.
 //
 // Commit and tag authors are therefore always explicit (Signature).
-// DefaultIdentity is the one deliberate read of the global config: it returns
+// DefaultIdentity deliberately reads the global config: it returns
 // the process's own user.name and user.email, for a caller that authors a
 // commit as the server itself.
+// Visibility operations also read core.excludesFile from global configuration,
+// respecting repository overrides without importing other global settings.
 package git
