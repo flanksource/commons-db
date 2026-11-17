@@ -114,7 +114,7 @@ func Open(options Options) (*DB, error) {
 }
 
 func openWriter(path string) (*sql.DB, error) {
-	writer, err := sql.Open("sqlite", fileURI(path)+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate")
+	writer, err := sql.Open("sqlite", FileURI(path)+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("sqlite: open writer %s: %w", path, err)
 	}
@@ -358,11 +358,23 @@ func (d *DB) ReadDSN() string { return ReadOnlyDSN(d.path) }
 // ReadOnlyDSN is a query-only DSN for the SQLite file at path, for a reader
 // that must never write it, such as one partition of a merged read.
 func ReadOnlyDSN(path string) string {
-	return fileURI(path) + "?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)"
+	return FileURI(path) + "?mode=ro&_pragma=query_only(1)&_pragma=busy_timeout(5000)"
 }
 
-func fileURI(path string) string {
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
+// FileURI is the SQLite file: URI for path. A relative path stays relative to
+// the working directory (file:dir/x.sqlite), since file://dir/... would make
+// its first segment the URI authority.
+func FileURI(path string) string {
+	slashed := filepath.ToSlash(path)
+	escaped := (&url.URL{Path: slashed}).EscapedPath()
+	switch {
+	case strings.HasPrefix(slashed, "/"):
+		return "file://" + escaped
+	case filepath.IsAbs(path):
+		return "file:///" + escaped
+	default:
+		return "file:" + escaped
+	}
 }
 
 // Close drains accepted asynchronous writes and closes both pools.

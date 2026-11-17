@@ -51,6 +51,21 @@ var _ = Describe("SQLite database opened read-only", func() {
 		DeferCleanup(func() { Expect(readOnly.Close()).To(Succeed()) })
 	})
 
+	It("opens a path relative to the working directory, whose first segment is not a URI authority", func() {
+		cwd, err := filepath.Abs(".")
+		Expect(err).ToNot(HaveOccurred())
+		relative, err := filepath.Rel(cwd, path)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(insert(writable, "relative")).To(Succeed())
+
+		client, err := sql.Open("sqlite", ReadOnlyDSN(relative))
+		Expect(err).ToNot(HaveOccurred())
+		DeferCleanup(client.Close)
+		var id string
+		Expect(client.QueryRow(`SELECT id FROM events`).Scan(&id)).To(Succeed())
+		Expect(id).To(Equal("relative"))
+	})
+
 	It("refuses a file that does not exist rather than creating it", func() {
 		missing := filepath.Join(GinkgoT().TempDir(), "missing.sqlite")
 		_, err := Open(Options{Path: missing, ReadOnly: true})

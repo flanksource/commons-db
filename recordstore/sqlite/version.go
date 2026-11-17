@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/flanksource/commons-db/db/sqlitetable"
 	"github.com/flanksource/commons-db/query"
+	sqlitedb "github.com/flanksource/commons-db/sqlite"
 )
 
 // predecessor is a file an older build wrote for the configured path, and the
@@ -101,7 +101,7 @@ func versionedFile(ctx context.Context, path string, derived bool) (string, erro
 // copy.
 func copyPredecessor(ctx context.Context, from predecessor, target string) error {
 	source := from.path
-	database, err := sql.Open("sqlite", fileURI(source)+"?_pragma=busy_timeout(5000)")
+	database, err := sql.Open("sqlite", sqlitedb.FileURI(source)+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		return fmt.Errorf("open %s: %w", source, err)
 	}
@@ -154,7 +154,7 @@ func copyPredecessor(ctx context.Context, from predecessor, target string) error
 // kinds' recorded indexes and its streams' compaction counts; a version 4 or 5 one already describes its tables'
 // columns as version 6 reads them.
 func migrateCopy(ctx context.Context, path string, version int) (err error) {
-	database, err := sql.Open("sqlite", fileURI(path))
+	database, err := sql.Open("sqlite", sqlitedb.FileURI(path))
 	if err != nil {
 		return err
 	}
@@ -270,8 +270,4 @@ func positionalTable(ctx context.Context, tx *sql.Tx, kind storedKind) (sqliteta
 		storage[index] = parts[index][storageAt:]
 	}
 	return table, storage, parts[len(physical):], nil
-}
-
-func fileURI(path string) string {
-	return (&url.URL{Scheme: "file", Path: filepath.ToSlash(path)}).String()
 }
