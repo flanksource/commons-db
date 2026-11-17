@@ -29,7 +29,8 @@ const helmReleaseSecretType = "helm.sh/release.v1"
 //
 //   - GET {prefix}/secrets?kind=secret|configmap|helm|serviceaccount[&namespace=] -> [{name, keys}]
 //   - GET {prefix}/secrets/preview?kind=&name=[&namespace=]        -> [{key, value}]
-//   - GET {prefix}/secrets/onepassword/vaults                     -> [{id, name}]
+//   - GET {prefix}/secrets/helm-values?name=[&namespace=]          -> the release's merged values, scalars masked
+//   - GET {prefix}/secrets/onepassword/vaults                   -> [{id, name}]
 //   - GET {prefix}/secrets/onepassword/items?vault=               -> [{id, name}]
 //   - GET {prefix}/secrets/onepassword/fields?vault=&item=         -> [{id, label, reference, section}]
 //   - GET {prefix}/namespaces                                      -> [name, ...]
@@ -107,7 +108,7 @@ func NewHandler(options Options) http.Handler {
 func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rel := strings.Trim(strings.TrimPrefix(strings.TrimSuffix(r.URL.Path, "/"), h.prefix), "/")
 	switch rel {
-	case "contexts", "secrets", "secrets/preview", "namespaces", "workloads",
+	case "contexts", "secrets", "secrets/preview", "secrets/helm-values", "namespaces", "workloads",
 		"secrets/onepassword/vaults", "secrets/onepassword/items", "secrets/onepassword/fields":
 	default:
 		h.next.ServeHTTP(w, r)
@@ -166,6 +167,13 @@ func (h *secretsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		payload, err = scoped.previewKeys(r.Context(), client, q.Get("kind"), name, ns)
+	case "secrets/helm-values":
+		name := q.Get("name")
+		if name == "" {
+			http.Error(w, "name is required", http.StatusBadRequest)
+			return
+		}
+		payload, err = scoped.previewHelmValues(name, ns)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -324,6 +332,40 @@ func (h *secretsHandler) previewHelmKeys(name, ns string) ([]keyPreview, error) 
 		out = append(out, keyPreview{Key: k, Value: previewHelmValue(merged[k])})
 	}
 	return out, nil
+}
+
+// previewHelmValues returns the release's merged values with the same shape but
+// every scalar mid-masked, so a JSONPath picker can browse where a value lives
+// without the values themselves leaving the server.
+func (h *secretsHandler) previewHelmValues(name, ns string) (any, error) {
+	merged, err := dbcontext.GetHelmValuesFromCache(h.ctx, ns, name)
+	if err != nil {
+		return nil, fmt.Errorf("decode helm release %s/%s: %w", ns, name, err)
+	}
+	return maskHelmValues(merged), nil
+}
+
+func maskHelmValues(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(t))
+		for k, child := range t {
+			out[k] = maskHelmValues(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(t))
+		for i, child := range t {
+			out[i] = maskHelmValues(child)
+		}
+		return out
+	case nil:
+		return nil
+	case string:
+		return maskValue(t)
+	default:
+		return maskValue(fmt.Sprintf("%v", t))
+	}
 }
 
 // previewHelmValue masks a scalar value and collapses nested structures to a

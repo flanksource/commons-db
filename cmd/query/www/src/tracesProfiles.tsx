@@ -21,6 +21,7 @@ import {
   type ProfileRenderSurface,
 } from "./logsProfiles";
 import { useProfiles } from "./profilesQuery";
+import { useOpenTrace } from "./profileOpenTrace";
 
 export function useTraceSurfaces() {
   const { data } = useProfiles();
@@ -75,6 +76,10 @@ function ProfileTraces({
 }) {
   const { navigate, pathname } = useRouter();
   const params = new URLSearchParams(window.location.search);
+  const openTrace = useOpenTrace(
+    context.response?.requestUrl,
+    params.get("trace") ?? undefined,
+  );
   const result = useMemo(() => {
     try {
       const table = clickyTable(context.response!.parsed);
@@ -139,6 +144,7 @@ function ProfileTraces({
         ? { selectedTraceId: params.get("trace")! }
         : {})}
       {...(params.get("span") ? { selectedSpanId: params.get("span")! } : {})}
+      {...(openTrace ? { openTrace } : {})}
       loading={context.loading}
       {...(context.filterConfig?.filters
         ? { externalFilters: context.filterConfig.filters }

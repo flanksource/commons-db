@@ -196,3 +196,47 @@ it("keeps all cursor pages, typed fields and server controls while preserving ro
   await act(async () => container.querySelectorAll("button")[2]!.click());
   expect(window.location.search).toBe("?service=checkout&limit=100");
 });
+
+it("fetches the open trace by cursor pages apart from the listing, and the spans its filters match", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  window.history.replaceState(null, "", "/profile-service-traces?trace=trace-a");
+  const listing = { ...page("root"), requestUrl: "/api/v1/profile/profile-service-traces?limit=100&filter.service=checkout" };
+  const requested: string[] = [];
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    requested.push(url);
+    const query = new URL(url, "http://host").searchParams;
+    const matching = query.has("filter.service");
+    const first = !query.has("cursor");
+    const headers = new Headers(!matching && first ? { "X-Has-More": "true", "X-Next-Cursor": "c2" } : {});
+    const id = matching ? "child" : first ? "root" : "child";
+    return new Response(JSON.stringify(page(id).parsed), { status: 200, headers });
+  }));
+  const context: ResultRenderContext = { surfaceKey: "profile-service-traces", response: listing, loading: false, defaultView: "table" };
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  expect(observed.props?.openTrace?.spans.map((span) => span.spanId)).toEqual(["root", "child"]);
+  expect([...(observed.props?.openTrace?.matchingSpanIds ?? [])]).toEqual(["child"]);
+  expect(observed.props?.openTrace?.loading).toBe(false);
+  expect(requested.map((url) => new URL(url, "http://host").searchParams.get("filter.trace_id"))).toEqual(["trace-a", "trace-a", "trace-a"]);
+});
+
+it("keeps the spans of a trace the source cut short, and warns that it is incomplete", async () => {
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  window.history.replaceState(null, "", "/profile-service-traces?trace=trace-a");
+  const listing = { ...page("root"), requestUrl: "/api/v1/profile/profile-service-traces?limit=100" };
+  vi.stubGlobal("fetch", vi.fn(async () =>
+    new Response(JSON.stringify(page("root").parsed), { status: 200, headers: { "X-Truncated": "true", "X-Total-Count": "5", "X-Total-Relation": "eq" } }),
+  ));
+  const context: ResultRenderContext = { surfaceKey: "profile-service-traces", response: listing, loading: false, defaultView: "table" };
+  container = document.createElement("div");
+  document.body.appendChild(container);
+  root = createRoot(container);
+  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+  expect(observed.props?.openTrace?.spans.map((span) => span.spanId)).toEqual(["root"]);
+  expect(observed.props?.openTrace?.warning).toBe("The profile stopped returning spans after 1 of 5; this trace is incomplete.");
+  expect(observed.props?.openTrace?.error).toBeUndefined();
+});

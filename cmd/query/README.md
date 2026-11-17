@@ -49,6 +49,20 @@ params:
     required: true
 ```
 
+## Capturing HTTP and SQL from the CLI
+
+Every `query` command takes `--har <path>` to write each provider and projection HTTP request of that command to a HAR 1.2 archive, including the requests of a command that fails. `--har-level full` (the default) keeps JSON request and response bodies; `--har-level metadata` keeps headers, query strings and timings only. Exec projection sources run their own processes and are not captured.
+
+```sh
+query --db= --profiles-dir profiles projections run projections.yaml --context-file collection.yaml --format json --har=out.har
+```
+
+`-P key=value` (repeatable, or comma-separated) sets process properties. The connection logging levels (`log.level.sql`, `log.level.sql.params`, `log.level.http`, `log.level.http.headers`, `log.level.http.request.body`, `log.level.http.response.body`, `log.level.error`, `log.level.slow`, `log.level.operation`) are read from the connection's properties first, then from `-P`, then the default. So `-Plog.level.sql=info` logs every SQL statement with its duration and row count at the default log level, and `-Plog.level.sql.params=info` adds its bound arguments, with credential-shaped values redacted. `off` disables an event.
+
+```sh
+query --db= --profiles-dir profiles -Plog.level.sql=info profiles run events --format json
+```
+
 ## API
 
 Resources are addressed by one REST endpoint; **content negotiation** selects the

@@ -33,22 +33,32 @@ const connectionFields = connectionSchemaFormExtensions({apiBase:connectionsApiB
 // EntityExplorerApp, and without them every x-clicky-component in the profile
 // schema — the CEL editor, the processor pipeline, the namespace and secret
 // pickers — falls back to a plain control.
-export const formExtensions = {
-  pre: [
-    ...unitFormExtensions.pre,
-    ...esParamOptionsFormExtensions.pre,
-    ...connectionLoggingFormExtensions.pre,
-  ],
+// The connection form is built from the served schema (useConnectionFormExtensions
+// in App), which needs only the app's own extensions: it adds the unit-aware and
+// logging ones and the schema-derived namespace, secret and kubernetes pickers.
+export const appFormExtensions = {
+  pre: [...esParamOptionsFormExtensions.pre],
   post: [
-    ...connectionFields.post,
     ...profileBuilderFormExtensions.post,
     ...esQueryBuilderFormExtensions.post,
     ...esParamOptionsFormExtensions.post,
     ...jsonPathFormExtensions.post,
     ...celEditorFormExtensions.post,
     ...processorPipelineFormExtensions.post,
-    ...connectionLoggingFormExtensions.post,
     ...localFileFormExtensions.post,
+  ],
+};
+
+export const formExtensions = {
+  pre: [
+    ...unitFormExtensions.pre,
+    ...appFormExtensions.pre,
+    ...connectionLoggingFormExtensions.pre,
+  ],
+  post: [
+    ...connectionFields.post,
+    ...appFormExtensions.post,
+    ...connectionLoggingFormExtensions.post,
   ],
 };
 

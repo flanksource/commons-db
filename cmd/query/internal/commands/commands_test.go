@@ -15,9 +15,22 @@ import (
 )
 
 func TestCommands(t *testing.T) {
+	// Connections are read from $XDG_CONFIG_HOME/flanksource/connections, so the
+	// developer's own connections would otherwise become profiles in every tree.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	RegisterFailHandler(Fail)
 	RunSpecs(t, "Query commands")
 }
+
+const kubernetesConnection = `apiVersion: mission-control.flanksource.com/v1
+kind: Connection
+metadata:
+  name: %s
+spec:
+  type: kubernetes
+  properties:
+    kubecontext: %s
+`
 
 var _ = Describe("New", Ordered, func() {
 	build := commands.BuildInfo{Version: "dev", Commit: "unknown", Date: "unknown"}
@@ -78,6 +91,31 @@ var _ = Describe("New", Ordered, func() {
 		Entry("with a command's --help", []string{"serve", "--help"}),
 		Entry("with a sub-command's -h", []string{"connection", "list", "-h"}),
 	)
+
+	It("builds the command tree twice in one process with a Kubernetes connection's logs profile", func() {
+		const connection = "acme-cluster"
+		configHome := GinkgoT().TempDir()
+		GinkgoT().Setenv("XDG_CONFIG_HOME", configHome)
+		connections := filepath.Join(configHome, "flanksource", "connections")
+		Expect(os.MkdirAll(connections, 0o700)).To(Succeed())
+		Expect(os.WriteFile(filepath.Join(connections, connection+".yaml"),
+			[]byte(fmt.Sprintf(kubernetesConnection, connection, connection)), 0o600)).To(Succeed())
+
+		for attempt := range 2 {
+			root, err := commands.New(commands.Options{
+				Args: []string{
+					"--config-dir", filepath.Join(GinkgoT().TempDir(), "config"),
+					"--profiles-dir", filepath.Join(GinkgoT().TempDir(), "profiles"),
+					"--db=", "profiles",
+				},
+				Stdout: io.Discard, Stderr: io.Discard, BuildInfo: build,
+			})
+			Expect(err).NotTo(HaveOccurred(), "build %d", attempt)
+			logs, _, err := root.Find([]string{"profiles", "profile-logs-" + connection})
+			Expect(err).NotTo(HaveOccurred(), "build %d", attempt)
+			Expect(logs.Name()).To(Equal("profile-logs-"+connection), "build %d", attempt)
+		}
+	})
 
 	It("falls back to the file store when --db is explicitly empty", func() {
 		configDir := filepath.Join(GinkgoT().TempDir(), "config")

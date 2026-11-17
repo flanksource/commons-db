@@ -371,16 +371,15 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("build entity schema for profile %q: %w", name, err)
 		}
+		runtimeBindings, err := resolved.Profile.RuntimeFilterBindings()
+		if err != nil {
+			return fmt.Errorf("build runtime filters for profile %q: %w", name, err)
+		}
+		inputBindings := append(resolved.Profile.ParamFilterBindings(), runtimeBindings...)
 		if !s.markRegistered(name) {
 			continue
 		}
-		for _, binding := range bindings {
-			filterName := profileFilterName(resolved.Profile.Name, binding.Column)
-			if _, exists := entity.GetFilter(filterName); exists {
-				s.unmarkRegistered(name)
-				return fmt.Errorf("profile filter %q is already registered", filterName)
-			}
-		}
+		filters := make([]entity.NamedFilter, 0, len(bindings)+len(inputBindings))
 		for _, binding := range bindings {
 			// A registered filter is what tells the browser which control to render,
 			// so every binding registers — including the ones with nothing to
@@ -391,30 +390,25 @@ func (s *Service) RegisterDynamic(ctx context.Context) error {
 			if binding.Lookup {
 				source = profileFilterSource{service: s, profileName: name, key: binding.Key}
 			}
-			entity.RegisterFilter(entity.NamedFilter{
+			filters = append(filters, entity.NamedFilter{
 				Name:  profileFilterName(resolved.Profile.Name, binding.Column),
 				Label: binding.Label, Type: binding.ControlType(), Unit: binding.ControlUnit(), Multi: binding.Multi,
 				Limit:  filterLookupLimit(binding),
 				Source: source,
 			})
 		}
-		runtimeBindings, err := resolved.Profile.RuntimeFilterBindings()
-		if err != nil {
-			return fmt.Errorf("build runtime filters for profile %q: %w", name, err)
-		}
-		inputBindings := append(resolved.Profile.ParamFilterBindings(), runtimeBindings...)
 		// Bound params and runtime controls filter inputs the rows do not carry.
 		for _, binding := range inputBindings {
-			filterName := profileParamFilterName(resolved.Profile.Name, binding.Key)
-			if _, exists := entity.GetFilter(filterName); exists {
-				s.unmarkRegistered(name)
-				return fmt.Errorf("profile filter %q is already registered", filterName)
-			}
-			entity.RegisterFilter(entity.NamedFilter{
-				Name: filterName, Label: binding.Label, Type: binding.ControlType(), Unit: binding.ControlUnit(), Multi: binding.Multi,
+			filters = append(filters, entity.NamedFilter{
+				Name:  profileParamFilterName(resolved.Profile.Name, binding.Key),
+				Label: binding.Label, Type: binding.ControlType(), Unit: binding.ControlUnit(), Multi: binding.Multi,
 				Limit:  filterLookupLimit(binding),
 				Source: profileFilterSource{service: s, profileName: name, key: binding.Key},
 			})
+		}
+		if err := registerProfileFilters(filters); err != nil {
+			s.unmarkRegistered(name)
+			return err
 		}
 		builder := entity.NewDynamicEntity(SurfaceKey(name), schemaJSON)
 		// A param filters on an input the rows never carry, so it has no schema
