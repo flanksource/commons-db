@@ -225,9 +225,18 @@ func TestRunTemplate(t *testing.T) {
 			want: "Admin",
 		},
 		{
-			name: "missing variable",
+			name: "missing variable renders empty",
 			template: gomplate.Template{
 				Template: "Hello {{.missing}}!",
+			},
+			env:  map[string]any{},
+			want: "Hello !",
+		},
+		{
+			name: "missing variable under Strict renders text/template's <no value>",
+			template: gomplate.Template{
+				Template: "Hello {{.missing}}!",
+				Strict:   true,
 			},
 			env:  map[string]any{},
 			want: "Hello <no value>!",
