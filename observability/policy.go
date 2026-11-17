@@ -7,6 +7,7 @@ import (
 
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons/logger"
+	commonsProperties "github.com/flanksource/commons/properties"
 )
 
 const (
@@ -150,9 +151,13 @@ func PolicyFor(connection *models.Connection) (Policy, error) {
 		policy.SlowThreshold = threshold
 	}
 	for _, definition := range capability.Events {
-		value := definition.Default
+		// A connection property wins over the process property (-P), which wins over the default.
+		value, source := definition.Default, "connection property"
+		if override := strings.TrimSpace(commonsProperties.Get(definition.Property)); override != "" {
+			value, source = strings.ToLower(override), "property"
+		}
 		if override := strings.TrimSpace(properties[definition.Property]); override != "" {
-			value = strings.ToLower(override)
+			value, source = strings.ToLower(override), "connection property"
 		}
 		if value == "off" {
 			policy.levels[definition.Event] = eventLevel{}
@@ -160,7 +165,7 @@ func PolicyFor(connection *models.Connection) (Policy, error) {
 		}
 		level, ok := supportedLevels[value]
 		if !ok {
-			return Policy{}, fmt.Errorf("connection property %s has unsupported log level %q", definition.Property, value)
+			return Policy{}, fmt.Errorf("%s %s has unsupported log level %q", source, definition.Property, value)
 		}
 		policy.levels[definition.Event] = eventLevel{level: level, enabled: true}
 	}

@@ -10,6 +10,7 @@ import (
 	"github.com/flanksource/commons-db/observability"
 	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/logger"
+	"github.com/flanksource/commons/properties"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -91,6 +92,38 @@ var _ = Describe("Connection logging policy", func() {
 		Expect(policy.Level(observability.EventHTTP)).To(Equal(logger.Info))
 		Expect(policy.Enabled(observability.EventHTTPHeaders)).To(BeFalse())
 		Expect(policy.Level(observability.EventHTTPResponseBody)).To(Equal(logger.Trace4))
+	})
+
+	It("falls back to process properties below connection properties", func() {
+		properties.Set(observability.PropertySQLLevel, "info")
+		properties.Set(observability.PropertySQLParamsLevel, "debug")
+		DeferCleanup(func() {
+			properties.Set(observability.PropertySQLLevel, "")
+			properties.Set(observability.PropertySQLParamsLevel, "")
+		})
+
+		policy, err := observability.PolicyFor(&models.Connection{
+			Type:       models.ConnectionTypePostgres,
+			Properties: types.JSONStringMap{observability.PropertySQLParamsLevel: "trace"},
+		})
+
+		Expect(err).NotTo(HaveOccurred())
+		Expect(map[observability.Event]logger.LogLevel{
+			observability.EventSQL:       policy.Level(observability.EventSQL),
+			observability.EventSQLParams: policy.Level(observability.EventSQLParams),
+		}).To(Equal(map[observability.Event]logger.LogLevel{
+			observability.EventSQL:       logger.Info,
+			observability.EventSQLParams: logger.Trace,
+		}))
+	})
+
+	It("rejects an invalid process property naming it as a property", func() {
+		properties.Set(observability.PropertySQLLevel, "loud")
+		DeferCleanup(func() { properties.Set(observability.PropertySQLLevel, "") })
+
+		_, err := observability.PolicyFor(&models.Connection{Type: models.ConnectionTypePostgres})
+
+		Expect(err).To(MatchError(`property log.level.sql has unsupported log level "loud"`))
 	})
 
 	DescribeTable("rejects invalid overrides",
