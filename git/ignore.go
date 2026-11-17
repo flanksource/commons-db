@@ -15,11 +15,12 @@ type VisiblePaths struct {
 	directory  string
 	paths      map[string]bool
 	repository bool
+	env        []string
 }
 
 // ListVisiblePaths applies .gitignore and repository exclude rules beneath directory.
 // Contains accepts absolute paths. Tracked files remain visible even if an ignore rule matches.
-// Global excludes are not read because git commands in this package isolate global configuration.
+// User-global core.excludesFile is honored without importing other global settings.
 func ListVisiblePaths(ctx context.Context, directory string) (VisiblePaths, error) {
 	absolute, err := filepath.Abs(directory)
 	if err != nil {
@@ -36,12 +37,16 @@ func ListVisiblePaths(ctx context.Context, directory string) (VisiblePaths, erro
 		}
 		return VisiblePaths{}, fmt.Errorf("find Git repository for %q: %w", canonical, err)
 	}
-	listed, err := run(ctx, command{dir: canonical,
+	env, err := visibilityEnvironment(ctx, canonical)
+	if err != nil {
+		return VisiblePaths{}, err
+	}
+	listed, err := run(ctx, command{dir: canonical, env: env,
 		args: []string{"--no-optional-locks", "ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."}})
 	if err != nil {
 		return VisiblePaths{}, fmt.Errorf("list Git-visible paths under %q: %w", canonical, err)
 	}
-	visible := VisiblePaths{directory: canonical, paths: make(map[string]bool), repository: true}
+	visible := VisiblePaths{directory: canonical, paths: make(map[string]bool), repository: true, env: env}
 	for _, item := range strings.Split(listed, "\x00") {
 		if item == "" {
 			continue
@@ -73,7 +78,7 @@ func (visible VisiblePaths) IsIgnored(ctx context.Context, path string) (bool, e
 	if err != nil || !filepath.IsLocal(relative) {
 		return false, fmt.Errorf("path %q is outside Git visibility directory %q", path, visible.directory)
 	}
-	_, err = run(ctx, command{dir: visible.directory,
+	_, err = run(ctx, command{dir: visible.directory, env: visible.env,
 		args: []string{"--no-optional-locks", "check-ignore", "-q", "--", relative}})
 	if err == nil {
 		return true, nil

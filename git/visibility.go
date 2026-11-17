@@ -49,7 +49,11 @@ func CheckVisibility(ctx context.Context, options VisibilityOptions) ([]PathVisi
 	if len(result) == 0 {
 		return result, nil
 	}
-	checked, err := gitcommand.Run(ctx, gitcommand.Options{Directory: options.Directory, Input: []byte(input), Args: []string{"check-ignore", "--stdin", "-z", "-v", "--non-matching"}})
+	env, err := visibilityEnvironment(ctx, options.Directory)
+	if err != nil {
+		return nil, err
+	}
+	checked, err := gitcommand.Run(ctx, gitcommand.Options{Directory: options.Directory, Environment: env, Input: []byte(input), Args: []string{"check-ignore", "--stdin", "-z", "-v", "--non-matching"}})
 	var exit *exec.ExitError
 	if err != nil && (!errors.As(err, &exit) || exit.ExitCode() != 1) {
 		return nil, fmt.Errorf("check Git visibility: %w: %s", err, checked.Stderr)
