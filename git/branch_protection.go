@@ -55,7 +55,7 @@ func (p *azureProvider) branchProtected(ctx context.Context, repo RepoURL, branc
 		return false, err
 	}
 	if repository.ID == "" {
-		return false, fmt.Errorf("Azure DevOps did not report a repository ID")
+		return false, fmt.Errorf("repository ID missing from Azure DevOps response")
 	}
 	full := "refs/heads/" + branch
 	query := url.Values{"filter": {"heads/" + branch}, "api-version": {azureAPIVersion}}
@@ -78,7 +78,7 @@ func (p *azureProvider) branchProtected(ctx context.Context, repo RepoURL, branc
 			return p.branchPolicyBlocksPush(ctx, repo.Project, repository.ID, full)
 		}
 	}
-	return false, fmt.Errorf("Azure DevOps branch %q was not found", branch)
+	return false, fmt.Errorf("branch %q was not found in Azure DevOps", branch)
 }
 
 func (p *azureProvider) branchPolicyBlocksPush(ctx context.Context, project, id, ref string) (bool, error) {
@@ -105,7 +105,7 @@ func (p *azureProvider) branchPolicyBlocksPush(ctx context.Context, project, id,
 			return false, nil
 		}
 		if next == query.Get("continuationToken") {
-			return false, fmt.Errorf("Azure DevOps repeated a branch policy continuation token")
+			return false, fmt.Errorf("repeated branch policy continuation token from Azure DevOps")
 		}
 		query.Set("continuationToken", next)
 	}

@@ -214,6 +214,8 @@ Nested selectors such as `$.servers[*].databases[*]` resolve every wildcard to a
 
 Each `set` key is a JSONPath relative to the selected target, such as `$.name`. `value` is a CEL expression; `when` optionally guards evaluation. Use `value: '"managed"'` for a CEL string literal and `when: '"email" in source'` for optional fields. Mapping guards see the original target for that source row.
 
+Use `value: source.samples.percentile(95)` to select the 95th percentile by nearest rank, with a rank in `(0, 100]`. Use `value: source.samples.stats()` to produce `min`, `avg`, `max`, `p50`, `p90`, `p95`, `p99`, and `samples` (the sample count). Both functions require a nonempty list of finite numbers.
+
 `strategy` defaults to `replace`. `mergeUnique` appends new list values not already present. `replaceMatching` removes existing list items satisfying its `match`, then inserts incoming values; `item` denotes each existing list element, for example `item.context == context.name`.
 
 `target.aggregate: true` permits multiple sources to share a target. Use list strategies or guarded scalar writes; conflicting scalar values fail without writing that projection. Results report `applied`, `warned`, `skipped` or `failed`, counts, changed/created/missing/stale entries, warnings and errors. Dry runs report evaluated changes without a rendered patch.

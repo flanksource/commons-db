@@ -62,6 +62,10 @@ export default defineConfig(({ command, mode }) => ({
   // host's prefix; the dev server serves it at /.
   base: command === "build" ? "./" : "/",
   plugins: [react(), tailwindcss()],
+  test: {
+    // Resolve Clicky UI's bundler-style imports through Vite in Node tests too.
+    server: { deps: { inline: ["@flanksource/clicky-ui"] } },
+  },
   resolve: {
     alias: clickyUIDevAliases(command, mode),
     dedupe: [
