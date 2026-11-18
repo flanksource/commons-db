@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
@@ -12,9 +13,13 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-type unavailableAncestry struct{ recordingProvider }
+type unavailableAncestry struct {
+	recordingProvider
+	calls atomic.Int64
+}
 
-func (*unavailableAncestry) RemoteMergeBase(context.Context, git.RemoteMergeBaseOptions) (string, error) {
+func (p *unavailableAncestry) RemoteMergeBase(context.Context, git.RemoteMergeBaseOptions) (string, error) {
+	p.calls.Add(1)
 	return "", errors.New("provider ancestry API unavailable")
 }
 
@@ -33,6 +38,18 @@ func organizationRepository(remote *httpRemote, fixture bareRepo, owner string) 
 }
 
 var _ = Describe("scoped object pool", func() {
+	It("prefetches an exact pooled SHA when the durable store and remote are unavailable", func(ctx SpecContext) {
+		donor, fork, remote := organizationFixtures()
+		forkTip := fork.commitOn(fixtureCommit{Branch: "main", Path: "fork.txt", Content: "fork\n", Message: "fork"})
+		source, target := organizationRepository(remote, donor, "example"), organizationRepository(remote, fork, "example")
+		cache := &git.Cache{Root: fixtureTempDir()}
+		Expect(cache.Fetch(ctx, source, git.FetchOptions{Refs: []git.Ref{branchRef("main")}})).To(Succeed())
+		remote.Server.Close()
+		cache.Store = &git.MirrorStore{Path: filepath.Join(fixtureTempDir(), "unavailable")}
+		Expect(cache.Fetch(ctx, target, git.FetchOptions{Refs: []git.Ref{shaRef(donor.Main)}})).To(Succeed())
+		Expect(cache.Fetch(ctx, target, git.FetchOptions{Refs: []git.Ref{shaRef(forkTip)}})).To(MatchError(ContainSubstring("from git store")))
+	})
+
 	It("uses a sibling's prefetched commit without contacting the requested remote", func(ctx SpecContext) {
 		donor, fork, remote := organizationFixtures()
 		source := organizationRepository(remote, donor, "Example")

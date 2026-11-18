@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,17 +63,21 @@ func validStoreKey(key string) error {
 	return nil
 }
 
-// hydrateMiss hydrates mirror from store when sha is missing from it: the
-// designed first tier of a miss. The caller holds the exclusive mirror lock
-// and fetches from the remote whatever is still missing afterwards.
-func hydrateMiss(ctx context.Context, store Store, mirror, sha string) error {
-	if store == nil || hasCommit(ctx, mirror, sha) {
+// hydrateMiss tries the store once if any SHA is absent from the mirror and
+// its alternate. The caller holds the exclusive mirror lock.
+func hydrateMiss(ctx context.Context, store Store, mirror string, shas ...string) error {
+	if store == nil {
+		return nil
+	}
+	miss := slices.IndexFunc(shas, func(sha string) bool { return !hasCommit(ctx, mirror, sha) })
+	if miss < 0 {
 		return nil
 	}
 	hydrated, err := hydrate(ctx, store, mirror)
 	if err != nil || !hydrated {
 		return err
 	}
+	sha := shas[miss]
 	key, _ := storeKeyOf(mirror)
 	log := logger.GetLogger("git").V(1)
 	if hasCommit(ctx, mirror, sha) {
