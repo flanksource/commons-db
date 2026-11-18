@@ -6,7 +6,7 @@ require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
 	github.com/andybalholm/brotli v1.2.0
 	github.com/elazarl/goproxy v1.7.2
-	github.com/flanksource/clicky v1.21.95
+	github.com/flanksource/clicky v1.21.96
 	github.com/flanksource/commons v1.64.2
 	github.com/flanksource/commons-db v0.1.75
 	github.com/flanksource/commons-db/recordstore v0.1.75
