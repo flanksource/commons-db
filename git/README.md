@@ -1,6 +1,6 @@
 # Git repository caches
 
-`Cache{Root: ...}` stores fetched Git objects and leases working trees. Repositories opened with Azure DevOps, GitHub, or GitLab provider clients automatically probe existing complete mirrors before creating a new store. A confirmed common ancestor allows the new repository to reuse that store. Plain Git connections retain per-repository caching.
+`Cache{Root: ...}` stores fetched Git objects and leases working trees. Each repository has its own bare mirror and worktrees under `Root/v2/<repository-key>`. Complete GitHub and Azure DevOps mirrors automatically use a ref-bearing alternate for their organization. Git negotiates reuse directly with the remote. Local repositories and other Git providers use per-repository mirrors.
 
 ```go
 cache := &git.Cache{Root: cacheDirectory}
@@ -13,11 +13,11 @@ if err != nil {
 defer worktree.Release()
 ```
 
-`Root` is the sharing boundary and must be a trusted local cache directory. The supplied repository provides its own credentials and hosting API. Discovery uses metadata-only REST requests; it never requires Git protocol v2. Unknown candidate commits are tried against cached roots. Authentication, rate limits, invalid responses, and network failures are returned to the caller.
+The pool key comes from the provider instance and organization in the clone URL. GitHub uses the owner namespace. Azure DevOps Services recognizes its HTTPS and SSH aliases and shares across projects in the same organization. Azure DevOps Server uses the server and collection. Repositories in an organization share objects across connection credentials. Git uses the requested repository's credentials for network requests.
 
-Each logical repository records its physical owner in an atomic, versioned `repository.json`. Existing mirrors are adopted in place. Existing stores are never moved, merged, or deleted by discovery. Removing an owner directory while bindings reference it produces an explicit error. Maintenance visits physical mirrors once; active worktrees remain registered with Git and retain their commits.
+The cache accepts a known SHA from the repository mirror or its organization pool. Each mirror retains the pool commits its worktrees can use until the mirror is evicted. Maintenance removes retired borrowers' refs before collecting unreferenced objects. `Evict` operates on one repository key and refuses a mirror with a leased worktree.
 
-Fetched refs, writable branches, and tags are isolated by repository. Worktree-created refs also include the lease identity. Push operations retain the requested remote branch/tag names, and annotated tags retain their logical tag names.
+Set `Cache.Store` to a `MirrorStore` or `PackStore` to hydrate the repository mirror from a durable tier. `Cache.Fetch` with `Publish: true` writes a self-contained entry by the repository key. A fresh local cache can restore a published SHA while the remote is offline. The built-in stores write under `Path/v2`. Older caches and store entries are available for rollback in their original directories.
 
 ## Independent clones
 
@@ -34,4 +34,4 @@ if err != nil {
 
 The destination has its own objects, its `origin` names the requested repository, and it remains usable after the cache is removed. No persistent alternates are installed. Omitting `Cache` uses the ordinary remote clone path.
 
-`Depth` limits standalone clone history. Shallow cache-assisted clones and provider-backed shallow checkouts use isolated depth-specific stores so they cannot truncate a shared complete mirror. Discovery timing is recorded in the existing Git timing collector; pack transfer bytes remain available through fetch progress observations.
+`Depth` limits standalone clone history. Shallow clones and checkouts use depth-specific mirrors outside the organization pool. Fetch progress reports the pool key and transferred bytes when available.

@@ -53,7 +53,7 @@ func parseLsRemote(out string) ([]*plumbing.Reference, error) {
 }
 
 // localReader is the private bare repository a local repository is read
-// through, at <Root>/<CacheKey>/local.git: it has no refs and borrows the
+// through, at <Root>/v2/<CacheKey>/local.git: it has no refs and borrows the
 // local repository's objects (objects/info/alternates) and shallow file, so a
 // read copies nothing and sees none of the local repository's config.
 type localReader struct {

@@ -82,21 +82,34 @@ func (s *MirrorStore) Inventory(ctx context.Context) ([]StoreEntry, error) {
 	entries := []StoreEntry{}
 	for _, key := range keys {
 		dir := filepath.Join(s.Path, cacheLayout, key)
-		if _, err := os.Stat(filepath.Join(dir, "mirror.git", "HEAD")); errors.Is(err, fs.ErrNotExist) {
-			continue
-		} else if err != nil {
-			return nil, fmt.Errorf("git store mirror %s: %w", key, err)
-		}
-		entry := StoreEntry{Key: key}
-		if entry.SizeBytes, err = dirSize(filepath.Join(dir, "mirror.git")); err != nil {
-			return nil, fmt.Errorf("size git store mirror %s: %w", key, err)
-		}
-		if entry.Published, err = modTime(filepath.Join(dir, "published")); err != nil {
+		entry, err := mirrorStoreEntry(ctx, newMirrorPaths(dir))
+		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, entry)
+		if entry != nil {
+			entries = append(entries, *entry)
+		}
 	}
 	return entries, nil
+}
+
+func mirrorStoreEntry(ctx context.Context, paths mirrorPaths) (_ *StoreEntry, err error) {
+	lock, err := acquire(ctx, paths.lock, "git store mirror lock", sharedLock)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, lock.Unlock()) }()
+	if _, err := os.Stat(filepath.Join(paths.git, "HEAD")); errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	} else if err != nil {
+		return nil, fmt.Errorf("git store mirror %s: %w", paths.git, err)
+	}
+	entry := &StoreEntry{Key: filepath.Base(paths.dir)}
+	if entry.SizeBytes, err = dirSize(paths.git); err != nil {
+		return nil, fmt.Errorf("size git store mirror %s: %w", entry.Key, err)
+	}
+	entry.Published, err = modTime(filepath.Join(paths.dir, "published"))
+	return entry, err
 }
 
 // fetchLocal fetches refspecs from the repository at source (a local path)
@@ -107,7 +120,7 @@ func fetchLocal(ctx context.Context, dir, source string, refspecs ...string) err
 		return err
 	}
 	transport := (&url.URL{Scheme: "file", Path: filepath.ToSlash(source)}).String()
-	args := append([]string{"fetch", "--quiet", "--no-tags", "--end-of-options", transport}, refspecs...)
+	args := append([]string{"fetch", "--quiet", "--no-tags", "--no-auto-maintenance", "--end-of-options", transport}, refspecs...)
 	_, err = run(ctx, command{dir: dir, args: args})
 	return err
 }

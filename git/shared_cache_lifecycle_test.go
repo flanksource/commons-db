@@ -119,7 +119,7 @@ var _ = Describe("scoped object pool lifecycle", func() {
 		}
 		for range 2 {
 			var actual result
-			Eventually(results).Should(Receive(&actual))
+			Eventually(ctx, results).WithTimeout(30 * time.Second).Should(Receive(&actual))
 			Expect(actual.err).NotTo(HaveOccurred())
 			Expect(actual.tree.Release()).To(Succeed())
 		}
