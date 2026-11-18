@@ -40,12 +40,12 @@ require (
 	github.com/emersion/go-smtp v0.25.0
 	github.com/exaring/otelpgx v0.11.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
-	github.com/flanksource/clicky v1.21.95
+	github.com/flanksource/clicky v1.21.96
 	github.com/flanksource/commons v1.64.2
 	github.com/flanksource/deps v1.0.51
 	github.com/flanksource/gomplate/v4 v4.0.2
 	github.com/flanksource/is-healthy v1.0.93
-	github.com/flanksource/sqlglot-go v1.1.3
+	github.com/flanksource/sqlglot-go v1.2.2
 	github.com/fxamacker/cbor/v2 v2.9.1
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/go-sql-driver/mysql v1.10.0
@@ -199,7 +199,7 @@ require (
 	github.com/envoyproxy/protoc-gen-validate v1.3.3 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/flanksource/gomplate/v3 v3.24.91 // indirect
+	github.com/flanksource/gomplate/v3 v3.24.90 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect

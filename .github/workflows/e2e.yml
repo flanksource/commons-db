@@ -100,7 +100,7 @@ jobs:
         run: docker logs --tail 40 deps-start-opensearch
 
       - name: Test with gavel
-        uses: flanksource/gavel@4c5015446610371c852fd866bfbe0efa77f24c9d # v0.0.80
+        uses: flanksource/gavel@4ec24346ade41681a5f1db1de47acd32c32e0879 # v0.0.83
         with:
           args: test ./e2e --framework ginkgo --timeout 30m --test-timeout 10m
           artifact-name: gavel-e2e-${{ matrix.os }}

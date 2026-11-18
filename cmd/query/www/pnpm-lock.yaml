@@ -7,8 +7,8 @@ settings:
 catalogs:
   default:
     '@flanksource/clicky-ui':
-      specifier: ^0.3.63
-      version: 0.3.63
+      specifier: ^0.3.65
+      version: 0.3.65
     '@flanksource/icons':
       specifier: 1.0.65
       version: 1.0.65
@@ -54,7 +54,7 @@ importers:
         version: 3.0.210(react@18.3.1)(zod@4.4.3)
       '@flanksource/clicky-ui':
         specifier: 'catalog:'
-        version: 0.3.63(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)(yjs@13.6.33)
+        version: 0.3.65(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)(yjs@13.6.33)
       '@flanksource/commons-db-ui':
         specifier: workspace:*
         version: link:packages/reconcile
@@ -137,7 +137,7 @@ importers:
     devDependencies:
       '@flanksource/clicky-ui':
         specifier: 'catalog:'
-        version: 0.3.63(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)(yjs@13.6.33)
+        version: 0.3.65(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)(yjs@13.6.33)
 
 packages:
 
@@ -375,8 +375,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@flanksource/clicky-ui@0.3.63':
-    resolution: {integrity: sha512-/NLX4mCjnn+Pab9Hl0judshNpo+dVDzRCdtQcYV6p5Cc7GEAUzlzVPK1ATrsVM2BnJDVUnSkTMXD5fqcnx2Ktg==}
+  '@flanksource/clicky-ui@0.3.65':
+    resolution: {integrity: sha512-1+3m8trf/MXth3sN4wI1+0Vd8xJAXxdnrPB31WenIMaRLk4i3DbVm+ldcReC8TmO9tQe1otdLp/7pE29e3MvEQ==}
     peerDependencies:
       '@ai-sdk/react': ^3.0.0
       '@mdxeditor/editor': ^4.0.4
@@ -1083,6 +1083,9 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  ajv@8.20.0:
+    resolution: {integrity: sha512-Thbli+OlOj+iMPYFBVBfJ3OmCAnaSyNn4M1vz9T6Gka5Jt9ba/HIR56joy65tY6kx/FCF5VXNB819Y7/GUrBGA==}
+
   ansi-regex@6.2.2:
     resolution: {integrity: sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg==}
     engines: {node: '>=12'}
@@ -1258,6 +1261,12 @@ packages:
     resolution: {integrity: sha512-KfYbmpRm0VbLjEvVa9yGwCi9GI34xvi7A/HXYWQO65CSD2u3MczUJSuwXKFIxlGsgBQizV9q5J9NHj4VG0n+pA==}
     engines: {node: '>=12.0.0'}
 
+  fast-deep-equal@3.1.3:
+    resolution: {integrity: sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q==}
+
+  fast-uri@3.1.9:
+    resolution: {integrity: sha512-hS/0Wt3Ya043oKXs0sIxrMpKQITXhMLIrVAKKXi4gozGC9v7YRWVnXIZzjNPTO02M9BdxLCWqK1yRXgNziVyJQ==}
+
   fdir@6.5.0:
     resolution: {integrity: sha512-tIbYtZbucOs0BRGqPJkshJUYdL+SDH7dVM8gjy+ERp3WAUjLEFJE+02kanyHtwjWOnwrKYBiwAmM0p4kLJAnXg==}
     engines: {node: '>=12.0.0'}
@@ -1356,6 +1365,9 @@ packages:
     peerDependenciesMeta:
       canvas:
         optional: true
+
+  json-schema-traverse@1.0.0:
+    resolution: {integrity: sha512-NM8/P9n3XjXhIZn1lLhkFaACTOURQXjWhV4BA/RnOv8xvgqtqpAX9IO4mRQxSx1Rlo4tqzeqb0sOlruaOy3dug==}
 
   json-schema@0.4.0:
     resolution: {integrity: sha512-es94M3nTIfsEPisRafak+HDLfHXnKBhV3vU5eqPcS3flIWqcxJWgXHXiey3YrpaNsanY5ei1VoYEbOzijuq9BA==}
@@ -1686,6 +1698,10 @@ packages:
 
   redux@5.0.1:
     resolution: {integrity: sha512-M9/ELqF6fy8FwmkpnF0S3YKOqMyoWJ4+CS5Efg2ct3oY9daQvd/Pc71FpGZsVsbl3Cpb+IIcjBDUnnyBdQbq4w==}
+
+  require-from-string@2.0.2:
+    resolution: {integrity: sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw==}
+    engines: {node: '>=0.10.0'}
 
   reselect@5.2.0:
     resolution: {integrity: sha512-AgZ3UOZm3YndfrJ4OYjgrT7bmCm/1iqkjvEfH/oYjzh6PD2qw4QuT3jjnXIrpdt4MTpMXclMT3lXbmRY+XRakw==}
@@ -2225,7 +2241,7 @@ snapshots:
   '@esbuild/win32-x64@0.25.12':
     optional: true
 
-  '@flanksource/clicky-ui@0.3.63(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)(yjs@13.6.33)':
+  '@flanksource/clicky-ui@0.3.65(@ai-sdk/react@3.0.210(react@18.3.1)(zod@4.4.3))(@tanstack/react-query@5.101.4(react@18.3.1))(@types/react-dom@18.3.7(@types/react@18.3.31))(@types/react@18.3.31)(ai@6.0.208(zod@4.4.3))(monaco-editor@0.48.0)(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(recharts@3.10.1(@types/react@18.3.31)(react-dom@18.3.1(react@18.3.1))(react-is@19.2.8)(react@18.3.1)(redux@5.0.1))(tailwindcss@4.3.3)(yjs@13.6.33)':
     dependencies:
       '@codemirror/autocomplete': 6.20.3
       '@codemirror/commands': 6.10.4
@@ -2243,6 +2259,8 @@ snapshots:
       '@radix-ui/react-slot': 1.3.3(@types/react@18.3.31)(react@18.3.1)
       '@tanstack/react-query': 5.101.4(react@18.3.1)
       '@tanstack/react-virtual': 3.14.10(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
+      ajv: 8.20.0
+      bippy: 0.6.1(react@18.3.1)
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       country-flag-icons: 1.6.20
@@ -2871,6 +2889,13 @@ snapshots:
       '@opentelemetry/api': 1.9.1
       zod: 4.4.3
 
+  ajv@8.20.0:
+    dependencies:
+      fast-deep-equal: 3.1.3
+      fast-uri: 3.1.9
+      json-schema-traverse: 1.0.0
+      require-from-string: 2.0.2
+
   ansi-regex@6.2.2: {}
 
   assertion-error@2.0.1: {}
@@ -3031,6 +3056,10 @@ snapshots:
 
   expect-type@1.4.0: {}
 
+  fast-deep-equal@3.1.3: {}
+
+  fast-uri@3.1.9: {}
+
   fdir@6.5.0(picomatch@4.0.5):
     optionalDependencies:
       picomatch: 4.0.5
@@ -3115,6 +3144,8 @@ snapshots:
       - bufferutil
       - supports-color
       - utf-8-validate
+
+  json-schema-traverse@1.0.0: {}
 
   json-schema@0.4.0: {}
 
@@ -3393,6 +3424,8 @@ snapshots:
       redux: 5.0.1
 
   redux@5.0.1: {}
+
+  require-from-string@2.0.2: {}
 
   reselect@5.2.0: {}
 
