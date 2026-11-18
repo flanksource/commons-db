@@ -28,8 +28,13 @@ func organizationPool(repo RepoURL) string {
 		return ""
 	}
 	if repo.Provider == models.ConnectionTypeGit {
-		if parsed, err := ParseRepoURL(repo.Clone, ""); err == nil {
-			repo = parsed
+		provider, err := detectProvider(repo.Host, "")
+		if err != nil || provider == models.ConnectionTypeGit {
+			return ""
+		}
+		repo = RepoURL{Provider: provider, Host: repo.Host, Path: repo.Path}
+		if err := parseRepoPath(&repo); err != nil {
+			return ""
 		}
 	}
 	host, organization := strings.ToLower(repo.Host), strings.ToLower(repo.Owner)

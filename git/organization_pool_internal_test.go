@@ -22,3 +22,13 @@ var _ = DescribeTable("scoped object pool identity", func(first, second, provide
 	Entry("separates Azure Server collections", "https://git.example.net/one/Project/_git/tools", "https://git.example.net/two/Project/_git/docs", models.ConnectionTypeAzureDevops, false),
 	Entry("keeps generic Git in private mirrors", "https://git.example.net/acme/tools.git", "https://git.example.net/acme/docs.git", "", false),
 )
+
+var _ = It("derives the pool for generic Git from the parsed host and path", func() {
+	repo, err := ParseRepoURL("https://github.com/Example/tools.git", models.ConnectionTypeGit)
+	Expect(err).NotTo(HaveOccurred())
+	want, err := ParseRepoURL("https://github.com/example/docs.git", models.ConnectionTypeGithub)
+	Expect(err).NotTo(HaveOccurred())
+	repo.Clone = ""
+	Expect(organizationPool(want)).NotTo(BeEmpty())
+	Expect(organizationPool(repo)).To(Equal(organizationPool(want)))
+})

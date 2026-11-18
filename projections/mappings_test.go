@@ -361,6 +361,26 @@ entries:
 
 		Expect(err).To(MatchError(ContainSubstring("stats requires at least one sample")))
 	})
+	ginkgo.It("selects the exact rank when a percentile falls on a sample boundary", func() {
+		program, err := compileProjectionExpression(`source.samples.percentile(7)`)
+		Expect(err).NotTo(HaveOccurred())
+		samples := make([]int, 100)
+		for i := range samples {
+			samples[i] = i + 1
+		}
+		value, err := evalProjectionValue(program, map[string]any{"source": map[string]any{"samples": samples}})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(Equal(7.0))
+	})
+	ginkgo.It("keeps the average finite when the sample sum overflows", func() {
+		program, err := compileProjectionExpression(`source.samples.stats().avg`)
+		Expect(err).NotTo(HaveOccurred())
+		value, err := evalProjectionValue(program, map[string]any{
+			"source": map[string]any{"samples": []float64{math.MaxFloat64, math.MaxFloat64}},
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(value).To(Equal(math.MaxFloat64))
+	})
 	ginkgo.It("rejects a date() argument that is not a timestamp", func() {
 		program, err := compileProjectionExpression(`date(source.first_observed)`)
 		Expect(err).ToNot(HaveOccurred())

@@ -284,8 +284,8 @@ github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeO
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
 github.com/fergusstrange/embedded-postgres v1.34.0 h1:c6RKhPKFsLVU+Tdxsx8q0UxCHsvZZ/iShAnljRBXs6s=
 github.com/fergusstrange/embedded-postgres v1.34.0/go.mod h1:w0YvnCgf19o6tskInrOOACtnqfVlOvluz3hlNLY7tRk=
-github.com/flanksource/clicky v1.21.95 h1:cBuTKkvbWHjpDRswJ0iOPJzNT5QYiyqt31qmJOA7rBg=
-github.com/flanksource/clicky v1.21.95/go.mod h1:H4HeUqMEzAz14ewqX5CNu/VnlaZHrTK/1otCgs1O1m4=
+github.com/flanksource/clicky v1.21.96 h1:372+IpAQHSxcxjPojWkPdHhTYyLbxvgSwrdrpd4CIVw=
+github.com/flanksource/clicky v1.21.96/go.mod h1:LV9LWE2qCSkTWeu1+FqGZyQC+9FcvED6fDzhfiNRkb8=
 github.com/flanksource/clicky/valkey v1.21.94 h1:JPcksQ4qLy2MJnFL2QrfNoYHcouS2X0yr4t77qvb/Qo=
 github.com/flanksource/clicky/valkey v1.21.94/go.mod h1:2uuZIuCWcLGd4TuehgVcUpKTvS6+2vx6gFeWlybgHlY=
 github.com/flanksource/commons v1.64.2 h1:a23fIOoicqbt+QlaALGhvpwlpFOId7kesVN4M70r21o=
@@ -298,8 +298,8 @@ github.com/flanksource/is-healthy v1.0.93 h1:hpXkPfMXG+zawNs0HTjc/3ZIjrW7obAPDR/
 github.com/flanksource/is-healthy v1.0.93/go.mod h1:Ee0lzss7zeLlfYOcr4r3eOUJqTD3fjVnxT5cv79UVF8=
 github.com/flanksource/kubectl-neat v1.0.4 h1:t5/9CqgE84oEtB0KitgJ2+WIeLfD+RhXSxYrqb4X8yI=
 github.com/flanksource/kubectl-neat v1.0.4/go.mod h1:Un/Voyh3cmiZNKQrW/TkAl28nAA7vwnwDGVjRErKjOw=
-github.com/flanksource/sqlglot-go v1.1.3 h1:H2tR19U8edUEwkCd1pPLIHfxvhEQtIhqQov/ufeoYEc=
-github.com/flanksource/sqlglot-go v1.1.3/go.mod h1:INlRpqVwrFNqos6JdwLBsrl5TLvMGWfKpVq7ChUKuTU=
+github.com/flanksource/sqlglot-go v1.2.2 h1:yPrwgGqT8v0ckt2nWoiYjKX4q5UOvS9yO2+IpSIJ1zs=
+github.com/flanksource/sqlglot-go v1.2.2/go.mod h1:ZMjKaAlpKLhbmCDxixRbRXbds3v+bMTEkT7g3eWVQq8=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
 github.com/geoffgarside/ber v1.1.0/go.mod h1:jVPKeCbj6MvQZhwLYsGwaGI52oUorHoHKNecGT85ZCc=

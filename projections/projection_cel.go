@@ -11,9 +11,9 @@ import (
 // of the platform already uses: playbooks, notifications, canaries and views all
 // compile against the same environment. faro used to build its own, so a
 // projection author had base CEL and four local helpers while everyone else had
-// strings, lists, math, regex, encoders and a fold macro. The helpers that were
-// genuinely missing -- text, int, float, date -- now live in gomplate's funcs
-// package, which leaves nothing here to declare.
+// strings, lists, math, regex, encoders and a fold macro. The text, int, float,
+// and date conversions live in gomplate's funcs package.
+// Projection templates also register summary functions for sample series.
 //
 // The activation is the one thing faro still owns: source, target, context and
 // item, declared by gomplate from the keys of the map it is handed.
@@ -26,7 +26,7 @@ import (
 // target. Compiling here keeps `faro projection verify` able to reject a
 // document without making a request, and the error carries its source position.
 func compileProjectionExpression(expression string) (*gomplate.Template, error) {
-	template := &gomplate.Template{Expression: expression}
+	template := &gomplate.Template{Expression: expression, CelFunctions: projectionStatistics}
 	env, err := cel.NewEnv(gomplate.CompileEnvOptions(projectionActivation(nil, nil, nil, nil), *template)...)
 	if err != nil {
 		return nil, err
