@@ -89,7 +89,7 @@ func gitCacheHTTPSpecs() {
 		parsed, err := git.ParseRepoURL(rulesURL, "")
 		Expect(err).NotTo(HaveOccurred())
 		key = parsed.CacheKey()
-		mirror := filepath.Join(cacheDir, key, "mirror.git")
+		mirror := filepath.Join(cacheDir, "v2", key, "mirror.git")
 		Expect(os.MkdirAll(mirror, 0o755)).To(Succeed())
 		Expect(exec.Command("git", "init", "--quiet", "--bare", mirror).Run()).To(Succeed())
 		rules := models.Connection{Name: "rules", Type: models.ConnectionTypeGit, URL: rulesURL}
@@ -132,7 +132,7 @@ func gitCacheHTTPSpecs() {
 		response = call(http.MethodPost, "cache-evict", `{"owner":"`+key+`"}`)
 		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
 		Expect(response.Body.String()).To(Equal(`{"owner":"` + key + `"}`))
-		Expect(filepath.Join(cacheDir, key, "mirror.git")).NotTo(BeAnExistingFile())
+		Expect(filepath.Join(cacheDir, "v2", key, "mirror.git")).NotTo(BeAnExistingFile())
 	})
 
 	DescribeTable("rejects an invalid action",

@@ -47,13 +47,13 @@ func AddOpenAPI(spec *rpc.OpenAPISpec, prefix string) {
 var actionSummaries = map[string]string{
 	"cache-prune":  "Prune a Git cache mirror",
 	"cache-evict":  "Evict a Git cache mirror",
-	"cache-rebind": "Rebind a repository to another Git cache mirror",
+	"cache-rebind": "Reject mirror rebind for repository-owned mirrors",
 }
 
 var actionDescriptions = map[string]string{
 	"cache-prune":  "Expires the owner mirror's commit pins unused for the configured pin TTL and garbage-collects it. Body: owner (cache key).",
 	"cache-evict":  "Deletes the owner mirror with its pins and worktrees, and the bindings of repositories reading it; each clones again on its next read. Body: owner (cache key).",
-	"cache-rebind": "Moves a repository reading another repository's mirror onto the named owner mirror, or the mirror sharing the most history when owner is empty. Body: connection, repo (for provider connections), owner.",
+	"cache-rebind": "Repository-owned mirrors use automatic organization pooling. This transitional operation rejects requests to change mirror ownership.",
 }
 
 func actionSchema(action string) *rpc.OpenAPISchema {

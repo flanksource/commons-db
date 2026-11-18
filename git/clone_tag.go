@@ -14,7 +14,7 @@ type cachedTagOptions struct {
 
 func cachedCloneTag(ctx context.Context, o cachedTagOptions) (string, error) {
 	destination := "refs/commons-cache/repos/" + o.Repository.URL.CacheKey() + "/tags/" + o.Ref.Name
-	sha, err := fetch(ctx, fetchOptions{Dir: o.Paths.git, Owner: o.Repository, Repo: o.Repository, Ref: o.Ref, Depth: o.Depth, Refspec: "+" + o.Ref.FullName + ":" + destination})
+	sha, err := fetch(ctx, fetchOptions{Dir: o.Paths.git, Owner: o.Repository, Repo: o.Repository, Ref: o.Ref, Depth: o.Depth, Refspecs: []string{"+" + o.Ref.FullName + ":" + destination}})
 	if err != nil {
 		return "", err
 	}

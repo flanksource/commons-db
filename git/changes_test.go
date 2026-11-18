@@ -60,7 +60,7 @@ var _ = Describe("Cache.Changes", func() {
 		Expect(string(commands)).NotTo(ContainSubstring("cat-file blob"))
 		Expect(string(commands)).NotTo(ContainSubstring("worktree"))
 		Expect(strings.Count(string(commands), "diff-tree")).To(Equal(1))
-		_, err = os.Stat(filepath.Join(cache.Root, repo.URL.CacheKey(), "worktrees"))
+		_, err = os.Stat(filepath.Join(cache.Root, "v2", repo.URL.CacheKey(), "worktrees"))
 		Expect(os.IsNotExist(err)).To(BeTrue())
 	})
 

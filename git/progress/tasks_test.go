@@ -101,6 +101,30 @@ var _ = Describe("fetch progress line", func() {
 	})
 })
 
+var _ = Describe("read progress", func() {
+	It("describes a running read and drops the description once it finishes", func() {
+		group := task.StartGroup[bool]("reads", task.WithConcurrency(1))
+		observe := Reads(TaskOptions{Group: func(context.Context) *task.Group { return group.Group }})
+		event := git.ReadProgress{ID: "read", Repository: "https://dev.azure.com/acme/tenant-x/_git/rules", Ref: "29be68a64244", Current: 3, Total: 10}
+		observe(group.Context(), event)
+		Expect(task.SnapshotTask(group.GetTasks()[0].GetTask(), group.Group).Description).To(Equal("Reading objects"))
+		event.Current, event.Done = 10, true
+		observe(group.Context(), event)
+		snap := task.SnapshotTask(group.GetTasks()[0].GetTask(), group.Group)
+		Expect(snap.Description).To(BeEmpty())
+		Expect(snap.Status).To(BeEquivalentTo(task.StatusSuccess))
+	})
+
+	It("records a read that finishes on its first event without a running description", func() {
+		group := task.StartGroup[bool]("reads", task.WithConcurrency(1))
+		observe := Reads(TaskOptions{Group: func(context.Context) *task.Group { return group.Group }})
+		observe(group.Context(), git.ReadProgress{ID: "fast", Repository: "file:///work/acme/rules", Ref: "main", Current: 4, Total: 4, Done: true})
+		snap := task.SnapshotTask(group.GetTasks()[0].GetTask(), group.Group)
+		Expect(snap.Description).To(BeEmpty())
+		Expect(snap.Status).To(BeEquivalentTo(task.StatusSuccess))
+	})
+})
+
 func withPhase(progress git.FetchProgress, phase string) git.FetchProgress {
 	progress.Phase = phase
 	return progress

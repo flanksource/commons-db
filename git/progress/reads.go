@@ -26,12 +26,14 @@ func Reads(options TaskOptions) git.ReadObserver {
 			step.Task().SetLabels(map[string]string{"repository": repositoryName(event.Repository), "ref": event.Ref, "operation": "cat-file"})
 			steps[event.ID] = step
 		}
-		step.Task().SetDescription("Reading objects")
 		step.Task().SetProgress(int(event.Current), int(event.Total))
 		step.Task().SetProgressMetrics(task.ProgressMetrics{Unit: "objects", Bytes: event.Bytes, BytesPerSecond: event.BytesPerSecond})
 		if event.Done {
+			step.Task().SetDescription("")
 			step.Finish(event.Err)
 			delete(steps, event.ID)
+			return
 		}
+		step.Task().SetDescription("Reading objects")
 	}
 }

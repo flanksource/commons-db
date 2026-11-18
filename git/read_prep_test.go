@@ -23,7 +23,7 @@ var _ = Describe("read preparation", func() {
 		cache = &git.Cache{Root: GinkgoT().TempDir()}
 		repo = mirroredRepository(fixture)
 	})
-	mirrorLock := func() string { return filepath.Join(cache.Root, repo.URL.CacheKey(), "mirror.lock") }
+	mirrorLock := func() string { return filepath.Join(cache.Root, "v2", repo.URL.CacheKey(), "mirror.lock") }
 	changes := func(ctx context.Context, base, head string) error {
 		_, err := cache.Changes(ctx, git.ChangesOptions{Repository: repo, Base: base, Head: head})
 		return err

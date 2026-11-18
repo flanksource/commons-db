@@ -37,7 +37,7 @@ var _ = Describe("Cache.Blame", func() {
 		warmCommands, err := os.ReadFile(log)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(warmCommands).To(Equal(commands))
-		_, err = os.Stat(filepath.Join(cache.Root, repo.URL.CacheKey(), "worktrees"))
+		_, err = os.Stat(filepath.Join(cache.Root, "v2", repo.URL.CacheKey(), "worktrees"))
 		Expect(os.IsNotExist(err)).To(BeTrue())
 	})
 

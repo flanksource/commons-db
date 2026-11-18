@@ -116,6 +116,19 @@ var _ = Describe("Cache.Apply", func() {
 		Expect(gitFixture(fixture.Path, "rev-parse", "refs/heads/feature")).To(Equal(fixture.Feature))
 	})
 
+	It("updates an existing branch with a child of the reviewed tip", func(ctx SpecContext) {
+		change := request()
+		change.Base, change.Branch, change.BaseSHA = "refs/heads/main", "main", fixture.Main
+		change.UpdateExisting = true
+		repo := newRepository(fixture.FileURL(), git.Auth{})
+		result, err := cache.Apply(ctx, repo, change)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(result.PullRequest).To(BeNil())
+		Expect(gitFixture(fixture.Path, "rev-parse", "main", "main^")).To(Equal(result.CommitSHA + "\n" + fixture.Main))
+		_, err = cache.Apply(ctx, repo, change)
+		Expect(err).To(MatchError(git.ErrBaseMoved))
+	})
+
 	Describe("without a worktree", func() {
 		var base string
 		BeforeEach(func() {

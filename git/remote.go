@@ -4,12 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 
 	rpchttp "github.com/flanksource/clicky/rpc/http"
-	registry "github.com/flanksource/commons-db/git/internal/cache"
 	"github.com/flanksource/commons-db/git/readcache"
 	"github.com/flanksource/commons/http/middlewares/timing"
 	gogit "github.com/go-git/go-git/v5"
@@ -148,34 +146,18 @@ func remoteOf(owner, repo *Repository) string {
 }
 
 // fetchOptions configures fetch: Ref is fetched from Repo into the repository
-// at Dir, the mirror of Owner. Depth > 0 shallows the fetch; Flags are extra
+// at Dir, the mirror of Owner. Refspecs, when set, replace Ref's refspec (Ref
+// then only names the fetch). Depth > 0 shallows the fetch; Flags are extra
 // fetch options (e.g. --unshallow).
 type fetchOptions struct {
-	Refspec string
-	Dir     string
-	Owner   *Repository
-	Repo    *Repository
-	Ref     Ref
-	Depth   int
-	Flags   []string
-}
-
-// sharedMirrorOf is the binding of the cache mirror at dir when a repository
-// other than repo owns it, and the zero binding for repo's own mirrors
-// (including its -depth-N mirrors) and for directories outside the cache.
-func sharedMirrorOf(dir string, repo *Repository) (registry.Binding, error) {
-	if filepath.Base(dir) != "mirror.git" {
-		return registry.Binding{}, nil
-	}
-	owner, own := filepath.Base(filepath.Dir(dir)), repo.URL.CacheKey()
-	if owner == own || strings.HasPrefix(owner, own+"-depth-") {
-		return registry.Binding{}, nil
-	}
-	binding, err := registry.Load(filepath.Dir(filepath.Dir(dir)), owner)
-	if err != nil {
-		return registry.Binding{}, fmt.Errorf("fetch %s into %s: %w", repo.URL.Redacted(), owner, err)
-	}
-	return binding, nil
+	Refspecs []string
+	Dir      string
+	Owner    *Repository
+	Repo     *Repository
+	Ref      Ref
+	Depth    int
+	Flags    []string
+	Pool     string
 }
 
 // fetch fetches options.Ref and returns the fetched commit, which may be
@@ -191,17 +173,13 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	if observer := fetchObserver(ctx); observer != nil {
 		verbosity = "--progress"
 		id := uuid.NewString()
-		owner, mirrorErr := sharedMirrorOf(options.Dir, repo)
-		if mirrorErr != nil {
-			return "", mirrorErr
-		}
 		var received string
 		report = func(progress FetchProgress) {
 			if progress.Phase == "Receiving objects" && progress.Transferred != "" {
 				received = progress.Transferred
 			}
 			progress.Repository, progress.Ref = repo.URL.Redacted(), ref.Name
-			progress.Mirror, progress.MirrorRepository = owner.Owner, owner.Repository
+			progress.Pool = options.Pool
 			progress.ID = id
 			if kib, ok := transferredKiB(progress.Transferred); ok {
 				progress.Bytes = kib * 1024
@@ -223,11 +201,11 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	if options.Depth > 0 {
 		args = append(args, fmt.Sprintf("--depth=%d", options.Depth))
 	}
-	refspec := options.Refspec
-	if refspec == "" {
-		refspec = ref.refspec(remoteOf(options.Owner, repo))
+	refspecs := options.Refspecs
+	if len(refspecs) == 0 {
+		refspecs = []string{ref.refspec(remoteOf(options.Owner, repo))}
 	}
-	args = append(args, "--end-of-options", repo.URL.Clone, refspec)
+	args = append(append(args, "--end-of-options", repo.URL.Clone), refspecs...)
 	if _, err := run(ctx, command{dir: options.Dir, env: env, args: args, progress: report}); err != nil {
 		return "", fmt.Errorf("fetch %s from %s: %w", ref.Name, repo.URL.Redacted(), err)
 	}

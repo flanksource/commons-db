@@ -42,6 +42,7 @@ type githubPull struct {
 	Title     string    `json:"title"`
 	Body      string    `json:"body"`
 	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 	User      struct {
 		Login     string `json:"login"`
 		AvatarURL string `json:"avatar_url"`
@@ -258,7 +259,7 @@ func (pull githubPull) toPullRequest() PullRequest {
 		state = PullRequestClosed
 	}
 	pr := PullRequest{Number: pull.Number, URL: pull.HTMLURL, State: state, Head: pull.Head.Ref, Base: pull.Base.Ref,
-		Title: pull.Title, Author: pull.User.Login, Body: pull.Body, CreatedAt: pull.CreatedAt, HeadSHA: pull.Head.SHA}
+		Title: pull.Title, Author: pull.User.Login, Body: pull.Body, CreatedAt: pull.CreatedAt, UpdatedAt: pull.UpdatedAt, HeadSHA: pull.Head.SHA}
 	if pull.Head.Repo != nil {
 		pr.HeadRepository = pull.Head.Repo.FullName
 	}

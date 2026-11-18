@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
-	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -281,9 +280,15 @@ func (c *Cache) lockReadRefs(ctx context.Context, repo *Repository, options refR
 	if len(resolved) == 0 {
 		return "", nil, nil, fmt.Errorf("git read requires at least one revision")
 	}
-	if err := c.prepareShared(ctx, repo, resolved[0]); err != nil {
-		return "", nil, nil, err
+	for _, source := range options.Refs {
+		if source.repo.URL.CacheKey() != repo.URL.CacheKey() {
+			return c.lockMixedRefs(ctx, options, resolved)
+		}
 	}
+	return c.lockResolvedRefs(ctx, repo, resolved, options.History)
+}
+
+func (c *Cache) lockResolvedRefs(ctx context.Context, repo *Repository, resolved []Ref, history bool) (string, []string, func() error, error) {
 	paths, err := c.mirrorPaths(repo)
 	if err != nil {
 		return "", nil, nil, err
@@ -296,7 +301,7 @@ func (c *Cache) lockReadRefs(ctx context.Context, repo *Repository, options refR
 	if err != nil {
 		return "", nil, nil, err
 	}
-	pinned, err := paths.usePinned(shas, options.History)
+	pinned, err := paths.usePinned(shas, history)
 	if err != nil {
 		return "", nil, nil, errors.Join(err, lock.Unlock())
 	}
@@ -306,7 +311,13 @@ func (c *Cache) lockReadRefs(ctx context.Context, repo *Repository, options refR
 	if err := lock.Unlock(); err != nil {
 		return "", nil, nil, err
 	}
-	if shas, err = c.pinReadRefs(ctx, paths, repo, resolved, options); err != nil {
+	if !history {
+		shallow, release, err := paths.lockShallowRefs(ctx, shas)
+		if err != nil || shallow != "" {
+			return shallow, shas, release, err
+		}
+	}
+	if err := c.pinReadRefs(ctx, paths, repo, resolved); err != nil {
 		return "", nil, nil, err
 	}
 	if lock, err = acquire(ctx, paths.lock, "mirror lock", sharedLock); err != nil {
@@ -317,37 +328,26 @@ func (c *Cache) lockReadRefs(ctx context.Context, repo *Repository, options refR
 
 // pinReadRefs makes every ref's commit present (fetching it when missing, with
 // full history for a History read) and pins it, under the exclusive lock.
-func (c *Cache) pinReadRefs(ctx context.Context, paths mirrorPaths, repo *Repository, resolved []Ref, options refReadOptions) (shas []string, err error) {
-	lock, err := acquire(ctx, paths.lock, "mirror lock", exclusiveLock)
+func (c *Cache) pinReadRefs(ctx context.Context, paths mirrorPaths, repo *Repository, resolved []Ref) (err error) {
+	unlock, err := paths.lockWrite(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer func() { err = errors.Join(err, lock.Unlock()) }()
-	if err := ensureMirror(ctx, paths.git); err != nil {
-		return nil, err
+	defer func() { err = errors.Join(err, unlock()) }()
+	if err := paths.ensure(ctx, repo); err != nil {
+		return err
 	}
-	shas = make([]string, len(resolved))
-	for i, ref := range resolved {
-		shas[i] = ref.SHA
-		fetching := fetchOptions{Dir: paths.git, Owner: repo, Repo: options.Refs[i].repo, Ref: ref}
-		_, shared := repo.Provider.(RemoteHistoryProvider)
-		if shared || filepath.Base(paths.dir) != repo.URL.CacheKey() {
-			fetching.Ref = Ref{Name: ref.SHA, FullName: ref.SHA, SHA: ref.SHA, Kind: RefSHA}
+	for _, ref := range resolved {
+		if pinned, err := paths.usePinned([]string{ref.SHA}, true); err != nil {
+			return err
+		} else if pinned {
+			continue
 		}
-		if options.History {
-			shas[i], err = fetchHistory(ctx, fetching)
-		} else if !hasCommit(ctx, paths.git, ref.SHA) {
-			shas[i], err = fetch(ctx, fetching)
-		}
-		if err != nil {
-			return nil, err
-		}
-		ref.SHA = shas[i]
-		if err := recordCacheRef(ctx, paths.git, options.Refs[i].repo, ref); err != nil {
-			return nil, err
+		if err := paths.prepareRef(ctx, c.Store, fetchOptions{Dir: paths.git, Owner: repo, Repo: repo, Ref: ref}); err != nil {
+			return err
 		}
 	}
-	return shas, paths.pin(ctx, slices.Compact(slices.Sorted(slices.Values(shas))))
+	return nil
 }
 
 func resolveReadRefs(ctx context.Context, refs []refOn) ([]Ref, error) {

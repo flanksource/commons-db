@@ -40,6 +40,7 @@ type gitlabMergeRequest struct {
 	Title       string    `json:"title"`
 	Description string    `json:"description"`
 	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 	Author      struct {
 		Name      string `json:"name"`
 		AvatarURL string `json:"avatar_url"`
@@ -255,7 +256,7 @@ func (mr gitlabMergeRequest) toPullRequest() (PullRequest, error) {
 		return PullRequest{}, fmt.Errorf("gitlab merge request !%d has unknown state %q", mr.IID, mr.State)
 	}
 	pr := PullRequest{Number: mr.IID, URL: mr.WebURL, State: state, Head: mr.SourceBranch, Base: mr.TargetBranch,
-		Title: mr.Title, Author: mr.Author.Name, Body: mr.Description, CreatedAt: mr.CreatedAt, HeadSHA: mr.SHA}
+		Title: mr.Title, Author: mr.Author.Name, Body: mr.Description, CreatedAt: mr.CreatedAt, UpdatedAt: mr.UpdatedAt, HeadSHA: mr.SHA}
 	if mr.Author.AvatarURL != "" || mr.DetailedMergeStatus != "" || mr.Draft {
 		pr.Metadata = &PullRequestMetadata{AuthorAvatarURL: mr.Author.AvatarURL, Mergeability: gitlabMergeability(mr.DetailedMergeStatus), MergeReason: mr.DetailedMergeStatus, Draft: mr.Draft}
 	}

@@ -64,7 +64,7 @@ var _ = Describe("local repository read in place", func() {
 		Expect(err).NotTo(HaveOccurred())
 		files, err := cache.Files(timed, repo, topic)
 		Expect(err).NotTo(HaveOccurred())
-		_, mirrorErr := os.Stat(filepath.Join(cache.Root, repo.URL.CacheKey(), "mirror.git"))
+		_, mirrorErr := os.Stat(filepath.Join(cache.Root, "v2", repo.URL.CacheKey(), "mirror.git"))
 		Expect([]any{string(body), string(blobs[0].Content), len(history), len(changes), changes[0].Path, mergeBase, files,
 			counter(timings, "git_fetch", "ops"), counter(timings, "git", "ls_remote"), os.IsNotExist(mirrorErr)}).To(Equal([]any{
 			"<Rule/>\n", "second\n", 3, 1, "rules/rule.xml", fixture.Main, []string{"README.md", "rules/rule.xml"},

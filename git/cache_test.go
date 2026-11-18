@@ -75,7 +75,7 @@ var _ = Describe("Cache", func() {
 		Expect(checkout(ctx, git.CheckoutOptions{Ref: "main", Ephemeral: true}).Release()).To(Succeed())
 		Expect(remote.uploadPacks()).To(Equal(fetches))
 
-		mirrorConfig, err := os.ReadFile(filepath.Join(cache.Root, repo.URL.CacheKey(), "mirror.git", "config"))
+		mirrorConfig, err := os.ReadFile(filepath.Join(cache.Root, "v2", repo.URL.CacheKey(), "mirror.git", "config"))
 		Expect(err).ToNot(HaveOccurred())
 		Expect(string(mirrorConfig)).ToNot(ContainSubstring(remote.Password))
 		Expect(string(mirrorConfig)).ToNot(ContainSubstring(base64.StdEncoding.EncodeToString([]byte(remote.User + ":" + remote.Password))))

@@ -53,7 +53,7 @@ var _ = Describe("a fork of the changed repository", func() {
 
 	mirrorRef := func(owner *git.Repository, ref string) string {
 		GinkgoHelper()
-		return gitFixture(filepath.Join(cache.Root, owner.URL.CacheKey(), "mirror.git"), "rev-parse", "--verify", ref)
+		return gitFixture(filepath.Join(cache.Root, "v2", owner.URL.CacheKey(), "mirror.git"), "rev-parse", "--verify", ref)
 	}
 
 	It("logs the fork's commits the repository lacks, keeping the fork's refs out of origin", func(ctx SpecContext) {
@@ -65,8 +65,8 @@ var _ = Describe("a fork of the changed repository", func() {
 		Expect(commits).To(HaveLen(1))
 		Expect(commits[0].SHA).To(Equal(ahead))
 		Expect(commits[0].Files).To(Equal([]string{"fork.txt"}))
-		Expect(mirrorRef(repo, "refs/remotes/origin/main")).To(Equal(upstreamAhead))
-		Expect(mirrorRef(repo, "refs/remotes/"+forkRepo.URL.CacheKey()+"/main")).To(Equal(ahead))
+		Expect(mirrorRef(repo, "refs/commons-cache/repos/"+repo.URL.CacheKey()+"/heads/main")).To(Equal(upstreamAhead))
+		Expect(mirrorRef(forkRepo, "refs/commons-cache/repos/"+forkRepo.URL.CacheKey()+"/heads/main")).To(Equal(ahead))
 	})
 
 	It("cherry-picks a fork commit onto a branch of the repository", func(ctx SpecContext) {

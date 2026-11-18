@@ -6,6 +6,8 @@ import (
 	. "github.com/onsi/gomega"
 	"math/rand"
 	"net/http"
+	"os"
+	"path/filepath"
 )
 
 type packResponseWriter struct {
@@ -34,22 +36,23 @@ var _ = Describe("shared cache transfer", func() {
 		donor.Main = donor.commitOn(fixtureCommit{Branch: "main", Path: "payload.bin", Content: string(payload), Message: "payload"})
 		fork := newFork(donor)
 		fork.Main = fork.commitOn(fixtureCommit{Branch: "main", Path: "delta.txt", Content: "delta\n", Message: "delta"})
+		Expect(os.Symlink(donor.Path, filepath.Join(fork.Root, filepath.Base(donor.Path)))).To(Succeed())
+		remote := newHTTPRemote(fork.Root, false)
 		shared := &git.Cache{Root: fixtureTempDir()}
-		initial, err := shared.Checkout(ctx, mirroredRepository(donor), git.CheckoutOptions{Ref: "main", Ephemeral: true})
+		initial, err := shared.Checkout(ctx, organizationRepository(remote, donor, "example"), git.CheckoutOptions{Ref: "main", Ephemeral: true})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(initial.Release()).To(Succeed())
-		remote := newHTTPRemote(fork.Root, false)
-		repo := newRepository(remote.URL(fork), git.Auth{Username: remote.User, Password: remote.Password})
-		repo.Provider = &historyFixtureProvider{base: donor.Main}
+		repo := organizationRepository(remote, fork, "example")
+		beforeCold := remote.PackBytes()
 		cold := &git.Cache{Root: fixtureTempDir()}
 		baseline, err := cold.Checkout(ctx, repo, git.CheckoutOptions{Ref: "main", Ephemeral: true})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(baseline.Release()).To(Succeed())
-		coldBytes := remote.PackBytes()
+		coldBytes := remote.PackBytes() - beforeCold
 		warm, err := shared.Checkout(ctx, repo, git.CheckoutOptions{Ref: "main", Ephemeral: true})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(warm.Release()).To(Succeed())
-		warmBytes := remote.PackBytes() - coldBytes
+		warmBytes := remote.PackBytes() - beforeCold - coldBytes
 		Expect(coldBytes).To(BeNumerically(">", len(payload)))
 		Expect(warmBytes).To(BeNumerically("<", coldBytes/4))
 		before := remote.PackBytes()
