@@ -16,13 +16,13 @@ type Worktree struct {
 	Dir string
 	Ref Ref
 
-	repo       *Repository
-	mirror     string
-	mirrorLock string
-	lease      *flock.Flock
-	ephemeral  bool
-	branches   []string
-	tags       []string
+	repo      *Repository
+	paths     mirrorPaths
+	store     Store
+	lease     *flock.Flock
+	ephemeral bool
+	branches  []string
+	tags      []string
 }
 
 // Signature is a commit author or tag tagger.
@@ -73,21 +73,21 @@ func (w *Worktree) Release() error {
 
 func (w *Worktree) remove() (err error) {
 	ctx := context.Background()
-	lock, err := acquire(ctx, w.mirrorLock, "mirror lock", exclusiveLock)
+	lock, err := acquire(ctx, w.paths.lock, "mirror lock", exclusiveLock)
 	if err != nil {
 		return err
 	}
 	defer func() { err = errors.Join(err, lock.Unlock()) }()
-	if _, err := run(ctx, command{dir: w.mirror, args: []string{"worktree", "remove", "--force", "--end-of-options", w.Dir}}); err != nil {
+	if _, err := run(ctx, command{dir: w.paths.git, args: []string{"worktree", "remove", "--force", "--end-of-options", w.Dir}}); err != nil {
 		return err
 	}
 	if len(w.branches) > 0 {
-		if _, err := run(ctx, command{dir: w.mirror, args: append([]string{"branch", "--quiet", "-D", "--end-of-options"}, w.branches...)}); err != nil {
+		if _, err := run(ctx, command{dir: w.paths.git, args: append([]string{"branch", "--quiet", "-D", "--end-of-options"}, w.branches...)}); err != nil {
 			return err
 		}
 	}
 	if len(w.tags) > 0 {
-		_, err = run(ctx, command{dir: w.mirror, args: append([]string{"tag", "--delete", "--end-of-options"}, w.tags...)})
+		_, err = run(ctx, command{dir: w.paths.git, args: append([]string{"tag", "--delete", "--end-of-options"}, w.tags...)})
 	}
 	return err
 }

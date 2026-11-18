@@ -16,21 +16,25 @@ import (
 
 const lockRetry = 50 * time.Millisecond
 
-// Cache leases worktrees from cached bare repositories. Provider-backed
-// repositories with common history can share a physical mirror:
+// Cache leases worktrees from per-repository bare mirrors. GitHub and Azure
+// DevOps mirrors borrow complete objects from an organization pool.
 //
-//	<Root>/<RepoURL.CacheKey>/mirror.git
-//	<Root>/<RepoURL.CacheKey>/mirror.lock
-//	<Root>/<RepoURL.CacheKey>/pins/<sha>
-//	<Root>/<RepoURL.CacheKey>/worktrees/<ref dir>[.lock]
+//	<Root>/v2/<RepoURL.CacheKey>/mirror.git
+//	<Root>/v2/<RepoURL.CacheKey>/mirror.lock
+//	<Root>/v2/<RepoURL.CacheKey>/pins/<sha>
+//	<Root>/v2/<RepoURL.CacheKey>/worktrees/<ref dir>[.lock]
 //
 // mirror.lock is held shared by reads and exclusively by fetches, pin writes,
 // Maintain and worktree bookkeeping; a pin file's mtime is when a read last
 // used that commit (see Maintain). Each worktree is
 // leased exclusively until Release, so concurrent checkouts of different refs
 // proceed while a second checkout of the same ref waits.
+//
+// Store, when set, is the durable tier behind Root: a commit missing from a
+// mirror is hydrated from it before the remote is asked (see Store).
 type Cache struct {
-	Root string
+	Root  string
+	Store Store
 }
 
 // CheckoutOptions configures Cache.Checkout. Ref is a branch, tag, full ref
@@ -55,30 +59,21 @@ func (c *Cache) Checkout(ctx context.Context, repo *Repository, options Checkout
 	return c.checkoutRef(ctx, repo, ref, options)
 }
 
-// checkoutRef leases a worktree at an already resolved ref, so a caller that
-// checked ref.SHA checks out exactly that commit (a fetch can still advance
-// it when the mirror lacks the commit; the caller compares Worktree.Ref.SHA).
+// checkoutRef leases a worktree at the exact commit of an already resolved ref.
 func (c *Cache) checkoutRef(ctx context.Context, repo *Repository, ref Ref, options CheckoutOptions) (*Worktree, error) {
 	if c.Root == "" {
 		return nil, errors.New("git cache root is required")
 	}
-	base := filepath.Join(c.Root, repo.URL.CacheKey())
-	if options.Depth < 0 {
-		return nil, fmt.Errorf("invalid checkout depth %d", options.Depth)
-	}
-	paths, err := c.checkoutPaths(ctx, repo, ref, options.Depth)
+	paths, err := c.checkoutPaths(repo, options.Depth)
 	if err != nil {
 		return nil, err
-	}
-	if options.Depth > 0 {
-		base = paths.dir
 	}
 	name, err := worktreeName(ref, options.Ephemeral)
 	if err != nil {
 		return nil, err
 	}
-	worktree := &Worktree{Dir: filepath.Join(base, "worktrees", name), Ref: ref, repo: repo,
-		mirror: paths.git, mirrorLock: paths.lock, ephemeral: options.Ephemeral}
+	worktree := &Worktree{Dir: filepath.Join(paths.dir, "worktrees", name), Ref: ref, repo: repo,
+		paths: paths, store: c.Store, ephemeral: options.Ephemeral}
 	if worktree.lease, err = acquire(ctx, worktree.Dir+".lock", "worktree lease", exclusiveLock); err != nil {
 		return nil, fmt.Errorf("%s at %s: %w", repo.URL.Redacted(), ref.Name, err)
 	}
@@ -103,36 +98,24 @@ func worktreeName(ref Ref, ephemeral bool) (string, error) {
 // materialize fetches ref into the mirror unless its commit is cached, then
 // adds (or resets) the worktree at that commit, under the mirror lock.
 func (w *Worktree) materialize(ctx context.Context, depth int) (err error) {
-	lock, err := acquire(ctx, w.mirrorLock, "mirror lock", exclusiveLock)
+	unlock, err := w.paths.lockWrite(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, lock.Unlock()) }()
-	if err := ensureMirror(ctx, w.mirror); err != nil {
+	defer func() { err = errors.Join(err, unlock()) }()
+	if err := w.paths.ensure(ctx, w.repo); err != nil {
 		return err
 	}
-	if !hasCommit(ctx, w.mirror, w.Ref.SHA) {
-		fetchRef := w.Ref
-		if _, shared := w.repo.Provider.(RemoteHistoryProvider); shared {
-			fetchRef = Ref{Name: w.Ref.SHA, FullName: w.Ref.SHA, SHA: w.Ref.SHA, Kind: RefSHA}
-		}
-		if w.Ref.SHA, err = fetch(ctx, fetchOptions{Dir: w.mirror, Owner: w.repo, Repo: w.repo, Ref: fetchRef, Depth: depth}); err != nil {
-			return err
-		}
-	}
-	if err := recordCacheRef(ctx, w.mirror, w.repo, w.Ref); err != nil {
-		return err
-	}
-	if err := newMirrorPaths(filepath.Dir(w.mirror)).pin(ctx, []string{w.Ref.SHA}); err != nil {
+	if err := w.paths.prepareRef(ctx, w.store, fetchOptions{Dir: w.paths.git, Owner: w.repo, Repo: w.repo, Ref: w.Ref, Depth: depth}); err != nil {
 		return err
 	}
 	if _, err := os.Stat(filepath.Join(w.Dir, ".git")); err == nil {
 		return w.reset(ctx)
 	}
-	if _, err := run(ctx, command{dir: w.mirror, args: []string{"worktree", "prune"}}); err != nil {
+	if _, err := run(ctx, command{dir: w.paths.git, args: []string{"worktree", "prune"}}); err != nil {
 		return err
 	}
-	_, err = run(ctx, command{dir: w.mirror, args: []string{"worktree", "add", "--quiet", "--force", "--detach",
+	_, err = run(ctx, command{dir: w.paths.git, args: []string{"worktree", "add", "--quiet", "--force", "--detach",
 		"--end-of-options", w.Dir, w.Ref.SHA}})
 	return err
 }
@@ -149,6 +132,8 @@ func (w *Worktree) reset(ctx context.Context) error {
 func ensureMirror(ctx context.Context, mirror string) error {
 	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err == nil {
 		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	if err := os.MkdirAll(mirror, 0o755); err != nil {
 		return fmt.Errorf("create git mirror %s: %w", mirror, err)

@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	registry "github.com/flanksource/commons-db/git/internal/cache"
 	"github.com/gofrs/flock"
 )
 
@@ -30,6 +29,7 @@ type CacheEntry struct {
 	Key        string          `json:"key"`
 	Repository string          `json:"repository,omitempty"`
 	Owner      string          `json:"owner"`
+	Pool       string          `json:"pool,omitempty"`
 	BoundAt    *time.Time      `json:"boundAt,omitempty"`
 	Dependents []string        `json:"dependents,omitempty"`
 	Mirror     *MirrorState    `json:"mirror,omitempty"`
@@ -75,16 +75,8 @@ func (c *Cache) Inventory(ctx context.Context) ([]CacheEntry, error) {
 		return nil, err
 	}
 	entries := make([]CacheEntry, 0, len(keys))
-	index := map[string]int{}
 	for _, key := range keys {
-		entry := c.inventoryEntry(ctx, key)
-		index[key] = len(entries)
-		entries = append(entries, entry)
-	}
-	for _, entry := range entries {
-		if owner, ok := index[entry.Owner]; ok && entry.Owner != entry.Key {
-			entries[owner].Dependents = append(entries[owner].Dependents, entry.Key)
-		}
+		entries = append(entries, c.inventoryEntry(ctx, key))
 	}
 	return entries, ctx.Err()
 }
@@ -94,7 +86,8 @@ func (c *Cache) cacheKeys() ([]string, error) {
 	if c.Root == "" {
 		return nil, errors.New("git cache root is required")
 	}
-	dirs, err := os.ReadDir(c.Root)
+	root := c.cacheRoot()
+	dirs, err := os.ReadDir(root)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
@@ -106,13 +99,10 @@ func (c *Cache) cacheKeys() ([]string, error) {
 		if !dir.IsDir() {
 			continue
 		}
-		for _, marker := range []string{filepath.Join("mirror.git", "HEAD"), "repository.json"} {
-			if _, err := os.Stat(filepath.Join(c.Root, dir.Name(), marker)); err == nil {
-				keys = append(keys, dir.Name())
-				break
-			} else if !errors.Is(err, fs.ErrNotExist) {
-				return nil, err
-			}
+		if _, err := os.Stat(filepath.Join(root, dir.Name(), "mirror.git", "HEAD")); err == nil {
+			keys = append(keys, dir.Name())
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
 		}
 	}
 	sort.Strings(keys)
@@ -125,30 +115,25 @@ func (c *Cache) inventoryEntry(ctx context.Context, key string) CacheEntry {
 		entry.Error = Redact(err.Error())
 		return entry
 	}
-	binding, err := registry.Load(c.Root, key)
-	if errors.Is(err, registry.ErrOwnerMissing) {
-		entry.Owner, entry.Repository = binding.Owner, binding.Repository
-	}
-	if err != nil {
+	paths := newMirrorPaths(filepath.Join(c.cacheRoot(), key))
+	meta, err := paths.metadata()
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fail(err)
 	}
-	entry.Owner, entry.Repository = binding.Owner, binding.Repository
-	if info, err := os.Stat(filepath.Join(c.Root, key, "repository.json")); err == nil {
+	entry.Repository, entry.Pool = meta.Repository, meta.Pool
+	if info, err := os.Stat(paths.metadataPath()); err == nil {
 		bound := info.ModTime().UTC()
 		entry.BoundAt = &bound
 	} else if !errors.Is(err, fs.ErrNotExist) {
 		return fail(err)
 	}
-	owner := newMirrorPaths(filepath.Join(c.Root, entry.Owner))
-	if entry.Owner == key {
-		if entry.Mirror, err = mirrorState(ctx, owner); err != nil {
-			return fail(err)
-		}
-	}
-	if entry.Commits, err = cachedCommits(ctx, owner.git, key); err != nil {
+	if entry.Mirror, err = mirrorState(ctx, paths); err != nil {
 		return fail(err)
 	}
-	if entry.Worktrees, err = worktreeStates(filepath.Join(c.Root, key, "worktrees")); err != nil {
+	if entry.Commits, err = cachedCommits(ctx, paths.git, key); err != nil {
+		return fail(err)
+	}
+	if entry.Worktrees, err = worktreeStates(filepath.Join(paths.dir, "worktrees")); err != nil {
 		return fail(err)
 	}
 	return entry
@@ -164,6 +149,9 @@ func mirrorState(ctx context.Context, paths mirrorPaths) (*MirrorState, error) {
 		name, value, ok := strings.Cut(line, ": ")
 		if !ok {
 			return nil, fmt.Errorf("unexpected count-objects line %q in %s", line, paths.git)
+		}
+		if name == "alternate" || name == "warning" {
+			continue
 		}
 		if counts[name], err = strconv.ParseInt(value, 10, 64); err != nil {
 			return nil, fmt.Errorf("unexpected count-objects line %q in %s", line, paths.git)

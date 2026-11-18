@@ -15,6 +15,7 @@ import (
 // remote branch.
 type PushOptions struct {
 	tagRefs       map[string]string
+	createOnly    bool
 	Branch        string
 	RemoteBranch  string
 	Commit        string
@@ -71,6 +72,8 @@ func (o PushOptions) flags() ([]string, error) {
 			return nil, errors.New("a forced push needs a branch and the full ExpectedSHA of the remote branch")
 		}
 		flags = append(flags, "--force-with-lease=refs/heads/"+o.remoteBranch()+":"+o.ExpectedSHA)
+	} else if o.createOnly {
+		flags = append(flags, "--force-with-lease=refs/heads/"+o.remoteBranch()+":")
 	}
 	for _, option := range o.ServerOptions {
 		if option == "" || strings.ContainsAny(option, "\n\x00") {

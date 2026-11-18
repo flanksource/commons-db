@@ -15,7 +15,8 @@ var (
 	ErrPullRequestsUnsupported = errors.New("pull requests are not supported by this git provider")
 	// ErrBranchExists is returned when a change would push to a branch that
 	// already exists on the remote.
-	ErrBranchExists = errors.New("branch already exists on the remote")
+	ErrBranchExists    = errors.New("branch already exists on the remote")
+	ErrBranchProtected = errors.New("branch is protected on the remote")
 	// ErrTagExists is returned when a change would push a tag that already
 	// exists on the remote.
 	ErrTagExists = errors.New("tag already exists on the remote")
@@ -139,6 +140,10 @@ type PullRequest struct {
 	Author    string
 	Body      string
 	CreatedAt time.Time
+	// UpdatedAt is when the provider last changed the pull request (GitHub
+	// updated_at, GitLab updated_at). Azure DevOps reports no such time, so
+	// it is zero there.
+	UpdatedAt time.Time
 	// HeadSHA is the commit the head branch points at.
 	HeadSHA string
 	// HeadRepository is the full name (as RepositoryInfo.FullName) of the

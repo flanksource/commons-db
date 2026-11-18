@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/git"
@@ -64,19 +65,29 @@ func githubPulls(from, count int) string {
 	return "[" + strings.Join(pulls, ",") + "]"
 }
 
+// pullUpdated is the provider's last-update time of a listed pull request.
+const pullUpdated = "2026-10-19T08:30:00Z"
+
+func mustTime(value string) time.Time {
+	GinkgoHelper()
+	parsed, err := time.Parse(time.RFC3339, value)
+	Expect(err).ToNot(HaveOccurred())
+	return parsed
+}
+
 var _ = Describe("GitHub ListPullRequests", func() {
 	pullsPath := "GET /repos/acme/widgets/pulls"
 	repo := func() git.RepoURL { return repoURL("https://github.com/acme/widgets", "") }
 
 	It("filters open pull requests by base and owner-qualified head, keeping the fork head repository", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
-			pullsPath: reply(`[{"number":5,"html_url":"u","state":"open","title":"T","head":{"ref":"apply","sha":"` + headSHA + `","repo":{"full_name":"fork/widgets"}},"base":{"ref":"release/1"}}]`),
+			pullsPath: reply(`[{"number":5,"html_url":"u","state":"open","title":"T","updated_at":"` + pullUpdated + `","head":{"ref":"apply","sha":"` + headSHA + `","repo":{"full_name":"fork/widgets"}},"base":{"ref":"release/1"}}]`),
 		})
 		provider := providerClient(models.ConnectionTypeGithub, api.Server.URL, nil).Provider
 		pulls, err := provider.ListPullRequests(ctx, repo(), git.ListPullRequestsOptions{Base: "release/1", Head: "apply"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pulls).To(Equal([]git.PullRequest{{Number: 5, URL: "u", State: git.PullRequestOpen, Head: "apply", Base: "release/1",
-			Title: "T", HeadSHA: headSHA, HeadRepository: "fork/widgets"}}))
+			Title: "T", UpdatedAt: mustTime(pullUpdated), HeadSHA: headSHA, HeadRepository: "fork/widgets"}}))
 		Expect(api.Calls()[0].Query).To(Equal("base=release%2F1&head=acme%3Aapply&page=1&per_page=100&state=open"))
 	})
 
@@ -124,7 +135,7 @@ var _ = Describe("GitHub ListPullRequests", func() {
 var _ = Describe("GitLab ListPullRequests", func() {
 	It("filters by target and source branch and resolves a fork source project", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
-			"GET /api/v4/projects/acme%2Fcli/merge_requests": reply(`[{"iid":3,"web_url":"u","state":"merged","title":"T","source_branch":"apply","target_branch":"release/1","sha":"` + headSHA + `","source_project_id":42,"target_project_id":7}]`),
+			"GET /api/v4/projects/acme%2Fcli/merge_requests": reply(`[{"iid":3,"web_url":"u","state":"merged","title":"T","updated_at":"` + pullUpdated + `","source_branch":"apply","target_branch":"release/1","sha":"` + headSHA + `","source_project_id":42,"target_project_id":7}]`),
 			"GET /api/v4/projects/42":                        reply(`{"path":"cli","path_with_namespace":"fork/cli"}`),
 		})
 		provider := providerClient(models.ConnectionTypeGitlab, api.Server.URL, nil).Provider
@@ -132,7 +143,7 @@ var _ = Describe("GitLab ListPullRequests", func() {
 			git.ListPullRequestsOptions{Base: "release/1", Head: "apply", State: git.PullRequestMerged})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pulls).To(Equal([]git.PullRequest{{Number: 3, URL: "u", State: git.PullRequestMerged, Head: "apply", Base: "release/1",
-			Title: "T", HeadSHA: headSHA, HeadRepository: "fork/cli"}}))
+			Title: "T", UpdatedAt: mustTime(pullUpdated), HeadSHA: headSHA, HeadRepository: "fork/cli"}}))
 		Expect(api.Calls()[0].Query).To(Equal("page=1&per_page=100&source_branch=apply&state=merged&target_branch=release%2F1"))
 	})
 })

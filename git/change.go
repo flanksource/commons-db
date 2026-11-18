@@ -23,6 +23,8 @@ type FileChange struct {
 // BaseSHA, when set, pins the change to the commit the caller verified Files
 // against: the branch is cut from exactly that commit, and a Base whose head
 // is anywhere else fails with ErrBaseMoved before anything is pushed.
+// UpdateExisting requires Base to be the full ref of Branch and BaseSHA to
+// be set. The push accepts the new child commit only at that reviewed tip.
 //
 // CherryPick replays full commit SHAs in order onto the branch (git
 // cherry-pick -x, Author as committer, the original author kept) before Files
@@ -58,6 +60,7 @@ type ChangeRequest struct {
 	Base               string
 	BaseSHA            string
 	Branch             string
+	UpdateExisting     bool // Commit Files on the reviewed tip of Base and update that same branch.
 	Message            string
 	Author             Signature
 	Source             *Repository
@@ -121,12 +124,15 @@ func (c *Cache) preflight(ctx context.Context, repo *Repository, request ChangeR
 	if request.PullRequest != nil && (repo.Provider == nil || !repo.Provider.SupportsPullRequests()) {
 		return Ref{}, ErrPullRequestsUnsupported
 	}
-	refs, err := repo.LsRemote(ctx)
+	refs, err := repo.LsRemote(WithFreshRefs(ctx))
 	if err != nil {
 		return Ref{}, err
 	}
 	base, err := refs.Resolve(request.Base)
 	if err != nil {
+		if request.UpdateExisting {
+			return Ref{}, baseMoved(request, "absent")
+		}
 		return Ref{}, fmt.Errorf("change base: %w", err)
 	}
 	if request.PullRequest != nil && base.Kind != RefBranch {
@@ -135,7 +141,7 @@ func (c *Cache) preflight(ctx context.Context, repo *Repository, request ChangeR
 	if request.BaseSHA != "" && base.SHA != request.BaseSHA {
 		return Ref{}, baseMoved(request, base.SHA)
 	}
-	if _, exists := refs.findIn(refs.Branches, request.Branch); exists {
+	if _, exists := refs.findIn(refs.Branches, request.Branch); exists && !request.UpdateExisting {
 		return Ref{}, fmt.Errorf("%w: %s", ErrBranchExists, request.Branch)
 	}
 	if request.Tag != nil {
@@ -155,6 +161,10 @@ func (r ChangeRequest) validate() error {
 	}
 	if r.BaseSHA != "" && !fullSHAPattern.MatchString(r.BaseSHA) {
 		return fmt.Errorf("change base SHA %q must be a full 40-character lowercase commit SHA", r.BaseSHA)
+	}
+	if r.UpdateExisting && (r.Base != "refs/heads/"+r.Branch || r.BaseSHA == "" || r.PullRequest != nil ||
+		r.Tag != nil || r.Head != "" || r.Rebase != "" || len(r.CherryPick) != 0 || len(r.Files) == 0) {
+		return errors.New("updating an existing branch requires its qualified ref, reviewed SHA and file changes")
 	}
 	if err := r.validateContent(); err != nil {
 		return err

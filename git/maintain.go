@@ -25,15 +25,55 @@ type MaintainOptions struct {
 // (the ref itself points at the commit, whose date says nothing of use); a
 // pin ref without a pin file has not been read since pin files existed and
 // expires. A Tree keeps no pin fresh while open, so PinTTL must exceed the
-// longest a Tree stays open.
+// longest a Tree stays open. A PackStore then compacts the bundles of every
+// key it holds (of Owners only, when set).
 func (c *Cache) Maintain(ctx context.Context, options MaintainOptions) error {
+	if err := c.maintainMirrors(ctx, options); err != nil {
+		return err
+	}
+	if len(options.Owners) == 0 {
+		if err := c.maintainPools(ctx); err != nil {
+			return err
+		}
+	}
+	return c.compactStore(ctx, options.Owners)
+}
+
+// storeCompactor is a Store that folds its per-key files (PackStore).
+type storeCompactor interface {
+	Compact(ctx context.Context, key string) (bool, error)
+}
+
+func (c *Cache) compactStore(ctx context.Context, owners []string) error {
+	compactor, ok := c.Store.(storeCompactor)
+	if !ok {
+		return nil
+	}
+	if len(owners) == 0 {
+		entries, err := c.Store.Inventory(ctx)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			owners = append(owners, entry.Key)
+		}
+	}
+	for _, owner := range owners {
+		if _, err := compactor.Compact(ctx, owner); err != nil {
+			return fmt.Errorf("compact git store %s: %w", owner, err)
+		}
+	}
+	return nil
+}
+
+func (c *Cache) maintainMirrors(ctx context.Context, options MaintainOptions) error {
 	if c.Root == "" {
 		return errors.New("git cache root is required")
 	}
 	if options.PinTTL <= 0 {
 		return fmt.Errorf("maintain git cache: pin TTL must be positive, got %s", options.PinTTL)
 	}
-	root, err := os.OpenRoot(c.Root)
+	root, err := os.OpenRoot(c.cacheRoot())
 	if errors.Is(err, fs.ErrNotExist) && len(options.Owners) == 0 {
 		return nil
 	}
@@ -43,7 +83,7 @@ func (c *Cache) Maintain(ctx context.Context, options MaintainOptions) error {
 	defer root.Close()
 	owners := options.Owners
 	if len(owners) == 0 {
-		entries, err := os.ReadDir(c.Root)
+		entries, err := os.ReadDir(c.cacheRoot())
 		if errors.Is(err, fs.ErrNotExist) {
 			return nil
 		}
@@ -69,7 +109,7 @@ func (c *Cache) Maintain(ctx context.Context, options MaintainOptions) error {
 		if _, err := root.Stat(filepath.Join(owner, "mirror.git", "HEAD")); err != nil {
 			return fmt.Errorf("maintain git mirror %s: %w", owner, err)
 		}
-		paths := newMirrorPaths(filepath.Join(c.Root, owner))
+		paths := newMirrorPaths(filepath.Join(c.cacheRoot(), owner))
 		if err := maintainMirror(ctx, paths, cutoff); err != nil {
 			return fmt.Errorf("maintain git mirror %s: %w", paths.git, err)
 		}

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	registry "github.com/flanksource/commons-db/git/internal/cache"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -29,6 +28,7 @@ var pinnedCommits sync.Map
 //	<dir>/pins/<sha>      the pin of <sha>; its mtime is when a read last used it
 type mirrorPaths struct {
 	dir, git, lock, pins string
+	pool                 string
 }
 
 func newMirrorPaths(dir string) mirrorPaths {
@@ -42,11 +42,11 @@ func (c *Cache) mirrorPaths(repo *Repository) (mirrorPaths, error) {
 	if repo == nil {
 		return mirrorPaths{}, errors.New("git repository is required")
 	}
-	binding, err := registry.Load(c.Root, repo.URL.CacheKey())
-	if err != nil {
-		return mirrorPaths{}, err
+	paths := newMirrorPaths(filepath.Join(c.cacheRoot(), repo.URL.CacheKey()))
+	if pool := organizationPool(repo.URL); pool != "" {
+		paths.pool = filepath.Join(c.cacheRoot(), "pools", pool, "pool.git")
 	}
-	return newMirrorPaths(filepath.Join(c.Root, binding.Owner)), nil
+	return paths, nil
 }
 
 func (m mirrorPaths) pinned() (*sync.Map, error) {

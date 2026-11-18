@@ -4,49 +4,91 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 )
 
 func recordCacheRef(ctx context.Context, mirror string, repo *Repository, ref Ref) error {
-	if _, ok := repo.Provider.(RemoteHistoryProvider); !ok {
+	if ref.Kind != RefBranch {
 		return nil
 	}
-	kind := "commits"
-	name := ref.SHA
-	switch ref.Kind {
-	case RefBranch:
-		kind, name = "heads", ref.Name
-	case RefTag:
-		return nil
-	}
-	_, err := run(ctx, command{dir: mirror, args: []string{"update-ref", cacheRefPrefix + repo.URL.CacheKey() + "/" + kind + "/" + name, ref.SHA}})
+	_, err := run(ctx, command{dir: mirror, args: []string{"update-ref", cacheRefPrefix + repo.URL.CacheKey() + "/heads/" + ref.Name, ref.SHA}})
 	return err
 }
 
-func (c *Cache) cloneSource(ctx context.Context, repo *Repository, ref Ref, depth int) (result mirrorPaths, err error) {
-	if c.Root == "" {
-		return mirrorPaths{}, fmt.Errorf("git cache root is required")
+// Endpoint reads can use an isolated shallow mirror if its snapshots are
+// already present. History reads always prepare the complete mirror.
+func (m mirrorPaths) lockShallowRefs(ctx context.Context, shas []string) (string, func() error, error) {
+	if _, err := os.Stat(filepath.Join(m.git, "HEAD")); err == nil {
+		return "", nil, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return "", nil, err
 	}
-	if depth == 0 {
-		return c.checkoutPaths(ctx, repo, ref, 0)
-	}
-	paths := newMirrorPaths(filepath.Join(c.Root, fmt.Sprintf("%s-depth-%d", repo.URL.CacheKey(), depth)))
-	lock, err := acquire(ctx, paths.lock, "shallow clone source", exclusiveLock)
+	parent := filepath.Dir(m.dir)
+	entries, err := os.ReadDir(parent)
 	if err != nil {
-		return mirrorPaths{}, err
+		return "", nil, err
 	}
-	defer func() { err = errors.Join(err, lock.Unlock()) }()
-	if err := ensureMirror(ctx, paths.git); err != nil {
-		return mirrorPaths{}, err
-	}
-	if !hasCommit(ctx, paths.git, ref.SHA) {
-		sha, err := fetch(ctx, fetchOptions{Dir: paths.git, Owner: repo, Repo: repo, Ref: Ref{Name: ref.SHA, FullName: ref.SHA, SHA: ref.SHA, Kind: RefSHA}, Depth: depth})
+	for _, entry := range entries {
+		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), filepath.Base(m.dir)+"-depth-") {
+			continue
+		}
+		candidate := newMirrorPaths(filepath.Join(parent, entry.Name()))
+		lock, err := acquire(ctx, candidate.lock, "shallow mirror lock", sharedLock)
 		if err != nil {
-			return mirrorPaths{}, err
+			return "", nil, err
 		}
-		if sha != ref.SHA {
-			return mirrorPaths{}, fmt.Errorf("shallow fetch returned %s, expected %s", sha, ref.SHA)
+		if !slices.ContainsFunc(shas, func(sha string) bool { return !hasCommit(ctx, candidate.git, sha) }) {
+			return candidate.git, lock.Unlock, nil
+		}
+		if err := lock.Unlock(); err != nil {
+			return "", nil, err
 		}
 	}
-	return paths, paths.pin(ctx, []string{ref.SHA})
+	return "", nil, ctx.Err()
+}
+
+func (c *Cache) checkoutPaths(repo *Repository, depth int) (mirrorPaths, error) {
+	if depth < 0 {
+		return mirrorPaths{}, fmt.Errorf("invalid checkout depth %d", depth)
+	}
+	paths, err := c.mirrorPaths(repo)
+	if err != nil || depth == 0 {
+		return paths, err
+	}
+	return newMirrorPaths(filepath.Join(c.cacheRoot(), fmt.Sprintf("%s-depth-%d", repo.URL.CacheKey(), depth))), nil
+}
+
+func (m mirrorPaths) prepareRef(ctx context.Context, store Store, options fetchOptions) error {
+	ref := options.Ref
+	if options.Depth == 0 {
+		if err := hydrateMiss(ctx, store, m.git, ref.SHA); err != nil {
+			return err
+		}
+	}
+	options.Ref = Ref{Name: ref.Name, FullName: ref.SHA, SHA: ref.SHA, Kind: RefSHA}
+	options.Pool = m.poolName()
+	var err error
+	sha := ref.SHA
+	if options.Depth == 0 {
+		sha, err = fetchHistory(ctx, options)
+	} else if !hasCommit(ctx, m.git, ref.SHA) {
+		sha, err = fetch(ctx, options)
+	}
+	if err != nil {
+		return err
+	}
+	if sha != ref.SHA {
+		return fmt.Errorf("fetch returned %s, expected %s", sha, ref.SHA)
+	}
+	if err := m.retain(ctx, []string{sha}, true); err != nil {
+		return err
+	}
+	if err := recordCacheRef(ctx, m.git, options.Repo, ref); err != nil {
+		return err
+	}
+	return m.pin(ctx, []string{sha})
 }

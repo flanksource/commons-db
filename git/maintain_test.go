@@ -16,8 +16,8 @@ var _ = Describe("Cache.Maintain", func() {
 	It("rejects a mirror symlink that escapes the cache root before running git", func(ctx SpecContext) {
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
 		outside := newBareRepo("outside-cache")
-		Expect(os.MkdirAll(filepath.Join(cache.Root, "owner"), 0700)).To(Succeed())
-		Expect(os.Symlink(outside.Path, filepath.Join(cache.Root, "owner", "mirror.git"))).To(Succeed())
+		Expect(os.MkdirAll(filepath.Join(cache.Root, "v2", "owner"), 0700)).To(Succeed())
+		Expect(os.Symlink(outside.Path, filepath.Join(cache.Root, "v2", "owner", "mirror.git"))).To(Succeed())
 		timed, timings := rpchttp.WithTimings(ctx)
 		Expect(cache.Maintain(timed, git.MaintainOptions{PinTTL: time.Hour, Owners: []string{"owner"}})).NotTo(Succeed())
 		collections, _ := timings.Counter("git_maintenance", "ops")
@@ -30,7 +30,7 @@ var _ = Describe("Cache.Maintain", func() {
 		repo := mirroredRepository(fixture)
 		_, err := cache.Changes(ctx, git.ChangesOptions{Repository: repo, Base: fixture.First, Head: fixture.Main})
 		Expect(err).NotTo(HaveOccurred())
-		repository := filepath.Join(cache.Root, repo.URL.CacheKey())
+		repository := filepath.Join(cache.Root, "v2", repo.URL.CacheKey())
 		stale := time.Now().Add(-2 * time.Hour)
 		Expect(os.Chtimes(filepath.Join(repository, "pins", fixture.First), stale, stale)).To(Succeed())
 		timed, timings := rpchttp.WithTimings(ctx)

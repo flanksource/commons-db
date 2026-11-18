@@ -145,7 +145,18 @@ func (s indexScratch) requireEntries(ctx context.Context, paths []string) error 
 // publishCommit pushes sha as request.Branch, with request.Tag created on it
 // in the mirror for the push and deleted afterwards.
 func publishCommit(ctx context.Context, mirror string, repo *Repository, sha string, request ChangeRequest) (result ChangeResult, err error) {
-	options := PushOptions{Branch: request.Branch, Commit: sha}
+	options := PushOptions{Branch: request.Branch, Commit: sha, createOnly: !request.UpdateExisting}
+	if request.UpdateExisting {
+		protected, err := repo.BranchProtected(ctx, request.Branch)
+		if err != nil {
+			return ChangeResult{}, fmt.Errorf("verify protection of %s before pushing: %w", request.Branch, err)
+		}
+		if protected {
+			return ChangeResult{}, fmt.Errorf("%w: %s", ErrBranchProtected, request.Branch)
+		}
+		// The commit was built with the reviewed SHA as its only parent.
+		options.Force, options.ExpectedSHA = true, request.BaseSHA
+	}
 	result = ChangeResult{Branch: request.Branch, CommitSHA: sha}
 	if request.Tag != nil {
 		tag := *request.Tag
@@ -169,6 +180,24 @@ func publishCommit(ctx context.Context, mirror string, repo *Repository, sha str
 		options.tagRefs = map[string]string{tag.Name: stored}
 	}
 	if err := push(ctx, mirror, repo, options); err != nil {
+		if request.UpdateExisting {
+			refs, readErr := repo.LsRemote(WithFreshRefs(ctx))
+			if readErr == nil {
+				ref, exists := refs.findIn(refs.Branches, request.Branch)
+				switch {
+				case !exists:
+					return ChangeResult{}, baseMoved(request, "absent")
+				case ref.SHA != request.BaseSHA:
+					return ChangeResult{}, baseMoved(request, ref.SHA)
+				}
+			}
+			return ChangeResult{}, errors.Join(err, readErr)
+		}
+		if refs, readErr := repo.LsRemote(WithFreshRefs(ctx)); readErr == nil {
+			if _, exists := refs.findIn(refs.Branches, request.Branch); exists {
+				return ChangeResult{}, fmt.Errorf("%w: %s", ErrBranchExists, request.Branch)
+			}
+		}
 		return ChangeResult{}, err
 	}
 	return result, nil

@@ -112,16 +112,19 @@ func (w *Worktree) pickOne(ctx context.Context, options pickOptions) (bool, erro
 // repository), every commit the mirror does not have yet.
 func (w *Worktree) fetchCommits(ctx context.Context, source *Repository, shas []string) (err error) {
 	source = cmp.Or(source, w.repo)
-	lock, err := acquire(ctx, w.mirrorLock, "mirror lock", exclusiveLock)
+	unlock, err := w.paths.lockWrite(ctx)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, lock.Unlock()) }()
+	defer func() { err = errors.Join(err, unlock()) }()
 	for _, sha := range shas {
-		if hasCommit(ctx, w.mirror, sha) {
+		if err := hydrateMiss(ctx, w.store, w.paths.git, sha); err != nil {
+			return err
+		}
+		if hasCommit(ctx, w.paths.git, sha) {
 			continue
 		}
-		if _, err := fetch(ctx, fetchOptions{Dir: w.mirror, Owner: w.repo, Repo: source, Ref: Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}}); err != nil {
+		if _, err := fetch(ctx, fetchOptions{Dir: w.paths.git, Owner: w.repo, Repo: source, Ref: Ref{Name: sha, FullName: sha, SHA: sha, Kind: RefSHA}}); err != nil {
 			return fmt.Errorf("cherry-pick commit %s: %w", sha, err)
 		}
 	}
