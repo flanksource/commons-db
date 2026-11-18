@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/flanksource/commons/logger"
 )
 
 func (c *Cache) maintainPools(ctx context.Context) error {
@@ -22,7 +24,7 @@ func (c *Cache) maintainPools(ctx context.Context) error {
 	for _, entry := range entries {
 		if entry.IsDir() {
 			if err := c.maintainPool(ctx, filepath.Join(dir, entry.Name(), "pool.git")); err != nil {
-				return err
+				return fmt.Errorf("maintain git object pool %s: %w", entry.Name(), err)
 			}
 		}
 	}
@@ -66,8 +68,11 @@ func (c *Cache) maintainPool(ctx context.Context, pool string) (err error) {
 	if err := prunePoolRefs(ctx, pool, borrowers); err != nil {
 		return err
 	}
-	_, err = run(ctx, command{dir: pool, args: []string{"maintenance", "run", "--task=gc", "--quiet"}})
-	return err
+	if _, err := run(ctx, command{dir: pool, args: []string{"maintenance", "run", "--task=gc", "--quiet"}}); err != nil {
+		return err
+	}
+	logger.GetLogger("git").Infof("maintained git object pool %s for %d mirrors", paths.poolName(), len(borrowers))
+	return nil
 }
 
 // A process may stop after Git updates a fetched ref and before recording its

@@ -80,7 +80,7 @@ A `Repository` whose URL is a local path or `file://` URL (`RepoURL.LocalPath`) 
 
 Reads hold the mirror lock shared, so reads proceed together while a fetch, a pin write or `Maintain` (which hold it exclusively) waits for them. Each selected commit is retained under `refs/commons-cache/commits/<SHA>` so Git maintenance cannot prune objects during a read, and `pins/<SHA>` beside the mirror records when a read last used it. A commit this process already pinned is read without any preparatory Git process; any other commit is checked, fetched when missing and pinned under the exclusive lock first. A tree reads after releasing the lock, protected by its pin.
 
-`Cache.Maintain(ctx, git.MaintainOptions{PinTTL: ...})` deletes the pins no read used for `PinTTL` and runs `git maintenance run --task=gc` in every mirror. Choose a TTL longer than any tree stays open.
+`Cache.Maintain(ctx, git.MaintainOptions{PinTTL: ...})` deletes the pins no read used for `PinTTL` and runs `git maintenance run --task=gc` in every mirror. A full sweep also reconciles and collects each organization pool and logs its mirror count. Choose a TTL longer than any tree stays open.
 
 Reads share a limit of four concurrent readers per mirror within the process. Waiting for a reader slot honors context cancellation; cancelling a waiting caller does not interrupt active readers. This limit does not coordinate separate processes.
 

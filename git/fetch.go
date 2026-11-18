@@ -16,10 +16,10 @@ type FetchOptions struct {
 	Publish bool
 }
 
-// Fetch brings refs into repo's mirror ahead of any read: hydrating it from
-// the Store first, then one fetch from the remote of every branch and tag (so
-// they advance) and of every SHA still missing. Fetched SHAs are pinned, like
-// a read's, so they survive gc and reach the Store.
+// Fetch brings refs into repo's mirror ahead of any read. It uses cached
+// SHAs from the mirror and its pool, then hydrates missing commits from the
+// Store. One remote fetch advances named refs and fills remaining misses.
+// The resulting commits are pinned so they survive gc and reach the Store.
 func (c *Cache) Fetch(ctx context.Context, repo *Repository, options FetchOptions) (err error) {
 	if len(options.Refs) == 0 {
 		return errors.New("git fetch: at least one ref is required")
@@ -39,10 +39,7 @@ func (c *Cache) Fetch(ctx context.Context, repo *Repository, options FetchOption
 	if err := paths.ensure(ctx, repo); err != nil {
 		return err
 	}
-	if _, err := hydrate(ctx, c.Store, paths.git); err != nil {
-		return err
-	}
-	shas, err := fetchRefs(ctx, paths, repo, options.Refs)
+	shas, err := fetchRefs(ctx, paths, c.Store, repo, options.Refs)
 	if err != nil {
 		return err
 	}
@@ -61,7 +58,7 @@ func (c *Cache) Fetch(ctx context.Context, repo *Repository, options FetchOption
 }
 
 // fetchRefs batches remote refs and returns the commits they resolved to.
-func fetchRefs(ctx context.Context, paths mirrorPaths, repo *Repository, refs []Ref) ([]string, error) {
+func fetchRefs(ctx context.Context, paths mirrorPaths, store Store, repo *Repository, refs []Ref) ([]string, error) {
 	var refspecs, shas, names []string
 	var destinations []string
 	for _, ref := range refs {
@@ -84,8 +81,17 @@ func fetchRefs(ctx context.Context, paths mirrorPaths, repo *Repository, refs []
 			return nil, fmt.Errorf("git fetch %s: %q is not a full 40-character commit SHA", repo.URL.Redacted(), ref.SHA)
 		}
 		shas = append(shas, ref.SHA)
-		if !hasCommit(ctx, paths.git, ref.SHA) {
-			refspecs = append(refspecs, ref.SHA)
+	}
+	if len(destinations) > 0 {
+		if _, err := hydrate(ctx, store, paths.git); err != nil {
+			return nil, err
+		}
+	} else if err := hydrateMiss(ctx, store, paths.git, shas...); err != nil {
+		return nil, err
+	}
+	for _, sha := range shas {
+		if !hasCommit(ctx, paths.git, sha) {
+			refspecs = append(refspecs, sha)
 		}
 	}
 	if len(refspecs) == 0 {
