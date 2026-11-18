@@ -102,7 +102,7 @@ func applyBundles(ctx context.Context, o applyOptions) error {
 				deferred, reasons = append(deferred, name), append(reasons, err)
 				continue
 			}
-			if _, err := run(ctx, command{dir: o.Dir, args: []string{"fetch", "--quiet", "--no-tags", "--end-of-options", bundle, o.Refspec}}); err != nil {
+			if _, err := run(ctx, command{dir: o.Dir, args: []string{"fetch", "--quiet", "--no-tags", "--no-auto-maintenance", "--end-of-options", bundle, o.Refspec}}); err != nil {
 				if _, statErr := os.Stat(bundle); errors.Is(statErr, fs.ErrNotExist) {
 					return errBundleRetired
 				}

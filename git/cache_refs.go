@@ -64,6 +64,11 @@ func (c *Cache) checkoutPaths(repo *Repository, depth int) (mirrorPaths, error) 
 
 func (m mirrorPaths) prepareRef(ctx context.Context, store Store, options fetchOptions) error {
 	ref := options.Ref
+	if pinned, err := m.usePinned([]string{ref.SHA}, options.Depth == 0); err != nil {
+		return err
+	} else if pinned {
+		return recordCacheRef(ctx, m.git, options.Repo, ref)
+	}
 	if options.Depth == 0 {
 		if err := hydrateMiss(ctx, store, m.git, ref.SHA); err != nil {
 			return err

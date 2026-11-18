@@ -118,6 +118,12 @@ func (w *Worktree) fetchCommits(ctx context.Context, source *Repository, shas []
 	}
 	defer func() { err = errors.Join(err, unlock()) }()
 	for _, sha := range shas {
+		if w.paths.pool != "" && hasCommit(ctx, w.paths.pool, sha) {
+			if err := w.paths.retain(ctx, []string{sha}, false); err != nil {
+				return err
+			}
+			continue
+		}
 		if err := hydrateMiss(ctx, w.store, w.paths.git, sha); err != nil {
 			return err
 		}

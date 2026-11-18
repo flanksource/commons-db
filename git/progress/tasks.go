@@ -36,6 +36,9 @@ func Tasks(options TaskOptions) git.FetchObserver {
 			if event.Mirror != "" {
 				labels["mirror"] = event.Mirror
 			}
+			if event.Pool != "" {
+				labels["pool"] = event.Pool
+			}
 			step.Task().SetLabels(labels)
 			steps[event.ID] = step
 		}

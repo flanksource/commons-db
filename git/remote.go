@@ -197,7 +197,7 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 			report(FetchProgress{Done: true, Err: err})
 		}()
 	}
-	args := append([]string{"fetch", verbosity, "--no-tags"}, options.Flags...)
+	args := append([]string{"fetch", verbosity, "--no-tags", "--no-auto-maintenance"}, options.Flags...)
 	if options.Depth > 0 {
 		args = append(args, fmt.Sprintf("--depth=%d", options.Depth))
 	}

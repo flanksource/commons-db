@@ -2,7 +2,7 @@
 
 `Cache` uses its existing bare mirror for history, commit counts, tree changes, selected files and supplied-content blame. These reads require Git 2.42 or newer. They do not lease worktrees.
 
-Resolve a branch or tag to a full commit SHA when the caller needs several operations to describe the same revision. An operation lists remote refs once for named references. Full SHAs use cached commits without remote discovery; missing commits are fetched. History and blame complete shallow ancestry when necessary. Tree changes and blob reads only need the selected endpoint objects.
+Resolve a branch or tag to a full commit SHA when the caller needs several operations to describe the same revision. An operation lists remote refs once for named references. A full SHA can hit the repository mirror, its organization pool, or its durable store entry. History and blame use the complete mirror. Tree changes and blob reads can use the selected endpoint objects from an isolated shallow mirror.
 
 ## Compare first, load on selection
 
@@ -74,7 +74,7 @@ Close the tree when its consumer finishes. It owns a reader slot and one lazily 
 
 ## Local repositories
 
-A `Repository` whose URL is a local path or `file://` URL (`RepoURL.LocalPath`) is read in place by every read API (`OpenTree`, `ReadBlobs`, `Show`, `Files`, `Changes`, `History`, `Log`, `Compare`, `MergeBase`, `Ancestors`, `Blame`): nothing is fetched and no mirror is created. `LsRemote` and `Resolve` list its refs with native `git ls-remote --symref`, so a detached HEAD, linked worktrees and many refs resolve as git itself sees them. Reads run in `<Root>/<CacheKey>/local.git`, a bare repository without refs that borrows the local repository's objects (`objects/info/alternates`) and shallow file, so the local repository's config never applies. Each commit is checked present once per process (`ErrRevisionNotFound` otherwise). A read that mixes a local repository with another one (a fork's head) uses the mirror. Writes (`Checkout`, `Apply`, push) keep mirror semantics: the local repository is a remote they fetch from and push to.
+A `Repository` whose URL is a local path or `file://` URL (`RepoURL.LocalPath`) is read in place by `OpenTree`, `ReadBlobs`, `Show`, `Files`, `Changes`, `History`, `Log`, `Compare`, `MergeBase`, `Ancestors`, and `Blame`. `LsRemote` and `Resolve` list its refs with native `git ls-remote --symref`. Reads run in `<Root>/v2/<CacheKey>/local.git`, a bare repository that borrows the local repository's objects and shallow file. Each commit is checked once per process. Mixed-repository reads borrow from the prepared mirrors in a temporary comparison repository. `Checkout` and `Apply` treat the local path as a remote.
 
 ## Concurrency and retention
 
