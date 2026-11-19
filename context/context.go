@@ -475,6 +475,7 @@ func (k Context) Kubernetes() (*dutyKubernetes.Client, error) {
 }
 
 type localKubernetesContextKeyType struct{}
+type portForwardManagerKey struct{}
 
 var localKubernetesContextKey localKubernetesContextKeyType
 
@@ -486,6 +487,11 @@ var (
 
 func (k Context) WithLocalKubernetes(client *dutyKubernetes.Client) Context {
 	return k.WithValue(localKubernetesContextKey, client)
+}
+
+// WithPortForwardManager selects a caller-owned manager for workload URL resolution.
+func (k Context) WithPortForwardManager(manager *dutyKubernetes.ForwardManager) Context {
+	return k.WithValue(portForwardManagerKey{}, manager)
 }
 
 func (k Context) LocalKubernetes(kubeconfigPaths ...string) (*dutyKubernetes.Client, error) {
@@ -669,6 +675,9 @@ func (k Context) Wrap(ctx gocontext.Context) Context {
 		WithNamespace(k.GetNamespace())
 	if client, ok := k.Value(localKubernetesContextKey).(*dutyKubernetes.Client); ok && client != nil {
 		wrapped = wrapped.WithLocalKubernetes(client)
+	}
+	if manager, ok := k.Value(portForwardManagerKey{}).(*dutyKubernetes.ForwardManager); ok && manager != nil {
+		wrapped = wrapped.WithPortForwardManager(manager)
 	}
 	if clients, ok := k.Value(kubeContextClientsKey{}).(KubeContextClients); ok && clients != nil {
 		wrapped = wrapped.WithKubeContextClients(clients)

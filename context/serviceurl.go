@@ -85,7 +85,7 @@ func parseServiceRef(raw string) (serviceRef, bool) {
 		return serviceRef{}, false
 	}
 
-	ref := serviceRef{strategy: u.Scheme, port: u.Port(), path: u.Path}
+	ref := serviceRef{strategy: u.Scheme, port: u.Port(), path: u.EscapedPath()}
 	host := u.Hostname()
 	if i := strings.IndexByte(host, '.'); i >= 0 {
 		ref.name, ref.namespace = host[:i], host[i+1:]
@@ -235,7 +235,11 @@ func expandPortForwardURL(k Context, w workloadURL) (string, error) {
 		}
 		remotePort = p
 	}
-	localPort, err := dutyKubernetes.DefaultForwardManager().Forward(k, w.client, w.client.RestConfig(), dutyKubernetes.PortForwardOptions{
+	manager, _ := k.Value(portForwardManagerKey{}).(*dutyKubernetes.ForwardManager)
+	if manager == nil {
+		manager = dutyKubernetes.DefaultForwardManager()
+	}
+	localPort, err := manager.Forward(k, w.client, w.client.RestConfig(), dutyKubernetes.PortForwardOptions{
 		Namespace:     w.ref.namespace,
 		Name:          w.ref.name,
 		LabelSelector: w.ref.selector,

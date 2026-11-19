@@ -166,6 +166,12 @@ var _ = ginkgo.Describe("expandServiceURL", func() {
 		Expect(got).To(Equal("https://api.k8s.local/api/v1/namespaces/prod/services/http:app:8080/proxy/PASJava"))
 	})
 
+	ginkgo.It("keeps the escaped scrape path and query on the service proxy URL", func() {
+		got, err := newCtx().ResolveConnectionURL("proxy://app.prod:8080/probe%3Fapp?module=http_2xx", models.ConnectionTypeHTTP, "")
+		Expect(err).ToNot(HaveOccurred())
+		Expect(got).To(Equal("https://api.k8s.local/api/v1/namespaces/prod/services/http:app:8080/proxy/probe%3Fapp?module=http_2xx"))
+	})
+
 	ginkgo.It("proxy:// with ?kind=pod builds the pod-proxy URL with the named port resolved", func() {
 		got, err := newCtx().expandServiceURL("proxy://orders-1.prod/orders?kind=pod&port=http", models.ConnectionTypeHTTP, "")
 		Expect(err).ToNot(HaveOccurred())
