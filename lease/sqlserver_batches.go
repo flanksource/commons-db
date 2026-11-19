@@ -1,5 +1,26 @@
 package lease
 
+// sqlSetHolder names the pinned session's holder for Holders, which reads it
+// back from sys.dm_exec_sessions.
+const sqlSetHolder = `
+DECLARE @holder varbinary(128) = @p1;
+SET CONTEXT_INFO @holder;
+SELECT 0;`
+
+const sqlHolderPermission = `SELECT HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE'), SUSER_SNAME();`
+
+// sqlHolderLocks lists the granted session app locks whose resource
+// description contains @p1. sys.dm_tran_locks shows only the first 32
+// characters of an app-lock resource, so the caller matches the exact
+// truncated names.
+const sqlHolderLocks = `
+SELECT l.request_session_id, l.request_mode, l.resource_description, s.context_info, s.login_time
+FROM sys.dm_tran_locks AS l
+JOIN sys.dm_exec_sessions AS s ON s.session_id = l.request_session_id
+WHERE l.resource_type = N'APPLICATION' AND l.resource_database_id = DB_ID()
+  AND l.request_owner_type = N'SESSION' AND l.request_status = N'GRANT'
+  AND CHARINDEX(@p1, l.resource_description COLLATE Latin1_General_BIN2) > 0;`
+
 const sqlRegisterWriter = `
 DECLARE @status int, @gate nvarchar(255) = @p1 + N':gate';
 EXEC @status = sys.sp_getapplock @Resource = @gate, @LockMode = N'IntentExclusive', @LockOwner = N'Session', @LockTimeout = 0;

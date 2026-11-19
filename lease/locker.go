@@ -1,20 +1,32 @@
 package lease
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"regexp"
+	"slices"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 var (
 	errBusy     = errors.New("lock is busy")
 	errNotOwned = errors.New("ownership token is no longer active")
 )
+
+const (
+	maxNameLength   = 100
+	maxHolderLength = 128
+)
+
+var namePattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 
 type mode uint8
 
@@ -24,10 +36,24 @@ const (
 	groupMode
 )
 
-type request struct {
-	key, group string
-	mode       mode
+func (m mode) String() string {
+	switch m {
+	case writeMode:
+		return "write"
+	case readMode:
+		return "read"
+	default:
+		return "group"
+	}
 }
+
+type request struct {
+	scope, key, group, holder string
+	mode                      mode
+}
+
+// resource is the readable "<scope>:<key>" name of the requested key.
+func (r request) resource() string { return r.scope + ":" + r.key }
 
 type ownership interface {
 	renew(context.Context) error
@@ -39,15 +65,37 @@ type acquisition interface {
 	abandon(context.Context) error
 }
 
+// refusedAcquisition fails every attempt with err, for a request a backend
+// cannot name.
+type refusedAcquisition struct{ err error }
+
+func (a refusedAcquisition) try(context.Context) (ownership, error) { return nil, a.err }
+func (refusedAcquisition) abandon(context.Context) error            { return nil }
+
 type locker struct {
 	options Options
 	ttl     time.Duration
 	begin   func(request, bool) acquisition
+	holders func(context.Context, request) ([]Holder, error)
+}
+
+func validateName(field, value string) error {
+	if len(value) > maxNameLength || !namePattern.MatchString(value) {
+		return fmt.Errorf("lease %s %q must match %s and be at most %d characters", field, value, namePattern, maxNameLength)
+	}
+	return nil
+}
+
+func validateHolder(holder string) error {
+	if holder == "" || len(holder) > maxHolderLength || !utf8.ValidString(holder) || strings.IndexFunc(holder, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return fmt.Errorf("lease holder %q must be nonempty printable UTF-8 of at most %d bytes", holder, maxHolderLength)
+	}
+	return nil
 }
 
 func normalize(options Options) (Options, error) {
-	if strings.TrimSpace(options.Scope) == "" {
-		return options, errors.New("lease scope is required")
+	if err := validateName("scope", options.Scope); err != nil {
+		return options, err
 	}
 	if options.RetryInterval < 0 || options.OperationTimeout < 0 {
 		return options, errors.New("lease retry interval and operation timeout must be positive")
@@ -79,16 +127,22 @@ func normalizeExpiring(options ExpiringOptions) (ExpiringOptions, error) {
 	return options, nil
 }
 
-func (l *locker) Mutex(key string) Lock                  { return lock{locker: l, key: key} }
-func (l *locker) ReadWriteLock(key string) ReadWriteLock { return lock{locker: l, key: key} }
-func (l *locker) GroupLock(key, group string) Lock {
-	return lock{locker: l, key: key, group: group, mode: groupMode}
+func (l *locker) Mutex(key string, options LockOptions) Lock {
+	return lock{locker: l, key: key, holder: options.Holder}
+}
+
+func (l *locker) ReadWriteLock(key string, options LockOptions) ReadWriteLock {
+	return lock{locker: l, key: key, holder: options.Holder}
+}
+
+func (l *locker) GroupLock(key, group string, options LockOptions) Lock {
+	return lock{locker: l, key: key, group: group, holder: options.Holder, mode: groupMode}
 }
 
 type lock struct {
-	locker     *locker
-	key, group string
-	mode       mode
+	locker             *locker
+	key, group, holder string
+	mode               mode
 }
 
 func (l lock) Lock(ctx context.Context) (Lease, error) { return l.acquire(ctx, true) }
@@ -146,16 +200,43 @@ func (l lock) RLockWait(ctx context.Context) <-chan Result {
 	return l.LockWait(ctx)
 }
 
+func (l lock) Holders(ctx context.Context) ([]Holder, error) {
+	req, err := l.request()
+	if err != nil {
+		return nil, err
+	}
+	if l.locker.holders == nil {
+		return nil, errors.New("this lease backend does not report holders")
+	}
+	operation, cancel := context.WithTimeout(ctx, l.locker.operationTimeout())
+	defer cancel()
+	holders, err := l.locker.holders(operation, req)
+	if err != nil {
+		return nil, fmt.Errorf("list holders of lease %s: %w", req.resource(), err)
+	}
+	slices.SortFunc(holders, func(a, b Holder) int {
+		return cmp.Or(a.Since.Compare(b.Since), strings.Compare(a.Name, b.Name))
+	})
+	return holders, nil
+}
+
+func (l lock) request() (request, error) {
+	req := request{scope: l.locker.options.Scope, key: l.key, holder: l.holder, mode: l.mode}
+	err := validateName("key", l.key)
+	if l.mode == groupMode {
+		req.group = l.group
+		err = errors.Join(err, validateName("group", l.group))
+	}
+	return req, errors.Join(err, validateHolder(l.holder))
+}
+
 func (l lock) acquire(ctx context.Context, wait bool) (Lease, error) {
-	if strings.TrimSpace(l.key) == "" || l.mode == groupMode && strings.TrimSpace(l.group) == "" {
-		return nil, errors.New("lease key and group must be nonempty")
+	req, err := l.request()
+	if err != nil {
+		return nil, err
 	}
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
-	}
-	req := request{key: digest(l.locker.options.Scope, l.key), mode: l.mode}
-	if l.mode == groupMode {
-		req.group = digest(l.group)
 	}
 	return l.locker.acquire(ctx, req, wait)
 }

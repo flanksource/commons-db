@@ -20,20 +20,20 @@ import (
 
 var _ = Describe("live lease backends", Label("integration"), func() {
 	for _, engine := range []struct{ name, env string }{{"Redis", "COMMONS_DB_LEASE_REDIS_URL"}, {"Valkey", "COMMONS_DB_LEASE_VALKEY_URL"}} {
-		lockerContract(engine.name, func(options ExpiringOptions) (Locker, error) {
+		lockerContract(engine.name, allModes, func(options ExpiringOptions) (Locker, error) {
 			client := newTestRedis(engine.env)
 			return NewRedis(client, options)
 		})
 	}
 
-	lockerContract("SQL Server", func(options ExpiringOptions) (Locker, error) {
+	lockerContract("SQL Server", allModes, func(options ExpiringOptions) (Locker, error) {
 		db, err := sql.Open("sqlserver", testSetting("COMMONS_DB_LEASE_SQLSERVER_URL"))
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(db.Close)
 		return NewSQLServer(db, options.Options)
 	})
 
-	lockerContract("Kubernetes API server", func(options ExpiringOptions) (Locker, error) {
+	lockerContract("Kubernetes API server", allModes, func(options ExpiringOptions) (Locker, error) {
 		config, err := clientcmd.BuildConfigFromFlags("", testSetting("COMMONS_DB_LEASE_KUBECONFIG"))
 		Expect(err).NotTo(HaveOccurred())
 		client, err := kubernetes.NewForConfig(config)
@@ -56,12 +56,12 @@ var _ = Describe("live lease backends", Label("integration"), func() {
 		adapter, err := NewRedis(client, ExpiringOptions{Options: Options{Scope: "expiry-test"}, TTL: backend.ttl})
 		Expect(err).NotTo(HaveOccurred())
 		key := uuid.NewString()
-		stale, err := backend.begin(request{key: digest("expiry-test", key), mode: writeMode}, false).try(ctx)
+		stale, err := backend.begin(request{scope: "expiry-test", key: key, holder: "stale", mode: writeMode}, false).try(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		DeferCleanup(func(ctx SpecContext) error { return stale.unlock(ctx) })
 		var next Lease
 		Eventually(func(g Gomega) bool {
-			held, ok, err := adapter.Mutex(key).TryLock(ctx)
+			held, ok, err := adapter.Mutex(key, as("next")).TryLock(ctx)
 			g.Expect(err).NotTo(HaveOccurred())
 			next = held
 			return ok
@@ -69,7 +69,7 @@ var _ = Describe("live lease backends", Label("integration"), func() {
 		DeferCleanup(next.Unlock, ctx)
 		Expect(stale.renew(ctx)).To(MatchError(errNotOwned))
 		Expect(stale.unlock(ctx)).To(Succeed())
-		expectBusy(adapter.Mutex(key).TryLock(ctx))
+		expectBusy(adapter.Mutex(key, as("contender")).TryLock(ctx))
 	}, Entry("Redis", "COMMONS_DB_LEASE_REDIS_URL"), Entry("Valkey", "COMMONS_DB_LEASE_VALKEY_URL"))
 })
 
