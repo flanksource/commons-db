@@ -34,7 +34,7 @@ func (c *Cache) Evict(ctx context.Context, o EvictOptions) (_ EvictResult, err e
 	if err != nil {
 		return EvictResult{}, err
 	}
-	unlock, err := paths.lockWrite(ctx)
+	_, unlock, err := paths.lockWrite(ctx)
 	if err != nil {
 		return EvictResult{}, err
 	}
@@ -108,10 +108,7 @@ func (c *Cache) requireMirror(key string) (mirrorPaths, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return paths, err
 	}
-	if meta.Pool != "" {
-		paths.pool = filepath.Join(c.cacheRoot(), "pools", meta.Pool, "pool.git")
-	}
-	return paths, nil
+	return c.withPool(paths, meta.Pool)
 }
 
 func lockIdleWorktrees(dir string) ([]*flock.Flock, error) {

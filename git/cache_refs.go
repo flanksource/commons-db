@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 func recordCacheRef(ctx context.Context, mirror string, repo *Repository, ref Ref) error {
@@ -20,9 +21,8 @@ func recordCacheRef(ctx context.Context, mirror string, repo *Repository, ref Re
 // prepareOptions is one commit of Repo to make present, with its complete
 // history, in the mirror and pin.
 type prepareOptions struct {
-	Store Store
-	Repo  *Repository
-	Ref   Ref
+	Repo *Repository
+	Ref  Ref
 }
 
 // prepareRef makes the commit present with its complete history, retains and
@@ -34,9 +34,6 @@ func (m mirrorPaths) prepareRef(ctx context.Context, o prepareOptions) error {
 		return err
 	} else if pinned {
 		return recordCacheRef(ctx, m.git, o.Repo, ref)
-	}
-	if err := hydrateMiss(ctx, o.Store, m.git, ref.SHA); err != nil {
-		return err
 	}
 	if err := m.fetchCommit(ctx, o); err != nil {
 		return err
@@ -76,7 +73,7 @@ func (m mirrorPaths) fetchCommit(ctx context.Context, o prepareOptions) error {
 // poolHoldsRepository reports whether the pool advertises a commit of this
 // mirror's repository.
 func (m mirrorPaths) poolHoldsRepository(ctx context.Context) (bool, error) {
-	tips, err := run(ctx, command{dir: m.pool, args: []string{"for-each-ref", "--count=1", "--format=%(refname)", poolTips + filepath.Base(m.dir) + "/"}})
+	tips, err := run(ctx, command{dir: m.pool, args: []string{"for-each-ref", "--count=1", "--format=%(refname)", poolTips + m.repoKey() + "/"}})
 	return tips != "", err
 }
 
@@ -93,15 +90,16 @@ func (m mirrorPaths) fetchIntoPool(ctx context.Context, o prepareOptions) (err e
 	if err != nil {
 		return err
 	}
-	mode := exclusiveLock
-	if holds {
-		mode = sharedLock
+	fetchLease := m.locks.ReadWriteLock(m.poolLease("fetch"), m.holder)
+	acquireFetch := fetchLease.RLock
+	if !holds {
+		acquireFetch = fetchLease.Lock
 	}
-	lock, err := acquire(ctx, m.poolFetchLock(), "object pool fetch", mode)
+	ctx, release, err := holdLease(ctx, "git object pool "+m.poolName()+" fetch lease", acquireFetch)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, lock.Unlock()) }()
+	defer func() { err = errors.Join(err, release()) }()
 	if err := requireComplete(m.pool); err != nil {
 		return err
 	}
@@ -109,7 +107,10 @@ func (m mirrorPaths) fetchIntoPool(ctx context.Context, o prepareOptions) (err e
 	if hasCommit(ctx, m.pool, sha) {
 		return nil
 	}
-	destination := poolRetained + filepath.Base(m.dir) + "/" + sha
+	if err := writeStamp(m.pool, m.repoKey(), time.Now()); err != nil {
+		return err
+	}
+	destination := poolRetained + m.repoKey() + "/" + sha
 	fetched, err := fetch(ctx, fetchOptions{Dir: m.pool, Owner: o.Repo, Repo: o.Repo, Ref: o.Ref.bySHA(),
 		Refspecs: []string{"+" + sha + ":" + destination}, Destination: destination, Pool: m.poolName()})
 	if err != nil {

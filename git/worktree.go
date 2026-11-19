@@ -18,7 +18,6 @@ type Worktree struct {
 
 	repo      *Repository
 	paths     mirrorPaths
-	store     Store
 	lease     *flock.Flock
 	ephemeral bool
 	branches  []string

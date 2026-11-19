@@ -9,30 +9,25 @@ import (
 )
 
 // FetchOptions configures Cache.Fetch. Refs are branches, tags and full
-// commit SHAs (e.g. pull request heads), fetched in one git fetch. Publish
-// then writes the mirror's new objects and refs to Cache.Store.
+// commit SHAs (e.g. pull request heads), fetched in one git fetch.
 type FetchOptions struct {
-	Refs    []Ref
-	Publish bool
+	Refs []Ref
 }
 
 // Fetch brings refs with their complete history into repo's mirror ahead of
-// any read. It uses cached SHAs from the mirror and its pool, then hydrates
-// missing commits from the Store. One remote fetch advances named refs and
-// fills remaining misses. The resulting commits are retained in the pool,
-// dropped from the mirror, and pinned so they survive gc and reach the Store.
+// any read. It uses cached SHAs from the mirror and its pool. One remote
+// fetch advances named refs and fills remaining misses. The resulting commits
+// are retained in the pool, dropped from the mirror, and pinned so they
+// survive gc.
 func (c *Cache) Fetch(ctx context.Context, repo *Repository, options FetchOptions) (err error) {
 	if len(options.Refs) == 0 {
 		return errors.New("git fetch: at least one ref is required")
-	}
-	if options.Publish && c.Store == nil {
-		return fmt.Errorf("git fetch %s: publish requested but the cache has no store", repo.URL.Redacted())
 	}
 	paths, err := c.mirrorPaths(repo)
 	if err != nil {
 		return err
 	}
-	unlock, err := paths.lockWrite(ctx)
+	ctx, unlock, err := paths.lockWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -40,26 +35,21 @@ func (c *Cache) Fetch(ctx context.Context, repo *Repository, options FetchOption
 	if err := paths.ensure(ctx, repo); err != nil {
 		return err
 	}
-	shas, err := fetchRefs(ctx, paths, c.Store, repo, options.Refs)
+	shas, err := fetchRefs(ctx, paths, repo, options.Refs)
 	if err != nil {
 		return err
 	}
 	if err := paths.retain(ctx, shas, true); err != nil {
 		return err
 	}
-	if len(shas) > 0 {
-		if err := paths.pin(ctx, shas); err != nil {
-			return err
-		}
-	}
-	if !options.Publish {
+	if len(shas) == 0 {
 		return nil
 	}
-	return publishMirror(ctx, c.Store, paths.git)
+	return paths.pin(ctx, shas)
 }
 
 // fetchRefs batches remote refs and returns the commits they resolved to.
-func fetchRefs(ctx context.Context, paths mirrorPaths, store Store, repo *Repository, refs []Ref) ([]string, error) {
+func fetchRefs(ctx context.Context, paths mirrorPaths, repo *Repository, refs []Ref) ([]string, error) {
 	var refspecs, shas, names []string
 	var destinations []string
 	for _, ref := range refs {
@@ -82,13 +72,6 @@ func fetchRefs(ctx context.Context, paths mirrorPaths, store Store, repo *Reposi
 			return nil, fmt.Errorf("git fetch %s: %q is not a full 40-character commit SHA", repo.URL.Redacted(), ref.SHA)
 		}
 		shas = append(shas, ref.SHA)
-	}
-	if len(destinations) > 0 {
-		if _, err := hydrate(ctx, store, paths.git); err != nil {
-			return nil, err
-		}
-	} else if err := hydrateMiss(ctx, store, paths.git, shas...); err != nil {
-		return nil, err
 	}
 	if err := requireComplete(paths.git); err != nil {
 		return nil, err

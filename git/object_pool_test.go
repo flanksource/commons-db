@@ -38,16 +38,15 @@ func organizationRepository(remote *httpRemote, fixture bareRepo, owner string) 
 }
 
 var _ = Describe("scoped object pool", func() {
-	It("prefetches an exact pooled SHA when the durable store and remote are unavailable", func(ctx SpecContext) {
+	It("prefetches an exact pooled SHA when the remote is unavailable", func(ctx SpecContext) {
 		donor, fork, remote := organizationFixtures()
 		forkTip := fork.commitOn(fixtureCommit{Branch: "main", Path: "fork.txt", Content: "fork\n", Message: "fork"})
 		source, target := organizationRepository(remote, donor, "example"), organizationRepository(remote, fork, "example")
 		cache := &git.Cache{Root: fixtureTempDir()}
 		Expect(cache.Fetch(ctx, source, git.FetchOptions{Refs: []git.Ref{branchRef("main")}})).To(Succeed())
 		remote.Server.Close()
-		cache.Store = &git.MirrorStore{Path: filepath.Join(fixtureTempDir(), "unavailable")}
 		Expect(cache.Fetch(ctx, target, git.FetchOptions{Refs: []git.Ref{shaRef(donor.Main)}})).To(Succeed())
-		Expect(cache.Fetch(ctx, target, git.FetchOptions{Refs: []git.Ref{shaRef(forkTip)}})).To(MatchError(ContainSubstring("from git store")))
+		Expect(cache.Fetch(ctx, target, git.FetchOptions{Refs: []git.Ref{shaRef(forkTip)}})).To(MatchError(ContainSubstring(forkTip)))
 	})
 
 	It("uses a sibling's prefetched commit without contacting the requested remote", func(ctx SpecContext) {
@@ -77,24 +76,4 @@ var _ = Describe("scoped object pool", func() {
 		Expect(os.RemoveAll(cache.Root)).To(Succeed())
 		gitFixture(clone, "fsck", "--full")
 	})
-
-	DescribeTable("publishes a sibling's own durable checkpoint", func(ctx SpecContext, newStore func(string) git.Store) {
-		donor, fork, remote := organizationFixtures()
-		fork.Main = fork.commitOn(fixtureCommit{Branch: "main", Path: "fork.txt", Content: "fork\n", Message: "fork"})
-		source, target := organizationRepository(remote, donor, "example"), organizationRepository(remote, fork, "example")
-		store := newStore(fixtureTempDir())
-		cache := &git.Cache{Root: fixtureTempDir(), Store: store}
-		Expect(cache.Fetch(ctx, source, git.FetchOptions{Refs: []git.Ref{branchRef("main")}})).To(Succeed())
-		Expect(cache.Fetch(ctx, target, git.FetchOptions{Refs: []git.Ref{branchRef("main")}, Publish: true})).To(Succeed())
-		entries, err := store.Inventory(ctx)
-		Expect(err).NotTo(HaveOccurred())
-		Expect(entries).To(HaveExactElements(HaveField("Key", target.URL.CacheKey())))
-		remote.Server.Close()
-		fresh := &git.Cache{Root: fixtureTempDir(), Store: store}
-		tree, err := fresh.Checkout(ctx, target, git.CheckoutOptions{Ref: fork.Main, Ephemeral: true})
-		Expect(err).NotTo(HaveOccurred())
-		DeferCleanup(tree.Release)
-		Expect(readWorktreeFile(tree, "fork.txt")).To(Equal("fork\n"))
-	}, Entry("mirror store", func(path string) git.Store { return &git.MirrorStore{Path: path} }),
-		Entry("pack store", func(path string) git.Store { return &git.PackStore{Path: path, CompactAbove: 2} }))
 })

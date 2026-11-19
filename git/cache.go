@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/lease"
 	"github.com/gofrs/flock"
 )
 
@@ -35,11 +36,21 @@ const lockRetry = 50 * time.Millisecond
 // mirror (stored once, see fetchIntoPool) and into the mirror otherwise. No
 // read creates a shallow mirror, and a shallow one is refused.
 //
-// Store, when set, is the durable tier behind Root: a commit missing from a
-// mirror is hydrated from it before the remote is asked (see Store).
+// Organization pools live under PoolRoot when it is set (a volume every cache
+// sharing them mounts at the same path), else under <Root>/v2/pools. Pool
+// locks are leases from Locker, which a shared PoolRoot requires; without
+// one a local pool uses flock files beside it (lease.NewFile, scope
+// "git-pool"). Pool maintenance removes a repository's objects only once no
+// cache has pinned, fetched or reconciled it for PoolRetain (30 days by
+// default), so every cache sharing a pool must run Maintain more often.
+// Holder names this process in lease reports: POD_NAME, else
+// <hostname>-<pid>, when empty.
 type Cache struct {
-	Root  string
-	Store Store
+	Root       string
+	PoolRoot   string
+	Locker     lease.Locker
+	PoolRetain time.Duration
+	Holder     string
 }
 
 // CheckoutOptions configures Cache.Checkout. Ref is a branch, tag, full ref
@@ -77,7 +88,7 @@ func (c *Cache) checkoutRef(ctx context.Context, repo *Repository, ref Ref, opti
 		return nil, err
 	}
 	worktree := &Worktree{Dir: filepath.Join(paths.dir, "worktrees", name), Ref: ref, repo: repo,
-		paths: paths, store: c.Store, ephemeral: options.Ephemeral}
+		paths: paths, ephemeral: options.Ephemeral}
 	if worktree.lease, err = acquire(ctx, worktree.Dir+".lock", "worktree lease", exclusiveLock); err != nil {
 		return nil, fmt.Errorf("%s at %s: %w", repo.URL.Redacted(), ref.Name, err)
 	}
@@ -102,7 +113,7 @@ func worktreeName(ref Ref, ephemeral bool) (string, error) {
 // materialize fetches ref into the mirror unless its commit is cached, then
 // adds (or resets) the worktree at that commit, under the mirror lock.
 func (w *Worktree) materialize(ctx context.Context) (err error) {
-	unlock, err := w.paths.lockWrite(ctx)
+	ctx, unlock, err := w.paths.lockWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -110,7 +121,7 @@ func (w *Worktree) materialize(ctx context.Context) (err error) {
 	if err := w.paths.ensure(ctx, w.repo); err != nil {
 		return err
 	}
-	if err := w.paths.prepareRef(ctx, prepareOptions{Store: w.store, Repo: w.repo, Ref: w.Ref}); err != nil {
+	if err := w.paths.prepareRef(ctx, prepareOptions{Repo: w.repo, Ref: w.Ref}); err != nil {
 		return err
 	}
 	if _, err := os.Stat(filepath.Join(w.Dir, ".git")); err == nil {

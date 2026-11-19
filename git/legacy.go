@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/gofrs/flock"
@@ -196,7 +198,7 @@ func (c *Cache) importLegacyMirror(ctx context.Context, mirror string, binding *
 // importRefs fetches every ref of source into the pool as tips of this
 // mirror's repository, or into the mirror under refs/commons-legacy/.
 func (m mirrorPaths) importRefs(ctx context.Context, repo *Repository, source string) (_ string, err error) {
-	unlock, err := m.lockWrite(ctx)
+	ctx, unlock, err := m.lockWrite(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -206,18 +208,56 @@ func (m mirrorPaths) importRefs(ctx context.Context, repo *Repository, source st
 	}
 	target, namespace := m.git, "refs/commons-legacy/"
 	if m.pool != "" {
-		lock, err := acquire(ctx, m.poolFetchLock(), "object pool fetch", exclusiveLock)
+		var release func() error
+		ctx, release, err = holdLease(ctx, "git object pool "+m.poolName()+" fetch lease", m.locks.ReadWriteLock(m.poolLease("fetch"), m.holder).Lock)
 		if err != nil {
 			return "", err
 		}
-		defer func() { err = errors.Join(err, lock.Unlock()) }()
+		defer func() { err = errors.Join(err, release()) }()
 		if err := requireComplete(m.pool); err != nil {
 			return "", err
 		}
-		target, namespace = m.pool, poolTips+filepath.Base(m.dir)+"/legacy/"
+		if err := writeStamp(m.pool, m.repoKey(), time.Now()); err != nil {
+			return "", err
+		}
+		target, namespace = m.pool, poolTips+m.repoKey()+"/legacy/"
 	}
 	if err := fetchLocal(ctx, target, source, "+refs/*:"+namespace+"*"); err != nil {
 		return "", err
 	}
 	return "imported into " + target + " under " + namespace, nil
+}
+
+// fetchLocal fetches refspecs into dir from the repository at source on disk.
+func fetchLocal(ctx context.Context, dir, source string, refspecs ...string) error {
+	source, err := filepath.Abs(source)
+	if err != nil {
+		return err
+	}
+	transport := (&url.URL{Scheme: "file", Path: filepath.ToSlash(source)}).String()
+	args := append([]string{"fetch", "--quiet", "--no-tags", "--no-auto-maintenance", "--end-of-options", transport}, refspecs...)
+	_, err = run(ctx, command{dir: dir, args: args})
+	return err
+}
+
+func isShallow(ctx context.Context, mirror string) (bool, error) {
+	out, err := run(ctx, command{dir: mirror, args: []string{"rev-parse", "--is-shallow-repository"}})
+	return out == "true", err
+}
+
+// dirSize sums the sizes of every regular file under dir.
+func dirSize(dir string) (int64, error) {
+	var size int64
+	err := filepath.WalkDir(dir, func(_ string, entry fs.DirEntry, err error) error {
+		if err != nil || !entry.Type().IsRegular() {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		size += info.Size()
+		return nil
+	})
+	return size, err
 }

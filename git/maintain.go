@@ -25,50 +25,19 @@ type MaintainOptions struct {
 // (the ref itself points at the commit, whose date says nothing of use); a
 // pin ref without a pin file has not been read since pin files existed and
 // expires. A Tree keeps no pin fresh while open, so PinTTL must exceed the
-// longest a Tree stays open. A PackStore then compacts the bundles of every
-// key it holds (of Owners only, when set). A full sweep (no Owners) first
-// imports and removes the pre-v2 entries under Root (migrateLegacy); an
-// import failure leaves that entry in place and fails Maintain after the rest
-// of the sweep ran.
+// longest a Tree stays open. A full sweep (no Owners) then imports and
+// removes the pre-v2 entries under Root (migrateLegacy) and maintains every
+// organization pool (maintainPool); an import failure leaves that entry in
+// place and fails Maintain after the rest of the sweep ran.
 func (c *Cache) Maintain(ctx context.Context, options MaintainOptions) error {
 	if err := c.maintainMirrors(ctx, options); err != nil {
 		return err
 	}
 	if len(options.Owners) > 0 {
-		return c.compactStore(ctx, options.Owners)
-	}
-	legacy := c.migrateLegacy(ctx)
-	if err := c.maintainPools(ctx); err != nil {
-		return errors.Join(legacy, err)
-	}
-	return errors.Join(legacy, c.compactStore(ctx, options.Owners))
-}
-
-// storeCompactor is a Store that folds its per-key files (PackStore).
-type storeCompactor interface {
-	Compact(ctx context.Context, key string) (bool, error)
-}
-
-func (c *Cache) compactStore(ctx context.Context, owners []string) error {
-	compactor, ok := c.Store.(storeCompactor)
-	if !ok {
 		return nil
 	}
-	if len(owners) == 0 {
-		entries, err := c.Store.Inventory(ctx)
-		if err != nil {
-			return err
-		}
-		for _, entry := range entries {
-			owners = append(owners, entry.Key)
-		}
-	}
-	for _, owner := range owners {
-		if _, err := compactor.Compact(ctx, owner); err != nil {
-			return fmt.Errorf("compact git store %s: %w", owner, err)
-		}
-	}
-	return nil
+	legacy := c.migrateLegacy(ctx)
+	return errors.Join(legacy, c.maintainPools(ctx))
 }
 
 func (c *Cache) maintainMirrors(ctx context.Context, options MaintainOptions) error {
