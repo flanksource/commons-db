@@ -39,7 +39,7 @@ func Handler(prefix string, next http.Handler) http.Handler {
 		}
 		if r.Method != http.MethodGet {
 			w.Header().Set("Allow", "GET")
-			http.Error(w, "method not allowed", 405)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		listing, err := list(r.URL.Query().Get("path"))

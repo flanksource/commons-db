@@ -312,7 +312,7 @@ func (s *Service) withVirtual(stored []*models.Connection, options ListOptions) 
 		stored = slices.DeleteFunc(stored, func(existing *models.Connection) bool {
 			return existing.Namespace == connection.Namespace && existing.Name == connection.Name
 		})
-		if types := connectionTypeFilter(options); len(types) > 0 && !slices.Contains(types, connection.Type) && !(connection.Type == "" && len(connection.Warnings) > 0) {
+		if types := connectionTypeFilter(options); len(types) > 0 && !slices.Contains(types, connection.Type) && (connection.Type != "" || len(connection.Warnings) == 0) {
 			continue
 		}
 		connection = cloneConnection(connection)
