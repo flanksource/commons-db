@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/pem"
 	"fmt"
@@ -17,8 +18,10 @@ type configPair struct{ key, value string }
 
 // commandEnv is the environment for a git command that talks to repo: the
 // credentials and TLS settings as URL-scoped env config, never argv or a
-// config file. cleanup removes the temporary key and certificate files.
-func commandEnv(repo *Repository) (env []string, cleanup func(), err error) {
+// config file. cleanup removes the temporary key and certificate files. A
+// defensive repository's remote must pass defensiveRemote, and git may follow
+// no redirect and speak no protocol but https and ssh.
+func commandEnv(ctx context.Context, repo *Repository) (env []string, cleanup func(), err error) {
 	secrets := &secretFiles{}
 	cleanup = secrets.remove
 	defer func() {
@@ -27,6 +30,13 @@ func commandEnv(repo *Repository) (env []string, cleanup func(), err error) {
 		}
 	}()
 	pairs := []configPair{{"credential.helper", ""}}
+	if repo.defensive {
+		if err := defensiveRemote(ctx, repo.URL); err != nil {
+			return nil, cleanup, fmt.Errorf("%s: %w", repo.URL.Redacted(), err)
+		}
+		pairs = append(pairs, configPair{"http.followRedirects", "false"}, configPair{"protocol.allow", "never"},
+			configPair{"protocol.https.allow", "always"}, configPair{"protocol.ssh.allow", "always"})
+	}
 	var extra []string
 	switch repo.URL.Scheme {
 	case "http", "https":
