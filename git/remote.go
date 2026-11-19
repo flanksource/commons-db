@@ -27,6 +27,8 @@ type Repository struct {
 	Provider          Provider
 	ReadCache         *readcache.Cache
 	SecurityNamespace string
+	// defensive limits git to remotes a defensive client may reach (see ClientOptions).
+	defensive bool
 }
 
 // RepositoryOptions configures NewRepository.
@@ -69,6 +71,9 @@ func (r *Repository) LsRemote(ctx context.Context) (refs RemoteRefs, err error) 
 }
 
 func (r *Repository) lsRemote(ctx context.Context) (refs RemoteRefs, err error) {
+	if r.defensive {
+		return lsRemoteDefensive(ctx, r)
+	}
 	if path, local := r.URL.LocalPath(); local {
 		return lsRemoteLocal(ctx, path)
 	}
@@ -182,7 +187,7 @@ func sharedMirrorOf(dir string, repo *Repository) (registry.Binding, error) {
 // newer than the SHA ls-remote reported.
 func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	repo, ref := options.Repo, options.Ref
-	env, cleanup, err := commandEnv(repo)
+	env, cleanup, err := commandEnv(ctx, repo)
 	if err != nil {
 		return "", err
 	}

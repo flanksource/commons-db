@@ -24,6 +24,7 @@ type Client struct {
 	scope             ConnectionScope
 	readCache         *readcache.Cache
 	securityNamespace string
+	defensive         bool
 }
 
 // ClientOptions shares transport connections while keeping middleware per client.
@@ -31,6 +32,11 @@ type ClientOptions struct {
 	TransportPool     *commonshttp.TransportPool
 	SecurityNamespace string
 	ReadCache         *readcache.Cache
+	// Defensive limits the client to public addresses with TLS verified, for a connection
+	// someone other than the operator supplied: provider API calls go through commons
+	// http.Defensive, and git refuses a remote that is not https or ssh or whose host is not
+	// public (see defensiveRemote).
+	Defensive bool
 }
 
 // FromConnection builds a Client from a hydrated connection (URL, username,
@@ -59,11 +65,14 @@ func FromConnection(ctx dbcontext.Context, conn models.Connection, options ...Cl
 	if err != nil {
 		return nil, err
 	}
+	if clientOptions.Defensive && conn.InsecureTLS {
+		return nil, fmt.Errorf("connection %q skips TLS verification, which a defensive client refuses", conn.Name)
+	}
 	tls := TLS{InsecureSkipVerify: conn.InsecureTLS}
 	if conn.Type == models.ConnectionTypeGit {
 		client, err := gitClient(conn, scope, tls)
 		if err == nil {
-			client.readCache, client.securityNamespace = clientOptions.ReadCache, clientOptions.SecurityNamespace
+			client.readCache, client.securityNamespace, client.defensive = clientOptions.ReadCache, clientOptions.SecurityNamespace, clientOptions.Defensive
 		}
 		return client, err
 	}
@@ -92,7 +101,7 @@ func providerClient(conn models.Connection, scope ConnectionScope, tls TLS, opti
 	if err != nil {
 		return nil, err
 	}
-	client := &Client{Type: conn.Type, Auth: auth, scope: scope}
+	client := &Client{Type: conn.Type, Auth: auth, scope: scope, defensive: options.Defensive}
 	client.readCache, client.securityNamespace = options.ReadCache, options.SecurityNamespace
 	switch conn.Type {
 	case models.ConnectionTypeGithub:
@@ -131,6 +140,6 @@ func (c *Client) Repository(rawURL string) (*Repository, error) {
 	if err := c.scope.Owns(repo.URL); err != nil {
 		return nil, fmt.Errorf("repository %s: %w", repo.URL.Redacted(), err)
 	}
-	repo.ReadCache, repo.SecurityNamespace = c.readCache, c.securityNamespace
+	repo.ReadCache, repo.SecurityNamespace, repo.defensive = c.readCache, c.securityNamespace, c.defensive
 	return repo, nil
 }

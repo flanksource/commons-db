@@ -112,7 +112,7 @@ func push(ctx context.Context, dir string, repo *Repository, options PushOptions
 	if err != nil {
 		return err
 	}
-	env, cleanup, err := commandEnv(repo)
+	env, cleanup, err := commandEnv(ctx, repo)
 	if err != nil {
 		return err
 	}

@@ -79,6 +79,11 @@ func newRESTClient(options restClientOptions) (*restClient, error) {
 			return observability.ApplyHTTPObservability(dbcontext.NewContext(request.Context()), "git", next, nil).RoundTrip(request)
 		})
 	})
+	if options.Client.Defensive {
+		// Defensive must wrap the concrete transport, and the middleware Use registers last
+		// sits innermost.
+		client.Use(commonshttp.Defensive(commonshttp.DefensiveOptions{Public: true, Redirect: true}))
+	}
 	return &restClient{provider: provider, base: base, http: client}, nil
 }
 
