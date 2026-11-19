@@ -11,9 +11,9 @@ require (
 	github.com/flanksource/clicky/aichat v1.21.94
 	github.com/flanksource/clicky/valkey v1.21.94
 	github.com/flanksource/commons v1.64.2
-	github.com/flanksource/commons-db v0.1.77
-	github.com/flanksource/commons-db/recordstore v0.1.77
-	github.com/flanksource/commons-db/tracing v0.1.77
+	github.com/flanksource/commons-db v0.1.78
+	github.com/flanksource/commons-db/recordstore v0.1.78
+	github.com/flanksource/commons-db/tracing v0.1.78
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.10.0
@@ -26,7 +26,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
-	github.com/valkey-io/valkey-go v1.0.75
+	github.com/valkey-io/valkey-go v1.0.79
 	go.yaml.in/yaml/v3 v3.0.5
 	gocloud.dev v0.46.0
 	golang.org/x/sync v0.24.0
@@ -210,7 +210,7 @@ require (
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/gops v0.3.29 // indirect
 	github.com/google/jsonschema-go v0.4.3 // indirect
-	github.com/google/pprof v0.0.0-20260507013755-92041b743c96 // indirect
+	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.17 // indirect
 	github.com/googleapis/gax-go/v2 v2.22.0 // indirect

@@ -8,11 +8,11 @@ require (
 	github.com/elazarl/goproxy v1.7.2
 	github.com/flanksource/clicky v1.21.96
 	github.com/flanksource/commons v1.64.2
-	github.com/flanksource/commons-db v0.1.77
-	github.com/flanksource/commons-db/recordstore v0.1.77
+	github.com/flanksource/commons-db v0.1.78
+	github.com/flanksource/commons-db/recordstore v0.1.78
 	github.com/flanksource/sqlglot-go v1.2.2
 	github.com/google/gops v0.3.29
-	github.com/google/pprof v0.0.0-20260507013755-92041b743c96
+	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
 	github.com/google/uuid v1.6.0
 	github.com/grafana/jfr-parser v0.19.0
 	github.com/jackc/pgx/v5 v5.10.0
