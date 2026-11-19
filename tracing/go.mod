@@ -8,8 +8,8 @@ require (
 	github.com/elazarl/goproxy v1.7.2
 	github.com/flanksource/clicky v1.21.96
 	github.com/flanksource/commons v1.64.2
-	github.com/flanksource/commons-db v0.1.78
-	github.com/flanksource/commons-db/recordstore v0.1.78
+	github.com/flanksource/commons-db v0.1.79
+	github.com/flanksource/commons-db/recordstore v0.1.79
 	github.com/flanksource/sqlglot-go v1.2.2
 	github.com/google/gops v0.3.29
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
@@ -272,6 +272,8 @@ require (
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/ugorji/go/codec v1.3.2 // indirect
+	github.com/valkey-io/valkey-go v1.0.79 // indirect
+	github.com/valkey-io/valkey-go/valkeycompat v1.0.79 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/woodsbury/decimal128 v1.4.1 // indirect

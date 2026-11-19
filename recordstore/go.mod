@@ -11,7 +11,7 @@ require (
 	github.com/flanksource/clicky v1.21.96
 	github.com/flanksource/clicky/valkey v1.21.94
 	github.com/flanksource/commons v1.64.2
-	github.com/flanksource/commons-db v0.1.78
+	github.com/flanksource/commons-db v0.1.79
 	github.com/gofrs/flock v0.13.0
 	github.com/google/uuid v1.6.0
 	github.com/klauspost/compress v1.18.7
@@ -277,6 +277,7 @@ require (
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/ugorji/go/codec v1.3.2 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
+	github.com/valkey-io/valkey-go/valkeycompat v1.0.79 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/woodsbury/decimal128 v1.4.1 // indirect

@@ -11,9 +11,9 @@ require (
 	github.com/flanksource/clicky/aichat v1.21.94
 	github.com/flanksource/clicky/valkey v1.21.94
 	github.com/flanksource/commons v1.64.2
-	github.com/flanksource/commons-db v0.1.78
-	github.com/flanksource/commons-db/recordstore v0.1.78
-	github.com/flanksource/commons-db/tracing v0.1.78
+	github.com/flanksource/commons-db v0.1.79
+	github.com/flanksource/commons-db/recordstore v0.1.79
+	github.com/flanksource/commons-db/tracing v0.1.79
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
 	github.com/jackc/pgerrcode v0.0.0-20250907135507-afb5586c32a6
 	github.com/jackc/pgx/v5 v5.10.0
@@ -324,6 +324,7 @@ require (
 	github.com/tklauser/numcpus v0.11.0 // indirect
 	github.com/ugorji/go/codec v1.3.2 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
+	github.com/valkey-io/valkey-go/valkeycompat v1.0.79 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasttemplate v1.2.2 // indirect
 	github.com/woodsbury/decimal128 v1.4.1 // indirect
