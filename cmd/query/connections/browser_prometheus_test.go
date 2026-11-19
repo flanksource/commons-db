@@ -1,6 +1,7 @@
 package connections
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -10,8 +11,35 @@ import (
 	"time"
 
 	clickymetrics "github.com/flanksource/clicky/metrics"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
+	"github.com/google/uuid"
 )
+
+func TestPrometheusBrowserQueriesVirtualConnection(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/query" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = fmt.Fprint(w, `{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"up"},"value":[1704067200,"1"]}]}}`)
+	}))
+	defer backend.Close()
+	conn := &models.Connection{ID: uuid.New(), Name: "metrics", Type: models.ConnectionTypePrometheus, URL: backend.URL, Virtual: true, ReadOnly: true}
+	handler := newConnectionBrowserHandler("/api/v1", dbcontext.NewContext(context.Background()), http.NotFoundHandler())
+	handler.virtual = configCatalog{connections: []*models.Connection{conn}}
+	recorder := postBrowser(t, handler, "/api/v1/connection/"+conn.ID.String()+"/browser/query", `{"query":"up"}`)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("virtual connection query status = %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var result browserQueryResult
+	if err := json.Unmarshal(recorder.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Rows) != 1 || result.Rows[0]["value"] != float64(1) {
+		t.Fatalf("rows = %+v, want one sample with value 1", result.Rows)
+	}
+}
 
 // A metric SQL console query maps its label columns through the request's
 // labels, reports what it read, and answers with the same series projection a

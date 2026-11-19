@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
@@ -293,19 +294,38 @@ func discoverPrometheus(ctx context.Context, connectionContext dbcontext.Context
 			GoVersion string `json:"goVersion"`
 		} `json:"data"`
 	}
-	if err := getConnectionJSON(ctx, connectionContext, connection, "/api/v1/status/buildinfo", &response); err != nil {
-		return serverInfo{}, err
+	buildErr := getConnectionJSON(ctx, connectionContext, connection, "/api/v1/status/buildinfo", &response)
+	if buildErr == nil && (response.Status != "success" || response.Data.Version == "") {
+		buildErr = fmt.Errorf("invalid Prometheus build information (status %q, version %q)", response.Status, response.Data.Version)
 	}
-	if response.Status != "success" {
-		return serverInfo{}, fmt.Errorf("prometheus build information returned status %q", response.Status)
-	}
-	return serverInfo{
+	prometheus := serverInfo{
 		Product: "Prometheus", Version: response.Data.Version,
 		Details: nonEmptyDetails(map[string]string{
 			"revision": response.Data.Revision, "branch": response.Data.Branch,
 			"buildDate": response.Data.BuildDate, "goVersion": response.Data.GoVersion,
 		}),
-	}, nil
+	}
+	if buildErr == nil && len(prometheus.Details) != 0 {
+		return prometheus, nil
+	}
+	// VictoriaMetrics advertises a compatibility version in Prometheus buildinfo.
+	var config struct {
+		Version string `json:"version"`
+		License struct {
+			Type string `json:"type"`
+		} `json:"license"`
+		VMAlert struct {
+			Enabled *bool `json:"enabled"`
+		} `json:"vmalert"`
+	}
+	probeErr := getConnectionJSON(ctx, connectionContext, connection, "/vmui/config.json", &config)
+	if probeErr == nil && config.Version != "" && config.License.Type != "" && config.VMAlert.Enabled != nil {
+		return serverInfo{Product: "VictoriaMetrics", Version: config.Version}, nil
+	}
+	if buildErr != nil {
+		return serverInfo{}, errors.Join(buildErr, probeErr)
+	}
+	return prometheus, nil
 }
 
 func getConnectionJSON(ctx context.Context, connectionContext dbcontext.Context, connection *models.Connection, path string, target any) error {

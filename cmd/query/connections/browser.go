@@ -278,6 +278,20 @@ func (h *connectionBrowserHandler) hydratedConnection(id string) (*models.Connec
 	return resolved, nil
 }
 
+func withBrowserConnection(ctx dbcontext.Context, conn *models.Connection) dbcontext.Context {
+	next := ctx.ConnectionResolver()
+	id := conn.ID.String()
+	return ctx.WithConnectionResolver(func(ctx dbcontext.Context, ref string) (*models.Connection, error) {
+		if ref == id {
+			return conn, nil
+		}
+		if next != nil {
+			return next(ctx, ref)
+		}
+		return nil, nil
+	})
+}
+
 func findConnectionMust(ctx dbcontext.Context, id string) (*models.Connection, error) {
 	reference := id
 	if _, err := uuid.Parse(id); err != nil {
