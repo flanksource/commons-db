@@ -174,11 +174,17 @@ func mergeStoredProfiles(ctx context.Context, spec *rpc.OpenAPISpec, store profi
 // refused by every execution, so for them a run would be an entry point that
 // can only fail.
 func advertisesRun(profile query.Profile) (bool, error) {
-	if profile.Kind() != query.KindQuery {
+	if profile.Kind() != query.KindQuery || profile.Provider.Type == retiredLegacyTraceProvider {
 		return false, nil
 	}
 	return query.ProviderRunnable(profile.Provider.Type)
 }
+
+// retiredLegacyTraceProvider is the provider type the removed legacy trace
+// migration stored converted profiles under. Its provider is gone, so such a
+// profile never runs, but an upgraded store may still hold one: it stays
+// listed without a run rather than failing every profile surface.
+const retiredLegacyTraceProvider = "legacy-trace"
 
 func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	entityName := SurfaceKey(profile.Name)

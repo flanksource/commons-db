@@ -6985,7 +6985,6 @@
               "x-col-span": "full"
             },
             "format": {
-              "default": "flat",
               "description": "How span documents are shaped: flat OpenTelemetry fields, or Jaeger's span documents.",
               "enum": [
                 "flat",

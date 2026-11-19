@@ -9,7 +9,7 @@ func openTelemetryRow(document map[string]any, options OpenTelemetryOptions) (qu
 	if options.RawRows {
 		return query.Row(document), nil
 	}
-	normalized, err := span.Normalize(document, span.Options{Format: options.Format, DateField: options.DateField})
+	normalized, err := span.Normalize(document, span.Options{Format: options.Format, DateField: options.DateField, TraceIDField: options.TraceIDField, SpanIDField: options.SpanIDField})
 	if err != nil {
 		return nil, err
 	}

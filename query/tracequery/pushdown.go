@@ -11,11 +11,12 @@ import (
 
 // pushdown is one condition per included attribute key, then one for the
 // included services, each of which a passing trace meets on some span of its
-// own. Reading the spans that meet them in turn narrows a search without
-// dropping a trace Search would keep: different keys may hold on different
-// spans, so they are never AND-ed within one read. Each compiles through the
-// index's span layout, so a nested tag list and tag fields read alike.
-// Exclusions, and anything the layout cannot match exactly, stay with Search.
+// own. Reading the window's traces that meet them in turn narrows a search
+// without dropping a trace Search would keep: different keys may hold on
+// different spans, so they are never AND-ed within one read. Each compiles
+// through the index's span layout, so a nested tag list and tag fields read
+// alike. Exclusions, and anything the layout cannot match exactly, stay with
+// Search.
 func pushdown(r Request, definition layout.Definition) []esdsl.Condition {
 	result := []esdsl.Condition{}
 	groups := r.Attributes.includedByKey()
@@ -94,29 +95,22 @@ func termsCondition(field string, values []string) esdsl.Condition {
 	return esdsl.Condition{Op: esdsl.OpTerms, Field: field, Values: literals}
 }
 
-// readNarrowed reads the spans meeting each condition in turn, every read
-// after the first limited to the traces the one before found, and returns the
-// last read's spans, whose traces meet every condition.
-func readNarrowed(read func(*esdsl.Condition) ([]Span, error), conditions []esdsl.Condition, traceIDField string) ([]Span, error) {
-	if len(conditions) == 0 {
-		return read(nil)
-	}
-	var spans []Span
-	for i, condition := range conditions {
-		query := esdsl.Condition{Op: esdsl.OpBool, Conditions: []esdsl.Condition{condition}}
-		if i > 0 {
-			ids := traceIDs(spans)
-			if len(ids) == 0 {
-				return spans, nil
-			}
-			query.Conditions = append(query.Conditions, termsCondition(traceIDField, ids))
+// narrow is the traces of ids with a span meeting each condition. Each is read
+// across whole traces, never the window, since the span meeting a filter may
+// start outside it, and asks only of the traces the read before kept.
+func (s openSearchSource) narrow(conditions []esdsl.Condition, ids []string) ([]string, error) {
+	for _, condition := range conditions {
+		if len(ids) == 0 {
+			break
 		}
-		var err error
-		if spans, err = read(&query); err != nil {
+		query := esdsl.Condition{Op: esdsl.OpBool, Conditions: []esdsl.Condition{condition, termsCondition(s.traceIDField, ids)}}
+		spans, err := s.read(&query, "", "")
+		if err != nil {
 			return nil, err
 		}
+		ids = traceIDs(spans)
 	}
-	return spans, nil
+	return ids, nil
 }
 
 func traceIDs(spans []Span) []string {

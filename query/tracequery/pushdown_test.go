@@ -1,6 +1,7 @@
 package tracequery
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"maps"
@@ -14,6 +15,7 @@ import (
 	"github.com/flanksource/commons-db/connection/crd"
 	"github.com/flanksource/commons-db/connection/store"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/types"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -65,9 +67,9 @@ func serveMapping(w http.ResponseWriter, r *http.Request, mapping map[string]str
 }
 
 // jaegerIndex is a fake OpenSearch over Jaeger span documents mapped as
-// mapping. It evaluates the bool, nested, term, terms, prefix and exists
-// clauses a trace read sends, treats a range as true, and records each search
-// body's query.
+// mapping. It evaluates the bool, nested, term, terms, prefix, exists and
+// numeric range clauses a trace read sends, and records each search body's
+// query.
 type jaegerIndex struct {
 	mapping map[string]string
 	docs    []map[string]any
@@ -93,7 +95,7 @@ func (x *jaegerIndex) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		x.mu.Unlock()
 		for _, doc := range x.docs {
 			if matches(body["query"].(map[string]any), doc) {
-				hits = append(hits, map[string]any{"_index": "traces-example", "_id": doc["spanID"], "_source": doc, "sort": []any{doc["startTimeMillis"], doc["spanID"]}})
+				hits = append(hits, map[string]any{"_index": "traces-example", "_id": doc["spanID"], "_source": doc, "sort": []any{cmp.Or(doc["startTimeMillis"], doc["startTimeUnixNano"]), doc["spanID"]}})
 			}
 		}
 	}
@@ -114,7 +116,9 @@ func matches(clause map[string]any, doc map[string]any) bool {
 			})
 		case "exists":
 			return lookup(doc, body["field"].(string)) != nil
-		case "range", "match_all":
+		case "range":
+			return matchesRange(body, doc)
+		case "match_all":
 			return true
 		}
 		for field, want := range body {
@@ -140,7 +144,29 @@ func matchesBool(body map[string]any, doc map[string]any) bool {
 		return !slices.ContainsFunc(clauses, func(c any) bool { return !matches(c.(map[string]any), doc) })
 	}
 	should, _ := body["should"].([]any)
-	return all("filter") && all("must") && (len(should) == 0 || slices.ContainsFunc(should, func(c any) bool { return matches(c.(map[string]any), doc) }))
+	mustNot, _ := body["must_not"].([]any)
+	return all("filter") && all("must") && !slices.ContainsFunc(mustNot, func(c any) bool { return matches(c.(map[string]any), doc) }) &&
+		(len(should) == 0 || slices.ContainsFunc(should, func(c any) bool { return matches(c.(map[string]any), doc) }))
+}
+
+// matchesRange bounds a numeric time field by the epoch values a read encodes.
+func matchesRange(body map[string]any, doc map[string]any) bool {
+	for field, raw := range body {
+		got, ok := lookup(doc, field).(float64)
+		if !ok {
+			return false
+		}
+		for bound, value := range raw.(map[string]any) {
+			want, numeric := value.(float64)
+			if !numeric {
+				continue
+			}
+			if !map[string]bool{"gte": got >= want, "gt": got > want, "lte": got <= want, "lt": got < want}[bound] {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func lookup(doc map[string]any, field string) any {
@@ -181,22 +207,25 @@ func jaegerSpan(trace, id, parent, service string, at time.Time, tags ...string)
 	return doc
 }
 
-func jaegerService(index *jaegerIndex) Service {
+// jaegerService searches index through an OpenSearch connection holding
+// properties.
+func jaegerService(index *jaegerIndex, properties types.JSONStringMap) Service {
 	server := httptest.NewServer(index)
 	DeferCleanup(server.Close)
 	catalog, err := store.New(store.Layer{Name: store.LayerCWD, Dir: GinkgoT().TempDir()})
 	Expect(err).NotTo(HaveOccurred())
-	search, err := crd.FromModel(models.Connection{Name: "search", Type: models.ConnectionTypeOpenSearch, URL: server.URL})
+	search, err := crd.FromModel(models.Connection{Name: "search", Type: models.ConnectionTypeOpenSearch, URL: server.URL, Properties: properties})
 	Expect(err).NotTo(HaveOccurred())
 	Expect(catalog.Save(store.LayerCWD, search)).To(Succeed())
 	return Service{Connections: catalog}
 }
 
-// pushedQuery is the condition a search-phase read pushed beside its time range.
-func pushedQuery(query any) string {
+// narrowedQuery is the condition a narrowing read pushed beside the trace IDs
+// it asks of, which it checks are ids.
+func narrowedQuery(query any, ids ...string) string {
 	filters := query.(map[string]any)["bool"].(map[string]any)["filter"].([]any)
 	Expect(filters).To(HaveLen(2), toJSON(query))
-	Expect(filters[1]).To(HaveKey("range"))
+	Expect(toJSON(filters[1])).To(MatchJSON(toJSON(map[string]any{"terms": map[string]any{"traceID": ids}})))
 	return toJSON(filters[0])
 }
 
@@ -211,14 +240,14 @@ var _ = Describe("OpenSearch trace pushdown", func() {
 		return `{"bool":{"minimum_should_match":1,"should":[` + span + `,` + resource + `]}}`
 	}
 
-	DescribeTable("pushes an included attribute into the search-phase read through the index's tag shape", func(expr string, mapping map[string]string, expected string) {
-		index := &jaegerIndex{mapping: mapping}
+	DescribeTable("pushes an included attribute into the read narrowing the window's traces through the index's tag shape", func(expr string, mapping map[string]string, expected string) {
+		index := &jaegerIndex{mapping: mapping, docs: []map[string]any{jaegerSpan("trace-a", "a-root", "", "oipa", at, plan, "X")}}
 		request := window
 		request.Attributes = Modes{expr: Include}
-		_, err := jaegerService(index).ReadSpans(context.Background(), request, nil)
+		_, err := jaegerService(index, nil).Search(context.Background(), request)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(index.queries).To(HaveLen(1))
-		Expect(pushedQuery(index.queries[0])).To(MatchJSON(expected))
+		Expect(len(index.queries)).To(BeNumerically(">=", 2))
+		Expect(narrowedQuery(index.queries[1], "trace-a")).To(MatchJSON(expected))
 	},
 		Entry("key=value as a nested term", plan+"=X", mappingOf(nestedTags),
 			either(nestedTag("tags", `,{"term":{"tags.value":"X"}}`), nestedTag("process.tags", `,{"term":{"process.tags.value":"X"}}`))),
@@ -238,13 +267,13 @@ var _ = Describe("OpenSearch trace pushdown", func() {
 	)
 
 	It("ORs the values of one key and leaves exclusions and inexact wildcards in memory", func() {
-		index := &jaegerIndex{mapping: mappingOf(nestedTags)}
+		index := &jaegerIndex{mapping: mappingOf(nestedTags), docs: []map[string]any{jaegerSpan("trace-a", "a-root", "", "oipa", at, plan, "A")}}
 		request := window
 		request.Attributes = Modes{plan + "=A": Include, plan + "=B": Include, "oipa.rule.name": Exclude, "oipa.outcome=*ed": Include}
-		_, err := jaegerService(index).ReadSpans(context.Background(), request, nil)
+		_, err := jaegerService(index, nil).Search(context.Background(), request)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(index.queries).To(HaveLen(1))
-		Expect(pushedQuery(index.queries[0])).To(MatchJSON(`{"bool":{"minimum_should_match":1,"should":[` +
+		Expect(index.queries).To(HaveLen(3))
+		Expect(narrowedQuery(index.queries[1], "trace-a")).To(MatchJSON(`{"bool":{"minimum_should_match":1,"should":[` +
 			strings.Join([]string{
 				nestedTag("tags", `,{"term":{"tags.value":"A"}}`), nestedTag("process.tags", `,{"term":{"process.tags.value":"A"}}`),
 				nestedTag("tags", `,{"term":{"tags.value":"B"}}`), nestedTag("process.tags", `,{"term":{"process.tags.value":"B"}}`),
@@ -256,7 +285,7 @@ var _ = Describe("OpenSearch trace pushdown", func() {
 		request := window
 		request.From, request.Until = "", ""
 		request.Attributes = Modes{plan + "=X": Include}
-		_, err := jaegerService(index).ReadSpans(context.Background(), request, []string{"trace-a"})
+		_, err := jaegerService(index, nil).ReadSpans(context.Background(), request, []string{"trace-a"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(toJSON(index.queries)).To(MatchJSON(`[{"terms":{"traceID":["trace-a"]}}]`))
 	})
@@ -273,14 +302,64 @@ var _ = Describe("OpenSearch trace pushdown", func() {
 		request := window
 		request.Attributes = Modes{plan + "=X": Include, "oipa.rule.name=Prem*": Include}
 		request.Services = Modes{"rules": Include}
-		result, err := jaegerService(index).Search(context.Background(), request)
+		result, err := jaegerService(index, nil).Search(context.Background(), request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Traces).To(HaveExactElements(And(HaveField("TraceID", "trace-a"), HaveField("SpanCount", 3))))
-		Expect(index.queries).To(HaveLen(4))
-		narrowed := index.queries[1].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
-		Expect(toJSON(narrowed[1])).To(MatchJSON(`{"terms":{"traceID":["trace-a","trace-b"]}}`))
-		services := index.queries[2].(map[string]any)["bool"].(map[string]any)["filter"].([]any)
-		Expect(toJSON(services[:2])).To(MatchJSON(`[{"terms":{"process.serviceName":["rules"]}},{"terms":{"traceID":["trace-a"]}}]`))
-		Expect(toJSON(index.queries[3])).To(MatchJSON(`{"terms":{"traceID":["trace-a"]}}`))
+		Expect(result.Services).To(Equal([]string{"db", "oipa", "rules"}))
+		// The window read, one narrowing read per key and the services, the
+		// full read of the one trace left, then the services the rest add.
+		Expect(index.queries).To(HaveLen(6))
+		Expect(toJSON(index.queries[0])).To(And(ContainSubstring(`"range"`), Not(ContainSubstring(`"terms"`))))
+		narrowedQuery(index.queries[1], "trace-a", "trace-b", "trace-c")
+		narrowedQuery(index.queries[2], "trace-a", "trace-b")
+		Expect(narrowedQuery(index.queries[3], "trace-a")).To(MatchJSON(`{"terms":{"process.serviceName":["rules"]}}`))
+		Expect(toJSON(index.queries[4])).To(MatchJSON(`{"terms":{"traceID":["trace-a"]}}`))
+		Expect(toJSON(index.queries[5])).To(MatchJSON(`{"bool":{"filter":[{"terms":{"traceID":["trace-b","trace-c"]}}],"must_not":[{"terms":{"process.serviceName":["db","oipa","rules"]}}]}}`))
+	})
+
+	It("keeps a trace in the window whose filter span starts before it, and facets every trace in the window", func() {
+		index := &jaegerIndex{mapping: mappingOf(nestedTags), docs: []map[string]any{
+			jaegerSpan("trace-x", "x-root", "", "checkout", at.Add(-2*time.Minute)),
+			jaegerSpan("trace-x", "x-db", "x-root", "db", at),
+			jaegerSpan("trace-y", "y-root", "", "inventory", at),
+			jaegerSpan("trace-z", "z-root", "", "payments", at),
+			jaegerSpan("trace-z", "z-bill", "z-root", "billing", at.Add(2*time.Minute)),
+		}}
+		request := window
+		request.Services = Modes{"checkout": Include}
+		result, err := jaegerService(index, nil).Search(context.Background(), request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Traces).To(HaveExactElements(And(HaveField("TraceID", "trace-x"), HaveField("SpanCount", 2))))
+		Expect(result.Services).To(Equal([]string{"billing", "checkout", "db", "inventory", "payments"}))
+	})
+
+	It("bounds a window on a numeric timestamp in its source unit", func() {
+		mapping := map[string]string{"traceID": "keyword", "spanID": "keyword", "startTimeUnixNano": "long", "durationNano": "long", "operationName": "keyword", "process": "object", "process.serviceName": "keyword"}
+		span := func(trace string, started time.Time) map[string]any {
+			return map[string]any{"traceID": trace, "spanID": trace + "-root", "startTimeUnixNano": float64(started.UnixNano()), "durationNano": float64(time.Millisecond), "operationName": "GET /", "process": map[string]any{"serviceName": "web"}}
+		}
+		index := &jaegerIndex{mapping: mapping, docs: []map[string]any{span("trace-in", at), span("trace-before", at.Add(-2*time.Minute))}}
+		request := window
+		request.Format = ""
+		result, err := jaegerService(index, nil).Search(context.Background(), request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Traces).To(HaveExactElements(HaveField("TraceID", "trace-in")))
+	})
+
+	It("reads spans whose trace ID the connection's span layout names", func() {
+		mapping := mappingOf(nestedTags)
+		delete(mapping, "traceID")
+		mapping["custom_trace_id"] = "keyword"
+		span := jaegerSpan("trace-k", "k-root", "", "web", at)
+		span["custom_trace_id"] = span["traceID"]
+		delete(span, "traceID")
+		index := &jaegerIndex{mapping: mapping, docs: []map[string]any{span}}
+		service := jaegerService(index, types.JSONStringMap{"span_layout": `{"fields":{"trace_id":{"source":"custom_trace_id"}}}`})
+		result, err := service.Search(context.Background(), window)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Traces).To(HaveExactElements(HaveField("TraceID", "trace-k")))
+		detail, err := service.Trace(context.Background(), window, "trace-k")
+		Expect(err).NotTo(HaveOccurred())
+		Expect(detail.Spans).To(HaveExactElements(HaveField("SpanID", "k-root")))
 	})
 })

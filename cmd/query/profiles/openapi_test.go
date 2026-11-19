@@ -3,6 +3,7 @@ package profiles
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -612,6 +613,24 @@ func TestProfileOpenAPIUnregisteredProviderFails(t *testing.T) {
 	err := addProfileToSpec(spec, query.Profile{Name: "orphan", Provider: query.ProviderConfig{Type: "unregistered-provider"}})
 	if err == nil || !strings.Contains(err.Error(), `no data provider registered for type "unregistered-provider"`) {
 		t.Fatalf("addProfileToSpec error = %v, want the unregistered provider named", err)
+	}
+}
+
+// A profile the removed legacy trace migration stored keeps its retired
+// provider type, which is no longer registered; it is listed without a run
+// instead of failing the whole document.
+func TestProfileOpenAPIRetiredLegacyTraceProfileIsListedWithoutRun(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	legacy := query.Profile{Name: "legacy-sql", Provider: query.ProviderConfig{Type: retiredLegacyTraceProvider, Options: map[string]any{"kind": "sql_xevent"}}}
+	if err := addProfileToSpec(spec, legacy); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/api/v1/profile/profile-legacy-sql"
+	if _, listed := spec.Paths[path]; listed {
+		t.Fatalf("a retired legacy trace profile must advertise no run operation, got %+v", spec.Paths[path])
+	}
+	if !slices.ContainsFunc(spec.Clicky.Surfaces, func(surface rpc.ClickySurface) bool { return surface.Key == "profile-legacy-sql" }) {
+		t.Fatalf("a retired legacy trace profile must stay listed, got %+v", spec.Clicky.Surfaces)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query/tracequery"
 )
@@ -14,9 +15,8 @@ func (h *connectionBrowserHandler) serveTraces(w http.ResponseWriter, r *http.Re
 		http.Error(w, "connection does not support OpenSearch traces", 400)
 		return
 	}
-	service := tracequery.Service{Read: func(ctx context.Context, request tracequery.Request, ids []string) ([]tracequery.Span, error) {
-		queryContext := withBrowserConnection(h.ctx.Wrap(ctx), conn)
-		return tracequery.ReadOpenSearch(queryContext, request, conn, ids)
+	service := tracequery.Service{Resolve: func(ctx context.Context, _ string) (dbcontext.Context, *models.Connection, error) {
+		return withBrowserConnection(h.ctx.Wrap(ctx), conn), conn, nil
 	}}
 	traces := r.Clone(r.Context())
 	traces.URL.Path, traces.URL.RawPath = strings.TrimPrefix(tail, "/traces"), ""

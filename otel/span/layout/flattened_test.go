@@ -111,6 +111,22 @@ var _ = Describe("Flattened tag-field attributes", func() {
 			Expect(err).To(MatchError(And(ContainSubstring("attributes.http.status_code"), ContainSubstring("long"))))
 		})
 
+		// Discover keys tag.http_status_code as attributes.http_status_code, since
+		// it only undoes "@"; the custom separator rule still lands on that field.
+		It("checks the mapped type of the field a custom-separator rule names", func() {
+			custom := layout.FlattenedAttributes{Prefix: "attributes.", FieldPrefix: "tag.", Separator: "_"}
+			definition, err := layout.Discover(layout.Discovery{
+				Fields:             jaegerFlattenedFields(map[string]string{"tag.http_status_code": "long", "tag.http_method": "keyword"}),
+				FlattenedOverrides: []layout.FlattenedAttributes{custom},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			_, err = definition.AttributeCondition("http.status_code", esdsl.OpPrefix, "5")
+			Expect(err).To(MatchError(And(ContainSubstring("attributes.http.status_code"), ContainSubstring("long"))))
+			condition, err := definition.AttributeCondition("http.method", esdsl.OpTerm, "GET")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(compiledCondition(condition)).To(MatchJSON(`{"query":{"bool":{"minimum_should_match":1,"should":[{"term":{"tag.http_method":"GET"}},{"term":{"process.tag.http@method":"GET"}}]}}}`))
+		})
+
 		It("refuses an attribute no source of the layout holds", func() {
 			definition, err := layout.Discover(layout.Discovery{Fields: map[string]string{"traceID": "keyword", "spanID": "keyword", "startTimeMillis": "long", "duration": "long"}})
 			Expect(err).NotTo(HaveOccurred())

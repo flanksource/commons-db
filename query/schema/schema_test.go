@@ -195,7 +195,9 @@ var _ = Describe("Connection schema", func() {
 		Expect(scope["map"].(map[string][]string)[models.ConnectionTypeOpenTelemetry]).To(Equal([]string{models.ConnectionTypeOpenSearch}))
 	})
 
-	It("offers OpenTelemetry a span document format defaulting to flat", func() {
+	// An omitted format is auto-detected from each document, so the form must
+	// not save one: a default would parse Jaeger documents as flat.
+	It("offers OpenTelemetry a span document format with no default", func() {
 		then := branchFor(s, models.ConnectionTypeOpenTelemetry)
 		settings := then["properties"].(schema.Schema)["properties"].(schema.Schema)["properties"].(schema.Schema)
 		Expect(settings).To(HaveKey("index"))
@@ -203,7 +205,7 @@ var _ = Describe("Connection schema", func() {
 		format := settings["format"].(schema.Schema)
 		Expect(format).To(And(
 			HaveKeyWithValue("enum", []string{"flat", "jaeger"}),
-			HaveKeyWithValue("default", "flat"),
+			Not(HaveKey("default")),
 			HaveKeyWithValue("x-enum-display", "segmented"),
 			HaveKeyWithValue("x-enum-labels", map[string]string{"flat": "Flat", "jaeger": "Jaeger"}),
 		))

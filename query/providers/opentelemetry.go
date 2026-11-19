@@ -40,9 +40,14 @@ type OpenTelemetryOptions struct {
 	Layout  *layout.Definition `json:"-"`
 	RawRows bool               `json:"-"`
 	OpenSearchPagingOptions
-	Format         string   `json:"format,omitempty"`
-	Index          string   `json:"index,omitempty"`
-	DateField      string   `json:"dateField,omitempty"`
+	Format    string `json:"format,omitempty"`
+	Index     string `json:"index,omitempty"`
+	DateField string `json:"dateField,omitempty"`
+	// TraceIDField and SpanIDField name the span identity fields a row is
+	// normalized from, when the span layout resolves them to a field outside
+	// the names normalization tries.
+	TraceIDField   string   `json:"traceIdField,omitempty"`
+	SpanIDField    string   `json:"spanIdField,omitempty"`
 	SelectFields   []string `json:"selectFields,omitempty"`
 	SourceExcludes []string `json:"sourceExcludes,omitempty"`
 	Limit          int      `json:"limit,omitempty"`

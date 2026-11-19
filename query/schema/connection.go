@@ -435,7 +435,6 @@ func customizeOpenTelemetryPropertiesSchema(properties Schema) {
 	field := properties["properties"].(Schema)["format"].(Schema)
 	field["description"] = "How span documents are shaped: flat OpenTelemetry fields, or Jaeger's span documents."
 	field["enum"] = []string{"flat", "jaeger"}
-	field["default"] = "flat"
 	field["x-enum-display"] = "segmented"
 	field["x-enum-labels"] = map[string]string{"flat": "Flat", "jaeger": "Jaeger"}
 }

@@ -115,7 +115,13 @@ func (d Definition) targetCondition(canonical string, target Target, op esdsl.Op
 	if err := esdsl.ValidateFieldName(target.Field); err != nil {
 		return esdsl.Condition{}, fmt.Errorf("%s: %w", canonical, err)
 	}
-	if field, ok := d.Fields[canonical]; ok && op != esdsl.OpExists && field.Type != "keyword" && field.Query == "" {
+	// A flattened rule with its own separator names a field Discover keys under
+	// a different canonical name, so the mapping is found by the field itself.
+	field, mapped := d.Fields[canonical]
+	if !mapped && target.Nested == "" {
+		field, mapped = d.fieldBySource(target.Field)
+	}
+	if mapped && op != esdsl.OpExists && field.Type != "keyword" && field.Query == "" {
 		return esdsl.Condition{}, fmt.Errorf("%s is mapped as %s; only a keyword field takes an exact %s condition", canonical, field.Type, op)
 	}
 	if target.Nested == "" {
@@ -129,6 +135,15 @@ func (d Definition) targetCondition(canonical string, target Target, op esdsl.Op
 		conditions = append(conditions, valueCondition(op, target.Field, values))
 	}
 	return esdsl.Condition{Op: esdsl.OpNested, Path: target.Nested, Conditions: conditions}, nil
+}
+
+func (d Definition) fieldBySource(name string) (Field, bool) {
+	for _, field := range d.Fields {
+		if field.Source == name || field.Query == name {
+			return field, true
+		}
+	}
+	return Field{}, false
 }
 
 func valueCondition(op esdsl.Operator, field string, values []string) esdsl.Condition {

@@ -42,7 +42,14 @@ func (s Service) Search(ctx context.Context, r Request) (SearchResult, error) {
 	if err != nil {
 		return SearchResult{}, err
 	}
-	spans, err := s.load(ctx, r, nil)
+	if s.Read == nil {
+		queryContext, c, err := s.connection(ctx, r.Source)
+		if err != nil {
+			return SearchResult{}, err
+		}
+		return SearchOpenSearch(queryContext, r, c)
+	}
+	spans, err := s.Read(ctx, r, nil)
 	if err != nil {
 		return SearchResult{}, err
 	}
@@ -55,7 +62,7 @@ func (s Service) Search(ctx context.Context, r Request) (SearchResult, error) {
 	if len(ids) > 0 {
 		full := r
 		full.From, full.Until = "", ""
-		spans, err = s.load(ctx, full, ids)
+		spans, err = s.Read(ctx, full, ids)
 		if err != nil {
 			return SearchResult{}, err
 		}
@@ -83,20 +90,38 @@ func (s Service) load(ctx context.Context, r Request, ids []string) ([]Span, err
 	if s.Read != nil {
 		return s.Read(ctx, r, ids)
 	}
-	if r.Source == "" {
-		return nil, fmt.Errorf("source is required")
-	}
-	if s.Connections == nil {
-		return nil, fmt.Errorf("trace source catalog is not configured")
-	}
-	c, err := s.Connections.ResolveConnection(dbcontext.NewContext(ctx), r.Source)
+	queryContext, c, err := s.connection(ctx, r.Source)
 	if err != nil {
 		return nil, err
 	}
-	if c == nil {
-		return nil, fmt.Errorf("source connection %q not found", r.Source)
+	return ReadOpenSearch(queryContext, r, c, ids)
+}
+
+func (s Service) connection(ctx context.Context, source string) (dbcontext.Context, *models.Connection, error) {
+	if source == "" {
+		return dbcontext.Context{}, nil, fmt.Errorf("source is required")
 	}
-	return ReadOpenSearch(s.Connections.Attach(dbcontext.NewContext(ctx)), r, c, ids)
+	var (
+		queryContext dbcontext.Context
+		c            *models.Connection
+		err          error
+	)
+	switch {
+	case s.Resolve != nil:
+		queryContext, c, err = s.Resolve(ctx, source)
+	case s.Connections != nil:
+		queryContext = s.Connections.Attach(dbcontext.NewContext(ctx))
+		c, err = s.Connections.ResolveConnection(dbcontext.NewContext(ctx), source)
+	default:
+		return dbcontext.Context{}, nil, fmt.Errorf("trace source catalog is not configured")
+	}
+	if err != nil {
+		return dbcontext.Context{}, nil, err
+	}
+	if c == nil {
+		return dbcontext.Context{}, nil, fmt.Errorf("source connection %q not found", source)
+	}
+	return queryContext, c, nil
 }
 
 // ReadSpans reads the spans selected by a host without assembling a search.

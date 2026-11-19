@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/flanksource/commons-db/connection/store"
+	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/otel/span"
 )
 
@@ -87,7 +89,14 @@ type Detail struct {
 	MissingParents []string `json:"missingParents"`
 }
 
+// Service searches the spans of an OpenSearch or opentelemetry connection,
+// or those Read returns.
 type Service struct {
 	Connections *store.Store
-	Read        func(context.Context, Request, []string) ([]Span, error)
+	// Resolve is the connection a source names and the context it is read in,
+	// for a host whose connections Connections does not hold.
+	Resolve func(context.Context, string) (dbcontext.Context, *models.Connection, error)
+	// Read replaces the connection read with a host's own spans, which a search
+	// then filters in memory.
+	Read func(context.Context, Request, []string) ([]Span, error)
 }

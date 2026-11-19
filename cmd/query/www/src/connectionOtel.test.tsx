@@ -24,7 +24,7 @@ it("keeps the connection and filters when opening a trace and restoring search",
   expect(new URLSearchParams(window.location.search).get("index")).toBe("example-*");
   expect(new URLSearchParams(window.location.search).get("trace")).toBe(summary.traceId);
   expect(new URLSearchParams(window.location.search).get("tab")).toBe("traces");
-  await act(async () => { Array.from(container.querySelectorAll("a")).find(link => link.textContent === "Back to trace search")!.click(); });
+  await act(async () => { Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Back to trace search")!.click(); });
   await vi.waitFor(() => expect(container.querySelector("h2")?.textContent).toBe("Traces"));
   expect(new URLSearchParams(window.location.search).get("minSpans")).toBe("2");
 });
