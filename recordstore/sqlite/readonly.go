@@ -5,9 +5,12 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"slices"
 	"time"
 
+	"github.com/flanksource/commons/logger"
 	"github.com/google/uuid"
 
 	"github.com/flanksource/commons-db/recordstore"
@@ -80,13 +83,15 @@ func (b *Backend) submitAppend(ctx context.Context, stream, kind string, rows []
 // adoptReadOnly adopts kind's table from the catalog the writer keeps. A
 // table or a declared column the file does not have yet is declared by
 // submitting a batch of no entries, and adopted once the writer made it.
+// Without a Submitter the backend declares it through a writer of its own,
+// opened for that one transaction.
 func (b *Backend) adoptReadOnly(ctx context.Context, kind string, table kindTable) (kindTable, error) {
 	adopted, missing, err := b.readTable(ctx, kind, table)
 	if err != nil || !missing {
 		return adopted, err
 	}
 	if b.submit == nil {
-		return kindTable{}, fmt.Errorf("kind %q has no table with every declared column: %w", kind, b.errNoSubmitter())
+		return b.declareDetached(ctx, kind, table, adopted)
 	}
 	if _, err := b.submit(ctx, recordstore.Batch{ID: uuid.NewString(), Schemas: []recordstore.KindSchema{table.schema}}); err != nil {
 		return kindTable{}, fmt.Errorf("kind %q: submit its declaration: %w", kind, err)
@@ -100,9 +105,40 @@ func (b *Backend) adoptReadOnly(ctx context.Context, kind string, table kindTabl
 	return adopted, nil
 }
 
+// declareDetached reconciles kind's table through a writer opened for this
+// declaration alone and closed again, so the backend stays read-only. When the
+// file cannot be written, a table it already has is read through the columns
+// it has — a declared column it lacks holds no value in any row — and the
+// backend writes nothing, so no row can be stored without that column.
+func (b *Backend) declareDetached(ctx context.Context, kind string, table, readable kindTable) (kindTable, error) {
+	declared, err := b.reconcileDetached(ctx, kind, table)
+	if err == nil {
+		return declared, nil
+	}
+	if readable.Name == "" {
+		return kindTable{}, fmt.Errorf("kind %q has no table in %s and none could be declared: %w", kind, b.Path(), errors.Join(err, b.errNoSubmitter()))
+	}
+	logger.Warnf("sqlite record store %s: kind %q lacks declared columns and they could not be added (%v); reading the columns it has", b.Path(), kind, err)
+	return readable, nil
+}
+
+func (b *Backend) reconcileDetached(ctx context.Context, kind string, table kindTable) (kindTable, error) {
+	writer, err := sqlitedb.Open(sqlitedb.Options{Path: b.Path()})
+	if err != nil {
+		return kindTable{}, err
+	}
+	err = writer.Write(func(db *sql.DB) error {
+		table, err = b.reconcileTableLocked(ctx, db, kind, table)
+		return err
+	})
+	return table, errors.Join(err, writer.Close())
+}
+
 // readTable adopts table from the catalog without writing, reporting it
 // missing when the file has no table for the kind, or lacks a declared column
-// or an index the kind asks for.
+// or an index the kind asks for. A table missing only declared columns or
+// indexes is returned as far as the file has it: its columns minus the ones
+// it lacks.
 func (b *Backend) readTable(ctx context.Context, kind string, table kindTable) (kindTable, bool, error) {
 	tx, err := b.database.Reader().BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
@@ -129,11 +165,24 @@ func (b *Backend) readTable(ctx context.Context, kind string, table kindTable) (
 	if mismatch != "" {
 		return kindTable{}, false, fmt.Errorf("kind %q was stored in %s with %s: %w", kind, b.Path(), mismatch, recordstore.ErrSchemaConflict)
 	}
-	if _, indexed := withIndexes(catalog.indexes, kindIndexes(table.schema)); len(added) > 0 || indexed {
-		return kindTable{}, true, nil
+	_, indexed := withIndexes(catalog.indexes, kindIndexes(table.schema))
+	adopted, err := withKey(table.without(added))
+	return adopted, len(added) > 0 || indexed, err
+}
+
+// without is the table minus the named declared columns.
+func (table kindTable) without(names []string) kindTable {
+	if len(names) == 0 {
+		return table
 	}
-	adopted, err := withKey(table)
-	return adopted, false, err
+	table.Columns, table.StoredAs = slices.Clone(table.Columns), slices.Clone(table.StoredAs)
+	for index := len(table.Columns) - 1; index >= 0; index-- {
+		if slices.Contains(names, table.Columns[index].Name) {
+			table.Columns = slices.Delete(table.Columns, index, index+1)
+			table.StoredAs = slices.Delete(table.StoredAs, index, index+1)
+		}
+	}
+	return table
 }
 
 // WatchChanges calls changed whenever a commit to the file lands, until ctx
@@ -159,6 +208,11 @@ func (b *Backend) Promote(ctx context.Context) error {
 	if err := b.createCatalog(ctx); err != nil {
 		return fmt.Errorf("sqlite record store %s: promote: %w", b.Path(), err)
 	}
+	// A table read without the columns the file lacked is reconciled again,
+	// now that the backend can add them.
+	b.tablesMu.Lock()
+	b.tables = map[string]kindTable{}
+	b.tablesMu.Unlock()
 	b.readOnly.Store(false)
 	b.startSweeper(b.sweepInterval)
 	return nil
