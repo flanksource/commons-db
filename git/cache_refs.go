@@ -7,8 +7,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"slices"
-	"strings"
 )
 
 func recordCacheRef(ctx context.Context, mirror string, repo *Repository, ref Ref) error {
@@ -19,81 +17,122 @@ func recordCacheRef(ctx context.Context, mirror string, repo *Repository, ref Re
 	return err
 }
 
-// Endpoint reads can use an isolated shallow mirror if its snapshots are
-// already present. History reads always prepare the complete mirror.
-func (m mirrorPaths) lockShallowRefs(ctx context.Context, shas []string) (string, func() error, error) {
-	if _, err := os.Stat(filepath.Join(m.git, "HEAD")); err == nil {
-		return "", nil, nil
-	} else if !errors.Is(err, fs.ErrNotExist) {
-		return "", nil, err
-	}
-	parent := filepath.Dir(m.dir)
-	entries, err := os.ReadDir(parent)
-	if err != nil {
-		return "", nil, err
-	}
-	for _, entry := range entries {
-		if !entry.IsDir() || !strings.HasPrefix(entry.Name(), filepath.Base(m.dir)+"-depth-") {
-			continue
-		}
-		candidate := newMirrorPaths(filepath.Join(parent, entry.Name()))
-		lock, err := acquire(ctx, candidate.lock, "shallow mirror lock", sharedLock)
-		if err != nil {
-			return "", nil, err
-		}
-		if !slices.ContainsFunc(shas, func(sha string) bool { return !hasCommit(ctx, candidate.git, sha) }) {
-			return candidate.git, lock.Unlock, nil
-		}
-		if err := lock.Unlock(); err != nil {
-			return "", nil, err
-		}
-	}
-	return "", nil, ctx.Err()
+// prepareOptions is one commit of Repo to make present, with its complete
+// history, in the mirror and pin.
+type prepareOptions struct {
+	Store Store
+	Repo  *Repository
+	Ref   Ref
 }
 
-func (c *Cache) checkoutPaths(repo *Repository, depth int) (mirrorPaths, error) {
-	if depth < 0 {
-		return mirrorPaths{}, fmt.Errorf("invalid checkout depth %d", depth)
-	}
-	paths, err := c.mirrorPaths(repo)
-	if err != nil || depth == 0 {
-		return paths, err
-	}
-	return newMirrorPaths(filepath.Join(c.cacheRoot(), fmt.Sprintf("%s-depth-%d", repo.URL.CacheKey(), depth))), nil
-}
-
-func (m mirrorPaths) prepareRef(ctx context.Context, store Store, options fetchOptions) error {
-	ref := options.Ref
-	if pinned, err := m.usePinned([]string{ref.SHA}, options.Depth == 0); err != nil {
+// prepareRef makes the commit present with its complete history, retains and
+// advertises it in the pool, and pins it. Every cached commit is complete: no
+// read creates a shallow mirror.
+func (m mirrorPaths) prepareRef(ctx context.Context, o prepareOptions) error {
+	ref := o.Ref
+	if pinned, err := m.usePinned([]string{ref.SHA}); err != nil {
 		return err
 	} else if pinned {
-		return recordCacheRef(ctx, m.git, options.Repo, ref)
+		return recordCacheRef(ctx, m.git, o.Repo, ref)
 	}
-	if options.Depth == 0 {
-		if err := hydrateMiss(ctx, store, m.git, ref.SHA); err != nil {
-			return err
-		}
+	if err := hydrateMiss(ctx, o.Store, m.git, ref.SHA); err != nil {
+		return err
 	}
-	options.Ref = Ref{Name: ref.Name, FullName: ref.SHA, SHA: ref.SHA, Kind: RefSHA}
-	options.Pool = m.poolName()
-	var err error
-	sha := ref.SHA
-	if options.Depth == 0 {
-		sha, err = fetchHistory(ctx, options)
-	} else if !hasCommit(ctx, m.git, ref.SHA) {
-		sha, err = fetch(ctx, options)
+	if err := m.fetchCommit(ctx, o); err != nil {
+		return err
 	}
+	if err := m.retain(ctx, []string{ref.SHA}, true); err != nil {
+		return err
+	}
+	if err := recordCacheRef(ctx, m.git, o.Repo, ref); err != nil {
+		return err
+	}
+	return m.pin(ctx, []string{ref.SHA})
+}
+
+// fetchCommit fetches the commit with its complete history unless the mirror
+// or its pool already holds it: into the pool when there is one, so the
+// objects are stored once, into the mirror otherwise.
+func (m mirrorPaths) fetchCommit(ctx context.Context, o prepareOptions) error {
+	if err := requireComplete(m.git); err != nil {
+		return err
+	}
+	if hasCommit(ctx, m.git, o.Ref.SHA) {
+		return nil
+	}
+	if m.pool != "" {
+		return m.fetchIntoPool(ctx, o)
+	}
+	sha, err := fetch(ctx, fetchOptions{Dir: m.git, Owner: o.Repo, Repo: o.Repo, Ref: o.Ref.bySHA()})
 	if err != nil {
 		return err
 	}
-	if sha != ref.SHA {
-		return fmt.Errorf("fetch returned %s, expected %s", sha, ref.SHA)
+	if sha != o.Ref.SHA {
+		return fmt.Errorf("fetch returned %s, expected %s", sha, o.Ref.SHA)
 	}
-	if err := m.retain(ctx, []string{sha}, true); err != nil {
+	return nil
+}
+
+// poolHoldsRepository reports whether the pool advertises a commit of this
+// mirror's repository.
+func (m mirrorPaths) poolHoldsRepository(ctx context.Context) (bool, error) {
+	tips, err := run(ctx, command{dir: m.pool, args: []string{"for-each-ref", "--count=1", "--format=%(refname)", poolTips + filepath.Base(m.dir) + "/"}})
+	return tips != "", err
+}
+
+// fetchIntoPool fetches the commit with its complete history straight into
+// the organization pool, so the objects are stored once and the mirror never
+// holds a copy: the pool's refs of every repository it serves are the
+// negotiation's haves. The fetch lock serializes the first fetch of a
+// repository (the pool advertises nothing of it yet) against every other
+// fetch into the pool, so a concurrent first fetch of a related repository
+// waits and then negotiates against what this one brought; fetches of
+// repositories the pool already holds share the lock.
+func (m mirrorPaths) fetchIntoPool(ctx context.Context, o prepareOptions) (err error) {
+	holds, err := m.poolHoldsRepository(ctx)
+	if err != nil {
 		return err
 	}
-	if err := recordCacheRef(ctx, m.git, options.Repo, ref); err != nil {
+	mode := exclusiveLock
+	if holds {
+		mode = sharedLock
+	}
+	lock, err := acquire(ctx, m.poolFetchLock(), "object pool fetch", mode)
+	if err != nil {
 		return err
 	}
-	return m.pin(ctx, []string{sha})
+	defer func() { err = errors.Join(err, lock.Unlock()) }()
+	if err := requireComplete(m.pool); err != nil {
+		return err
+	}
+	sha := o.Ref.SHA
+	if hasCommit(ctx, m.pool, sha) {
+		return nil
+	}
+	destination := poolRetained + filepath.Base(m.dir) + "/" + sha
+	fetched, err := fetch(ctx, fetchOptions{Dir: m.pool, Owner: o.Repo, Repo: o.Repo, Ref: o.Ref.bySHA(),
+		Refspecs: []string{"+" + sha + ":" + destination}, Destination: destination, Pool: m.poolName()})
+	if err != nil {
+		return err
+	}
+	if fetched != sha {
+		return fmt.Errorf("fetch returned %s, expected %s", fetched, sha)
+	}
+	return nil
+}
+
+// requireComplete refuses a shallow repository: every mirror trusts a commit
+// it or its pool holds to carry its complete history.
+func requireComplete(dir string) error {
+	if _, err := os.Stat(filepath.Join(dir, "shallow")); err == nil {
+		return fmt.Errorf("git repository %s is shallow; the cache holds complete histories only", dir)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+// bySHA is the ref fetched by its commit SHA, still named as requested.
+func (ref Ref) bySHA() Ref {
+	return Ref{Name: ref.Name, FullName: ref.SHA, SHA: ref.SHA, Kind: RefSHA}
 }

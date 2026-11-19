@@ -30,6 +30,11 @@ const lockRetry = 50 * time.Millisecond
 // leased exclusively until Release, so concurrent checkouts of different refs
 // proceed while a second checkout of the same ref waits.
 //
+// Every cached commit is complete: a read or checkout of a missing commit
+// fetches it with its whole history, into the organization pool for a pooled
+// mirror (stored once, see fetchIntoPool) and into the mirror otherwise. No
+// read creates a shallow mirror, and a shallow one is refused.
+//
 // Store, when set, is the durable tier behind Root: a commit missing from a
 // mirror is hydrated from it before the remote is asked (see Store).
 type Cache struct {
@@ -42,7 +47,6 @@ type Cache struct {
 // unique directory removed on Release.
 type CheckoutOptions struct {
 	Ref       string
-	Depth     int
 	Ephemeral bool
 }
 
@@ -64,7 +68,7 @@ func (c *Cache) checkoutRef(ctx context.Context, repo *Repository, ref Ref, opti
 	if c.Root == "" {
 		return nil, errors.New("git cache root is required")
 	}
-	paths, err := c.checkoutPaths(repo, options.Depth)
+	paths, err := c.mirrorPaths(repo)
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +81,7 @@ func (c *Cache) checkoutRef(ctx context.Context, repo *Repository, ref Ref, opti
 	if worktree.lease, err = acquire(ctx, worktree.Dir+".lock", "worktree lease", exclusiveLock); err != nil {
 		return nil, fmt.Errorf("%s at %s: %w", repo.URL.Redacted(), ref.Name, err)
 	}
-	if err := worktree.materialize(ctx, options.Depth); err != nil {
+	if err := worktree.materialize(ctx); err != nil {
 		return nil, errors.Join(err, worktree.unlease())
 	}
 	return worktree, nil
@@ -97,7 +101,7 @@ func worktreeName(ref Ref, ephemeral bool) (string, error) {
 
 // materialize fetches ref into the mirror unless its commit is cached, then
 // adds (or resets) the worktree at that commit, under the mirror lock.
-func (w *Worktree) materialize(ctx context.Context, depth int) (err error) {
+func (w *Worktree) materialize(ctx context.Context) (err error) {
 	unlock, err := w.paths.lockWrite(ctx)
 	if err != nil {
 		return err
@@ -106,7 +110,7 @@ func (w *Worktree) materialize(ctx context.Context, depth int) (err error) {
 	if err := w.paths.ensure(ctx, w.repo); err != nil {
 		return err
 	}
-	if err := w.paths.prepareRef(ctx, w.store, fetchOptions{Dir: w.paths.git, Owner: w.repo, Repo: w.repo, Ref: w.Ref, Depth: depth}); err != nil {
+	if err := w.paths.prepareRef(ctx, prepareOptions{Store: w.store, Repo: w.repo, Ref: w.Ref}); err != nil {
 		return err
 	}
 	if _, err := os.Stat(filepath.Join(w.Dir, ".git")); err == nil {

@@ -83,6 +83,9 @@ func reconcilePoolBorrower(ctx context.Context, mirror mirrorPaths) (err error) 
 		return err
 	}
 	defer func() { err = errors.Join(err, lock.Unlock()) }()
+	if err := requireComplete(mirror.git); err != nil {
+		return err
+	}
 	out, err := run(ctx, command{dir: mirror.git, args: []string{"for-each-ref", "--format=%(objecttype) %(objectname) %(*objecttype) %(*objectname)",
 		"refs/remotes/origin", "refs/tags", "refs/commons-cache/remote-head", cacheRefPrefix, pinRefPrefix, storeRefPrefix}})
 	if err != nil {

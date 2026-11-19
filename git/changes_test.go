@@ -12,20 +12,24 @@ import (
 )
 
 var _ = Describe("Cache.Changes", func() {
-	It("compares cached endpoints without fetching history from a shallow mirror", func(ctx SpecContext) {
-		fixture := newBareRepo("shallow-changes")
+	It("caches the endpoints with their complete history and compares them again offline", func(ctx SpecContext) {
+		fixture := newBareRepo("complete-changes")
 		base := fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: "<Old/>", Message: "Add rule"})
+		between := fixture.commitOn(fixtureCommit{Branch: "main", Path: "between.xml", Content: "<Between/>", Message: "Add between"})
 		head := fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: "<New/>", Message: "Change rule"})
 		cache := &git.Cache{Root: GinkgoT().TempDir()}
 		repo := mirroredRepository(fixture)
-		worktree, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: head, Depth: 2})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(worktree.Release()).To(Succeed())
+		compare := func() []string {
+			changes, err := cache.Changes(ctx, git.ChangesOptions{Repository: repo, Base: base, Head: head})
+			Expect(err).NotTo(HaveOccurred())
+			return paths(changes)
+		}
+		Expect(compare()).To(Equal([]string{"between.xml", "rule.xml"}))
+		mirror := filepath.Join(cache.Root, "v2", repo.URL.CacheKey(), "mirror.git")
+		Expect(mirrorCommits(mirror)).To(ConsistOf(fixture.First, fixture.Main, base, between, head))
+		Expect(gitFixture(mirror, "rev-parse", "--is-shallow-repository")).To(Equal("false"))
 		Expect(os.Rename(fixture.Path, fixture.Path+"-offline")).To(Succeed())
-		changes, err := cache.Changes(ctx, git.ChangesOptions{Repository: repo, Base: base, Head: head})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(changes).To(HaveLen(1))
-		Expect(changes[0].Path).To(Equal("rule.xml"))
+		Expect(compare()).To(Equal([]string{"between.xml", "rule.xml"}))
 	})
 
 	It("reads native object changes including mode-only changes without loading blobs", func(ctx SpecContext) {

@@ -44,7 +44,7 @@ func (c *Cache) Ancestors(ctx context.Context, options AncestorsOptions) ([]stri
 	}
 	var ancestors []string
 	repo := options.Repository
-	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.Head}}, History: true}, func(mirror string, shas []string) (err error) {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.Head}}}, func(mirror string, shas []string) (err error) {
 		ancestors, err = revList(ctx, command{dir: mirror}, shas[0], options.Max)
 		return err
 	})

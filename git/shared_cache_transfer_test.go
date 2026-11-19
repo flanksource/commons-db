@@ -66,9 +66,9 @@ var _ = Describe("scoped object pool transfer", func() {
 		ancestry := &unavailableAncestry{}
 		repo.Provider = ancestry
 		cold := &git.Cache{Root: fixtureTempDir()}
-		coldBytes := measureCheckouts(ctx, remote, cold, "cold", "main", []*git.Repository{repo})
-		pooledBytes := measureCheckouts(ctx, remote, shared, "pooled", "main", []*git.Repository{repo})
-		warmBytes := measureCheckouts(ctx, remote, shared, "warm SHA", fork.Main, []*git.Repository{repo})
+		coldBytes := measureCheckouts(ctx, remote, cold, "cold", git.CheckoutOptions{Ref: "main"}, []*git.Repository{repo})
+		pooledBytes := measureCheckouts(ctx, remote, shared, "pooled", git.CheckoutOptions{Ref: "main"}, []*git.Repository{repo})
+		warmBytes := measureCheckouts(ctx, remote, shared, "warm SHA", git.CheckoutOptions{Ref: fork.Main}, []*git.Repository{repo})
 		Expect(coldBytes).To(BeNumerically(">", len(payload)))
 		Expect(pooledBytes).To(BeNumerically("<", coldBytes/4))
 		Expect(warmBytes).To(BeZero())
@@ -83,17 +83,33 @@ var _ = Describe("scoped object pool transfer", func() {
 		independentTip := independent.orphanOn("independent", "unique.txt", "independent\n")
 		gitFixture(independent.Path, "update-ref", "refs/heads/main", independentTip)
 		cache := &git.Cache{Root: fixtureTempDir()}
-		measureCheckouts(ctx, remote, cache, "donor prefetch", donor.Main, []*git.Repository{organizationRepository(remote, donor, "example")})
+		measureCheckouts(ctx, remote, cache, "donor prefetch", git.CheckoutOptions{Ref: donor.Main}, []*git.Repository{organizationRepository(remote, donor, "example")})
 		related := []*git.Repository{organizationRepository(remote, donor, "example"), organizationRepository(remote, fork, "example")}
-		Expect(measureCheckouts(ctx, remote, cache, "concurrent related", donor.Main, related)).To(BeZero())
+		Expect(measureCheckouts(ctx, remote, cache, "concurrent related", git.CheckoutOptions{Ref: donor.Main}, related)).To(BeZero())
 		unrelated := []*git.Repository{organizationRepository(remote, donor, "another"), organizationRepository(remote, independent, "another")}
 		shareNoHistory := organizationRepository(remote, independent, "example")
-		Expect(measureCheckouts(ctx, remote, cache, "independent history in the seeded pool", independentTip, []*git.Repository{shareNoHistory})).To(BeNumerically(">", 0))
-		Expect(measureCheckouts(ctx, remote, &git.Cache{Root: fixtureTempDir()}, "concurrent unrelated", "main", unrelated)).To(BeNumerically(">", 0))
+		Expect(measureCheckouts(ctx, remote, cache, "independent history in the seeded pool", git.CheckoutOptions{Ref: independentTip}, []*git.Repository{shareNoHistory})).To(BeNumerically(">", 0))
+		Expect(measureCheckouts(ctx, remote, &git.Cache{Root: fixtureTempDir()}, "concurrent unrelated", git.CheckoutOptions{Ref: "main"}, unrelated)).To(BeNumerically(">", 0))
+	})
+
+	It("serializes concurrent first complete fetches into one pool so the shared base transfers once", func(ctx SpecContext) {
+		donor := newBareRepo("cold-donor")
+		payload := make([]byte, 512*1024)
+		_, err := rand.New(rand.NewSource(11)).Read(payload)
+		Expect(err).NotTo(HaveOccurred())
+		donor.Main = donor.commitOn(fixtureCommit{Branch: "main", Path: "payload.bin", Content: string(payload), Message: "payload"})
+		fork := newFork(donor)
+		fork.Main = fork.commitOn(fixtureCommit{Branch: "main", Path: "delta.txt", Content: "delta\n", Message: "delta"})
+		Expect(os.Symlink(donor.Path, filepath.Join(fork.Root, filepath.Base(donor.Path)))).To(Succeed())
+		remote := newHTTPRemote(fork.Root, false)
+		repos := []*git.Repository{organizationRepository(remote, donor, "example"), organizationRepository(remote, fork, "example")}
+		transferred := measureCheckouts(ctx, remote, &git.Cache{Root: fixtureTempDir()}, "concurrent cold complete", git.CheckoutOptions{Ref: "main"}, repos)
+		Expect(transferred).To(BeNumerically(">", len(payload)))
+		Expect(transferred).To(BeNumerically("<", len(payload)*3/2), "the second fetch negotiated against the first one's pool tips")
 	})
 })
 
-func measureCheckouts(ctx SpecContext, remote *httpRemote, cache *git.Cache, label, ref string, repos []*git.Repository) int64 {
+func measureCheckouts(ctx SpecContext, remote *httpRemote, cache *git.Cache, label string, options git.CheckoutOptions, repos []*git.Repository) int64 {
 	GinkgoHelper()
 	type result struct {
 		tree *git.Worktree
@@ -102,9 +118,10 @@ func measureCheckouts(ctx SpecContext, remote *httpRemote, cache *git.Cache, lab
 	beforePack, beforeDisk := remote.PackBytes(), transferDiskBytes(cache.Root)
 	results := make(chan result, len(repos))
 	start := time.Now()
+	options.Ephemeral = true
 	for _, repo := range repos {
 		go func() {
-			tree, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: ref, Ephemeral: true})
+			tree, err := cache.Checkout(ctx, repo, options)
 			results <- result{tree, err}
 		}()
 	}
@@ -113,8 +130,8 @@ func measureCheckouts(ctx SpecContext, remote *httpRemote, cache *git.Cache, lab
 		Eventually(ctx, results).WithTimeout(30 * time.Second).Should(Receive(&checkout))
 		Expect(checkout.err).NotTo(HaveOccurred())
 		defer func() { Expect(checkout.tree.Release()).To(Succeed()) }()
-		if len(ref) == 40 {
-			Expect(checkout.tree.Ref.SHA).To(Equal(ref))
+		if len(options.Ref) == 40 {
+			Expect(checkout.tree.Ref.SHA).To(Equal(options.Ref))
 		}
 	}
 	elapsed := time.Since(start).Round(time.Millisecond)
