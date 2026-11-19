@@ -52,7 +52,7 @@ func gitHTTPSpecs() {
 		Expect(err).To(MatchError(ContainSubstring("action authorization")))
 	})
 	It("lists redacted connections and rejects invalid requests", func() {
-		service, err := browse.New(browse.Options{CacheDir: GinkgoT().TempDir(), Catalog: func(context.Context) ([]models.Connection, error) {
+		service, err := browse.New(browse.Options{Cache: &git.Cache{Root: GinkgoT().TempDir()}, Catalog: func(context.Context) ([]models.Connection, error) {
 			return []models.Connection{{Name: "rules", Type: "git", URL: "https://user:secret@example.test/rules.git"}, {Name: "db", Type: "postgres"}}, nil
 		}, Resolve: func(context.Context, string) (models.Connection, error) {
 			return models.Connection{}, browse.ErrUnknownConnection
@@ -93,7 +93,7 @@ func gitCacheHTTPSpecs() {
 		Expect(os.MkdirAll(mirror, 0o755)).To(Succeed())
 		Expect(exec.Command("git", "init", "--quiet", "--bare", mirror).Run()).To(Succeed())
 		rules := models.Connection{Name: "rules", Type: models.ConnectionTypeGit, URL: rulesURL}
-		service, err := browse.New(browse.Options{CacheDir: cacheDir, PinTTL: time.Hour,
+		service, err := browse.New(browse.Options{Cache: &git.Cache{Root: cacheDir}, PinTTL: time.Hour,
 			Catalog: func(context.Context) ([]models.Connection, error) { return []models.Connection{rules}, nil },
 			Resolve: func(_ context.Context, name string) (models.Connection, error) {
 				if name != rules.Name {

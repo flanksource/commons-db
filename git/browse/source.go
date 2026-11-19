@@ -13,10 +13,10 @@ import (
 )
 
 func New(options Options) (*Service, error) {
-	if (options.Resolve == nil && options.Client == nil) || options.CacheDir == "" {
-		return nil, fmt.Errorf("new git browser: catalog, connection resolver and cache directory are required")
+	if (options.Resolve == nil && options.Client == nil) || options.Cache == nil || options.Cache.Root == "" {
+		return nil, fmt.Errorf("new git browser: catalog, connection resolver and a cache with a root are required")
 	}
-	return &Service{options: options, cache: &git.Cache{Root: options.CacheDir}}, nil
+	return &Service{options: options, cache: options.Cache}, nil
 }
 
 func IsGitType(kind string) bool {

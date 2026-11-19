@@ -15,9 +15,27 @@ defer worktree.Release()
 
 The pool key comes from the provider instance and organization in the clone URL. GitHub uses the owner namespace. Azure DevOps Services recognizes its HTTPS and SSH aliases and shares across projects in the same organization. Azure DevOps Server uses the server and collection. Repositories in an organization share objects across connection credentials. Git uses the requested repository's credentials for network requests.
 
-The cache accepts a known SHA from the repository mirror or its organization pool. Each mirror retains the pool commits its worktrees can use until the mirror is evicted. Maintenance removes retired borrowers' refs before collecting unreferenced objects. `Evict` operates on one repository key and refuses a mirror with a leased worktree.
+The cache accepts a known SHA from the repository mirror or its organization pool. The pool retains the commits of each repository by its key, with a stamp of when a cache last used it. Maintenance removes the refs of repositories unused for `PoolRetain` before collecting unreferenced objects. `Evict` operates on one repository key and refuses a mirror with a leased worktree.
 
-Set `Cache.Store` to a `MirrorStore` or `PackStore` to hydrate the repository mirror from a durable tier. `Cache.Fetch` with `Publish: true` writes a self-contained entry by the repository key. A fresh local cache can restore a published SHA while the remote is offline. The built-in stores write under `Path/v2`. Older caches and store entries are available for rollback in their original directories.
+## Shared object pools
+
+By default the pools live under `Root/v2/pools`, locked with `flock` files there. To share them between hosts, for example on a ReadWriteMany volume, set `PoolRoot` to the pool volume and `Locker` to a `lease.Locker` with scope `git-pool` that every sharing host reaches:
+
+```go
+locks, err := lease.NewRedis(valkeyClient, lease.ExpiringOptions{Options: lease.Options{Scope: "git-pool"}})
+if err != nil {
+    return err
+}
+cache := &git.Cache{Root: localDisk, PoolRoot: "/mnt/git-pool", Locker: locks, PoolRetain: 30 * 24 * time.Hour}
+```
+
+- A cache with `PoolRoot` and no `Locker` fails at its first pool use with `shared git pool <path> requires Cache.Locker`. It never falls back to `flock`, which cannot detect a dead holder across hosts.
+- Every host mounts the pool at the same path. Mirrors name it in an absolute alternate, and a mirror whose alternate points at a different pool is refused, naming both paths.
+- Mirrors and worktrees stay local to each cache's `Root`, under `flock`.
+- `Holder` names this process in lease reports. It defaults to `POD_NAME`, else `<hostname>-<pid>`.
+- Pool maintenance prunes a repository only once no cache has pinned, fetched or reconciled it for `PoolRetain` (30 days by default). Every cache that shares a pool must run `Maintain` more often than that, because its reconcile step is what keeps the repositories its idle mirrors borrow from.
+
+See [READS.md](READS.md#shared-pools) for the lease and retention details.
 
 ## Independent clones
 

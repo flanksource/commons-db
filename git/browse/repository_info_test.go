@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync/atomic"
 
+	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/git/browse"
 	"github.com/flanksource/commons-db/models"
 	. "github.com/onsi/ginkgo/v2"
@@ -27,7 +28,7 @@ var _ = Describe("Opened repository metadata", func() {
 			_, _ = fmt.Fprintf(w, `[{"path":"rules","path_with_namespace":"acme/rules","http_url_to_repo":%q,"web_url":%q,"namespace":{"full_path":"acme"}}]`, server.URL+"/acme/rules.git", server.URL+"/acme/rules")
 		}))
 		DeferCleanup(server.Close)
-		service, err := browse.New(browse.Options{CacheDir: GinkgoT().TempDir(), Resolve: func(context.Context, string) (models.Connection, error) {
+		service, err := browse.New(browse.Options{Cache: &git.Cache{Root: GinkgoT().TempDir()}, Resolve: func(context.Context, string) (models.Connection, error) {
 			return models.Connection{Type: "gitlab", URL: server.URL, Password: "fixture-token", InsecureTLS: true, Properties: map[string]string{"group": "acme"}}, nil
 		}})
 		Expect(err).NotTo(HaveOccurred())
