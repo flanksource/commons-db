@@ -23,7 +23,13 @@ func TestLease(t *testing.T) {
 
 const contractTTL = 3 * time.Second
 
-func lockerContract(name string, factory func(ExpiringOptions) (Locker, error)) {
+// backendCapabilities lists the optional lock modes a backend supports, so the
+// contract runs every spec a backend can pass and asserts the refusal of the rest.
+type backendCapabilities struct{ groups bool }
+
+var allModes = backendCapabilities{groups: true}
+
+func lockerContract(name string, supports backendCapabilities, factory func(ExpiringOptions) (Locker, error)) {
 	Describe(name, func() {
 		var first, second Locker
 		BeforeEach(func() {
@@ -36,19 +42,19 @@ func lockerContract(name string, factory func(ExpiringOptions) (Locker, error)) 
 		})
 
 		It("allows independent keys and excludes writers on a held key", func(ctx SpecContext) {
-			lock := first.Mutex("git/azure/oma")
+			lock := first.Mutex("git-azure-oma", as("first"))
 			hold(ctx, lock)
-			expectBusy(second.ReadWriteLock("git/azure/oma").TryLock(ctx))
-			expectBusy(second.ReadWriteLock("git/azure/oma").TryRLock(ctx))
-			hold(ctx, second.Mutex("git/azure/other"))
+			expectBusy(second.ReadWriteLock("git-azure-oma", as("second")).TryLock(ctx))
+			expectBusy(second.ReadWriteLock("git-azure-oma", as("second")).TryRLock(ctx))
+			hold(ctx, second.Mutex("git-azure-other", as("second")))
 		}, SpecTimeout(8*time.Second))
 
 		It("continues excluding contenders past the initial lease duration", func(ctx SpecContext) {
 			const key = "renew"
-			held := hold(ctx, first.Mutex(key))
+			held := hold(ctx, first.Mutex(key, as("first")))
 			Consistently(func(g Gomega) {
 				g.Expect(held.Done()).NotTo(BeClosed())
-				contender, ok, err := second.Mutex(key).TryLock(ctx)
+				contender, ok, err := second.Mutex(key, as("second")).TryLock(ctx)
 				if ok {
 					g.Expect(contender.Unlock(ctx)).To(Succeed())
 				}
@@ -59,17 +65,19 @@ func lockerContract(name string, factory func(ExpiringOptions) (Locker, error)) 
 
 		It("allows concurrent readers and admits a queued writer before new readers", func(ctx SpecContext) {
 			const key = "schema"
-			rw := first.ReadWriteLock(key)
+			rw := first.ReadWriteLock(key, as("first"))
 			read, err := rw.RLock(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(read.Unlock, ctx)
-			other, ok, err := second.ReadWriteLock(key).TryRLock(ctx)
+			other, ok, err := second.ReadWriteLock(key, as("second")).TryRLock(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(ok).To(BeTrue())
 			DeferCleanup(other.Unlock, ctx)
-			waiting := second.Mutex(key).LockWait(ctx)
+			waiting := second.Mutex(key, as("second")).LockWait(ctx)
 			expectWriterRegistered(ctx, rw)
-			expectBusy(first.GroupLock(key, "USA").TryLock(ctx))
+			if supports.groups {
+				expectBusy(first.GroupLock(key, "USA", as("first")).TryLock(ctx))
+			}
 			Expect(read.Unlock(ctx)).To(Succeed())
 			Consistently(waiting, 30*time.Millisecond).ShouldNot(Receive())
 			Expect(other.Unlock(ctx)).To(Succeed())
@@ -80,12 +88,51 @@ func lockerContract(name string, factory func(ExpiringOptions) (Locker, error)) 
 			expectBusy(rw.TryRLock(ctx))
 		}, SpecTimeout(8*time.Second))
 
+		It("removes canceled writer intent and releases an acquisition abandoned before channel delivery", func(ctx SpecContext) {
+			const key = "cancel"
+			rw := first.ReadWriteLock(key, as("first"))
+			read, err := rw.RLock(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			DeferCleanup(read.Unlock, ctx)
+			waitCtx, cancel := context.WithCancel(ctx)
+			defer cancel()
+			waiting := second.Mutex(key, as("second")).LockWait(waitCtx)
+			expectWriterRegistered(ctx, rw)
+			cancel()
+			Eventually(waiting, 2*time.Second).Should(BeClosed())
+			another, err := rw.RLock(ctx)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(another.Unlock(ctx)).To(Succeed())
+			Expect(read.Unlock(ctx)).To(Succeed())
+
+			waitCtx, cancel = context.WithCancel(ctx)
+			defer cancel()
+			waiting = second.Mutex(key, as("second")).LockWait(waitCtx)
+			expectWriterRegistered(ctx, rw)
+			cancel()
+			Eventually(waiting, 2*time.Second).Should(BeClosed())
+			hold(ctx, first.Mutex(key, as("first")))
+		}, SpecTimeout(8*time.Second))
+
+		if !supports.groups {
+			It("refuses group locks without touching the key", func(ctx SpecContext) {
+				held, acquired, err := first.GroupLock("country", "USA", as("first")).TryLock(ctx)
+				Expect(err).To(MatchError(ContainSubstring("group locks are not supported")))
+				Expect(held).To(BeNil())
+				Expect(acquired).To(BeFalse())
+				_, err = second.GroupLock("country", "USA", as("second")).Lock(ctx)
+				Expect(err).To(MatchError(ContainSubstring("group locks are not supported")))
+				hold(ctx, second.Mutex("country", as("second")))
+			}, SpecTimeout(8*time.Second))
+			return
+		}
+
 		It("atomically admits either a writer or a group across independent clients", func(ctx SpecContext) {
 			for range 10 {
 				key := uuid.NewString()
 				start := make(chan struct{})
 				results := make(chan Result, 2)
-				for _, lock := range []Lock{first.Mutex(key), second.GroupLock(key, "USA")} {
+				for _, lock := range []Lock{first.Mutex(key, as("first")), second.GroupLock(key, "USA", as("second"))} {
 					go func() {
 						<-start
 						held, _, err := lock.TryLock(ctx)
@@ -111,44 +158,18 @@ func lockerContract(name string, factory func(ExpiringOptions) (Locker, error)) 
 
 		It("admits the same group and rejects a different group until its last holder releases", func(ctx SpecContext) {
 			const key = "country"
-			usa := hold(ctx, first.GroupLock(key, "USA"))
-			otherUSA := hold(ctx, second.GroupLock(key, "USA"))
-			rsa := second.GroupLock(key, "RSA")
+			usa := hold(ctx, first.GroupLock(key, "USA", as("first")))
+			otherUSA := hold(ctx, second.GroupLock(key, "USA", as("second")))
+			rsa := second.GroupLock(key, "RSA", as("second"))
 			expectBusy(rsa.TryLock(ctx))
-			expectBusy(second.Mutex(key).TryLock(ctx))
-			read, err := second.ReadWriteLock(key).RLock(ctx)
+			expectBusy(second.Mutex(key, as("second")).TryLock(ctx))
+			read, err := second.ReadWriteLock(key, as("second")).RLock(ctx)
 			Expect(err).NotTo(HaveOccurred())
 			DeferCleanup(read.Unlock, ctx)
 			Expect(usa.Unlock(ctx)).To(Succeed())
 			expectBusy(rsa.TryLock(ctx))
 			Expect(otherUSA.Unlock(ctx)).To(Succeed())
 			hold(ctx, rsa)
-		}, SpecTimeout(8*time.Second))
-
-		It("removes canceled writer intent and releases an acquisition abandoned before channel delivery", func(ctx SpecContext) {
-			const key = "cancel"
-			rw := first.ReadWriteLock(key)
-			read, err := rw.RLock(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			DeferCleanup(read.Unlock, ctx)
-			waitCtx, cancel := context.WithCancel(ctx)
-			defer cancel()
-			waiting := second.Mutex(key).LockWait(waitCtx)
-			expectWriterRegistered(ctx, rw)
-			cancel()
-			Eventually(waiting, 2*time.Second).Should(BeClosed())
-			another, err := rw.RLock(ctx)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(another.Unlock(ctx)).To(Succeed())
-			Expect(read.Unlock(ctx)).To(Succeed())
-
-			waitCtx, cancel = context.WithCancel(ctx)
-			defer cancel()
-			waiting = second.Mutex(key).LockWait(waitCtx)
-			expectWriterRegistered(ctx, rw)
-			cancel()
-			Eventually(waiting, 2*time.Second).Should(BeClosed())
-			hold(ctx, first.Mutex(key))
 		}, SpecTimeout(8*time.Second))
 	})
 }
@@ -194,7 +215,14 @@ var _ = Describe("lease backends", func() {
 		next.ResourceVersion = strconv.Itoa(version + 1)
 		return true, next, client.Tracker().Update(action.GetResource(), next, action.GetNamespace())
 	})
-	lockerContract("Kubernetes", func(options ExpiringOptions) (Locker, error) {
+	lockerContract("Kubernetes", allModes, func(options ExpiringOptions) (Locker, error) {
 		return NewKubernetes(client.CoordinationV1().Leases("lease-test"), options)
+	})
+	files := map[string]string{}
+	lockerContract("File", backendCapabilities{}, func(options ExpiringOptions) (Locker, error) {
+		if files[options.Scope] == "" {
+			files[options.Scope] = GinkgoT().TempDir()
+		}
+		return NewFile(files[options.Scope], options.Options)
 	})
 })
