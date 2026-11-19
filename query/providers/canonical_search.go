@@ -21,85 +21,122 @@ func resolveSpanLayout(ctx context.Context, searcher *opensearch.Searcher, index
 	if err := req.Spans.ValidateReversible(); err != nil {
 		return nil, err
 	}
-	if index == "" {
-		return nil, fmt.Errorf("canonical search requires an index on the profile or connection")
-	}
-	inspector, err := opensearchinspect.New(searcher.GetRawClient(), opensearchinspect.Options{CacheKey: searcher.InspectionKey()})
+	overrides, err := decodeSpanLayout(configured)
 	if err != nil {
 		return nil, err
-	}
-	catalog, err := inspector.Fields(ctx, opensearchinspect.FieldRequest{Target: openSearchTimeTarget(index), Refresh: req.Inspection.Refresh})
-	if err != nil {
-		return nil, fmt.Errorf("resolve span layout on %s: %w", index, err)
-	}
-	if catalog.Truncated {
-		return nil, fmt.Errorf("span layout inspection is incomplete: %s", catalog.TruncateReason)
-	}
-	fields := map[string]string{}
-	// Nested leaves are kept apart: a key/value attribute list is only queryable
-	// through a nested clause, never as a scalar field.
-	nested := map[string]layout.NestedLeaf{}
-	for _, field := range catalog.Fields {
-		if field.Nested() {
-			if !field.Conflicting && len(field.Types) == 1 {
-				nested[field.Name] = layout.NestedLeaf{Type: field.Types[0], Container: field.Container}
-			}
-			continue
-		}
-		if field.Conflicting || len(field.Types) != 1 {
-			return nil, fmt.Errorf("span layout field %s has conflicting mapping types", field.Name)
-		}
-		fields[field.Name] = field.Types[0]
-	}
-	overrides := layout.Definition{Fields: map[string]layout.Field{}}
-	if configured != "" {
-		decoder := json.NewDecoder(strings.NewReader(configured))
-		decoder.DisallowUnknownFields()
-		decoder.UseNumber()
-		if err := decoder.Decode(&overrides); err != nil {
-			return nil, fmt.Errorf("connection span_layout: %w", err)
-		}
-		if err := decoder.Decode(new(any)); err != io.EOF {
-			return nil, fmt.Errorf("connection span_layout must contain one JSON object")
-		}
 	}
 	for name, mapping := range req.Spans {
 		canonical := map[string]string{"traceId": "trace_id", "spanId": "span_id", "parentId": "parent_id", "startedAt": "timestamp", "durationMs": "duration_ms", "service": "service", "operation": "operation", "status": "status", "kind": "kind"}[name]
 		if canonical == "" {
 			return nil, fmt.Errorf("span mapping %s has no reversible query field", name)
 		}
-		if overrides.Fields == nil {
-			overrides.Fields = map[string]layout.Field{}
-		}
 		overrides.Fields[canonical] = layout.Field{Source: mapping.Source, Unit: mapping.Unit}
 	}
-	resolved, err := layout.Discover(layout.Discovery{Fields: fields, Nested: nested, Overrides: overrides.Fields, NestedOverrides: overrides.Nested})
+	resolved, err := discoverSpanLayout(ctx, spanLayoutSource{searcher: searcher, index: index, refresh: req.Inspection.Refresh}, overrides)
 	if err != nil {
 		return nil, err
 	}
+	return &resolved, nil
+}
+
+// decodeSpanLayout strictly reads a connection's span_layout property: the
+// overrides it applies over the layout discovered from the index mapping.
+func decodeSpanLayout(configured string) (layout.Definition, error) {
+	overrides := layout.Definition{}
+	if configured != "" {
+		decoder := json.NewDecoder(strings.NewReader(configured))
+		decoder.DisallowUnknownFields()
+		decoder.UseNumber()
+		if err := decoder.Decode(&overrides); err != nil {
+			return overrides, fmt.Errorf("connection span_layout: %w", err)
+		}
+		if err := decoder.Decode(new(any)); err != io.EOF {
+			return overrides, fmt.Errorf("connection span_layout must contain one JSON object")
+		}
+	}
+	if overrides.Fields == nil {
+		overrides.Fields = map[string]layout.Field{}
+	}
+	return overrides, nil
+}
+
+type spanLayoutSource struct {
+	searcher *opensearch.Searcher
+	index    string
+	refresh  bool
+}
+
+// discoverSpanLayout resolves the layout of source's index from its mapped
+// fields, read through the cached OpenSearch inspection, with overrides applied.
+func discoverSpanLayout(ctx context.Context, source spanLayoutSource, overrides layout.Definition) (layout.Definition, error) {
+	if source.index == "" {
+		return layout.Definition{}, fmt.Errorf("span layout requires an index on the profile or connection")
+	}
+	inspector, err := opensearchinspect.New(source.searcher.GetRawClient(), opensearchinspect.Options{CacheKey: source.searcher.InspectionKey()})
+	if err != nil {
+		return layout.Definition{}, err
+	}
+	catalog, err := inspector.Fields(ctx, opensearchinspect.FieldRequest{Target: openSearchTimeTarget(source.index), Refresh: source.refresh})
+	if err != nil {
+		return layout.Definition{}, fmt.Errorf("resolve span layout on %s: %w", source.index, err)
+	}
+	discovery, err := spanLayoutDiscovery(catalog)
+	if err != nil {
+		return layout.Definition{}, err
+	}
+	discovery.Overrides, discovery.NestedOverrides, discovery.FlattenedOverrides = overrides.Fields, overrides.Nested, overrides.Flattened
+	resolved, err := layout.Discover(discovery)
+	if err != nil {
+		return layout.Definition{}, err
+	}
 	clock := resolved.Fields["timestamp"]
 	if clock.Type == "date" || clock.Type == "date_nanos" {
-		catalog, err := inspector.Fields(ctx, opensearchinspect.FieldRequest{Target: openSearchTimeTarget(index), Names: []string{clock.Source}, IncludeFormats: true, Refresh: req.Inspection.Refresh})
-		if err != nil {
-			return nil, fmt.Errorf("resolve timestamp format: %w", err)
-		}
-		found := false
-		for _, field := range catalog.Fields {
-			if field.Name != clock.Source {
-				continue
-			}
-			if field.FormatConflicting {
-				return nil, fmt.Errorf("timestamp %s has conflicting date formats", clock.Source)
-			}
-			clock.Format = field.Format
-			found = true
-		}
-		if !found {
-			return nil, fmt.Errorf("timestamp %s has no resolved date format", clock.Source)
+		if clock.Format, err = timestampFormat(ctx, inspector, source, clock.Source); err != nil {
+			return layout.Definition{}, err
 		}
 		resolved.Fields["timestamp"] = clock
 	}
-	return &resolved, nil
+	return resolved, nil
+}
+
+// spanLayoutDiscovery splits the inspected fields into scalar fields and the
+// leaves of nested containers: a key/value attribute list is only queryable
+// through a nested clause, never as a scalar field.
+func spanLayoutDiscovery(catalog opensearchinspect.FieldCatalog) (layout.Discovery, error) {
+	if catalog.Truncated {
+		return layout.Discovery{}, fmt.Errorf("span layout inspection is incomplete: %s", catalog.TruncateReason)
+	}
+	discovery := layout.Discovery{Fields: map[string]string{}, Nested: map[string]layout.NestedLeaf{}}
+	for _, field := range catalog.Fields {
+		if field.Nested() {
+			if !field.Conflicting && len(field.Types) == 1 {
+				discovery.Nested[field.Name] = layout.NestedLeaf{Type: field.Types[0], Container: field.Container}
+			}
+			continue
+		}
+		if field.Conflicting || len(field.Types) != 1 {
+			return layout.Discovery{}, fmt.Errorf("span layout field %s has conflicting mapping types", field.Name)
+		}
+		discovery.Fields[field.Name] = field.Types[0]
+	}
+	return discovery, nil
+}
+
+func timestampFormat(ctx context.Context, inspector *opensearchinspect.Inspector, source spanLayoutSource, name string) (string, error) {
+	catalog, err := inspector.Fields(ctx, opensearchinspect.FieldRequest{Target: openSearchTimeTarget(source.index), Names: []string{name}, IncludeFormats: true, Refresh: source.refresh})
+	if err != nil {
+		return "", fmt.Errorf("resolve timestamp format: %w", err)
+	}
+	for _, field := range catalog.Fields {
+		if field.Name != name {
+			continue
+		}
+		if field.FormatConflicting {
+			return "", fmt.Errorf("timestamp %s has conflicting date formats", name)
+		}
+		return field.Format, nil
+	}
+	return "", fmt.Errorf("timestamp %s has no resolved date format", name)
 }
 
 func canonicalSearchRequest(req query.ProviderRequest, page openSearchPage, resolved *layout.Definition) (openSearchRequest, error) {

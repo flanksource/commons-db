@@ -45,7 +45,8 @@ type OpenSearchProvider struct {
 // connection while retaining its own first-class connection identity.
 type OpenTelemetryProvider struct {
 	Index      string `json:"index" clicky:"property=index,title=Default index,order=3"`
-	SpanLayout string `json:"span_layout" clicky:"property=span_layout,title=Span layout overrides,format=textarea,order=4"`
+	Format     string `json:"format" clicky:"property=format,title=Document format,order=4"`
+	SpanLayout string `json:"span_layout" clicky:"property=span_layout,title=Span layout overrides,format=textarea,order=5"`
 	Connection string `json:"connection" clicky:"property=connection,title=OpenSearch Connection,required,order=2"`
 }
 

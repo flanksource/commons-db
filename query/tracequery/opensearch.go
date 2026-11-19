@@ -18,46 +18,38 @@ func ReadOpenSearch(queryContext dbcontext.Context, r Request, c *models.Connect
 	if c.Type != models.ConnectionTypeOpenSearch && c.Type != models.ConnectionTypeOpenTelemetry {
 		return nil, fmt.Errorf("source %q has unsupported type %q", r.Source, c.Type)
 	}
-	reference := r.Source
+	// The connection supplies index and format, which the request may override;
+	// the trace, service and date fields come from the index's span layout.
 	options := map[string]any{}
-	for _, key := range []string{"index", "format", "dateField", "traceIdField", "spanIdField", "parentIdField", "parentRefType", "serviceField", "operationField"} {
-		if value := c.Properties[key]; value != "" {
-			options[key] = value
-		}
-	}
 	if r.Index != "" {
 		options["index"] = r.Index
 	}
 	if r.Format != "" {
 		options["format"] = string(r.Format)
 	}
-	format, _ := options["format"].(string)
-	if format == "jaeger" {
-		jaegerDefaults(options)
+	definition, err := providers.ResolveSpanLayout(queryContext, providers.SpanLayoutRequest{Connection: r.Source, Options: options})
+	if err != nil {
+		return nil, fmt.Errorf("source %q: %w", r.Source, err)
 	}
+	traceIDField, err := definition.SourceField("trace_id")
+	if err != nil {
+		return nil, fmt.Errorf("source %q: %w", r.Source, err)
+	}
+	options["dateField"] = definition.Fields["timestamp"].Source
 	if len(ids) == 0 && r.TraceID != "" {
 		ids = []string{r.TraceID}
 	}
+	read := func(query *esdsl.Condition) ([]Span, error) {
+		if query != nil {
+			options["search"] = &esdsl.Search{Query: query}
+		}
+		return readOpenSearch(queryContext, providers.OpenTelemetryRead{Connection: r.Source, Options: options, From: r.From, To: r.Until})
+	}
 	if len(ids) > 0 {
-		field := "trace_id"
-		if value, ok := options["traceIdField"].(string); ok {
-			field = value
-		}
-		values := make([]esdsl.Value, len(ids))
-		for i, id := range ids {
-			values[i] = *esdsl.Literal(id)
-		}
-		options["search"] = &esdsl.Search{Query: &esdsl.Condition{Op: "terms", Field: field, Values: values}}
+		byID := termsCondition(traceIDField, ids)
+		return read(&byID)
 	}
-	return readOpenSearch(queryContext, providers.OpenTelemetryRead{Connection: reference, Options: options, From: r.From, To: r.Until})
-}
-
-func jaegerDefaults(options map[string]any) {
-	for key, value := range map[string]string{"dateField": "startTimeMillis", "traceIdField": "traceID", "spanIdField": "spanID", "parentRefType": "CHILD_OF", "serviceField": "process.serviceName", "operationField": "operationName"} {
-		if _, ok := options[key]; !ok {
-			options[key] = value
-		}
-	}
+	return readNarrowed(read, pushdown(r, definition), traceIDField)
 }
 
 func readOpenSearch(ctx dbcontext.Context, request providers.OpenTelemetryRead) ([]Span, error) {

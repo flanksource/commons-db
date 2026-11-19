@@ -57,6 +57,8 @@ type openTelemetryRuntime struct {
 	searcher  *opensearch.Searcher
 	options   OpenTelemetryOptions
 	paging    openSearchPagingMode
+	// spanLayout is the connection's span_layout property, unparsed.
+	spanLayout string
 }
 
 // PagingModes matches the nested OpenSearch connection: from/size inside the
@@ -188,25 +190,10 @@ func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (
 		return openTelemetryRuntime{}, fmt.Errorf(
 			"provider.options.params has been replaced by provider.options.search; re-import the profile to migrate it")
 	}
-	options.withDefaults()
 	options.RawRows = req.RawRows || req.Search != nil
-	outerModel, err := ctx.HydrateConnectionByURL(req.Connection)
+	outer, nested, err := openTelemetryConnections(ctx, req.Connection)
 	if err != nil {
-		return openTelemetryRuntime{}, fmt.Errorf("hydrate opentelemetry connection %q: %w", req.Connection, err)
-	}
-	nested := outerModel
-	if outerModel == nil {
-		return openTelemetryRuntime{}, fmt.Errorf("trace connection %q not found", req.Connection)
-	}
-	if outerModel.Type != models.ConnectionTypeOpenSearch {
-		outer, err := dbconnection.NewOpenTelemetry(outerModel)
-		if err != nil {
-			return openTelemetryRuntime{}, err
-		}
-		nested, err = outer.ResolveOpenSearch(ctx)
-		if err != nil {
-			return openTelemetryRuntime{}, err
-		}
+		return openTelemetryRuntime{}, err
 	}
 	runtime, err := openSearchClientForConnection(ctx, nested)
 	if err != nil {
@@ -216,22 +203,81 @@ func openTelemetrySearchClient(ctx context.Context, req query.ProviderRequest) (
 	if err != nil {
 		return openTelemetryRuntime{}, err
 	}
+	// The request's options win, then the opentelemetry connection's own
+	// properties, then those of the OpenSearch connection it wraps.
 	if req.Options["index"] == nil {
-		if index := outerModel.Properties["index"]; index != "" {
-			options.Index = index
-		} else if index := nested.Properties["index"]; index != "" {
-			options.Index = index
+		options.Index = connectionProperty("index", outer, nested)
+	}
+	if req.Options["format"] == nil {
+		options.Format = connectionProperty("format", outer, nested)
+		if err := options.Validate(); err != nil {
+			return openTelemetryRuntime{}, fmt.Errorf("connection %q: %w", req.Connection, err)
 		}
 	}
-	configured := outerModel.Properties["span_layout"]
-	if configured == "" {
-		configured = nested.Properties["span_layout"]
-	}
-	options.Layout, err = resolveSpanLayout(ctx, runtime.searcher, options.Index, req, configured)
+	options.withDefaults()
+	spanLayout := connectionProperty("span_layout", outer, nested)
+	options.Layout, err = resolveSpanLayout(ctx, runtime.searcher, options.Index, req, spanLayout)
 	if err != nil {
 		return openTelemetryRuntime{}, err
 	}
-	return openTelemetryRuntime{searcher: runtime.searcher, options: options, paging: policy.mode, threshold: policy.threshold}, nil
+	return openTelemetryRuntime{searcher: runtime.searcher, options: options, paging: policy.mode, threshold: policy.threshold, spanLayout: spanLayout}, nil
+}
+
+// openTelemetryConnections hydrates reference and the OpenSearch connection
+// holding its spans: the nested one an opentelemetry connection names, or the
+// connection itself when it is OpenSearch.
+func openTelemetryConnections(ctx context.Context, reference string) (outer, nested *models.Connection, err error) {
+	outer, err = ctx.HydrateConnectionByURL(reference)
+	if err != nil {
+		return nil, nil, fmt.Errorf("hydrate opentelemetry connection %q: %w", reference, err)
+	}
+	if outer == nil {
+		return nil, nil, fmt.Errorf("trace connection %q not found", reference)
+	}
+	if outer.Type == models.ConnectionTypeOpenSearch {
+		return outer, outer, nil
+	}
+	wrapper, err := dbconnection.NewOpenTelemetry(outer)
+	if err != nil {
+		return nil, nil, err
+	}
+	nested, err = wrapper.ResolveOpenSearch(ctx)
+	return outer, nested, err
+}
+
+func connectionProperty(key string, outer, nested *models.Connection) string {
+	if value := outer.Properties[key]; value != "" {
+		return value
+	}
+	return nested.Properties[key]
+}
+
+// SpanLayoutRequest names the index whose span layout is resolved: the one an
+// opentelemetry read of Connection with Options would search.
+type SpanLayoutRequest struct {
+	// Connection is an opentelemetry or opensearch connection reference.
+	Connection string
+	// Options are the opentelemetry provider's options; their index wins over
+	// the connection's.
+	Options map[string]any
+	// Refresh re-reads the index mapping instead of the cached inspection.
+	Refresh bool
+}
+
+// ResolveSpanLayout discovers the span layout of a connection's index: its
+// mapped fields, with the connection's span_layout applied as overrides. The
+// mapping is read through the OpenSearch inspection memo, so it is cached per
+// connection and index, bounded and refreshed by that memo's policy.
+func ResolveSpanLayout(ctx context.Context, request SpanLayoutRequest) (layout.Definition, error) {
+	runtime, err := openTelemetrySearchClient(ctx, query.ProviderRequest{Connection: request.Connection, Options: request.Options})
+	if err != nil {
+		return layout.Definition{}, err
+	}
+	overrides, err := decodeSpanLayout(runtime.spanLayout)
+	if err != nil {
+		return layout.Definition{}, err
+	}
+	return discoverSpanLayout(ctx, spanLayoutSource{searcher: runtime.searcher, index: runtime.options.Index, refresh: request.Refresh}, overrides)
 }
 
 // Validate refuses a format the provider cannot shape rows from; empty is flat.

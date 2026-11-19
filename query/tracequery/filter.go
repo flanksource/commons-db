@@ -64,11 +64,6 @@ func (m Modes) pass(has func(string) bool) bool {
 // expressions are any-of per key and all-of across keys, and any span
 // matching an excluded expression rejects the trace.
 func (m Modes) passAttributes(spans []Span) bool {
-	byKey := map[string][]string{}
-	for _, expr := range m.values(Include) {
-		key, _, _ := strings.Cut(expr, "=")
-		byKey[key] = append(byKey[key], expr)
-	}
 	anySpan := func(expr string) bool {
 		for _, span := range spans {
 			if attributeMatches(span, expr) {
@@ -77,7 +72,7 @@ func (m Modes) passAttributes(spans []Span) bool {
 		}
 		return false
 	}
-	for _, exprs := range byKey {
+	for _, exprs := range m.includedByKey() {
 		matched := false
 		for _, expr := range exprs {
 			matched = matched || anySpan(expr)
@@ -92,6 +87,17 @@ func (m Modes) passAttributes(spans []Span) bool {
 		}
 	}
 	return true
+}
+
+// includedByKey groups the included attribute expressions by their key; a
+// trace passes a group when a span matches any expression of it.
+func (m Modes) includedByKey() map[string][]string {
+	byKey := map[string][]string{}
+	for _, expr := range m.values(Include) {
+		key, _, _ := strings.Cut(expr, "=")
+		byKey[key] = append(byKey[key], expr)
+	}
+	return byKey
 }
 
 func validAttribute(expr string) error {

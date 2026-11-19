@@ -36,6 +36,13 @@ func (p *capabilityProvider) BackendCapabilities(
 	return p.capabilities, p.err
 }
 
+type runnableProvider struct {
+	*mockProvider
+	runnable bool
+}
+
+func (p *runnableProvider) Runnable() bool { return p.runnable }
+
 func (m *mockProvider) Type() string { return m.typ }
 
 func (m *mockProvider) Execute(ctx context.Context, req query.ProviderRequest) ([]query.Row, error) {
@@ -97,6 +104,23 @@ var _ = Describe("provider registry", func() {
 		query.RegisterProvider(provider)
 		_, err := query.BackendCapabilitiesFor(context.New(), query.ProviderRequest{Provider: provider.Type()})
 		Expect(err).To(MatchError(ContainSubstring("metadata denied")))
+	})
+
+	DescribeTable("reports whether a provider type runs",
+		func(provider query.Provider, want bool) {
+			query.RegisterProvider(provider)
+			runnable, err := query.ProviderRunnable(provider.Type())
+			Expect(err).ToNot(HaveOccurred())
+			Expect(runnable).To(Equal(want))
+		},
+		Entry("a provider without the optional interface runs", &mockProvider{typ: "runnable-implicit"}, true),
+		Entry("a provider that reports it runs", &runnableProvider{mockProvider: &mockProvider{typ: "runnable-explicit"}, runnable: true}, true),
+		Entry("a catalog-only provider does not run", &runnableProvider{mockProvider: &mockProvider{typ: "runnable-catalog-only"}}, false),
+	)
+
+	It("fails to judge an unregistered provider type as runnable", func() {
+		_, err := query.ProviderRunnable("runnable-unregistered")
+		Expect(err).To(MatchError(ContainSubstring(`no data provider registered for type "runnable-unregistered"`)))
 	})
 
 	It("supports concurrent registration, lookup, and enumeration", func() {

@@ -354,6 +354,9 @@ func tailoredBranch(typ string, cfg any) Schema {
 		if typ == models.ConnectionTypeClickHouse {
 			customizeClickHousePropertiesSchema(properties)
 		}
+		if typ == models.ConnectionTypeOpenTelemetry {
+			customizeOpenTelemetryPropertiesSchema(properties)
+		}
 		if len(propertyRequired) > 0 {
 			properties["required"] = propertyRequired
 			required = append(required, "properties")
@@ -426,6 +429,15 @@ func customizeOpenSearchPropertiesSchema(properties Schema) {
 		models.OpenSearchPagingModeScroll: "Scroll",
 		models.OpenSearchPagingModePIT:    "Point in time",
 	}
+}
+
+func customizeOpenTelemetryPropertiesSchema(properties Schema) {
+	field := properties["properties"].(Schema)["format"].(Schema)
+	field["description"] = "How span documents are shaped: flat OpenTelemetry fields, or Jaeger's span documents."
+	field["enum"] = []string{"flat", "jaeger"}
+	field["default"] = "flat"
+	field["x-enum-display"] = "segmented"
+	field["x-enum-labels"] = map[string]string{"flat": "Flat", "jaeger": "Jaeger"}
 }
 
 func customizeClickHousePropertiesSchema(properties Schema) {

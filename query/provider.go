@@ -64,6 +64,24 @@ func RequireBackendCapability(
 	return capabilities, nil
 }
 
+// RunnableProvider is an optional Provider capability. A provider reporting
+// false is registered so its profiles can be catalogued, but it refuses every
+// execution, so surfaces offer no run operation for it.
+type RunnableProvider interface {
+	Runnable() bool
+}
+
+// ProviderRunnable reports whether the provider registered for typ executes
+// profiles. A provider without RunnableProvider runs.
+func ProviderRunnable(typ string) (bool, error) {
+	provider, err := GetProvider(typ)
+	if err != nil {
+		return false, err
+	}
+	runnable, ok := provider.(RunnableProvider)
+	return !ok || runnable.Runnable(), nil
+}
+
 // QueryParameterizer replaces provider-native parameter references with opaque
 // markers while carrying their values separately to the backend driver.
 type QueryParameterizer interface {

@@ -170,10 +170,14 @@ func mergeStoredProfiles(ctx context.Context, spec *rpc.OpenAPISpec, store profi
 // advertisesRun reports whether a profile gets a run operation: a single-shot
 // read a surface may execute the moment the profile is opened. A trace or top
 // profile is refused by that read and started as a session instead, and a
-// legacy trace placeholder is listed but refused by every execution, so for
-// them a run would be an entry point that can only fail.
-func advertisesRun(profile query.Profile) bool {
-	return profile.Kind() == query.KindQuery && profile.Provider.Type != legacyTraceProvider
+// profile whose provider is not query.RunnableProvider-runnable is listed but
+// refused by every execution, so for them a run would be an entry point that
+// can only fail.
+func advertisesRun(profile query.Profile) (bool, error) {
+	if profile.Kind() != query.KindQuery {
+		return false, nil
+	}
+	return query.ProviderRunnable(profile.Provider.Type)
 }
 
 func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
@@ -316,7 +320,11 @@ func addProfileToSpec(spec *rpc.OpenAPISpec, profile query.Profile) error {
 	// and points the caller at ExecuteStream. Advertising a run operation anyway
 	// is how a generic surface ends up executing one the moment the profile is
 	// opened — so the session start below is the only entry point it gets.
-	if advertisesRun(profile) {
+	runs, err := advertisesRun(profile)
+	if err != nil {
+		return fmt.Errorf("profile %q: %w", profile.Name, err)
+	}
+	if runs {
 		spec.Paths[path] = rpc.OpenAPIPath{"get": {
 			Summary:     "Run " + profile.Name,
 			Description: "Execute the stored query profile",

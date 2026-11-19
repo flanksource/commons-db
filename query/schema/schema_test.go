@@ -195,6 +195,20 @@ var _ = Describe("Connection schema", func() {
 		Expect(scope["map"].(map[string][]string)[models.ConnectionTypeOpenTelemetry]).To(Equal([]string{models.ConnectionTypeOpenSearch}))
 	})
 
+	It("offers OpenTelemetry a span document format defaulting to flat", func() {
+		then := branchFor(s, models.ConnectionTypeOpenTelemetry)
+		settings := then["properties"].(schema.Schema)["properties"].(schema.Schema)["properties"].(schema.Schema)
+		Expect(settings).To(HaveKey("index"))
+		Expect(settings).To(HaveKey("span_layout"))
+		format := settings["format"].(schema.Schema)
+		Expect(format).To(And(
+			HaveKeyWithValue("enum", []string{"flat", "jaeger"}),
+			HaveKeyWithValue("default", "flat"),
+			HaveKeyWithValue("x-enum-display", "segmented"),
+			HaveKeyWithValue("x-enum-labels", map[string]string{"flat": "Flat", "jaeger": "Jaeger"}),
+		))
+	})
+
 	It("gives Elasticsearch the OpenSearch endpoint form", func() {
 		// Without a tailored branch the type falls back to name/namespace and
 		// the connection cannot be given an endpoint at all — a picker entry

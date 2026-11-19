@@ -10,7 +10,8 @@ import (
 func TestProfileOpenAPIAdvertisesDateTimeAndDurationParameterSchemas(t *testing.T) {
 	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
 	if err := addProfileToSpec(spec, query.Profile{
-		Name: "temporal",
+		Name:     "temporal",
+		Provider: query.ProviderConfig{Type: "postgres"},
 		Params: []query.ParamDef{
 			{Name: "day", Type: query.ParamTypeDate},
 			{Name: "started_at", Type: query.ParamTypeDateTime},

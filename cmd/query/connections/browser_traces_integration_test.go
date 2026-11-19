@@ -28,7 +28,16 @@ var _ = Describe("OpenSearch trace browser integration", func() {
 				return
 			}
 			if strings.HasSuffix(r.URL.Path, "/_field_caps") {
-				Expect(json.NewEncoder(w).Encode(map[string]any{"fields": map[string]any{"@timestamp": map[string]any{"date": map[string]any{"searchable": true, "aggregatable": true}}}})).To(Succeed())
+				// The span layout is discovered from every mapped field; the time
+				// range only inspects the date field.
+				mapping := map[string]string{"@timestamp": "date", "trace_id": "keyword", "span_id": "keyword", "parent_id": "keyword", "service_name": "keyword", "operation_name": "keyword", "duration_ms": "double"}
+				fields := map[string]any{}
+				for name, typ := range mapping {
+					if requested := r.URL.Query().Get("fields"); requested == "*" || requested == name {
+						fields[name] = map[string]any{typ: map[string]any{"searchable": true, "aggregatable": true}}
+					}
+				}
+				Expect(json.NewEncoder(w).Encode(map[string]any{"fields": fields})).To(Succeed())
 				return
 			}
 			if strings.Contains(r.URL.Path, "/_mapping/field/") {
