@@ -6,11 +6,13 @@ import (
 	"os"
 	"time"
 
+	redsyncredis "github.com/flanksource/commons-db/lease/internal/redsync/redis"
 	"github.com/google/uuid"
 	_ "github.com/microsoft/go-mssqldb"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/valkey-io/valkey-go"
+	"github.com/valkey-io/valkey-go/valkeycompat"
 	core "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -50,7 +52,7 @@ var _ = Describe("live lease backends", Label("integration"), func() {
 		return NewKubernetes(client.CoordinationV1().Leases(name), options)
 	})
 
-	DescribeTable("rejects stale writers after expiry", func(ctx SpecContext, env string) {
+	DescribeTable("rejects Redis lock operations from former writer tokens after expiry", func(ctx SpecContext, env string) {
 		client := newTestRedis(env)
 		backend := newRedisBackend(client, 3*time.Second)
 		adapter, err := NewRedis(client, ExpiringOptions{Options: Options{Scope: "expiry-test"}, TTL: backend.ttl})
@@ -70,6 +72,59 @@ var _ = Describe("live lease backends", Label("integration"), func() {
 		Expect(stale.renew(ctx)).To(MatchError(errNotOwned))
 		Expect(stale.unlock(ctx)).To(Succeed())
 		expectBusy(adapter.Mutex(key, as("contender")).TryLock(ctx))
+	}, Entry("Redis", "COMMONS_DB_LEASE_REDIS_URL"), Entry("Valkey", "COMMONS_DB_LEASE_VALKEY_URL"))
+
+	DescribeTable("expires the grouped index independently of plain readers", func(ctx SpecContext, env string) {
+		client := newTestRedis(env)
+		backend := newRedisBackend(client, 5*time.Second)
+		key := uuid.NewString()
+		cleanUp := func(held ownership) {
+			DeferCleanup(func(ctx SpecContext) error { return held.unlock(ctx) })
+		}
+		reader, err := backend.begin(request{key: key, mode: readMode}, false).try(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		cleanUp(reader)
+
+		usa := request{key: key, mode: groupMode, group: "USA"}
+		legacy := newRedisBackend(client, time.Second).begin(usa, false).(*redisAcquisition)
+		// Simulate a grouped holder written before the index existed.
+		now, err := valkeycompat.NewAdapter(client).Time(ctx).Result()
+		Expect(err).NotTo(HaveOccurred())
+		expires := now.Add(legacy.ttl)
+		Expect(client.Do(ctx, client.B().Zadd().Key(legacy.keys[1]).ScoreMember().
+			ScoreMember(float64(expires.UnixMilli()), legacy.share).Build()).Error()).To(Succeed())
+		rsa := request{key: key, mode: groupMode, group: "RSA"}
+		_, err = backend.begin(rsa, false).try(ctx)
+		Expect(err).To(MatchError(errBusy))
+		peer, err := backend.begin(usa, false).try(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		cleanUp(peer)
+		Expect(peer.renew(ctx)).To(Succeed())
+		Eventually(func(g Gomega) time.Time {
+			now, err := valkeycompat.NewAdapter(client).Time(ctx).Result()
+			g.Expect(err).NotTo(HaveOccurred())
+			return now
+		}, 2*time.Second, 50*time.Millisecond).Should(BeTemporally(">=", expires))
+		Expect((&redisShared{legacy.redisResource, legacy.share}).renew(ctx)).To(MatchError(errNotOwned))
+		_, err = backend.begin(rsa, false).try(ctx)
+		Expect(err).To(MatchError(errBusy))
+		Expect(peer.unlock(ctx)).To(Succeed())
+		other, err := backend.begin(rsa, false).try(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		cleanUp(other)
+		Expect(reader.renew(ctx)).To(Succeed())
+	}, Entry("Redis", "COMMONS_DB_LEASE_REDIS_URL"), Entry("Valkey", "COMMONS_DB_LEASE_VALKEY_URL"))
+
+	DescribeTable("passes caller-supplied Lua key counts", func(ctx SpecContext, env string) {
+		conn, err := newRedisBackend(newTestRedis(env), contractTTL).pool.Get(ctx)
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(conn.Close)
+		script := redsyncredis.NewScript(-1, "return KEYS[1] .. ARGV[1]", "")
+		Expect(conn.Eval(script, 1, "lock", "-token")).To(Equal("lock-token"))
+		for _, args := range [][]any{nil, {-1}, {2, "lock"}, {"invalid"}, {1, 123}} {
+			_, err := conn.Eval(script, args...)
+			Expect(err).To(HaveOccurred())
+		}
 	}, Entry("Redis", "COMMONS_DB_LEASE_REDIS_URL"), Entry("Valkey", "COMMONS_DB_LEASE_VALKEY_URL"))
 })
 

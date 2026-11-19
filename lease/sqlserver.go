@@ -17,6 +17,8 @@ const (
 	sqlLongestSuffix = ":group:256"
 )
 
+var errSQLReaderGateBusy = errors.New("SQL Server reader gate is busy before any locks were acquired")
+
 // NewSQLServer uses session-owned app locks. Size the caller's lock pool for
 // the maximum number of simultaneous holders and waiting writers.
 func NewSQLServer(db *sql.DB, options Options) (Locker, error) {
@@ -111,6 +113,9 @@ func (a *sqlAcquisition) try(ctx context.Context) (ownership, error) {
 		err = sqlStatus(ctx, a.conn, sqlTryWriteLock, a.name)
 	}
 	if err != nil {
+		if a.mode != writeMode && err == errSQLReaderGateBusy {
+			return nil, a.release(ctx)
+		}
 		if err == errBusy && a.mode == writeMode && a.waiting {
 			return nil, err
 		}
@@ -119,6 +124,22 @@ func (a *sqlAcquisition) try(ctx context.Context) (ownership, error) {
 	held := &sqlOwnership{conn: a.conn, name: a.name, bits: a.bits, mode: a.mode}
 	a.conn = nil
 	return held, nil
+}
+
+// release returns a reader whose gate was busy, and which therefore holds no
+// app locks, to the pool after clearing its holder name, so the pool never
+// hands out a session that carries a holder's CONTEXT_INFO. A session whose
+// name cannot be cleared is discarded.
+func (a *sqlAcquisition) release(ctx context.Context) error {
+	if err := sqlStatus(ctx, a.conn, sqlClearHolder); err != nil {
+		return dropSQLAttempt(fmt.Errorf("clear SQL Server lock session holder: %w", err), a)
+	}
+	err := a.conn.Close()
+	a.conn = nil
+	if err != nil {
+		return fmt.Errorf("return SQL Server lock connection to pool: %w", err)
+	}
+	return errBusy
 }
 
 func dropSQLAttempt(cause error, a *sqlAcquisition) error {
@@ -166,6 +187,8 @@ func sqlStatus(ctx context.Context, conn *sql.Conn, batch string, args ...any) e
 		return nil
 	case -1:
 		return errBusy
+	case -10:
+		return errSQLReaderGateBusy
 	default:
 		return fmt.Errorf("SQL Server app lock returned %d", code)
 	}

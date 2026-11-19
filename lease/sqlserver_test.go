@@ -85,6 +85,37 @@ var _ = Describe("SQL Server app-lock protocol", func() {
 			Holder{Name: "grouped", Mode: "group", Since: login},
 		))
 	})
+
+	It("clears the holder name and returns the session to the pool when the reader gate times out before taking any locks", func(ctx SpecContext) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(mock.ExpectationsWereMet()).To(Succeed()) })
+		DeferCleanup(db.Close)
+		mock.ExpectQuery(sqlSetHolder).WithArgs([]byte("ci-runner")).WillReturnRows(status(0))
+		mock.ExpectQuery(sqlReadLock).WithArgs("test:country", "").WillReturnRows(status(-10))
+		mock.ExpectQuery(sqlClearHolder).WillReturnRows(status(0))
+		mock.ExpectClose()
+		locker, err := NewSQLServer(db, Options{Scope: "test"})
+		Expect(err).NotTo(HaveOccurred())
+		expectBusy(locker.ReadWriteLock("country", as("ci-runner")).TryRLock(ctx))
+		Expect(db.Stats().Idle).To(Equal(1))
+	})
+
+	It("discards a reader-gate-busy session whose holder name cannot be cleared", func(ctx SpecContext) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(mock.ExpectationsWereMet()).To(Succeed()) })
+		DeferCleanup(db.Close)
+		mock.ExpectQuery(sqlSetHolder).WithArgs([]byte("ci-runner")).WillReturnRows(status(0))
+		mock.ExpectQuery(sqlReadLock).WithArgs("test:country", "").WillReturnRows(status(-10))
+		mock.ExpectQuery(sqlClearHolder).WillReturnRows(status(-999))
+		mock.ExpectClose()
+		locker, err := NewSQLServer(db, Options{Scope: "test"})
+		Expect(err).NotTo(HaveOccurred())
+		_, _, err = locker.ReadWriteLock("country", as("ci-runner")).TryRLock(ctx)
+		Expect(err).To(MatchError(ContainSubstring("clear SQL Server lock session holder")))
+		Expect(db.Stats().Idle).To(Equal(0))
+	})
 })
 
 // padded mimics a CONTEXT_INFO value read back with trailing zero bytes.
