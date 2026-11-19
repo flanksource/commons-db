@@ -15,7 +15,7 @@ func (c *Cache) cloneCached(ctx context.Context, repo *Repository, ref Ref, opti
 	if err != nil {
 		return err
 	}
-	unlock, err := paths.lockWrite(ctx)
+	ctx, unlock, err := paths.lockWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -23,7 +23,7 @@ func (c *Cache) cloneCached(ctx context.Context, repo *Repository, ref Ref, opti
 	if err := paths.ensure(ctx, repo); err != nil {
 		return err
 	}
-	if err := paths.prepareRef(ctx, prepareOptions{Store: c.Store, Repo: repo, Ref: ref}); err != nil {
+	if err := paths.prepareRef(ctx, prepareOptions{Repo: repo, Ref: ref}); err != nil {
 		return err
 	}
 	spec := ref.SHA

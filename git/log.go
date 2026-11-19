@@ -322,7 +322,7 @@ func (c *Cache) lockResolvedRefs(ctx context.Context, repo *Repository, resolved
 // pinReadRefs makes every ref's commit present with its complete history
 // (fetching it when missing) and pins it, under the exclusive lock.
 func (c *Cache) pinReadRefs(ctx context.Context, paths mirrorPaths, repo *Repository, resolved []Ref) (err error) {
-	unlock, err := paths.lockWrite(ctx)
+	ctx, unlock, err := paths.lockWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -331,7 +331,7 @@ func (c *Cache) pinReadRefs(ctx context.Context, paths mirrorPaths, repo *Reposi
 		return err
 	}
 	for _, ref := range resolved {
-		if err := paths.prepareRef(ctx, prepareOptions{Store: c.Store, Repo: repo, Ref: ref}); err != nil {
+		if err := paths.prepareRef(ctx, prepareOptions{Repo: repo, Ref: ref}); err != nil {
 			return err
 		}
 	}

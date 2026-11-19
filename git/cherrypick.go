@@ -112,7 +112,7 @@ func (w *Worktree) pickOne(ctx context.Context, options pickOptions) (bool, erro
 // repository), every commit the mirror does not have yet.
 func (w *Worktree) fetchCommits(ctx context.Context, source *Repository, shas []string) (err error) {
 	source = cmp.Or(source, w.repo)
-	unlock, err := w.paths.lockWrite(ctx)
+	ctx, unlock, err := w.paths.lockWrite(ctx)
 	if err != nil {
 		return err
 	}
@@ -123,9 +123,6 @@ func (w *Worktree) fetchCommits(ctx context.Context, source *Repository, shas []
 				return err
 			}
 			continue
-		}
-		if err := hydrateMiss(ctx, w.store, w.paths.git, sha); err != nil {
-			return err
 		}
 		if hasCommit(ctx, w.paths.git, sha) {
 			continue

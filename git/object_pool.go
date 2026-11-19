@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons-db/models"
 )
@@ -86,32 +88,31 @@ func (m mirrorPaths) poolName() string {
 	return filepath.Base(filepath.Dir(m.pool))
 }
 
-func (m mirrorPaths) poolLock() string { return filepath.Join(filepath.Dir(m.pool), "pool.lock") }
+// repoKey keys a repository's refs and stamp in the pool: its cache key,
+// which is also its mirror directory's name.
+func (m mirrorPaths) repoKey() string { return filepath.Base(m.dir) }
 
-// poolFetchLock serializes network fetches into the pool (fetchIntoPool).
-func (m mirrorPaths) poolFetchLock() string {
-	return filepath.Join(filepath.Dir(m.pool), "pool.fetch.lock")
-}
-
-// lockWrite takes the locks a mirror write needs. Every path takes them in
-// one order, so none waits on a lock while blocking the holder of an earlier
-// one: pool.lock (shared; Maintain holds it exclusively), then mirror.lock
-// (exclusive), then, only around a fetch into the pool, pool.fetch.lock
-// (exclusive for a repository the pool holds nothing of, else shared).
-func (m mirrorPaths) lockWrite(ctx context.Context) (func() error, error) {
-	unlockPool := func() error { return nil }
+// lockWrite takes the locks a mirror write needs and returns the context the
+// write runs under, cancelled if the pool lease is lost. Every path takes
+// them in one order, so none waits on a lock while blocking the holder of an
+// earlier one: the pool read lease (Maintain holds it exclusively), then
+// mirror.lock (exclusive), then, only around a fetch into the pool, the pool
+// fetch lease (exclusive for a repository the pool holds nothing of, else
+// read).
+func (m mirrorPaths) lockWrite(ctx context.Context) (context.Context, func() error, error) {
+	work, unlockPool := ctx, func() error { return nil }
 	if m.pool != "" {
-		lock, err := acquire(ctx, m.poolLock(), "object pool", sharedLock)
+		var err error
+		work, unlockPool, err = holdLease(ctx, "git object pool "+m.poolName()+" read lease", m.locks.ReadWriteLock(m.poolLease(""), m.holder).RLock)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		unlockPool = lock.Unlock
 	}
-	lock, err := acquire(ctx, m.lock, "mirror lock", exclusiveLock)
+	lock, err := acquire(work, m.lock, "mirror lock", exclusiveLock)
 	if err != nil {
-		return nil, errors.Join(err, unlockPool())
+		return nil, nil, errors.Join(err, unlockPool())
 	}
-	return func() error { return errors.Join(lock.Unlock(), unlockPool()) }, nil
+	return work, func() error { return errors.Join(lock.Unlock(), unlockPool()) }, nil
 }
 
 func (m mirrorPaths) ensure(ctx context.Context, repo *Repository) error {
@@ -122,6 +123,9 @@ func (m mirrorPaths) ensure(ctx context.Context, repo *Repository) error {
 	if current, err := m.metadata(); err == nil {
 		if current != want {
 			return fmt.Errorf("git mirror metadata changed for %s", m.dir)
+		}
+		if m.pool != "" {
+			return m.verifyAlternate()
 		}
 		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -139,12 +143,14 @@ func (m mirrorPaths) ensure(ctx context.Context, repo *Repository) error {
 	return replaceFile(m.metadataPath(), data)
 }
 
+// installAlternate creates the pool when missing and points the mirror at
+// it by absolute path, so every host mounting the pool at that path agrees.
 func (m mirrorPaths) installAlternate(ctx context.Context) (err error) {
-	lock, err := acquire(ctx, m.pool+".init.lock", "initialize object pool", exclusiveLock)
+	ctx, release, err := holdLease(ctx, "git object pool "+m.poolName()+" init lease", m.locks.Mutex(m.poolLease("init"), m.holder).Lock)
 	if err != nil {
 		return err
 	}
-	defer func() { err = errors.Join(err, lock.Unlock()) }()
+	defer func() { err = errors.Join(err, release()) }()
 	if err := ensureMirror(ctx, m.pool); err != nil {
 		return err
 	}
@@ -156,11 +162,18 @@ func (m mirrorPaths) installAlternate(ctx context.Context) (err error) {
 	if _, err := run(ctx, command{dir: m.git, args: []string{"config", "core.alternateRefsPrefixes", poolTips}}); err != nil {
 		return err
 	}
-	objects, err := filepath.Rel(filepath.Join(m.git, "objects"), filepath.Join(m.pool, "objects"))
+	objects, err := filepath.Abs(filepath.Join(m.pool, "objects"))
 	if err != nil {
 		return err
 	}
 	return replaceFile(filepath.Join(m.git, "objects", "info", "alternates"), []byte(objects+"\n"))
+}
+
+func removeIfExists(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 func replaceFile(path string, data []byte) (err error) {
@@ -179,12 +192,16 @@ func replaceFile(path string, data []byte) (err error) {
 // retain keeps pinned commits complete in the pool before the mirror publishes
 // its pins. A ref-bearing tip is advertised only after the pool has its graph.
 // Objects copied into the pool are then dropped from the mirror
-// (dropBorrowed), so they are stored once.
+// (dropBorrowed), so they are stored once. The refs are keyed by repository
+// and refresh its stamp, which keeps them from pool maintenance on any host.
 func (m mirrorPaths) retain(ctx context.Context, shas []string, advertise bool) error {
 	if m.pool == "" || len(shas) == 0 {
 		return nil
 	}
-	key := filepath.Base(m.dir)
+	key := m.repoKey()
+	if err := writeStamp(m.pool, key, time.Now()); err != nil {
+		return err
+	}
 	var updates strings.Builder
 	var specs []string
 	for _, sha := range slices.Compact(slices.Sorted(slices.Values(shas))) {

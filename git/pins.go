@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/flanksource/commons-db/lease"
 )
 
 // pinRefPrefix holds one ref per commit a read retained, so gc keeps it.
@@ -26,9 +28,13 @@ var pinnedCommits sync.Map
 //	<dir>/mirror.git      the bare mirror
 //	<dir>/mirror.lock     shared by reads, exclusive for fetch and ref writes
 //	<dir>/pins/<sha>      the pin of <sha>; its mtime is when a read last used it
+//
+// A pooled mirror also names its pool.git and the Locker of the pool leases.
 type mirrorPaths struct {
 	dir, git, lock, pins string
 	pool                 string
+	locks                lease.Locker
+	holder               lease.LockOptions
 }
 
 func newMirrorPaths(dir string) mirrorPaths {
@@ -43,9 +49,23 @@ func (c *Cache) mirrorPaths(repo *Repository) (mirrorPaths, error) {
 		return mirrorPaths{}, errors.New("git repository is required")
 	}
 	paths := newMirrorPaths(filepath.Join(c.cacheRoot(), repo.URL.CacheKey()))
-	if pool := organizationPool(repo.URL); pool != "" {
-		paths.pool = filepath.Join(c.cacheRoot(), "pools", pool, "pool.git")
+	return c.withPool(paths, organizationPool(repo.URL))
+}
+
+// withPool attaches the named organization pool (none for "") and its Locker.
+func (c *Cache) withPool(paths mirrorPaths, name string) (mirrorPaths, error) {
+	if name == "" {
+		return paths, nil
 	}
+	locks, err := c.poolLocker()
+	if err != nil {
+		return paths, err
+	}
+	holder, err := c.holder()
+	if err != nil {
+		return paths, err
+	}
+	paths.pool, paths.locks, paths.holder = c.poolPath(name), locks, lease.LockOptions{Holder: holder}
 	return paths, nil
 }
 
