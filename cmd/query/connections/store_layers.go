@@ -97,5 +97,5 @@ func (p *StoreProvider) saveToLayer(ctx context.Context, c *models.Connection) (
 	if saved == nil {
 		return nil, fmt.Errorf("saved connection %q cannot be resolved", c.Name)
 	}
-	return p.project(*saved, true), nil
+	return p.project(*saved), nil
 }

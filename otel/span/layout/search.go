@@ -43,7 +43,7 @@ func (d Definition) TranslateSearch(search esdsl.Search, direction Direction) (e
 		if direction == ToCanonical {
 			result.TimeFieldFormat = ""
 		} else {
-			result.TimeFieldFormat = map[string]esdsl.TimeFieldFormat{"s": esdsl.TimeFieldFormatEpochSecond, "ms": esdsl.TimeFieldFormatEpochMillis, "us": esdsl.TimeFieldFormatEpochMicros, "ns": esdsl.TimeFieldFormatEpochNanos}[field.Unit]
+			result.TimeFieldFormat = epochFormats[field.Unit]
 		}
 	}
 	if result.Source != nil && (len(result.Source.Includes) > 0 || len(result.Source.Excludes) > 0) || len(result.Fields) > 0 || len(result.StoredFields) > 0 || len(result.Aggregations) > 0 {

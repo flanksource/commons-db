@@ -28,6 +28,9 @@ type Definition struct {
 	// Nested resolves canonical attributes no scalar field maps, from a key/value
 	// list such as Jaeger's nested `tags`, whose entries are never flattened.
 	Nested []NestedAttributes `json:"nested,omitempty"`
+	// Flattened resolves canonical attributes no scalar field maps to one field
+	// per key, such as the tag.<key> fields Jaeger's tags_as_fields writes.
+	Flattened []FlattenedAttributes `json:"flattened,omitempty"`
 }
 
 // NestedAttributes maps every canonical name under Prefix to the Value of the
@@ -56,9 +59,10 @@ type NestedLeaf struct {
 type Discovery struct {
 	Fields map[string]string
 	// Nested holds the leaves of nested containers, keyed by full field name.
-	Nested          map[string]NestedLeaf
-	Overrides       map[string]Field
-	NestedOverrides []NestedAttributes
+	Nested             map[string]NestedLeaf
+	Overrides          map[string]Field
+	NestedOverrides    []NestedAttributes
+	FlattenedOverrides []FlattenedAttributes
 }
 
 // nestedAttributeLists are the key/value lists span stores keep attributes in.
@@ -210,6 +214,9 @@ func Discover(options Discovery) (Definition, error) {
 		return d, err
 	}
 	d.Nested = nested
+	if d.Flattened, err = discoverFlattened(options); err != nil {
+		return d, err
+	}
 	return d, nil
 }
 
@@ -248,11 +255,7 @@ func (d Definition) resolve(name string, direction Direction) (string, Field, er
 		if !ok {
 			return "", Field{}, fmt.Errorf("canonical field %q has no source mapping", name)
 		}
-		target := field.Source
-		if field.Query != "" {
-			target = field.Query
-		}
-		return target, field, nil
+		return field.queryField(), field, nil
 	}
 	if direction != ToCanonical {
 		return "", Field{}, fmt.Errorf("invalid translation direction %q", direction)
@@ -279,25 +282,62 @@ func (d Definition) resolve(name string, direction Direction) (string, Field, er
 // SourceField is the scalar source field of canonical. An attribute only a
 // nested list holds has none; read it through SourceTarget.
 func (d Definition) SourceField(canonical string) (string, error) {
-	if _, ok := d.Fields[canonical]; !ok {
-		if list, ok := d.nestedList(canonical); ok {
-			return "", fmt.Errorf("canonical field %q is held in nested %s; resolve it with SourceTarget", canonical, list.Path)
-		}
+	target, err := d.SourceTarget(canonical)
+	if err != nil {
+		return "", err
 	}
-	name, _, err := d.resolve(canonical, ToSource)
-	return name, err
+	if target.Nested != "" {
+		return "", fmt.Errorf("canonical field %q is held in nested %s; resolve it with SourceTarget", canonical, target.Nested)
+	}
+	return target.Field, nil
 }
 
 // SourceTarget is where canonical is read: its scalar field when the index maps
-// one, else the value of the nested list entry keyed by the attribute name.
+// one, else the value of the nested list entry keyed by the attribute name,
+// else the field a flattened rule names for it.
 func (d Definition) SourceTarget(canonical string) (Target, error) {
 	if _, ok := d.Fields[canonical]; !ok {
 		if list, ok := d.nestedList(canonical); ok {
-			return Target{Field: list.Value, Nested: list.Path, Where: map[string]string{list.Key: strings.TrimPrefix(canonical, list.Prefix)}}, nil
+			return list.target(canonical), nil
+		}
+		if rule, ok := d.flattenedRule(canonical); ok {
+			return Target{Field: rule.field(canonical)}, nil
 		}
 	}
 	name, _, err := d.resolve(canonical, ToSource)
 	return Target{Field: name}, err
+}
+
+// SourceTargets is every place canonical is read, any of which may hold it: the
+// scalar field the index maps, or else the field a flattened rule names, and
+// the nested list entry keyed by the attribute name. An index holding both
+// Jaeger tag shapes resolves an attribute to both.
+func (d Definition) SourceTargets(canonical string) ([]Target, error) {
+	if targets := d.attributeTargets(canonical); len(targets) > 0 {
+		return targets, nil
+	}
+	name, _, err := d.resolve(canonical, ToSource)
+	if err != nil {
+		return nil, err
+	}
+	return []Target{{Field: name}}, nil
+}
+
+func (d Definition) attributeTargets(canonical string) []Target {
+	targets := []Target{}
+	if field, ok := d.Fields[canonical]; ok {
+		targets = append(targets, Target{Field: field.queryField()})
+	} else if rule, ok := d.flattenedRule(canonical); ok {
+		targets = append(targets, Target{Field: rule.field(canonical)})
+	}
+	if list, ok := d.nestedList(canonical); ok {
+		targets = append(targets, list.target(canonical))
+	}
+	return targets
+}
+
+func (list NestedAttributes) target(canonical string) Target {
+	return Target{Field: list.Value, Nested: list.Path, Where: map[string]string{list.Key: strings.TrimPrefix(canonical, list.Prefix)}}
 }
 
 // nestedList is the nested attribute list holding canonical, by longest prefix.

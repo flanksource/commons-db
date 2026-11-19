@@ -3,12 +3,14 @@ package profiles
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/clicky/rpc"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -97,7 +99,8 @@ func TestMergeStoredProfilesTracksStoreImmediately(t *testing.T) {
 func TestProfileOpenAPIPreservesMappedPagingAndTimeRoles(t *testing.T) {
 	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
 	if err := addProfileToSpec(spec, query.Profile{
-		Name: "mapped",
+		Name:     "mapped",
+		Provider: query.ProviderConfig{Type: "postgres"},
 		Params: []query.ParamDef{
 			{Name: "page_size", Type: query.ParamTypeNumber, Role: query.ParamRoleLimit},
 			{Name: "skip", Type: query.ParamTypeNumber, Role: query.ParamRoleOffset},
@@ -567,25 +570,67 @@ func TestProfileOpenAPITopOffersOnlySessionStart(t *testing.T) {
 	}
 }
 
-// A legacy trace placeholder is catalogued so it can be listed, but its
-// provider refuses every run. Advertising a run operation would hand a generic
-// surface an entry point that can only fail, so it gets none — neither a run
-// nor a session start, since it is not a trace the engine can capture either.
-func TestProfileOpenAPILegacyTraceOffersNoOperation(t *testing.T) {
-	profile, err := ConvertLegacyProfile([]byte("name: sql\nkind: sql_xevent\ndescription: Capture SQL statements.\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
+// catalogOnlyProvider lists its profiles but refuses every execution.
+type catalogOnlyProvider struct{}
+
+const catalogOnlyProviderType = "catalog-only"
+
+func (catalogOnlyProvider) Type() string { return catalogOnlyProviderType }
+
+func (catalogOnlyProvider) Runnable() bool { return false }
+
+func (catalogOnlyProvider) Execute(dbcontext.Context, query.ProviderRequest) ([]query.Row, error) {
+	return nil, fmt.Errorf("%s profiles are catalogued only", catalogOnlyProviderType)
+}
+
+func catalogOnlyProfile(name string) query.Profile {
+	query.RegisterProvider(catalogOnlyProvider{})
+	return query.Profile{Name: name, Provider: query.ProviderConfig{Type: catalogOnlyProviderType}}
+}
+
+// A provider that reports it does not run is catalogued so its profiles can be
+// listed, but advertising a run would hand a generic surface an entry point
+// that can only fail, so it gets none — neither a run nor a session start,
+// since it is not a trace the engine can capture either.
+func TestProfileOpenAPICatalogOnlyProviderOffersNoOperation(t *testing.T) {
 	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
-	if err := addProfileToSpec(spec, profile); err != nil {
+	if err := addProfileToSpec(spec, catalogOnlyProfile("sql")); err != nil {
 		t.Fatal(err)
 	}
 	const path = "/api/v1/profile/profile-sql"
 	if _, listed := spec.Paths[path]; listed {
-		t.Fatalf("a legacy trace profile must advertise no run operation, got %+v", spec.Paths[path])
+		t.Fatalf("a catalog-only profile must advertise no run operation, got %+v", spec.Paths[path])
 	}
 	if _, listed := spec.Paths[path+"/sessions"]; listed {
-		t.Fatalf("a legacy trace profile must advertise no session start, got %+v", spec.Paths[path+"/sessions"])
+		t.Fatalf("a catalog-only profile must advertise no session start, got %+v", spec.Paths[path+"/sessions"])
+	}
+}
+
+// A query profile whose provider is not registered cannot be judged runnable,
+// so building its surface fails instead of advertising a run that cannot work.
+func TestProfileOpenAPIUnregisteredProviderFails(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	err := addProfileToSpec(spec, query.Profile{Name: "orphan", Provider: query.ProviderConfig{Type: "unregistered-provider"}})
+	if err == nil || !strings.Contains(err.Error(), `no data provider registered for type "unregistered-provider"`) {
+		t.Fatalf("addProfileToSpec error = %v, want the unregistered provider named", err)
+	}
+}
+
+// A profile the removed legacy trace migration stored keeps its retired
+// provider type, which is no longer registered; it is listed without a run
+// instead of failing the whole document.
+func TestProfileOpenAPIRetiredLegacyTraceProfileIsListedWithoutRun(t *testing.T) {
+	spec := &rpc.OpenAPISpec{Paths: map[string]rpc.OpenAPIPath{}, Clicky: &rpc.ClickySpecMeta{}}
+	legacy := query.Profile{Name: "legacy-sql", Provider: query.ProviderConfig{Type: retiredLegacyTraceProvider, Options: map[string]any{"kind": "sql_xevent"}}}
+	if err := addProfileToSpec(spec, legacy); err != nil {
+		t.Fatal(err)
+	}
+	const path = "/api/v1/profile/profile-legacy-sql"
+	if _, listed := spec.Paths[path]; listed {
+		t.Fatalf("a retired legacy trace profile must advertise no run operation, got %+v", spec.Paths[path])
+	}
+	if !slices.ContainsFunc(spec.Clicky.Surfaces, func(surface rpc.ClickySurface) bool { return surface.Key == "profile-legacy-sql" }) {
+		t.Fatalf("a retired legacy trace profile must stay listed, got %+v", spec.Clicky.Surfaces)
 	}
 }
 

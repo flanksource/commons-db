@@ -77,10 +77,9 @@ func (p *StoreProvider) ListConnections() ([]*models.Connection, error) {
 	if err != nil {
 		return nil, err
 	}
-	writable := p.Writable()
 	listed := make([]*models.Connection, 0, len(entries))
 	for _, entry := range entries {
-		listed = append(listed, p.project(entry, writable))
+		listed = append(listed, p.project(entry))
 	}
 	return listed, nil
 }
@@ -90,18 +89,17 @@ func (p *StoreProvider) ResolveConnection(_ dbcontext.Context, reference string)
 	if err != nil || entry == nil {
 		return nil, err
 	}
-	return p.project(*entry, p.Writable()), nil
+	return p.project(*entry), nil
 }
 
 // project is entry's connection as the service sees it: a write-layer
 // connection is editable while the layer is writable; another layer's stays
 // virtual and read-only, so the service refuses to edit it.
-func (p *StoreProvider) project(entry store.Entry, writable bool) *models.Connection {
+func (p *StoreProvider) project(entry store.Entry) *models.Connection {
 	connection := entry.Connection
 	connection.Properties = maps.Clone(connection.Properties)
 	if entry.Layer.Name == p.layer.Name || slices.Contains(p.writableLayers, entry.Layer.Name) {
-		writable = dirWritable(entry.Layer.Dir)
-		connection.Virtual, connection.ReadOnly = false, !writable
+		connection.Virtual, connection.ReadOnly = false, !dirWritable(entry.Layer.Dir)
 	} else {
 		connection.Virtual, connection.ReadOnly = true, true
 	}
@@ -165,7 +163,7 @@ func (p *StoreProvider) SaveConnection(ctx context.Context, connection *models.C
 	if saved == nil {
 		return nil, fmt.Errorf("connection %q was saved but the store does not resolve it", resource.Name)
 	}
-	return p.project(*saved, true), nil
+	return p.project(*saved), nil
 }
 
 // DeleteConnection removes the write layer's file for the connection id names.

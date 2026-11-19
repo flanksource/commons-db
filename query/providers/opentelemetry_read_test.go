@@ -105,6 +105,35 @@ var _ = Describe("ReadOpenTelemetrySpans", func() {
 		Eventually(done).Should(Receive(BeNil()))
 	})
 
+	DescribeTable("reads the document format from the request, then the connection, then its nested connection",
+		func(requested string, outer, nested types.JSONStringMap, rejected bool) {
+			ctx = ctx.WithConnectionResolver(func(_ dbcontext.Context, reference string) (*models.Connection, error) {
+				switch reference {
+				case "connection://traces":
+					outer["connection"] = "connection://spans"
+					return &models.Connection{Name: "traces", Type: models.ConnectionTypeOpenTelemetry, Properties: outer}, nil
+				case "connection://spans":
+					return &models.Connection{Name: "spans", Type: models.ConnectionTypeOpenSearch, URL: stub.server.URL, Properties: nested}, nil
+				}
+				return nil, nil
+			})
+			options := map[string]any{"index": "logs"}
+			if requested != "" {
+				options["format"] = requested
+			}
+			err := providers.ReadOpenTelemetrySpans(ctx, providers.OpenTelemetryRead{Connection: "connection://traces", Options: options}, func(query.Row) {})
+			if rejected {
+				Expect(err).To(MatchError(ContainSubstring(`unsupported opentelemetry format "bogus"`)))
+			} else {
+				Expect(err).NotTo(HaveOccurred())
+			}
+		},
+		Entry("the connection's format", "", types.JSONStringMap{"format": "bogus"}, nil, true),
+		Entry("the nested connection's format", "", types.JSONStringMap{}, types.JSONStringMap{"format": "bogus"}, true),
+		Entry("the connection over its nested connection", "", types.JSONStringMap{"format": "flat"}, types.JSONStringMap{"format": "bogus"}, false),
+		Entry("the request over the connection", "flat", types.JSONStringMap{"format": "bogus"}, nil, false),
+	)
+
 	It("refuses a followed read with an end", func() {
 		err := providers.ReadOpenTelemetrySpans(ctx, providers.OpenTelemetryRead{
 			Connection: "connection://traces", Follow: true, To: "now",

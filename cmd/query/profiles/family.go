@@ -106,7 +106,11 @@ func (s *Service) listSurfaces(ctx context.Context) ([]entity.DynamicEntitySpec,
 		// Every instance listed here is documented with a run, and the profile
 		// extension has already described one that has none — so listing it would
 		// both advertise a run that can only fail and duplicate its surface.
-		if !advertisesRun(resolved.Profile) {
+		runs, err := advertisesRun(resolved.Profile)
+		if err != nil {
+			return nil, fmt.Errorf("profile surface %q: %w", profile.Name, err)
+		}
+		if !runs {
 			continue
 		}
 		surface, err := s.profileSurface(resolved.Profile)

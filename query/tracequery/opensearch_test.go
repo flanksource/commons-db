@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"time"
 
 	"github.com/flanksource/commons-db/connection/crd"
@@ -26,17 +25,11 @@ var _ = Describe("OpenSearch trace search", func() {
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			fieldType := "date"
+			mapping := map[string]string{"@timestamp": "date", "trace_id": "keyword", "span_id": "keyword", "parent_id": "keyword", "operation_name": "keyword", "service_name": "keyword", "duration_ms": "double"}
 			if format == "jaeger" {
-				fieldType = "long"
+				mapping = mappingOf(nestedTags)
 			}
-			if strings.HasSuffix(r.URL.Path, "/_field_caps") {
-				Expect(json.NewEncoder(w).Encode(map[string]any{"fields": map[string]any{r.URL.Query().Get("fields"): map[string]any{fieldType: map[string]any{"searchable": true, "aggregatable": true}}}})).To(Succeed())
-				return
-			}
-			if strings.Contains(r.URL.Path, "/_mapping/field/") {
-				field := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
-				Expect(json.NewEncoder(w).Encode(map[string]any{"traces-example": map[string]any{"mappings": map[string]any{field: map[string]any{"full_name": field, "mapping": map[string]any{field: map[string]any{"type": fieldType}}}}}})).To(Succeed())
+			if serveMapping(w, r, mapping) {
 				return
 			}
 			var body map[string]any
@@ -66,15 +59,15 @@ var _ = Describe("OpenSearch trace search", func() {
 		search, err := crd.FromModel(models.Connection{Name: "search", Type: models.ConnectionTypeOpenSearch, URL: index.URL})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(catalog.Save(store.LayerCWD, search)).To(Succeed())
-		source := "search"
+		request := Request{Source: "search", Index: "traces-*", Format: DocumentFormat(format)}
 		if sourceType == "opentelemetry" {
-			outer, err := crd.FromModel(models.Connection{Name: "traces", Type: models.ConnectionTypeOpenTelemetry, Properties: types.JSONStringMap{"connection": "connection://search"}})
+			// The opentelemetry connection owns its index and format.
+			outer, err := crd.FromModel(models.Connection{Name: "traces", Type: models.ConnectionTypeOpenTelemetry, Properties: types.JSONStringMap{"connection": "connection://search", "index": "traces-*", "format": format}})
 			Expect(err).NotTo(HaveOccurred())
 			Expect(catalog.Save(store.LayerCWD, outer)).To(Succeed())
-			source = "traces"
+			request = Request{Source: "traces"}
 		}
 		service := Service{Connections: catalog}
-		request := Request{Source: source, Index: "traces-*", Format: DocumentFormat(format)}
 		result, err := service.Search(context.Background(), request)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(result.Traces).To(HaveExactElements(And(HaveField("TraceID", "trace-search"), HaveField("SpanCount", 2))))

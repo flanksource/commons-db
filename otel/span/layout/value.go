@@ -12,6 +12,19 @@ import (
 	"github.com/flanksource/commons-db/query/esdsl"
 )
 
+// epochFormats are the search time formats of the numeric source units.
+var epochFormats = map[string]esdsl.TimeFieldFormat{"s": esdsl.TimeFieldFormatEpochSecond, "ms": esdsl.TimeFieldFormatEpochMillis, "us": esdsl.TimeFieldFormatEpochMicros, "ns": esdsl.TimeFieldFormatEpochNanos}
+
+// TimeFieldFormat is the epoch format a search bounding f declares: that of
+// its Unit for a numeric field, and none for a date field, whose mapping
+// already says how it stores instants.
+func (f Field) TimeFieldFormat() esdsl.TimeFieldFormat {
+	if f.Type == "date" || f.Type == "date_nanos" {
+		return ""
+	}
+	return epochFormats[f.Unit]
+}
+
 func (f Field) validateOrdering() error {
 	if len(f.Values) > 0 {
 		return fmt.Errorf("source enum %s has no reversible canonical ordering", f.Source)
@@ -53,7 +66,7 @@ func (f Field) value(value any, canonical string, direction Direction) (any, err
 	}
 	if canonical == "timestamp" && f.Unit != "" {
 		if direction == ToSource {
-			format := map[string]esdsl.TimeFieldFormat{"s": esdsl.TimeFieldFormatEpochSecond, "ms": esdsl.TimeFieldFormatEpochMillis, "us": esdsl.TimeFieldFormatEpochMicros, "ns": esdsl.TimeFieldFormatEpochNanos}[f.Unit]
+			format := epochFormats[f.Unit]
 			if format == "" {
 				return nil, fmt.Errorf("unknown timestamp unit %q", f.Unit)
 			}

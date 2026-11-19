@@ -271,17 +271,13 @@ func TestProfileFamilyResolvesAProfileCreatedAfterTheRoutesWereBuilt(t *testing.
 
 // The served document is the family's paths laid over the profile extension's,
 // and the family fills any profile path the extension left empty. A trace or a
-// legacy placeholder is left without a run on purpose — running it can only
+// catalog-only profile is left without a run on purpose — running it can only
 // fail — so the family must not put one back, nor list its surface twice.
 func TestProfileFamilyAdvertisesARunOnlyForAProfileThatRuns(t *testing.T) {
-	legacy, err := ConvertLegacyProfile([]byte("name: legacy-sql\nkind: sql_xevent\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
 	capture := lookupProfile("Capture")
 	capture.Trace = &query.TraceSpec{}
 	query.RegisterProvider(familyLookupMock{})
-	service, _ := newProfileServiceTest(t, lookupProfile("Spans"), capture, legacy)
+	service, _ := newProfileServiceTest(t, lookupProfile("Spans"), capture, catalogOnlyProfile("catalog-sql"))
 	service.RegisterFamily()
 	t.Cleanup(func() { entity.UnregisterDynamicEntityFamily(profileFamilyName) })
 
@@ -313,7 +309,7 @@ func TestProfileFamilyAdvertisesARunOnlyForAProfileThatRuns(t *testing.T) {
 		Surfaces          int
 	}
 	got := map[string]advertised{}
-	for _, key := range []string{"profile-spans", "profile-capture", "profile-legacy-sql"} {
+	for _, key := range []string{"profile-spans", "profile-capture", "profile-catalog-sql"} {
 		_, run := spec.Paths["/api/v1/profile/"+key]["get"]
 		_, start := spec.Paths["/api/v1/profile/"+key+"/sessions"]["post"]
 		surfaces := 0
@@ -325,9 +321,9 @@ func TestProfileFamilyAdvertisesARunOnlyForAProfileThatRuns(t *testing.T) {
 		got[key] = advertised{Run: run, SessionStart: start, Surfaces: surfaces}
 	}
 	want := map[string]advertised{
-		"profile-spans":      {Run: true, SessionStart: false, Surfaces: 1},
-		"profile-capture":    {Run: false, SessionStart: true, Surfaces: 1},
-		"profile-legacy-sql": {Run: false, SessionStart: false, Surfaces: 1},
+		"profile-spans":       {Run: true, SessionStart: false, Surfaces: 1},
+		"profile-capture":     {Run: false, SessionStart: true, Surfaces: 1},
+		"profile-catalog-sql": {Run: false, SessionStart: false, Surfaces: 1},
 	}
 	for key, expected := range want {
 		if got[key] != expected {
