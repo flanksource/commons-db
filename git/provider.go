@@ -59,6 +59,10 @@ type ListRepositoriesOptions struct {
 
 // RepositoryInfo is one repository as the provider lists it.
 type RepositoryInfo struct {
+	// ID is the provider's stable identifier for the repository, which a rename keeps: GitHub's
+	// numeric id, GitLab's project id or Azure DevOps' repository GUID. A generic git remote has
+	// none.
+	ID            string
 	Name          string
 	FullName      string
 	Namespace     string

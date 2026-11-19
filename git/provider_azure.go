@@ -23,6 +23,7 @@ type azureProvider struct {
 }
 
 type azureRepo struct {
+	ID            string `json:"id"`
 	Name          string `json:"name"`
 	RemoteURL     string `json:"remoteUrl"`
 	SSHURL        string `json:"sshUrl"`
@@ -99,7 +100,7 @@ func (p *azureProvider) ListRepositories(ctx context.Context, options ListReposi
 	}
 	repos := make([]RepositoryInfo, 0, len(page.Value))
 	for _, repo := range page.Value {
-		repos = append(repos, RepositoryInfo{Name: repo.Name, FullName: repo.Project.Name + "/" + repo.Name,
+		repos = append(repos, RepositoryInfo{ID: repo.ID, Name: repo.Name, FullName: repo.Project.Name + "/" + repo.Name,
 			Namespace: repo.Project.Name, CloneURL: repo.RemoteURL, SSHURL: repo.SSHURL, WebURL: repo.WebURL,
 			DefaultBranch: strings.TrimPrefix(repo.DefaultBranch, "refs/heads/"), Archived: repo.IsDisabled})
 	}
