@@ -5,6 +5,7 @@ package sqlite_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -228,6 +229,61 @@ var _ = Describe("sqlite backend opened read-only", func() {
 			Expect(readOnly(owner.Path()).QueryRowContext(ctx,
 				`SELECT name FROM pragma_index_list('records_sample') WHERE origin = 'c'`).Scan(&name)).To(Succeed())
 			Expect(name).To(Equal("records_sample_ix_stream_id_at_desc_seq"))
+		})
+
+		Context("without a submitter", func() {
+			const added = "region"
+			widened := func(kind string) (recordstore.KindSchema, error) {
+				schema, err := recordstoretest.Schema(kind)
+				schema.Columns = append(append([]query.ColumnDef(nil), schema.Columns...), query.ColumnDef{Name: added, Type: query.ColumnTypeString})
+				return schema, err
+			}
+			physicalColumns := func() []string {
+				rows, err := readOnly(owner.Path()).QueryContext(ctx, `SELECT name FROM pragma_table_info('records_sample') ORDER BY cid`)
+				Expect(err).ToNot(HaveOccurred())
+				defer func() { _ = rows.Close() }()
+				var names []string
+				for rows.Next() {
+					var name string
+					Expect(rows.Scan(&name)).To(Succeed())
+					names = append(names, name)
+				}
+				Expect(rows.Err()).ToNot(HaveOccurred())
+				return names
+			}
+
+			It("adds a column the kind now declares through a temporary writer, then reads it", func() {
+				wider := openReader(widened, nil)
+				table, err := wider.Table(recordstoretest.Kind)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(table.Columns).To(ContainElement(HaveField("Name", added)))
+				Expect(physicalColumns()).To(ContainElement(added))
+				seqs, _ := recordstoretest.Scanned(wider, "run-1", 0)
+				Expect(seqs).To(Equal([]int64{1, 2}))
+				_, err = wider.Append(ctx, "run-1", recordstoretest.Kind, recordstoretest.SampleRows(3, 3))
+				Expect(errors.Is(err, sqlitedb.ErrReadOnly)).To(BeTrue(), "the temporary writer is closed again: %v", err)
+			})
+
+			It("reads the columns the file has when it cannot be written, and widens once promoted", func() {
+				Expect(os.Chmod(owner.Path(), 0o444)).To(Succeed())
+				DeferCleanup(os.Chmod, owner.Path(), os.FileMode(0o644))
+				wider := openReader(widened, nil)
+				table, err := wider.Table(recordstoretest.Kind)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(table.Columns).ToNot(ContainElement(HaveField("Name", added)))
+				Expect(physicalColumns()).ToNot(ContainElement(added))
+				seqs, rows := recordstoretest.Scanned(wider, "run-1", 0)
+				Expect(seqs).To(Equal([]int64{1, 2}))
+				Expect(recordstoretest.Normalize(rows)).To(Equal(recordstoretest.Normalize(recordstoretest.SampleRows(1, 2))))
+
+				Expect(os.Chmod(owner.Path(), 0o644)).To(Succeed())
+				Expect(owner.Close()).To(Succeed())
+				Expect(wider.Promote(ctx)).To(Succeed())
+				table, err = wider.Table(recordstoretest.Kind)
+				Expect(err).ToNot(HaveOccurred())
+				Expect(table.Columns).To(ContainElement(HaveField("Name", added)))
+				Expect(physicalColumns()).To(ContainElement(added))
+			})
 		})
 
 		It("refuses a table the writer does not create", func() {
