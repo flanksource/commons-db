@@ -16,6 +16,8 @@ Import `github.com/flanksource/commons-db/lease` to coordinate callers that shar
 
 Use `Lock(ctx)` to wait, `TryLock(ctx)` to make one admission attempt, or `LockWait(ctx)` to receive the acquired lease asynchronously. `TryLock` returns a false acquisition flag and a nil error on contention. Use a cancellable context for channel waits and cancel it if you stop receiving. The channel can close without a result if the caller cancels before handoff. Receiving a successful result transfers the lease to the caller. Read acquisition uses `RLock`, `TryRLock`, or `RLockWait`.
 
+The first example uses the lease for advisory coordination and cancels work when ownership can no longer be confirmed. A holder paused beyond the TTL may resume and write after a replacement acquires the lease. For correctness-critical writes, the protected storage must reject stale fencing tokens or use an equivalent guard that prevents former holders from writing.
+
 ```go
 // updateRepo must return when its context is canceled.
 func update(ctx context.Context, locks lease.Locker, updateRepo func(context.Context) error) (err error) {
@@ -56,9 +58,9 @@ SQL Server leases last as long as their session. Size a dedicated connection poo
 
 Redis and Valkey use a single authoritative primary per key. Asynchronous failover, data loss, or key eviction can allow overlapping holders. Use a primary with adequate memory and a `noeviction` policy. Writer leases use a local copy of Redsync. Include the [Redsync license](internal/redsync/LICENSE) in distribution materials for binaries containing it.
 
-Kubernetes requires `get`, `create`, and `update` on `coordination.k8s.io` Leases. The adapter retains empty Lease objects for reuse. A new observer can need a full TTL to declare a crashed holder stale.
+Kubernetes requires `get`, `create`, and `update` on `coordination.k8s.io` Leases. The adapter retains empty Lease objects for reuse. An observer can need a full TTL from its first sight of a heartbeat to declare a crashed holder stale. Each locker retains this evidence in memory while the holder remains in the Lease object as last observed.
 
-The default expiry is 30 seconds. Redis/Valkey and Kubernetes renew every third of the TTL and signal loss before expiry when ownership cannot be confirmed. The context used to acquire a lock bounds acquisition. Work cancellation is cooperative and callers are responsible for relinquishing a lease after guarded work stops.
+The default expiry is 30 seconds. Redis/Valkey and Kubernetes attempt renewal every third of the TTL and signal loss when ownership cannot be confirmed. A paused process may miss the notification deadline. Expiry permits another caller to acquire, and `Done()` is a cooperative notification. Both leave fencing to the protected storage. The acquisition context bounds acquisition. After loss or normal completion, stop guarded work and call `Unlock` to release any remaining ownership.
 
 ## Integration tests
 

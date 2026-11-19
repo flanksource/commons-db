@@ -10,6 +10,8 @@ import (
 	"strings"
 )
 
+var errSQLReaderGateBusy = errors.New("SQL Server reader gate is busy before any locks were acquired")
+
 // NewSQLServer uses session-owned app locks. Size the caller's lock pool for
 // the maximum number of simultaneous holders and waiting writers.
 func NewSQLServer(db *sql.DB, options Options) (Locker, error) {
@@ -71,6 +73,14 @@ func (a *sqlAcquisition) try(ctx context.Context) (ownership, error) {
 		err = sqlStatus(ctx, a.conn, sqlTryWriteLock, a.name)
 	}
 	if err != nil {
+		if a.mode != writeMode && err == errSQLReaderGateBusy {
+			closeErr := a.conn.Close()
+			a.conn = nil
+			if closeErr != nil {
+				return nil, fmt.Errorf("return SQL Server lock connection to pool: %w", closeErr)
+			}
+			return nil, errBusy
+		}
 		if err == errBusy && a.mode == writeMode && a.waiting {
 			return nil, err
 		}
@@ -126,6 +136,8 @@ func sqlStatus(ctx context.Context, conn *sql.Conn, batch string, args ...any) e
 		return nil
 	case -1:
 		return errBusy
+	case -10:
+		return errSQLReaderGateBusy
 	default:
 		return fmt.Errorf("SQL Server app lock returned %d", code)
 	}

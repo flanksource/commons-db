@@ -23,6 +23,7 @@ SELECT @status;`
 const sqlReadLock = `
 DECLARE @status int, @gate nvarchar(255) = @p1 + N':gate';
 EXEC @status = sys.sp_getapplock @Resource = @gate, @LockMode = N'Shared', @LockOwner = N'Session', @LockTimeout = 0;
+IF @status = -1 BEGIN SELECT -10; RETURN; END;
 IF @status < 0 BEGIN SELECT @status; RETURN; END;
 EXEC @status = sys.sp_getapplock @Resource = @p1, @LockMode = N'Shared', @LockOwner = N'Session', @LockTimeout = 0;
 IF @status < 0 BEGIN SELECT @status; RETURN; END;

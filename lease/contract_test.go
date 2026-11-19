@@ -144,13 +144,32 @@ func lockerContract(name string, factory func(ExpiringOptions) (Locker, error)) 
 
 			waitCtx, cancel = context.WithCancel(ctx)
 			defer cancel()
-			waiting = second.Mutex(key).LockWait(waitCtx)
-			expectWriterRegistered(ctx, rw)
+			acquired := make(chan struct{})
+			writer := *second.(*locker)
+			begin := writer.begin
+			writer.begin = func(req request, wait bool) acquisition {
+				return signaledAcquisition{acquisition: begin(req, wait), acquired: acquired}
+			}
+			waiting = writer.Mutex(key).LockWait(waitCtx)
+			Eventually(acquired, 2*time.Second).Should(BeClosed())
 			cancel()
 			Eventually(waiting, 2*time.Second).Should(BeClosed())
 			hold(ctx, first.Mutex(key))
 		}, SpecTimeout(8*time.Second))
 	})
+}
+
+type signaledAcquisition struct {
+	acquisition
+	acquired chan struct{}
+}
+
+func (a signaledAcquisition) try(ctx context.Context) (ownership, error) {
+	held, err := a.acquisition.try(ctx)
+	if held != nil && err == nil {
+		close(a.acquired)
+	}
+	return held, err
 }
 
 func hold(ctx context.Context, lock Lock) Lease {

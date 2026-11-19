@@ -30,12 +30,12 @@ func (l *managedLease) end(err error) {
 	l.finish.Do(func() {
 		l.err = err
 		close(l.done)
-		l.stop()
 	})
 }
 
 func (l *managedLease) Unlock(context.Context) error {
 	l.end(nil)
+	l.stop()
 	<-l.cleaned
 	return l.unlockErr
 }
@@ -48,6 +48,8 @@ func (l *locker) manage(ctx context.Context, held ownership, start time.Time) *m
 		if err := l.maintain(run, held, start); err != nil {
 			lease.end(fmt.Errorf("%w: %w", ErrLost, err))
 		}
+		// Unlock acknowledges that protected work has stopped.
+		<-run.Done()
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(run), l.options.OperationTimeout)
 		defer cancel()
 		if err := held.unlock(cleanup); err != nil && !errors.Is(err, errNotOwned) {

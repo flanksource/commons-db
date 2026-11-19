@@ -43,4 +43,17 @@ var _ = Describe("SQL Server app-lock protocol", func() {
 		expectBusy(locker.GroupLock("country", "RSA").TryLock(ctx))
 		Expect(mock.ExpectationsWereMet()).To(Succeed())
 	})
+
+	It("returns a session to the pool when the reader gate times out before taking any locks", func(ctx SpecContext) {
+		db, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(sqlmock.QueryMatcherEqual))
+		Expect(err).NotTo(HaveOccurred())
+		DeferCleanup(func() { Expect(mock.ExpectationsWereMet()).To(Succeed()) })
+		DeferCleanup(db.Close)
+		mock.ExpectQuery(sqlReadLock).WithArgs(sqlmock.AnyArg(), "").WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(-10))
+		mock.ExpectClose()
+		locker, err := NewSQLServer(db, Options{Scope: "test"})
+		Expect(err).NotTo(HaveOccurred())
+		expectBusy(locker.ReadWriteLock("country").TryRLock(ctx))
+		Expect(db.Stats().Idle).To(Equal(1))
+	})
 })

@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	api "k8s.io/api/coordination/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/validation"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/cache"
+	"k8s.io/apimachinery/pkg/types"
 	coordination "k8s.io/client-go/kubernetes/typed/coordination/v1"
 )
 
@@ -26,14 +29,25 @@ func NewKubernetes(client coordination.LeaseInterface, options ExpiringOptions) 
 	if err != nil {
 		return nil, err
 	}
-	backend := &kubeBackend{client: client, ttl: int32(options.TTL / time.Second), observations: cache.NewLRUExpireCache(8192)}
+	backend := &kubeBackend{client: client, ttl: int32(options.TTL / time.Second), observations: make(map[string]kubeObservations)}
 	return &locker{options.Options, options.TTL, backend.begin}, nil
 }
 
 type kubeBackend struct {
 	client       coordination.LeaseInterface
 	ttl          int32
-	observations *cache.LRUExpireCache
+	mu           sync.Mutex
+	observations map[string]kubeObservations
+}
+
+type kubeObservations struct {
+	uid     types.UID
+	holders map[string]kubeObservation
+}
+
+type kubeObservation struct {
+	heartbeat uint64
+	firstSeen time.Time
 }
 
 type kubeHolder struct {
@@ -114,6 +128,15 @@ func (a *kubeAcquisition) unlock(ctx context.Context) error {
 		delete(holders, a.token)
 		return present, nil
 	})
+	if err == nil || errors.Is(err, errNotOwned) {
+		a.mu.Lock()
+		seen := a.observations[a.name]
+		delete(seen.holders, a.token)
+		if len(seen.holders) == 0 {
+			delete(a.observations, a.name)
+		}
+		a.mu.Unlock()
+	}
 	if errors.Is(err, errNotOwned) {
 		return nil
 	}
@@ -136,6 +159,11 @@ func (a *kubeAcquisition) edit(ctx context.Context, create bool, change func(map
 	for ctx.Err() == nil {
 		obj, err := a.client.Get(ctx, a.name, metav1.GetOptions{})
 		missing := apierrors.IsNotFound(err)
+		if missing {
+			a.mu.Lock()
+			delete(a.observations, a.name)
+			a.mu.Unlock()
+		}
 		if missing && !create {
 			return errNotOwned
 		}
@@ -145,7 +173,7 @@ func (a *kubeAcquisition) edit(ctx context.Context, create bool, change func(map
 		if missing {
 			obj = &api.Lease{ObjectMeta: metav1.ObjectMeta{Name: a.name, Annotations: map[string]string{}}}
 		}
-		if err := a.write(ctx, obj, missing, change); err != nil {
+		if err := a.write(ctx, obj, missing, create, change); err != nil {
 			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) || apierrors.IsNotFound(err) {
 				if err := pause(ctx, 10*time.Millisecond); err != nil {
 					return err
@@ -159,16 +187,17 @@ func (a *kubeAcquisition) edit(ctx context.Context, create bool, change func(map
 	return context.Cause(ctx)
 }
 
-func (a *kubeAcquisition) write(ctx context.Context, obj *api.Lease, create bool, change func(map[string]kubeHolder) (bool, error)) error {
+func (a *kubeAcquisition) write(ctx context.Context, obj *api.Lease, missing, acquiring bool, change func(map[string]kubeHolder) (bool, error)) error {
 	holders := make(map[string]kubeHolder)
-	if !create {
+	if !missing {
 		if err := json.Unmarshal([]byte(obj.Annotations[leaseAnnotation]), &holders); err != nil || holders == nil {
 			return fmt.Errorf("invalid %s state on Kubernetes lease %s", leaseAnnotation, a.name)
 		}
-		if err := a.prune(obj, holders); err != nil {
+		if err := a.prune(obj, holders, time.Now()); err != nil {
 			return err
 		}
 	}
+	_, present := holders[a.token]
 	changed, result := change(holders)
 	if !changed {
 		return result
@@ -178,7 +207,12 @@ func (a *kubeAcquisition) write(ctx context.Context, obj *api.Lease, create bool
 		return err
 	}
 	obj.Annotations[leaseAnnotation] = string(data)
-	if create {
+	if acquiring && !present {
+		if size := annotationSizeWithHeartbeatCapacity(obj.Annotations, holders); size > validation.TotalAnnotationSizeLimitB {
+			return fmt.Errorf("reserve heartbeat capacity on Kubernetes lease %s: need %d annotation bytes, limit is %d", a.name, size, validation.TotalAnnotationSizeLimitB)
+		}
+	}
+	if missing {
 		_, err = a.client.Create(ctx, obj, metav1.CreateOptions{})
 	} else {
 		_, err = a.client.Update(ctx, obj, metav1.UpdateOptions{})
@@ -189,20 +223,43 @@ func (a *kubeAcquisition) write(ctx context.Context, obj *api.Lease, create bool
 	return result
 }
 
-func (a *kubeAcquisition) prune(obj *api.Lease, holders map[string]kubeHolder) error {
-	now := time.Now()
+func annotationSizeWithHeartbeatCapacity(annotations map[string]string, holders map[string]kubeHolder) int {
+	size := 0
+	for key, value := range annotations {
+		size += len(key) + len(value)
+	}
+	for _, h := range holders {
+		size += 20 - len(strconv.FormatUint(h.Heartbeat, 10))
+	}
+	return size
+}
+
+func (a *kubeAcquisition) prune(obj *api.Lease, holders map[string]kubeHolder, now time.Time) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	seen := a.observations[obj.Name]
+	if seen.uid != obj.UID || seen.holders == nil {
+		seen = kubeObservations{uid: obj.UID, holders: make(map[string]kubeObservation)}
+	}
+	for token := range seen.holders {
+		if _, present := holders[token]; !present {
+			delete(seen.holders, token)
+		}
+	}
+	if len(holders) == 0 {
+		delete(a.observations, obj.Name)
+		return nil
+	}
+	a.observations[obj.Name] = seen
 	for token, h := range holders {
 		if token == "" || h.Duration < 3 || h.Duration > 86400 || h.Mode > groupMode || h.Pending && h.Mode != writeMode || h.Heartbeat == 0 || h.Mode == groupMode && h.Group == "" {
 			return fmt.Errorf("invalid holder state on Kubernetes lease %s", a.name)
 		}
-		key := struct {
-			uid, name, token string
-			heartbeat        uint64
-		}{string(obj.UID), obj.Name, token, h.Heartbeat}
+		first := seen.holders[token]
 		duration := time.Duration(h.Duration) * time.Second
-		if first, ok := a.observations.Get(key); !ok {
-			a.observations.Add(key, now, duration*2)
-		} else if !now.Before(first.(time.Time).Add(duration)) {
+		if h.Heartbeat > first.heartbeat {
+			seen.holders[token] = kubeObservation{heartbeat: h.Heartbeat, firstSeen: now}
+		} else if h.Heartbeat == first.heartbeat && !now.Before(first.firstSeen.Add(duration)) {
 			delete(holders, token)
 		}
 	}

@@ -39,7 +39,7 @@ type redisBackend struct {
 
 type redisResource struct {
 	*redisBackend
-	keys []string // Writer, shared holders, waiting writers.
+	keys []string // Writer, shared holders, waiting writers, grouped holders.
 }
 
 type redisAcquisition struct {
@@ -52,7 +52,8 @@ type redisAcquisition struct {
 
 func (b *redisBackend) begin(req request, wait bool) acquisition {
 	prefix := "commons-db:lease:{" + req.key + "}:"
-	a := &redisAcquisition{redisResource: redisResource{b, []string{prefix + "writer", prefix + "shared", prefix + "waiting"}}}
+	keys := []string{prefix + "writer", prefix + "shared", prefix + "waiting", prefix + "grouped"}
+	a := &redisAcquisition{redisResource: redisResource{b, keys}}
 	if req.mode == writeMode {
 		if wait {
 			a.waiter = uuid.NewString()
