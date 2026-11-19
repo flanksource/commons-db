@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/git/browse"
 	"github.com/flanksource/commons-db/models"
 	. "github.com/onsi/ginkgo/v2"
@@ -40,7 +41,7 @@ var _ = Describe("Git browser sources", func() {
 		sha = gitAt(dir, "rev-parse", "HEAD")
 		connection := models.Connection{Name: "rules", Type: "git", URL: "file://" + dir}
 		var err error
-		service, err = browse.New(browse.Options{CacheDir: GinkgoT().TempDir(),
+		service, err = browse.New(browse.Options{Cache: &git.Cache{Root: GinkgoT().TempDir()},
 			Catalog: func(context.Context) ([]models.Connection, error) { return []models.Connection{connection}, nil },
 			Resolve: func(_ context.Context, name string) (models.Connection, error) {
 				if name != connection.Name {

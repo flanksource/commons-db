@@ -19,7 +19,7 @@ var (
 type Options struct {
 	Catalog     func(context.Context) ([]models.Connection, error)
 	Resolve     func(context.Context, string) (models.Connection, error)
-	CacheDir    string
+	Cache       *git.Cache
 	PinTTL      time.Duration
 	Client      func(context.Context, string) (*git.Client, models.Connection, error)
 	ClientScope func(context.Context) (string, error)
