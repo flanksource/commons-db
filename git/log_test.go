@@ -70,10 +70,10 @@ var _ = Describe("Cache.Log and Cache.Compare", func() {
 		Expect(scoped).To(HaveLen(2))
 	})
 
-	It("compares two refs through a shallow mirror and sees a base that advanced since the last fetch", func(ctx SpecContext) {
-		shallow, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: "feature", Depth: 1})
+	It("compares two refs after a checkout and sees a base that advanced since the last fetch", func(ctx SpecContext) {
+		checkout, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: "feature"})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(shallow.Release()).To(Succeed())
+		Expect(checkout.Release()).To(Succeed())
 
 		comparison, err := cache.Compare(ctx, repo, "main", "feature")
 		Expect(err).ToNot(HaveOccurred())

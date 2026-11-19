@@ -34,4 +34,4 @@ if err != nil {
 
 The destination has its own objects, its `origin` names the requested repository, and it remains usable after the cache is removed. No persistent alternates are installed. Omitting `Cache` uses the ordinary remote clone path.
 
-`Depth` limits standalone clone history. Shallow clones and checkouts use depth-specific mirrors outside the organization pool. Fetch progress reports the pool key and transferred bytes when available.
+`Depth` limits standalone clone history. The cache itself holds complete histories only, stored once in the organization pool; see [READS.md](READS.md#complete-histories-stored-once). Fetch progress reports the pool key and transferred bytes when available.

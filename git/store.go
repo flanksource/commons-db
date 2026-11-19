@@ -27,9 +27,9 @@ const storeRefPrefix = "refs/commons-store/"
 // writes a mirror's new objects and refs back.
 //
 // Keys are the same RepoURL.CacheKey layout as Root (the directory of a
-// repository mirror). Shallow mirrors (<key>-depth-N, or a mirror an earlier Depth fetch
-// left shallow) are never hydrated into nor published: a shallow history
-// would truncate every other reader's log and merge base.
+// repository mirror). Cache mirrors hold complete histories only; a shallow
+// mirror is never published: a shallow history would truncate every other
+// reader's log and merge base.
 type Store interface {
 	// Hydrate fetches what the store holds for key into the bare mirror; a
 	// key the store has nothing for is no error.
@@ -50,10 +50,9 @@ type StoreEntry struct {
 }
 
 // storeKeyOf is the Store key of the cache mirror at mirror, false for a
-// shallow -depth-N mirror, which is never stored.
+// repository that is not a cache mirror.
 func storeKeyOf(mirror string) (string, bool) {
-	key := filepath.Base(filepath.Dir(mirror))
-	return key, filepath.Base(mirror) == "mirror.git" && !strings.Contains(key, "-depth-")
+	return filepath.Base(filepath.Dir(mirror)), filepath.Base(mirror) == "mirror.git"
 }
 
 func validStoreKey(key string) error {
@@ -89,7 +88,7 @@ func hydrateMiss(ctx context.Context, store Store, mirror string, shas ...string
 }
 
 // hydrate hydrates the cache mirror from store, reporting false for no store
-// or a shallow mirror, which is never hydrated.
+// or a repository that is not a cache mirror.
 func hydrate(ctx context.Context, store Store, mirror string) (bool, error) {
 	if store == nil {
 		return false, nil
@@ -97,9 +96,6 @@ func hydrate(ctx context.Context, store Store, mirror string) (bool, error) {
 	key, stored := storeKeyOf(mirror)
 	if !stored {
 		return false, nil
-	}
-	if shallow, err := isShallow(ctx, mirror); err != nil || shallow {
-		return false, err
 	}
 	if err := store.Hydrate(ctx, key, mirror); err != nil {
 		return false, fmt.Errorf("hydrate %s from git store: %w", key, err)
@@ -121,7 +117,7 @@ func isShallow(ctx context.Context, mirror string) (bool, error) {
 func publishMirror(ctx context.Context, store Store, mirror string) error {
 	key, stored := storeKeyOf(mirror)
 	if !stored {
-		return fmt.Errorf("publish %s: shallow -depth-N mirrors are not published to the git store", mirror)
+		return fmt.Errorf("publish %s: only cache mirrors are published to the git store", mirror)
 	}
 	shallow, err := isShallow(ctx, mirror)
 	if err != nil {

@@ -148,16 +148,20 @@ func remoteOf(owner, repo *Repository) string {
 // fetchOptions configures fetch: Ref is fetched from Repo into the repository
 // at Dir, the mirror of Owner. Refspecs, when set, replace Ref's refspec (Ref
 // then only names the fetch). Depth > 0 shallows the fetch; Flags are extra
-// fetch options (e.g. --unshallow).
+// fetch options (e.g. --unshallow). Destination, when set, is the ref the
+// fetched commit is read from instead of FETCH_HEAD, which is then not
+// written: concurrent fetches into one repository (an object pool) would
+// race on it.
 type fetchOptions struct {
-	Refspecs []string
-	Dir      string
-	Owner    *Repository
-	Repo     *Repository
-	Ref      Ref
-	Depth    int
-	Flags    []string
-	Pool     string
+	Refspecs    []string
+	Dir         string
+	Owner       *Repository
+	Repo        *Repository
+	Ref         Ref
+	Depth       int
+	Flags       []string
+	Pool        string
+	Destination string
 }
 
 // fetch fetches options.Ref and returns the fetched commit, which may be
@@ -201,6 +205,10 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	if options.Depth > 0 {
 		args = append(args, fmt.Sprintf("--depth=%d", options.Depth))
 	}
+	fetched := "FETCH_HEAD"
+	if options.Destination != "" {
+		args, fetched = append(args, "--no-write-fetch-head"), options.Destination
+	}
 	refspecs := options.Refspecs
 	if len(refspecs) == 0 {
 		refspecs = []string{ref.refspec(remoteOf(options.Owner, repo))}
@@ -209,5 +217,5 @@ func fetch(ctx context.Context, options fetchOptions) (sha string, err error) {
 	if _, err := run(ctx, command{dir: options.Dir, env: env, args: args, progress: report}); err != nil {
 		return "", fmt.Errorf("fetch %s from %s: %w", ref.Name, repo.URL.Redacted(), err)
 	}
-	return run(ctx, command{dir: options.Dir, args: []string{"rev-parse", "--verify", "FETCH_HEAD^{commit}"}})
+	return run(ctx, command{dir: options.Dir, args: []string{"rev-parse", "--verify", "--end-of-options", fetched + "^{commit}"}})
 }

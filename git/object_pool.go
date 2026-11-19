@@ -88,6 +88,16 @@ func (m mirrorPaths) poolName() string {
 
 func (m mirrorPaths) poolLock() string { return filepath.Join(filepath.Dir(m.pool), "pool.lock") }
 
+// poolFetchLock serializes network fetches into the pool (fetchIntoPool).
+func (m mirrorPaths) poolFetchLock() string {
+	return filepath.Join(filepath.Dir(m.pool), "pool.fetch.lock")
+}
+
+// lockWrite takes the locks a mirror write needs. Every path takes them in
+// one order, so none waits on a lock while blocking the holder of an earlier
+// one: pool.lock (shared; Maintain holds it exclusively), then mirror.lock
+// (exclusive), then, only around a fetch into the pool, pool.fetch.lock
+// (exclusive for a repository the pool holds nothing of, else shared).
 func (m mirrorPaths) lockWrite(ctx context.Context) (func() error, error) {
 	unlockPool := func() error { return nil }
 	if m.pool != "" {
@@ -138,6 +148,11 @@ func (m mirrorPaths) installAlternate(ctx context.Context) (err error) {
 	if err := ensureMirror(ctx, m.pool); err != nil {
 		return err
 	}
+	// Keep every fetch into the pool packed: a mirror's prune-packed (in
+	// dropBorrowed) drops only the loose objects an alternate packs.
+	if _, err := run(ctx, command{dir: m.pool, args: []string{"config", "fetch.unpackLimit", "1"}}); err != nil {
+		return err
+	}
 	if _, err := run(ctx, command{dir: m.git, args: []string{"config", "core.alternateRefsPrefixes", poolTips}}); err != nil {
 		return err
 	}
@@ -163,6 +178,8 @@ func replaceFile(path string, data []byte) (err error) {
 
 // retain keeps pinned commits complete in the pool before the mirror publishes
 // its pins. A ref-bearing tip is advertised only after the pool has its graph.
+// Objects copied into the pool are then dropped from the mirror
+// (dropBorrowed), so they are stored once.
 func (m mirrorPaths) retain(ctx context.Context, shas []string, advertise bool) error {
 	if m.pool == "" || len(shas) == 0 {
 		return nil
@@ -195,9 +212,27 @@ func (m mirrorPaths) retain(ctx context.Context, shas []string, advertise bool) 
 			return err
 		}
 	}
-	if updates.Len() == 0 {
+	if updates.Len() > 0 {
+		if _, err := run(ctx, command{dir: m.pool, args: []string{"update-ref", "--stdin"}, stdin: []byte(updates.String())}); err != nil {
+			return err
+		}
+	}
+	if len(specs) == 0 {
 		return nil
 	}
-	_, err := run(ctx, command{dir: m.pool, args: []string{"update-ref", "--stdin"}, stdin: []byte(updates.String())})
+	return m.dropBorrowed(ctx)
+}
+
+// dropBorrowed repacks the mirror without the objects its pool holds
+// (repack -l), deleting the packs and loose objects it replaces (-d), so an
+// object retained in the pool is not stored twice. The caller holds the
+// exclusive mirror lock, so no mirror write races it. Readers that do not
+// hold the lock are safe the way they are with git gc: an open pack stays
+// readable after it is unlinked, and a reader that misses a removed pack
+// rescans and finds the object in the pool. -A keeps unreachable objects
+// (a commit fetched only into FETCH_HEAD for a worktree's cherry-pick) as
+// loose objects for gc's prune expiry rather than deleting them.
+func (m mirrorPaths) dropBorrowed(ctx context.Context) error {
+	_, err := run(ctx, command{dir: m.git, args: []string{"-c", "repack.writeBitmaps=false", "repack", "-A", "-d", "-l", "-q"}})
 	return err
 }

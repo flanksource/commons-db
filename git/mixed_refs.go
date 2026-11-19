@@ -31,7 +31,7 @@ func (c *Cache) lockMixedRefs(ctx context.Context, options refReadOptions, resol
 	keys := slices.Sorted(maps.Keys(sources))
 	for _, key := range keys {
 		source := sources[key]
-		_, _, unlock, err := c.lockResolvedRefs(ctx, source.repo, source.refs, true)
+		_, _, unlock, err := c.lockResolvedRefs(ctx, source.repo, source.refs)
 		if err != nil {
 			return "", nil, nil, err
 		}

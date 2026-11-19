@@ -118,7 +118,7 @@ func (c *Cache) readLog(ctx context.Context, repo *Repository, options LogOption
 	}
 	headFrom := cmp.Or(options.HeadFrom, repo)
 	var out string
-	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.Base}, {headFrom, options.Head}}, History: true}, func(mirror string, shas []string) (err error) {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, options.Base}, {headFrom, options.Head}}}, func(mirror string, shas []string) (err error) {
 		args = append(args, "--end-of-options", shas[0]+"..."+shas[1], "--")
 		out, err = run(ctx, command{dir: mirror, args: append(args, options.Paths...)})
 		return err
@@ -133,7 +133,7 @@ func (c *Cache) readLog(ctx context.Context, repo *Repository, options LogOption
 // History returns the commits reachable from ref, newest first
 // (--topo-order), with each commit's per-file changes (--name-status, renames
 // detected). ref resolves like a Checkout ref and its full history is fetched
-// into the mirror, unshallowing it when needed.
+// into the cache when missing.
 func (c *Cache) readHistory(ctx context.Context, repo *Repository, ref string, options HistoryOptions) ([]Commit, error) {
 	if options.Limit < 0 || options.Offset < 0 {
 		return nil, fmt.Errorf("invalid history limit %d", options.Limit)
@@ -168,7 +168,7 @@ func (c *Cache) readHistory(ctx context.Context, repo *Repository, ref string, o
 		args = append(args, "--skip="+strconv.Itoa(options.Offset))
 	}
 	var out string
-	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, ref}}, History: true}, func(mirror string, shas []string) (err error) {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, ref}}}, func(mirror string, shas []string) (err error) {
 		out, err = run(ctx, command{dir: mirror, args: slices.Concat(args, []string{"--end-of-options", shas[0], "--"}, options.Paths)})
 		return err
 	})
@@ -183,7 +183,7 @@ func (c *Cache) readHistory(ctx context.Context, repo *Repository, ref string, o
 // their merge base; refs without a common ancestor are an error.
 func (c *Cache) readComparison(ctx context.Context, repo *Repository, base, head string) (Comparison, error) {
 	var comparison Comparison
-	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {repo, head}}, History: true}, func(mirror string, shas []string) error {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {repo, head}}}, func(mirror string, shas []string) error {
 		baseSHA, headSHA := shas[0], shas[1]
 		counts, err := run(ctx, command{dir: mirror, args: []string{"rev-list", "--left-right", "--count", "--end-of-options", baseSHA + "..." + headSHA}})
 		if err != nil {
@@ -216,7 +216,7 @@ func (c *Cache) readMergeBase(ctx context.Context, repo *Repository, options Mer
 	base, head := options.Base, options.Head
 	headFrom := cmp.Or(options.HeadFrom, repo)
 	var found string
-	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {headFrom, head}}, History: true}, func(mirror string, shas []string) (err error) {
+	err := c.readRefs(ctx, repo, refReadOptions{Refs: []refOn{{repo, base}, {headFrom, head}}}, func(mirror string, shas []string) (err error) {
 		if found, err = mergeBase(ctx, mirror, shas[0], shas[1]); err != nil {
 			return fmt.Errorf("%s of %s and %s of %s: %w", base, repo.URL.Redacted(), head, headFrom.URL.Redacted(), err)
 		}
@@ -243,8 +243,7 @@ type refOn struct {
 }
 
 type refReadOptions struct {
-	Refs    []refOn
-	History bool
+	Refs []refOn
 }
 
 // withRefs makes the commits present and pinned, then reads them under the
@@ -285,10 +284,10 @@ func (c *Cache) lockReadRefs(ctx context.Context, repo *Repository, options refR
 			return c.lockMixedRefs(ctx, options, resolved)
 		}
 	}
-	return c.lockResolvedRefs(ctx, repo, resolved, options.History)
+	return c.lockResolvedRefs(ctx, repo, resolved)
 }
 
-func (c *Cache) lockResolvedRefs(ctx context.Context, repo *Repository, resolved []Ref, history bool) (string, []string, func() error, error) {
+func (c *Cache) lockResolvedRefs(ctx context.Context, repo *Repository, resolved []Ref) (string, []string, func() error, error) {
 	paths, err := c.mirrorPaths(repo)
 	if err != nil {
 		return "", nil, nil, err
@@ -301,7 +300,7 @@ func (c *Cache) lockResolvedRefs(ctx context.Context, repo *Repository, resolved
 	if err != nil {
 		return "", nil, nil, err
 	}
-	pinned, err := paths.usePinned(shas, history)
+	pinned, err := paths.usePinned(shas)
 	if err != nil {
 		return "", nil, nil, errors.Join(err, lock.Unlock())
 	}
@@ -310,12 +309,6 @@ func (c *Cache) lockResolvedRefs(ctx context.Context, repo *Repository, resolved
 	}
 	if err := lock.Unlock(); err != nil {
 		return "", nil, nil, err
-	}
-	if !history {
-		shallow, release, err := paths.lockShallowRefs(ctx, shas)
-		if err != nil || shallow != "" {
-			return shallow, shas, release, err
-		}
 	}
 	if err := c.pinReadRefs(ctx, paths, repo, resolved); err != nil {
 		return "", nil, nil, err
@@ -326,8 +319,8 @@ func (c *Cache) lockResolvedRefs(ctx context.Context, repo *Repository, resolved
 	return paths.git, shas, lock.Unlock, nil
 }
 
-// pinReadRefs makes every ref's commit present (fetching it when missing, with
-// full history for a History read) and pins it, under the exclusive lock.
+// pinReadRefs makes every ref's commit present with its complete history
+// (fetching it when missing) and pins it, under the exclusive lock.
 func (c *Cache) pinReadRefs(ctx context.Context, paths mirrorPaths, repo *Repository, resolved []Ref) (err error) {
 	unlock, err := paths.lockWrite(ctx)
 	if err != nil {
@@ -338,12 +331,7 @@ func (c *Cache) pinReadRefs(ctx context.Context, paths mirrorPaths, repo *Reposi
 		return err
 	}
 	for _, ref := range resolved {
-		if pinned, err := paths.usePinned([]string{ref.SHA}, true); err != nil {
-			return err
-		} else if pinned {
-			continue
-		}
-		if err := paths.prepareRef(ctx, c.Store, fetchOptions{Dir: paths.git, Owner: repo, Repo: repo, Ref: ref}); err != nil {
+		if err := paths.prepareRef(ctx, prepareOptions{Store: c.Store, Repo: repo, Ref: ref}); err != nil {
 			return err
 		}
 	}
@@ -374,25 +362,6 @@ func resolveReadRefs(ctx context.Context, refs []refOn) ([]Ref, error) {
 		}
 	}
 	return resolved, nil
-}
-
-// fetchHistory makes ref's commit and its full history, fetched from repo,
-// present in owner's mirror: a cached commit is reused unless an earlier
-// Depth checkout left the mirror shallow, which would truncate a log or merge
-// base.
-func fetchHistory(ctx context.Context, options fetchOptions) (string, error) {
-	shallow, err := run(ctx, command{dir: options.Dir, args: []string{"rev-parse", "--is-shallow-repository"}})
-	if err != nil {
-		return "", err
-	}
-	if shallow == "true" {
-		options.Flags = append(slices.Clone(options.Flags), "--unshallow")
-		return fetch(ctx, options)
-	}
-	if hasCommit(ctx, options.Dir, options.Ref.SHA) {
-		return options.Ref.SHA, nil
-	}
-	return fetch(ctx, options)
 }
 
 // parseLog splits logFormat output into commits; parseFiles reads the file

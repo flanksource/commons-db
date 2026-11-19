@@ -2,7 +2,15 @@
 
 `Cache` uses its existing bare mirror for history, commit counts, tree changes, selected files and supplied-content blame. These reads require Git 2.42 or newer. They do not lease worktrees.
 
-Resolve a branch or tag to a full commit SHA when the caller needs several operations to describe the same revision. An operation lists remote refs once for named references. A full SHA can hit the repository mirror, its organization pool, or its durable store entry. History and blame use the complete mirror. Tree changes and blob reads can use the selected endpoint objects from an isolated shallow mirror.
+Resolve a branch or tag to a full commit SHA when the caller needs several operations to describe the same revision. An operation lists remote refs once for named references. A full SHA can hit the repository mirror, its organization pool, or its durable store entry.
+
+## Complete histories, stored once
+
+Every cached commit is complete. Any read or checkout of a missing commit fetches it with its whole history, so `History`, `Log`, `Compare`, `MergeBase`, `Ancestors` and `Blame` never see a truncated graph. No read creates a shallow mirror, and a shallow mirror or pool is refused. `CloneOptions.Depth` limits only the clone's own history; the mirror it is filled from stays complete.
+
+A pooled mirror fetches straight into the organization pool (`fetchIntoPool`), so the objects are stored once and the pool's refs of every repository it serves are the negotiation's haves. Commits that reach the mirror itself (a Store hydrate, `Fetch`) are retained into the pool, and `git repack -A -d -l` then drops the mirror's copies.
+
+The first fetch of a repository into a pool holds `pool.fetch.lock` exclusively; fetches of repositories the pool already holds share it. Two first fetches of related repositories therefore run one after the other, and the second negotiates against what the first brought. Locks are taken in one order: `pool.lock` (shared; `Maintain` exclusive), `mirror.lock`, then `pool.fetch.lock`.
 
 ## Compare first, load on selection
 
@@ -81,6 +89,8 @@ A `Repository` whose URL is a local path or `file://` URL (`RepoURL.LocalPath`) 
 Reads hold the mirror lock shared, so reads proceed together while a fetch, a pin write or `Maintain` (which hold it exclusively) waits for them. Each selected commit is retained under `refs/commons-cache/commits/<SHA>` so Git maintenance cannot prune objects during a read, and `pins/<SHA>` beside the mirror records when a read last used it. A commit this process already pinned is read without any preparatory Git process; any other commit is checked, fetched when missing and pinned under the exclusive lock first. A tree reads after releasing the lock, protected by its pin.
 
 `Cache.Maintain(ctx, git.MaintainOptions{PinTTL: ...})` deletes the pins no read used for `PinTTL` and runs `git maintenance run --task=gc` in every mirror. A full sweep also reconciles and collects each organization pool and logs its mirror count. Choose a TTL longer than any tree stays open.
+
+A full sweep also migrates pre-v2 entries: a directory directly under `Root` holding only `mirror.git`, `pins`, `worktrees`, `mirror.lock`, `repository.lock` and a version 1 `repository.json` owner binding (or only its empty lock files). Its mirror's refs are fetched from disk, with no network, into the v2 pool as tips under `refs/commons-pool/tips/<key>/legacy/` (into the v2 mirror under `refs/commons-legacy/` when the repository has no pool), and the directory is removed and logged. Any other directory is left alone. An entry whose locks are held, whose mirror is shallow or whose import fails stays in place, and `Maintain` returns the error after the rest of the sweep.
 
 Reads share a limit of four concurrent readers per mirror within the process. Waiting for a reader slot honors context cancellation; cancelling a waiting caller does not interrupt active readers. This limit does not coordinate separate processes.
 
