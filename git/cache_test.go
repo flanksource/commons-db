@@ -35,7 +35,7 @@ var _ = Describe("Cache", func() {
 
 	It("checks out a branch, a tag and a raw SHA", func(ctx SpecContext) {
 		for ref, sha := range map[string]string{"feature": fixture.Feature, "v1-lite": fixture.First, fixture.Main: fixture.Main} {
-			worktree := checkout(ctx, git.CheckoutOptions{Ref: ref, Depth: 1})
+			worktree := checkout(ctx, git.CheckoutOptions{Ref: ref})
 			Expect(worktree.Ref.SHA).To(Equal(sha))
 			Expect(gitFixture(worktree.Dir, "rev-parse", "HEAD")).To(Equal(sha))
 			Expect(worktree.Release()).To(Succeed())

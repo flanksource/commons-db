@@ -26,17 +26,22 @@ type MaintainOptions struct {
 // pin ref without a pin file has not been read since pin files existed and
 // expires. A Tree keeps no pin fresh while open, so PinTTL must exceed the
 // longest a Tree stays open. A PackStore then compacts the bundles of every
-// key it holds (of Owners only, when set).
+// key it holds (of Owners only, when set). A full sweep (no Owners) first
+// imports and removes the pre-v2 entries under Root (migrateLegacy); an
+// import failure leaves that entry in place and fails Maintain after the rest
+// of the sweep ran.
 func (c *Cache) Maintain(ctx context.Context, options MaintainOptions) error {
 	if err := c.maintainMirrors(ctx, options); err != nil {
 		return err
 	}
-	if len(options.Owners) == 0 {
-		if err := c.maintainPools(ctx); err != nil {
-			return err
-		}
+	if len(options.Owners) > 0 {
+		return c.compactStore(ctx, options.Owners)
 	}
-	return c.compactStore(ctx, options.Owners)
+	legacy := c.migrateLegacy(ctx)
+	if err := c.maintainPools(ctx); err != nil {
+		return errors.Join(legacy, err)
+	}
+	return errors.Join(legacy, c.compactStore(ctx, options.Owners))
 }
 
 // storeCompactor is a Store that folds its per-key files (PackStore).

@@ -8,8 +8,10 @@ import (
 	"path/filepath"
 )
 
+// cloneCached fills options.Dir from repo's mirror, which holds the commit's
+// complete history; Depth limits only the clone's own history.
 func (c *Cache) cloneCached(ctx context.Context, repo *Repository, ref Ref, options CloneOptions) (err error) {
-	paths, err := c.checkoutPaths(repo, options.Depth)
+	paths, err := c.mirrorPaths(repo)
 	if err != nil {
 		return err
 	}
@@ -21,13 +23,13 @@ func (c *Cache) cloneCached(ctx context.Context, repo *Repository, ref Ref, opti
 	if err := paths.ensure(ctx, repo); err != nil {
 		return err
 	}
-	if err := paths.prepareRef(ctx, c.Store, fetchOptions{Dir: paths.git, Owner: repo, Repo: repo, Ref: ref, Depth: options.Depth}); err != nil {
+	if err := paths.prepareRef(ctx, prepareOptions{Store: c.Store, Repo: repo, Ref: ref}); err != nil {
 		return err
 	}
 	spec := ref.SHA
 	switch ref.Kind {
 	case RefTag:
-		tag, err := cachedCloneTag(ctx, cachedTagOptions{Paths: paths, Repository: repo, Ref: ref, Depth: options.Depth})
+		tag, err := cachedCloneTag(ctx, cachedTagOptions{Paths: paths, Repository: repo, Ref: ref})
 		if err != nil {
 			return err
 		}

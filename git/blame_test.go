@@ -75,11 +75,11 @@ var _ = Describe("Cache.Blame", func() {
 		Entry("long XML line", strings.Repeat("x", 100_000), []string{strings.Repeat("x", 100_000)}),
 	)
 
-	It("uses the requested commit after its branch advances and completes a shallow cache", func(ctx SpecContext) {
+	It("uses the requested commit after its branch advances", func(ctx SpecContext) {
 		const displayed = "<Rule>\n<Value/>\n</Rule>\n"
 		created := fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: displayed, Message: "Add rule"})
 		head := fixture.commitOn(fixtureCommit{Branch: "main", Path: "other.xml", Content: "<Other/>", Message: "Other rule"})
-		wt, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: head, Depth: 1})
+		wt, err := cache.Checkout(ctx, repo, git.CheckoutOptions{Ref: head})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(wt.Release()).To(Succeed())
 		fixture.commitOn(fixtureCommit{Branch: "main", Path: "rule.xml", Content: "<Replaced/>\n", Message: "Replace rule"})

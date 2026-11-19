@@ -56,20 +56,22 @@ var _ = Describe("scoped object pool lifecycle", func() {
 		Expect(gitFixture(fork.Path, "rev-parse", "release/shared")).To(Equal(right.Ref.SHA))
 		Expect(gitFixture(fork.Path, "cat-file", "tag", "shared-v1")).To(ContainSubstring("tag shared-v1\n"))
 	})
-	It("keeps shallow clones independent without shallowing the donor", func(ctx SpecContext) {
+	It("keeps a shallow clone independent of the cache", func(ctx SpecContext) {
 		clone := filepath.Join(fixtureTempDir(), "clone")
 		_, err := git.Clone(ctx, forkRepo, git.CloneOptions{Cache: cache, Dir: clone, Ref: "main", Depth: 1})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(gitFixture(clone, "rev-list", "--count", "HEAD")).To(Equal("1"))
-		Expect(gitFixture(filepath.Join(cache.Root, "v2", donorRepo.URL.CacheKey(), "mirror.git"), "rev-parse", "--is-shallow-repository")).To(Equal("false"))
+		Expect(filepath.Join(clone, ".git", "objects", "info", "alternates")).NotTo(BeAnExistingFile())
+		Expect(os.RemoveAll(cache.Root)).To(Succeed())
+		gitFixture(clone, "fsck", "--full")
 	})
-	It("uses a separate complete mirror alongside a depth-limited checkout", func(ctx SpecContext) {
-		legacy := &git.Cache{Root: fixtureTempDir()}
-		tree, err := legacy.Checkout(ctx, donorRepo, git.CheckoutOptions{Ref: "main", Depth: 1, Ephemeral: true})
+	It("keeps the mirror complete after a shallow clone and serves a complete clone from it", func(ctx SpecContext) {
+		fresh := &git.Cache{Root: fixtureTempDir()}
+		_, err := git.Clone(ctx, donorRepo, git.CloneOptions{Cache: fresh, Dir: filepath.Join(fixtureTempDir(), "shallow"), Ref: "v1", Depth: 1})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(tree.Release()).To(Succeed())
+		Expect(gitFixture(filepath.Join(fresh.Root, "v2", donorRepo.URL.CacheKey(), "mirror.git"), "rev-parse", "--is-shallow-repository")).To(Equal("false"))
 		clone := filepath.Join(fixtureTempDir(), "complete")
-		_, err = git.Clone(ctx, donorRepo, git.CloneOptions{Cache: legacy, Dir: clone, Ref: "main"})
+		_, err = git.Clone(ctx, donorRepo, git.CloneOptions{Cache: fresh, Dir: clone, Ref: "main"})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(gitFixture(clone, "rev-parse", "--is-shallow-repository")).To(Equal("false"))
 		Expect(gitFixture(clone, "rev-list", "--count", "HEAD")).To(Equal("2"))

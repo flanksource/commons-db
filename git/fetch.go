@@ -16,10 +16,11 @@ type FetchOptions struct {
 	Publish bool
 }
 
-// Fetch brings refs into repo's mirror ahead of any read. It uses cached
-// SHAs from the mirror and its pool, then hydrates missing commits from the
-// Store. One remote fetch advances named refs and fills remaining misses.
-// The resulting commits are pinned so they survive gc and reach the Store.
+// Fetch brings refs with their complete history into repo's mirror ahead of
+// any read. It uses cached SHAs from the mirror and its pool, then hydrates
+// missing commits from the Store. One remote fetch advances named refs and
+// fills remaining misses. The resulting commits are retained in the pool,
+// dropped from the mirror, and pinned so they survive gc and reach the Store.
 func (c *Cache) Fetch(ctx context.Context, repo *Repository, options FetchOptions) (err error) {
 	if len(options.Refs) == 0 {
 		return errors.New("git fetch: at least one ref is required")
@@ -87,6 +88,9 @@ func fetchRefs(ctx context.Context, paths mirrorPaths, store Store, repo *Reposi
 			return nil, err
 		}
 	} else if err := hydrateMiss(ctx, store, paths.git, shas...); err != nil {
+		return nil, err
+	}
+	if err := requireComplete(paths.git); err != nil {
 		return nil, err
 	}
 	for _, sha := range shas {

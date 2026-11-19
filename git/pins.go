@@ -59,14 +59,8 @@ func (m mirrorPaths) pinned() (*sync.Map, error) {
 }
 
 // usePinned reports whether every commit is known pinned in this process and
-// still pinned on disk, refreshing each pin's last use. A History read also
-// needs a mirror that is not shallow.
-func (m mirrorPaths) usePinned(shas []string, history bool) (bool, error) {
-	if history {
-		if _, err := os.Stat(filepath.Join(m.git, "shallow")); !errors.Is(err, fs.ErrNotExist) {
-			return false, err
-		}
-	}
+// still pinned on disk, refreshing each pin's last use.
+func (m mirrorPaths) usePinned(shas []string) (bool, error) {
 	set, err := m.pinned()
 	if err != nil {
 		return false, err
