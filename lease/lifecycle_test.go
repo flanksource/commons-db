@@ -29,8 +29,10 @@ var _ = Describe("lease lifecycle", func() {
 		l := locker{options: Options{OperationTimeout: time.Second}, ttl: ttl}
 		held := unconfirmedLease{removed: make(chan struct{})}
 		lease := l.manage(ctx, held, time.Now())
+		DeferCleanup(lease.Unlock, ctx)
 		Eventually(lease.Done(), ttl).Should(BeClosed())
 		Expect(errors.Is(lease.Err(), ErrLost)).To(BeTrue())
+		Consistently(held.removed, 50*time.Millisecond).ShouldNot(BeClosed())
 		Expect(lease.Unlock(ctx)).To(Succeed())
 		Expect(lease.Unlock(ctx)).To(Succeed())
 		Expect(held.removed).To(BeClosed())

@@ -7,6 +7,12 @@ DECLARE @holder varbinary(128) = @p1;
 SET CONTEXT_INFO @holder;
 SELECT 0;`
 
+// sqlClearHolder resets the holder name before a session that holds no app
+// locks returns to the pool.
+const sqlClearHolder = `
+SET CONTEXT_INFO 0x;
+SELECT 0;`
+
 const sqlHolderPermission = `SELECT HAS_PERMS_BY_NAME(NULL, NULL, N'VIEW SERVER STATE'), SUSER_SNAME();`
 
 // sqlHolderLocks lists the granted session app locks whose resource
@@ -44,6 +50,7 @@ SELECT @status;`
 const sqlReadLock = `
 DECLARE @status int, @gate nvarchar(255) = @p1 + N':gate';
 EXEC @status = sys.sp_getapplock @Resource = @gate, @LockMode = N'Shared', @LockOwner = N'Session', @LockTimeout = 0;
+IF @status = -1 BEGIN SELECT -10; RETURN; END;
 IF @status < 0 BEGIN SELECT @status; RETURN; END;
 EXEC @status = sys.sp_getapplock @Resource = @p1, @LockMode = N'Shared', @LockOwner = N'Session', @LockTimeout = 0;
 IF @status < 0 BEGIN SELECT @status; RETURN; END;

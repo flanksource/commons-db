@@ -2,6 +2,8 @@ package valkeygo
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -50,15 +52,29 @@ func (c *conn) PTTL(name string) (time.Duration, error) {
 }
 
 func (c *conn) Eval(script *redsyncredis.Script, keysAndArgs ...any) (any, error) {
-	keys := make([]string, script.KeyCount)
-	args := keysAndArgs
-
-	if script.KeyCount > 0 {
-		for i := range script.KeyCount {
-			keys[i] = keysAndArgs[i].(string)
+	keyCount := script.KeyCount
+	if keyCount < 0 {
+		if len(keysAndArgs) == 0 {
+			return nil, fmt.Errorf("missing Lua script key count")
 		}
-		args = keysAndArgs[script.KeyCount:]
+		count, err := strconv.Atoi(fmt.Sprint(keysAndArgs[0]))
+		if err != nil || count < 0 {
+			return nil, fmt.Errorf("invalid Lua script key count %v", keysAndArgs[0])
+		}
+		keyCount, keysAndArgs = count, keysAndArgs[1:]
 	}
+	if keyCount > len(keysAndArgs) {
+		return nil, fmt.Errorf("script needs %d keys, got %d arguments", keyCount, len(keysAndArgs))
+	}
+	keys := make([]string, keyCount)
+	for i, arg := range keysAndArgs[:keyCount] {
+		key, ok := arg.(string)
+		if !ok {
+			return nil, fmt.Errorf("script key %d has type %T, expected string", i+1, arg)
+		}
+		keys[i] = key
+	}
+	args := keysAndArgs[keyCount:]
 
 	v, err := c.delegate.EvalSha(c.ctx, script.Hash, keys, args...).Result()
 	if err != nil && strings.Contains(err.Error(), "NOSCRIPT ") {

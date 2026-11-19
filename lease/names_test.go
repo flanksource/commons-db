@@ -71,6 +71,7 @@ var _ = Describe("lease names", func() {
 			"commons-db:lease:{deploy:git-azure_oma}:writer",
 			"commons-db:lease:{deploy:git-azure_oma}:shared",
 			"commons-db:lease:{deploy:git-azure_oma}:waiting",
+			"commons-db:lease:{deploy:git-azure_oma}:grouped",
 			"commons-db:lease:{deploy:git-azure_oma}:holders",
 		}))
 	})

@@ -32,11 +32,11 @@ func newRedisBackend(client valkey.Client, ttl time.Duration) *redisBackend {
 	return &redisBackend{client: client, pool: valkeygo.NewPool(valkeycompat.NewAdapter(client)), ttl: ttl}
 }
 
-// redisKeys are the writer, shared holders, waiting writers and holder names
-// of a key, all in one hash slot.
+// redisKeys are the writer, shared holders, waiting writers, grouped holder
+// index and holder names of a key, all in one hash slot.
 func redisKeys(req request) []string {
 	prefix := "commons-db:lease:{" + req.resource() + "}:"
-	return []string{prefix + "writer", prefix + "shared", prefix + "waiting", prefix + "holders"}
+	return []string{prefix + "writer", prefix + "shared", prefix + "waiting", prefix + "grouped", prefix + "holders"}
 }
 
 type redisBackend struct {
@@ -47,7 +47,7 @@ type redisBackend struct {
 
 type redisResource struct {
 	*redisBackend
-	keys []string
+	keys []string // Writer, shared holders, waiting writers, grouped holders, holder names.
 }
 
 type redisAcquisition struct {
@@ -175,7 +175,7 @@ func (b *redisBackend) holders(ctx context.Context, req request) ([]Holder, erro
 	for _, record := range records {
 		var holder Holder
 		if err := json.Unmarshal([]byte(record), &holder); err != nil || holder.Name == "" {
-			return nil, fmt.Errorf("invalid holder record %q in %s", record, resource.keys[3])
+			return nil, fmt.Errorf("invalid holder record %q in %s", record, resource.keys[4])
 		}
 		holders = append(holders, holder)
 	}
