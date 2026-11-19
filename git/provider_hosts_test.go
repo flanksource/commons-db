@@ -14,18 +14,18 @@ var _ = Describe("GitHub provider", func() {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"GET /orgs/acme/repos": func(r *http.Request) apiReply {
 				if r.URL.Query().Get("page") == "2" {
-					return apiReply{Body: `[{"name":"b","full_name":"acme/b","clone_url":"https://github.com/acme/b.git","default_branch":"dev","private":true}]`}
+					return apiReply{Body: `[{"id":202,"name":"b","full_name":"acme/b","clone_url":"https://github.com/acme/b.git","default_branch":"dev","private":true}]`}
 				}
 				return apiReply{Headers: map[string]string{"Link": `<{base}/orgs/acme/repos?per_page=100&page=2>; rel="next"`},
-					Body: `[{"name":"a","full_name":"acme/a","clone_url":"https://github.com/acme/a.git","default_branch":"main"}]`}
+					Body: `[{"id":101,"name":"a","full_name":"acme/a","clone_url":"https://github.com/acme/a.git","default_branch":"main"}]`}
 			},
 		})
 		client := providerClient(models.ConnectionTypeGithub, api.Server.URL, map[string]string{"organization": "acme"})
 		repos, err := client.Provider.ListRepositories(ctx, git.ListRepositoriesOptions{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(repos).To(Equal([]git.RepositoryInfo{
-			{Name: "a", FullName: "acme/a", Namespace: "acme", CloneURL: "https://github.com/acme/a.git", DefaultBranch: "main"},
-			{Name: "b", FullName: "acme/b", Namespace: "acme", CloneURL: "https://github.com/acme/b.git", DefaultBranch: "dev", Private: true},
+			{ID: "101", Name: "a", FullName: "acme/a", Namespace: "acme", CloneURL: "https://github.com/acme/a.git", DefaultBranch: "main"},
+			{ID: "202", Name: "b", FullName: "acme/b", Namespace: "acme", CloneURL: "https://github.com/acme/b.git", DefaultBranch: "dev", Private: true},
 		}))
 		calls := api.Calls()
 		Expect(calls).To(HaveLen(2))
@@ -77,18 +77,18 @@ var _ = Describe("GitLab provider", func() {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"GET /api/v4/groups/acme%2Fplatform/projects": func(r *http.Request) apiReply {
 				if r.URL.Query().Get("page") == "2" {
-					return apiReply{Body: `[{"path":"b","path_with_namespace":"acme/platform/b","http_url_to_repo":"https://gl/acme/platform/b.git","default_branch":"main","namespace":{"full_path":"acme/platform"}}]`}
+					return apiReply{Body: `[{"id":32,"path":"b","path_with_namespace":"acme/platform/b","http_url_to_repo":"https://gl/acme/platform/b.git","default_branch":"main","namespace":{"full_path":"acme/platform"}}]`}
 				}
 				return apiReply{Headers: map[string]string{"X-Next-Page": "2"},
-					Body: `[{"path":"a","path_with_namespace":"acme/platform/a","http_url_to_repo":"https://gl/acme/platform/a.git","default_branch":"main","visibility":"private","archived":true,"namespace":{"full_path":"acme/platform"}}]`}
+					Body: `[{"id":31,"path":"a","path_with_namespace":"acme/platform/a","http_url_to_repo":"https://gl/acme/platform/a.git","default_branch":"main","visibility":"private","archived":true,"namespace":{"full_path":"acme/platform"}}]`}
 			},
 		})
 		client := providerClient(models.ConnectionTypeGitlab, api.Server.URL, map[string]string{"group": "acme/platform"})
 		repos, err := client.Provider.ListRepositories(ctx, git.ListRepositoriesOptions{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(repos).To(Equal([]git.RepositoryInfo{
-			{Name: "a", FullName: "acme/platform/a", Namespace: "acme/platform", CloneURL: "https://gl/acme/platform/a.git", DefaultBranch: "main", Private: true, Archived: true},
-			{Name: "b", FullName: "acme/platform/b", Namespace: "acme/platform", CloneURL: "https://gl/acme/platform/b.git", DefaultBranch: "main"},
+			{ID: "31", Name: "a", FullName: "acme/platform/a", Namespace: "acme/platform", CloneURL: "https://gl/acme/platform/a.git", DefaultBranch: "main", Private: true, Archived: true},
+			{ID: "32", Name: "b", FullName: "acme/platform/b", Namespace: "acme/platform", CloneURL: "https://gl/acme/platform/b.git", DefaultBranch: "main"},
 		}))
 		Expect(api.Calls()[0].Query).To(Equal("include_subgroups=true&per_page=100"))
 		Expect(api.Calls()[1].Query).To(Equal("include_subgroups=true&page=2&per_page=100"))
@@ -128,12 +128,12 @@ var _ = Describe("GitLab provider", func() {
 var _ = Describe("Azure DevOps provider", func() {
 	It("lists project repositories with api-version and Basic PAT auth", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
-			"GET /acme/Platform/_apis/git/repositories": reply(`{"value":[{"name":"rules","remoteUrl":"https://acme@dev.azure.com/acme/Platform/_git/rules","sshUrl":"git@ssh.dev.azure.com:v3/acme/Platform/rules","webUrl":"https://dev.azure.com/acme/Platform/_git/rules","defaultBranch":"refs/heads/main","isDisabled":true,"project":{"name":"Platform"}}]}`),
+			"GET /acme/Platform/_apis/git/repositories": reply(`{"value":[{"id":"5f0c7d3a-9c1e-4b1a-8d2e-0a6b7c8d9e10","name":"rules","remoteUrl":"https://acme@dev.azure.com/acme/Platform/_git/rules","sshUrl":"git@ssh.dev.azure.com:v3/acme/Platform/rules","webUrl":"https://dev.azure.com/acme/Platform/_git/rules","defaultBranch":"refs/heads/main","isDisabled":true,"project":{"name":"Platform"}}]}`),
 		})
 		client := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", map[string]string{"project": "Platform"})
 		repos, err := client.Provider.ListRepositories(ctx, git.ListRepositoriesOptions{})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(repos).To(Equal([]git.RepositoryInfo{{Name: "rules", FullName: "Platform/rules", Namespace: "Platform",
+		Expect(repos).To(Equal([]git.RepositoryInfo{{ID: "5f0c7d3a-9c1e-4b1a-8d2e-0a6b7c8d9e10", Name: "rules", FullName: "Platform/rules", Namespace: "Platform",
 			CloneURL: "https://acme@dev.azure.com/acme/Platform/_git/rules", SSHURL: "git@ssh.dev.azure.com:v3/acme/Platform/rules",
 			WebURL: "https://dev.azure.com/acme/Platform/_git/rules", DefaultBranch: "main", Archived: true}}))
 		Expect(api.Calls()[0].Query).To(Equal("api-version=7.1"))

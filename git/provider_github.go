@@ -25,6 +25,7 @@ type githubProvider struct {
 }
 
 type githubRepo struct {
+	ID            int64  `json:"id"`
 	Name          string `json:"name"`
 	FullName      string `json:"full_name"`
 	CloneURL      string `json:"clone_url"`
@@ -97,7 +98,7 @@ func (p *githubProvider) listPages(ctx context.Context, next string) ([]Reposito
 		}
 		for _, repo := range page {
 			namespace, _, _ := strings.Cut(repo.FullName, "/")
-			repos = append(repos, RepositoryInfo{Name: repo.Name, FullName: repo.FullName, Namespace: namespace,
+			repos = append(repos, RepositoryInfo{ID: strconv.FormatInt(repo.ID, 10), Name: repo.Name, FullName: repo.FullName, Namespace: namespace,
 				CloneURL: repo.CloneURL, SSHURL: repo.SSHURL, WebURL: repo.HTMLURL, DefaultBranch: repo.DefaultBranch,
 				Private: repo.Private, Archived: repo.Archived})
 		}

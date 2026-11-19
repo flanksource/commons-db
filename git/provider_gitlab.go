@@ -20,6 +20,7 @@ type gitlabProvider struct {
 }
 
 type gitlabProject struct {
+	ID                int64  `json:"id"`
 	Path              string `json:"path"`
 	PathWithNamespace string `json:"path_with_namespace"`
 	HTTPURLToRepo     string `json:"http_url_to_repo"`
@@ -76,7 +77,7 @@ func (p *gitlabProvider) ListRepositories(ctx context.Context, options ListRepos
 			return nil, err
 		}
 		for _, project := range page {
-			repos = append(repos, RepositoryInfo{Name: project.Path, FullName: project.PathWithNamespace,
+			repos = append(repos, RepositoryInfo{ID: strconv.FormatInt(project.ID, 10), Name: project.Path, FullName: project.PathWithNamespace,
 				Namespace: project.Namespace.FullPath, CloneURL: project.HTTPURLToRepo, SSHURL: project.SSHURLToRepo,
 				WebURL: project.WebURL, DefaultBranch: project.DefaultBranch, Private: project.Visibility == "private",
 				Archived: project.Archived})
