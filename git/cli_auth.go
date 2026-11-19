@@ -55,6 +55,14 @@ func commandEnv(ctx context.Context, repo *Repository) (env []string, cleanup fu
 	return append(baseEnv(pairs...), extra...), cleanup, nil
 }
 
+// CommandEnv is the environment for a git command, run by the caller, that talks to r's remote:
+// its credentials and TLS settings scoped to the remote's host, with a defensive client's limits
+// (see commandEnv). cleanup removes the temporary key and certificate files once the command is
+// done.
+func (r *Repository) CommandEnv(ctx context.Context) (env []string, cleanup func(), err error) {
+	return commandEnv(ctx, r)
+}
+
 // httpConfig scopes Authorization and TLS settings to the repository's
 // scheme://host/ so a redirect to another host never receives them.
 func httpConfig(repo *Repository, secrets *secretFiles) ([]configPair, error) {
