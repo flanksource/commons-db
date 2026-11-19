@@ -100,6 +100,37 @@ func TestDiscoverOpenSearchAndPrometheus(t *testing.T) {
 	}
 }
 
+func TestDiscoverVictoriaMetrics(t *testing.T) {
+	for _, probe := range []struct {
+		name, body, product, version string
+		status                       int
+	}{
+		{"VictoriaMetrics", `{"version":"v1.156.0","license":{"type":"opensource"},"vmalert":{"enabled":false}}`, "VictoriaMetrics", "v1.156.0", http.StatusOK},
+		{"blocked probe", "forbidden", "Prometheus", "2.24.0", http.StatusForbidden},
+		{"unrelated endpoint", `{"version":"v9.0.0"}`, "Prometheus", "2.24.0", http.StatusOK},
+	} {
+		t.Run(probe.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/v1/status/buildinfo":
+					_, _ = w.Write([]byte(`{"status":"success","data":{"version":"2.24.0"}}`))
+				case "/vmui/config.json":
+					w.WriteHeader(probe.status)
+					_, _ = w.Write([]byte(probe.body))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			ctx := dbcontext.NewContext(context.Background())
+			got := discoverServer(context.Background(), ctx, &models.Connection{Type: models.ConnectionTypePrometheus, URL: server.URL})
+			if got.Status != "available" || got.Product != probe.product || got.Version != probe.version {
+				t.Fatalf("discovery = %#v, want %s %s", got, probe.product, probe.version)
+			}
+		})
+	}
+}
+
 func TestParseRedisInfo(t *testing.T) {
 	got := parseRedisInfo("# Server\r\nredis_version:7.2.4\r\nredis_mode:standalone\r\nos:Linux\r\narch_bits:64\r\n")
 	if got["redis_version"] != "7.2.4" || got["redis_mode"] != "standalone" || got["arch_bits"] != "64" {

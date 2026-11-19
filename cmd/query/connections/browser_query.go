@@ -84,7 +84,8 @@ func (h *connectionBrowserHandler) serveQuery(w http.ResponseWriter, r *http.Req
 		operation = recorder.Operation(descriptor.Provider)
 		result, err = h.executeOpenSearch(r, conn, descriptor, request)
 	default:
-		result, err = h.executeProvider(query.WithRecorder(h.ctx, recorder), conn, descriptor, request)
+		queryContext := withBrowserConnection(h.ctx.Wrap(r.Context()), conn)
+		result, err = h.executeProvider(query.WithRecorder(queryContext, recorder), conn, descriptor, request)
 	}
 	elapsed := time.Since(started)
 	result.DurationMS = float64(elapsed.Microseconds()) / 1000

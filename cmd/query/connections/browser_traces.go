@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/rpc"
-	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query/tracequery"
 )
@@ -35,17 +34,7 @@ func (h *connectionBrowserHandler) serveTraces(w http.ResponseWriter, r *http.Re
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	service := tracequery.Service{Read: func(ctx context.Context, request tracequery.Request, ids []string) ([]tracequery.Span, error) {
-		queryContext := h.ctx.Wrap(ctx)
-		next := queryContext.ConnectionResolver()
-		queryContext = queryContext.WithConnectionResolver(func(ctx dbcontext.Context, ref string) (*models.Connection, error) {
-			if ref == request.Source {
-				return conn, nil
-			}
-			if next != nil {
-				return next(ctx, ref)
-			}
-			return nil, nil
-		})
+		queryContext := withBrowserConnection(h.ctx.Wrap(ctx), conn)
 		return tracequery.ReadOpenSearch(queryContext, request, conn, ids)
 	}}
 	var result any
