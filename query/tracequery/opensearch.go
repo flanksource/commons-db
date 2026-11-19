@@ -55,6 +55,10 @@ func resolveOpenSearchSource(queryContext dbcontext.Context, r Request, c *model
 	}
 	clock := definition.Fields["timestamp"]
 	options["dateField"], options["traceIdField"], options["spanIdField"] = clock.Source, traceIDField, spanIDField
+	// The service a row reports is the one a pushed service filter matched on.
+	if service, ok := definition.Fields["service"]; ok {
+		options["serviceField"] = service.Source
+	}
 	return openSearchSource{
 		ctx: queryContext, reference: r.Source, options: options,
 		// A numeric timestamp bounds a read only once its epoch unit is declared.

@@ -125,6 +125,10 @@ func (d Definition) targetCondition(canonical string, target Target, op esdsl.Op
 		return esdsl.Condition{}, fmt.Errorf("%s is mapped as %s; only a keyword field takes an exact %s condition", canonical, field.Type, op)
 	}
 	if target.Nested == "" {
+		// A text field is matched exactly through its keyword subfield.
+		if mapped {
+			target.Field = field.queryField()
+		}
 		return valueCondition(op, target.Field, values), nil
 	}
 	conditions := []esdsl.Condition{}

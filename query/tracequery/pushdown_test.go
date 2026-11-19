@@ -333,6 +333,34 @@ var _ = Describe("OpenSearch trace pushdown", func() {
 		Expect(result.Services).To(Equal([]string{"billing", "checkout", "db", "inventory", "payments"}))
 	})
 
+	It("keeps a filter on the service.name normalization derives from the span's service in memory", func() {
+		index := &jaegerIndex{mapping: mappingOf(nestedTags), docs: []map[string]any{
+			jaegerSpan("trace-a", "a-root", "", "checkout", at),
+			jaegerSpan("trace-b", "b-root", "", "inventory", at),
+		}}
+		request := window
+		request.Attributes = Modes{"service.name=checkout": Include}
+		result, err := jaegerService(index, nil).Search(context.Background(), request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Traces).To(HaveExactElements(HaveField("TraceID", "trace-a")))
+		// The window read and the full read of both traces: nothing narrowed.
+		Expect(index.queries).To(HaveLen(2))
+	})
+
+	It("reports the service the connection's span layout names, which a service filter matches", func() {
+		mapping := mappingOf(nestedTags)
+		mapping["custom_service"] = "keyword"
+		span := jaegerSpan("trace-s", "s-root", "", "jaeger-service", at)
+		span["custom_service"] = "checkout"
+		index := &jaegerIndex{mapping: mapping, docs: []map[string]any{span}}
+		request := window
+		request.Services = Modes{"checkout": Include}
+		result, err := jaegerService(index, types.JSONStringMap{"span_layout": `{"fields":{"service":{"source":"custom_service"}}}`}).Search(context.Background(), request)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(result.Traces).To(HaveExactElements(And(HaveField("TraceID", "trace-s"), HaveField("Service", "checkout"))))
+		Expect(result.Services).To(Equal([]string{"checkout"}))
+	})
+
 	It("bounds a window on a numeric timestamp in its source unit", func() {
 		mapping := map[string]string{"traceID": "keyword", "spanID": "keyword", "startTimeUnixNano": "long", "durationNano": "long", "operationName": "keyword", "process": "object", "process.serviceName": "keyword"}
 		span := func(trace string, started time.Time) map[string]any {

@@ -43,11 +43,12 @@ type OpenTelemetryOptions struct {
 	Format    string `json:"format,omitempty"`
 	Index     string `json:"index,omitempty"`
 	DateField string `json:"dateField,omitempty"`
-	// TraceIDField and SpanIDField name the span identity fields a row is
-	// normalized from, when the span layout resolves them to a field outside
-	// the names normalization tries.
+	// TraceIDField, SpanIDField and ServiceField name the fields a row's span
+	// identity and service are normalized from, when the span layout resolves
+	// them to a field outside the names normalization tries.
 	TraceIDField   string   `json:"traceIdField,omitempty"`
 	SpanIDField    string   `json:"spanIdField,omitempty"`
+	ServiceField   string   `json:"serviceField,omitempty"`
 	SelectFields   []string `json:"selectFields,omitempty"`
 	SourceExcludes []string `json:"sourceExcludes,omitempty"`
 	Limit          int      `json:"limit,omitempty"`

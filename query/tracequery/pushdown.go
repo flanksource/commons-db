@@ -17,10 +17,17 @@ import (
 // through the index's span layout, so a nested tag list and tag fields read
 // alike. Exclusions, and anything the layout cannot match exactly, stay with
 // Search.
+const derivedServiceAttribute = "service.name"
+
 func pushdown(r Request, definition layout.Definition) []esdsl.Condition {
 	result := []esdsl.Condition{}
 	groups := r.Attributes.includedByKey()
 	for _, key := range slices.Sorted(maps.Keys(groups)) {
+		// Normalization sets resource service.name from the span's service field,
+		// which no attribute source holds, so only Search can match it.
+		if key == derivedServiceAttribute {
+			continue
+		}
 		if condition, ok := attributeCondition(definition, groups[key]); ok {
 			result = append(result, condition)
 		}

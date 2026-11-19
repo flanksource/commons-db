@@ -127,6 +127,18 @@ var _ = Describe("Flattened tag-field attributes", func() {
 			Expect(compiledCondition(condition)).To(MatchJSON(`{"query":{"bool":{"minimum_should_match":1,"should":[{"term":{"tag.http_method":"GET"}},{"term":{"process.tag.http@method":"GET"}}]}}}`))
 		})
 
+		It("matches a text field a custom-separator rule names through its keyword subfield", func() {
+			custom := layout.FlattenedAttributes{Prefix: "attributes.", FieldPrefix: "tag.", Separator: "_"}
+			definition, err := layout.Discover(layout.Discovery{
+				Fields:             jaegerFlattenedFields(map[string]string{"tag.http_method": "text", "tag.http_method.keyword": "keyword"}),
+				FlattenedOverrides: []layout.FlattenedAttributes{custom},
+			})
+			Expect(err).NotTo(HaveOccurred())
+			condition, err := definition.AttributeCondition("http.method", esdsl.OpTerm, "GET")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(compiledCondition(condition)).To(MatchJSON(`{"query":{"bool":{"minimum_should_match":1,"should":[{"term":{"tag.http_method.keyword":"GET"}},{"term":{"process.tag.http@method":"GET"}}]}}}`))
+		})
+
 		It("refuses an attribute no source of the layout holds", func() {
 			definition, err := layout.Discover(layout.Discovery{Fields: map[string]string{"traceID": "keyword", "spanID": "keyword", "startTimeMillis": "long", "duration": "long"}})
 			Expect(err).NotTo(HaveOccurred())
