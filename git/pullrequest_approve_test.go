@@ -61,3 +61,36 @@ var _ = Describe("Approving an Azure DevOps pull request", func() {
 			To(MatchError(ContainSubstring("azure DevOps named no identity for the connection to approve as")))
 	})
 })
+
+var _ = Describe("Approving a GitLab merge request", func() {
+	const mr = "/api/v4/projects/acme%2Fapi/merge_requests/5"
+	api := func() git.RepoURL {
+		return repoURL("https://gitlab.example.com/acme/api.git", models.ConnectionTypeGitlab)
+	}
+	approver := func(fake *fakeAPI) git.PullRequestApprover {
+		approver, ok := providerClient(models.ConnectionTypeGitlab, fake.Server.URL, nil).Provider.(git.PullRequestApprover)
+		Expect(ok).To(BeTrue())
+		return approver
+	}
+
+	It("approves as the connection's user and leaves the comment as a note", func(ctx SpecContext) {
+		fake := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"POST " + mr + "/approve": reply(`{"iid":5,"approved_by":[{"user":{"username":"ada"}}]}`),
+			"GET " + mr:               reply(`{"iid":5,"state":"opened","web_url":"https://gitlab.example.com/acme/api/-/merge_requests/5"}`),
+			"POST " + mr + "/notes":   reply(`{"id":91}`),
+		})
+		Expect(approver(fake).ApprovePullRequest(ctx, api(), 5, "Ship it.")).To(Succeed())
+		paths := []string{}
+		for _, call := range fake.Calls() {
+			paths = append(paths, call.Method+" "+call.Path)
+		}
+		Expect(paths).To(Equal([]string{"POST " + mr + "/approve", "GET " + mr, "POST " + mr + "/notes"}))
+		Expect(fake.Calls()[2].Body).To(Equal(map[string]any{"body": "Ship it."}))
+	})
+
+	It("leaves no note without a comment", func(ctx SpecContext) {
+		fake := newFakeAPI(map[string]func(*http.Request) apiReply{"POST " + mr + "/approve": reply(`{"iid":5}`)})
+		Expect(approver(fake).ApprovePullRequest(ctx, api(), 5, "")).To(Succeed())
+		Expect(fake.Calls()).To(HaveLen(1))
+	})
+})
