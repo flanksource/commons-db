@@ -11,3 +11,7 @@ func ApplyInWorktree(ctx context.Context, cache *Cache, repo *Repository, reques
 	}
 	return cache.applyInWorktree(ctx, repo, base, request)
 }
+
+// ForgetAzureProjectIDs drops every memoised Azure project id, so a fake API started on a closed
+// one's address isn't answered from what was read from that one.
+func ForgetAzureProjectIDs() { azureProjectIDs.Clear() }

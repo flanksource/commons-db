@@ -40,6 +40,8 @@ type apiReply struct {
 
 func newFakeAPI(routes map[string]func(r *http.Request) apiReply) *fakeAPI {
 	GinkgoHelper()
+	// A fake API is a new host, which may get a closed one's port: nothing read from that one applies.
+	git.ForgetAzureProjectIDs()
 	api := &fakeAPI{}
 	api.Server = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		api.record(r)
