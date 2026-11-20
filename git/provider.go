@@ -28,6 +28,11 @@ var (
 	ErrUnrelatedHistories = errors.New("the commits share no history")
 )
 
+// RepositoryReader reads one repository's information, its default branch among it.
+type RepositoryReader interface {
+	Repository(ctx context.Context, repo RepoURL) (RepositoryInfo, error)
+}
+
 // Provider is a git hosting provider's REST API.
 type Provider interface {
 	// Type is the models.ConnectionType* of the provider.
