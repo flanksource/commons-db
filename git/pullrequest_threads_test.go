@@ -30,10 +30,10 @@ var _ = Describe("Azure DevOps pull request threads", func() {
 		threads, err := reader.PullRequestThreads(ctx, repoURL("https://dev.azure.com/acme/Platform/_git/rules", ""), 9)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(threads).To(Equal([]git.PullRequestThread{
-			{ID: "5", Path: "/rules.go", Line: 12, URL: "https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9?discussionId=5",
+			{ID: "5", Status: "active", Path: "/rules.go", Line: 12, URL: "https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9?discussionId=5",
 				Comments: []git.PullRequestThreadComment{{ID: "1", Author: "Grace Hopper", AuthorLogin: "grace@example.com",
 					AuthorAvatarURL: "https://avatars.example/grace", Body: "Split this up.", CreatedAt: time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)}}},
-			{ID: "6", Resolved: true, URL: "https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9?discussionId=6",
+			{ID: "6", Resolved: true, Status: "closed", URL: "https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9?discussionId=6",
 				Comments: []git.PullRequestThreadComment{{ID: "1", Author: "Ada Lovelace", Body: "Looks good.", CreatedAt: time.Date(2026, 11, 2, 13, 0, 0, 0, time.UTC)}}},
 		}), "a system note's thread and a deleted thread have no comments to read")
 	})
