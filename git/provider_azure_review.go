@@ -91,6 +91,7 @@ type azurePolicyEvaluation struct {
 		IsEnabled  bool `json:"isEnabled"`
 		IsDeleted  bool `json:"isDeleted"`
 		Type       struct {
+			ID          string `json:"id"`
 			DisplayName string `json:"displayName"`
 		} `json:"type"`
 		Settings struct {
@@ -116,7 +117,8 @@ func (evaluation azurePolicyEvaluation) toPolicy(repo RepoURL) (PullRequestPolic
 	if name == "" {
 		return PullRequestPolicy{}, fmt.Errorf("missing display name")
 	}
-	policy := PullRequestPolicy{ID: evaluation.Configuration.ID, Name: name, Status: evaluation.Status, Required: evaluation.Configuration.IsBlocking, MinimumApproverCount: evaluation.Configuration.Settings.MinimumApproverCount}
+	policy := PullRequestPolicy{ID: evaluation.Configuration.ID, Name: name, Status: evaluation.Status, Required: evaluation.Configuration.IsBlocking, MinimumApproverCount: evaluation.Configuration.Settings.MinimumApproverCount,
+		Build: evaluation.Configuration.Type.ID == azureBuildPolicyType}
 	if evaluation.Context.BuildID != "" {
 		buildID, err := strconv.Atoi(string(evaluation.Context.BuildID))
 		if err != nil || buildID <= 0 {

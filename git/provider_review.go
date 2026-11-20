@@ -13,11 +13,13 @@ type PullRequestReview struct {
 }
 
 type PullRequestPolicy struct {
-	ID                   int
-	Name                 string
-	Status               string
-	Required             bool
-	BuildID              int
+	ID       int
+	Name     string
+	Status   string
+	Required bool
+	BuildID  int
+	// Build is a build validation policy, which waits on a pipeline rather than on people.
+	Build                bool
 	URL                  string
 	MinimumApproverCount int
 }
