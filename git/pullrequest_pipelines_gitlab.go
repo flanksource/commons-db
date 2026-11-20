@@ -57,8 +57,10 @@ func (p *gitlabProvider) PullRequestExecutions(ctx context.Context, repo RepoURL
 	id := strconv.FormatInt(latest.ID, 10)
 	execution := PullRequestExecution{PipelineName: "pipeline", Repository: repo, PipelineExecution: PipelineExecution{
 		ID: id, Number: id, Branch: latest.Ref, SHA: latest.SHA, Status: latest.Status, CreatedAt: latest.CreatedAt, URL: latest.WebURL}}
-	if owner, name, found := cutLast(pull.HeadRepository, "/"); found && pull.HeadRepository != repo.Owner+"/"+repo.Name {
-		execution.Repository.Owner, execution.Repository.Name = owner, name
+	if pull.HeadRepository != repo.Owner+"/"+repo.Name {
+		if execution.Repository, err = repo.SourceRepository(pull.HeadRepository); err != nil {
+			return nil, fmt.Errorf("gitlab merge request !%d source project: %w", number, err)
+		}
 	}
 	for _, job := range jobs {
 		jobID := strconv.FormatInt(job.ID, 10)
@@ -87,12 +89,4 @@ func (p *gitlabProvider) PipelineLog(ctx context.Context, repo RepoURL, _, log s
 		lines = lines[len(lines)-tail:]
 	}
 	return strings.Join(lines, "\n"), nil
-}
-
-// cutLast cuts s around the last instance of sep.
-func cutLast(s, sep string) (string, string, bool) {
-	if i := strings.LastIndex(s, sep); i >= 0 {
-		return s[:i], s[i+len(sep):], true
-	}
-	return s, "", false
 }
