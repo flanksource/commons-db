@@ -1,6 +1,7 @@
 package git
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -37,6 +38,11 @@ type ClientOptions struct {
 	// http.Defensive, and git refuses a remote that is not https or ssh or whose host is not
 	// public (see defensiveRemote).
 	Defensive bool
+	// TokenSource, when set, is asked for an OAuth access token on every provider API call,
+	// which authenticates as a bearer token in place of the connection's password: an az CLI
+	// login, whose token expires and is refreshed, needs no personal access token. git commands
+	// carry no credentials from it.
+	TokenSource func(context.Context) (string, error)
 }
 
 // FromConnection builds a Client from a hydrated connection (URL, username,
@@ -89,13 +95,16 @@ func gitClient(conn models.Connection, scope ConnectionScope, tls TLS) (*Client,
 }
 
 func providerClient(conn models.Connection, scope ConnectionScope, tls TLS, options ClientOptions) (*Client, error) {
-	if strings.TrimSpace(conn.Password) == "" {
-		return nil, fmt.Errorf("%s access token is required", conn.Type)
-	}
 	auth := Auth{Username: conn.Username, Token: conn.Password, TLS: tls}
-	authorization := "Bearer " + conn.Password
-	if conn.Type == models.ConnectionTypeAzureDevops {
+	var authorization string
+	switch {
+	case options.TokenSource != nil:
+	case strings.TrimSpace(conn.Password) == "":
+		return nil, fmt.Errorf("%s access token is required", conn.Type)
+	case conn.Type == models.ConnectionTypeAzureDevops:
 		authorization = "Basic " + base64.StdEncoding.EncodeToString([]byte(":"+conn.Password))
+	default:
+		authorization = "Bearer " + conn.Password
 	}
 	api, err := newRESTClient(restClientOptions{Provider: conn.Type, BaseURL: scope.API.String(), TLS: tls, Authorization: authorization, Client: options})
 	if err != nil {

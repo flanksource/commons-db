@@ -43,7 +43,8 @@ type restClient struct {
 }
 
 // restClientOptions configures newRESTClient for one Provider API at BaseURL,
-// authenticating with the Authorization header; Client shares transports.
+// authenticating with the Authorization header, or with a bearer token from
+// Client.TokenSource when it is set; Client shares transports.
 type restClientOptions struct {
 	Provider      string
 	BaseURL       string
@@ -72,8 +73,12 @@ func newRESTClient(options restClientOptions) (*restClient, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s API TLS: %w", provider, err)
 	}
-	client.Timeout(restTimeout).Use(requireHTTPS(provider)).Header("Authorization", authorization).
-		Header("Accept", "application/json")
+	client.Timeout(restTimeout).Use(requireHTTPS(provider)).Header("Accept", "application/json")
+	if source := options.Client.TokenSource; source != nil {
+		client.Use(bearerFrom(provider, source))
+	} else {
+		client.Header("Authorization", authorization)
+	}
 	client.Use(func(next http.RoundTripper) http.RoundTripper {
 		return middlewares.RoundTripperFunc(func(request *http.Request) (*http.Response, error) {
 			return observability.ApplyHTTPObservability(dbcontext.NewContext(request.Context()), "git", next, nil).RoundTrip(request)
@@ -85,6 +90,21 @@ func newRESTClient(options restClientOptions) (*restClient, error) {
 		client.Use(commonshttp.Defensive(commonshttp.DefensiveOptions{Public: true, Redirect: true}))
 	}
 	return &restClient{provider: provider, base: base, http: client}, nil
+}
+
+// bearerFrom authenticates each request with a bearer token source hands out for it.
+func bearerFrom(provider string, source func(context.Context) (string, error)) middlewares.Middleware {
+	return func(next http.RoundTripper) http.RoundTripper {
+		return middlewares.RoundTripperFunc(func(req *http.Request) (*http.Response, error) {
+			token, err := source(req.Context())
+			if err != nil {
+				return nil, fmt.Errorf("%s API access token: %w", provider, err)
+			}
+			req = req.Clone(req.Context())
+			req.Header.Set("Authorization", "Bearer "+token)
+			return next.RoundTrip(req)
+		})
+	}
 }
 
 // requireHTTPS refuses every hop, including redirects, that is not HTTPS.
