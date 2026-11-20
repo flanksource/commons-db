@@ -3,6 +3,7 @@ packages:
   - 'packages/*'
 
 allowBuilds:
+  "@flanksource/clicky-ui": true
   esbuild: true
 
 catalog:
