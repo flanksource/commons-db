@@ -77,10 +77,7 @@ func (p *gitlabProvider) ListRepositories(ctx context.Context, options ListRepos
 			return nil, err
 		}
 		for _, project := range page {
-			repos = append(repos, RepositoryInfo{ID: strconv.FormatInt(project.ID, 10), Name: project.Path, FullName: project.PathWithNamespace,
-				Namespace: project.Namespace.FullPath, CloneURL: project.HTTPURLToRepo, SSHURL: project.SSHURLToRepo,
-				WebURL: project.WebURL, DefaultBranch: project.DefaultBranch, Private: project.Visibility == "private",
-				Archived: project.Archived})
+			repos = append(repos, project.info())
 		}
 		next := strings.TrimSpace(headers.Get("X-Next-Page"))
 		if next == "" {
@@ -88,6 +85,22 @@ func (p *gitlabProvider) ListRepositories(ctx context.Context, options ListRepos
 		}
 		query.Set("page", next)
 	}
+}
+
+// Repository reads repo's project.
+func (p *gitlabProvider) Repository(ctx context.Context, repo RepoURL) (RepositoryInfo, error) {
+	var project gitlabProject
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.projectEndpoint(repo, ""), Out: &project}); err != nil {
+		return RepositoryInfo{}, err
+	}
+	return project.info(), nil
+}
+
+func (project gitlabProject) info() RepositoryInfo {
+	return RepositoryInfo{ID: strconv.FormatInt(project.ID, 10), Name: project.Path, FullName: project.PathWithNamespace,
+		Namespace: project.Namespace.FullPath, CloneURL: project.HTTPURLToRepo, SSHURL: project.SSHURLToRepo,
+		WebURL: project.WebURL, DefaultBranch: project.DefaultBranch, Private: project.Visibility == "private",
+		Archived: project.Archived}
 }
 
 // OpenPullRequest opens a merge request, resolving assignee and reviewer
