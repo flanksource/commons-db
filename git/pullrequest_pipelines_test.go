@@ -121,3 +121,75 @@ var _ = Describe("Azure DevOps pull request executions", func() {
 		Expect(err).To(MatchError(ContainSubstring("azure build 31 has no log 99")))
 	})
 })
+
+var _ = Describe("GitLab merge request executions", func() {
+	mr := func(source int) func(*http.Request) apiReply {
+		return reply(`{"iid":5,"state":"opened","source_branch":"fast","target_branch":"main","sha":"` + headSHA +
+			`","source_project_id":` + itoa(source) + `,"target_project_id":1}`)
+	}
+	api := func() git.RepoURL {
+		return repoURL("https://gitlab.example.com/acme/api.git", models.ConnectionTypeGitlab)
+	}
+
+	It("is the merge request's latest pipeline, with its jobs in the order they were created", func(ctx SpecContext) {
+		fake := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5": mr(1),
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/pipelines": reply(`[
+				{"id":102,"project_id":1,"sha":"` + headSHA + `","ref":"refs/merge-requests/5/head","status":"failed","created_at":"2026-11-03T11:00:00Z","web_url":"https://gitlab.example.com/acme/api/-/pipelines/102"},
+				{"id":101,"project_id":1,"sha":"` + staleSHA + `","ref":"refs/merge-requests/5/head","status":"success","created_at":"2026-11-03T10:00:00Z","web_url":"https://gitlab.example.com/acme/api/-/pipelines/101"}]`),
+			"GET /api/v4/projects/1/pipelines/102/jobs": reply(`[
+				{"id":7002,"name":"test","stage":"test","status":"failed","started_at":"2026-11-03T11:02:00Z","finished_at":"2026-11-03T11:04:00Z","web_url":"https://gitlab.example.com/acme/api/-/jobs/7002"},
+				{"id":7001,"name":"build","stage":"build","status":"success","started_at":"2026-11-03T11:00:30Z","finished_at":"2026-11-03T11:01:30Z","web_url":"https://gitlab.example.com/acme/api/-/jobs/7001"}]`),
+			"GET /api/v4/projects/acme%2Fapi/jobs/7002/trace": reply("go test ./...\n--- FAIL: TestSpeed\nFAIL\n"),
+		})
+		reader, ok := providerClient(models.ConnectionTypeGitlab, fake.Server.URL, nil).Provider.(git.PullRequestPipelineReader)
+		Expect(ok).To(BeTrue())
+
+		executions, err := reader.PullRequestExecutions(ctx, api(), 5)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(executions).To(Equal([]git.PullRequestExecution{{
+			PipelineName: "pipeline", Repository: api(),
+			PipelineExecution: git.PipelineExecution{ID: "102", Number: "102", Branch: "refs/merge-requests/5/head", SHA: headSHA, Status: "failed",
+				CreatedAt: time.Date(2026, 11, 3, 11, 0, 0, 0, time.UTC), URL: "https://gitlab.example.com/acme/api/-/pipelines/102"},
+			Jobs: []git.PipelineJob{
+				{ID: "7001", Name: "build", Status: "success", StartedAt: time.Date(2026, 11, 3, 11, 0, 30, 0, time.UTC),
+					FinishedAt: time.Date(2026, 11, 3, 11, 1, 30, 0, time.UTC), URL: "https://gitlab.example.com/acme/api/-/jobs/7001", LogID: "7001"},
+				{ID: "7002", Name: "test", Status: "failed", StartedAt: time.Date(2026, 11, 3, 11, 2, 0, 0, time.UTC),
+					FinishedAt: time.Date(2026, 11, 3, 11, 4, 0, 0, time.UTC), URL: "https://gitlab.example.com/acme/api/-/jobs/7002", LogID: "7002"},
+			},
+		}}))
+
+		log, err := reader.PipelineLog(ctx, executions[0].Repository, "102", "7002", 2)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(log).To(Equal("--- FAIL: TestSpeed\nFAIL"))
+	})
+
+	It("reads a fork's pipeline through the fork's project", func(ctx SpecContext) {
+		fake := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5": mr(9),
+			"GET /api/v4/projects/9":                           reply(`{"id":9,"path":"api","path_with_namespace":"grace/api"}`),
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/pipelines": reply(`[
+				{"id":202,"project_id":9,"sha":"` + headSHA + `","ref":"fast","status":"running","created_at":"2026-11-03T11:00:00Z"}]`),
+			"GET /api/v4/projects/9/pipelines/202/jobs": reply(`[]`),
+		})
+		reader := providerClient(models.ConnectionTypeGitlab, fake.Server.URL, nil).Provider.(git.PullRequestPipelineReader)
+
+		executions, err := reader.PullRequestExecutions(ctx, api(), 5)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(executions).To(HaveLen(1))
+		Expect(executions[0].Repository.Owner).To(Equal("grace"))
+		Expect(executions[0].Repository.Name).To(Equal("api"))
+		Expect(executions[0].Status).To(Equal("running"))
+	})
+
+	It("has none for a merge request that ran no pipeline", func(ctx SpecContext) {
+		fake := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5":           mr(1),
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5/pipelines": reply(`[]`),
+		})
+		reader := providerClient(models.ConnectionTypeGitlab, fake.Server.URL, nil).Provider.(git.PullRequestPipelineReader)
+		executions, err := reader.PullRequestExecutions(ctx, api(), 5)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(executions).To(BeEmpty())
+	})
+})

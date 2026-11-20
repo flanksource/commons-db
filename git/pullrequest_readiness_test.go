@@ -80,3 +80,40 @@ var _ = Describe("An Azure DevOps pull request's merge readiness", func() {
 		Expect(readiness(ctx, api)).To(Equal(git.MergeReadiness{}))
 	})
 })
+
+var _ = Describe("A GitLab merge request's merge readiness", func() {
+	api := func() git.RepoURL {
+		return repoURL("https://gitlab.example.com/acme/api.git", models.ConnectionTypeGitlab)
+	}
+	readiness := func(ctx SpecContext, state, status string) git.MergeReadiness {
+		fake := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /api/v4/projects/acme%2Fapi/merge_requests/5": reply(`{"iid":5,"state":"` + state + `","source_branch":"fast","target_branch":"main",
+				"source_project_id":1,"target_project_id":1,"detailed_merge_status":"` + status + `"}`),
+		})
+		reader, ok := providerClient(models.ConnectionTypeGitlab, fake.Server.URL, nil).Provider.(git.PullRequestReadinessReader)
+		Expect(ok).To(BeTrue())
+		got, err := reader.PullRequestReadiness(ctx, api(), 5)
+		Expect(err).ToNot(HaveOccurred())
+		return got
+	}
+
+	DescribeTable("is its detailed merge status", func(ctx SpecContext, status string, want git.MergeReadiness) {
+		Expect(readiness(ctx, "opened", status)).To(Equal(want))
+	},
+		Entry("mergeable", "mergeable", git.MergeReadiness{State: "ready"}),
+		Entry("conflicting", "conflict", git.MergeReadiness{State: "conflicting", Reasons: []string{"conflicts with target branch"}}),
+		Entry("still being checked", "checking", git.MergeReadiness{State: "pending", WaitingForMerge: true, Reasons: []string{"merge status: checking"}}),
+		Entry("not yet checked", "unchecked", git.MergeReadiness{State: "pending", WaitingForMerge: true, Reasons: []string{"merge status: unchecked"}}),
+		Entry("waiting on its pipeline", "ci_still_running", git.MergeReadiness{State: "pending", WaitingForBuilds: true, Reasons: []string{"pipeline is still running"}}),
+		Entry("a failed pipeline", "ci_must_pass", git.MergeReadiness{State: "blocked", Reasons: []string{"pipeline must succeed"}}),
+		Entry("a draft", "draft_status", git.MergeReadiness{State: "blocked", Reasons: []string{"MR is a draft"}}),
+		Entry("unresolved threads", "discussions_not_resolved", git.MergeReadiness{State: "blocked", Reasons: []string{"discussions are not resolved"}}),
+		Entry("missing approvals", "not_approved", git.MergeReadiness{State: "blocked", Reasons: []string{"approvals are missing"}}),
+		Entry("another block, named as GitLab names it", "need_rebase", git.MergeReadiness{State: "blocked", Reasons: []string{"merge status: need_rebase"}}),
+	)
+
+	It("has none once the merge request is merged or closed", func(ctx SpecContext) {
+		Expect(readiness(ctx, "merged", "not_open")).To(Equal(git.MergeReadiness{}))
+		Expect(readiness(ctx, "closed", "not_open")).To(Equal(git.MergeReadiness{}))
+	})
+})

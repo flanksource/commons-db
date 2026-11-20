@@ -26,3 +26,20 @@ var _ = Describe("An Azure DevOps repository's information", func() {
 		Expect(info.DefaultBranch).To(Equal("trunk"))
 	})
 })
+
+var _ = Describe("A GitLab repository's information", func() {
+	It("is its project, a nested group's by its whole path", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /api/v4/projects/acme%2Fplatform%2Fapi": reply(`{"id":42,"path":"api","path_with_namespace":"acme/platform/api",
+				"default_branch":"trunk","visibility":"private","web_url":"https://gitlab.example.com/acme/platform/api",
+				"http_url_to_repo":"https://gitlab.example.com/acme/platform/api.git","namespace":{"full_path":"acme/platform"}}`),
+		})
+		reader, ok := providerClient(models.ConnectionTypeGitlab, api.Server.URL, nil).Provider.(git.RepositoryReader)
+		Expect(ok).To(BeTrue())
+		info, err := reader.Repository(ctx, repoURL("https://gitlab.example.com/acme/platform/api.git", models.ConnectionTypeGitlab))
+		Expect(err).ToNot(HaveOccurred())
+		Expect(info).To(Equal(git.RepositoryInfo{ID: "42", Name: "api", FullName: "acme/platform/api", Namespace: "acme/platform",
+			CloneURL: "https://gitlab.example.com/acme/platform/api.git", WebURL: "https://gitlab.example.com/acme/platform/api",
+			DefaultBranch: "trunk", Private: true}))
+	})
+})
