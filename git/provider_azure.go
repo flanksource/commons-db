@@ -103,11 +103,24 @@ func (p *azureProvider) ListRepositories(ctx context.Context, options ListReposi
 	}
 	repos := make([]RepositoryInfo, 0, len(page.Value))
 	for _, repo := range page.Value {
-		repos = append(repos, RepositoryInfo{ID: repo.ID, Name: repo.Name, FullName: repo.Project.Name + "/" + repo.Name,
-			Namespace: repo.Project.Name, CloneURL: repo.RemoteURL, SSHURL: repo.SSHURL, WebURL: repo.WebURL,
-			DefaultBranch: strings.TrimPrefix(repo.DefaultBranch, "refs/heads/"), Archived: repo.IsDisabled})
+		repos = append(repos, repo.info())
 	}
 	return repos, nil
+}
+
+func (repo azureRepo) info() RepositoryInfo {
+	return RepositoryInfo{ID: repo.ID, Name: repo.Name, FullName: repo.Project.Name + "/" + repo.Name,
+		Namespace: repo.Project.Name, CloneURL: repo.RemoteURL, SSHURL: repo.SSHURL, WebURL: repo.WebURL,
+		DefaultBranch: strings.TrimPrefix(repo.DefaultBranch, "refs/heads/"), Archived: repo.IsDisabled}
+}
+
+// Repository reads repo's information from its project.
+func (p *azureProvider) Repository(ctx context.Context, repo RepoURL) (RepositoryInfo, error) {
+	var read azureRepo
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.repoEndpoint(repo, ""), Out: &read}); err != nil {
+		return RepositoryInfo{}, err
+	}
+	return read.info(), nil
 }
 
 // OpenPullRequest opens a pull request and, with AutoMerge, sets
