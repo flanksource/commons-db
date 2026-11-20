@@ -135,7 +135,8 @@ type restRequest struct {
 	Method   string
 	Endpoint string
 	Body     any
-	Out      any
+	// Out decodes the JSON response, or receives the raw body when it is an io.Writer.
+	Out any
 }
 
 // do sends options and returns the response headers.
@@ -171,7 +172,11 @@ func (c *restClient) do(ctx context.Context, options restRequest) (headers http.
 		return nil, &APIError{Provider: c.provider, Method: method, URL: endpoint, StatusCode: response.StatusCode,
 			Body: strings.TrimSpace(string(excerpt))}
 	}
-	if out != nil {
+	if writer, ok := out.(io.Writer); ok {
+		if _, err := io.Copy(writer, response.Body); err != nil {
+			return nil, fmt.Errorf("%s API %s %s: read response: %w", c.provider, method, endpoint, err)
+		}
+	} else if out != nil {
 		if err := json.NewDecoder(response.Body).Decode(out); err != nil {
 			return nil, fmt.Errorf("%s API %s %s: decode response: %w", c.provider, method, endpoint, err)
 		}

@@ -56,6 +56,9 @@ type azurePull struct {
 	LastMergeTargetCommit struct {
 		CommitID string `json:"commitId"`
 	} `json:"lastMergeTargetCommit"`
+	LastMergeCommit struct {
+		CommitID string `json:"commitId"`
+	} `json:"lastMergeCommit"`
 	ForkSource *struct {
 		Repository azurePullRepo `json:"repository"`
 	} `json:"forkSource"`
