@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"time"
 
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
 	profilepkg "github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	dbcontext "github.com/flanksource/commons-db/context"
+	"github.com/flanksource/commons-db/dbtest"
+	"github.com/flanksource/commons-db/migrate"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -26,7 +30,7 @@ var _ = ginkgo.Describe("stream sessions authorized per profile", func() {
 	var (
 		handler  *sessionHandler
 		registry *query.SessionRegistry
-		store    *Store
+		store    *sessionstore.Store
 	)
 
 	authorize := func(_ *http.Request, profile string, _ Action) error {
@@ -49,7 +53,11 @@ var _ = ginkgo.Describe("stream sessions authorized per profile", func() {
 		for _, name := range []string{allowed, denied} {
 			Expect(profiles.Save(context.Background(), traceTestProfile(name, providerType))).To(Succeed())
 		}
-		store = newGormStore(sessionStoreDB(), time.Hour)
+		database := dbtest.ForGinkgo(dbtest.Options{Name: "query_sessions_auth"})
+		Expect(migrate.Apply(ginkgo.GinkgoT().Context(), database.DSN(), os.DirFS("../internal/app/migrations"), migrate.WithName("query"))).To(Succeed())
+		store, err = sessionstore.NewStore(database.Gorm(), time.Hour)
+		Expect(err).ToNot(HaveOccurred())
+		ginkgo.DeferCleanup(store.Close)
 		registry = query.NewSessionRegistry(query.RegistryOptions{Store: store, Events: store})
 		store.BindResolver(registry.Get)
 		ginkgo.DeferCleanup(func() { Expect(registry.StopAll(context.Background())).To(Succeed()) })

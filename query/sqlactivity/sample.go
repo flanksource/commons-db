@@ -43,6 +43,7 @@ type Sample struct {
 	OpenTransactions     int64     `json:"openTransactions" filter:"range" sort:"openTransactions"`
 	QueryID              string    `json:"queryId" pretty:"label=Query id" filter:"exact" sort:"queryId"`
 	SQL                  string    `json:"sql" pretty:"label=SQL" filter:"text" sort:"sql"`
+	SQLServerProgress
 }
 
 // Derive fills what follows from the server time and the row's own times:

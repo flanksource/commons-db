@@ -12,6 +12,8 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/sessionstoretest"
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore/recordstoretest"
 )
@@ -64,7 +66,7 @@ var _ = ginkgo.Describe("GET /sessions", func() {
 		Expect(err).ToNot(HaveOccurred())
 		meta, err := h.records.Meta(context.Background(), "stream-c")
 		Expect(err).ToNot(HaveOccurred())
-		stopped := contractFixture(h.epoch)[0]
+		stopped := sessionstoretest.Fixture(h.epoch)[0]
 		stopped.Events = &query.EventsRef{Stream: "stream-c", Kind: recordstoretest.Kind, Generation: meta.Generation, From: ref.Window.From, To: ref.Window.To}
 		Expect(h.store.Update(context.Background(), "c", stopped.SessionStatus)).To(Succeed())
 
@@ -191,19 +193,19 @@ var _ = ginkgo.Describe("GET /sessions", func() {
 	})
 
 	ginkgo.It("reads each stored record at most once to list a page with its lineage", func() {
-		counting := &countingCache{Store: cache.NewMemory(), reads: map[string]int{}}
-		store, err := NewKVStore(func(context.Context) (cache.Store, string, error) { return counting, "", nil }, KVStoreOptions{})
+		counting := sessionstoretest.NewCountingCache(cache.NewMemory())
+		store, err := sessionstore.NewKVStore(func(context.Context) (cache.Store, string, error) { return counting, "", nil }, sessionstore.KVStoreOptions{})
 		Expect(err).ToNot(HaveOccurred())
-		for _, rec := range contractFixture(h.epoch) {
+		for _, rec := range sessionstoretest.Fixture(h.epoch) {
 			Expect(store.Begin(context.Background(), rec)).To(Succeed())
 		}
 		h.handler.sessions = store
-		counting.reset()
+		counting.Reset()
 
 		body := h.list("limit=500")
 		Expect(body.Items).To(HaveLen(5))
-		for _, rec := range contractFixture(h.epoch) {
-			Expect(counting.readsOf(rec.ID)).To(Equal(1), "session %s", rec.ID)
+		for _, rec := range sessionstoretest.Fixture(h.epoch) {
+			Expect(counting.ReadsOf(rec.ID)).To(Equal(1), "session %s", rec.ID)
 		}
 	})
 

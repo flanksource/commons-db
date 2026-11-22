@@ -12,6 +12,7 @@ import (
 
 	"github.com/flanksource/clicky/entity"
 	"github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/datetime"
 )
@@ -45,7 +46,7 @@ func (h *sessionHandler) list(w http.ResponseWriter, r *http.Request) {
 		h.lookup(w, r, filter)
 		return
 	}
-	ctx := withSessionReadMemo(r.Context())
+	ctx := sessionstore.WithReadMemo(r.Context())
 	page, err := h.listRecords(ctx, filter)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
