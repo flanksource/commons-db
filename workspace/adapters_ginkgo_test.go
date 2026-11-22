@@ -92,6 +92,63 @@ var _ = Describe("Prepare", func() {
 			}
 			Expect(lines(git(source, "worktree", "list"))).To(HaveLen(1))
 		})
+		Describe("an existing branch at an explicit path", func() {
+			const branch = "shell/previous"
+			var source, path string
+			var opts Options
+			BeforeEach(func() {
+				source = initRepo()
+				path = filepath.Join(baseDir, "worktrees", "previous")
+				opts = Options{Source: source, Kind: KindClean, Branch: branch, Path: path, Existing: true}
+				git(source, "branch", branch)
+			})
+			registered := func() string { return git(source, "worktree", "list", "--porcelain") }
+
+			It("recreates a worktree that was removed", func() {
+				git(source, "worktree", "add", "-q", path, branch)
+				original := git(path, "rev-parse", "--show-toplevel")
+				git(source, "worktree", "remove", path)
+
+				ws := prepare(opts)
+				Expect(ws.Dir).To(Equal(original))
+				Expect(ws.Branch).To(Equal(branch))
+			})
+			It("recreates a worktree whose directory was deleted, keeping other missing registrations", func() {
+				other := filepath.Join(baseDir, "other")
+				git(source, "worktree", "add", "-q", "-b", "shell/other", other)
+				Expect(os.RemoveAll(other)).To(Succeed())
+				git(source, "worktree", "add", "-q", path, branch)
+				Expect(os.RemoveAll(path)).To(Succeed())
+
+				ws := prepare(opts)
+				Expect(ws.Branch).To(Equal(branch))
+				Expect(registered()).To(ContainSubstring("branch refs/heads/shell/other"))
+			})
+			It("refuses a missing worktree that is locked", func() {
+				git(source, "worktree", "add", "-q", path, branch)
+				git(source, "worktree", "lock", path)
+				Expect(os.RemoveAll(path)).To(Succeed())
+
+				_, err := Prepare(ctx, opts)
+				Expect(err).To(MatchError(ContainSubstring("locked")))
+				Expect(registered()).To(ContainSubstring("branch refs/heads/" + branch))
+			})
+			It("refuses a path that is in use", func() {
+				write(path, "owned.txt", "owned\n")
+
+				_, err := Prepare(ctx, opts)
+				Expect(err).To(MatchError(ContainSubstring("already exists")))
+				Expect(read(path, "owned.txt")).To(Equal("owned\n"))
+			})
+			It("refuses a branch checked out elsewhere", func() {
+				elsewhere := filepath.Join(baseDir, "elsewhere")
+				git(source, "worktree", "add", "-q", elsewhere, branch)
+
+				_, err := Prepare(ctx, opts)
+				Expect(err).To(MatchError(ContainSubstring("elsewhere")))
+				Expect(path).NotTo(BeADirectory())
+			})
+		})
 		It("removes the worktree on release unless kept", func() {
 			source := initRepo()
 			ws, err := Prepare(ctx, Options{Source: source, Kind: KindClean, BaseDir: baseDir})

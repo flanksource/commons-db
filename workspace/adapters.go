@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -106,6 +107,9 @@ func addWorktree(ctx context.Context, source string, opts Options) (*Workspace, 
 		if err := requireBranch(ctx, source, branch); err != nil {
 			return nil, err
 		}
+		if err := removeMissingWorktree(ctx, source, target); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := gitOutput(ctx, source, args...); err != nil {
 		return nil, err
@@ -120,6 +124,25 @@ func addWorktree(ctx context.Context, source string, opts Options) (*Workspace, 
 		_, _ = gitOutput(ctx, source, "worktree", "prune")
 		return nil
 	}}, nil
+}
+
+// removeMissingWorktree drops git's registration of a worktree at target whose
+// directory is gone, which otherwise blocks adding one there. It touches only
+// target and never forces, so a locked registration stays: `worktree prune`
+// would also drop worktrees on volumes that are merely unmounted.
+func removeMissingWorktree(ctx context.Context, source, target string) error {
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	list, err := gitOutput(ctx, source, "worktree", "list", "--porcelain", "-z")
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(splitNUL(list), "worktree "+target) {
+		return nil
+	}
+	_, err = gitOutput(ctx, source, "worktree", "remove", target)
+	return err
 }
 
 func worktreePath(opts Options, branch string) (string, error) {
