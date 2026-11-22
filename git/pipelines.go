@@ -1,3 +1,5 @@
+// A repository's CI pipelines and their executions as each provider runs them, listed by page or one
+// execution read by its ID.
 package git
 
 import (
@@ -36,6 +38,8 @@ type PipelineExecution struct {
 	Author    string    `json:"author,omitempty"`
 	CreatedAt time.Time `json:"createdAt"`
 	URL       string    `json:"url,omitempty"`
+	// RepositoryID is the provider's ID of the repository the execution ran on, when it says.
+	RepositoryID string `json:"repositoryId,omitempty"`
 }
 
 type PipelineOptions struct {
@@ -44,6 +48,12 @@ type PipelineOptions struct {
 	Branch     string
 	Cursor     string
 	Limit      int
+}
+
+// PipelineExecutionReader reads one execution of a repository's pipelines by its ID, with the
+// repository it ran on.
+type PipelineExecutionReader interface {
+	PipelineExecution(ctx context.Context, repo RepoURL, id string) (PipelineExecution, error)
 }
 
 type PipelineProvider interface {
