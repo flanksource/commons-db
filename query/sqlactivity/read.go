@@ -15,10 +15,11 @@ type Snapshot struct {
 
 // Filter narrows a read. Idle reads sessions that run nothing too; SessionID,
 // when not zero, reads only that session (SQL Server SPID, Postgres backend
-// pid).
+// pid). SQLServerProgress adds age-gated request and transaction diagnostics.
 type Filter struct {
-	Idle      bool
-	SessionID int64
+	Idle              bool
+	SessionID         int64
+	SQLServerProgress bool
 }
 
 // Read reads engine's sessions through db, which must not be the connection

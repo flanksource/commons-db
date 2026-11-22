@@ -10,6 +10,7 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/sessionstoretest"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -34,7 +35,7 @@ var _ = ginkgo.Describe("session actions", func() {
 	})
 
 	ginkgo.It("names in restartedAs only the restarted sessions the caller may read", func() {
-		hidden := contractRecord(h.epoch, "g", sqlProfile, query.SessionRunning, 6, 0, nil)
+		hidden := sessionstoretest.Record(h.epoch, "g", sqlProfile, query.SessionRunning, 6, 0, nil)
 		hidden.RestartOf = "c"
 		Expect(h.store.Begin(context.Background(), hidden)).To(Succeed())
 		Expect(decodeInfo(h.do(http.MethodGet, "/api/v1/sessions/c")).RestartedAs).To(Equal([]string{"f", "g"}))
@@ -101,7 +102,7 @@ var _ = ginkgo.Describe("session actions", func() {
 	})
 
 	ginkgo.It("restarts for the duration first requested when no duration is given", func() {
-		requested := contractFixture(h.epoch)[0]
+		requested := sessionstoretest.Fixture(h.epoch)[0]
 		requested.ID, requested.State = "requested", query.SessionStopped
 		requested.Params = map[string]any{"class": "com.example.Listener", "durationMs": 120000.0}
 		extended := requested.StartedAt.Add(14 * time.Minute)
@@ -126,7 +127,7 @@ var _ = ginkgo.Describe("session actions", func() {
 		Expect(response.Code).To(Equal(http.StatusCreated), response.Body.String())
 		next := decodeInfo(response)
 		Expect(next).To(And(HaveField("RestartOf", "c"), HaveField("Principal", "tester"),
-			HaveField("Controllable", true), HaveField("Labels", contractFixture(h.epoch)[0].Labels)))
+			HaveField("Controllable", true), HaveField("Labels", sessionstoretest.Fixture(h.epoch)[0].Labels)))
 		Expect(next.ID).ToNot(Equal("c"))
 		Expect(*next.StopAt).To(BeTemporally("~", time.Now().Add(2*time.Minute), 5*time.Second))
 

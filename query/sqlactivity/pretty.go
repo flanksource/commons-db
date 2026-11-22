@@ -20,11 +20,14 @@ func (s Sample) Pretty() api.Text {
 	if s.Blocked {
 		t = t.Space().Append(fmt.Sprintf("blocked by #%d", s.BlockedBy), "text-red-500")
 	}
+	if s.PercentComplete != nil {
+		t = t.Space().Append(s.Command, "muted").Space().Append(progressPercent(*s.PercentComplete), "number")
+	}
 	return t.Space().Append(s.SQL, "font-mono max-w-[200ch]")
 }
 
 func (s Sample) PrettyFull() api.Textable {
-	return s.Pretty().NewLine().Add(clicky.CodeBlock("sql", s.SQL)).NewLine().Add(clicky.Map(map[string]any{
+	detail := s.Pretty().NewLine().Add(clicky.CodeBlock("sql", s.SQL)).NewLine().Add(clicky.Map(map[string]any{
 		"Engine": s.Engine, "User": s.User, "Application": s.Application, "Client host": s.ClientHost,
 		"Command": s.Command, "Wait resource": s.WaitResource,
 		"Waited":      durationReading(s.WaitMs),
@@ -33,14 +36,22 @@ func (s Sample) PrettyFull() api.Textable {
 		"Reads":       s.LogicalReads, "Physical reads": s.Reads, "Writes": s.Writes,
 		"Memory": bytesReading(s.MemoryBytes), "Open transactions": s.OpenTransactions, "Query id": s.QueryID,
 	}))
+	if progress := s.SQLServerProgress.Detail(); progress != nil {
+		detail = detail.NewLine().Add(progress)
+	}
+	return detail
 }
 
-func durationReading(value *float64)api.Textable{
-	if value==nil{return clicky.Text("—","muted")}
-	return api.Human(time.Duration(*value*float64(time.Millisecond)))
+func durationReading(value *float64) api.Textable {
+	if value == nil {
+		return clicky.Text("—", "muted")
+	}
+	return api.Human(time.Duration(*value * float64(time.Millisecond)))
 }
 
-func bytesReading(value *int64)api.Textable{
-	if value==nil{return clicky.Text("—","muted")}
+func bytesReading(value *int64) api.Textable {
+	if value == nil {
+		return clicky.Text("—", "muted")
+	}
 	return api.HumanizeBytes(*value)
 }

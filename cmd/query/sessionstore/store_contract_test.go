@@ -1,4 +1,4 @@
-package sessions
+package sessionstore
 
 import (
 	"context"
@@ -8,41 +8,9 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/sessionstoretest"
 	"github.com/flanksource/commons-db/query"
 )
-
-// contractEpoch anchors the contract fixture an hour back, well inside every
-// store's retention window, so window filters read as minute offsets.
-func contractEpoch() time.Time { return time.Now().Add(-time.Hour).Truncate(time.Millisecond).UTC() }
-
-func contractRecord(epoch time.Time, id, profile string, state query.SessionState, startedMin int, events int64, labels map[string]string) query.SessionRecord {
-	started := epoch.Add(time.Duration(startedMin) * time.Minute)
-	return query.SessionRecord{
-		SessionStart: query.SessionStart{
-			SchemaVersion: query.SessionSchemaVersion, ID: id, Profile: profile, Kind: query.KindCapture,
-			Role: query.SessionRoleCapture, Labels: labels, Principal: "admin",
-			Params: map[string]any{"class": "com.example.Listener"},
-			Owner:  query.SessionOwner{Host: "pod-a", PID: 1, Boot: "boot-a"}, StartedAt: started,
-		},
-		SessionStatus: query.SessionStatus{State: state, EventCount: events, UpdatedAt: started, HeartbeatAt: started},
-	}
-}
-
-// contractFixture mirrors the query package's filter fixture: b and c start at
-// the same minute so a startedAt sort needs the id tie-breaker, and d has no
-// labels at all.
-func contractFixture(epoch time.Time) []query.SessionRecord {
-	restarted := contractRecord(epoch, "f", "trace-capture/jvm_trace", query.SessionRunning, 5, 1, map[string]string{"target": "cycle", "origin": "web"})
-	restarted.RestartOf = "c"
-	restarted.Principal = "operator"
-	return []query.SessionRecord{
-		contractRecord(epoch, "c", "trace-capture/jvm_trace", query.SessionStopped, 2, 30, map[string]string{"target": "cycle", "origin": "web"}),
-		contractRecord(epoch, "a", "trace-capture/jvm_trace", query.SessionRunning, 0, 10, map[string]string{"target": "oipa", "origin": "testplan"}),
-		contractRecord(epoch, "b", "trace-capture/sql_xevent", query.SessionCompleted, 2, 20, map[string]string{"target": "cycle", "origin": "web"}),
-		contractRecord(epoch, "d", "trace-capture/jvm_trace", query.SessionFailed, 3, 5, nil),
-		restarted,
-	}
-}
 
 func pageIDs(page query.SessionPage) []string {
 	ids := make([]string, len(page.Items))
@@ -70,14 +38,14 @@ func describeSessionStoreContract(newStore func() query.SessionStore) {
 	ctx := context.Background()
 
 	ginkgo.BeforeEach(func() {
-		store, epoch = newStore(), contractEpoch()
-		for _, rec := range contractFixture(epoch) {
+		store, epoch = newStore(), sessionstoretest.Epoch()
+		for _, rec := range sessionstoretest.Fixture(epoch) {
 			Expect(store.Begin(ctx, rec)).To(Succeed())
 		}
 	})
 
 	ginkgo.It("returns a begun record exactly as it was written", func() {
-		want := contractFixture(epoch)[0]
+		want := sessionstoretest.Fixture(epoch)[0]
 		got, found, err := store.Get(ctx, want.ID)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(found).To(BeTrue())
@@ -89,11 +57,11 @@ func describeSessionStoreContract(newStore func() query.SessionStore) {
 	})
 
 	ginkgo.It("refuses to begin a record twice", func() {
-		Expect(store.Begin(ctx, contractFixture(epoch)[0])).To(MatchError(ContainSubstring("already exists")))
+		Expect(store.Begin(ctx, sessionstoretest.Fixture(epoch)[0])).To(MatchError(ContainSubstring("already exists")))
 	})
 
 	ginkgo.It("overwrites the status of a begun record and refuses one never begun", func() {
-		rec := contractFixture(epoch)[1]
+		rec := sessionstoretest.Fixture(epoch)[1]
 		stopped := epoch.Add(9 * time.Minute)
 		rec.State, rec.StoppedAt, rec.StopReason, rec.EventCount = query.SessionStopped, &stopped, "stopped by admin", 99
 		rec.Events = &query.EventsRef{Stream: "stream-a", Kind: "jvm_trace", From: 1, To: 99, Total: 99}

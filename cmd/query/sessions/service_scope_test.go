@@ -13,6 +13,7 @@ import (
 	. "github.com/onsi/gomega"
 
 	profilepkg "github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 )
@@ -38,10 +39,10 @@ func environmentOf(ctx context.Context) (string, error) {
 // registry's live sessions can cross environments.
 type environmentStores struct {
 	mu     sync.Mutex
-	stores map[string]*KVStore
+	stores map[string]*sessionstore.KVStore
 }
 
-func (s *environmentStores) storeFor(ctx context.Context) (*KVStore, error) {
+func (s *environmentStores) storeFor(ctx context.Context) (*sessionstore.KVStore, error) {
 	environment, err := environmentOf(ctx)
 	if err != nil {
 		return nil, err
@@ -51,7 +52,7 @@ func (s *environmentStores) storeFor(ctx context.Context) (*KVStore, error) {
 	if store, ok := s.stores[environment]; ok {
 		return store, nil
 	}
-	store, err := NewMemoryKVStore(KVStoreOptions{})
+	store, err := sessionstore.NewMemoryKVStore(sessionstore.KVStoreOptions{})
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +153,7 @@ var _ = ginkgo.Describe("sessions API with an environment-scoped registry", func
 		name  string
 		store func() query.SessionStore
 	}{
-		{"with an environment-routed store", func() query.SessionStore { return &environmentStores{stores: map[string]*KVStore{}} }},
+		{"with an environment-routed store", func() query.SessionStore { return &environmentStores{stores: map[string]*sessionstore.KVStore{}} }},
 		{"with no store", func() query.SessionStore { return nil }},
 	} {
 		ginkgo.Context(variant.name, func() {
