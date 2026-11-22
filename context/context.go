@@ -679,6 +679,9 @@ func (k Context) Wrap(ctx gocontext.Context) Context {
 	if resolver, ok := k.Value(connectionLeaseResolverKey{}).(ConnectionLeaseResolver); ok && resolver != nil {
 		wrapped = wrapped.WithConnectionLeaseResolver(resolver)
 	}
+	if scope := secretScopeOf(k); scope != nil {
+		wrapped = wrapped.WithValue(secretScopeKey{}, scope)
+	}
 	return wrapped
 }
 

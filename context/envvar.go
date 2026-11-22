@@ -39,7 +39,7 @@ func GetEnvValueFromCache(ctx Context, input types.EnvVar, namespace string) (va
 	if input.IsEmpty() {
 		return "", nil
 	}
-	ctx, cancel := ctx.WithTimeout(ctx.Properties().Duration("envvar.lookup.timeout", 5*time.Second))
+	ctx, cancel := ctx.WithTimeout(envLookupTimeout(ctx, input))
 	defer cancel()
 	if namespace == "" {
 		namespace = ctx.GetNamespace()
@@ -139,49 +139,44 @@ func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (str
 	if err != nil {
 		return "", err
 	}
-	id := fmt.Sprintf("%s/helm/%s/%s/%s", scope, namespace, releaseName, key)
-	if value, found := envCache.Get(id); found {
-		return value.(string), nil
-	}
-	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
-		merged, err := GetHelmValuesFromCache(ctx, namespace, releaseName)
-		if err != nil {
-			return "", err
-		}
-		keyJPExpr, err := jp.ParseString(key)
-		if err != nil {
-			return "", fmt.Errorf("could not parse key:%s. must be a valid jsonpath expression. %w", key, err)
-		}
-		results := keyJPExpr.Get(merged)
-		if len(results) == 0 {
-			return "", fmt.Errorf("could not find key %s in merged helm secret %s/%s", key, namespace, lo.Keys(merged))
-		}
-		val := ""
-		if len(results) == 1 {
-			switch v := results[0].(type) {
-			case string:
-				val = v
-			case []byte:
-				val = string(v)
-			case int, int32, int64:
-				val = fmt.Sprintf("%d", v)
-			case float32, float64:
-				val = fmt.Sprintf("%0f", v)
-			default:
-				b, err := json.Marshal(v)
-				if err != nil {
-					return "", fmt.Errorf("could not marshal merged helm secret %s/%s: %w", namespace, releaseName, err)
-				}
-				val = string(b)
+	return envLookup{
+		id:  fmt.Sprintf("%s/helm/%s/%s/%s", scope, namespace, releaseName, key),
+		ttl: envCacheTTL(ctx, "envvar.helm.cache.timeout"),
+		resolve: func() (string, time.Time, error) {
+			merged, err := GetHelmValuesFromCache(ctx, namespace, releaseName)
+			if err != nil {
+				return "", time.Time{}, err
 			}
-		}
-		envCache.Set(id, val, envCacheTTL(ctx, "envvar.helm.cache.timeout"))
-		return val, nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return value.(string), nil
+			keyJPExpr, err := jp.ParseString(key)
+			if err != nil {
+				return "", time.Time{}, fmt.Errorf("could not parse key:%s. must be a valid jsonpath expression. %w", key, err)
+			}
+			results := keyJPExpr.Get(merged)
+			if len(results) == 0 {
+				return "", time.Time{}, fmt.Errorf("could not find key %s in merged helm secret %s/%s", key, namespace, lo.Keys(merged))
+			}
+			val := ""
+			if len(results) == 1 {
+				switch v := results[0].(type) {
+				case string:
+					val = v
+				case []byte:
+					val = string(v)
+				case int, int32, int64:
+					val = fmt.Sprintf("%d", v)
+				case float32, float64:
+					val = fmt.Sprintf("%0f", v)
+				default:
+					b, err := json.Marshal(v)
+					if err != nil {
+						return "", time.Time{}, fmt.Errorf("could not marshal merged helm secret %s/%s: %w", namespace, releaseName, err)
+					}
+					val = string(b)
+				}
+			}
+			return val, time.Time{}, nil
+		},
+	}.get(ctx)
 }
 
 func GetSecretFromCache(ctx Context, namespace, name, key string) (string, error) {
@@ -189,29 +184,32 @@ func GetSecretFromCache(ctx Context, namespace, name, key string) (string, error
 	if err != nil {
 		return "", err
 	}
-	id := fmt.Sprintf("%s/secret/%s/%s/%s", scope, namespace, name, key)
-	if value, found := envCache.Get(id); found {
-		return value.(string), nil
-	}
-	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
-		secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return "", fmt.Errorf("could not find secret %s/%s: %w", namespace, name, err)
-		}
-		if secret == nil {
-			return "", fmt.Errorf("could not get contents of secret %s/%s", namespace, name)
-		}
-		resolved, ok := secret.Data[key]
-		if !ok {
-			return "", fmt.Errorf("could not find key %v in secret %s/%s (%s)", key, namespace, name, strings.Join(lo.Keys(secret.Data), ", "))
-		}
-		envCache.Set(id, string(resolved), envCacheTTL(ctx, "envvar.cache.timeout"))
-		return string(resolved), nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return value.(string), nil
+	return envLookup{
+		id:  secretCacheID(scope, namespace, name, key),
+		ttl: envCacheTTL(ctx, "envvar.cache.timeout"),
+		resolve: func() (string, time.Time, error) {
+			secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return "", time.Time{}, fmt.Errorf("could not find secret %s/%s: %w", namespace, name, err)
+			}
+			if secret == nil {
+				return "", time.Time{}, fmt.Errorf("could not get contents of secret %s/%s", namespace, name)
+			}
+			resolved, ok := secret.Data[key]
+			if !ok {
+				return "", time.Time{}, fmt.Errorf("could not find key %v in secret %s/%s (%s)", key, namespace, name, strings.Join(lo.Keys(secret.Data), ", "))
+			}
+			return string(resolved), time.Time{}, nil
+		},
+	}.get(ctx)
+}
+
+func secretCacheID(scope, namespace, name, key string) string {
+	return fmt.Sprintf("%s/secret/%s/%s/%s", scope, namespace, name, key)
+}
+
+func configMapCacheID(scope, namespace, name, key string) string {
+	return fmt.Sprintf("%s/cm/%s/%s/%s", scope, namespace, name, key)
 }
 
 func GetConfigMapFromCache(ctx Context, namespace, name, key string) (string, error) {
@@ -219,30 +217,25 @@ func GetConfigMapFromCache(ctx Context, namespace, name, key string) (string, er
 	if err != nil {
 		return "", err
 	}
-	id := fmt.Sprintf("%s/cm/%s/%s/%s", scope, namespace, name, key)
-	if value, found := envCache.Get(id); found {
-		return value.(string), nil
-	}
-	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
-		configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
-			return "", fmt.Errorf("could not get configmap %s/%s: %w", namespace, name, err)
-		}
-		if configMap == nil {
-			return "", fmt.Errorf("could not get contents of configmap %s/%s", namespace, name)
-		}
-		resolved, ok := configMap.Data[key]
-		if !ok {
-			return "", fmt.Errorf("could not find key %v in configmap %s/%s (%s)", key, namespace, name,
-				strings.Join(lo.Keys(configMap.Data), ", "))
-		}
-		envCache.Set(id, resolved, envCacheTTL(ctx, "envvar.cache.timeout"))
-		return resolved, nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return value.(string), nil
+	return envLookup{
+		id:  configMapCacheID(scope, namespace, name, key),
+		ttl: envCacheTTL(ctx, "envvar.cache.timeout"),
+		resolve: func() (string, time.Time, error) {
+			configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
+			if err != nil {
+				return "", time.Time{}, fmt.Errorf("could not get configmap %s/%s: %w", namespace, name, err)
+			}
+			if configMap == nil {
+				return "", time.Time{}, fmt.Errorf("could not get contents of configmap %s/%s", namespace, name)
+			}
+			resolved, ok := configMap.Data[key]
+			if !ok {
+				return "", time.Time{}, fmt.Errorf("could not find key %v in configmap %s/%s (%s)", key, namespace, name,
+					strings.Join(lo.Keys(configMap.Data), ", "))
+			}
+			return resolved, time.Time{}, nil
+		},
+	}.get(ctx)
 }
 
 func GetServiceAccountTokenFromCache(ctx Context, namespace, serviceAccount string) (string, error) {
@@ -250,26 +243,20 @@ func GetServiceAccountTokenFromCache(ctx Context, namespace, serviceAccount stri
 	if err != nil {
 		return "", err
 	}
-	id := fmt.Sprintf("%s/sa-token/%s/%s", scope, namespace, serviceAccount)
-	if value, found := envCache.Get(id); found {
-		return value.(string), nil
-	}
-	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
-		tokenRequest, err := client.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, serviceAccount, &authenticationv1.TokenRequest{}, metav1.CreateOptions{})
-		if err != nil {
-			return "", fmt.Errorf("could not get token for service account %s/%s: %w", namespace, serviceAccount, err)
-		}
-		ttl := time.Until(tokenRequest.Status.ExpirationTimestamp.Time) - time.Minute
-		if ttl <= 0 {
-			return "", fmt.Errorf("service account token for %s/%s expires too soon", namespace, serviceAccount)
-		}
-		envCache.Set(id, tokenRequest.Status.Token, ttl)
-		return tokenRequest.Status.Token, nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return value.(string), nil
+	return envLookup{
+		id: fmt.Sprintf("%s/sa-token/%s/%s", scope, namespace, serviceAccount),
+		resolve: func() (string, time.Time, error) {
+			tokenRequest, err := client.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, serviceAccount, &authenticationv1.TokenRequest{}, metav1.CreateOptions{})
+			if err != nil {
+				return "", time.Time{}, fmt.Errorf("could not get token for service account %s/%s: %w", namespace, serviceAccount, err)
+			}
+			expires := tokenRequest.Status.ExpirationTimestamp.Add(-time.Minute)
+			if !time.Now().Before(expires) {
+				return "", time.Time{}, fmt.Errorf("service account token for %s/%s expires too soon", namespace, serviceAccount)
+			}
+			return tokenRequest.Status.Token, expires, nil
+		},
+	}.get(ctx)
 }
 
 func localKubernetesCacheScope(ctx Context) (*dutyKubernetes.Client, string, error) {
@@ -282,6 +269,16 @@ func localKubernetesCacheScope(ctx Context) (*dutyKubernetes.Client, string, err
 		scope = fmt.Sprintf("client-%p", client)
 	}
 	return client, scope, nil
+}
+
+// envLookupTimeout bounds resolving input. A 1Password reference read without
+// a service account waits for a person to approve the prompt; killing `op`
+// before they do fails the lookup and the next one prompts again.
+func envLookupTimeout(ctx Context, input types.EnvVar) time.Duration {
+	if input.ValueFrom != nil && !lo.IsEmpty(input.ValueFrom.OnePassword) && onePasswordToken(ctx) == "" {
+		return ctx.Properties().Duration("envvar.1password.lookup.timeout", 2*time.Minute)
+	}
+	return ctx.Properties().Duration("envvar.lookup.timeout", 5*time.Second)
 }
 
 func envCacheTTL(ctx Context, override string) time.Duration {
@@ -299,7 +296,7 @@ func InvalidateSecretCache(ctx Context, namespace, name, key string) error {
 	if err != nil {
 		return err
 	}
-	envCache.Delete(fmt.Sprintf("%s/secret/%s/%s/%s", scope, namespace, name, key))
+	dropEnvValue(ctx, secretCacheID(scope, namespace, name, key))
 	return nil
 }
 
@@ -308,7 +305,7 @@ func InvalidateConfigMapCache(ctx Context, namespace, name, key string) error {
 	if err != nil {
 		return err
 	}
-	envCache.Delete(fmt.Sprintf("%s/cm/%s/%s/%s", scope, namespace, name, key))
+	dropEnvValue(ctx, configMapCacheID(scope, namespace, name, key))
 	return nil
 }
 

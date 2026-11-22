@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/flanksource/commons-db/pkg/allowlist"
 )
@@ -24,6 +25,10 @@ const onePasswordTokenProperty = "1password.service-account-token"
 var opReadFunc = opRead
 
 var onePasswordCommandFunc = runOnePasswordCommand
+
+// onePasswordPrompt admits one interactive `op` at a time: concurrent ones each
+// prompt, while one started after an approval reuses its authorization.
+var onePasswordPrompt = make(chan struct{}, 1)
 
 // onePasswordFingerprintKey makes token fingerprints process-local. The cache
 // is also process-local, so fingerprints only need to remain stable for the
@@ -39,22 +44,14 @@ func GetOnePasswordValueFromCache(ctx Context, ref string) (string, error) {
 	token := onePasswordToken(ctx)
 	// Scope the cache entry by a token fingerprint (never the token itself) so a
 	// value resolved by one service account can't satisfy another's lookup.
-	id := fmt.Sprintf("1password/%s/%s", tokenFingerprint(token), ref)
-	if value, found := envCache.Get(id); found {
-		return value.(string), nil
-	}
-	value, err, _ := envLookupGroup.Do(id, func() (any, error) {
-		v, err := opReadFunc(ctx, ref, token)
-		if err != nil {
-			return "", err
-		}
-		envCache.Set(id, v, envCacheTTL(ctx, "envvar.1password.cache.timeout"))
-		return v, nil
-	})
-	if err != nil {
-		return "", err
-	}
-	return value.(string), nil
+	return envLookup{
+		id:  fmt.Sprintf("1password/%s/%s", tokenFingerprint(token), ref),
+		ttl: envCacheTTL(ctx, "envvar.1password.cache.timeout"),
+		resolve: func() (string, time.Time, error) {
+			value, err := opReadFunc(ctx, ref, token)
+			return value, time.Time{}, err
+		},
+	}.get(ctx)
 }
 
 // onePasswordToken resolves the service-account token from context properties,
@@ -103,6 +100,13 @@ func runOnePasswordCommand(ctx Context, token string, args ...string) ([]byte, e
 	cmd.Env = os.Environ()
 	if token != "" {
 		cmd.Env = append(cmd.Env, "OP_SERVICE_ACCOUNT_TOKEN="+token)
+	} else {
+		select {
+		case onePasswordPrompt <- struct{}{}:
+			defer func() { <-onePasswordPrompt }()
+		case <-ctx.Done():
+			return nil, fmt.Errorf("op %s: waiting for another 1password prompt: %w", strings.Join(args, " "), ctx.Err())
+		}
 	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
