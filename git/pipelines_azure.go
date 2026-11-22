@@ -1,3 +1,5 @@
+// Azure DevOps build definitions and builds as pipelines and their executions: listing a
+// repository's, and reading one build by its ID with the repository it built.
 package git
 
 import (
@@ -84,6 +86,28 @@ type azureExecution struct {
 	RequestedFor struct {
 		DisplayName string `json:"displayName"`
 	} `json:"requestedFor"`
+	Repository struct {
+		ID string `json:"id"`
+	} `json:"repository"`
+}
+
+// PipelineExecution reads build id of repo's project.
+func (p *azureProvider) PipelineExecution(ctx context.Context, repo RepoURL, id string) (PipelineExecution, error) {
+	if build, err := strconv.ParseInt(id, 10, 64); err != nil || build <= 0 {
+		return PipelineExecution{}, fmt.Errorf("azure build ID %q is not a positive number", id)
+	}
+	if repo.Project == "" {
+		return PipelineExecution{}, fmt.Errorf("read azure build %s: the repository has no project", id)
+	}
+	var run azureExecution
+	path := "/" + url.PathEscape(repo.Project) + "/_apis/build/builds/" + id
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.api.endpoint(path, url.Values{"api-version": {azureAPIVersion}}), Out: &run}); err != nil {
+		return PipelineExecution{}, err
+	}
+	pipeline := strconv.FormatInt(run.Definition.ID, 10)
+	return PipelineExecution{ID: strconv.FormatInt(run.ID, 10), Pipeline: pipeline, Number: run.BuildNumber, Name: run.BuildNumber,
+		Branch: run.SourceBranch, SHA: run.SourceVersion, Status: run.Status, Result: run.Result, Author: run.RequestedFor.DisplayName,
+		CreatedAt: run.QueueTime, URL: run.Links.Web.Href, RepositoryID: run.Repository.ID}, nil
 }
 
 func (p *azureProvider) ListPipelineExecutions(ctx context.Context, options PipelineOptions) (Page[PipelineExecution], error) {
