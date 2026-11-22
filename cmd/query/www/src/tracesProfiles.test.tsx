@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, type ComponentProps } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { OtelTraceTable } from "@flanksource/clicky-ui/data";
 import type { ResultRenderContext } from "@flanksource/clicky-ui";
 import { afterEach, expect, it, vi } from "vitest";
@@ -28,8 +29,11 @@ vi.mock("@flanksource/clicky-ui/data", async (importOriginal) => ({
 
 let root: Root;
 let container: HTMLDivElement;
+let queryClient: QueryClient | undefined;
 afterEach(async () => {
   await act(async () => root?.unmount());
+  queryClient?.clear();
+  queryClient = undefined;
   container?.remove();
   vi.unstubAllGlobals();
   window.history.replaceState(null, "", "/");
@@ -94,6 +98,15 @@ const surfaces = profileRenderSurfaces(
   "traces",
 );
 
+async function renderTraceProfile(context: ResultRenderContext) {
+  const client = (queryClient ??= new QueryClient());
+  await act(async () => root.render(
+    <QueryClientProvider client={client}>
+      {tracesResultRenderer(surfaces, () => [])(context)}
+    </QueryClientProvider>,
+  ));
+}
+
 it("uses only the traces render mode and leaves other results alone", () => {
   expect([...surfaces.keys()]).toEqual(["profile-service-traces"]);
   const context = {
@@ -129,7 +142,7 @@ it("hands the listing response's Server-Timing phases to the trace table", async
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
+  await renderTraceProfile(context);
   expect(observed.props?.serverTiming).toEqual([
     { name: "total", duration: 1200, counters: {} },
     { name: "provider", duration: 1150, counters: { rows: 100 }, description: "rows=100" },
@@ -162,7 +175,7 @@ it("keeps all cursor pages, typed fields and server controls while preserving ro
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
+  await renderTraceProfile(context);
   expect(
     observed.props?.spans.map((span) => ({
       id: span.spanId,
@@ -190,7 +203,7 @@ it("keeps all cursor pages, typed fields and server controls while preserving ro
   expect(new URLSearchParams(window.location.search).get("trace")).toBe(
     "trace-a",
   );
-  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
+  await renderTraceProfile(context);
   await act(async () => container.querySelectorAll("button")[1]!.click());
   expect(new URLSearchParams(window.location.search).get("span")).toBe("child");
   await act(async () => container.querySelectorAll("button")[2]!.click());
@@ -215,7 +228,7 @@ it("fetches the open trace by cursor pages apart from the listing, and the spans
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
+  await renderTraceProfile(context);
   await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
   expect(observed.props?.openTrace?.spans.map((span) => span.spanId)).toEqual(["root", "child"]);
   expect([...(observed.props?.openTrace?.matchingSpanIds ?? [])]).toEqual(["child"]);
@@ -234,7 +247,7 @@ it("keeps the spans of a trace the source cut short, and warns that it is incomp
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => root.render(tracesResultRenderer(surfaces, () => [])(context)));
+  await renderTraceProfile(context);
   await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
   expect(observed.props?.openTrace?.spans.map((span) => span.spanId)).toEqual(["root"]);
   expect(observed.props?.openTrace?.warning).toBe("The profile stopped returning spans after 1 of 5; this trace is incomplete.");

@@ -63,9 +63,14 @@ var _ = ginkgo.Describe("secret cache lookup", func() {
 		ginkgo.Entry("with a scope", true),
 	)
 
-	ginkgo.DescribeTable("lets a scoped caller leave while a shared lookup continues", func(cancelOwner bool) {
-		ctx := New().WithSecretTTL(0)
-		owner, cancelOwnerContext := ctx.WithCancel()
+	ginkgo.DescribeTable("lets a caller leave while a shared lookup continues", func(cancelOwner, scopedOwner bool) {
+		base := New()
+		ctx := base.WithSecretTTL(0)
+		ownerContext := base
+		if scopedOwner {
+			ownerContext = ctx
+		}
+		owner, cancelOwnerContext := ownerContext.WithCancel()
 		ginkgo.DeferCleanup(cancelOwnerContext)
 		started := make(chan struct{})
 		markStarted := sync.OnceFunc(func() { close(started) })
@@ -111,8 +116,9 @@ var _ = ginkgo.Describe("secret cache lookup", func() {
 			Eventually(ownerResult).Should(Receive(Succeed()))
 		}
 	},
-		ginkgo.Entry("joining caller's deadline", false),
-		ginkgo.Entry("initiating caller's cancellation", true),
+		ginkgo.Entry("joining caller's deadline", false, true),
+		ginkgo.Entry("scoped initiating caller's cancellation", true, true),
+		ginkgo.Entry("unscoped initiating caller's cancellation", true, false),
 	)
 
 	ginkgo.DescribeTable("cannot restore a value resolved before invalidation", func(scoped bool) {

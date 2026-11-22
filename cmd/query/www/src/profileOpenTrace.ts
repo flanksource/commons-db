@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { OtelOpenTrace } from "@flanksource/clicky-ui/data";
 import { profileSpans } from "@flanksource/clicky-ui/data";
+import { skipToken, useQuery, type UseQueryResult } from "@tanstack/react-query";
 import { clickyLogsRows } from "./logsProfiles";
 
 type Span = OtelOpenTrace["spans"][number];
@@ -81,11 +81,55 @@ async function fetchTracePage(url: string, signal: AbortSignal): Promise<TracePa
   };
 }
 
-type SpansState = { spans: Span[]; next?: string; total?: number; loading: boolean; error?: string; warning?: string };
-type MatchesState = { ids?: ReadonlySet<string>; loading: boolean; warning?: string };
+type TraceSpans = { spans: Span[]; next?: string; total?: number; warning?: string };
+const emptyTraceSpans: TraceSpans = { spans: [] };
+const traceQueryOptions = { gcTime: 0, staleTime: "static", retry: false, networkMode: "always" } as const;
 
 const failure = (error: unknown) => (error instanceof Error ? error.message : String(error));
-const aborted = (error: unknown) => error instanceof DOMException && error.name === "AbortError";
+
+async function loadTraceSpans(
+  url: string,
+  from: TraceSpans,
+  signal: AbortSignal,
+  onPage: (state: TraceSpans) => void,
+): Promise<TraceSpans> {
+  let state = from;
+  let cursor = from.next;
+  const budget = from.spans.length + TRACE_AUTO_LOAD;
+  do {
+    const page = await fetchTracePage(pageUrl(url, cursor), signal);
+    signal.throwIfAborted();
+    cursor = page.next;
+    const spans = [...state.spans, ...page.spans];
+    const total = page.total ?? state.total;
+    state = {
+      spans,
+      ...(cursor ? { next: cursor } : {}),
+      ...(total !== undefined ? { total } : {}),
+      ...(page.truncated
+        ? { warning: `The profile stopped returning spans after ${spans.length}${total !== undefined ? ` of ${total}` : ""}; this trace is incomplete.` }
+        : {}),
+    };
+    onPage(state);
+  } while (cursor && state.spans.length < budget);
+  return state;
+}
+
+async function loadMatchingSpans(url: string, signal: AbortSignal) {
+  const ids = new Set<string>();
+  let cursor: string | undefined;
+  let truncated = false;
+  do {
+    const page = await fetchTracePage(pageUrl(url, cursor), signal);
+    signal.throwIfAborted();
+    for (const span of page.spans) ids.add(span.spanId);
+    if (ids.size > TRACE_MATCH_LIMIT)
+      throw new Error(`More than ${TRACE_MATCH_LIMIT} spans of this trace match the filters; narrow them`);
+    truncated = page.truncated;
+    cursor = page.next;
+  } while (cursor);
+  return { ids, truncated };
+}
 
 /**
  * Loads the open trace on its own, a cursor page at a time: TRACE_AUTO_LOAD
@@ -93,107 +137,55 @@ const aborted = (error: unknown) => error instanceof DOMException && error.name 
  * the matching span ids too, which the waterfall narrows to.
  */
 export function useOpenTrace(listingUrl: string | undefined, traceId: string | undefined): OtelOpenTrace | undefined {
-  const derived = listingUrl && traceId ? openTraceRequests(listingUrl, traceId) : undefined;
-  const spansUrl = derived?.spans;
-  const matchesUrl = derived?.matches;
+  const requests = listingUrl && traceId ? openTraceRequests(listingUrl, traceId) : undefined;
+  const matchesUrl = requests?.matches;
   // Keyed by the derived URLs, not the listing's: paging or re-sorting the
   // listing leaves the open trace's requests, and its loaded spans, alone.
-  const requests = useMemo(
-    () => (spansUrl ? { spans: spansUrl, ...(matchesUrl ? { matches: matchesUrl } : {}) } : undefined),
-    [spansUrl, matchesUrl],
-  );
-  const [spans, setSpans] = useState<SpansState>({ spans: [], loading: false });
-  const [matches, setMatches] = useState<MatchesState>({ loading: false });
-  const controller = useRef<AbortController | undefined>(undefined);
+  const spansQuery = useQuery({
+    ...traceQueryOptions,
+    queryKey: ["open-trace", "spans", requests?.spans, matchesUrl],
+    queryFn: requests
+      ? ({ client, queryKey, signal }) => {
+          const previous = client.getQueryData<TraceSpans>(queryKey);
+          if (previous && !previous.next) return previous;
+          // Publish each page immediately. The cached cursor resumes the next batch.
+          return loadTraceSpans(requests.spans, previous ?? emptyTraceSpans, signal,
+            (page) => client.setQueryData(queryKey, page),
+          );
+        }
+      : skipToken,
+  });
+  const matchesQuery = useQuery({
+    ...traceQueryOptions,
+    queryKey: ["open-trace", "matches", matchesUrl],
+    queryFn: matchesUrl ? ({ signal }) => loadMatchingSpans(matchesUrl, signal) : skipToken,
+  });
 
-  const load = useCallback(
-    async (url: string, from: SpansState) => {
-      controller.current?.abort();
-      const abort = new AbortController();
-      controller.current = abort;
-      let state: SpansState = { ...from, loading: true };
-      setSpans(state);
-      try {
-        const budget = from.spans.length + TRACE_AUTO_LOAD;
-        let cursor = from.next;
-        do {
-          const page = await fetchTracePage(pageUrl(url, cursor), abort.signal);
-          cursor = page.next;
-          const loaded = [...state.spans, ...page.spans];
-          const total = page.total ?? state.total;
-          state = {
-            spans: loaded,
-            ...(cursor ? { next: cursor } : {}),
-            ...(total !== undefined ? { total } : {}),
-            loading: Boolean(cursor) && loaded.length < budget,
-            ...(page.truncated
-              ? { warning: `The profile stopped returning spans after ${loaded.length}${total !== undefined ? ` of ${total}` : ""}; this trace is incomplete.` }
-              : {}),
-          };
-          setSpans(state);
-        } while (cursor && state.spans.length < budget);
-      } catch (error) {
-        if (aborted(error)) return;
-        // Spans already loaded are still the trace: a later page failing
-        // leaves it incomplete, which is a warning, not a lost trace.
-        setSpans(
-          state.spans.length > 0
-            ? { ...state, loading: false, warning: `Stopped loading spans after ${state.spans.length}: ${failure(error)}` }
-            : { ...state, loading: false, error: failure(error) },
-        );
-      }
-    },
-    [],
-  );
+  return requests ? openTraceResult(spansQuery, matchesQuery) : undefined;
+}
 
-  useEffect(() => {
-    if (!requests) return;
-    void load(requests.spans, { spans: [], loading: true });
-    return () => controller.current?.abort();
-  }, [requests, load]);
-
-  useEffect(() => {
-    if (!requests?.matches) {
-      setMatches({ loading: false });
-      return;
-    }
-    const abort = new AbortController();
-    setMatches({ loading: true });
-    void (async () => {
-      const ids = new Set<string>();
-      let cursor: string | undefined;
-      let truncated = false;
-      try {
-        do {
-          const page = await fetchTracePage(pageUrl(requests.matches!, cursor), abort.signal);
-          for (const span of page.spans) ids.add(span.spanId);
-          if (ids.size > TRACE_MATCH_LIMIT)
-            throw new Error(`More than ${TRACE_MATCH_LIMIT} spans of this trace match the filters; narrow them`);
-          truncated = page.truncated;
-          cursor = page.next;
-        } while (cursor);
-        setMatches({
-          ids,
-          loading: false,
-          ...(truncated ? { warning: "Filter matches are incomplete; some matching spans may be hidden." } : {}),
-        });
-      } catch (error) {
-        // Without the matches the trace still renders, unfiltered.
-        if (!aborted(error)) setMatches({ loading: false, warning: `Filters not applied inside the trace: ${failure(error)}` });
-      }
-    })();
-    return () => abort.abort();
-  }, [requests]);
-
-  if (!requests) return undefined;
-  const warning = [spans.warning, matches.warning].filter(Boolean).join("\n");
+function openTraceResult(
+  spansQuery: UseQueryResult<TraceSpans>,
+  matchesQuery: UseQueryResult<Awaited<ReturnType<typeof loadMatchingSpans>>>,
+): OtelOpenTrace {
+  const spans = spansQuery.data ?? emptyTraceSpans;
+  const spanError = spansQuery.error ? failure(spansQuery.error) : undefined;
+  const spanWarning = spanError && spans.spans.length > 0
+    ? `Stopped loading spans after ${spans.spans.length}: ${spanError}`
+    : spans.warning;
+  const matchesWarning = matchesQuery.error
+    ? `Filters not applied inside the trace: ${failure(matchesQuery.error)}`
+    : matchesQuery.data?.truncated
+      ? "Filter matches are incomplete; some matching spans may be hidden."
+      : undefined;
+  const warning = [spanWarning, matchesWarning].filter(Boolean).join("\n");
   return {
     spans: spans.spans,
     ...(spans.total !== undefined ? { total: spans.total } : {}),
-    loading: spans.loading || matches.loading,
-    ...(spans.error ? { error: spans.error } : {}),
+    loading: spansQuery.isFetching || matchesQuery.isFetching,
+    ...(spanError && spans.spans.length === 0 ? { error: spanError } : {}),
     ...(warning ? { warning } : {}),
-    ...(spans.next && !spans.loading ? { onLoadMore: () => void load(requests.spans, spans) } : {}),
-    ...(matches.ids ? { matchingSpanIds: matches.ids } : {}),
+    ...(spans.next && !spansQuery.isFetching ? { onLoadMore: () => void spansQuery.refetch({ cancelRefetch: false }) } : {}),
+    ...(matchesQuery.data ? { matchingSpanIds: matchesQuery.data.ids } : {}),
   };
 }

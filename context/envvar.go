@@ -124,7 +124,14 @@ func GetHelmValuesFromCache(ctx Context, namespace, releaseName string) (map[str
 	if chart, ok := rawJson["chart"].(map[string]any); ok {
 		chartValues = chart["values"]
 	}
-	merged := rawJson["config"].(map[string]any)
+	merged := make(map[string]any)
+	if config := rawJson["config"]; config != nil {
+		var ok bool
+		merged, ok = config.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("expected Helm config object for secret %s/%s, got %T", namespace, secret.Name, config)
+		}
+	}
 
 	if err := mergo.Merge(&merged, chartValues); err != nil {
 		return nil, fmt.Errorf("could not merge helm config and values of helm secret %s/%s: %w", namespace, secret.Name, err)

@@ -10,27 +10,29 @@ import (
 )
 
 var _ = ginkgo.Describe("Connection hydration request context", func() {
-	ginkgo.It("passes request values and deadlines into secret resolution and rejects canceled warm reads", func() {
+	ginkgo.It("passes request values into bounded shared resolution and rejects canceled warm reads", func() {
 		type requestKey struct{}
 		request, cancel := gocontext.WithTimeout(gocontext.WithValue(gocontext.Background(), requestKey{}, "active-request"), time.Second)
 		defer cancel()
 		previous := opReadFunc
 		ginkgo.DeferCleanup(func() { opReadFunc = previous })
-		var called bool
+		var requestValue any
+		var namespace string
+		var resolverDeadline time.Time
 		opReadFunc = func(ctx Context, _, _ string) (string, error) {
-			called = true
-			Expect(ctx.Value(requestKey{})).To(Equal("active-request"))
-			deadline, _ := ctx.Deadline()
-			expected, _ := request.Deadline()
-			Expect(deadline).To(Equal(expected))
-			Expect(ctx.GetNamespace()).To(Equal("rules"))
+			requestValue = ctx.Value(requestKey{})
+			namespace = ctx.GetNamespace()
+			resolverDeadline, _ = ctx.Deadline()
 			return "example-token", nil
 		}
 		resolver := New().WithNamespace("rules")
 		connection := &models.Connection{Password: "op://request-context/fixture/password"}
 		value, err := resolver.HydrateConnection(connection, HydrationOptions{Context: request})
 		Expect(err).NotTo(HaveOccurred())
-		Expect(called).To(BeTrue())
+		Expect(requestValue).To(Equal("active-request"))
+		Expect(namespace).To(Equal("rules"))
+		requestDeadline, _ := request.Deadline()
+		Expect(resolverDeadline).To(BeTemporally(">", requestDeadline))
 		Expect(value.Password).To(Equal("example-token"))
 		cancel()
 		_, err = resolver.HydrateConnection(connection, HydrationOptions{Context: request})

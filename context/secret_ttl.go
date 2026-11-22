@@ -73,10 +73,10 @@ type envLookup struct {
 // get is the value the context's secret scope holds, else the process cache's,
 // else the resolved one.
 func (l envLookup) get(ctx Context) (string, error) {
-	scope := secretScopeOf(ctx)
-	if scope != nil && ctx.Err() != nil {
-		return "", ctx.Err()
+	if err := ctx.Err(); err != nil {
+		return "", err
 	}
+	scope := secretScopeOf(ctx)
 
 	envCacheMu.Lock()
 	if value, found := l.cachedValue(scope); found {
@@ -92,20 +92,16 @@ func (l envLookup) get(ctx Context) (string, error) {
 		pending.scopes[scope] = struct{}{}
 	}
 	resolved := pending.flight.DoChan(l.id, func() (any, error) {
-		return l.resolveValue(ctx, pending, scope != nil)
+		return l.resolveValue(ctx, pending)
 	})
 	envCacheMu.Unlock()
 
-	var done <-chan struct{}
-	if scope != nil {
-		done = ctx.Done()
-	}
 	select {
-	case <-done:
+	case <-ctx.Done():
 		return "", ctx.Err()
 	case result := <-resolved:
-		if scope != nil && ctx.Err() != nil {
-			return "", ctx.Err()
+		if err := ctx.Err(); err != nil {
+			return "", err
 		}
 		if result.Err != nil {
 			return "", result.Err
@@ -140,15 +136,12 @@ func (l envLookup) cachedValue(scope *secretScope) (envValue, bool) {
 	return envValue{}, false
 }
 
-func (l envLookup) resolveValue(ctx Context, pending *envResolution, scoped bool) (envValue, error) {
-	if scoped {
-		// The shared resolver has its own timeout, independent of its waiters.
-		ctx.Context.Context = gocontext.WithoutCancel(ctx.Context.Context)
-		var cancel gocontext.CancelFunc
-		ctx, cancel = ctx.WithTimeout(envLookupTimeout(ctx, l.ambientPrompt))
-		defer cancel()
-	}
-	value, expires, err := l.resolve(ctx)
+func (l envLookup) resolveValue(ctx Context, pending *envResolution) (envValue, error) {
+	// The shared resolver has its own timeout, independent of its waiters.
+	ctx.Context.Context = gocontext.WithoutCancel(ctx.Context.Context)
+	resolver, cancel := ctx.WithTimeout(envLookupTimeout(ctx, l.ambientPrompt))
+	defer cancel()
+	value, expires, err := l.resolve(resolver)
 
 	envCacheMu.Lock()
 	defer envCacheMu.Unlock()
