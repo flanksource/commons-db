@@ -3,6 +3,7 @@ package context
 import (
 	gocontext "context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/patrickmn/go-cache"
@@ -15,8 +16,19 @@ type secretScopeKey struct{}
 // carry it.
 type secretScope struct {
 	ttl    time.Duration
-	flight singleflight.Group
 	values *cache.Cache
+}
+
+// The lock makes flight registration, cache writes and invalidation atomic.
+// Only current in-flight resolutions are tracked.
+var (
+	envCacheMu sync.Mutex
+	envPending = make(map[string]*envResolution)
+)
+
+type envResolution struct {
+	flight singleflight.Group
+	scopes map[*secretScope]struct{}
 }
 
 // WithSecretTTL keeps every value resolved through this context and those
@@ -52,79 +64,129 @@ type envValue struct {
 // envLookup resolves one value, cached under id. ttl is how long the process
 // cache keeps a value that does not expire by itself.
 type envLookup struct {
-	id      string
-	ttl     time.Duration
-	resolve func() (value string, expires time.Time, err error)
+	id            string
+	ttl           time.Duration
+	ambientPrompt bool
+	resolve       func(Context) (value string, expires time.Time, err error)
 }
 
 // get is the value the context's secret scope holds, else the process cache's,
 // else the resolved one.
 func (l envLookup) get(ctx Context) (string, error) {
-	var value envValue
-	var err error
-	if scope := secretScopeOf(ctx); scope != nil {
-		value, err = scope.get(l)
-	} else {
-		value, err = l.processValue(0)
+	scope := secretScopeOf(ctx)
+	if scope != nil && ctx.Err() != nil {
+		return "", ctx.Err()
 	}
-	return value.value, err
-}
 
-// processValue is the process cache's value when it is younger than maxAge (0
-// for any), else the resolved one.
-func (l envLookup) processValue(maxAge time.Duration) (envValue, error) {
-	if cached, found := envCache.Get(l.id); found {
-		if value := cached.(envValue); maxAge == 0 || time.Since(value.resolved) < maxAge {
-			return value, nil
-		}
+	envCacheMu.Lock()
+	if value, found := l.cachedValue(scope); found {
+		envCacheMu.Unlock()
+		return value.value, nil
 	}
-	resolved, err, _ := envLookupGroup.Do(l.id, func() (any, error) {
-		value, expires, err := l.resolve()
-		if err != nil {
-			return envValue{}, err
-		}
-		ttl := l.ttl
-		if !expires.IsZero() {
-			ttl = time.Until(expires)
-		}
-		result := envValue{value: value, resolved: time.Now(), expires: expires}
-		envCache.Set(l.id, result, ttl)
-		return result, nil
+	pending := envPending[l.id]
+	if pending == nil {
+		pending = &envResolution{scopes: make(map[*secretScope]struct{})}
+		envPending[l.id] = pending
+	}
+	if scope != nil {
+		pending.scopes[scope] = struct{}{}
+	}
+	resolved := pending.flight.DoChan(l.id, func() (any, error) {
+		return l.resolveValue(ctx, pending, scope != nil)
 	})
-	if err != nil {
-		return envValue{}, err
+	envCacheMu.Unlock()
+
+	var done <-chan struct{}
+	if scope != nil {
+		done = ctx.Done()
 	}
-	return resolved.(envValue), nil
+	select {
+	case <-done:
+		return "", ctx.Err()
+	case result := <-resolved:
+		if scope != nil && ctx.Err() != nil {
+			return "", ctx.Err()
+		}
+		if result.Err != nil {
+			return "", result.Err
+		}
+		value := result.Val.(envValue)
+		if !value.usable(time.Now(), 0) {
+			return "", fmt.Errorf("resolved value expired while waiting for lookup")
+		}
+		return value.value, nil
+	}
 }
 
-func (s *secretScope) get(l envLookup) (envValue, error) {
-	resolved, err, _ := s.flight.Do(l.id, func() (any, error) {
-		if cached, found := s.values.Get(l.id); found {
-			if value := cached.(envValue); s.keeps(value) {
-				return value, nil
+// cachedValue is called with envCacheMu held.
+func (l envLookup) cachedValue(scope *secretScope) (envValue, bool) {
+	var maxAge time.Duration
+	if scope != nil {
+		maxAge = scope.ttl
+		if cached, found := scope.values.Get(l.id); found {
+			if value := cached.(envValue); value.usable(time.Now(), maxAge) {
+				return value, true
 			}
 		}
-		value, err := l.processValue(s.ttl)
-		if err == nil {
-			s.values.Set(l.id, value, cache.NoExpiration)
+	}
+	if cached, found := envCache.Get(l.id); found {
+		if value := cached.(envValue); value.usable(time.Now(), maxAge) {
+			if scope != nil {
+				scope.values.Set(l.id, value, cache.NoExpiration)
+			}
+			return value, true
 		}
-		return value, err
-	})
+	}
+	return envValue{}, false
+}
+
+func (l envLookup) resolveValue(ctx Context, pending *envResolution, scoped bool) (envValue, error) {
+	if scoped {
+		// The shared resolver has its own timeout, independent of its waiters.
+		ctx.Context.Context = gocontext.WithoutCancel(ctx.Context.Context)
+		var cancel gocontext.CancelFunc
+		ctx, cancel = ctx.WithTimeout(envLookupTimeout(ctx, l.ambientPrompt))
+		defer cancel()
+	}
+	value, expires, err := l.resolve(ctx)
+
+	envCacheMu.Lock()
+	defer envCacheMu.Unlock()
+	current := envPending[l.id] == pending
+	if current {
+		delete(envPending, l.id)
+	}
 	if err != nil {
 		return envValue{}, err
 	}
-	return resolved.(envValue), nil
+
+	result := envValue{value: value, resolved: time.Now(), expires: expires}
+	ttl := l.ttl
+	if !expires.IsZero() {
+		ttl = expires.Sub(result.resolved)
+		if ttl <= 0 {
+			return envValue{}, fmt.Errorf("resolved value expired before caching")
+		}
+	}
+	if current {
+		envCache.Set(l.id, result, ttl)
+		for scope := range pending.scopes {
+			scope.values.Set(l.id, result, cache.NoExpiration)
+		}
+	}
+	return result, nil
 }
 
-func (s *secretScope) keeps(value envValue) bool {
-	if !value.expires.IsZero() && !time.Now().Before(value.expires) {
-		return false
-	}
-	return s.ttl == 0 || time.Since(value.resolved) < s.ttl
+func (v envValue) usable(now time.Time, maxAge time.Duration) bool {
+	return (v.expires.IsZero() || v.expires.After(now)) &&
+		(maxAge == 0 || now.Sub(v.resolved) < maxAge)
 }
 
 // dropEnvValue makes the next lookup of id resolve it again.
 func dropEnvValue(ctx Context, id string) {
+	envCacheMu.Lock()
+	defer envCacheMu.Unlock()
+	delete(envPending, id)
 	envCache.Delete(id)
 	if scope := secretScopeOf(ctx); scope != nil {
 		scope.values.Delete(id)

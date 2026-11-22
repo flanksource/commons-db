@@ -177,6 +177,8 @@ func (w *Worktree) ApplyDefaults() []string {
 	return warnings
 }
 
+// Prepare runs the setup, anchoring relative branch worktree paths to the
+// process working directory, as Setup.Resolve does with an empty base.
 func Prepare(ctx context.Context, setup *Setup) (*SetupResult, error) {
 	if setup == nil {
 		setup = &Setup{}
@@ -184,7 +186,24 @@ func Prepare(ctx context.Context, setup *Setup) (*SetupResult, error) {
 	if err := validateSetupPatch(setup); err != nil {
 		return nil, err
 	}
-	result, err := SetupEnv(ctx, setup.ToExec())
+	resolved := *setup
+	if checkout := setup.Checkout; checkout != nil && checkout.Mode != CheckoutNone {
+		if wt := checkout.Worktree; wt != nil && wt.Mode == WorktreeBranch {
+			path := strings.TrimSpace(wt.Path)
+			if path != "" && !filepath.IsAbs(path) {
+				abs, err := filepath.Abs(path)
+				if err != nil {
+					return nil, fmt.Errorf("resolve branch worktree path %q: %w", path, err)
+				}
+				worktree := *wt
+				worktree.Path = abs
+				resolvedCheckout := *checkout
+				resolvedCheckout.Worktree = &worktree
+				resolved.Checkout = &resolvedCheckout
+			}
+		}
+	}
+	result, err := SetupEnv(ctx, resolved.ToExec())
 	if err != nil {
 		return nil, err
 	}

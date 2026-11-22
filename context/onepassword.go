@@ -45,9 +45,10 @@ func GetOnePasswordValueFromCache(ctx Context, ref string) (string, error) {
 	// Scope the cache entry by a token fingerprint (never the token itself) so a
 	// value resolved by one service account can't satisfy another's lookup.
 	return envLookup{
-		id:  fmt.Sprintf("1password/%s/%s", tokenFingerprint(token), ref),
-		ttl: envCacheTTL(ctx, "envvar.1password.cache.timeout"),
-		resolve: func() (string, time.Time, error) {
+		id:            fmt.Sprintf("1password/%s/%s", tokenFingerprint(token), ref),
+		ttl:           envCacheTTL(ctx, "envvar.1password.cache.timeout"),
+		ambientPrompt: token == "",
+		resolve: func(ctx Context) (string, time.Time, error) {
 			value, err := opReadFunc(ctx, ref, token)
 			return value, time.Time{}, err
 		},
