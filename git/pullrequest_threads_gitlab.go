@@ -1,10 +1,11 @@
 // GitLab merge request discussions as threads: their notes without GitLab's system ones, whether a
-// resolvable one is resolved, and the file line a diff note is on; and opening, replying in,
-// resolving and reopening one.
+// resolvable one is resolved, and the file line a diff note is on; and opening one on a file's
+// lines of the diff, replying in, resolving and reopening one.
 package git
 
 import (
 	"context"
+	"crypto/sha1"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -108,31 +109,14 @@ func (p *gitlabProvider) PullRequestThread(ctx context.Context, repo RepoURL, nu
 	return discussion.thread(repo, number), nil
 }
 
-// CreatePullRequestThread opens a discussion; one on a file's lines goes on its last line, as
-// GitLab places a diff note on one line, of the diff the merge request is at.
+// CreatePullRequestThread opens a discussion; one on a file's lines goes on them in the diff the
+// merge request is at, each end of a range named by its line code.
 func (p *gitlabProvider) CreatePullRequestThread(ctx context.Context, repo RepoURL, number int, request PullRequestThreadRequest) (PullRequestThread, error) {
 	body := map[string]any{"body": request.Body}
 	if request.Path != "" {
-		var mr struct {
-			DiffRefs struct {
-				BaseSHA  string `json:"base_sha"`
-				HeadSHA  string `json:"head_sha"`
-				StartSHA string `json:"start_sha"`
-			} `json:"diff_refs"`
-		}
-		if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), Out: &mr}); err != nil {
+		position, err := p.diffPosition(ctx, repo, number, request)
+		if err != nil {
 			return PullRequestThread{}, err
-		}
-		if mr.DiffRefs.HeadSHA != request.HeadSHA {
-			return PullRequestThread{}, fmt.Errorf("gitlab merge request !%d is at %s, not %s: %w", number, mr.DiffRefs.HeadSHA, request.HeadSHA, ErrThreadTargetMoved)
-		}
-		path := strings.TrimPrefix(request.Path, "/")
-		position := map[string]any{"position_type": "text", "base_sha": mr.DiffRefs.BaseSHA, "head_sha": mr.DiffRefs.HeadSHA,
-			"start_sha": mr.DiffRefs.StartSHA, "old_path": path, "new_path": path}
-		if request.Old {
-			position["old_line"] = request.EndLine
-		} else {
-			position["new_line"] = request.EndLine
 		}
 		body["position"] = position
 	}
@@ -141,6 +125,166 @@ func (p *gitlabProvider) CreatePullRequestThread(ctx context.Context, repo RepoU
 		return PullRequestThread{}, err
 	}
 	return discussion.thread(repo, number), nil
+}
+
+// diffPosition is where request's note goes in the diff merge request number is at: its last
+// line, and with a range of lines, the line_range from its first.
+func (p *gitlabProvider) diffPosition(ctx context.Context, repo RepoURL, number int, request PullRequestThreadRequest) (map[string]any, error) {
+	var mr struct {
+		DiffRefs struct {
+			BaseSHA  string `json:"base_sha"`
+			HeadSHA  string `json:"head_sha"`
+			StartSHA string `json:"start_sha"`
+		} `json:"diff_refs"`
+	}
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d", number)), Out: &mr}); err != nil {
+		return nil, err
+	}
+	if mr.DiffRefs.HeadSHA != request.HeadSHA {
+		return nil, fmt.Errorf("gitlab merge request !%d is at %s, not %s: %w", number, mr.DiffRefs.HeadSHA, request.HeadSHA, ErrThreadTargetMoved)
+	}
+	path := strings.TrimPrefix(request.Path, "/")
+	file, err := p.diffFile(ctx, repo, number, path)
+	if err != nil {
+		return nil, err
+	}
+	lines, err := gitlabDiffLines(file.Diff)
+	if err != nil {
+		return nil, fmt.Errorf("gitlab merge request !%d's diff of %s: %w", number, path, err)
+	}
+	find := func(want int) (gitlabDiffLine, error) {
+		for _, line := range lines {
+			if line.on(request.Old) == want {
+				return line, nil
+			}
+		}
+		side := "new"
+		if request.Old {
+			side = "old"
+		}
+		return gitlabDiffLine{}, fmt.Errorf("gitlab merge request !%d's diff of %s doesn't show %s line %d", number, path, side, want)
+	}
+	end, err := find(request.EndLine)
+	if err != nil {
+		return nil, err
+	}
+	position := map[string]any{"position_type": "text", "base_sha": mr.DiffRefs.BaseSHA, "head_sha": mr.DiffRefs.HeadSHA,
+		"start_sha": mr.DiffRefs.StartSHA, "old_path": file.OldPath, "new_path": file.NewPath}
+	end.place(position)
+	if request.StartLine != 0 && request.StartLine < request.EndLine {
+		start, err := find(request.StartLine)
+		if err != nil {
+			return nil, err
+		}
+		position["line_range"] = map[string]any{"start": start.rangeEnd(file.NewPath), "end": end.rangeEnd(file.NewPath)}
+	}
+	return position, nil
+}
+
+type gitlabDiffFile struct {
+	OldPath string `json:"old_path"`
+	NewPath string `json:"new_path"`
+	Diff    string `json:"diff"`
+}
+
+// diffFile is the change merge request number makes to the file at path, by its new or old path,
+// paging its diffs by X-Next-Page.
+func (p *gitlabProvider) diffFile(ctx context.Context, repo RepoURL, number int, path string) (gitlabDiffFile, error) {
+	query := url.Values{"per_page": {"100"}}
+	for {
+		var files []gitlabDiffFile
+		headers, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d/diffs", number)) + "?" + query.Encode(), Out: &files})
+		if err != nil {
+			return gitlabDiffFile{}, err
+		}
+		for _, file := range files {
+			if file.NewPath == path || file.OldPath == path {
+				return file, nil
+			}
+		}
+		page := strings.TrimSpace(headers.Get("X-Next-Page"))
+		if page == "" {
+			return gitlabDiffFile{}, fmt.Errorf("gitlab merge request !%d doesn't change %s", number, path)
+		}
+		query.Set("page", page)
+	}
+}
+
+// gitlabDiffLine is a line of a unified diff with the old and new line numbers GitLab gives it:
+// an added line carries the old line after it, a removed one the new line after it.
+type gitlabDiffLine struct {
+	Kind     byte
+	Old, New int
+}
+
+// on is the line's number on the old or new side, or 0 when it isn't on that side.
+func (line gitlabDiffLine) on(old bool) int {
+	switch {
+	case old && line.Kind != '+':
+		return line.Old
+	case !old && line.Kind != '-':
+		return line.New
+	}
+	return 0
+}
+
+// place sets the line numbers GitLab places a note on line by: an added line's new one, a removed
+// line's old one, and both of an unchanged one.
+func (line gitlabDiffLine) place(position map[string]any) {
+	if line.Kind != '+' {
+		position["old_line"] = line.Old
+	}
+	if line.Kind != '-' {
+		position["new_line"] = line.New
+	}
+}
+
+// rangeEnd is line as an end of a line_range in the diff of the file at path: its line code, the
+// SHA-1 of path with its old and new line, and "new" for an added line, else "old".
+func (line gitlabDiffLine) rangeEnd(path string) map[string]any {
+	end := map[string]any{"line_code": fmt.Sprintf("%x_%d_%d", sha1.Sum([]byte(path)), line.Old, line.New), "type": "old"}
+	if line.Kind == '+' {
+		end["type"] = "new"
+	}
+	line.place(end)
+	return end
+}
+
+// gitlabDiffLines are the lines of diff's hunks, numbered as GitLab numbers them.
+func gitlabDiffLines(diff string) ([]gitlabDiffLine, error) {
+	var lines []gitlabDiffLine
+	old, current := 0, 0
+	for _, text := range strings.Split(diff, "\n") {
+		if strings.HasPrefix(text, "@@") {
+			if _, err := fmt.Sscanf(text, "@@ -%d", &old); err != nil {
+				return nil, fmt.Errorf("hunk header %q: %w", text, err)
+			}
+			_, added, found := strings.Cut(text, " +")
+			if !found {
+				return nil, fmt.Errorf("hunk header %q names no new lines", text)
+			}
+			if _, err := fmt.Sscanf(added, "%d", &current); err != nil {
+				return nil, fmt.Errorf("hunk header %q: %w", text, err)
+			}
+			continue
+		}
+		if text == "" || old == 0 && current == 0 {
+			continue
+		}
+		switch kind := text[0]; kind {
+		case '+':
+			lines = append(lines, gitlabDiffLine{Kind: kind, Old: old, New: current})
+			current++
+		case '-':
+			lines = append(lines, gitlabDiffLine{Kind: kind, Old: old, New: current})
+			old++
+		case ' ':
+			lines = append(lines, gitlabDiffLine{Kind: kind, Old: old, New: current})
+			old++
+			current++
+		}
+	}
+	return lines, nil
 }
 
 // ReplyPullRequestThread adds a note to the discussion; GitLab keeps its notes flat, so the reply
