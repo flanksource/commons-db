@@ -94,8 +94,10 @@ type Worktree struct {
 	Mode   WorktreeMode `json:"mode,omitempty" yaml:"mode,omitempty"`
 	Prefix string       `json:"prefix,omitempty" yaml:"prefix,omitempty"`
 	Base   string       `json:"base,omitempty" yaml:"base,omitempty"`
-	Path   string       `json:"path,omitempty" yaml:"path,omitempty"`
-	Keep   bool         `json:"keep,omitempty" yaml:"keep,omitempty"`
+	// Path is the directory of an `existing` worktree, or where a `branch` mode
+	// worktree is added (default: a generated directory).
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+	Keep bool   `json:"keep,omitempty" yaml:"keep,omitempty"`
 	// Branch is the existing branch a `branch` mode worktree checks out.
 	Branch string `json:"branch,omitempty" yaml:"branch,omitempty"`
 
@@ -270,7 +272,7 @@ func (w *Worktree) toGitWorktree() *connection.GitWorktree {
 		Ignored:     w.Ignored.IsClone(),
 	}
 	if w.Mode == WorktreeBranch {
-		wt.Branch, wt.Existing = w.Branch, true
+		wt.Branch, wt.Existing, wt.Path = w.Branch, true, w.Path
 	}
 	return wt
 }

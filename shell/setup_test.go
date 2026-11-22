@@ -103,6 +103,20 @@ func TestSetupResolveMakesRelativePathsExplicitWithoutMutatingInput(t *testing.T
 	assert.Equal(t, "worktrees/feature", setup.Checkout.Worktree.Path)
 }
 
+func TestSetupResolveAnchorsTheBranchWorktreePath(t *testing.T) {
+	baseDir := t.TempDir()
+	for path, want := range map[string]string{
+		"worktrees/feature": filepath.Join(baseDir, "worktrees/feature"),
+		"":                  "",
+	} {
+		resolved, err := Setup{Checkout: &Checkout{
+			Worktree: &Worktree{Mode: WorktreeBranch, Branch: "feature", Path: path},
+		}}.Resolve(baseDir)
+		require.NoError(t, err)
+		assert.Equal(t, want, resolved.Checkout.Worktree.Path)
+	}
+}
+
 // Resolve promises "an independent setup". A caller that edits the resolved copy
 // — the setup hook clears Checkout, a runner overrides one connection — must not
 // reach back into the config the setup was resolved from, which is typically
@@ -381,12 +395,12 @@ func TestSetupToExecBranchWorktree(t *testing.T) {
 		Checkout: &Checkout{
 			Mode:     CheckoutLocal,
 			Path:     "/repo",
-			Worktree: &Worktree{Mode: WorktreeBranch, Branch: "shell/abc", Keep: true, Ignored: CloneClone},
+			Worktree: &Worktree{Mode: WorktreeBranch, Branch: "shell/abc", Path: "/worktrees/abc", Keep: true, Ignored: CloneClone},
 		},
 	}.ToExec()
 
 	require.NotNil(t, exec.Checkout)
-	assert.Equal(t, &connection.GitWorktree{Enabled: true, Branch: "shell/abc", Existing: true, Keep: true, Ignored: true},
+	assert.Equal(t, &connection.GitWorktree{Enabled: true, Branch: "shell/abc", Path: "/worktrees/abc", Existing: true, Keep: true, Ignored: true},
 		exec.Checkout.Worktree)
 }
 

@@ -32,10 +32,10 @@ func (s Setup) Resolve(baseDir string) (Setup, error) {
 	}
 	if checkout := resolved.Checkout; checkout != nil {
 		checkout.Path = resolveSetupPath(baseDir, checkout.Path, "")
-		// Only an existing worktree names a path the caller chose; the others are
-		// created by Prepare, which decides where they land.
-		if checkout.Worktree != nil && checkout.Worktree.Mode == WorktreeExisting {
-			checkout.Worktree.Path = resolveSetupPath(baseDir, checkout.Worktree.Path, "")
+		// Only these modes name a path the caller chose; a new worktree is created
+		// by Prepare, which decides where it lands.
+		if wt := checkout.Worktree; wt != nil && (wt.Mode == WorktreeExisting || wt.Mode == WorktreeBranch) {
+			wt.Path = resolveSetupPath(baseDir, wt.Path, "")
 		}
 	}
 	return resolved, nil
