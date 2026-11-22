@@ -81,26 +81,88 @@ var _ = Describe("GitLab merge request discussions", func() {
 		Expect(fake.Calls()[0].Body).To(Equal(map[string]any{"body": "Looks good."}))
 	})
 
-	It("opens a discussion on the last line written on, of the diff the merge request is at", func(ctx SpecContext) {
-		fake := newFakeAPI(map[string]func(*http.Request) apiReply{
-			"GET " + base: reply(`{"iid":5,"state":"opened","source_branch":"fast","target_branch":"main","sha":"` + headSHA + `",
-				"source_project_id":1,"target_project_id":1,"diff_refs":{"base_sha":"` + mergeSHA + `","head_sha":"` + headSHA + `","start_sha":"` + staleSHA + `"}}`),
+	mergeRequest := reply(`{"iid":5,"state":"opened","source_branch":"fast","target_branch":"main","sha":"` + headSHA + `",
+		"source_project_id":1,"target_project_id":1,"diff_refs":{"base_sha":"` + mergeSHA + `","head_sha":"` + headSHA + `","start_sha":"` + staleSHA + `"}}`)
+	// api.go, renamed from server.go: old lines 10-12 are a, b := 2, return; new lines 10-13 are a,
+	// b := 3, c := 4, return.
+	diffs := func(*http.Request) apiReply {
+		return apiReply{Headers: map[string]string{"X-Next-Page": "2"}, Body: `[{"old_path":"README.md","new_path":"README.md","diff":"@@ -1 +1 @@\n-a\n+b\n"}]`}
+	}
+	secondDiffs := reply(`[{"old_path":"server.go","new_path":"api.go","renamed_file":true,
+		"diff":"@@ -10,3 +10,4 @@ func api() {\n \ta := 1\n-\tb := 2\n+\tb := 3\n+\tc := 4\n \treturn\n\\ No newline at end of file\n"}]`)
+	diffRoutes := func() map[string]func(*http.Request) apiReply {
+		return map[string]func(*http.Request) apiReply{
+			"GET " + base: mergeRequest,
+			"GET " + base + "/diffs": func(r *http.Request) apiReply {
+				if r.URL.Query().Get("page") == "2" {
+					return secondDiffs(r)
+				}
+				return diffs(r)
+			},
 			"POST " + base + "/discussions": reply(`{"id":"d6","notes":[{"id":61,"type":"DiffNote","body":"Rename this.","resolvable":true,
-				"author":{"id":8,"name":"Ada Lovelace","username":"ada"},"position":{"new_path":"api.go","new_line":14}}]}`),
-		})
+				"author":{"id":8,"name":"Ada Lovelace","username":"ada"},"position":{"new_path":"api.go","new_line":13}}]}`),
+		}
+	}
+	// lineCode is GitLab's name for a diff line of api.go: its path's SHA-1, old line and new line.
+	lineCode := func(old, current string) string {
+		return "f7e02cab0db787f60e7f5e727806f0f8b6c6d72a_" + old + "_" + current
+	}
+	posted := func(fake *fakeAPI) map[string]any {
+		calls := fake.Calls()
+		return calls[len(calls)-1].Body["position"].(map[string]any)
+	}
+
+	It("opens a discussion on every line written on, each end named by its line code in the file's diff", func(ctx SpecContext) {
+		fake := newFakeAPI(diffRoutes())
 		opened, err := writer(fake).CreatePullRequestThread(ctx, api(), 5, git.PullRequestThreadRequest{Body: "Rename this.",
-			Path: "/api.go", StartLine: 12, EndLine: 14, HeadSHA: headSHA, BaseSHA: mergeSHA})
+			Path: "/api.go", StartLine: 10, EndLine: 13, HeadSHA: headSHA, BaseSHA: mergeSHA})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(opened.Line).To(Equal(14))
-		Expect(fake.Calls()[1].Body).To(Equal(map[string]any{"body": "Rename this.", "position": map[string]any{
+		Expect(opened.Line).To(Equal(13))
+		Expect(posted(fake)).To(Equal(map[string]any{
 			"position_type": "text", "base_sha": mergeSHA, "head_sha": headSHA, "start_sha": staleSHA,
-			"old_path": "api.go", "new_path": "api.go", "new_line": float64(14)}}))
+			"old_path": "server.go", "new_path": "api.go", "old_line": float64(12), "new_line": float64(13),
+			"line_range": map[string]any{
+				"start": map[string]any{"line_code": lineCode("10", "10"), "type": "old", "old_line": float64(10), "new_line": float64(10)},
+				"end":   map[string]any{"line_code": lineCode("12", "13"), "type": "old", "old_line": float64(12), "new_line": float64(13)},
+			}}))
 
 		_, err = writer(fake).CreatePullRequestThread(ctx, api(), 5, git.PullRequestThreadRequest{Body: "Was this needed?",
-			Path: "api.go", StartLine: 3, EndLine: 3, Old: true, HeadSHA: headSHA, BaseSHA: mergeSHA})
+			Path: "api.go", StartLine: 11, EndLine: 12, Old: true, HeadSHA: headSHA, BaseSHA: mergeSHA})
 		Expect(err).ToNot(HaveOccurred())
-		Expect(fake.Calls()[3].Body["position"]).To(HaveKeyWithValue("old_line", float64(3)))
-		Expect(fake.Calls()[3].Body["position"]).ToNot(HaveKey("new_line"))
+		Expect(posted(fake)).To(HaveKeyWithValue("line_range", map[string]any{
+			"start": map[string]any{"line_code": lineCode("11", "11"), "type": "old", "old_line": float64(11)},
+			"end":   map[string]any{"line_code": lineCode("12", "13"), "type": "old", "old_line": float64(12), "new_line": float64(13)},
+		}))
+	})
+
+	DescribeTable("places a note on one line by its side: an added line by its new number, a removed one by its old, an unchanged one by both",
+		func(ctx SpecContext, line int, old bool, want map[string]any) {
+			fake := newFakeAPI(diffRoutes())
+			_, err := writer(fake).CreatePullRequestThread(ctx, api(), 5, git.PullRequestThreadRequest{Body: "Rename this.",
+				Path: "api.go", StartLine: line, EndLine: line, Old: old, HeadSHA: headSHA, BaseSHA: mergeSHA})
+			Expect(err).ToNot(HaveOccurred())
+			position := posted(fake)
+			Expect(position).ToNot(HaveKey("line_range"))
+			delete(position, "position_type")
+			delete(position, "base_sha")
+			delete(position, "head_sha")
+			delete(position, "start_sha")
+			delete(position, "old_path")
+			delete(position, "new_path")
+			Expect(position).To(Equal(want))
+		},
+		Entry("added", 11, false, map[string]any{"new_line": float64(11)}),
+		Entry("removed", 11, true, map[string]any{"old_line": float64(11)}),
+		Entry("unchanged", 13, false, map[string]any{"old_line": float64(12), "new_line": float64(13)}))
+
+	It("refuses a line the file's diff doesn't show, and a file the merge request doesn't change", func(ctx SpecContext) {
+		fake := newFakeAPI(diffRoutes())
+		_, err := writer(fake).CreatePullRequestThread(ctx, api(), 5, git.PullRequestThreadRequest{Body: "Rename this.",
+			Path: "api.go", StartLine: 2, EndLine: 13, HeadSHA: headSHA, BaseSHA: mergeSHA})
+		Expect(err).To(MatchError("gitlab merge request !5's diff of api.go doesn't show new line 2"))
+		_, err = writer(fake).CreatePullRequestThread(ctx, api(), 5, git.PullRequestThreadRequest{Body: "Rename this.",
+			Path: "main.go", StartLine: 2, EndLine: 2, HeadSHA: headSHA, BaseSHA: mergeSHA})
+		Expect(err).To(MatchError("gitlab merge request !5 doesn't change main.go"))
 	})
 
 	It("refuses a discussion on lines of a diff the merge request moved past", func(ctx SpecContext) {
