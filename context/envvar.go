@@ -18,7 +18,6 @@ import (
 	"github.com/flanksource/commons-db/types"
 	"github.com/flanksource/commons/logger"
 	"github.com/patrickmn/go-cache"
-	"golang.org/x/sync/singleflight"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -28,10 +27,7 @@ const defaultEnvCacheTTL = time.Minute
 // envCache is scoped in every key by the Kubernetes API and authorization
 // fingerprint. This prevents a value fetched by one cluster or principal from
 // satisfying a lookup made by another.
-var (
-	envCache       = cache.New(defaultEnvCacheTTL, 2*defaultEnvCacheTTL)
-	envLookupGroup singleflight.Group
-)
+var envCache = cache.New(defaultEnvCacheTTL, 2*defaultEnvCacheTTL)
 
 const helmSecretType = "helm.sh/release.v1"
 
@@ -39,7 +35,8 @@ func GetEnvValueFromCache(ctx Context, input types.EnvVar, namespace string) (va
 	if input.IsEmpty() {
 		return "", nil
 	}
-	ctx, cancel := ctx.WithTimeout(envLookupTimeout(ctx, input))
+	ambientPrompt := input.ValueFrom != nil && !lo.IsEmpty(input.ValueFrom.OnePassword) && onePasswordToken(ctx) == ""
+	ctx, cancel := ctx.WithTimeout(envLookupTimeout(ctx, ambientPrompt))
 	defer cancel()
 	if namespace == "" {
 		namespace = ctx.GetNamespace()
@@ -142,7 +139,7 @@ func GetHelmValueFromCache(ctx Context, namespace, releaseName, key string) (str
 	return envLookup{
 		id:  fmt.Sprintf("%s/helm/%s/%s/%s", scope, namespace, releaseName, key),
 		ttl: envCacheTTL(ctx, "envvar.helm.cache.timeout"),
-		resolve: func() (string, time.Time, error) {
+		resolve: func(ctx Context) (string, time.Time, error) {
 			merged, err := GetHelmValuesFromCache(ctx, namespace, releaseName)
 			if err != nil {
 				return "", time.Time{}, err
@@ -187,7 +184,7 @@ func GetSecretFromCache(ctx Context, namespace, name, key string) (string, error
 	return envLookup{
 		id:  secretCacheID(scope, namespace, name, key),
 		ttl: envCacheTTL(ctx, "envvar.cache.timeout"),
-		resolve: func() (string, time.Time, error) {
+		resolve: func(ctx Context) (string, time.Time, error) {
 			secret, err := client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
 			if err != nil {
 				return "", time.Time{}, fmt.Errorf("could not find secret %s/%s: %w", namespace, name, err)
@@ -220,7 +217,7 @@ func GetConfigMapFromCache(ctx Context, namespace, name, key string) (string, er
 	return envLookup{
 		id:  configMapCacheID(scope, namespace, name, key),
 		ttl: envCacheTTL(ctx, "envvar.cache.timeout"),
-		resolve: func() (string, time.Time, error) {
+		resolve: func(ctx Context) (string, time.Time, error) {
 			configMap, err := client.CoreV1().ConfigMaps(namespace).Get(ctx, name, metav1.GetOptions{})
 			if err != nil {
 				return "", time.Time{}, fmt.Errorf("could not get configmap %s/%s: %w", namespace, name, err)
@@ -245,7 +242,7 @@ func GetServiceAccountTokenFromCache(ctx Context, namespace, serviceAccount stri
 	}
 	return envLookup{
 		id: fmt.Sprintf("%s/sa-token/%s/%s", scope, namespace, serviceAccount),
-		resolve: func() (string, time.Time, error) {
+		resolve: func(ctx Context) (string, time.Time, error) {
 			tokenRequest, err := client.CoreV1().ServiceAccounts(namespace).CreateToken(ctx, serviceAccount, &authenticationv1.TokenRequest{}, metav1.CreateOptions{})
 			if err != nil {
 				return "", time.Time{}, fmt.Errorf("could not get token for service account %s/%s: %w", namespace, serviceAccount, err)
@@ -271,11 +268,11 @@ func localKubernetesCacheScope(ctx Context) (*dutyKubernetes.Client, string, err
 	return client, scope, nil
 }
 
-// envLookupTimeout bounds resolving input. A 1Password reference read without
+// envLookupTimeout bounds a lookup. A 1Password reference read without
 // a service account waits for a person to approve the prompt; killing `op`
 // before they do fails the lookup and the next one prompts again.
-func envLookupTimeout(ctx Context, input types.EnvVar) time.Duration {
-	if input.ValueFrom != nil && !lo.IsEmpty(input.ValueFrom.OnePassword) && onePasswordToken(ctx) == "" {
+func envLookupTimeout(ctx Context, ambientPrompt bool) time.Duration {
+	if ambientPrompt {
 		return ctx.Properties().Duration("envvar.1password.lookup.timeout", 2*time.Minute)
 	}
 	return ctx.Properties().Duration("envvar.lookup.timeout", 5*time.Second)

@@ -10,6 +10,42 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var _ = Describe("Prepare branch worktree paths", func() {
+	It("anchors a relative path to the same directory as Setup.Resolve", func() {
+		dir, err := filepath.EvalSymlinks(GinkgoT().TempDir())
+		Expect(err).NotTo(HaveOccurred())
+		GinkgoT().Chdir(dir)
+
+		source := filepath.Join(dir, "source")
+		Expect(os.Mkdir(source, 0o700)).To(Succeed())
+		ctx := dbcontext.New()
+		for _, args := range [][]string{
+			{"init", "-q", "-b", "main"},
+			{"-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-qm", "seed"},
+			{"branch", "feature"},
+		} {
+			_, err := gitOutput(ctx, source, args...)
+			Expect(err).NotTo(HaveOccurred())
+		}
+
+		path := filepath.Join("worktrees", "feature")
+		setup := Setup{BaseDir: ".runtime", Checkout: &Checkout{
+			Mode: CheckoutLocal, Path: "source",
+			Worktree: &Worktree{Mode: WorktreeBranch, Branch: "feature", Path: path},
+		}}
+		resolved, err := setup.Resolve(dir)
+		Expect(err).NotTo(HaveOccurred())
+		for _, input := range []*Setup{&setup, &resolved} {
+			result, err := Prepare(ctx, input)
+			Expect(err).NotTo(HaveOccurred())
+			got := result.Cwd
+			Expect(result.Cleanup()).To(Succeed())
+			Expect(got).To(Equal(filepath.Join(dir, path)))
+		}
+		Expect(setup.Checkout.Worktree.Path).To(Equal(path))
+	})
+})
+
 var _ = Describe("supplied workspace patches", func() {
 	It("preserves a checkout supplied through a named connection", func() {
 		setup := Setup{Checkout: &Checkout{Connection: "connection://repository"}}
