@@ -14,7 +14,9 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/sessionstoretest"
 	profilepkg "github.com/flanksource/commons-db/cmd/query/profiles"
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
@@ -33,7 +35,7 @@ const (
 type apiHarness struct {
 	handler  *sessionHandler
 	registry *query.SessionRegistry
-	store    *KVStore
+	store    *sessionstore.KVStore
 	records  *recordstore.Notifier
 	epoch    time.Time
 
@@ -44,9 +46,9 @@ type apiHarness struct {
 }
 
 func newAPIHarness() *apiHarness {
-	h := &apiHarness{epoch: contractEpoch(), unread: map[string]bool{}, uncontrol: map[string]bool{}, calls: map[string]int{}}
+	h := &apiHarness{epoch: sessionstoretest.Epoch(), unread: map[string]bool{}, uncontrol: map[string]bool{}, calls: map[string]int{}}
 	var err error
-	h.store, err = NewMemoryKVStore(KVStoreOptions{})
+	h.store, err = sessionstore.NewMemoryKVStore(sessionstore.KVStoreOptions{})
 	Expect(err).ToNot(HaveOccurred())
 	backend, err := kv.New(kv.Options{
 		Store: cache.NewMemory(), Prefix: "records", Schema: recordstoretest.Schema, TTL: time.Hour, MaxChunkBytes: 1 << 20,
@@ -72,7 +74,7 @@ func newAPIHarness() *apiHarness {
 		Records: h.records, Authorize: h.authorize, Next: &nextMarker{},
 		Principal: func(*http.Request) string { return "tester" },
 	})
-	for _, rec := range contractFixture(h.epoch) {
+	for _, rec := range sessionstoretest.Fixture(h.epoch) {
 		Expect(h.store.Begin(context.Background(), rec)).To(Succeed())
 	}
 	return h

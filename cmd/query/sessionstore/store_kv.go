@@ -1,4 +1,4 @@
-package sessions
+package sessionstore
 
 import (
 	"context"
@@ -197,8 +197,8 @@ func (s *KVStore) Get(ctx context.Context, id string) (query.SessionRecord, bool
 	if err != nil {
 		return query.SessionRecord{}, false, err
 	}
-	records, missing, err := s.read(ctx, k, []string{id})
-	if err != nil || len(missing) > 0 {
+	records, _, err := s.read(ctx, k, []string{id})
+	if err != nil || len(records) == 0 {
 		return query.SessionRecord{}, false, err
 	}
 	return records[0], true, nil
@@ -247,12 +247,12 @@ func (s *KVStore) Lineage(ctx context.Context, ids []string) (map[string][]strin
 	if err != nil {
 		return nil, err
 	}
-	return lineageOf(records, ids), nil
+	return LineageOf(records, ids), nil
 }
 
-// lineageOf maps each of ids to the records restarted from it, in records'
+// LineageOf maps each of ids to the records restarted from it, in records'
 // order.
-func lineageOf(records []query.SessionRecord, ids []string) map[string][]string {
+func LineageOf(records []query.SessionRecord, ids []string) map[string][]string {
 	wanted := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		wanted[id] = true

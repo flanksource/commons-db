@@ -18,6 +18,7 @@ import (
 	"github.com/flanksource/commons-db/cmd/query/schedules"
 	"github.com/flanksource/commons-db/cmd/query/secretcatalog"
 	"github.com/flanksource/commons-db/cmd/query/sessions"
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	"github.com/flanksource/commons-db/cmd/query/www"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/fs"
@@ -147,7 +148,7 @@ func (a *App) Serve(parent context.Context, root *cobra.Command, configDir strin
 	a.scheduler.Start(flanksourceContext.NewContext(ctx))
 	defer a.scheduler.Stop()
 
-	sessionStore, err := sessions.NewStore(gdb, options.SessionRetention)
+	sessionStore, err := sessionstore.NewStore(gdb, options.SessionRetention)
 	if err != nil {
 		return err
 	}

@@ -1,4 +1,4 @@
-package sessions
+package sessionstore
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	. "github.com/onsi/gomega"
 	"gorm.io/gorm"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/sessionstoretest"
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
 )
@@ -41,7 +42,7 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 	)
 
 	ginkgo.BeforeEach(func() {
-		ctx, epoch = context.Background(), contractEpoch()
+		ctx, epoch = context.Background(), sessionstoretest.Epoch()
 		store = newGormStore(sessionStoreDB(), time.Hour)
 	})
 
@@ -52,7 +53,7 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 	}
 
 	ginkgo.It("flushes a session's buffered events when the session is closed", func() {
-		rec := contractFixture(epoch)[1]
+		rec := sessionstoretest.Fixture(epoch)[1]
 		Expect(store.Begin(ctx, rec)).To(Succeed())
 		appendEvents(rec.ID, 3)
 
@@ -68,7 +69,7 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 	})
 
 	ginkgo.It("flushes a full batch as it is appended", func() {
-		rec := contractFixture(epoch)[1]
+		rec := sessionstoretest.Fixture(epoch)[1]
 		Expect(store.Begin(ctx, rec)).To(Succeed())
 		appendEvents(rec.ID, sessionEventBatchSize)
 		events, err := store.Events(ctx, rec.ID)
@@ -77,10 +78,10 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 	})
 
 	ginkgo.It("prunes sessions stopped before the retention window, with their events", func() {
-		old := contractFixture(epoch)[0]
+		old := sessionstoretest.Fixture(epoch)[0]
 		longAgo := time.Now().Add(-2 * time.Hour)
 		old.StoppedAt = &longAgo
-		fresh := contractFixture(epoch)[1]
+		fresh := sessionstoretest.Fixture(epoch)[1]
 		Expect(store.Begin(ctx, old)).To(Succeed())
 		Expect(store.Begin(ctx, fresh)).To(Succeed())
 		appendEvents(old.ID, 1)
@@ -111,7 +112,7 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 		})).To(Succeed())
 		ginkgo.DeferCleanup(func() { Expect(gdb.Callback().Create().Remove(callback)).To(Succeed()) })
 
-		rec := contractFixture(epoch)[1]
+		rec := sessionstoretest.Fixture(epoch)[1]
 		Expect(store.Begin(ctx, rec)).To(Succeed())
 		for i := int64(1); i <= 3; i++ {
 			Expect(store.Append(ctx, query.Event{SessionID: rec.ID, Sequence: i, Time: epoch, Row: query.Row{"n": float64(i)}})).To(Succeed())
@@ -136,7 +137,7 @@ var _ = ginkgo.Describe("Store (gorm)", func() {
 	})
 
 	ginkgo.It("lists nothing when Allow refuses every profile", func() {
-		for _, rec := range contractFixture(epoch) {
+		for _, rec := range sessionstoretest.Fixture(epoch) {
 			Expect(store.Begin(ctx, rec)).To(Succeed())
 		}
 		page, err := store.List(ctx, query.SessionFilter{Allow: func(string) bool { return false }})

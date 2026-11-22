@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"sync"
 
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -79,7 +80,7 @@ type resolvedSession struct {
 // exists. Only a caller who may read it is told 403 for a control it may not
 // perform.
 func (h *sessionHandler) authorizedSession(w http.ResponseWriter, r *http.Request, id string, action Action) (resolvedSession, bool) {
-	ctx := withSessionReadMemo(r.Context())
+	ctx := sessionstore.WithReadMemo(r.Context())
 	resolved, err := h.resolve(ctx, id)
 	var notFound errSessionNotFound
 	switch {

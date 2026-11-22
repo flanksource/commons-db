@@ -7,7 +7,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/cmd/query/sessions"
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
 )
@@ -32,7 +32,7 @@ var _ = Describe("sessions table migration", func() {
 		Expect(migrateSchema(ctx, handle.DSN())).To(Succeed())
 		Expect(migrateSchema(ctx, handle.DSN())).To(Succeed(), "migration must be idempotent")
 
-		store, err := sessions.NewStore(handle.Gorm(), 365*24*time.Hour)
+		store, err := sessionstore.NewStore(handle.Gorm(), 365*24*time.Hour)
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(store.Close)
 
