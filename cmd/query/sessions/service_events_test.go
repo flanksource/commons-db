@@ -11,6 +11,7 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/sessionstoretest"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore/recordstoretest"
 )
@@ -68,7 +69,7 @@ var _ = ginkgo.Describe("events and results of a session no longer live", func()
 	})
 
 	ginkgo.It("tails a record this process writes until its stream is sealed", func() {
-		rec := contractFixture(h.epoch)[4]
+		rec := sessionstoretest.Fixture(h.epoch)[4]
 		rec.ID, rec.Owner = "local", h.registry.Owner()
 		Expect(h.store.Begin(ctx, rec)).To(Succeed())
 		recordEvents("local", "stream-local", 1, query.SessionRunning)

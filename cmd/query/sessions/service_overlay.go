@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/flanksource/commons-db/cmd/query/sessionstore"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore"
 )
@@ -106,7 +107,7 @@ func (h *sessionHandler) lineage(ctx context.Context, ids []string) (map[string]
 	if err != nil {
 		return nil, err
 	}
-	return lineageOf(live, ids), nil
+	return sessionstore.LineageOf(live, ids), nil
 }
 
 // readableLineage drops the restarted sessions allow refuses, so restartedAs

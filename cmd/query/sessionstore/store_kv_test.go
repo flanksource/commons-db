@@ -1,11 +1,9 @@
-package sessions
+package sessionstore
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"iter"
-	"strings"
 	"sync"
 	"time"
 
@@ -13,6 +11,7 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
+	"github.com/flanksource/commons-db/cmd/query/internal/sessionstoretest"
 	"github.com/flanksource/commons-db/query"
 )
 
@@ -41,53 +40,6 @@ func (c *ttlRecordingCache) ttl(key string) time.Duration {
 	return c.ttls[key]
 }
 
-// countingCache counts how often each session's start key is read, so a spec
-// can see which records a request read and how many times.
-type countingCache struct {
-	cache.Store
-	mu    sync.Mutex
-	reads map[string]int
-}
-
-func (c *countingCache) MGet(ctx context.Context, keys iter.Seq[string]) iter.Seq2[cache.Entry, error] {
-	c.mu.Lock()
-	for key := range keys {
-		if strings.HasSuffix(key, ":start") {
-			c.reads[key]++
-		}
-	}
-	c.mu.Unlock()
-	return c.Store.MGet(ctx, keys)
-}
-
-func (c *countingCache) Get(ctx context.Context, key string) ([]byte, error) {
-	c.mu.Lock()
-	if strings.HasSuffix(key, ":start") {
-		c.reads[key]++
-	}
-	c.mu.Unlock()
-	return c.Store.Get(ctx, key)
-}
-
-// readsOf is how often session id's start key was read under any prefix.
-func (c *countingCache) readsOf(id string) int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	total := 0
-	for key, reads := range c.reads {
-		if strings.HasSuffix(key, "sessions:v1:"+id+":start") {
-			total += reads
-		}
-	}
-	return total
-}
-
-func (c *countingCache) reset() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.reads = map[string]int{}
-}
-
 var _ = ginkgo.Describe("KVStore", func() {
 	ginkgo.Describe("over the memory cache", func() {
 		describeSessionStoreContract(func() query.SessionStore {
@@ -106,14 +58,14 @@ var _ = ginkgo.Describe("KVStore", func() {
 	)
 
 	ginkgo.BeforeEach(func() {
-		ctx, backing, epoch = context.Background(), newTTLRecordingCache(), contractEpoch()
+		ctx, backing, epoch = context.Background(), newTTLRecordingCache(), sessionstoretest.Epoch()
 		var err error
 		store, err = NewKVStore(func(context.Context) (cache.Store, string, error) { return backing, prefix, nil }, KVStoreOptions{TTL: 48 * time.Hour})
 		Expect(err).ToNot(HaveOccurred())
 	})
 
 	ginkgo.It("writes the start, the status and the index under the environment prefix", func() {
-		rec := contractFixture(epoch)[0]
+		rec := sessionstoretest.Fixture(epoch)[0]
 		Expect(store.Begin(ctx, rec)).To(Succeed())
 
 		start, err := backing.Get(ctx, prefix+"sessions:v1:c:start")
@@ -132,7 +84,7 @@ var _ = ginkgo.Describe("KVStore", func() {
 	})
 
 	ginkgo.It("deletes one session record and removes it from the index", func() {
-		records := contractFixture(epoch)
+		records := sessionstoretest.Fixture(epoch)
 		Expect(store.Begin(ctx, records[0])).To(Succeed())
 		Expect(store.Begin(ctx, records[1])).To(Succeed())
 
@@ -147,7 +99,7 @@ var _ = ginkgo.Describe("KVStore", func() {
 	})
 
 	ginkgo.It("pins the status expiry to the start record's", func() {
-		rec := contractFixture(epoch)[0]
+		rec := sessionstoretest.Fixture(epoch)[0]
 		Expect(store.Begin(ctx, rec)).To(Succeed())
 		startTTL := backing.ttl(prefix + "sessions:v1:c:start")
 		Expect(startTTL).To(BeNumerically("~", 47*time.Hour+2*time.Minute, time.Minute), "48h less the 58 minutes it has run")
@@ -158,13 +110,13 @@ var _ = ginkgo.Describe("KVStore", func() {
 	})
 
 	ginkgo.It("refuses a record that has already outlived the ttl", func() {
-		rec := contractFixture(epoch)[0]
+		rec := sessionstoretest.Fixture(epoch)[0]
 		rec.StartedAt = time.Now().Add(-49 * time.Hour)
 		Expect(store.Begin(ctx, rec)).To(MatchError(ContainSubstring("outside the 48h0m0s session ttl")))
 	})
 
 	ginkgo.It("drops index entries whose start record is gone, and trims those older than the ttl", func() {
-		for _, rec := range contractFixture(epoch) {
+		for _, rec := range sessionstoretest.Fixture(epoch) {
 			Expect(store.Begin(ctx, rec)).To(Succeed())
 		}
 		index := prefix + "sessions:v1:index"
@@ -180,14 +132,14 @@ var _ = ginkgo.Describe("KVStore", func() {
 		Expect(members).ToNot(ContainElement("b"), "a missing start removes its index entry")
 		Expect(members).To(ContainElement("ancient"), "only a write trims by age")
 
-		Expect(store.Begin(ctx, contractRecord(epoch, "g", "trace-capture/jvm_trace", query.SessionRunning, 6, 0, nil))).To(Succeed())
+		Expect(store.Begin(ctx, sessionstoretest.Record(epoch, "g", "trace-capture/jvm_trace", query.SessionRunning, 6, 0, nil))).To(Succeed())
 		members, err = backing.ZRangeByScore(ctx, index, cache.NegInf, cache.PosInf)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(members).ToNot(ContainElement("ancient"))
 	})
 
 	ginkgo.It("removes a start record whose status was evicted, counts it, and lists the rest", func() {
-		for _, rec := range contractFixture(epoch) {
+		for _, rec := range sessionstoretest.Fixture(epoch) {
 			Expect(store.Begin(ctx, rec)).To(Succeed())
 		}
 		orphansBefore := KVOrphanedRecords()
@@ -208,10 +160,13 @@ var _ = ginkgo.Describe("KVStore", func() {
 	})
 
 	ginkgo.It("leaves a just-begun start whose status is not written yet, unlisted but in place", func() {
-		rec := contractRecord(time.Now(), "fresh", jvmProfile, query.SessionStarting, 0, 0, nil)
+		rec := sessionstoretest.Record(time.Now(), "fresh", "trace-capture/jvm_trace", query.SessionStarting, 0, 0, nil)
 		Expect(store.Begin(ctx, rec)).To(Succeed())
 		Expect(backing.Del(ctx, prefix+"sessions:v1:fresh:status")).To(Succeed())
 
+		_, found, err := store.Get(ctx, rec.ID)
+		Expect(err).NotTo(HaveOccurred())
+		Expect(found).To(BeFalse())
 		page, err := store.List(ctx, query.SessionFilter{})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pageIDs(page)).To(BeEmpty())
@@ -223,18 +178,18 @@ var _ = ginkgo.Describe("KVStore", func() {
 	})
 
 	ginkgo.It("reads only records started no earlier than the ids it maps, for lineage", func() {
-		counting := &countingCache{Store: backing, reads: map[string]int{}}
+		counting := sessionstoretest.NewCountingCache(backing)
 		store, err := NewKVStore(func(context.Context) (cache.Store, string, error) { return counting, prefix, nil }, KVStoreOptions{TTL: 48 * time.Hour})
 		Expect(err).ToNot(HaveOccurred())
-		for _, rec := range contractFixture(epoch) {
+		for _, rec := range sessionstoretest.Fixture(epoch) {
 			Expect(store.Begin(ctx, rec)).To(Succeed())
 		}
-		counting.reset()
+		counting.Reset()
 
 		lineage, err := store.Lineage(ctx, []string{"c"})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(lineage).To(Equal(map[string][]string{"c": {"f"}}))
-		Expect(counting.readsOf("a")).To(BeZero(), "a started before c and cannot be its restart")
+		Expect(counting.ReadsOf("a")).To(BeZero(), "a started before c and cannot be its restart")
 	})
 
 	ginkgo.It("surfaces a resolver failure", func() {

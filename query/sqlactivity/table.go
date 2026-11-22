@@ -10,6 +10,7 @@ func (Sample) Columns() []api.ColumnDef {
 		api.Column("state").Label("State").Build(),
 		api.Column("waitType").Label("Wait").Build(),
 		api.Column("elapsedMs").Label("Elapsed").Type("duration").Unit("ms").Build(),
+		api.Column("percentComplete").Label("Progress").Type("number").Unit(api.ColumnUnitPercent).Build(),
 		api.Column("blockedBy").Label("Blocker").Type("number").Build(),
 		api.Column("sql").Label("SQL").Build(),
 	}
@@ -29,6 +30,10 @@ func (Sample) Columns() []api.ColumnDef {
 }
 
 func (s Sample) Row() map[string]any {
-	return map[string]any{"sessionId": s.SessionID, "state": s.State, "waitType": s.WaitType, "elapsedMs": s.ElapsedMs, "blockedBy": s.BlockedBy, "sql": s.SQL}
+	row := map[string]any{"sessionId": s.SessionID, "state": s.State, "waitType": s.WaitType, "elapsedMs": s.ElapsedMs, "blockedBy": s.BlockedBy, "sql": s.SQL}
+	if s.PercentComplete != nil {
+		row["percentComplete"] = *s.PercentComplete
+	}
+	return row
 }
 func (s Sample) RowDetail() api.Textable { return s.PrettyFull() }

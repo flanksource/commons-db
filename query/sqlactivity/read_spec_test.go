@@ -20,7 +20,9 @@ var postgresColumns = []string{"pid", "blocked_by", "datname", "usename", "appli
 
 var sqlServerColumns = []string{"session_id", "request_id", "blocked_by", "database_name", "login_name", "program_name", "host_name",
 	"state", "command", "wait_type", "wait_resource", "wait_time", "started_at", "transaction_started_at", "total_elapsed_time",
-	"cpu_time", "logical_reads", "reads", "writes", "memory_bytes", "open_transaction_count", "query_hash", "sql_text"}
+	"cpu_time", "logical_reads", "reads", "writes", "memory_bytes", "open_transaction_count", "query_hash", "sql_text",
+	"percent_complete", "estimated_completion_time", "transaction_id", "transaction_state", "rows_returned", "last_wait_type",
+	"log_records", "log_bytes_used", "log_bytes_reserved", "waiting_tasks", "longest_wait_type", "longest_wait_ms"}
 
 func mockDB(matcher sqlmock.QueryMatcher) (*sql.DB, sqlmock.Sqlmock) {
 	pool, mock, err := sqlmock.New(sqlmock.QueryMatcherOption(matcher))
@@ -82,12 +84,14 @@ var _ = Describe("reading SQL Server requests", func() {
 	It("reads the server time and every request in one marked batch with the idle switch and session named", func() {
 		var statement string
 		pool, mock := mockDB(sqlmock.QueryMatcherFunc(func(_, actual string) error { statement = actual; return nil }))
-		mock.ExpectQuery("batch").WithArgs(sql.Named("idle", false), sql.Named("session", int64(0))).WillReturnRows(
+		mock.ExpectQuery("batch").WithArgs(sql.Named("idle", false), sql.Named("session", int64(0)), sql.Named("progress", false), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(
 			sqlmock.NewRows([]string{"sampled_at"}).AddRow(serverTime),
 			sqlmock.NewRows(sqlServerColumns).
 				AddRow(55, 0, 54, "warehouse", "etl", "loader", "host-a", "suspended", "UPDATE", "LCK_M_X", "KEY: 5:72057594043236352 (8194443284a0)",
-					1200, started(1300*time.Millisecond), started(5*time.Second), 1300, 40, 900, 12, 3, 16384, 1, []byte{0xab, 0x01}, "UPDATE dbo.ledger SET v = 1").
-				AddRow(54, 0, 0, "warehouse", "etl", "loader", "host-a", "sleeping", "", "", "", nil, started(time.Minute), started(time.Minute), nil, nil, nil, nil, nil, nil, 1, nil, "BEGIN TRAN"),
+					1200, started(1300*time.Millisecond), started(5*time.Second), 1300, 40, 900, 12, 3, 16384, 1, []byte{0xab, 0x01}, "UPDATE dbo.ledger SET v = 1",
+					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).
+				AddRow(54, 0, 0, "warehouse", "etl", "loader", "host-a", "sleeping", "", "", "", nil, started(time.Minute), started(time.Minute), nil, nil, nil, nil, nil, nil, 1, nil, "BEGIN TRAN",
+					nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil),
 		)
 		got, err := readSQLServer(context.Background(), pool, Filter{})
 		Expect(err).NotTo(HaveOccurred())
@@ -108,7 +112,7 @@ var _ = Describe("reading SQL Server requests", func() {
 	})
 	It("names the session a filter narrows to", func() {
 		pool, mock := mockDB(sqlmock.QueryMatcherRegexp)
-		mock.ExpectQuery(".").WithArgs(sql.Named("idle", true), sql.Named("session", int64(57))).WillReturnRows(
+		mock.ExpectQuery(".").WithArgs(sql.Named("idle", true), sql.Named("session", int64(57)), sql.Named("progress", false), sqlmock.AnyArg(), sqlmock.AnyArg()).WillReturnRows(
 			sqlmock.NewRows([]string{"sampled_at"}).AddRow(serverTime), sqlmock.NewRows(sqlServerColumns))
 		_, err := readSQLServer(context.Background(), pool, Filter{Idle: true, SessionID: 57})
 		Expect(err).NotTo(HaveOccurred())
@@ -136,7 +140,8 @@ var _ = Describe("Read", func() {
 		pool, mock := mockDB(sqlmock.QueryMatcherRegexp)
 		mock.ExpectQuery(".").WillReturnRows(sqlmock.NewRows([]string{"sampled_at"}).AddRow(serverTime),
 			sqlmock.NewRows(sqlServerColumns).AddRow(55, 0, 54, "warehouse", "etl", "loader", "host-a", "suspended", "UPDATE", "", "",
-				0, started(2*time.Second), started(5*time.Second), nil, 0, 0, 0, 0, 0, 1, nil, "UPDATE dbo.ledger SET v = 1"))
+				0, started(2*time.Second), started(5*time.Second), nil, 0, 0, 0, 0, 0, 1, nil, "UPDATE dbo.ledger SET v = 1",
+				nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil))
 		got, err := Read(context.Background(), pool, EngineSQLServer, Filter{})
 		Expect(err).NotTo(HaveOccurred())
 		Expect(got.Rows).To(HaveLen(1))

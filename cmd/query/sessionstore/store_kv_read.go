@@ -1,4 +1,4 @@
-package sessions
+package sessionstore
 
 import (
 	"context"
@@ -41,10 +41,10 @@ type kvMemoEntry struct {
 
 type kvReadMemoKey struct{}
 
-// withSessionReadMemo returns ctx carrying a fresh read memo. A handler scopes
+// WithReadMemo returns ctx carrying a fresh read memo. A handler scopes
 // it to one resolution: a record read again later, such as a stream's final
 // status, must be read fresh.
-func withSessionReadMemo(ctx context.Context) context.Context {
+func WithReadMemo(ctx context.Context) context.Context {
 	return context.WithValue(ctx, kvReadMemoKey{}, &kvReadMemo{entries: map[string]kvMemoEntry{}})
 }
 
