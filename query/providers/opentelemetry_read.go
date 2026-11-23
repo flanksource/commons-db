@@ -61,6 +61,7 @@ func ReadOpenTelemetrySpans(ctx context.Context, read OpenTelemetryRead, emit fu
 	if err != nil {
 		return err
 	}
+	withTraceTimeFormat(&search, runtime.options, mapping)
 	// Checked now so a lag that cannot be bounded fails the start; each poll
 	// then bounds again from its own now, so the cursor keeps moving.
 	if _, _, err := openSearchTailBound(&search, read.Lag, mapping, time.Now().UTC()); err != nil {

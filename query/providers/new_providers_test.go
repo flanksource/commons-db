@@ -159,6 +159,48 @@ var _ = Describe("opentelemetry provider", func() {
 		}}))
 	})
 
+	// Jaeger's own index template maps startTimeMillis as a date with an
+	// epoch_millis format, so the epoch default for a numeric startTimeMillis
+	// must not be applied: the mapping already says how to encode the bound.
+	It("ranges a Jaeger startTimeMillis mapped as a date through its own format", func() {
+		var requestBody map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			if strings.HasSuffix(r.URL.Path, "/_field_caps") {
+				_, _ = fmt.Fprint(w, `{"fields":{"startTimeMillis":{"date":{"searchable":true,"aggregatable":true}}}}`)
+				return
+			}
+			if strings.Contains(r.URL.Path, "/_mapping/field/") {
+				_, _ = fmt.Fprint(w, `{"jaeger-span-2026":{"mappings":{"startTimeMillis":{"full_name":"startTimeMillis","mapping":{"startTimeMillis":{"type":"date","format":"epoch_millis"}}}}}}`)
+				return
+			}
+			Expect(json.NewDecoder(r.Body).Decode(&requestBody)).To(Succeed())
+			_, _ = fmt.Fprint(w, `{"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+		}))
+		defer server.Close()
+
+		since := time.Date(2026, time.August, 12, 0, 0, 0, 0, time.UTC)
+		_, err := query.Execute(context.New().WithDB(traceConnections(server.URL), nil), query.Profile{
+			Name: "spans",
+			Provider: query.ProviderConfig{
+				Type: "opentelemetry", Connection: "connection://traces",
+				Options: map[string]any{"format": "jaeger", "index": "jaeger-span*", "dateField": "startTimeMillis"},
+			},
+			Params: []query.ParamDef{{Name: "since", Role: query.ParamRoleTimeFrom}},
+		}, map[string]any{"since": since.Format(time.DateOnly)})
+		Expect(err).ToNot(HaveOccurred())
+
+		Expect(requestBody["query"]).To(Equal(map[string]any{"bool": map[string]any{
+			"filter": []any{map[string]any{"range": map[string]any{
+				"startTimeMillis": map[string]any{"gte": float64(since.UnixMilli())},
+			}}},
+		}}))
+	})
+
 	It("counts a param interpolated into the specification as referenced", func() {
 		var requestBody map[string]any
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

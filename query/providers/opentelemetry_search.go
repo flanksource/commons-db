@@ -17,6 +17,7 @@ func buildOpenTelemetryRequest(
 		return canonicalSearchRequest(req, page, options.Layout)
 	}
 	search := openTelemetrySearch(options)
+	withTraceTimeFormat(&search, options, timeFieldMapping)
 	// A declared order is the profile's, and it is what a cursor is cut from,
 	// so it wins over the trace-shaped default sort.
 	if len(req.Order) > 0 {
@@ -56,9 +57,6 @@ func openTelemetrySearch(options OpenTelemetryOptions) esdsl.Search {
 	if search.TimeField == "" {
 		search.TimeField = options.DateField
 	}
-	if search.TimeFieldFormat == "" && options.Format == "jaeger" && search.TimeField == "startTimeMillis" {
-		search.TimeFieldFormat = esdsl.TimeFieldFormatEpochMillis
-	}
 	if len(options.SelectFields) > 0 && len(search.Fields) == 0 {
 		search.StoredFields = []string{"*"}
 		search.Fields = options.SelectFields
@@ -70,4 +68,18 @@ func openTelemetrySearch(options OpenTelemetryOptions) esdsl.Search {
 		search.Size = &options.Limit
 	}
 	return search
+}
+
+// withTraceTimeFormat fills Jaeger's epoch-millisecond startTimeMillis format
+// once the field's mapping is known. A numeric mapping needs it to encode a
+// bound; Jaeger's own index template maps the field as a date with an
+// epoch_millis format, which already says how, and must not carry one.
+func withTraceTimeFormat(search *esdsl.Search, options OpenTelemetryOptions, mapping *esdsl.TimeFieldMapping) {
+	if search.TimeFieldFormat != "" || options.Format != "jaeger" || search.TimeField != "startTimeMillis" {
+		return
+	}
+	if mapping != nil && (mapping.Type == "date" || mapping.Type == "date_nanos") {
+		return
+	}
+	search.TimeFieldFormat = esdsl.TimeFieldFormatEpochMillis
 }
