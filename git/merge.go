@@ -118,7 +118,7 @@ func (c *Cache) DeleteBranch(ctx context.Context, repo *Repository, branch, expe
 	if err := paths.ensure(ctx, repo); err != nil {
 		return err
 	}
-	env, cleanup, err := commandEnv(repo)
+	env, cleanup, err := commandEnv(ctx, repo)
 	if err != nil {
 		return err
 	}

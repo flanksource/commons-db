@@ -11,9 +11,9 @@ import (
 type MergeMethod string
 
 const (
-	MergeCommit MergeMethod = "merge"
-	MergeSquash MergeMethod = "squash"
-	MergeRebase MergeMethod = "rebase"
+	MergeWithCommit MergeMethod = "merge"
+	MergeSquash     MergeMethod = "squash"
+	MergeRebase     MergeMethod = "rebase"
 )
 
 // MergePullRequestOptions merges HeadSHA, the head that was reviewed: a head that moved since is
@@ -31,7 +31,7 @@ func (o MergePullRequestOptions) validate(number int) error {
 		return fmt.Errorf("merging pull request %d needs the head SHA that was reviewed", number)
 	}
 	switch o.Method {
-	case MergeCommit, MergeSquash, MergeRebase:
+	case MergeWithCommit, MergeSquash, MergeRebase:
 		return nil
 	}
 	return fmt.Errorf("merge method %q is not merge, squash or rebase", o.Method)

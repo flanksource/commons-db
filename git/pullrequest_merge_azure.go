@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-var azureMergeStrategies = map[MergeMethod]string{MergeCommit: "noFastForward", MergeSquash: "squash", MergeRebase: "rebase"}
+var azureMergeStrategies = map[MergeMethod]string{MergeWithCommit: "noFastForward", MergeSquash: "squash", MergeRebase: "rebase"}
 
 func (p *azureProvider) MergePullRequest(ctx context.Context, repo RepoURL, number int, options MergePullRequestOptions) error {
 	if err := options.validate(number); err != nil {

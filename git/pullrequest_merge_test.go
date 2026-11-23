@@ -35,7 +35,7 @@ var _ = Describe("Merging an Azure DevOps pull request", func() {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"PATCH /acme/Platform/_apis/git/repositories/rules/pullrequests/9": reply(`{"pullRequestId":9,"status":"active","completionQueueTime":"2026-11-02T12:00:00Z"}`),
 		})
-		Expect(merger(api).MergePullRequest(ctx, rules(), 9, git.MergePullRequestOptions{Method: git.MergeCommit, HeadSHA: headSHA})).To(Succeed())
+		Expect(merger(api).MergePullRequest(ctx, rules(), 9, git.MergePullRequestOptions{Method: git.MergeWithCommit, HeadSHA: headSHA})).To(Succeed())
 		Expect(api.Calls()[0].Body["completionOptions"]).To(HaveKeyWithValue("mergeStrategy", "noFastForward"))
 	})
 
@@ -73,7 +73,7 @@ var _ = Describe("Merging a GitLab merge request", func() {
 		fake := newFakeAPI(map[string]func(*http.Request) apiReply{"PUT " + merge: reply(`{"iid":5,"state":"merged"}`)})
 		Expect(merger(fake).MergePullRequest(ctx, api(), 5, git.MergePullRequestOptions{Method: git.MergeSquash, HeadSHA: headSHA})).To(Succeed())
 		Expect(fake.Calls()[0].Body).To(Equal(map[string]any{"sha": headSHA, "squash": true, "should_remove_source_branch": false}))
-		Expect(merger(fake).MergePullRequest(ctx, api(), 5, git.MergePullRequestOptions{Method: git.MergeCommit, HeadSHA: headSHA})).To(Succeed())
+		Expect(merger(fake).MergePullRequest(ctx, api(), 5, git.MergePullRequestOptions{Method: git.MergeWithCommit, HeadSHA: headSHA})).To(Succeed())
 		Expect(fake.Calls()[1].Body).To(HaveKeyWithValue("squash", false))
 	})
 
@@ -86,7 +86,7 @@ var _ = Describe("Merging a GitLab merge request", func() {
 
 	It("reports a merge GitLab didn't make", func(ctx SpecContext) {
 		fake := newFakeAPI(map[string]func(*http.Request) apiReply{"PUT " + merge: reply(`{"iid":5,"state":"opened"}`)})
-		err := merger(fake).MergePullRequest(ctx, api(), 5, git.MergePullRequestOptions{Method: git.MergeCommit, HeadSHA: headSHA})
+		err := merger(fake).MergePullRequest(ctx, api(), 5, git.MergePullRequestOptions{Method: git.MergeWithCommit, HeadSHA: headSHA})
 		Expect(err).To(MatchError(`gitlab left merge request !5 opened instead of merging it`))
 	})
 })

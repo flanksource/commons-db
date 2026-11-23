@@ -44,7 +44,7 @@ var _ = Describe("Auto-merging an Azure DevOps pull request", func() {
 			"GET /acme/_apis/connectionData":                                 reply(`{"authenticatedUser":{"id":"` + me + `"}}`),
 			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9": pull(moved),
 		})
-		err := autoMerger(api).AutoMergePullRequest(ctx, rules(), 9, git.MergePullRequestOptions{Method: git.MergeCommit, HeadSHA: headSHA})
+		err := autoMerger(api).AutoMergePullRequest(ctx, rules(), 9, git.MergePullRequestOptions{Method: git.MergeWithCommit, HeadSHA: headSHA})
 		Expect(err).To(MatchError("pull request 9's head is " + moved + ", not " + headSHA + ", the head that was reviewed"))
 		for _, call := range api.Calls() {
 			Expect(call.Method).NotTo(Equal(http.MethodPatch))
