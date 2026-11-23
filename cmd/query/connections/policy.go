@@ -1,3 +1,5 @@
+// A connection policy: the connection types, and the sources of their values, a service offers
+// in its form and accepts on save.
 package connections
 
 import (
@@ -7,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/flanksource/clicky/entity"
+	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query/schema"
 	"github.com/flanksource/commons-db/types"
@@ -86,7 +89,26 @@ func (p Policy) check(connection *models.Connection) error {
 			return err
 		}
 	}
-	return checkSource(connection.Name, "url", connection.URL, p.URLSources)
+	if err := checkSource(connection.Name, "url", connection.URL, p.URLSources); err != nil {
+		return err
+	}
+	return p.checkKubernetesSelection(connection)
+}
+
+// checkKubernetesSelection refuses a connection that selects a Kubernetes
+// cluster to read its values from when none of its values may come from one; a
+// kubernetes connection selects the cluster it connects to.
+func (p Policy) checkKubernetesSelection(connection *models.Connection) error {
+	if connection.Type == models.ConnectionTypeKubernetes || p.schemaOptions().ReadsKubernetes() {
+		return nil
+	}
+	for _, property := range []string{dbcontext.KubeconfigProperty, dbcontext.KubeContextProperty} {
+		if connection.Properties[property] != "" {
+			return entity.NewStatusErrorf(http.StatusBadRequest, "kubernetes_selection", "connection %q selects a Kubernetes cluster (properties.%s), but its values may come only from %s",
+				connection.Name, property, strings.Join(slices.Compact(slices.Sorted(slices.Values(slices.Concat(p.SecretSources, p.URLSources)))), ", "))
+		}
+	}
+	return nil
 }
 
 func checkSource(connection, field, value string, allowed []string) error {
