@@ -2,11 +2,14 @@ package context
 
 import (
 	gocontext "context"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/flanksource/commons/logger"
 	"github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/patrickmn/go-cache"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -17,6 +20,151 @@ import (
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/models"
 )
+
+var _ = ginkgo.Describe("secret cache lookup", func() {
+	var id string
+
+	ginkgo.BeforeEach(func() { id = ginkgo.CurrentSpecReport().FullText() })
+	ginkgo.AfterEach(func() { envCache.Delete(id) })
+
+	ginkgo.It("rejects a token that expired before caching", func() {
+		ctx := New().WithSecretTTL(0)
+		lookup := envLookup{id: id, resolve: func(_ Context) (string, time.Time, error) {
+			return "expired", time.Now().Add(-time.Second), nil
+		}}
+		value, err := lookup.get(ctx)
+		Expect(err).To(HaveOccurred())
+		Expect(value).To(BeEmpty())
+		_, processCached := envCache.Get(id)
+		_, scopeCached := secretScopeOf(ctx).values.Get(id)
+		Expect([]bool{processCached, scopeCached}).To(Equal([]bool{false, false}))
+	})
+
+	ginkgo.DescribeTable("refreshes an expired token still present in the process cache", func(scoped bool) {
+		ctx := New()
+		if scoped {
+			ctx = ctx.WithSecretTTL(0)
+		}
+		now := time.Now()
+		envCache.Set(id, envValue{value: "expired", resolved: now, expires: now.Add(-time.Second)}, cache.NoExpiration)
+		lookup := envLookup{id: id, resolve: func(_ Context) (string, time.Time, error) {
+			return "fresh", now.Add(time.Hour), nil
+		}}
+		Expect(lookup.get(ctx)).To(Equal("fresh"))
+		didResolve := false
+		lookup.resolve = func(_ Context) (string, time.Time, error) {
+			didResolve = true
+			return "unexpected", time.Time{}, nil
+		}
+		Expect(lookup.get(ctx)).To(Equal("fresh"))
+		Expect(didResolve).To(BeFalse())
+	},
+		ginkgo.Entry("process only", false),
+		ginkgo.Entry("with a scope", true),
+	)
+
+	ginkgo.DescribeTable("lets a caller leave while a shared lookup continues", func(cancelOwner, scopedOwner bool) {
+		base := New()
+		ctx := base.WithSecretTTL(0)
+		ownerContext := base
+		if scopedOwner {
+			ownerContext = ctx
+		}
+		owner, cancelOwnerContext := ownerContext.WithCancel()
+		ginkgo.DeferCleanup(cancelOwnerContext)
+		started := make(chan struct{})
+		markStarted := sync.OnceFunc(func() { close(started) })
+		release := make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(release) })
+		defer unblock()
+
+		var resolutions atomic.Int32
+		lookup := envLookup{id: id, resolve: func(resolver Context) (string, time.Time, error) {
+			resolutions.Add(1)
+			markStarted()
+			<-release
+			if err := resolver.Err(); err != nil {
+				return "", time.Time{}, err
+			}
+			return "shared", time.Time{}, nil
+		}}
+		ownerResult := make(chan error, 1)
+		go func() {
+			_, err := lookup.get(owner)
+			ownerResult <- err
+		}()
+		Eventually(started).Should(BeClosed())
+
+		if cancelOwner {
+			cancelOwnerContext()
+			Eventually(ownerResult).Should(Receive(MatchError(gocontext.Canceled)))
+		} else {
+			waiter, cancelWaiter := ctx.WithTimeout(50 * time.Millisecond)
+			defer cancelWaiter()
+			waiterResult := make(chan error, 1)
+			go func() {
+				_, err := lookup.get(waiter)
+				waiterResult <- err
+			}()
+			Eventually(waiterResult).Should(Receive(MatchError(gocontext.DeadlineExceeded)))
+		}
+
+		unblock()
+		Expect(lookup.get(ctx)).To(Equal("shared"))
+		Expect(resolutions.Load()).To(Equal(int32(1)))
+		if !cancelOwner {
+			Eventually(ownerResult).Should(Receive(Succeed()))
+		}
+	},
+		ginkgo.Entry("joining caller's deadline", false, true),
+		ginkgo.Entry("scoped initiating caller's cancellation", true, true),
+		ginkgo.Entry("unscoped initiating caller's cancellation", true, false),
+	)
+
+	ginkgo.DescribeTable("cannot restore a value resolved before invalidation", func(scoped bool) {
+		ctx := New()
+		if scoped {
+			ctx = ctx.WithSecretTTL(0)
+		}
+		started := make(chan struct{})
+		release := make(chan struct{})
+		unblock := sync.OnceFunc(func() { close(release) })
+		defer unblock()
+		old := envLookup{id: id, ttl: time.Minute, resolve: func(_ Context) (string, time.Time, error) {
+			close(started)
+			<-release
+			return "old", time.Time{}, nil
+		}}
+		oldResult := make(chan error, 1)
+		go func() {
+			_, err := old.get(ctx)
+			oldResult <- err
+		}()
+		Eventually(started).Should(BeClosed())
+		dropEnvValue(ctx, id)
+
+		fresh := envLookup{id: id, ttl: time.Minute, resolve: func(_ Context) (string, time.Time, error) {
+			return "fresh", time.Time{}, nil
+		}}
+		type result struct {
+			value string
+			err   error
+		}
+		nextResult := make(chan result, 1)
+		go func() {
+			value, err := fresh.get(ctx)
+			nextResult <- result{value: value, err: err}
+		}()
+		Eventually(nextResult).Should(Receive(Equal(result{value: "fresh"})))
+		unblock()
+		Eventually(oldResult).Should(Receive(Succeed()))
+		Expect(fresh.get(ctx)).To(Equal("fresh"))
+		Expect(fresh.get(New())).To(Equal("fresh"))
+	},
+		ginkgo.Entry("process only", false),
+		ginkgo.Entry("with a scope", true),
+	)
+})
 
 var _ = ginkgo.Describe("WithSecretTTL", func() {
 	const ref = "op://prod/postgres/password"
