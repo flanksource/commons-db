@@ -70,11 +70,14 @@ type ChangeRequest struct {
 	Squash             bool
 	CherryPick         []string
 	CherryPickMainline int
-	AllowEmpty         bool
-	Trailers           []string
-	Files              []FileChange
-	PullRequest        *PullRequestRequest
-	Tag                *TagOptions
+	// Merge merges each head in order onto the base with a merge commit of
+	// its own; it takes no other content.
+	Merge       []MergeCommit
+	AllowEmpty  bool
+	Trailers    []string
+	Files       []FileChange
+	PullRequest *PullRequestRequest
+	Tag         *TagOptions
 }
 
 // ChangeResult is what Apply pushed and opened. SkippedCherryPicks are the
@@ -191,6 +194,9 @@ func (r ChangeRequest) validate() error {
 // validateContent checks what the change carries: a head commit, a rebase, or
 // commits to pick and files, each with the options it takes.
 func (r ChangeRequest) validateContent() error {
+	if len(r.Merge) > 0 {
+		return r.validateMerge()
+	}
 	if err := r.Pick.validate(); err != nil {
 		return err
 	}
@@ -235,9 +241,9 @@ func baseMoved(request ChangeRequest, actual string) error {
 }
 
 // needsWorktree reports a change only a worktree can land: replayed,
-// rebased or reset commits. Files alone are committed without one.
+// rebased, reset or merged commits. Files alone are committed without one.
 func (r ChangeRequest) needsWorktree() bool {
-	return r.Head != "" || r.Rebase != "" || len(r.CherryPick) > 0
+	return r.Head != "" || r.Rebase != "" || len(r.CherryPick) > 0 || len(r.Merge) > 0
 }
 
 func (c *Cache) applyInWorktree(ctx context.Context, repo *Repository, base Ref, request ChangeRequest) (ChangeResult, error) {
@@ -267,6 +273,9 @@ func applyIn(ctx context.Context, worktree *Worktree, request ChangeRequest) (Ch
 		return ChangeResult{}, err
 	}
 	if err := worktree.squash(ctx, request, skipped); err != nil {
+		return ChangeResult{}, err
+	}
+	if err := worktree.merge(ctx, request); err != nil {
 		return ChangeResult{}, err
 	}
 	sha, err := commitFiles(ctx, worktree, request)
