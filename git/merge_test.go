@@ -47,6 +47,17 @@ var _ = Describe("Cache.Apply with Merge", func() {
 		Expect(branchExists()).To(BeEmpty())
 	})
 
+	It("names a conflicting file exactly, leading space and tab included", func(ctx SpecContext) {
+		const odd = " rules\tgl.yaml"
+		first := fixture.commitOn(fixtureCommit{Branch: "odd-a", From: fixture.Main, Path: odd, Content: "a\n", Message: "odd a"})
+		second := fixture.commitOn(fixtureCommit{Branch: "odd-b", From: fixture.Main, Path: odd, Content: "b\n", Message: "odd b"})
+
+		_, err := cache.Apply(ctx, repo, stack(git.MergeCommit{SHA: first}, git.MergeCommit{SHA: second}))
+		var conflictErr *git.MergeConflictError
+		Expect(errors.As(err, &conflictErr)).To(BeTrue(), "%v", err)
+		Expect(conflictErr.Files).To(Equal([]string{odd}))
+	})
+
 	It("refuses a head already on the base before pushing", func(ctx SpecContext) {
 		_, err := cache.Apply(ctx, repo, stack(git.MergeCommit{SHA: fixture.First}))
 		Expect(err).To(MatchError(And(ContainSubstring(fixture.First), ContainSubstring("already on main"))))

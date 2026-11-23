@@ -82,12 +82,15 @@ func (w *Worktree) merge(ctx context.Context, request ChangeRequest) error {
 // mergeFailed aborts a stopped merge, classifying a conflict by its unmerged
 // paths.
 func (w *Worktree) mergeFailed(ctx context.Context, sha string, mergeErr error) error {
-	unmerged, err := run(ctx, command{dir: w.Dir, args: []string{"-c", "core.quotePath=false", "diff", "--name-only", "--diff-filter=U"}})
+	// -z keeps each path exactly as committed: line output would quote tabs and
+	// backslashes, and splitting it into lines would trim leading spaces.
+	unmerged, err := runBytes(ctx, command{dir: w.Dir, args: []string{"diff", "--name-only", "--diff-filter=U", "-z"}})
 	_, abortErr := run(ctx, command{dir: w.Dir, args: []string{"merge", "--abort"}})
 	if err != nil {
 		return errors.Join(fmt.Errorf("merge %s: %w", sha, mergeErr), err, abortErr)
 	}
-	if files := lines(unmerged); len(files) > 0 {
+	if listed := strings.TrimSuffix(string(unmerged), "\x00"); listed != "" {
+		files := strings.Split(listed, "\x00")
 		return errors.Join(&MergeConflictError{Commit: sha, Files: files}, abortErr)
 	}
 	return errors.Join(fmt.Errorf("merge %s: %w", sha, mergeErr), abortErr)
