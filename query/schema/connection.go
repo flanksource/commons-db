@@ -1,3 +1,5 @@
+// The connection form's JSON schema: a component per connection type, bundled into the schema
+// clicky-ui renders, narrowed to the types and value sources a host allows.
 package schema
 
 import (
@@ -155,7 +157,12 @@ func ConnectionSource() Schema {
 
 // ConnectionComponents returns a standalone form schema for every known
 // connection type. Types without tailored fields still receive the base form.
-func ConnectionComponents() map[string]Schema {
+func ConnectionComponents() map[string]Schema { return connectionComponents(true) }
+
+// connectionComponents is ConnectionComponents, each type's form offering a
+// Kubernetes cluster to read its values from when kubernetes is set; the
+// kubernetes type's form always offers its own cluster.
+func connectionComponents(kubernetes bool) map[string]Schema {
 	components := make(map[string]Schema, len(allConnectionTypes))
 	for _, typ := range allConnectionTypes {
 		flat := reflectStruct(baseConnectionForm{})
@@ -175,7 +182,9 @@ func ConnectionComponents() map[string]Schema {
 			}
 			required = appendUnique(required, stringSlice(branch["required"])...)
 		}
-		addKubernetesSelection(props)
+		if kubernetes || typ == "kubernetes" {
+			addKubernetesSelection(props)
+		}
 		props["name"].(Schema)["minLength"] = 1
 		components[typ] = Schema{
 			"$schema":    Draft,
@@ -224,6 +233,20 @@ type ConnectionOptions struct {
 	URLSources    []string
 }
 
+// clusterSources are the value sources read from a Kubernetes cluster.
+var clusterSources = []string{"secret", "configmap", "helm", "serviceaccount"}
+
+// ReadsKubernetes is whether a value may come from a Kubernetes cluster, so a
+// connection may select the cluster: an empty source list allows any source.
+func (o ConnectionOptions) ReadsKubernetes() bool {
+	for _, sources := range [][]string{o.SecretSources, o.URLSources} {
+		if len(sources) == 0 || slices.ContainsFunc(sources, func(source string) bool { return slices.Contains(clusterSources, source) }) {
+			return true
+		}
+	}
+	return false
+}
+
 // ConnectionTypes are the connection types the form knows.
 func ConnectionTypes() []string { return slices.Clone(allConnectionTypes) }
 
@@ -241,7 +264,7 @@ func Connection(options ConnectionOptions) Schema {
 	if len(options.URLSources) > 0 {
 		source["x-clicky-url-sources"] = slices.Clone(options.URLSources)
 	}
-	refs := SchemaRefs("connections", ConnectionComponents())
+	refs := SchemaRefs("connections", connectionComponents(options.ReadsKubernetes()))
 	bundled, err := Bundle(source, refs)
 	if err != nil {
 		panic(fmt.Sprintf("bundle connection schema: %v", err))

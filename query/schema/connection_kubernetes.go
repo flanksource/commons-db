@@ -1,5 +1,9 @@
+// Adds the Kubernetes selection to a connection form: the kubeconfig file and context its
+// cluster-backed values (secret://, configmap://, …) are read from.
 package schema
 
+// addKubernetesSelection adds the kubeconfig and kubecontext fields to the
+// form props, beside the type's own properties.
 func addKubernetesSelection(props Schema) {
 	properties, ok := props["properties"].(Schema)
 	if !ok {

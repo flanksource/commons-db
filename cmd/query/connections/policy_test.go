@@ -1,3 +1,5 @@
+// Tests a connection policy: the types and value sources a service offers and accepts, and the
+// Kubernetes selection only a policy that reads values from a cluster accepts.
 package connections
 
 import (
@@ -182,5 +184,39 @@ var _ = Describe("the connection form's secret pickers", func() {
 
 	It("are not served unless the host asks for them", func() {
 		Expect(serveConnections(newService(nil), http.MethodGet, "/api/v1/connections/namespaces", "").Code).To(Equal(http.StatusNotFound))
+	})
+})
+
+var _ = Describe("a policy of literal values only", func() {
+	literal := Policy{AllowedTypes: []string{models.ConnectionTypeGitlab, models.ConnectionTypeKubernetes},
+		SecretSources: []string{SourceValue}, URLSources: []string{SourceValue}}
+	var (
+		layers  layeredStore
+		service *Service
+	)
+	BeforeEach(func() {
+		layers = newLayeredStore()
+		service = newStoreService(newAppStoreProvider(layers, nil), literal)
+	})
+
+	DescribeTable("refuses a connection that selects a Kubernetes cluster to read its values from",
+		func(property string) {
+			_, err := service.Create(context.Background(), map[string]any{"name": "acme", "type": models.ConnectionTypeGitlab,
+				"url": "https://gitlab.example.com", "password": "glpat-example", "properties": map[string]any{property: "staging"}})
+			expectStatus(err, http.StatusBadRequest, "kubernetes_selection")
+			Expect(err).To(MatchError(HaveSuffix(`connection "acme" selects a Kubernetes cluster (properties.` + property + `), but its values may come only from value`)))
+			Expect(filepath.Join(layers.app, "acme.yaml")).NotTo(BeAnExistingFile())
+		},
+		Entry("by kubeconfig", "kubeconfig"),
+		Entry("by kubecontext", "kubecontext"),
+	)
+
+	It("accepts one without, and a kubernetes connection's own cluster", func() {
+		_, err := service.Create(context.Background(), map[string]any{"name": "acme", "type": models.ConnectionTypeGitlab,
+			"url": "https://gitlab.example.com", "password": "glpat-example"})
+		Expect(err).NotTo(HaveOccurred())
+		_, err = service.Create(context.Background(), map[string]any{"name": "cluster", "type": models.ConnectionTypeKubernetes,
+			"properties": map[string]any{"kubecontext": "staging"}})
+		Expect(err).NotTo(HaveOccurred())
 	})
 })
