@@ -42,3 +42,10 @@ func (o MergePullRequestOptions) validate(number int) error {
 type PullRequestMerger interface {
 	MergePullRequest(ctx context.Context, repo RepoURL, number int, options MergePullRequestOptions) error
 }
+
+// PullRequestAutoMerger has its provider complete a pull request on its own once the base's
+// policies pass, merging with the strategy asked; it refuses a pull request whose head moved
+// since HeadSHA was reviewed.
+type PullRequestAutoMerger interface {
+	AutoMergePullRequest(ctx context.Context, repo RepoURL, number int, options MergePullRequestOptions) error
+}
