@@ -24,7 +24,9 @@ type PullRequestPolicy struct {
 	Build                bool
 	URL                  string
 	MinimumApproverCount int
-	// RequiredReviewerIDs are the reviewers a required reviewers policy asks for, by reviewer ID.
+	// RequiredReviewers is a required reviewers policy, which asks for the reviewers
+	// RequiredReviewerIDs names, by reviewer ID.
+	RequiredReviewers   bool
 	RequiredReviewerIDs []string
 	// FilenamePatterns are the paths a policy applies to; none applies it to every change.
 	FilenamePatterns []string

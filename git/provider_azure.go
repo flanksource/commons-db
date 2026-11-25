@@ -320,6 +320,9 @@ func (r azurePullReader) resolve(ctx context.Context, head azurePullRepo) (azure
 	if _, err := r.provider.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: endpoint, Out: &resolved}); err != nil {
 		return azurePullRepo{}, fmt.Errorf("resolve head repository %q: %w", head.ID, err)
 	}
+	if resolved.ID != "" && !strings.EqualFold(resolved.ID, head.ID) {
+		return azurePullRepo{}, fmt.Errorf("resolving head repository %q found repository %q", head.ID, resolved.ID)
+	}
 	if resolved.Name == "" || resolved.Project.Name == "" {
 		return azurePullRepo{}, fmt.Errorf("no head repository name and project after resolving %q", head.ID)
 	}
