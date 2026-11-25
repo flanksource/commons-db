@@ -69,10 +69,23 @@ var _ = Describe("An Azure DevOps pull request's merge readiness", func() {
 		Expect(readiness(ctx, api)).To(Equal(git.MergeReadiness{State: "blocked", Reasons: []string{"PR is a draft", "Minimum reviewers (policy 3): rejected"}}))
 	})
 
-	It("waits for the merge computation when a branch moved past it", func(ctx SpecContext) {
+	It("waits for the merge computation when the source branch moved past it", func(ctx SpecContext) {
 		api := newFakeAPI(routes(pull("active", "succeeded", ""), "", staleSHA, mergeSHA))
 		Expect(readiness(ctx, api)).To(Equal(git.MergeReadiness{State: "pending", WaitingForMerge: true,
-			Reasons: []string{"merge computation has not caught up to the source or target branch"}}))
+			Reasons: []string{"merge computation has not caught up to the source branch"}}))
+	})
+
+	It("waits for a trial merge onto a target branch that moved, whose checks ran against the previous target", func(ctx SpecContext) {
+		api := newFakeAPI(routes(pull("active", "succeeded", ""), "", headSHA, staleSHA))
+		Expect(readiness(ctx, api)).To(Equal(git.MergeReadiness{State: "pending", WaitingForMerge: true,
+			Reasons: []string{"target branch advanced since the last trial merge; checks ran against the previous target"}}))
+	})
+
+	It("reads a fork's source branch from the fork it resolves by ID", func(ctx SpecContext) {
+		routes := routes(pull("active", "succeeded", `"forkSource":{"repository":{"id":"fork-id"}},`), "", mergeSHA, mergeSHA)
+		routes["GET /acme/_apis/git/repositories/fork-id"] = reply(`{"id":"fork-id","name":"rules-fork","project":{"name":"Forks"}}`)
+		routes["GET /acme/Forks/_apis/git/repositories/fork-id/refs"] = refs(headSHA, mergeSHA)
+		Expect(readiness(ctx, newFakeAPI(routes))).To(Equal(git.MergeReadiness{State: "ready"}))
 	})
 
 	It("has none for a pull request that isn't open", func(ctx SpecContext) {
