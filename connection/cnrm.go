@@ -4,9 +4,9 @@ import (
 	"encoding/base64"
 	"fmt"
 
+	"github.com/flanksource/commons-db/cloud/gcp"
 	"github.com/flanksource/commons-db/context"
 	dutyKube "github.com/flanksource/commons-db/kubernetes"
-	container "google.golang.org/api/container/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/kubernetes"
@@ -71,7 +71,7 @@ func (t *CNRMConnection) createRestConfigForClusterResource(ctx context.Context,
 		return nil, fmt.Errorf("unable to decode cluster CA certificate: %w", err)
 	}
 
-	token, err := t.GKE.Token(ctx, freshToken, container.CloudPlatformScope)
+	token, err := t.GKE.Token(ctx, freshToken, gcp.ScopeCloudPlatform)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get token for gke: %w", err)
 	}

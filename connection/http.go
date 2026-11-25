@@ -11,7 +11,6 @@ import (
 
 	"github.com/flanksource/commons/http"
 	"github.com/flanksource/commons/http/middlewares/oauth"
-	"github.com/labstack/echo/v4"
 
 	dutyKubernetes "github.com/flanksource/commons-db/kubernetes"
 	"github.com/flanksource/commons-db/models"
@@ -251,7 +250,7 @@ func (rt *httpConnectionRoundTripper) RoundTrip(req *netHTTP.Request) (*netHTTP.
 	if !conn.HTTPBasicAuth.IsEmpty() {
 		req.SetBasicAuth(conn.HTTPBasicAuth.GetUsername(), conn.HTTPBasicAuth.GetPassword())
 	} else if !conn.Bearer.IsEmpty() {
-		req.Header.Set(echo.HeaderAuthorization, "Bearer "+conn.Bearer.ValueStatic)
+		req.Header.Set("Authorization", "Bearer "+conn.Bearer.ValueStatic)
 	} else if !conn.OAuth.IsEmpty() {
 		oauthTransport := oauth.NewOauthTransport(oauth.OauthConfig{
 			ClientID:     conn.OAuth.ClientID.String(),
@@ -306,7 +305,7 @@ func CreateHTTPClient(ctx ConnectionContext, conn HTTPConnection) (*http.Client,
 		client.Auth(conn.GetUsername(), conn.GetPassword())
 		client.Digest(conn.Digest)
 	} else if !conn.Bearer.IsEmpty() {
-		client.Header(echo.HeaderAuthorization, "Bearer "+conn.Bearer.ValueStatic)
+		client.Header("Authorization", "Bearer "+conn.Bearer.ValueStatic)
 	} else if !conn.OAuth.IsEmpty() {
 		client.OAuth(oauth.OauthConfig{
 			ClientID:     conn.OAuth.ClientID.ValueStatic,

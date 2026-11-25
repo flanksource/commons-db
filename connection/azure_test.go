@@ -8,8 +8,8 @@ import (
 	"github.com/flanksource/commons-db/types"
 )
 
-func TestAzureTokenCredentialFallsBackToAmbientIdentity(t *testing.T) {
-	credential, err := (&AzureConnection{}).TokenCredential()
+func TestAzureCredentialFallsBackToAmbientIdentity(t *testing.T) {
+	credential, err := (&AzureConnection{}).Credential(AzureCredentialOptions{})
 	if err != nil {
 		t.Fatalf("unconfigured azure connection should use the ambient identity chain: %v", err)
 	}
@@ -18,7 +18,7 @@ func TestAzureTokenCredentialFallsBackToAmbientIdentity(t *testing.T) {
 	}
 }
 
-func TestAzureTokenCredentialRejectsPartialServicePrincipal(t *testing.T) {
+func TestAzureCredentialRejectsPartialServicePrincipal(t *testing.T) {
 	tests := []struct {
 		name    string
 		conn    AzureConnection
@@ -43,7 +43,7 @@ func TestAzureTokenCredentialRejectsPartialServicePrincipal(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.conn.TokenCredential()
+			_, err := tt.conn.Credential(AzureCredentialOptions{})
 			if err == nil {
 				t.Fatal("expected a partially configured service principal to fail rather than silently fall back")
 			}

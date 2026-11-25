@@ -2,18 +2,12 @@ package connection
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/kms"
-	"github.com/aws/aws-sdk-go-v2/service/kms/types"
-	"github.com/aws/smithy-go"
+	cloudaws "github.com/flanksource/commons-db/cloud/aws"
 	commonsContext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
-	"gocloud.dev/gcerrors"
-	"gocloud.dev/secrets"
-	"gocloud.dev/secrets/driver"
+	"github.com/flanksource/commons-db/secret/keeper"
 )
 
 type AWSKMS struct {
@@ -32,75 +26,36 @@ func (t *AWSKMS) FromModel(conn models.Connection) {
 	t.KeyID = conn.Properties["keyID"]
 }
 
-func (t *AWSKMS) SecretKeeper(ctx commonsContext.Context) (*secrets.Keeper, error) {
-	awsConfig, err := t.AWSConnection.Client(ctx)
+func (t *AWSKMS) SecretKeeper(ctx commonsContext.Context) (keeper.Keeper, error) {
+	session, err := t.AWSConnection.Client(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create AWS client: %w", err)
 	}
 
-	keeper := secrets.NewKeeper(&awsKMSKeeper{
-		keyID:  t.KeyID,
-		client: kms.NewFromConfig(awsConfig),
-	})
-	return keeper, nil
+	return &awsKMSKeeper{keyID: t.KeyID, client: session.KMS()}, nil
 }
 
 type awsKMSKeeper struct {
 	keyID  string
-	client *kms.Client
+	client *cloudaws.KMS
 }
 
-var _ driver.Keeper = (*awsKMSKeeper)(nil)
+var _ keeper.Keeper = (*awsKMSKeeper)(nil)
 
 func (k *awsKMSKeeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error) {
-	result, err := k.client.Decrypt(ctx, &kms.DecryptInput{
-		CiphertextBlob: ciphertext,
-	})
+	plaintext, err := k.client.Decrypt(ctx, cloudaws.KMSDecryptInput{CiphertextBlob: ciphertext})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("aws kms decrypt (key %s): %w", k.keyID, err)
 	}
-	return result.Plaintext, nil
+	return plaintext, nil
 }
 
 func (k *awsKMSKeeper) Encrypt(ctx context.Context, plaintext []byte) ([]byte, error) {
-	result, err := k.client.Encrypt(ctx, &kms.EncryptInput{
-		KeyId:     aws.String(k.keyID),
-		Plaintext: plaintext,
-	})
+	ciphertext, err := k.client.Encrypt(ctx, cloudaws.KMSEncryptInput{KeyID: k.keyID, Plaintext: plaintext})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("aws kms encrypt (key %s): %w", k.keyID, err)
 	}
-	return result.CiphertextBlob, nil
+	return ciphertext, nil
 }
 
 func (k *awsKMSKeeper) Close() error { return nil }
-
-func (k *awsKMSKeeper) ErrorAs(err error, i any) bool {
-	return errors.As(err, i)
-}
-
-func (k *awsKMSKeeper) ErrorCode(err error) gcerrors.ErrorCode {
-	var apiErr smithy.APIError
-	if !errors.As(err, &apiErr) {
-		return gcerrors.Unknown
-	}
-
-	switch apiErr.ErrorCode() {
-	case (&types.NotFoundException{}).ErrorCode():
-		return gcerrors.NotFound
-	case (&types.InvalidCiphertextException{}).ErrorCode(), (&types.InvalidKeyUsageException{}).ErrorCode():
-		return gcerrors.InvalidArgument
-	case (&types.KMSInternalException{}).ErrorCode():
-		return gcerrors.Internal
-	case (&types.KMSInvalidStateException{}).ErrorCode():
-		return gcerrors.FailedPrecondition
-	case (&types.DisabledException{}).ErrorCode(), (&types.InvalidGrantTokenException{}).ErrorCode():
-		return gcerrors.PermissionDenied
-	case (&types.KeyUnavailableException{}).ErrorCode():
-		return gcerrors.ResourceExhausted
-	case (&types.DependencyTimeoutException{}).ErrorCode():
-		return gcerrors.DeadlineExceeded
-	default:
-		return gcerrors.Unknown
-	}
-}

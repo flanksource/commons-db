@@ -7,8 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
+	cloudaws "github.com/flanksource/commons-db/cloud/aws"
 	dbcontext "github.com/flanksource/commons-db/context"
 	dbgit "github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/models"
@@ -107,21 +106,16 @@ func probeS3(ctx dbcontext.Context, model models.Connection) (ProbeResult, error
 	if err := connection.Populate(ctx); err != nil {
 		return ProbeResult{}, err
 	}
-	config, err := connection.Client(ctx)
+	session, err := connection.Client(ctx)
 	if err != nil {
 		return ProbeResult{}, err
 	}
-	client := s3.NewFromConfig(config, func(options *s3.Options) {
-		if connection.Endpoint != "" {
-			options.BaseEndpoint = aws.String(connection.Endpoint)
-		}
-		options.UsePathStyle = usePathStyle
-	})
+	client := session.S3(cloudaws.S3Options{PathStyle: usePathStyle})
 	if bucket := strings.TrimSpace(model.Properties["bucket"]); bucket != "" {
-		if _, err := client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(bucket)}); err != nil {
+		if err := client.HeadBucket(ctx, bucket); err != nil {
 			return ProbeResult{}, fmt.Errorf("s3 head bucket %q failed: %w", bucket, err)
 		}
-	} else if _, err := client.ListBuckets(ctx, &s3.ListBucketsInput{}); err != nil {
+	} else if _, err := client.ListBuckets(ctx); err != nil {
 		return ProbeResult{}, fmt.Errorf("s3 list buckets failed (requires ListAllMyBuckets permission): %w", err)
 	}
 	return ProbeResult{OK: true}, nil

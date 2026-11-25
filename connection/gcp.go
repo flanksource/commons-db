@@ -6,8 +6,8 @@ import (
 	"time"
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 
+	"github.com/flanksource/commons-db/cloud/gcp"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
@@ -45,13 +45,30 @@ func (t *GCPConnection) FromModel(connection models.Connection) {
 }
 
 func (g *GCPConnection) TokenSource(ctx context.Context, scopes ...string) (oauth2.TokenSource, error) {
-	creds, err := google.CredentialsFromJSON(ctx, []byte(g.Credentials.ValueStatic), scopes...)
-	if err != nil {
-		return nil, err
+	if g.Credentials == nil || g.Credentials.ValueStatic == "" {
+		return nil, fmt.Errorf("gcp connection %q has no credentials", g.ConnectionName)
 	}
 
-	tokenSource := creds.TokenSource
-	return tokenSource, nil
+	return gcp.CredentialsTokenSource(ctx, []byte(g.Credentials.ValueStatic), scopes...)
+}
+
+// ClientOptions maps the connection onto cloud/gcp client options: its endpoint
+// and TLS setting, authenticated with credentials (the resolved service-account
+// JSON) scoped to scopes. Empty credentials leave requests unauthenticated,
+// which is what emulators expect; callers that want the ambient application
+// default credentials ask for them explicitly with gcp.DefaultTokenSource.
+func (g *GCPConnection) ClientOptions(ctx context.Context, credentials string, scopes ...string) (gcp.Options, error) {
+	opts := gcp.Options{Endpoint: g.Endpoint, SkipTLSVerify: g.SkipTLSVerify}
+	if credentials == "" {
+		return opts, nil
+	}
+
+	tokenSource, err := gcp.CredentialsTokenSource(ctx, []byte(credentials), scopes...)
+	if err != nil {
+		return gcp.Options{}, err
+	}
+	opts.TokenSource = tokenSource
+	return opts, nil
 }
 
 func (g *GCPConnection) Validate() *GCPConnection {
