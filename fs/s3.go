@@ -11,27 +11,23 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/s3"
-	s3Types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 	"github.com/bmatcuk/doublestar/v4"
-	"github.com/flanksource/commons/utils"
-	"github.com/samber/lo"
+	cloudaws "github.com/flanksource/commons-db/cloud/aws"
 )
 
 const s3ListObjectMaxKeys = 1000
 
 // S3FileInfo wraps S3 object metadata to implement os.FileInfo and FileInfo
 type S3FileInfo struct {
-	Object s3Types.Object
+	Object cloudaws.S3Object
 }
 
 func (obj S3FileInfo) Name() string {
-	return *obj.Object.Key
+	return obj.Object.Key
 }
 
 func (obj S3FileInfo) Size() int64 {
-	return utils.Deref(obj.Object.Size)
+	return obj.Object.Size
 }
 
 func (obj S3FileInfo) Mode() fs.FileMode {
@@ -39,11 +35,11 @@ func (obj S3FileInfo) Mode() fs.FileMode {
 }
 
 func (obj S3FileInfo) ModTime() time.Time {
-	return lo.FromPtr(obj.Object.LastModified)
+	return obj.Object.LastModified
 }
 
 func (obj S3FileInfo) FullPath() string {
-	return *obj.Object.Key
+	return obj.Object.Key
 }
 
 func (obj S3FileInfo) IsDir() bool {
@@ -61,22 +57,28 @@ type s3FS struct {
 	// maxObjects limits the total number of objects ReadDir can return.
 	maxObjects int
 
-	Client *s3.Client
+	Client *cloudaws.S3
 	Bucket string
 }
 
 var _ FilesystemRW = (*s3FS)(nil)
 
-// NewS3FS returns a filesystem over bucket. optFns adjust the S3 client, e.g. its
-// endpoint or path-style addressing.
-func NewS3FS(ctx context.Context, bucket string, cfg aws.Config, optFns ...func(*s3.Options)) *s3FS {
-	client := &s3FS{
-		maxObjects: 50 * 10_000,
-		Client:     s3.NewFromConfig(cfg, optFns...),
-		Bucket:     strings.TrimPrefix(bucket, "s3://"),
-	}
+// S3FSOptions configures NewS3FS.
+type S3FSOptions struct {
+	// Bucket is the bucket name, optionally prefixed with s3://.
+	Bucket  string
+	Session *cloudaws.Session
+	// S3 selects addressing, e.g. path-style for emulators.
+	S3 cloudaws.S3Options
+}
 
-	return client
+// NewS3FS returns a filesystem over the bucket.
+func NewS3FS(options S3FSOptions) *s3FS {
+	return &s3FS{
+		maxObjects: 50 * 10_000,
+		Client:     options.Session.S3(options.S3),
+		Bucket:     strings.TrimPrefix(options.Bucket, "s3://"),
+	}
 }
 
 func (t *s3FS) SetMaxListItems(max int) {
@@ -93,13 +95,9 @@ func (t *s3FS) ReadDir(pattern string) ([]FileInfo, error) {
 		prefix = ""
 	}
 
-	req := &s3.ListObjectsV2Input{
-		Bucket: aws.String(t.Bucket),
-		Prefix: aws.String(prefix),
-	}
-
+	req := cloudaws.ListObjectsInput{Bucket: t.Bucket, Prefix: prefix}
 	if t.maxObjects < s3ListObjectMaxKeys {
-		req.MaxKeys = lo.ToPtr(int32(t.maxObjects))
+		req.MaxKeys = t.maxObjects
 	}
 
 	var output []FileInfo
@@ -110,24 +108,23 @@ func (t *s3FS) ReadDir(pattern string) ([]FileInfo, error) {
 			return nil, err
 		}
 
-		for _, obj := range resp.Contents {
+		for _, obj := range resp.Objects {
 			if pattern != "" {
-				if matched, err := doublestar.Match(pattern, *obj.Key); err != nil {
+				if matched, err := doublestar.Match(pattern, obj.Key); err != nil {
 					return nil, err
 				} else if !matched {
 					continue
 				}
 			}
 
-			fileInfo := &S3FileInfo{Object: obj}
-			output = append(output, fileInfo)
+			output = append(output, &S3FileInfo{Object: obj})
 		}
 
-		if resp.NextContinuationToken == nil {
+		if resp.NextContinuationToken == "" {
 			break
 		}
 
-		numObjectsFetched += int(*resp.KeyCount)
+		numObjectsFetched += resp.KeyCount
 		if numObjectsFetched >= t.maxObjects {
 			break
 		}
@@ -139,46 +136,32 @@ func (t *s3FS) ReadDir(pattern string) ([]FileInfo, error) {
 }
 
 func (t *s3FS) Stat(path string) (fs.FileInfo, error) {
-	headObject, err := t.Client.HeadObject(context.TODO(), &s3.HeadObjectInput{
-		Bucket: aws.String(t.Bucket),
-		Key:    aws.String(path),
-	})
+	head, err := t.Client.HeadObject(context.TODO(), cloudaws.S3ObjectRef{Bucket: t.Bucket, Key: path})
 	if err != nil {
 		return nil, err
 	}
 
-	fileInfo := &S3FileInfo{
-		Object: s3Types.Object{
-			Key:          utils.Ptr(filepath.Base(path)),
-			Size:         headObject.ContentLength,
-			LastModified: headObject.LastModified,
-			ETag:         headObject.ETag,
+	return &S3FileInfo{
+		Object: cloudaws.S3Object{
+			Key:          filepath.Base(path),
+			Size:         head.Size,
+			LastModified: head.LastModified,
+			ETag:         head.ETag,
 		},
-	}
-
-	return fileInfo, nil
+	}, nil
 }
 
 func (t *s3FS) Read(ctx context.Context, key string) (io.ReadCloser, error) {
-	results, err := t.Client.GetObject(ctx, &s3.GetObjectInput{
-		Bucket: aws.String(t.Bucket),
-		Key:    aws.String(key),
-	})
+	object, err := t.Client.GetObject(ctx, cloudaws.S3ObjectRef{Bucket: t.Bucket, Key: key})
 	if err != nil {
 		return nil, err
 	}
 
-	return results.Body, nil
+	return object.Body, nil
 }
 
 func (t *s3FS) Write(ctx context.Context, path string, data io.Reader) (os.FileInfo, error) {
-	_, err := t.Client.PutObject(ctx, &s3.PutObjectInput{
-		Bucket: aws.String(t.Bucket),
-		Key:    aws.String(path),
-		Body:   data,
-	})
-
-	if err != nil {
+	if err := t.Client.PutObject(ctx, cloudaws.S3ObjectRef{Bucket: t.Bucket, Key: path}, data); err != nil {
 		return nil, err
 	}
 
@@ -187,9 +170,5 @@ func (t *s3FS) Write(ctx context.Context, path string, data io.Reader) (os.FileI
 
 // Delete removes the object at key. A missing object is not an error.
 func (t *s3FS) Delete(ctx context.Context, key string) error {
-	_, err := t.Client.DeleteObject(ctx, &s3.DeleteObjectInput{
-		Bucket: aws.String(t.Bucket),
-		Key:    aws.String(key),
-	})
-	return err
+	return t.Client.DeleteObject(ctx, cloudaws.S3ObjectRef{Bucket: t.Bucket, Key: key})
 }

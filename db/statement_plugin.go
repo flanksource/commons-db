@@ -9,7 +9,7 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 )
 
 // statementStartKey names the per-statement start time stashed in Statement.Settings.
@@ -18,8 +18,8 @@ const statementStartKey = "commons-db:statement-start"
 type sqlStatementPlugin struct{}
 
 // NewSQLStatementPlugin returns a gorm plugin that publishes each statement the
-// handle runs (connection.PublishSQL) as the context's own database's
-// (connection.OwnDatabase). A handle nobody observes pays one lookup per statement.
+// handle runs (sqlobserve.PublishSQL) as the context's own database's
+// (sqlobserve.OwnDatabase). A handle nobody observes pays one lookup per statement.
 func NewSQLStatementPlugin() gorm.Plugin { return sqlStatementPlugin{} }
 
 func (sqlStatementPlugin) Name() string { return "commons-db:sql-statements" }
@@ -29,7 +29,7 @@ func (p sqlStatementPlugin) Initialize(db *gorm.DB) error {
 }
 
 func (sqlStatementPlugin) before(tx *gorm.DB) {
-	if tx.Statement == nil || !connection.ObservingSQL(connection.OwnDatabase) {
+	if tx.Statement == nil || !sqlobserve.ObservingSQL(sqlobserve.OwnDatabase) {
 		return
 	}
 	tx.Statement.Settings.Store(statementStartKey, time.Now())
@@ -48,8 +48,8 @@ func (sqlStatementPlugin) after(countsRows bool) func(*gorm.DB) {
 		if !ok {
 			return
 		}
-		statement := connection.Statement{
-			Connection: connection.OwnDatabase, Driver: tx.Dialector.Name(), SQL: tx.Statement.SQL.String(), Args: tx.Statement.Vars,
+		statement := sqlobserve.Statement{
+			Connection: sqlobserve.OwnDatabase, Driver: tx.Dialector.Name(), SQL: tx.Statement.SQL.String(), Args: tx.Statement.Vars,
 			StartedAt: started, Duration: time.Since(started), Rows: -1,
 		}
 		if countsRows {
@@ -58,7 +58,7 @@ func (sqlStatementPlugin) after(countsRows bool) func(*gorm.DB) {
 		if tx.Error != nil {
 			statement.Error = tx.Error.Error()
 		}
-		connection.PublishSQL(statement)
+		sqlobserve.PublishSQL(statement)
 	}
 }
 

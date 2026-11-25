@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 )
 
 // Postgres startup codes that arrive in place of a StartupMessage. The proxy
@@ -36,7 +36,7 @@ type proxy struct {
 	upstream string   // host:port the traffic is forwarded to
 	dsn      *url.URL // the resolved upstream DSN, rewritten for the child
 	listener net.Listener
-	emit     func(connection.Statement)
+	emit     func(sqlobserve.Statement)
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -50,7 +50,7 @@ type proxy struct {
 // startProxy listens on a loopback port and serves until Close. The upstream
 // must accept unencrypted connections: the proxy answers a client's SSLRequest
 // with a refusal and dials the upstream in the clear.
-func startProxy(params Params, dsn *url.URL, emit func(connection.Statement)) (*proxy, error) {
+func startProxy(params Params, dsn *url.URL, emit func(sqlobserve.Statement)) (*proxy, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("pg_proxy listen: %w", err)
@@ -128,7 +128,7 @@ func (p *proxy) handle(client net.Conn) {
 	dialer := net.Dialer{Timeout: dialTimeout}
 	server, err := dialer.DialContext(p.ctx, "tcp", p.upstream)
 	if err != nil {
-		p.emit(connection.Statement{
+		p.emit(sqlobserve.Statement{
 			Connection: p.params.Connection, Driver: driver, SQL: "CONNECT " + p.upstream,
 			StartedAt: time.Now(), Rows: -1, Error: fmt.Sprintf("dial %s: %v", p.upstream, err),
 		})

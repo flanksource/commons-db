@@ -11,7 +11,7 @@ import (
 	. "github.com/onsi/gomega"
 	. "github.com/onsi/gomega/gstruct"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 )
 
 type sniffed struct {
@@ -71,10 +71,10 @@ var _ = Describe("pg wire sniffer", func() {
 })
 
 var _ = Describe("pg session", func() {
-	var emitted []connection.Statement
+	var emitted []sqlobserve.Statement
 	newSession := func(params bool) *pgSession {
 		emitted = nil
-		return newPGSession("db", params, func(s connection.Statement) { emitted = append(emitted, s) })
+		return newPGSession("db", params, func(s sqlobserve.Statement) { emitted = append(emitted, s) })
 	}
 
 	It("records work still pending at ReadyForQuery as issued with no row count", func() {

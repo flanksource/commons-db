@@ -22,7 +22,7 @@ The cache accepts a known SHA from the repository mirror or its organization poo
 By default the pools live under `Root/v2/pools`, locked with `flock` files there. To share them between hosts, for example on a ReadWriteMany volume, set `PoolRoot` to the pool volume and `Locker` to a `lease.Locker` with scope `git-pool` that every sharing host reaches:
 
 ```go
-locks, err := lease.NewRedis(valkeyClient, lease.ExpiringOptions{Options: lease.Options{Scope: "git-pool"}})
+locks, err := leaseredis.New(valkeyClient, lease.ExpiringOptions{Options: lease.Options{Scope: "git-pool"}})
 if err != nil {
     return err
 }

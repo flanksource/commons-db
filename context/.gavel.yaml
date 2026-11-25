@@ -1,0 +1,9 @@
+# reason: context keeps the Kubernetes client (LocalKubernetes/WithLocalKubernetes are
+# public API used by gavel, recon, telltale and batch-runner) and the gomplate template
+# engine, so its own imports exceed the 500-package budget by design (decided 2026-11-25).
+lint:
+  ignore:
+    # *.go matches only this package's own files, not subpackages.
+    - rule: dep-budget-package
+      source: uir
+      file: "*.go"

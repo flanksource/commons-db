@@ -2,26 +2,27 @@ package kubernetes
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"os"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/cache"
 	"github.com/flanksource/commons/console"
 	"github.com/flanksource/commons/files"
 	"github.com/flanksource/commons/logger"
-	"github.com/flanksource/commons-db/cache"
 	"github.com/henvic/httpretty"
 	"github.com/samber/lo"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
 )
 
-var Nil = fake.NewSimpleClientset()
+// ErrNoCluster is returned by NewClient when no kubeconfig or in-cluster configuration exists.
+var ErrNoCluster = errors.New("no kubernetes cluster configured: name a connection, or set $KUBECONFIG / ~/.kube/config")
 
 var sensitiveUrls = []*regexp.Regexp{
 	regexp.MustCompile("/api/v1/namespaces/.*/secrets"),
@@ -49,7 +50,7 @@ func NewClient(log logger.Logger, kubeconfigPaths ...string) (kubernetes.Interfa
 		client, err := kubernetes.NewForConfig(trace(log, config))
 		return client, config, err
 	}
-	return Nil, nil, nil
+	return nil, nil, ErrNoCluster
 }
 
 func NewClientWithConfig(log logger.Logger, kubeConfig []byte) (kubernetes.Interface, *rest.Config, error) {
