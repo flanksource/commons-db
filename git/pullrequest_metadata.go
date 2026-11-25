@@ -18,21 +18,24 @@ type PullRequestCheck struct {
 }
 
 type PullRequestMetadata struct {
-	Author          string             `json:"author"`
-	AuthorAvatarURL string             `json:"authorAvatarUrl,omitempty"`
-	CreatedAt       time.Time          `json:"createdAt"`
-	BaseSHA         string             `json:"baseSha,omitempty"`
-	HeadSHA         string             `json:"headSha"`
-	HeadBranch      string             `json:"headBranch"`
-	BaseBranch      string             `json:"baseBranch"`
-	HeadBranchURL   string             `json:"headBranchUrl,omitempty"`
-	HeadCommitURL   string             `json:"headCommitUrl,omitempty"`
-	BaseBranchURL   string             `json:"baseBranchUrl,omitempty"`
-	BaseCommitURL   string             `json:"baseCommitUrl,omitempty"`
-	Mergeability    string             `json:"mergeability"`
-	MergeReason     string             `json:"mergeReason,omitempty"`
-	Draft           bool               `json:"draft,omitempty"`
-	Checks          []PullRequestCheck `json:"checks"`
+	Author          string `json:"author"`
+	AuthorAvatarURL string `json:"authorAvatarUrl,omitempty"`
+	// AuthorID and AuthorLogin are the author's account ID and sign-in name, where the provider names them.
+	AuthorID      string             `json:"authorId,omitempty"`
+	AuthorLogin   string             `json:"authorLogin,omitempty"`
+	CreatedAt     time.Time          `json:"createdAt"`
+	BaseSHA       string             `json:"baseSha,omitempty"`
+	HeadSHA       string             `json:"headSha"`
+	HeadBranch    string             `json:"headBranch"`
+	BaseBranch    string             `json:"baseBranch"`
+	HeadBranchURL string             `json:"headBranchUrl,omitempty"`
+	HeadCommitURL string             `json:"headCommitUrl,omitempty"`
+	BaseBranchURL string             `json:"baseBranchUrl,omitempty"`
+	BaseCommitURL string             `json:"baseCommitUrl,omitempty"`
+	Mergeability  string             `json:"mergeability"`
+	MergeReason   string             `json:"mergeReason,omitempty"`
+	Draft         bool               `json:"draft,omitempty"`
+	Checks        []PullRequestCheck `json:"checks"`
 }
 
 type PullRequestMetadataOptions struct {

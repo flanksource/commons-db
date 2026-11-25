@@ -97,6 +97,17 @@ var _ = Describe("pull request listing metadata", func() {
 		Entry("Azure fork commit", "https://dev.azure.com/acme/Platform/_git/rules", git.WebRefOptions{Repository: "Other/fork", Ref: "abcdef", Kind: git.RefSHA}, "https://dev.azure.com/acme/Other/_git/fork/commit/abcdef"),
 	)
 
+	It("reads an Azure pull request author's ID and sign-in name", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9": reply(`{"pullRequestId":9,"status":"active","sourceRefName":"refs/heads/feature/a","targetRefName":"refs/heads/main",
+				"createdBy":{"id":"ada-id","displayName":"Ada","uniqueName":"ada@example.com"},"lastMergeSourceCommit":{"commitId":"head"},"repository":{"name":"rules","project":{"name":"Platform"}}}`),
+		})
+		provider := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider
+		metadata, err := git.ReadPullRequestMetadata(ctx, provider, repoURL("https://dev.azure.com/acme/Platform/_git/rules", ""), git.PullRequestMetadataOptions{Number: 9, SkipChecks: true})
+		Expect(err).NotTo(HaveOccurred())
+		Expect([]string{metadata.Author, metadata.AuthorID, metadata.AuthorLogin}).To(Equal([]string{"Ada", "ada-id", "ada@example.com"}))
+	})
+
 	It("reads Azure avatars, mergeability and checks without confusing clean merges with successful checks", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9":           reply(`{"pullRequestId":9,"status":"active","mergeStatus":"succeeded","sourceRefName":"refs/heads/feature/a","targetRefName":"refs/heads/main","createdBy":{"displayName":"Ada","imageUrl":"https://example.com/avatar.png"},"lastMergeSourceCommit":{"commitId":"head"},"repository":{"name":"rules","project":{"name":"Platform"}}}`),

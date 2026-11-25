@@ -48,6 +48,7 @@ type azurePull struct {
 	CreatedBy     struct {
 		ID          string `json:"id"`
 		DisplayName string `json:"displayName"`
+		UniqueName  string `json:"uniqueName"`
 		ImageURL    string `json:"imageUrl"`
 	} `json:"createdBy"`
 	LastMergeSourceCommit struct {
@@ -278,9 +279,9 @@ func (r azurePullReader) read(ctx context.Context, pull azurePull) (PullRequest,
 		Head: strings.TrimPrefix(pull.SourceRefName, "refs/heads/"), Base: strings.TrimPrefix(pull.TargetRefName, "refs/heads/"),
 		Title: pull.Title, Author: pull.CreatedBy.DisplayName, Body: pull.Description, CreatedAt: pull.CreationDate,
 		HeadSHA: pull.LastMergeSourceCommit.CommitID, HeadRepository: head.fullName()}
-	if pull.MergeStatus != "" || pull.CreatedBy.ImageURL != "" || pull.LastMergeTargetCommit.CommitID != "" || pull.IsDraft {
-		pr.Metadata = &PullRequestMetadata{AuthorAvatarURL: pull.CreatedBy.ImageURL, BaseSHA: pull.LastMergeTargetCommit.CommitID,
-			Mergeability: azureMergeability(pull.MergeStatus), MergeReason: pull.MergeStatus, Draft: pull.IsDraft}
+	if pull.MergeStatus != "" || pull.CreatedBy.ImageURL != "" || pull.CreatedBy.ID != "" || pull.LastMergeTargetCommit.CommitID != "" || pull.IsDraft {
+		pr.Metadata = &PullRequestMetadata{AuthorAvatarURL: pull.CreatedBy.ImageURL, AuthorID: pull.CreatedBy.ID, AuthorLogin: pull.CreatedBy.UniqueName,
+			BaseSHA: pull.LastMergeTargetCommit.CommitID, Mergeability: azureMergeability(pull.MergeStatus), MergeReason: pull.MergeStatus, Draft: pull.IsDraft}
 	}
 	return pr, nil
 }
