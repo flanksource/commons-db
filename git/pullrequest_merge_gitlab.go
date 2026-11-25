@@ -1,5 +1,5 @@
-// Merging a GitLab merge request: the head that was reviewed, as a merge commit or squashed,
-// keeping its source branch. GitLab rebases in a request of its own, so a rebase is refused.
+// Merging a GitLab merge request: the head that was reviewed, as a merge commit or squashed, with
+// the message asked, keeping its source branch. GitLab rebases in a request of its own, so a rebase is refused.
 package git
 
 import (
@@ -17,6 +17,13 @@ func (p *gitlabProvider) MergePullRequest(ctx context.Context, repo RepoURL, num
 	}
 	var merged gitlabMergeRequest
 	body := map[string]any{"sha": options.HeadSHA, "squash": options.Method == MergeSquash, "should_remove_source_branch": false}
+	switch {
+	case options.CommitMessage == "":
+	case options.Method == MergeSquash:
+		body["squash_commit_message"] = options.CommitMessage
+	default:
+		body["merge_commit_message"] = options.CommitMessage
+	}
 	if _, err := p.api.do(ctx, restRequest{Method: http.MethodPut, Endpoint: p.mrEndpoint(repo, fmt.Sprintf("/%d/merge", number)), Body: body, Out: &merged}); err != nil {
 		return err
 	}

@@ -38,6 +38,17 @@ var _ = Describe("Auto-merging an Azure DevOps pull request", func() {
 		}))
 	})
 
+	It("sets auto-complete with the commit message asked", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /acme/_apis/connectionData":                                   reply(`{"authenticatedUser":{"id":"` + me + `"}}`),
+			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9":   pull(headSHA),
+			"PATCH /acme/Platform/_apis/git/repositories/rules/pullrequests/9": reply(`{"pullRequestId":9,"status":"active","autoCompleteSetBy":{"id":"` + me + `"}}`),
+		})
+		options := git.MergePullRequestOptions{Method: git.MergeWithCommit, HeadSHA: headSHA, CommitMessage: "Tighten rules"}
+		Expect(autoMerger(api).AutoMergePullRequest(ctx, rules(), 9, options)).To(Succeed())
+		Expect(api.Calls()[2].Body["completionOptions"]).To(HaveKeyWithValue("mergeCommitMessage", "Tighten rules"))
+	})
+
 	It("refuses a pull request whose head moved since it was reviewed", func(ctx SpecContext) {
 		const moved = "3333333333333333333333333333333333333333"
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
