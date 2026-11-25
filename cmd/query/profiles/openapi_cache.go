@@ -111,17 +111,49 @@ func fingerprintProfiles(profiles []query.Profile) (string, error) {
 // through Get — so without this the document costs O(N²) reads and can be built
 // from profiles that changed midway through, under a fingerprint that describes
 // neither state.
+//
+// A store may serve from Get a profile its List leaves out — an import-only
+// base, which is no surface of its own — so the snapshot also holds every
+// profile the listing imports, read once through the store's Get.
 type snapshotStore struct {
 	profiles []query.Profile
+	imported []query.Profile
 	byName   map[string]query.Profile
 }
 
-func newSnapshotStore(profiles []query.Profile) *snapshotStore {
-	byName := make(map[string]query.Profile, len(profiles))
-	for _, profile := range profiles {
-		byName[profile.Name] = profile
+func newSnapshotStore(ctx context.Context, store profilestore.Store) (*snapshotStore, error) {
+	profiles, err := store.List(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("load profile surfaces: %w", err)
 	}
-	return &snapshotStore{profiles: profiles, byName: byName}
+	s := &snapshotStore{profiles: profiles, byName: make(map[string]query.Profile, len(profiles))}
+	for _, profile := range profiles {
+		s.byName[profile.Name] = profile
+	}
+	pending := slices.Clone(profiles)
+	for len(pending) > 0 {
+		profile := pending[0]
+		pending = pending[1:]
+		for _, name := range profile.Imports {
+			if _, ok := s.byName[name]; ok {
+				continue
+			}
+			imported, err := store.Get(ctx, name)
+			if err != nil {
+				return nil, fmt.Errorf("profile %q imports %q: %w", profile.Name, name, err)
+			}
+			s.byName[name] = imported
+			s.imported = append(s.imported, imported)
+			pending = append(pending, imported)
+		}
+	}
+	return s, nil
+}
+
+// fingerprint covers the imports as well as the listing: an edit to an
+// unlisted base changes every surface importing it.
+func (s *snapshotStore) fingerprint() (string, error) {
+	return fingerprintProfiles(append(slices.Clone(s.profiles), s.imported...))
 }
 
 func (s *snapshotStore) List(context.Context) ([]query.Profile, error) {

@@ -294,13 +294,29 @@ func (s *Service) Save(ctx context.Context, body map[string]any, id string) (que
 	}
 	if id != "" {
 		err = store.Update(ctx, id, p, profilestore.UpdateOptions{ReplaceExisting: replaceExisting})
-	} else {
+	} else if err = refuseExistingProfileName(ctx, store, p.Name); err == nil {
 		err = store.Save(ctx, p)
 	}
 	if err != nil {
 		return query.Profile{}, err
 	}
 	return p, nil
+}
+
+// refuseExistingProfileName keeps a create from overwriting a profile it does
+// not name as its source: Save writes by slug, so a create over a name or slug
+// already in use would replace that profile without a word.
+func refuseExistingProfileName(ctx context.Context, store profilestore.Store, name string) error {
+	profiles, err := store.List(ctx)
+	if err != nil {
+		return err
+	}
+	for _, existing := range profiles {
+		if existing.Name == name || slugify(existing.Name) == slugify(name) {
+			return ProfileNameConflictError{Source: name, Target: existing.Name}
+		}
+	}
+	return nil
 }
 
 func cloneBody(body map[string]any) map[string]any {
