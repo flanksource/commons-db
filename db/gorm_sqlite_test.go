@@ -8,7 +8,7 @@ import (
 	commonsgorm "github.com/flanksource/commons-db/gorm"
 	"github.com/flanksource/commons/logger"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -22,8 +22,8 @@ var _ = Describe("NewGorm SQL statements", func() {
 		sqlDB, err := database.DB()
 		Expect(err).ToNot(HaveOccurred())
 		DeferCleanup(sqlDB.Close)
-		var statements []connection.Statement
-		release := connection.ObserveSQL(connection.OwnDatabase, func(s connection.Statement) { statements = append(statements, s) })
+		var statements []sqlobserve.Statement
+		release := sqlobserve.ObserveSQL(sqlobserve.OwnDatabase, func(s sqlobserve.Statement) { statements = append(statements, s) })
 		DeferCleanup(release)
 
 		Expect(database.Exec("CREATE TABLE notes (id INTEGER PRIMARY KEY, body TEXT)").Error).To(Succeed())
@@ -35,7 +35,7 @@ var _ = Describe("NewGorm SQL statements", func() {
 		Expect(statements[1].SQL).To(Equal("SELECT count(*) FROM notes WHERE body = ?"))
 		Expect(statements[1].Args).To(Equal([]any{"x"}))
 		Expect(statements[1].Driver).To(Equal("sqlite"))
-		Expect(statements[1].Connection).To(Equal(connection.OwnDatabase))
+		Expect(statements[1].Connection).To(Equal(sqlobserve.OwnDatabase))
 		release()
 		Expect(database.Exec("DELETE FROM notes").Error).To(Succeed())
 		Expect(statements).To(HaveLen(2))

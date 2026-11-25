@@ -10,6 +10,7 @@ import (
 
 	"github.com/flanksource/commons-db/git"
 	"github.com/flanksource/commons-db/lease"
+	leaseredis "github.com/flanksource/commons-db/lease/redis"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
@@ -63,7 +64,7 @@ func redisLocker() lease.Locker {
 	client, err := valkey.NewClient(options)
 	Expect(err).NotTo(HaveOccurred())
 	DeferCleanup(client.Close)
-	locks, err := lease.NewRedis(client, lease.ExpiringOptions{Options: lease.Options{Scope: "git-pool-" + uuid.NewString(), RetryInterval: 20 * time.Millisecond}})
+	locks, err := leaseredis.New(client, lease.ExpiringOptions{Options: lease.Options{Scope: "git-pool-" + uuid.NewString(), RetryInterval: 20 * time.Millisecond}})
 	Expect(err).NotTo(HaveOccurred())
 	return locks
 }

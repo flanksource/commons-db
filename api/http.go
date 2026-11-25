@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/labstack/echo/v4"
 	"github.com/samber/oops"
@@ -36,6 +37,18 @@ func HTTPErrorFromErr(err error) *HTTPError {
 type HTTPSuccess struct {
 	Message string `json:"message"`
 	Payload any    `json:"payload,omitempty"`
+}
+
+// WrapEcho derives a context from the echo request, honouring the X-Trace and X-Debug headers.
+func WrapEcho(ctx context.Context, c echo.Context) context.Context {
+	c2 := ctx.Wrap(c.Request().Context())
+	if c.Request().Header.Get("X-Trace") == "true" {
+		c2 = c2.WithTrace()
+	}
+	if c.Request().Header.Get("X-Debug") == "true" {
+		c2 = c2.WithDebug()
+	}
+	return c2
 }
 
 func WriteSuccess(c echo.Context, payload any) error {

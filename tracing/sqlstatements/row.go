@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 	"github.com/flanksource/commons-db/query/sqltext"
 	"github.com/flanksource/commons-db/tracing"
 )
@@ -38,7 +38,7 @@ type StatementRow struct {
 
 // FromStatement is the row a capture stores for statement. A statement naming
 // no table has an empty list of them, never none.
-func FromStatement(statement connection.Statement) StatementRow {
+func FromStatement(statement sqlobserve.Statement) StatementRow {
 	tables := sqltext.ExtractTables(statement.SQL)
 	if tables == nil {
 		tables = []string{}

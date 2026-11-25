@@ -2,20 +2,18 @@ package fs
 
 import (
 	"context"
-	"errors"
 	"io"
 	"io/fs"
 	"os"
 	"strings"
 	"time"
 
-	gcs "cloud.google.com/go/storage"
-	"google.golang.org/api/iterator"
+	"github.com/flanksource/commons-db/cloud/gcp"
 )
 
 // GCSFileInfo wraps GCS object attributes to implement os.FileInfo and FileInfo
 type GCSFileInfo struct {
-	Object *gcs.ObjectAttrs
+	Object *gcp.Object
 }
 
 func (GCSFileInfo) IsDir() bool {
@@ -48,98 +46,64 @@ func (obj GCSFileInfo) FullPath() string {
 
 // gcsFS implements FilesystemRW for Google Cloud Storage
 type gcsFS struct {
-	*gcs.Client
+	client *gcp.StorageClient
 	Bucket string
 }
 
-func NewGCSFS(ctx context.Context, bucket string, client *gcs.Client) *gcsFS {
-	fs := gcsFS{
+func NewGCSFS(ctx context.Context, bucket string, client *gcp.StorageClient) *gcsFS {
+	return &gcsFS{
 		Bucket: strings.TrimPrefix(bucket, "gcs://"),
-		Client: client,
+		client: client,
+	}
+}
+
+// Close is a no-op: the REST client holds no resources that outlive a request.
+func (t *gcsFS) Close() error {
+	return nil
+}
+
+// ReadDir lists every object whose name starts with name.
+func (t *gcsFS) ReadDir(name string) ([]FileInfo, error) {
+	objects, err := t.client.ListObjects(context.TODO(), t.Bucket, name)
+	if err != nil {
+		return nil, err
 	}
 
-	return &fs
-}
-
-func (t *gcsFS) Close() error {
-	return t.Client.Close()
-}
-
-func (t *gcsFS) ReadDir(name string) ([]FileInfo, error) {
-	bucket := t.Client.Bucket(t.Bucket)
-	objs := bucket.Objects(context.TODO(), &gcs.Query{Prefix: name})
-
 	var output []FileInfo
-	for {
-		obj, err := objs.Next()
-		if err != nil {
-			if errors.Is(err, iterator.Done) {
-				break
-			}
-
-			return nil, err
-		}
-
-		if obj == nil {
-			break
-		}
-
-		file := GCSFileInfo{Object: obj}
-		output = append(output, file)
+	for _, obj := range objects {
+		output = append(output, GCSFileInfo{Object: obj})
 	}
 
 	return output, nil
 }
 
 func (t *gcsFS) Stat(path string) (os.FileInfo, error) {
-	obj := t.Client.Bucket(t.Bucket).Object(path)
-	attrs, err := obj.Attrs(context.TODO())
+	attrs, err := t.client.GetObject(context.TODO(), t.Bucket, path)
 	if err != nil {
 		return nil, err
 	}
 
-	fileInfo := &GCSFileInfo{
-		Object: attrs,
-	}
-
-	return fileInfo, nil
+	return &GCSFileInfo{Object: attrs}, nil
 }
 
 func (t *gcsFS) Read(ctx context.Context, path string) (io.ReadCloser, error) {
-	obj := t.Client.Bucket(t.Bucket).Object(path)
-
-	reader, err := obj.NewReader(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	return reader, nil
+	return t.client.OpenObject(ctx, t.Bucket, path)
 }
 
+// Write streams data to the object, holding at most one upload chunk in memory.
 func (t *gcsFS) Write(ctx context.Context, path string, data io.Reader) (os.FileInfo, error) {
-	obj := t.Client.Bucket(t.Bucket).Object(path)
-
-	content, err := io.ReadAll(data)
+	object, err := t.client.WriteObject(ctx, gcp.WriteObjectOptions{Bucket: t.Bucket, Name: path, Body: data})
 	if err != nil {
 		return nil, err
 	}
 
-	writer := obj.NewWriter(ctx)
-	if _, err := writer.Write(content); err != nil {
-		return nil, err
-	}
-
-	if err := writer.Close(); err != nil {
-		return nil, err
-	}
-
-	return t.Stat(path)
+	return &GCSFileInfo{Object: object}, nil
 }
 
 // Delete removes the object at path. A missing object is not an error.
 func (t *gcsFS) Delete(ctx context.Context, path string) error {
-	err := t.Client.Bucket(t.Bucket).Object(path).Delete(ctx)
-	if errors.Is(err, gcs.ErrObjectNotExist) {
+	err := t.client.DeleteObject(ctx, t.Bucket, path)
+	if gcp.IsNotFound(err) {
 		return nil
 	}
 	return err

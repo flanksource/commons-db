@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
@@ -101,9 +101,9 @@ func (pgProxy) Prepare(ctx dbcontext.Context, params Params, records tracing.Emi
 
 // deliver stores each statement the proxy decodes, without waiting: it arrives
 // on a connection's goroutine. Statements beyond MaxStatements are not stored.
-func (r *running) deliver(params Params, records tracing.Emitter[sqlstatements.StatementRow]) func(connection.Statement) {
+func (r *running) deliver(params Params, records tracing.Emitter[sqlstatements.StatementRow]) func(sqlobserve.Statement) {
 	var seen atomic.Int64
-	return func(statement connection.Statement) {
+	return func(statement sqlobserve.Statement) {
 		if seen.Add(1) > int64(params.MaxStatements) {
 			if r.truncated.CompareAndSwap(false, true) {
 				records.Warn(fmt.Sprintf("pg_proxy stopped storing statements after maxStatements=%d", params.MaxStatements))

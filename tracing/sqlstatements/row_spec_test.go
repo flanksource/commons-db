@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/flanksource/clicky/api"
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 	"github.com/flanksource/commons-db/query/sqltext"
 	"github.com/flanksource/commons-db/tracing/sqlstatements"
 	. "github.com/onsi/ginkgo/v2"
@@ -20,7 +20,7 @@ var _ = Describe("a statement row", func() {
 
 	DescribeTable("derives the statement's op and the tables it names from its text",
 		func(sql, op string, tables []string) {
-			row := sqlstatements.FromStatement(connection.Statement{SQL: sql})
+			row := sqlstatements.FromStatement(sqlobserve.Statement{SQL: sql})
 			Expect(row.Op).To(Equal(op))
 			Expect(row.Tables).To(Equal(tables))
 		},
@@ -33,9 +33,9 @@ var _ = Describe("a statement row", func() {
 	)
 
 	It("keys a statement by its normalized text, so reruns with other values share it", func() {
-		first := sqlstatements.FromStatement(connection.Statement{SQL: labels, Args: []any{"todo-40"}})
-		again := sqlstatements.FromStatement(connection.Statement{SQL: labels, Args: []any{"todo-41"}})
-		other := sqlstatements.FromStatement(connection.Statement{SQL: "SELECT * FROM todos WHERE id = $1"})
+		first := sqlstatements.FromStatement(sqlobserve.Statement{SQL: labels, Args: []any{"todo-40"}})
+		again := sqlstatements.FromStatement(sqlobserve.Statement{SQL: labels, Args: []any{"todo-41"}})
+		other := sqlstatements.FromStatement(sqlobserve.Statement{SQL: "SELECT * FROM todos WHERE id = $1"})
 		Expect(first.RepeatKey).To(Equal(sqlstatements.RepeatKey(labels)))
 		Expect(again.RepeatKey).To(Equal(first.RepeatKey))
 		Expect(other.RepeatKey).ToNot(Equal(first.RepeatKey))
@@ -67,7 +67,7 @@ var _ = Describe("a statement row", func() {
 	DescribeTable("tones its duration as an xevent's is toned",
 		func(duration time.Duration, tone string) {
 			Expect(sqltext.DurationStyle(duration)).To(Equal(tone))
-			row := sqlstatements.FromStatement(connection.Statement{SQL: labels, Duration: duration})
+			row := sqlstatements.FromStatement(sqlobserve.Statement{SQL: labels, Duration: duration})
 			cell := row.Row()["durationMs"].(api.TableCell)
 			Expect(cell.FilterValue).To(Equal(row.DurationMs))
 			Expect(cell.Value).To(HaveField("Style", HavePrefix(tone)))
@@ -81,7 +81,7 @@ var _ = Describe("a statement row", func() {
 
 	It("shows a failed statement's error in red beneath its SQL", func() {
 		const failure = `pq: relation "todo_label" does not exist`
-		row := sqlstatements.FromStatement(connection.Statement{
+		row := sqlstatements.FromStatement(sqlobserve.Statement{
 			SQL: labels, StartedAt: startedAt, Error: failure, Rows: -1,
 		})
 		cell := row.Row()["sql"].(api.TableCell)
@@ -94,7 +94,7 @@ var _ = Describe("a statement row", func() {
 	})
 
 	It("shows a statement that did not fail as its SQL alone, and rows it could not count as blank", func() {
-		row := sqlstatements.FromStatement(connection.Statement{SQL: labels, StartedAt: startedAt, Rows: -1})
+		row := sqlstatements.FromStatement(sqlobserve.Statement{SQL: labels, StartedAt: startedAt, Rows: -1})
 		cells := row.Row()
 		Expect(cells["sql"].(api.TableCell).Value).To(Equal(api.CodeBlock("text/x-sql", labels)))
 		Expect(cells["rows"].(api.TableCell)).To(Equal(api.TableCell{Value: api.Text{}, FilterValue: int64(-1)}))

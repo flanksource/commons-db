@@ -12,7 +12,6 @@ import (
 	commons "github.com/flanksource/commons/context"
 	"github.com/flanksource/commons/logger"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/labstack/echo/v4"
 	"github.com/samber/lo"
 	"github.com/samber/oops"
 	"go.opentelemetry.io/otel/attribute"
@@ -532,17 +531,6 @@ func (k Context) StartSpan(name string) (Context, trace.Span) {
 		span.SetAttributes(attribute.String(k, fmt.Sprintf("%v", v)))
 	}
 	return k.Wrap(ctx).WithName(name), span
-}
-
-func (k Context) WrapEcho(c echo.Context) Context {
-	c2 := k.Wrap(c.Request().Context())
-	if c.Request().Header.Get("X-Trace") == "true" {
-		c2 = c2.WithTrace()
-	}
-	if c.Request().Header.Get("X-Debug") == "true" {
-		c2 = c2.WithDebug()
-	}
-	return c2
 }
 
 func (k Context) GetLoggingContext() map[string]any {
