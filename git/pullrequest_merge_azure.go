@@ -1,5 +1,5 @@
 // Azure DevOps pull request completion: the reviewed source commit, completed with the strategy
-// asked through the target's policies, keeping the source branch.
+// and commit message asked through the target's policies, keeping the source branch.
 package git
 
 import (
@@ -11,6 +11,16 @@ import (
 
 var azureMergeStrategies = map[MergeMethod]string{MergeWithCommit: "noFastForward", MergeSquash: "squash", MergeRebase: "rebase"}
 
+// azureCompletionOptions completes with the strategy and commit message options ask, through the
+// target's policies, keeping the source branch.
+func azureCompletionOptions(options MergePullRequestOptions) map[string]any {
+	completion := map[string]any{"mergeStrategy": azureMergeStrategies[options.Method], "bypassPolicy": false, "deleteSourceBranch": false}
+	if options.CommitMessage != "" && options.Method != MergeRebase {
+		completion["mergeCommitMessage"] = options.CommitMessage
+	}
+	return completion
+}
+
 func (p *azureProvider) MergePullRequest(ctx context.Context, repo RepoURL, number int, options MergePullRequestOptions) error {
 	if err := options.validate(number); err != nil {
 		return err
@@ -18,7 +28,7 @@ func (p *azureProvider) MergePullRequest(ctx context.Context, repo RepoURL, numb
 	payload := map[string]any{
 		"status":                "completed",
 		"lastMergeSourceCommit": map[string]string{"commitId": options.HeadSHA},
-		"completionOptions":     map[string]any{"mergeStrategy": azureMergeStrategies[options.Method], "bypassPolicy": false, "deleteSourceBranch": false},
+		"completionOptions":     azureCompletionOptions(options),
 	}
 	var completed struct {
 		ID           int       `json:"pullRequestId"`

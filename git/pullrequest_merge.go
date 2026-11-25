@@ -21,6 +21,9 @@ const (
 type MergePullRequestOptions struct {
 	Method  MergeMethod
 	HeadSHA string
+	// CommitMessage is the merge or squash commit's message; empty leaves it to the provider. A
+	// rebase makes no commit of its own, so it has none.
+	CommitMessage string
 }
 
 func (o MergePullRequestOptions) validate(number int) error {

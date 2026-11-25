@@ -28,7 +28,7 @@ func (p *azureProvider) AutoMergePullRequest(ctx context.Context, repo RepoURL, 
 	}
 	payload := map[string]any{
 		"autoCompleteSetBy": map[string]string{"id": me},
-		"completionOptions": map[string]any{"mergeStrategy": azureMergeStrategies[options.Method], "bypassPolicy": false, "deleteSourceBranch": false},
+		"completionOptions": azureCompletionOptions(options),
 	}
 	var updated struct {
 		AutoCompleteSetBy struct {
