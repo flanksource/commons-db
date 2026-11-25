@@ -1,3 +1,5 @@
+// Tests each hosted provider's repositories and pull requests: listing, opening with auto-merge,
+// reading state and closing, through its REST API.
 package git_test
 
 import (

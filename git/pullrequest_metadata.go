@@ -1,3 +1,5 @@
+// A pull request's metadata for listings: its author, branches and revisions with their web links,
+// mergeability and checks, read from any provider.
 package git
 
 import (
