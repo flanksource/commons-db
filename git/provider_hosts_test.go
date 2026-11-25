@@ -153,7 +153,8 @@ var _ = Describe("Azure DevOps provider", func() {
 			Labels: []string{"oipa"}, Draft: true, AutoMerge: true})
 		Expect(err).ToNot(HaveOccurred())
 		Expect(pr).To(Equal(git.PullRequest{Number: 9, URL: "https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9",
-			State: git.PullRequestOpen, Head: "apply", Base: "main", Title: "T", HeadRepository: "Platform/rules"}))
+			State: git.PullRequestOpen, Head: "apply", Base: "main", Title: "T", HeadRepository: "Platform/rules",
+			Metadata: &git.PullRequestMetadata{AuthorID: "u-1", Mergeability: "unknown"}}))
 		got, err := provider.GetPullRequest(ctx, repo, 9)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(got.State).To(Equal(git.PullRequestMerged))
