@@ -13,12 +13,12 @@ type unconfirmedLease struct {
 	removed chan struct{}
 }
 
-func (h unconfirmedLease) renew(ctx context.Context) error {
+func (h unconfirmedLease) Renew(ctx context.Context) error {
 	<-ctx.Done()
 	return context.Cause(ctx)
 }
 
-func (h unconfirmedLease) unlock(context.Context) error {
+func (h unconfirmedLease) Unlock(context.Context) error {
 	close(h.removed)
 	return nil
 }
@@ -26,7 +26,7 @@ func (h unconfirmedLease) unlock(context.Context) error {
 var _ = Describe("lease lifecycle", func() {
 	It("signals loss before expiry when renewal cannot confirm ownership", func(ctx SpecContext) {
 		const ttl = 300 * time.Millisecond
-		l := locker{options: Options{OperationTimeout: time.Second}, ttl: ttl}
+		l := Backend{Options: Options{OperationTimeout: time.Second}, TTL: ttl}
 		held := unconfirmedLease{removed: make(chan struct{})}
 		lease := l.manage(ctx, held, time.Now())
 		DeferCleanup(lease.Unlock, ctx)

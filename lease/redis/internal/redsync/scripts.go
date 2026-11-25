@@ -1,6 +1,6 @@
 package redsync
 
-import "github.com/flanksource/commons-db/lease/internal/redsync/redis"
+import "github.com/flanksource/commons-db/lease/redis/internal/redsync/redis"
 
 var deleteScript = redis.NewScript(1, `
 	local val = redis.call("GET", KEYS[1])

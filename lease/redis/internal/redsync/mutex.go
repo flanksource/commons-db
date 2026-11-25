@@ -7,7 +7,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/flanksource/commons-db/lease/internal/redsync/redis"
+	"github.com/flanksource/commons-db/lease/redis/internal/redsync/redis"
 )
 
 // A DelayFunc is used to decide the amount of time to wait between retries.

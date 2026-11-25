@@ -1,4 +1,4 @@
-package lease
+package kubernetes
 
 import (
 	"encoding/json"
@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/flanksource/commons-db/lease"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	api "k8s.io/api/coordination/v1"
@@ -45,28 +46,28 @@ var _ = Describe("Kubernetes lease holder records", func() {
 		const padding = "padding"
 		const token = "holder"
 		const name = "capacity"
-		req := request{scope: "deploy", key: "capacity", holder: strings.Repeat("<", maxHolderLength), mode: writeMode}
+		req := lease.Request{Scope: "deploy", Key: "capacity", Holder: strings.Repeat("<", maxHolderLength), Mode: lease.WriteMode}
 		// The widest since: an untrimmed nanosecond fraction and a numeric offset.
 		since := time.Date(2026, 11, 19, 10, 19, 10, 123456789, time.FixedZone("", 2*60*60))
-		future, err := json.Marshal(map[string]kubeHolder{token: {Name: req.holder, Since: since, Heartbeat: ^uint64(0), Duration: 30}})
+		future, err := json.Marshal(map[string]kubeHolder{token: {Name: req.Holder, Since: since, Heartbeat: ^uint64(0), Duration: 30}})
 		Expect(err).NotTo(HaveOccurred())
-		room := apivalidation.TotalAnnotationSizeLimitB - len(leaseAnnotation) - len(future) - len(padding) - len(leaseResourceAnnotation) - len(req.resource())
+		room := apivalidation.TotalAnnotationSizeLimitB - len(leaseAnnotation) - len(future) - len(padding) - len(leaseResourceAnnotation) - len(req.Resource())
 		obj := &api.Lease{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "test", Annotations: map[string]string{
-			leaseAnnotation: "{}", padding: strings.Repeat("x", room+1), leaseResourceAnnotation: req.resource(),
+			leaseAnnotation: "{}", padding: strings.Repeat("x", room+1), leaseResourceAnnotation: req.Resource(),
 		}}}
 		client := fake.NewClientset(obj).CoordinationV1().Leases(obj.Namespace)
 		backend := &kubeBackend{client: client, ttl: 30, observations: make(map[string]kubeObservations)}
-		acquisition := &kubeAcquisition{kubeBackend: backend, request: req, name: name, token: token}
-		_, err = acquisition.try(ctx)
+		acquisition := &kubeAcquisition{kubeBackend: backend, Request: req, name: name, token: token}
+		_, err = acquisition.Try(ctx)
 		Expect(err).To(MatchError(ContainSubstring("heartbeat capacity")))
 
 		obj.Annotations[padding] = obj.Annotations[padding][:room]
 		_, err = client.Update(ctx, obj, metav1.UpdateOptions{})
 		Expect(err).NotTo(HaveOccurred())
-		held, err := acquisition.try(ctx)
+		held, err := acquisition.Try(ctx)
 		Expect(err).NotTo(HaveOccurred())
 		for range 10 {
-			Expect(held.renew(ctx)).To(Succeed())
+			Expect(held.Renew(ctx)).To(Succeed())
 		}
 		stored, err := client.Get(ctx, name, metav1.GetOptions{})
 		Expect(err).NotTo(HaveOccurred())
@@ -75,16 +76,16 @@ var _ = Describe("Kubernetes lease holder records", func() {
 
 	It("preserves a holder whose heartbeat renews during reclamation", func(ctx SpecContext) {
 		const token = "holder"
-		req := request{scope: "deploy", key: "contended", holder: "contender", mode: writeMode}
+		req := lease.Request{Scope: "deploy", Key: "contended", Holder: "contender", Mode: lease.WriteMode}
 		holders := map[string]kubeHolder{token: {Name: "worker", Duration: 30, Heartbeat: 1}}
 		data, err := json.Marshal(holders)
 		Expect(err).NotTo(HaveOccurred())
 		obj := &api.Lease{ObjectMeta: metav1.ObjectMeta{Name: "contended", Namespace: "test", ResourceVersion: "1", Annotations: map[string]string{
-			leaseAnnotation: string(data), leaseResourceAnnotation: req.resource(),
+			leaseAnnotation: string(data), leaseResourceAnnotation: req.Resource(),
 		}}}
 		client := fake.NewClientset(obj)
 		backend := &kubeBackend{client: client.CoordinationV1().Leases(obj.Namespace), ttl: 30, observations: make(map[string]kubeObservations)}
-		attempt := &kubeAcquisition{kubeBackend: backend, request: req, name: obj.Name, token: "contender"}
+		attempt := &kubeAcquisition{kubeBackend: backend, Request: req, name: obj.Name, token: "contender"}
 		Expect(attempt.prune(obj, holders, time.Now().Add(-time.Minute))).To(Succeed())
 
 		holders[token] = kubeHolder{Name: "worker", Duration: 30, Heartbeat: 2}
@@ -99,8 +100,8 @@ var _ = Describe("Kubernetes lease holder records", func() {
 			Expect(client.Tracker().Update(action.GetResource(), renewed, renewed.Namespace)).To(Succeed())
 			return true, nil, apierrors.NewConflict(action.GetResource().GroupResource(), renewed.Name, nil)
 		})
-		held, err := attempt.try(ctx)
-		Expect(err).To(MatchError(errBusy))
+		held, err := attempt.Try(ctx)
+		Expect(err).To(MatchError(lease.ErrBusy))
 		Expect(held).To(BeNil())
 	})
 })
