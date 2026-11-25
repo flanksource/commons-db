@@ -126,6 +126,34 @@ var _ = Describe("profile updates", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(string(data)).NotTo(ContainSubstring("replaceExisting"))
 	})
+
+	// A create is a "Save as new": over a name already in use it would silently
+	// overwrite that profile, so it is refused the way a conflicting rename is.
+	It("refuses to create a profile whose name or slug an existing profile holds, leaving it unchanged", func() {
+		existing := sampleProfile("Live Sales")
+		Expect(store.Save(ctx, existing)).To(Succeed())
+		service, err := New(Options{
+			Store:      func() (profilestore.Store, error) { return store, nil },
+			Context:    func() dbcontext.Context { return dbcontext.New() },
+			DecodeBody: func(_ context.Context, body map[string]any) (map[string]any, error) { return body, nil },
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		var refused []error
+		for _, name := range []string{"Live Sales", "live sales"} {
+			duplicate := sampleProfile(name)
+			duplicate.Query = "select duplicate"
+			_, err := service.Save(ctx, profileBody(duplicate), "")
+			refused = append(refused, err)
+		}
+		created := sampleProfile("Live Sales Copy")
+		_, createErr := service.Save(ctx, profileBody(created), "")
+
+		Expect(refused).To(HaveEach(MatchError(ContainSubstring(`conflicts with existing profile "Live Sales"`))))
+		Expect(createErr).NotTo(HaveOccurred())
+		Expect(store.Get(ctx, existing.Name)).To(Equal(existing))
+		Expect(store.Get(ctx, created.Name)).To(Equal(created))
+	})
 })
 
 func profileBody(profile query.Profile) map[string]any {

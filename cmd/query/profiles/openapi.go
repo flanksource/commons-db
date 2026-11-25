@@ -79,11 +79,11 @@ func (h *profileOpenAPIHandler) document(ctx context.Context, representation ope
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	profiles, err := h.store.List(ctx)
+	snapshot, err := newSnapshotStore(ctx, h.store)
 	if err != nil {
-		return openAPIDocument{}, fmt.Errorf("load profile surfaces: %w", err)
+		return openAPIDocument{}, err
 	}
-	fingerprint, err := fingerprintProfiles(profiles)
+	fingerprint, err := snapshot.fingerprint()
 	if err != nil {
 		return openAPIDocument{}, err
 	}
@@ -98,7 +98,7 @@ func (h *profileOpenAPIHandler) document(ctx context.Context, representation ope
 	if err != nil {
 		return openAPIDocument{}, fmt.Errorf("generate OpenAPI: %v", err)
 	}
-	if err := mergeStoredProfiles(ctx, spec, newSnapshotStore(profiles)); err != nil {
+	if err := mergeStoredProfiles(ctx, spec, snapshot); err != nil {
 		return openAPIDocument{}, err
 	}
 	for _, extend := range h.extensions {
