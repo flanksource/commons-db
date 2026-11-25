@@ -51,16 +51,16 @@ func (p *azureProvider) PullRequestReadiness(ctx context.Context, repo RepoURL, 
 		}
 		readiness.Reasons = append(readiness.Reasons, "PR is a draft")
 	}
-	sourceMoved, targetMoved, err := p.mergeStale(ctx, repo, pull.azurePull)
+	snapshot, err := p.mergeSnapshot(ctx, repo, pull.azurePull)
 	if err != nil {
 		return MergeReadiness{}, err
 	}
-	if sourceMoved || targetMoved {
+	if snapshot.SourceMoved || snapshot.TargetMoved {
 		if readiness.State == "ready" {
 			readiness.State = "pending"
 		}
 		readiness.WaitingForMerge = true
-		if sourceMoved {
+		if snapshot.SourceMoved {
 			readiness.Reasons = append(readiness.Reasons, "merge computation has not caught up to the source branch")
 		} else {
 			readiness.Reasons = append(readiness.Reasons, "target branch advanced since the last trial merge; checks ran against the previous target")
@@ -88,31 +88,42 @@ func (p *azureProvider) PullRequestReadiness(ctx context.Context, repo RepoURL, 
 	return readiness, nil
 }
 
-// mergeStale reports whether the source branch, and else the target branch, moved past the
-// commits the pull request's last merge computation used.
-func (p *azureProvider) mergeStale(ctx context.Context, repo RepoURL, pull azurePull) (sourceMoved, targetMoved bool, err error) {
+func (p *azureProvider) PullRequestMergeSnapshot(ctx context.Context, repo RepoURL, number int) (MergeSnapshot, error) {
+	if number <= 0 {
+		return MergeSnapshot{}, fmt.Errorf("pull request number must be positive")
+	}
+	var pull azurePull
+	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), Out: &pull}); err != nil {
+		return MergeSnapshot{}, err
+	}
+	return p.mergeSnapshot(ctx, repo, pull)
+}
+
+// mergeSnapshot compares the commits the pull request's last merge computation used with its
+// source and target branches' tips.
+func (p *azureProvider) mergeSnapshot(ctx context.Context, repo RepoURL, pull azurePull) (MergeSnapshot, error) {
 	source, err := p.pullSource(ctx, pull)
 	if err != nil {
-		return false, false, err
+		return MergeSnapshot{}, err
 	}
 	if source.ID == "" || pull.Repository.ID == "" {
-		return false, false, fmt.Errorf("azure DevOps pull request %d has no repository identity for its branches", pull.ID)
+		return MergeSnapshot{}, fmt.Errorf("azure DevOps pull request %d has no repository identity for its branches", pull.ID)
 	}
 	head, err := p.branchTip(ctx, source.Project.Name, source.ID, pull.SourceRefName)
 	if err != nil {
-		return false, false, err
+		return MergeSnapshot{}, err
 	}
 	if head != pull.LastMergeSourceCommit.CommitID {
-		return true, false, nil
+		return MergeSnapshot{SourceMoved: true}, nil
 	}
 	if pull.LastMergeTargetCommit.CommitID == "" {
-		return false, false, nil
+		return MergeSnapshot{}, nil
 	}
 	target, err := p.branchTip(ctx, repo.Project, pull.Repository.ID, pull.TargetRefName)
 	if err != nil {
-		return false, false, err
+		return MergeSnapshot{}, err
 	}
-	return false, target != pull.LastMergeTargetCommit.CommitID, nil
+	return MergeSnapshot{TargetMoved: target != pull.LastMergeTargetCommit.CommitID}, nil
 }
 
 // branchTip is the commit branch (refs/heads/...) of repository points at.
