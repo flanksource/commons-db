@@ -1,6 +1,8 @@
 # HCL migrations
 
-The implementation now lives in [sqlglot-go/database/migrate](https://github.com/flanksource/sqlglot-go/tree/main/database/migrate). This package preserves commons-db API compatibility with aliases and forwarding functions. The standalone sqlglot CLI exposes `schema inspect`, `migrate plan` and `migrate apply`, including reviewed PostgreSQL and SQLite schema artifacts. Existing script/security bundle execution through this API retains its behavior.
+The implementation now lives in [sqlglot-go/database/migrate](https://github.com/flanksource/sqlglot-go/tree/main/database/migrate). This package preserves commons-db API compatibility with aliases and forwarding functions. PostgreSQL, SQLite and SQL Server schemas are planned by the one dialect-neutral planner in sqlglot-go (`migrate/engine`) and applied one unit per transaction, so a bundle plans the same way whichever target it reaches. The standalone sqlglot CLI exposes `schema inspect`, `migrate plan` and `migrate apply`, and writes the same reviewed artifact (version 2) for every dialect. Script and security bundle execution through this API retains its behavior.
+
+Callers that need the plan itself rather than an apply use sqlglot-go directly: `database/migrate.PlanSchema`, `PreviewBundle` and `PendingSQLServer` return the planned artifact or the pending work without changing anything, and are not forwarded here.
 
 `migrate.Apply` is the single filesystem-backed migration seam for PostgreSQL, SQLite and SQL Server. The connection string selects the target, while callers pass the same embedded Atlas HCL bundle and options. SQL Server bundles are SQL Server-shaped rather than portable; see [SQL Server](#sql-server).
 
@@ -26,7 +28,7 @@ SQL Server accepts `sqlserver://` URLs in the go-mssqldb form, e.g. `sqlserver:/
 
 ### Existing connections
 
-`WithDB` runs a SQL Server or SQLite migration on a `*sql.DB` the caller already holds, with the connection string left empty. The dialect comes from the handle's driver. Apply neither closes the handle nor changes its pool settings:
+`WithDB` runs a SQL Server, SQLite or PostgreSQL migration on a `*sql.DB` the caller already holds, with the connection string left empty. The dialect comes from the handle's driver. Apply neither closes the handle nor changes its pool settings:
 
 ```go
 err := migrate.Apply(ctx, "", bundle,
@@ -35,7 +37,7 @@ err := migrate.Apply(ctx, "", bundle,
 	migrate.WithName("acme/routines"))
 ```
 
-Passing both a connection string and `WithDB` is an error. A PostgreSQL handle is refused, because PostgreSQL migrations scope `search_path` and `lock_timeout` on connections they open themselves.
+Passing both a connection string and `WithDB` is an error. A PostgreSQL handle is accepted for the default schema: each schema unit sets and restores its own `lock_timeout` on a dedicated connection. `WithSchema` with another schema needs a connection string, because the script phases and metadata tables resolve unqualified names through `search_path`, which only a connection the migration opens can scope.
 
 Relative SQLite paths are resolved from the process working directory. SQLite is always file-backed; `:memory:` and `mode=memory` are rejected. The normalized connection enables foreign keys, a 5-second busy timeout, and WAL while preserving caller-supplied query parameters and unmanaged pragmas.
 
@@ -174,7 +176,7 @@ SQLite rejects the following before schema mutation:
 | A user check named `<table>_<json-column>_json` with a different expression | That name is reserved for the generated `json_valid` check |
 | Any `.sql` migration file | SQL phases are PostgreSQL-only; SQLite does not skip them silently |
 | `role` or `permission` blocks | Managed security is PostgreSQL-only |
-| `WithExclude(...)` | Partial inspection could hide SQLite drift |
+| `WithExclude(...)` naming a member of a table (`table.column`) | A rebuild cannot keep a column, index or key the plan cannot see; whole tables may be excluded |
 | `WithSchema(...)` with a value other than `public` | SQLite has no PostgreSQL schema namespace |
 
 These declarations are parser-valid PostgreSQL HCL but are not SQLite-compatible: bit strings, network and MAC types, spatial types, intervals, serial and identity types, XML, money, arrays, ranges and multiranges, full-text search types, enums, domains, and other user-defined types.
@@ -193,11 +195,13 @@ Some declarations are accepted because their storage representation is useful on
 
 ### SQLite migration-time limits
 
-The SQLite apply runs in one transaction. It reconciles supported indexes, constraints, column types, defaults and nullability, rebuilding populated tables when needed. Column and table drops are skipped by default; valid changes in the same migration still apply. Omitted columns remain in the effective desired table definition so a rebuild preserves their values. PostgreSQL also skips omitted columns and tables by default.
+PostgreSQL and SQLite bundles are planned by the shared planner (`migrate/engine`): the HCL is evaluated with its variables, projected to the dialect, diffed against the live database and applied one unit (a table with its dependents) per transaction. A table rebuilt to change a column keeps its rows. Nothing undeclared is dropped by default, on either dialect: omitted columns, indexes, keys, checks, tables and types stay, and a rebuild keeps them in the rebuilt table, so valid changes in the same migration still apply.
 
-`WithDrops()` opts into dropping columns and tables. On SQLite it inspects all user tables and treats the supplied HCL as the complete desired table schema: user tables omitted from the bundle are removed. Without this option, inspection stays limited to the declared tables. Index and constraint removal do not require `WithDrops()`. A rename represented by Atlas as a column removal and addition preserves the old column by default; this API does not infer rename mappings.
+`WithDrops()` makes the bundle the complete description of its schema: drops are planned for every undeclared table, type, column, index, key and check, and the unreviewed `Apply` acknowledges them. On SQLite it inspects all user tables, so user tables omitted from the bundle are removed. The bundle's own `schema_migration_*` tables are never dropped. A rename represented by Atlas as a column removal and addition preserves the old column by default; this API does not infer rename mappings.
 
-The transaction disables foreign-key enforcement while applying changes, verifies that no new foreign-key violations appear before commit, and restores enforcement afterward. An incompatible value or constraint rolls the transaction back. A rebuild that would discard an unmanaged trigger is refused. SQLite's native column-addition rules still apply, and the migrator does not backfill values. Views remain outside the table bundle; callers must assess views that depend on changed columns. Rebuilds no longer require the removed `WithRebuilds()` option; remove it from existing callers.
+`WithExclude(...)` hides objects from the plan on both sides (live and declared), so they are neither created, altered nor dropped, even under `WithDrops()`.
+
+Each unit disables foreign-key enforcement while applying changes, verifies that no new foreign-key violations appear before commit, and restores enforcement afterward. An incompatible value or constraint rolls the unit back. A rebuild that would discard an unmanaged trigger is refused. SQLite's native column-addition rules still apply, and the migrator does not backfill values. Views remain outside the table bundle; callers must assess views that depend on changed columns. Rebuilds are automatic, so `WithRebuilds()` has no effect and callers should drop it.
 
 ## PostgreSQL schema-scoped bundles
 
@@ -230,7 +234,7 @@ SQL files default to the post-Atlas phase. Directives are read from the leading 
 - Scripts are transactional by default; the SQL and its SHA-256 migration log commit atomically.
 - `runs: always` re-runs a script on every apply. It is an escape hatch for reconciliation that truly must occur at every boot, not a replacement for dependency tracking.
 
-Views are restored automatically when Atlas reshapes a base table they depend on. Prefer small hash-gated files, such as one file per view or shared dependency, so a table reshape re-creates only affected objects and steady-state startup remains DDL-free.
+Views that read a column the schema step retypes are dropped and re-created automatically around the change, from their live definitions, with their owner, options, comment and grants, whether a script owns them or not. A script's recorded hash is left alone, so it does not re-run only because a column changed; edit the script when the view itself should change. Other changes a view depends on, such as dropping a column it reads, are refused by PostgreSQL's own dependency error and the unit rolls back. Prefer small hash-gated files, such as one file per view or shared dependency, so steady-state startup remains DDL-free.
 
 Atlas-style PostgreSQL `role` and `permission` blocks may live in the same HCL files as tables. The OSS migration layer supports roles and memberships plus schema, table, column, and sequence permissions. Managed grants are reconciled exactly within the bundle's metadata scope; unrelated roles and grants remain untouched. Different scopes must not manage the same role or grantee/object pair.
 
@@ -268,13 +272,13 @@ if err := sqlitemigrate.ReconcileTables(ctx, tx, sqlitemigrate.ReconcileOptions{
 }
 ```
 
-The record store uses this lower-level API to add newly declared columns to tables that may already contain rows. New filesystem-backed migrations should call the target-aware parent `migrate.Apply` instead.
+The record store uses this lower-level API to add newly declared columns to tables that may already contain rows, inside the transaction that also writes its `record_kinds` catalog. It is the one SQLite path that does not run on the shared planner: the planner applies each unit on a connection it opens from a `*sql.DB`, so it cannot join a caller's transaction (the record store's writer holds a single connection). New filesystem-backed migrations should call the target-aware parent `migrate.Apply` instead.
 
 ## SQL Server
 
 `sqlserver://` targets reconcile through the Atlas SQL Server driver in `atlas/sqlserver`, which commons-db ships because Atlas OSS has none. A bundle declares tables in SQL Server-shaped HCL and stored procedures and functions as plain `.sql` files:
 
-The driver delegates its differ, SQL Server types and migration planner to `github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver`. Commons-db owns catalog inspection, HCL loading, connections, locks, transactions and applying the resulting SQL. Consumers that need a database-independent typed plan can use sqlglot's `migrate/sqlserver` package directly; this does not expand the HCL or inspection support described below.
+The driver delegates its differ, SQL Server types and migration planner to `github.com/flanksource/sqlglot-go/migrate/atlas/sqlserver`. Catalog inspection, HCL loading, connections, locks, transactions and applying the resulting SQL run in sqlglot-go's shared engine. Consumers that need a database-independent typed plan can register sqlglot's `migrate/sqlserver` dialect and call `engine.Plan`; this does not expand the HCL or inspection support described below.
 
 ```go
 //go:embed db
@@ -295,6 +299,10 @@ A routine is compared with the live `sys.sql_modules` definition through sqlglot
 
 A routine that is removed from the bundle is left in the database; migrate never drops procedures or functions.
 
+### The schema step is a reviewed artifact
+
+The tables and routines of a bundle are planned together, in one declared-scope batch, by the shared schema engine (`migrate/engine`, dialect `sqlserver`). Dependents of a changed column (indexes, keys, foreign keys in both directions, checks, defaults and statistics) are dropped and re-created around it from their live definitions, and data guards refuse a change the data cannot satisfy (a `varchar(36)` column becoming `uniqueidentifier` is refused while a value is not a GUID). The plan runs one transaction per unit with a lock timeout, so a failure rolls back only its own unit and applying the same plan again skips the units that committed. Undeclared foreign keys, checks and primary keys are never dropped. `sqlglot-go`'s `database/migrate.PlanSchema` returns the planned `engine.Artifact`; `migrate/sqlserver` here applies or renders one.
+
 ### Tables from HCL
 
 `.hcl` files under `WithDir` are optional when the bundle has routines. They declare exactly `schema "dbo" {}` and its tables:
@@ -311,7 +319,7 @@ Types: `bit`, `tinyint`, `smallint`, `int`, `bigint`, `decimal(p,s)`, `numeric(p
 
 ### Scoped inspection
 
-An OIPA-sized database holds thousands of objects, so migrate inspects only the tables and routines the bundle names. Undeclared objects are never read, and so never changed. Inside declared tables, columns, keys, foreign keys and checks are reconciled to the declaration, but indexes the bundle does not declare are kept, so tuning indexes added by a DBA survive. An apply that finds nothing to change runs no DDL. Every apply holds a session `sp_getapplock` named after `WithName` (one-minute wait), so concurrent applies of one bundle serialize.
+An OIPA-sized database holds thousands of objects, so migrate inspects only the tables and routines the bundle names. Undeclared objects are never read, and so never changed. Inside declared tables, columns, keys, foreign keys and checks are reconciled to the declaration, but indexes the bundle does not declare are kept, so tuning indexes added by a DBA survive. An apply that finds nothing to change runs no DDL. Every apply holds a session `sp_getapplock` named after `WithName` (one-minute wait), so concurrent applies of one bundle serialize. Every other `.sql` file under `WithDir` (outside the routine directory) is a hash-gated sqlcmd-style script with the same `-- phase:`, `-- dependsOn:`, `-- runs: always` and `-- transaction:` headers as on PostgreSQL; the sqlglot-go [migrations README](https://github.com/flanksource/sqlglot-go/blob/main/database/migrate/README.md) documents scripts, the plan file and ledger scopes.
 
 ### Compatibility level 100
 
@@ -321,7 +329,7 @@ Generated DDL and the catalog queries avoid syntax newer than compatibility leve
 
 These fail with an error instead of being ignored:
 
-- hash-gated pre/post `.sql` scripts outside the routine directory;
+- sqlcmd commands (`:setvar`, `:r`, `:on error`, `!!`) and `$(var)` scripting variables in scripts;
 - `WithSchema` other than `dbo` and `WithDrops`;
 - `role` and `permission` blocks;
 - `view`, `trigger`, `sequence`, `function` and `procedure` HCL blocks, computed columns, user-defined and alias types (including `sysname`), and any unknown column, index or table attribute;
