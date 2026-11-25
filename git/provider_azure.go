@@ -270,11 +270,7 @@ func (r azurePullReader) read(ctx context.Context, pull azurePull) (PullRequest,
 	if !ok {
 		return PullRequest{}, fmt.Errorf("azure DevOps pull request %d has unknown status %q", pull.ID, pull.Status)
 	}
-	head := pull.Repository
-	if pull.ForkSource != nil {
-		head = pull.ForkSource.Repository
-	}
-	head, err := r.resolve(ctx, head)
+	head, err := r.resolve(ctx, pull.source())
 	if err != nil {
 		return PullRequest{}, fmt.Errorf("azure DevOps pull request %d: %w", pull.ID, err)
 	}
@@ -287,6 +283,25 @@ func (r azurePullReader) read(ctx context.Context, pull azurePull) (PullRequest,
 			Mergeability: azureMergeability(pull.MergeStatus), MergeReason: pull.MergeStatus, Draft: pull.IsDraft}
 	}
 	return pr, nil
+}
+
+// source is the repository the pull request's source branch is in, as the pull request names it:
+// its fork's, or its own.
+func (pull azurePull) source() azurePullRepo {
+	if pull.ForkSource != nil {
+		return pull.ForkSource.Repository
+	}
+	return pull.Repository
+}
+
+// pullSource is the repository the pull request's source branch is in, resolved by ID when Azure
+// names it by nothing else.
+func (p *azureProvider) pullSource(ctx context.Context, pull azurePull) (azurePullRepo, error) {
+	source, err := (azurePullReader{provider: p}).resolve(ctx, pull.source())
+	if err != nil {
+		return azurePullRepo{}, fmt.Errorf("azure DevOps pull request %d: %w", pull.ID, err)
+	}
+	return source, nil
 }
 
 func (r azurePullReader) resolve(ctx context.Context, head azurePullRepo) (azurePullRepo, error) {

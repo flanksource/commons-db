@@ -56,11 +56,11 @@ func (p *azureProvider) PullRequestExecutions(ctx context.Context, repo RepoURL,
 	if _, err := p.api.do(ctx, restRequest{Method: http.MethodGet, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), Out: &pull}); err != nil {
 		return nil, err
 	}
-	source := pull.Repository
-	if pull.ForkSource != nil {
-		source = pull.ForkSource.Repository
+	source, err := p.pullSource(ctx, pull)
+	if err != nil {
+		return nil, err
 	}
-	if pull.Repository.ID == "" || source.ID == "" || source.Project.Name == "" {
+	if pull.Repository.ID == "" || source.ID == "" {
 		return nil, fmt.Errorf("azure DevOps pull request %d has no repository identity for its builds", number)
 	}
 	fork := repo

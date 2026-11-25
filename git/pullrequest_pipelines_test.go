@@ -103,6 +103,24 @@ var _ = Describe("Azure DevOps pull request executions", func() {
 		Expect(executions[0].Repository.Name).To(Equal("rules-fork"))
 	})
 
+	It("resolves a fork Azure names only by ID", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9": pull(`"forkSource":{"repository":{"id":"fork-id"}},`),
+			"GET /acme/_apis/git/repositories/fork-id":                       reply(`{"id":"fork-id","name":"rules-fork","project":{"name":"Forks"}}`),
+			"GET /acme/Platform/_apis/build/builds":                          builds(map[string]string{}),
+			"GET /acme/Forks/_apis/build/builds": builds(map[string]string{
+				"fork-id refs/heads/tighten": build(40, 7, "fork-ci", "inProgress", "", "refs/heads/tighten", headSHA, "2026-11-02T11:30:00Z"),
+			}),
+			"GET /acme/Forks/_apis/build/builds/40/timeline": reply(`{"records":[]}`),
+		})
+		reader := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider.(git.PullRequestPipelineReader)
+
+		executions, err := reader.PullRequestExecutions(ctx, rules(), 9)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(executions).To(HaveLen(1))
+		Expect([]string{executions[0].Repository.Project, executions[0].Repository.Name}).To(Equal([]string{"Forks", "rules-fork"}))
+	})
+
 	It("reads the tail of an execution's log", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"GET /acme/Platform/_apis/build/builds/31/logs": reply(`{"value":[{"id":7,"lineCount":40},{"id":8,"lineCount":3}]}`),
