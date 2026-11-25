@@ -9,7 +9,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 
 	"github.com/flanksource/commons-db/tracing/sqlstatements"
 )
@@ -43,7 +43,7 @@ var _ = Describe("summarizing statements", func() {
 	start := time.Date(2026, 10, 13, 9, 30, 0, 0, time.UTC)
 
 	statement := func(offset, duration time.Duration, sql string, rows int64, failure string) sqlstatements.StatementRow {
-		return sqlstatements.FromStatement(connection.Statement{
+		return sqlstatements.FromStatement(sqlobserve.Statement{
 			SQL: sql, StartedAt: start.Add(offset), Duration: duration, Rows: rows, Error: failure,
 		})
 	}

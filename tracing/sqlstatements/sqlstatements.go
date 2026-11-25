@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/recordstore/recordresults"
@@ -123,7 +123,7 @@ func (statements) Prepare(ctx dbcontext.Context, params Params, records tracing.
 		return ctx, nil, err
 	}
 	capture := &running{summary: NewAccumulator()}
-	deliver := func(statement connection.Statement) {
+	deliver := func(statement sqlobserve.Statement) {
 		if statement.Duration < minimum {
 			return
 		}
@@ -134,7 +134,7 @@ func (statements) Prepare(ctx dbcontext.Context, params Params, records tracing.
 	}
 	var releases []func()
 	for _, name := range params.Connections {
-		releases = append(releases, connection.ObserveSQL(name, deliver))
+		releases = append(releases, sqlobserve.ObserveSQL(name, deliver))
 	}
 	return ctx.WithValue(runningKey{}, capture), func() error {
 		for _, release := range releases {

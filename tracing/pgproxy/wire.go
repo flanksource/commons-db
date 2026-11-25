@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgproto3"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 )
 
 // maxWireMessage bounds a single protocol message the sniffer will buffer. A
@@ -85,7 +85,7 @@ func (s *pgSniffer) consume(n int64) {
 type pgSession struct {
 	label  string // the connection label statements carry
 	params bool
-	emit   func(connection.Statement)
+	emit   func(sqlobserve.Statement)
 
 	mu       sync.Mutex
 	prepared map[string]string   // Parse name → SQL
@@ -104,7 +104,7 @@ type pgPending struct {
 	args    []any
 }
 
-func newPGSession(label string, params bool, emit func(connection.Statement)) *pgSession {
+func newPGSession(label string, params bool, emit func(sqlobserve.Statement)) *pgSession {
 	return &pgSession{
 		label: label, params: params, emit: emit,
 		prepared: map[string]string{},
@@ -226,8 +226,8 @@ func (s *pgSession) flush() {
 	}
 }
 
-func (s *pgSession) statement(p *pgPending, rows int64, errText string) connection.Statement {
-	return connection.Statement{
+func (s *pgSession) statement(p *pgPending, rows int64, errText string) sqlobserve.Statement {
+	return sqlobserve.Statement{
 		Connection: s.label, Driver: driver, SQL: p.sql, Args: p.args,
 		StartedAt: p.started, Duration: time.Since(p.started), Rows: rows, Error: errText,
 	}
