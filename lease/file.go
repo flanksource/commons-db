@@ -35,31 +35,31 @@ func NewFile(dir string, options Options) (Locker, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create file lock directory %s: %w", dir, err)
 	}
-	paths := func(req request) string { return filepath.Join(dir, digest(req.scope, req.key)) }
-	return &locker{options: options,
-		begin: func(req request, wait bool) acquisition {
-			if req.mode == groupMode {
-				return refusedAcquisition{errGroupsUnsupported}
+	paths := func(req Request) string { return filepath.Join(dir, Digest(req.Scope, req.Key)) }
+	return &Backend{Options: options,
+		Begin: func(req Request, wait bool) Acquisition {
+			if req.Mode == GroupMode {
+				return RefusedAcquisition{errGroupsUnsupported}
 			}
 			base := paths(req)
-			return &fileAcquisition{base: base, holder: req.holder, mode: req.mode, waiting: wait}
+			return &fileAcquisition{base: base, holder: req.Holder, mode: req.Mode, waiting: wait}
 		},
-		holders: func(_ context.Context, req request) ([]Holder, error) { return fileHolders(paths(req) + ".holders") },
+		Holders: func(_ context.Context, req Request) ([]Holder, error) { return fileHolders(paths(req) + ".holders") },
 	}, nil
 }
 
 type fileAcquisition struct {
 	base, holder string
-	mode         mode
+	mode         Mode
 	waiting      bool
 	queued       *flock.Flock
 }
 
-func (a *fileAcquisition) try(context.Context) (ownership, error) {
+func (a *fileAcquisition) Try(context.Context) (Ownership, error) {
 	var held *flock.Flock
 	var err error
 	switch {
-	case a.mode == readMode:
+	case a.mode == ReadMode:
 		held, err = a.tryRead()
 	case a.waiting:
 		held, err = a.tryQueuedWrite()
@@ -107,13 +107,13 @@ func (a *fileAcquisition) tryQueuedWrite() (*flock.Flock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := a.abandon(context.Background()); err != nil {
+	if err := a.Abandon(context.Background()); err != nil {
 		return nil, errors.Join(err, held.Unlock())
 	}
 	return held, nil
 }
 
-func (a *fileAcquisition) abandon(context.Context) error {
+func (a *fileAcquisition) Abandon(context.Context) error {
 	if a.queued == nil {
 		return nil
 	}
@@ -128,7 +128,7 @@ func tryFileLock(lock *flock.Flock, try func(*flock.Flock) (bool, error)) (*floc
 		return nil, fmt.Errorf("file lock %s: %w", lock.Path(), err)
 	}
 	if !locked {
-		return nil, errBusy
+		return nil, ErrBusy
 	}
 	return lock, nil
 }
@@ -139,9 +139,9 @@ type fileOwnership struct {
 	recordPath   string
 }
 
-func (fileOwnership) renew(context.Context) error { return nil }
+func (fileOwnership) Renew(context.Context) error { return nil }
 
-func (h fileOwnership) unlock(context.Context) error {
+func (h fileOwnership) Unlock(context.Context) error {
 	err := os.Remove(h.recordPath)
 	if errors.Is(err, fs.ErrNotExist) {
 		err = nil

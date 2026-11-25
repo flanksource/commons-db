@@ -1,4 +1,4 @@
-package lease
+package redis
 
 import "github.com/valkey-io/valkey-go"
 

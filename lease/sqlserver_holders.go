@@ -24,7 +24,7 @@ type sqlSession struct {
 // names they set in CONTEXT_INFO. Since is the session's login time, which is
 // at or before acquisition because every lease pins and then ends its own
 // session.
-func sqlHolders(ctx context.Context, db *sql.DB, req request) ([]Holder, error) {
+func sqlHolders(ctx context.Context, db *sql.DB, req Request) ([]Holder, error) {
 	name, err := sqlResource(req)
 	if err != nil {
 		return nil, err
@@ -122,11 +122,11 @@ func sqlDescribedName(description string) (string, error) {
 func sqlHolderMode(modes []string) string {
 	switch {
 	case slices.Contains(modes, "X"):
-		return writeMode.String()
+		return WriteMode.String()
 	case len(modes) > 2:
-		return groupMode.String()
+		return GroupMode.String()
 	case slices.Contains(modes, "S"):
-		return readMode.String()
+		return ReadMode.String()
 	default:
 		return ""
 	}

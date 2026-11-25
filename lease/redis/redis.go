@@ -1,4 +1,4 @@
-package lease
+package redis
 
 import (
 	"context"
@@ -7,25 +7,26 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flanksource/commons-db/lease/internal/redsync"
-	redispool "github.com/flanksource/commons-db/lease/internal/redsync/redis"
-	"github.com/flanksource/commons-db/lease/internal/redsync/redis/valkeygo"
+	"github.com/flanksource/commons-db/lease"
+	"github.com/flanksource/commons-db/lease/redis/internal/redsync"
+	redispool "github.com/flanksource/commons-db/lease/redis/internal/redsync/redis"
+	"github.com/flanksource/commons-db/lease/redis/internal/redsync/redis/valkeygo"
 	"github.com/google/uuid"
 	"github.com/valkey-io/valkey-go"
 	"github.com/valkey-io/valkey-go/valkeycompat"
 )
 
-// NewRedis uses one authoritative Redis or Valkey primary per key.
-func NewRedis(client valkey.Client, options ExpiringOptions) (Locker, error) {
+// New uses one authoritative Redis or Valkey primary per key.
+func New(client valkey.Client, options lease.ExpiringOptions) (lease.Locker, error) {
 	if client == nil {
 		return nil, errors.New("a Redis or Valkey client is required")
 	}
-	options, err := normalizeExpiring(options)
+	options, err := lease.NormalizeExpiring(options)
 	if err != nil {
 		return nil, err
 	}
 	backend := newRedisBackend(client, options.TTL)
-	return &locker{options: options.Options, ttl: options.TTL, begin: backend.begin, holders: backend.holders}, nil
+	return &lease.Backend{Options: options.Options, TTL: options.TTL, Begin: backend.begin, Holders: backend.holders}, nil
 }
 
 func newRedisBackend(client valkey.Client, ttl time.Duration) *redisBackend {
@@ -34,8 +35,8 @@ func newRedisBackend(client valkey.Client, ttl time.Duration) *redisBackend {
 
 // redisKeys are the writer, shared holders, waiting writers, grouped holder
 // index and holder names of a key, all in one hash slot.
-func redisKeys(req request) []string {
-	prefix := "commons-db:lease:{" + req.resource() + "}:"
+func redisKeys(req lease.Request) []string {
+	prefix := "commons-db:lease:{" + req.Resource() + "}:"
 	return []string{prefix + "writer", prefix + "shared", prefix + "waiting", prefix + "grouped", prefix + "holders"}
 }
 
@@ -52,34 +53,34 @@ type redisResource struct {
 
 type redisAcquisition struct {
 	redisResource
-	request
+	lease.Request
 	share, waiter  string
 	registered     bool
 	uncertainShare bool
 	uncertainToken string
 }
 
-func (b *redisBackend) begin(req request, wait bool) acquisition {
-	a := &redisAcquisition{redisResource: redisResource{b, redisKeys(req)}, request: req}
-	if req.mode == writeMode {
+func (b *redisBackend) begin(req lease.Request, wait bool) lease.Acquisition {
+	a := &redisAcquisition{redisResource: redisResource{b, redisKeys(req)}, Request: req}
+	if req.Mode == lease.WriteMode {
 		if wait {
 			a.waiter = uuid.NewString()
 		}
 		return a
 	}
 	a.share = uuid.NewString()
-	if req.mode == groupMode {
-		a.share = req.group + ":" + a.share
+	if req.Mode == lease.GroupMode {
+		a.share = req.Group + ":" + a.share
 	}
 	return a
 }
 
 func (a *redisAcquisition) record() (string, error) {
-	data, err := json.Marshal(Holder{Name: a.holder, Mode: a.mode.String(), Group: a.group, Since: time.Now().UTC()})
+	data, err := json.Marshal(lease.Holder{Name: a.Holder, Mode: a.Mode.String(), Group: a.Group, Since: time.Now().UTC()})
 	return string(data), err
 }
 
-func (a *redisAcquisition) try(ctx context.Context) (ownership, error) {
+func (a *redisAcquisition) Try(ctx context.Context) (lease.Ownership, error) {
 	record, err := a.record()
 	if err != nil {
 		return nil, err
@@ -88,15 +89,15 @@ func (a *redisAcquisition) try(ctx context.Context) (ownership, error) {
 		return a.tryWriter(ctx, record)
 	}
 	a.uncertainShare = true
-	if err := a.run(ctx, "share", a.share, a.group, record); err != nil {
-		a.uncertainShare = err != errBusy
+	if err := a.run(ctx, "share", a.share, a.Group, record); err != nil {
+		a.uncertainShare = err != lease.ErrBusy
 		return nil, err
 	}
 	a.uncertainShare = false
 	return &redisShared{a.redisResource, a.share}, nil
 }
 
-func (a *redisAcquisition) tryWriter(ctx context.Context, record string) (ownership, error) {
+func (a *redisAcquisition) tryWriter(ctx context.Context, record string) (lease.Ownership, error) {
 	pool := redisWriterPool{Pool: a.pool, resource: a.redisResource, waiter: a.waiter, registered: a.registered, record: record}
 	token := uuid.NewString()
 	writer := redsync.New(pool).NewMutex(a.keys[0], redsync.WithExpiry(a.ttl), redsync.WithTimeoutFactor(1.0/3), redsync.WithGenValueFunc(func() (string, error) { return token, nil }))
@@ -104,7 +105,7 @@ func (a *redisAcquisition) tryWriter(ctx context.Context, record string) (owners
 		var taken *redsync.ErrTaken
 		if errors.As(err, &taken) {
 			a.registered = a.waiter != ""
-			return nil, errBusy
+			return nil, lease.ErrBusy
 		}
 		a.uncertainToken = token
 		return nil, fmt.Errorf("acquire Redis writer: %w", err)
@@ -112,10 +113,10 @@ func (a *redisAcquisition) tryWriter(ctx context.Context, record string) (owners
 	return redisWriter{a.redisResource, token}, nil
 }
 
-func (a *redisAcquisition) abandon(ctx context.Context) error {
+func (a *redisAcquisition) Abandon(ctx context.Context) error {
 	var err error
 	if a.uncertainToken != "" {
-		err = (redisWriter{a.redisResource, a.uncertainToken}).unlock(ctx)
+		err = (redisWriter{a.redisResource, a.uncertainToken}).Unlock(ctx)
 	}
 	if a.waiter != "" {
 		err = errors.Join(err, a.run(ctx, "cancel", a.waiter))
@@ -133,16 +134,16 @@ type redisWriter struct {
 	token string
 }
 
-func (w redisWriter) renew(ctx context.Context) error  { return w.run(ctx, "extend", w.token) }
-func (w redisWriter) unlock(ctx context.Context) error { return w.run(ctx, "unwrite", w.token) }
+func (w redisWriter) Renew(ctx context.Context) error  { return w.run(ctx, "extend", w.token) }
+func (w redisWriter) Unlock(ctx context.Context) error { return w.run(ctx, "unwrite", w.token) }
 
 type redisShared struct {
 	redisResource
 	token string
 }
 
-func (h *redisShared) renew(ctx context.Context) error  { return h.run(ctx, "renew", h.token) }
-func (h *redisShared) unlock(ctx context.Context) error { return h.run(ctx, "release", h.token) }
+func (h *redisShared) Renew(ctx context.Context) error  { return h.run(ctx, "renew", h.token) }
+func (h *redisShared) Unlock(ctx context.Context) error { return h.run(ctx, "release", h.token) }
 
 func (r redisResource) params(op string, args ...string) []string {
 	return append([]string{op, fmt.Sprint(r.ttl.Milliseconds())}, args...)
@@ -157,23 +158,23 @@ func (r redisResource) run(ctx context.Context, op string, args ...string) error
 	case 1:
 		return nil
 	case 0:
-		return errBusy
+		return lease.ErrBusy
 	case -1:
-		return errNotOwned
+		return lease.ErrNotOwned
 	default:
 		return fmt.Errorf("unexpected Redis lease status %d for %s", status, op)
 	}
 }
 
-func (b *redisBackend) holders(ctx context.Context, req request) ([]Holder, error) {
+func (b *redisBackend) holders(ctx context.Context, req lease.Request) ([]lease.Holder, error) {
 	resource := redisResource{b, redisKeys(req)}
 	records, err := redisScript.Exec(ctx, b.client, resource.keys, resource.params("holders", "")).AsStrSlice()
 	if err != nil {
 		return nil, fmt.Errorf("run Redis lease operation holders: %w", err)
 	}
-	holders := make([]Holder, 0, len(records))
+	holders := make([]lease.Holder, 0, len(records))
 	for _, record := range records {
-		var holder Holder
+		var holder lease.Holder
 		if err := json.Unmarshal([]byte(record), &holder); err != nil || holder.Name == "" {
 			return nil, fmt.Errorf("invalid holder record %q in %s", record, resource.keys[4])
 		}
@@ -213,7 +214,7 @@ func (c redisWriterConn) SetNX(key, token string, expiry time.Duration) (bool, e
 		registered = "1"
 	}
 	err := resource.run(c.ctx, "write", token, c.pool.waiter, registered, c.pool.record)
-	if err == errBusy {
+	if err == lease.ErrBusy {
 		return false, nil
 	}
 	return err == nil, err
