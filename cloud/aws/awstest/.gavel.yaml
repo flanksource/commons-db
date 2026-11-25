@@ -1,0 +1,9 @@
+# reason: awstest is a test-support helper that boots the ministack AWS emulator through
+# github.com/flanksource/deps/start; only test code imports it, so its weight never reaches
+# production binaries (decided 2026-11-25).
+lint:
+  ignore:
+    # *.go matches only this package's own files, not subpackages.
+    - rule: dep-budget-package
+      source: uir
+      file: "*.go"
