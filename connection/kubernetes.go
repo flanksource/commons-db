@@ -95,13 +95,6 @@ func (t KubeconfigConnection) Populate(ctx context.Context) (kubernetes.Interfac
 		return nil, nil, err
 	}
 
-	// NewClient hands back an empty fake clientset when it found nothing to
-	// connect to. Left alone that reads as a healthy cluster with no resources,
-	// so every query returns zero rows and no error.
-	if clientset == dutyKubernetes.Nil {
-		return nil, nil, fmt.Errorf("no kubernetes cluster configured: name a connection, or set $KUBECONFIG / ~/.kube/config")
-	}
-
 	return clientset, restConfig, nil
 }
 

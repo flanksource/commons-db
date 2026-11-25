@@ -6,10 +6,10 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	commonsdb "github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/models"
+	"github.com/flanksource/commons-db/secret/keeper"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"gocloud.dev/secrets/localsecrets"
 	"testing"
 )
 
@@ -23,10 +23,10 @@ var _ = Describe("encrypted catalog", func() {
 		db, err := commonsdb.NewGorm("sqlite://"+GinkgoT().TempDir()+"/catalog.db", nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(db.AutoMigrate(&Record{})).To(Succeed())
-		keeper := localsecrets.NewKeeper([32]byte{1})
-		DeferCleanup(keeper.Close)
+		local := keeper.NewLocal([32]byte{1})
+		DeferCleanup(local.Close)
 		org := uuid.New()
-		opts := Options{DB: db, OrgID: org, Keeper: keeper, KeyID: "test-key"}
+		opts := Options{DB: db, OrgID: org, Keeper: local, KeyID: "test-key"}
 		store, err := New(opts)
 		Expect(err).NotTo(HaveOccurred())
 		input := &models.Connection{Name: "example", Type: "http", URL: "https://example.com", Password: "credential-value", Properties: map[string]string{"token": "property-secret"}}
@@ -41,7 +41,7 @@ var _ = Describe("encrypted catalog", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(found.Password).To(Equal(input.Password))
 		Expect(found.Properties).To(Equal(input.Properties))
-		other, err := New(Options{DB: db, OrgID: uuid.New(), Keeper: keeper, KeyID: "test-key"})
+		other, err := New(Options{DB: db, OrgID: uuid.New(), Keeper: local, KeyID: "test-key"})
 		Expect(err).NotTo(HaveOccurred())
 		_, err = other.ResolveConnection(dbcontext.New(), saved.ID.String())
 		Expect(err).To(HaveOccurred())
@@ -54,14 +54,14 @@ var _ = Describe("encrypted catalog", func() {
 		db, err := commonsdb.NewGorm("sqlite://"+GinkgoT().TempDir()+"/catalog.db", nil)
 		Expect(err).NotTo(HaveOccurred())
 		Expect(db.AutoMigrate(&Record{})).To(Succeed())
-		keeper := localsecrets.NewKeeper([32]byte{1})
-		DeferCleanup(keeper.Close)
+		local := keeper.NewLocal([32]byte{1})
+		DeferCleanup(local.Close)
 		org := uuid.New()
-		store, err := New(Options{DB: db, OrgID: org, Keeper: keeper, KeyID: "original"})
+		store, err := New(Options{DB: db, OrgID: org, Keeper: local, KeyID: "original"})
 		Expect(err).NotTo(HaveOccurred())
 		saved, err := store.SaveConnection(context.Background(), &models.Connection{Name: "example", Type: "http", Password: "secret"})
 		Expect(err).NotTo(HaveOccurred())
-		wrong := localsecrets.NewKeeper([32]byte{2})
+		wrong := keeper.NewLocal([32]byte{2})
 		DeferCleanup(wrong.Close)
 		bad, err := New(Options{DB: db, OrgID: org, Keeper: wrong, KeyID: "original"})
 		Expect(err).NotTo(HaveOccurred())
@@ -69,7 +69,7 @@ var _ = Describe("encrypted catalog", func() {
 		Expect(err).To(HaveOccurred())
 		nextOrg := uuid.New()
 		Expect(db.Model(&Record{}).Where("id = ?", saved.ID).Update("org_id", nextOrg).Error).To(Succeed())
-		moved, err := New(Options{DB: db, OrgID: nextOrg, Keeper: keeper, KeyID: "original"})
+		moved, err := New(Options{DB: db, OrgID: nextOrg, Keeper: local, KeyID: "original"})
 		Expect(err).NotTo(HaveOccurred())
 		_, err = moved.ResolveConnection(dbcontext.New(), saved.ID.String())
 		Expect(err).To(HaveOccurred())

@@ -11,8 +11,8 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/secret"
+	"github.com/flanksource/commons-db/secret/keeper"
 	"github.com/google/uuid"
-	"gocloud.dev/secrets"
 	"gorm.io/gorm"
 )
 
@@ -34,7 +34,7 @@ func (Record) TableName() string { return "connections" }
 type Options struct {
 	DB     *gorm.DB
 	OrgID  uuid.UUID
-	Keeper *secrets.Keeper
+	Keeper keeper.Keeper
 	KeyID  string
 }
 

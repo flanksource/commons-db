@@ -1,19 +1,14 @@
 package connection
 
 import (
-	"crypto/tls"
 	"fmt"
-	"net/http"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
-	"github.com/aws/aws-sdk-go-v2/credentials"
-	"github.com/aws/aws-sdk-go-v2/credentials/stscreds"
-	"github.com/aws/aws-sdk-go-v2/service/sts"
+	cloudaws "github.com/flanksource/commons-db/cloud/aws"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
-	"github.com/henvic/httpretty"
+	commonshttp "github.com/flanksource/commons/http"
+	"github.com/flanksource/commons/logger"
 )
 
 // +kubebuilder:object:generate=true
@@ -132,49 +127,30 @@ func (t *AWSConnection) Populate(ctx ConnectionContext) error {
 	return nil
 }
 
-// Client returns a new aws config.
+// Client returns the SDK-free AWS session for the connection: region, endpoint,
+// TLS settings and the credentials chain described in aws_credentials.go.
 // Call this on a hydrated connection.
-func (t *AWSConnection) Client(ctx context.Context) (aws.Config, error) {
-	var tr http.RoundTripper
-	tr = &http.Transport{
-		TLSClientConfig: &tls.Config{InsecureSkipVerify: t.SkipTLSVerify},
-	}
-
-	if ctx.IsTrace() {
-		httplogger := &httpretty.Logger{
-			Time:           true,
-			TLS:            ctx.Logger.IsLevelEnabled(7),
-			RequestHeader:  true,
-			RequestBody:    ctx.Logger.IsLevelEnabled(8),
-			ResponseHeader: true,
-			ResponseBody:   ctx.Logger.IsLevelEnabled(9),
-			Colors:         true,
-			Formatters:     []httpretty.Formatter{&httpretty.JSONFormatter{}},
-		}
-
-		tr = httplogger.RoundTripper(tr)
-	}
-
-	options := []func(*config.LoadOptions) error{
-		config.WithHTTPClient(&http.Client{Transport: tr}),
-	}
-
-	if t.Region != "" {
-		options = append(options, config.WithRegion(t.Region))
-	}
-
-	if !t.AccessKey.IsEmpty() {
-		options = append(options, config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(t.AccessKey.ValueStatic, t.SecretKey.ValueStatic, t.SessionToken.ValueStatic)))
-	}
-
-	cfg, err := config.LoadDefaultConfig(ctx, options...)
+func (t *AWSConnection) Client(ctx context.Context) (*cloudaws.Session, error) {
+	credentials, err := t.resolveCredentials(ctx)
 	if err != nil {
-		return aws.Config{}, err
+		return nil, err
 	}
+	return cloudaws.NewSession(cloudaws.SessionOptions{
+		Region:        credentials.Region,
+		Endpoint:      t.Endpoint,
+		Credentials:   credentials.Provider,
+		SkipTLSVerify: t.SkipTLSVerify,
+		Customize:     traceHTTP(ctx),
+	})
+}
 
-	if t.AssumeRole != "" {
-		cfg.Credentials = aws.NewCredentialsCache(stscreds.NewAssumeRoleProvider(sts.NewFromConfig(cfg), t.AssumeRole))
+// traceHTTP adds request/response logging to each service client when the
+// context is tracing.
+func traceHTTP(ctx context.Context) func(*commonshttp.Client) *commonshttp.Client {
+	if !ctx.IsTrace() {
+		return nil
 	}
-
-	return cfg, nil
+	return func(c *commonshttp.Client) *commonshttp.Client {
+		return c.WithLogger(ctx.Logger).WithHttpLogging(logger.Trace, logger.Trace2)
+	}
 }

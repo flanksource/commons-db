@@ -2,9 +2,10 @@ package connection
 
 import (
 	"fmt"
+	"os"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
+	"github.com/flanksource/commons/http/middlewares/azuread"
+
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/types"
 )
@@ -83,19 +84,30 @@ func (g AzureConnection) ToModel() models.Connection {
 	}
 }
 
-func (g *AzureConnection) TokenCredential() (azcore.TokenCredential, error) {
-	// Nothing configured at all means "use whatever identity the environment
-	// provides" — env vars, workload identity, managed identity, az login — the
-	// same fall-through AWSConnection.Client gets from the AWS default chain. A
-	// half-filled service principal is a misconfiguration, not a request for
-	// ambient auth, so it still fails below.
+// AzureCredentialOptions tunes the credential built by AzureConnection.Credential.
+type AzureCredentialOptions struct {
+	// Authority overrides the Azure AD authority (sovereign clouds) for the
+	// connection's client secret. It requires a configured client secret;
+	// ambient credentials take their authority from AZURE_AUTHORITY_HOST.
+	Authority string
+}
+
+// Credential returns an SDK-free Azure AD credential. A connection carrying a
+// client secret authenticates with it. A connection naming nothing uses the
+// ambient chain: environment client secret, workload identity, managed
+// identity, plus the credential registered by azuresdk.Install when that
+// package is imported. A half-filled service principal is a misconfiguration,
+// not a request for ambient auth, so it fails.
+func (g *AzureConnection) Credential(opts AzureCredentialOptions) (azuread.Credential, error) {
 	if g.isUnconfigured() {
-		return azidentity.NewDefaultAzureCredential(nil)
+		if opts.Authority != "" {
+			return nil, fmt.Errorf("azure authority %q requires a client secret on the connection; ambient credentials read AZURE_AUTHORITY_HOST", opts.Authority)
+		}
+		return ambientAzureCredential(), nil
 	}
 
-	// Named explicitly rather than left to azidentity: an unset credential
-	// otherwise reaches EnvVar.String() — a value receiver — and panics on the
-	// nil pointer before any error can be reported.
+	// Named explicitly so a partially configured principal reports which field
+	// is missing instead of failing inside the token request.
 	if g.TenantID == "" {
 		return nil, fmt.Errorf("azure connection is missing tenantID")
 	}
@@ -106,7 +118,16 @@ func (g *AzureConnection) TokenCredential() (azcore.TokenCredential, error) {
 		return nil, fmt.Errorf("azure connection is missing clientSecret")
 	}
 
-	return azidentity.NewClientSecretCredential(g.TenantID, envValue(g.ClientID), envValue(g.ClientSecret), nil)
+	authority := opts.Authority
+	if authority == "" {
+		authority = os.Getenv("AZURE_AUTHORITY_HOST")
+	}
+	return azuread.ClientSecret{
+		TenantID:     g.TenantID,
+		ClientID:     envValue(g.ClientID),
+		ClientSecret: envValue(g.ClientSecret),
+		Authority:    authority,
+	}, nil
 }
 
 // isUnconfigured reports whether the connection names no service principal at
