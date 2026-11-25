@@ -88,6 +88,21 @@ var _ = Describe("An Azure DevOps pull request's merge readiness", func() {
 		Expect(readiness(ctx, newFakeAPI(routes))).To(Equal(git.MergeReadiness{State: "ready"}))
 	})
 
+	DescribeTable("says which branch outran the last trial merge, without reading its policies",
+		func(ctx SpecContext, head, target string, want git.MergeSnapshot) {
+			api := newFakeAPI(routes(pull("active", "succeeded", ""), "", head, target))
+			reader, ok := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider.(git.PullRequestMergeSnapshotReader)
+			Expect(ok).To(BeTrue())
+			Expect(reader.PullRequestMergeSnapshot(ctx, rules(), 9)).To(Equal(want))
+			for _, call := range api.Calls() {
+				Expect(call.Path).NotTo(ContainSubstring("policy"))
+			}
+		},
+		Entry("neither", headSHA, mergeSHA, git.MergeSnapshot{}),
+		Entry("the source branch", staleSHA, mergeSHA, git.MergeSnapshot{SourceMoved: true}),
+		Entry("the target branch", headSHA, staleSHA, git.MergeSnapshot{TargetMoved: true}),
+	)
+
 	It("has none for a pull request that isn't open", func(ctx SpecContext) {
 		api := newFakeAPI(routes(pull("completed", "succeeded", ""), "", headSHA, mergeSHA))
 		Expect(readiness(ctx, api)).To(Equal(git.MergeReadiness{}))
