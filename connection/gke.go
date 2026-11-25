@@ -1,14 +1,11 @@
 package connection
 
 import (
-	"crypto/tls"
 	"encoding/base64"
 	"fmt"
-	"net/http"
 
+	"github.com/flanksource/commons-db/cloud/gcp"
 	"github.com/flanksource/commons-db/context"
-	container "google.golang.org/api/container/v1"
-	"google.golang.org/api/option"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -34,56 +31,38 @@ func (t *GKEConnection) Validate() *GKEConnection {
 	return t
 }
 
-func (t *GKEConnection) Client(ctx context.Context) (*container.Service, error) {
+// Client builds the Kubernetes Engine API client for the connection. A
+// connection with no credentials is unauthenticated.
+func (t *GKEConnection) Client(ctx context.Context) (*gcp.ContainerClient, error) {
 	t = t.Validate()
 
-	var clientOpts []option.ClientOption
-
-	if t.Endpoint != "" {
-		clientOpts = append(clientOpts, option.WithEndpoint(t.Endpoint))
-	}
-
-	if t.SkipTLSVerify {
-		insecureHTTPClient := &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		}
-
-		clientOpts = append(clientOpts, option.WithHTTPClient(insecureHTTPClient))
-	}
-
+	credential := ""
 	if t.Credentials != nil && !t.Credentials.IsEmpty() {
-		credential, err := ctx.GetEnvValueFromCache(*t.Credentials, ctx.GetNamespace())
-		if err != nil {
+		var err error
+		if credential, err = ctx.GetEnvValueFromCache(*t.Credentials, ctx.GetNamespace()); err != nil {
 			return nil, err
 		}
-		clientOpts = append(clientOpts, option.WithCredentialsJSON([]byte(credential)))
-	} else {
-		clientOpts = append(clientOpts, option.WithoutAuthentication())
 	}
 
-	svc, err := container.NewService(ctx, clientOpts...)
+	opts, err := t.ClientOptions(ctx, credential, gcp.ScopeCloudPlatform)
 	if err != nil {
 		return nil, err
 	}
-
-	return svc, nil
+	return gcp.NewContainerClient(opts)
 }
 
 func (t *GKEConnection) KubernetesClient(ctx context.Context, freshToken bool) (kubernetes.Interface, *rest.Config, error) {
-	containerService, err := t.Client(ctx)
+	containerClient, err := t.Client(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
 
-	clusterName := fmt.Sprintf("projects/%s/locations/%s/clusters/%s", t.ProjectID, t.Zone, t.Cluster)
-	cluster, err := containerService.Projects.Locations.Clusters.Get(clusterName).Context(ctx).Do()
+	cluster, err := containerClient.GetCluster(ctx, gcp.ClusterRef{Project: t.ProjectID, Location: t.Zone, Cluster: t.Cluster})
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get cluster: %w", err)
 	}
 
-	token, err := t.GCPConnection.Token(ctx, freshToken, container.CloudPlatformScope)
+	token, err := t.GCPConnection.Token(ctx, freshToken, gcp.ScopeCloudPlatform)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get token for gke: %w", err)
 	}

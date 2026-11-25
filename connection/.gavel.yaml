@@ -1,0 +1,10 @@
+# reason: connection still builds Kubernetes clients for the kubeconfig, EKS, GKE and CNRM
+# connections, so client-go (kubernetes clientset, clientcmd, rest) keeps its own imports
+# above the 500-package budget. Cloud SDKs are gone; this is the same inherent weight that
+# context keeps (decided 2026-11-25).
+lint:
+  ignore:
+    # *.go matches only this package's own files, not subpackages.
+    - rule: dep-budget-package
+      source: uir
+      file: "*.go"

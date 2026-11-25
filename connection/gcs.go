@@ -1,14 +1,10 @@
 package connection
 
 import (
-	"crypto/tls"
-	"net/http"
-
-	gcs "cloud.google.com/go/storage"
+	"github.com/flanksource/commons-db/cloud/gcp"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/fs"
 	"github.com/flanksource/commons-db/types"
-	"google.golang.org/api/option"
 )
 
 // +kubebuilder:object:generate=true
@@ -25,43 +21,24 @@ func (g *GCSConnection) Validate() *GCSConnection {
 	return g
 }
 
-func (g *GCSConnection) Client(ctx context.Context) (*gcs.Client, error) {
+// Client builds the Cloud Storage client for the connection. A connection with
+// no credentials is unauthenticated (an emulator or a public bucket).
+func (g *GCSConnection) Client(ctx context.Context) (*gcp.StorageClient, error) {
 	g = g.Validate()
-	var client *gcs.Client
-	var err error
 
-	var clientOpts []option.ClientOption
-
-	if g.Endpoint != "" {
-		clientOpts = append(clientOpts, option.WithEndpoint(g.Endpoint))
-	}
-
-	if g.SkipTLSVerify {
-		insecureHTTPClient := &http.Client{
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-			},
-		}
-
-		clientOpts = append(clientOpts, option.WithHTTPClient(insecureHTTPClient))
-	}
-
+	credential := ""
 	if g.Credentials != nil && !g.Credentials.IsEmpty() {
-		credential, err := ctx.GetEnvValueFromCache(*g.Credentials, ctx.GetNamespace())
-		if err != nil {
+		var err error
+		if credential, err = ctx.GetEnvValueFromCache(*g.Credentials, ctx.GetNamespace()); err != nil {
 			return nil, err
 		}
-		clientOpts = append(clientOpts, option.WithCredentialsJSON([]byte(credential)))
-	} else {
-		clientOpts = append(clientOpts, option.WithoutAuthentication())
 	}
 
-	client, err = gcs.NewClient(ctx.Context, clientOpts...)
+	opts, err := g.ClientOptions(ctx, credential, gcp.ScopeDevStorageFull)
 	if err != nil {
 		return nil, err
 	}
-
-	return client, nil
+	return gcp.NewStorageClient(opts)
 }
 
 // HydrateConnection attempts to find the connection by name

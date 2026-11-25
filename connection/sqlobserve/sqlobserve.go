@@ -1,7 +1,7 @@
 // The SQL statement tap: observers of a connection, of every connection, or of
 // the context's own database receive each statement commons-db runs there.
 
-package connection
+package sqlobserve
 
 import (
 	"sync"

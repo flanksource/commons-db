@@ -1,12 +1,19 @@
 // Specs for the SQL statement tap: observers of a connection, of every named
 // connection, or of the context's own database receive what is published for it.
 
-package connection
+package sqlobserve
 
 import (
+	"testing"
+
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
+
+func TestSQLObserve(t *testing.T) {
+	RegisterFailHandler(Fail)
+	RunSpecs(t, "SQL Observe Suite")
+}
 
 var _ = Describe("SQL statement tap", func() {
 	It("hands a statement to the observers of its connection and to those of every named connection", func() {

@@ -2,19 +2,14 @@ package connection
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
-	"github.com/Azure/azure-sdk-for-go/sdk/keyvault/azkeys"
+	"github.com/flanksource/commons-db/cloud/azure"
 	commonsContext "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/models"
-	"gocloud.dev/gcerrors"
-	"gocloud.dev/secrets"
-	"gocloud.dev/secrets/driver"
+	"github.com/flanksource/commons-db/secret/keeper"
 )
 
 type AzureKeyVault struct {
@@ -34,10 +29,10 @@ func (t *AzureKeyVault) FromModel(conn models.Connection) {
 	t.KeyID = conn.Properties["keyID"]
 }
 
-func (t *AzureKeyVault) SecretKeeper(ctx commonsContext.Context) (*secrets.Keeper, error) {
-	creds, err := t.AzureConnection.TokenCredential()
+func (t *AzureKeyVault) SecretKeeper(ctx commonsContext.Context) (keeper.Keeper, error) {
+	creds, err := t.AzureConnection.Credential(AzureCredentialOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Azure token credential: %w", err)
+		return nil, fmt.Errorf("failed to create Azure credential: %w", err)
 	}
 
 	keyVaultURI, keyName, keyVersion, err := parseAzureKeyID(t.KeyID)
@@ -45,19 +40,17 @@ func (t *AzureKeyVault) SecretKeeper(ctx commonsContext.Context) (*secrets.Keepe
 		return nil, err
 	}
 
-	client, err := azkeys.NewClient(keyVaultURI, creds, &azkeys.ClientOptions{
-		ClientOptions: policy.ClientOptions{},
-	})
+	client, err := azure.NewKeyVaultClient(azure.KeyVaultOptions{VaultURL: keyVaultURI, Credential: creds})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Azure Key Vault client: %w", err)
 	}
 
-	return secrets.NewKeeper(&azureKeyVaultKeeper{
+	return &azureKeyVaultKeeper{
 		client:     client,
 		keyName:    keyName,
 		keyVersion: keyVersion,
-		algorithm:  azkeys.JSONWebKeyEncryptionAlgorithmRSAOAEP256,
-	}), nil
+		algorithm:  azure.AlgRSAOAEP256,
+	}, nil
 }
 
 var azureKeyIDRE = regexp.MustCompile(`^(https://.+\.vault\.(?:[a-z\d-.]+)/)keys/(.+)$`)
@@ -77,64 +70,32 @@ func parseAzureKeyID(keyID string) (keyVaultURI, keyName, keyVersion string, err
 }
 
 type azureKeyVaultKeeper struct {
-	client     *azkeys.Client
+	client     *azure.KeyVaultClient
 	keyName    string
 	keyVersion string
-	algorithm  azkeys.JSONWebKeyEncryptionAlgorithm
+	algorithm  string
 }
 
-var _ driver.Keeper = (*azureKeyVaultKeeper)(nil)
+var _ keeper.Keeper = (*azureKeyVaultKeeper)(nil)
+
+func (k *azureKeyVaultKeeper) operation(value []byte) azure.KeyOperation {
+	return azure.KeyOperation{Name: k.keyName, Version: k.keyVersion, Algorithm: k.algorithm, Value: value}
+}
 
 func (k *azureKeyVaultKeeper) Encrypt(ctx context.Context, plaintext []byte) ([]byte, error) {
-	result, err := k.client.Encrypt(ctx, k.keyName, k.keyVersion, azkeys.KeyOperationsParameters{
-		Algorithm: &k.algorithm,
-		Value:     plaintext,
-	}, nil)
+	result, err := k.client.Encrypt(ctx, k.operation(plaintext))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("azure key vault encrypt (key %s): %w", k.keyName, err)
 	}
-	return result.Result, nil
+	return result, nil
 }
 
 func (k *azureKeyVaultKeeper) Decrypt(ctx context.Context, ciphertext []byte) ([]byte, error) {
-	result, err := k.client.Decrypt(ctx, k.keyName, k.keyVersion, azkeys.KeyOperationsParameters{
-		Algorithm: &k.algorithm,
-		Value:     ciphertext,
-	}, nil)
+	result, err := k.client.Decrypt(ctx, k.operation(ciphertext))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("azure key vault decrypt (key %s): %w", k.keyName, err)
 	}
-	return result.Result, nil
+	return result, nil
 }
 
 func (k *azureKeyVaultKeeper) Close() error { return nil }
-
-func (k *azureKeyVaultKeeper) ErrorAs(err error, i any) bool { return errors.As(err, i) }
-
-func (k *azureKeyVaultKeeper) ErrorCode(err error) gcerrors.ErrorCode {
-	var responseErr *azcore.ResponseError
-	if !errors.As(err, &responseErr) {
-		return gcerrors.Unknown
-	}
-
-	switch responseErr.StatusCode {
-	case 400:
-		return gcerrors.InvalidArgument
-	case 401, 403:
-		return gcerrors.PermissionDenied
-	case 404:
-		return gcerrors.NotFound
-	case 409:
-		return gcerrors.FailedPrecondition
-	case 429:
-		return gcerrors.ResourceExhausted
-	case 500:
-		return gcerrors.Internal
-	case 503:
-		return gcerrors.Unknown
-	case 504:
-		return gcerrors.DeadlineExceeded
-	default:
-		return gcerrors.Unknown
-	}
-}
