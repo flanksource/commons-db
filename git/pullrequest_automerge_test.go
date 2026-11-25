@@ -72,6 +72,27 @@ var _ = Describe("Auto-merging an Azure DevOps pull request", func() {
 		Expect(err).To(MatchError("azure DevOps didn't set auto-complete on pull request 9"))
 	})
 
+	DescribeTable("accepts only auto-complete Azure confirms for this pull request and identity",
+		func(ctx SpecContext, response, problem string) {
+			api := newFakeAPI(map[string]func(*http.Request) apiReply{
+				"GET /acme/_apis/connectionData":                                   reply(`{"authenticatedUser":{"id":"` + me + `"}}`),
+				"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9":   pull(headSHA),
+				"PATCH /acme/Platform/_apis/git/repositories/rules/pullrequests/9": reply(response),
+			})
+			err := autoMerger(api).AutoMergePullRequest(ctx, rules(), 9, git.MergePullRequestOptions{Method: git.MergeRebase, HeadSHA: headSHA})
+			if problem == "" {
+				Expect(err).NotTo(HaveOccurred())
+			} else {
+				Expect(err).To(MatchError(problem))
+			}
+		},
+		Entry("completed at once", `{"pullRequestId":9,"status":"completed"}`, ""),
+		Entry("set by another identity", `{"pullRequestId":9,"status":"active","autoCompleteSetBy":{"id":"someone-else"}}`,
+			`azure DevOps didn't set auto-complete on pull request 9 as the connection's identity: it is set by "someone-else"`),
+		Entry("another pull request", `{"pullRequestId":10,"status":"completed"}`,
+			"azure DevOps answered setting auto-complete on pull request 9 with pull request 10"),
+	)
+
 	It("needs the reviewed head and a strategy it knows", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{})
 		Expect(autoMerger(api).AutoMergePullRequest(ctx, rules(), 9, git.MergePullRequestOptions{Method: git.MergeSquash})).
