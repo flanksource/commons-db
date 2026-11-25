@@ -3,7 +3,7 @@ package providers_test
 import (
 	"fmt"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 	context "github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/dbtest"
 	"github.com/flanksource/commons-db/query"
@@ -371,8 +371,8 @@ var _ = Describe("sql column filters (postgres)", Ordered, func() {
 		})
 
 		It("hands each lookup statement, including one that fails, to the SQL statement tap", func() {
-			var statements []connection.Statement
-			DeferCleanup(connection.ObserveSQL(connection.EveryConnection, func(s connection.Statement) {
+			var statements []sqlobserve.Statement
+			DeferCleanup(sqlobserve.ObserveSQL(sqlobserve.EveryConnection, func(s sqlobserve.Statement) {
 				statements = append(statements, s)
 			}))
 			// Refresh reads past the lookup cache, which an earlier spec may have filled.

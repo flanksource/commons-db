@@ -3,9 +3,7 @@ package providers
 import (
 	"fmt"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/service/cloudwatchlogs"
-
+	cloudaws "github.com/flanksource/commons-db/cloud/aws"
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
@@ -58,16 +56,10 @@ func (cloudwatchProvider) Execute(ctx context.Context, req query.ProviderRequest
 		return nil, fmt.Errorf("cloudwatch requires the `logGroup` option")
 	}
 
-	cfg, endpoint, err := awsConfigForRequest(ctx, req.Connection, opts.Region, opts.Endpoint)
+	session, err := awsSessionForRequest(ctx, req.Connection, opts.Region, opts.Endpoint)
 	if err != nil {
 		return nil, err
 	}
-
-	client := cloudwatchlogs.NewFromConfig(cfg, func(o *cloudwatchlogs.Options) {
-		if endpoint != "" {
-			o.BaseEndpoint = &endpoint
-		}
-	})
 
 	request := cloudwatch.Request{
 		LogGroup: opts.LogGroup,
@@ -80,7 +72,7 @@ func (cloudwatchProvider) Execute(ctx context.Context, req query.ProviderRequest
 	request.End = opts.End
 	request.Limit = opts.Limit
 
-	result, err := cloudwatch.New(client, opts.Mapping).Search(ctx, request)
+	result, err := cloudwatch.New(session.Logs(), opts.Mapping).Search(ctx, request)
 	if err != nil {
 		return nil, err
 	}
@@ -88,29 +80,22 @@ func (cloudwatchProvider) Execute(ctx context.Context, req query.ProviderRequest
 	return logResultToRows(result), nil
 }
 
-// awsConfigForRequest hydrates an AWS connection and returns the SDK config
-// alongside the endpoint to talk to.
-//
-// The endpoint comes back separately because AWSConnection.Client does not
-// apply it — a caller pointing at LocalStack or a VPC endpoint has to set
-// BaseEndpoint on the service client itself.
-func awsConfigForRequest(ctx context.Context, connectionName, region, endpoint string) (aws.Config, string, error) {
+// awsSessionForRequest hydrates an AWS connection and returns its session. An
+// inline endpoint — a VPC endpoint, or an emulator — overrides the one carried
+// by the connection.
+func awsSessionForRequest(ctx context.Context, connectionName, region, endpoint string) (*cloudaws.Session, error) {
 	conn := connection.AWSConnection{ConnectionName: connectionName, Region: region}
 	if err := conn.Populate(ctx); err != nil {
-		return aws.Config{}, "", err
+		return nil, err
 	}
 
 	if endpoint != "" {
 		resolved, err := providerkit.ResolveInlineURL(ctx, endpoint, models.ConnectionTypeAWS)
 		if err != nil {
-			return aws.Config{}, "", err
+			return nil, err
 		}
 		conn.Endpoint = resolved
 	}
 
-	cfg, err := conn.Client(ctx)
-	if err != nil {
-		return aws.Config{}, "", err
-	}
-	return cfg, conn.Endpoint, nil
+	return conn.Client(ctx)
 }
