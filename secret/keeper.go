@@ -12,8 +12,8 @@ import (
 	"github.com/patrickmn/go-cache"
 	"github.com/samber/lo"
 	"github.com/samber/oops"
-	"gocloud.dev/secrets"
-	"gocloud.dev/secrets/localsecrets"
+
+	secretkeeper "github.com/flanksource/commons-db/secret/keeper"
 )
 
 const defaultKeeperTTL = time.Minute * 10
@@ -42,14 +42,14 @@ var (
 func init() {
 	keeperCache.OnEvicted(func(key string, keeper interface{}) {
 		if keeper != nil {
-			keeper.(*secrets.Keeper).Close()
+			keeper.(secretkeeper.Keeper).Close()
 		}
 	})
 }
 
 // createOrGetKeeper creates a new Keeper from the KMSConnection if it doesn't
 // exist in the cache, otherwise it returns the cached Keeper.
-func createOrGetKeeper(ctx context.Context) (*secrets.Keeper, error) {
+func createOrGetKeeper(ctx context.Context) (secretkeeper.Keeper, error) {
 	if KMSConnection == "" {
 		return nil, oops.Errorf("secret keeper connection is not set")
 	}
@@ -58,7 +58,7 @@ func createOrGetKeeper(ctx context.Context) (*secrets.Keeper, error) {
 	cached, ok := keeperCache.Get("keeper")
 	keeperLock.RUnlock()
 	if ok {
-		return cached.(*secrets.Keeper), nil
+		return cached.(secretkeeper.Keeper), nil
 	}
 
 	keeperLock.Lock()
@@ -68,7 +68,7 @@ func createOrGetKeeper(ctx context.Context) (*secrets.Keeper, error) {
 	// a keeper and the second Set silently overwrites the first. go-cache does
 	// not fire OnEvicted on overwrite, so the orphan would never be closed.
 	if cached, ok := keeperCache.Get("keeper"); ok {
-		return cached.(*secrets.Keeper), nil
+		return cached.(secretkeeper.Keeper), nil
 	}
 
 	keeper, err := KeeperFromConnection(ctx, KMSConnection)
@@ -99,9 +99,9 @@ func InvalidateKeeper() {
 // of every other hydrated URL, which several consumers branch and reject on.
 const localKMSInlinePrefix = models.ConnectionTypeLocalKMS + "://"
 
-func KeeperFromConnection(ctx context.Context, connectionString string) (*secrets.Keeper, error) {
+func KeeperFromConnection(ctx context.Context, connectionString string) (secretkeeper.Keeper, error) {
 	if key, ok := strings.CutPrefix(strings.TrimSpace(connectionString), localKMSInlinePrefix); ok {
-		return openLocalKMSKeeper(ctx, key)
+		return openLocalKMSKeeper(key)
 	}
 
 	conn, err := ctx.HydrateConnectionByURL(connectionString)
@@ -132,23 +132,22 @@ func KeeperFromConnection(ctx context.Context, connectionString string) (*secret
 		return kmsConn.SecretKeeper(ctx)
 
 	case models.ConnectionTypeLocalKMS:
-		return openLocalKMSKeeper(ctx, conn.Password)
+		return openLocalKMSKeeper(conn.Password)
 	}
 
-	return nil, nil
+	return nil, fmt.Errorf("connection type %s has no SecretKeeper implementation", conn.Type)
 }
 
-// openLocalKMSKeeper builds a localsecrets keeper from a url-safe base64 key,
-// shared by the inline URL form and a connections row's password.
-func openLocalKMSKeeper(ctx context.Context, key string) (*secrets.Keeper, error) {
+// openLocalKMSKeeper builds a local keeper from a url-safe base64 key, shared
+// by the inline URL form and a connections row's password. An empty key is
+// refused: encrypting under a key nobody can reproduce would lose the data.
+func openLocalKMSKeeper(key string) (secretkeeper.Keeper, error) {
 	if key == "" {
-		// localsecrets mints a fresh random key for "base64key://" with an
-		// empty host. Reaching that would encrypt under a key nobody can ever
-		// reproduce, so refuse before it can happen.
 		return nil, fmt.Errorf("local_kms connection key is not set")
 	}
-	if _, err := localsecrets.Base64Key(key); err != nil {
+	local, err := secretkeeper.NewLocalFromBase64(key)
+	if err != nil {
 		return nil, fmt.Errorf("invalid local_kms connection key: %w", err)
 	}
-	return secrets.OpenKeeper(ctx, fmt.Sprintf("%s://%s", localsecrets.Scheme, key))
+	return local, nil
 }

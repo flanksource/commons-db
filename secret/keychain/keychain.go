@@ -18,7 +18,8 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	"github.com/zalando/go-keyring"
-	"gocloud.dev/secrets"
+
+	"github.com/flanksource/commons-db/secret/keeper"
 )
 
 type Options struct {
@@ -37,7 +38,7 @@ type document struct {
 var ErrMissing = errors.New("keychain KEK missing; run gavel connections kek init interactively on the database host")
 
 // Open loads the existing key or initializes a missing one after confirmation.
-func Open(ctx context.Context, options Options) (*secrets.Keeper, string, error) {
+func Open(ctx context.Context, options Options) (keeper.Keeper, string, error) {
 	if options.Service == "" || options.Account == "" {
 		return nil, "", fmt.Errorf("keychain service and account are required")
 	}
@@ -120,7 +121,7 @@ func encode(doc document) (text.SensitiveString, error) {
 	return text.NewSensitiveString(string(data)), err
 }
 
-func decode(ctx context.Context, raw text.SensitiveString) (*secrets.Keeper, string, error) {
+func decode(ctx context.Context, raw text.SensitiveString) (keeper.Keeper, string, error) {
 	var doc document
 	if err := json.Unmarshal([]byte(raw.Value()), &doc); err != nil || doc.Version != 1 || doc.ID == "" {
 		return nil, "", fmt.Errorf("invalid Keychain KEK document")
@@ -129,6 +130,6 @@ func decode(ctx context.Context, raw text.SensitiveString) (*secrets.Keeper, str
 	if err != nil || len(key) != 32 {
 		return nil, "", fmt.Errorf("invalid Keychain KEK: expected 32 bytes")
 	}
-	keeper, err := secret.KeeperFromConnection(dbcontext.NewContext(ctx), "local_kms://"+doc.Key.Value())
-	return keeper, doc.ID, err
+	opened, err := secret.KeeperFromConnection(dbcontext.NewContext(ctx), "local_kms://"+doc.Key.Value())
+	return opened, doc.ID, err
 }
