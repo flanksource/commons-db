@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 	"github.com/flanksource/commons-db/models"
 	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
@@ -54,8 +54,8 @@ var _ = Describe("ReadSQLPage", func() {
 			INSERT INTO events (id, message) VALUES (1, 'one'), (2, 'two');
 		`)
 		Expect(err).ToNot(HaveOccurred())
-		var statements []connection.Statement
-		DeferCleanup(connection.ObserveSQL("events-db", func(s connection.Statement) { statements = append(statements, s) }))
+		var statements []sqlobserve.Statement
+		DeferCleanup(sqlobserve.ObserveSQL("events-db", func(s sqlobserve.Statement) { statements = append(statements, s) }))
 
 		_, err = ReadSQLPage(context.Background(), database, models.ConnectionTypeSQLite, SQLPageRequest{
 			Connection: "events-db", Query: "SELECT id, message FROM events ORDER BY id", Page: query.PageRequest{Limit: 5},

@@ -5,11 +5,11 @@ package azureloganalytics
 import (
 	"fmt"
 	"strconv"
+	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/monitor/azquery"
 	"github.com/flanksource/commons/utils"
-	"github.com/samber/lo"
 
+	"github.com/flanksource/commons-db/cloud/azure"
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
@@ -32,18 +32,30 @@ type Request struct {
 type Searcher struct {
 	conn          connection.AzureConnection
 	mappingConfig *logs.FieldMappingConfig
-	clientOptions *azquery.LogsClientOptions
+	clientOptions ClientOptions
+}
+
+// ClientOptions overrides the public-cloud defaults, for sovereign clouds and
+// stub servers. Zero values select the public cloud.
+type ClientOptions struct {
+	// Endpoint is the Log Analytics API root including the version, e.g.
+	// "https://api.loganalytics.us/v1".
+	Endpoint string
+	// Scope is the token scope, e.g. "https://api.loganalytics.us/.default".
+	Scope string
+	// Authority is the Azure AD authority used with the connection's client
+	// secret, e.g. "https://login.microsoftonline.us".
+	Authority string
 }
 
 // New creates a new Azure Log Analytics searcher.
 func New(conn connection.AzureConnection, mappingConfig *logs.FieldMappingConfig) *Searcher {
-	return NewWithClientOptions(conn, mappingConfig, nil)
+	return NewWithClientOptions(conn, mappingConfig, ClientOptions{})
 }
 
-// NewWithClientOptions creates a searcher whose azquery client is built with
-// caller-supplied options. Tests use it to point the client at a stub server;
-// callers wanting HAR capture pass a transport through it.
-func NewWithClientOptions(conn connection.AzureConnection, mappingConfig *logs.FieldMappingConfig, clientOptions *azquery.LogsClientOptions) *Searcher {
+// NewWithClientOptions creates a searcher whose Log Analytics client uses the
+// caller-supplied endpoint, scope and authority.
+func NewWithClientOptions(conn connection.AzureConnection, mappingConfig *logs.FieldMappingConfig, clientOptions ClientOptions) *Searcher {
 	return &Searcher{
 		conn:          conn,
 		mappingConfig: mappingConfig,
@@ -65,19 +77,21 @@ func (s *Searcher) Search(ctx context.Context, request Request) (*logs.LogResult
 		return nil, fmt.Errorf("failed to hydrate connection: %w", err)
 	}
 
-	credential, err := s.conn.TokenCredential()
+	credential, err := s.conn.Credential(connection.AzureCredentialOptions{Authority: s.clientOptions.Authority})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create token credential: %w", err)
 	}
 
-	client, err := azquery.NewLogsClient(credential, s.clientOptions)
+	client, err := azure.NewLogAnalyticsClient(azure.LogAnalyticsOptions{
+		Credential: credential,
+		Endpoint:   s.clientOptions.Endpoint,
+		Scope:      s.clientOptions.Scope,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to create logs client: %w", err)
 	}
 
-	body := azquery.Body{
-		Query: &request.Query,
-	}
+	body := azure.QueryRequest{WorkspaceID: request.WorkspaceID, Query: request.Query}
 
 	if request.Start != "" || request.End != "" {
 		timespan, err := buildTimespan(request)
@@ -96,13 +110,13 @@ func (s *Searcher) Search(ctx context.Context, request Request) (*logs.LogResult
 		maxLogLines = int(limit)
 	}
 
-	resp, err := client.QueryWorkspace(ctx, request.WorkspaceID, body, nil)
+	resp, err := client.Query(ctx, body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query workspace: %w", err)
 	}
 
 	if resp.Error != nil {
-		return nil, fmt.Errorf("query returned error: %s", resp.Error.Error())
+		return nil, fmt.Errorf("query returned error: %s: %s", resp.Error.Code, resp.Error.Message)
 	}
 
 	mappingConfig := DefaultFieldMappingConfig
@@ -116,15 +130,9 @@ func (s *Searcher) Search(ctx context.Context, request Request) (*logs.LogResult
 	}
 
 	for _, table := range resp.Tables {
-		if table == nil {
-			continue
-		}
-
 		columnNames := make([]string, len(table.Columns))
 		for i, col := range table.Columns {
-			if col.Name != nil {
-				columnNames[i] = *col.Name
-			}
+			columnNames[i] = col.Name
 		}
 
 		result.Metadata["totalRows"] = len(table.Rows)
@@ -149,7 +157,7 @@ func (s *Searcher) Search(ctx context.Context, request Request) (*logs.LogResult
 	return result, nil
 }
 
-func rowToLogLine(columnNames []string, row azquery.Row, mappingConfig logs.FieldMappingConfig) (*logs.LogLine, error) {
+func rowToLogLine(columnNames []string, row []any, mappingConfig logs.FieldMappingConfig) (*logs.LogLine, error) {
 	line := &logs.LogLine{
 		Count: 1,
 	}
@@ -174,20 +182,19 @@ func rowToLogLine(columnNames []string, row azquery.Row, mappingConfig logs.Fiel
 	return line, nil
 }
 
-// buildTimespan constructs an ISO8601 time interval from the request's start/end fields.
-func buildTimespan(request Request) (*azquery.TimeInterval, error) {
+// buildTimespan constructs an ISO8601 "start/end" interval from the request's start/end fields.
+func buildTimespan(request Request) (string, error) {
 	start, err := request.GetStart()
 	if err != nil {
-		return nil, fmt.Errorf("invalid start time: %w", err)
+		return "", fmt.Errorf("invalid start time: %w", err)
 	}
 
 	end, err := request.GetEnd()
 	if err != nil {
-		return nil, fmt.Errorf("invalid end time: %w", err)
+		return "", fmt.Errorf("invalid end time: %w", err)
 	}
 
-	timespan := azquery.NewTimeInterval(start, end)
-	return lo.ToPtr(timespan), nil
+	return start.Format(time.RFC3339) + "/" + end.Format(time.RFC3339), nil
 }
 
 // DefaultFieldMappingConfig defines sensible defaults for common Azure Monitor log columns.

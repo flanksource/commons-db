@@ -4,13 +4,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
-	"cloud.google.com/go/logging"
-	"cloud.google.com/go/logging/logadmin"
-	"golang.org/x/oauth2/google"
-	"google.golang.org/api/iterator"
-	"google.golang.org/api/option"
-
+	"github.com/flanksource/commons-db/cloud/gcp"
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
@@ -28,45 +24,52 @@ type Request struct {
 }
 
 type cloudLogging struct {
-	client        *logadmin.Client
+	client        *gcp.LoggingClient
+	project       string
 	mappingConfig *logs.FieldMappingConfig
 }
 
-func (gcp *cloudLogging) Close() error {
-	return gcp.client.Close()
+// Close is a no-op: the REST client holds no resources that outlive a request.
+func (c *cloudLogging) Close() error {
+	return nil
 }
 
 func New(ctx context.Context, conn connection.GCPConnection, mappingConfig *logs.FieldMappingConfig) (*cloudLogging, error) {
+	if conn.Project == "" {
+		return nil, fmt.Errorf("a GCP project is required to read Cloud Logging entries")
+	}
+
 	// The connection arrives hydrated — the provider is the single hydration
 	// point, so nothing here re-reads the row or re-resolves its secret.
-	var opts []option.ClientOption
-
+	var credentials string
 	if conn.Credentials != nil && !conn.Credentials.IsEmpty() {
-		c, err := google.CredentialsFromJSON(ctx, []byte(conn.Credentials.ValueStatic))
-		if err != nil {
-			return nil, fmt.Errorf("%w", err)
-		}
-		opts = append(opts, option.WithCredentials(c))
+		credentials = conn.Credentials.ValueStatic
+	}
+	opts, err := conn.ClientOptions(ctx, credentials, gcp.ScopeLoggingRead)
+	if err != nil {
+		return nil, err
 	}
 	// Absent credentials are not an error: the client falls through to the
 	// ambient application-default chain.
-
-	if conn.Endpoint != "" {
-		opts = append(opts, option.WithEndpoint(conn.Endpoint))
+	if opts.TokenSource == nil {
+		if opts.TokenSource, err = gcp.DefaultTokenSource(ctx, gcp.ScopeLoggingRead); err != nil {
+			return nil, err
+		}
 	}
 
-	adminClient, err := logadmin.NewClient(ctx, conn.Project, opts...)
+	client, err := gcp.NewLoggingClient(opts)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create logging admin client: %w", err)
+		return nil, fmt.Errorf("failed to create logging client: %w", err)
 	}
 
 	return &cloudLogging{
-		client:        adminClient,
+		client:        client,
+		project:       conn.Project,
 		mappingConfig: mappingConfig,
 	}, nil
 }
 
-func (gcp *cloudLogging) Search(ctx context.Context, request Request) (*logs.LogResult, error) {
+func (c *cloudLogging) Search(ctx context.Context, request Request) (*logs.LogResult, error) {
 	var maxLogLines = 1000
 	if request.Limit != "" {
 		if l, err := strconv.ParseInt(request.Limit, 10, 32); err == nil && l > 0 {
@@ -75,8 +78,8 @@ func (gcp *cloudLogging) Search(ctx context.Context, request Request) (*logs.Log
 	}
 
 	mappingConfig := defaultFieldMappingConfig
-	if gcp.mappingConfig != nil {
-		mappingConfig = gcp.mappingConfig.WithDefaults(defaultFieldMappingConfig)
+	if c.mappingConfig != nil {
+		mappingConfig = c.mappingConfig.WithDefaults(defaultFieldMappingConfig)
 	}
 
 	result := &logs.LogResult{
@@ -88,38 +91,28 @@ func (gcp *cloudLogging) Search(ctx context.Context, request Request) (*logs.Log
 		return nil, err
 	}
 
-	pageSize := min(maxLogLines, 1000)
-	opts := []logadmin.EntriesOption{
-		logadmin.PageSize(int32(pageSize)),
-		logadmin.NewestFirst(),
+	listOptions := gcp.ListEntriesOptions{
+		ResourceNames: []string{"projects/" + c.project},
+		Filter:        combinedFilter,
+		OrderBy:       "timestamp desc",
+		PageSize:      min(maxLogLines, 1000),
 	}
 
-	if combinedFilter != "" {
-		opts = append(opts, logadmin.Filter(combinedFilter))
-	}
-
-	it := gcp.client.Entries(ctx, opts...)
-	for {
-		entry, err := it.Next()
-		if err == iterator.Done {
-			break
-		} else if err != nil {
-			return nil, fmt.Errorf("failed to list access log entries: %w", err)
-		}
-
-		if entry.Payload == nil {
-			continue
+	err = c.client.EachEntry(ctx, listOptions, func(entry *gcp.LogEntry) (bool, error) {
+		if entry.Payload() == nil {
+			return false, nil
 		}
 
 		line, err := entryToLogLine(ctx, entry, mappingConfig)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 
 		result.Logs = append(result.Logs, line)
-		if len(result.Logs) >= maxLogLines {
-			break
-		}
+		return len(result.Logs) >= maxLogLines, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list access log entries: %w", err)
 	}
 
 	return result, nil
@@ -155,10 +148,25 @@ func buildFilter(request Request) (string, error) {
 		}
 		combinedFilter = strings.Join(wrappedParts, " AND ")
 	}
-	return combinedFilter, nil
+	return defaultTimestampFilter(combinedFilter, time.Now()), nil
 }
 
-func entryToLogLine(ctx context.Context, entry *logging.Entry, mappingConfig logs.FieldMappingConfig) (*logs.LogLine, error) {
+// defaultTimestampFilter reproduces logadmin's implicit window: a filter that
+// never mentions "timestamp" (any case, even inside a payload match) is
+// restricted to the last 24 hours.
+func defaultTimestampFilter(filter string, now time.Time) string {
+	dayAgo := now.Add(-24 * time.Hour).UTC().Format(time.RFC3339)
+	switch {
+	case len(filter) == 0:
+		return fmt.Sprintf(`timestamp >= "%s"`, dayAgo)
+	case !strings.Contains(strings.ToLower(filter), "timestamp"):
+		return fmt.Sprintf(`%s AND timestamp >= "%s"`, filter, dayAgo)
+	default:
+		return filter
+	}
+}
+
+func entryToLogLine(ctx context.Context, entry *gcp.LogEntry, mappingConfig logs.FieldMappingConfig) (*logs.LogLine, error) {
 	line := &logs.LogLine{
 		Count: 1,
 	}
@@ -169,14 +177,14 @@ func entryToLogLine(ctx context.Context, entry *logging.Entry, mappingConfig log
 	if !entry.Timestamp.IsZero() {
 		line.FirstObserved = entry.Timestamp
 	}
-	if entry.Severity != 0 {
-		line.Severity = entry.Severity.String()
+	if severity := entry.SeverityName(); severity != "" {
+		line.Severity = severity
 	}
 	if entry.LogName != "" {
 		line.Source = entry.LogName
 	}
 
-	switch payload := entry.Payload.(type) {
+	switch payload := entry.Payload().(type) {
 	case string:
 		line.Message = payload
 	default:

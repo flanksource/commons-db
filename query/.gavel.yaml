@@ -1,0 +1,10 @@
+# reason: query evaluates CEL and Go templates through gomplate (356 packages, including its
+# Kubernetes, JavaScript and Lua function groups) plus clicky, which puts it 9 packages over
+# the 500 budget. The real fix is making gomplate's heavy function groups opt-in, tracked as
+# a follow-up (decided 2026-11-25).
+lint:
+  ignore:
+    # *.go matches only this package's own files, not subpackages.
+    - rule: dep-budget-package
+      source: uir
+      file: "*.go"

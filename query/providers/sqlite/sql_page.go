@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/flanksource/commons-db/connection"
+	"github.com/flanksource/commons-db/connection/sqlobserve"
 	"github.com/flanksource/commons-db/db"
 	"github.com/flanksource/commons-db/query"
 )
@@ -224,15 +224,15 @@ type sqlStatementRun struct {
 // publishSQLStatement hands a statement that ran, with the rows it returned or
 // the error it failed with, to the SQL statement tap.
 func publishSQLStatement(run sqlStatementRun, rows int, err error) {
-	if !connection.ObservingSQL(run.Connection) {
+	if !sqlobserve.ObservingSQL(run.Connection) {
 		return
 	}
-	published := connection.Statement{
+	published := sqlobserve.Statement{
 		Connection: run.Connection, Driver: string(run.Dialect), SQL: run.Statement, Args: run.Args,
 		StartedAt: run.Started, Duration: time.Since(run.Started), Rows: int64(rows),
 	}
 	if err != nil {
 		published.Error = err.Error()
 	}
-	connection.PublishSQL(published)
+	sqlobserve.PublishSQL(published)
 }

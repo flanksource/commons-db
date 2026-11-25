@@ -8,9 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
-	cw "github.com/aws/aws-sdk-go-v2/service/cloudwatch"
-	"github.com/aws/aws-sdk-go-v2/service/cloudwatch/types"
+	cloudaws "github.com/flanksource/commons-db/cloud/aws"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/query"
 	"github.com/flanksource/commons-db/query/metrics"
@@ -119,15 +117,11 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 	if !r.End.After(r.Start) {
 		return nil, fmt.Errorf("CloudWatch range end must be after start")
 	}
-	cfg, endpoint, err := awsConfigForRequest(ctx, req.Connection, opts.Region, opts.Endpoint)
+	session, err := awsSessionForRequest(ctx, req.Connection, opts.Region, opts.Endpoint)
 	if err != nil {
 		return nil, err
 	}
-	client := cw.NewFromConfig(cfg, func(o *cw.Options) {
-		if endpoint != "" {
-			o.BaseEndpoint = &endpoint
-		}
-	})
+	client := session.CloudWatch()
 	if opts.Statistic == "" {
 		opts.Statistic = "Average"
 	}
@@ -164,32 +158,31 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 			if opts.Namespace == "" {
 				return fmt.Errorf("CloudWatch SQL requires namespace")
 			}
-			input := &cw.ListMetricsInput{Namespace: &opts.Namespace, MetricName: &s.Name}
+			input := cloudaws.ListMetricsInput{Namespace: opts.Namespace, MetricName: s.Name}
 			if req.MetricMetadata != nil {
 				req.MetricMetadata.Notices = append(req.MetricMetadata.Notices, query.QueryNotice{Severity: "warning", Message: "ListMetrics discovery omits inactive and recently created metrics; configure explicit metric identities for historical completeness"})
 			}
 			for name, value := range opts.Dimensions {
-				input.Dimensions = append(input.Dimensions, types.DimensionFilter{Name: aws.String(name), Value: aws.String(value)})
+				input.Dimensions = append(input.Dimensions, cloudaws.Dimension{Name: name, Value: value})
 			}
 			// Dimensions only express equality; SQLite evaluates every other
 			// predicate after the samples are loaded.
 			for _, m := range s.Filters {
 				if dimension, ok := req.Labels[m.Label]; ok && m.Op == "=" {
-					input.Dimensions = append(input.Dimensions, types.DimensionFilter{Name: aws.String(dimension), Value: aws.String(m.Value)})
+					input.Dimensions = append(input.Dimensions, cloudaws.Dimension{Name: dimension, Value: m.Value})
 				}
 			}
-			pager := cw.NewListMetricsPaginator(client, input)
-			for pager.HasMorePages() {
-				page, err := pager.NextPage(ctx)
+			for {
+				page, err := client.ListMetrics(ctx, input)
 				if err != nil {
 					return err
 				}
 				for _, m := range page.Metrics {
 					dims := map[string]string{}
 					for _, d := range m.Dimensions {
-						dims[aws.ToString(d.Name)] = aws.ToString(d.Value)
+						dims[d.Name] = d.Value
 					}
-					identities = append(identities, CloudWatchMetric{Name: aws.ToString(m.MetricName), Namespace: aws.ToString(m.Namespace), Dimensions: dims})
+					identities = append(identities, CloudWatchMetric{Name: m.MetricName, Namespace: m.Namespace, Dimensions: dims})
 				}
 				queries, err := cloudwatchQueries(identities, cloudwatchQueryDefaults{Statistic: opts.Statistic, Unit: opts.Unit, Period: period})
 				if err != nil {
@@ -199,6 +192,10 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 					return err
 				}
 				identities = nil
+				if page.NextToken == "" {
+					break
+				}
+				input.NextToken = page.NextToken
 			}
 		}
 		queries, err := cloudwatchQueries(identities, cloudwatchQueryDefaults{Statistic: opts.Statistic, Unit: opts.Unit, Period: period})
@@ -206,7 +203,7 @@ func (cloudwatchMetricsProvider) Execute(ctx context.Context, req query.Provider
 			return err
 		}
 		if opts.Language == "metrics-insights" {
-			queries = []types.MetricDataQuery{{Id: aws.String("insights"), Expression: &req.Query, Period: &period}}
+			queries = []cloudaws.MetricDataQuery{{ID: "insights", Expression: req.Query, Period: period}}
 		}
 		if len(queries) == 0 && s.Name == "" {
 			return fmt.Errorf("cloudwatchmetrics requires explicit metrics or a Metrics Insights query")
@@ -264,8 +261,8 @@ type cloudwatchQueryDefaults struct {
 	Period          int32
 }
 
-func cloudwatchQueries(identities []CloudWatchMetric, defaults cloudwatchQueryDefaults) ([]types.MetricDataQuery, error) {
-	queries := make([]types.MetricDataQuery, 0, len(identities))
+func cloudwatchQueries(identities []CloudWatchMetric, defaults cloudwatchQueryDefaults) ([]cloudaws.MetricDataQuery, error) {
+	queries := make([]cloudaws.MetricDataQuery, 0, len(identities))
 	for i, m := range identities {
 		if m.Name == "" || m.Namespace == "" {
 			return nil, fmt.Errorf("metric identity requires name and namespace")
@@ -278,31 +275,31 @@ func cloudwatchQueries(identities []CloudWatchMetric, defaults cloudwatchQueryDe
 		if unit == "" {
 			unit = defaults.Unit
 		}
-		if unit != "" && !slices.Contains(types.StandardUnit("").Values(), types.StandardUnit(unit)) {
+		if unit != "" && !slices.Contains(cloudaws.StandardUnits, unit) {
 			return nil, fmt.Errorf("invalid CloudWatch unit %q", unit)
 		}
-		dims := []types.Dimension{}
+		dims := []cloudaws.Dimension{}
 		for k, v := range m.Dimensions {
-			dims = append(dims, types.Dimension{Name: aws.String(k), Value: aws.String(v)})
+			dims = append(dims, cloudaws.Dimension{Name: k, Value: v})
 		}
-		sort.Slice(dims, func(i, j int) bool { return aws.ToString(dims[i].Name) < aws.ToString(dims[j].Name) })
-		queries = append(queries, types.MetricDataQuery{Id: aws.String(fmt.Sprintf("m%d", i)), MetricStat: &types.MetricStat{Metric: &types.Metric{MetricName: &m.Name, Namespace: &m.Namespace, Dimensions: dims}, Stat: &stat, Period: &defaults.Period, Unit: types.StandardUnit(unit)}})
+		sort.Slice(dims, func(i, j int) bool { return dims[i].Name < dims[j].Name })
+		queries = append(queries, cloudaws.MetricDataQuery{ID: fmt.Sprintf("m%d", i), MetricStat: &cloudaws.MetricStat{Metric: cloudaws.Metric{MetricName: m.Name, Namespace: m.Namespace, Dimensions: dims}, Stat: stat, Period: defaults.Period, Unit: unit}})
 	}
 	return queries, nil
 }
 
 type cloudwatchReader interface {
-	GetMetricData(stdctx.Context, *cw.GetMetricDataInput, ...func(*cw.Options)) (*cw.GetMetricDataOutput, error)
+	GetMetricData(stdctx.Context, cloudaws.GetMetricDataInput) (*cloudaws.GetMetricDataOutput, error)
 }
 
-func readCloudwatch(ctx stdctx.Context, client cloudwatchReader, queries []types.MetricDataQuery, start, end time.Time, emit func(metrics.Sample) error) error {
+func readCloudwatch(ctx stdctx.Context, client cloudwatchReader, queries []cloudaws.MetricDataQuery, start, end time.Time, emit func(metrics.Sample) error) error {
 	for offset := 0; offset < len(queries); offset += 500 {
 		batch := queries[offset:min(offset+500, len(queries))]
-		byID := map[string]types.MetricDataQuery{}
+		byID := map[string]cloudaws.MetricDataQuery{}
 		for _, q := range batch {
-			byID[aws.ToString(q.Id)] = q
+			byID[q.ID] = q
 		}
-		input := &cw.GetMetricDataInput{StartTime: &start, EndTime: &end, ScanBy: types.ScanByTimestampAscending, MetricDataQueries: batch}
+		input := cloudaws.GetMetricDataInput{StartTime: start, EndTime: end, ScanBy: cloudaws.ScanByTimestampAscending, Queries: batch}
 		seen := map[string]bool{}
 		complete := map[string]bool{}
 		for {
@@ -313,35 +310,35 @@ func readCloudwatch(ctx stdctx.Context, client cloudwatchReader, queries []types
 			if len(out.Messages) > 0 {
 				return fmt.Errorf("CloudWatch query messages: %v", out.Messages)
 			}
-			for _, r := range out.MetricDataResults {
-				if r.StatusCode == types.StatusCodeComplete {
-					complete[aws.ToString(r.Id)] = true
+			for _, r := range out.Results {
+				if r.StatusCode == cloudaws.StatusCodeComplete {
+					complete[r.ID] = true
 				}
-				if r.StatusCode != types.StatusCodeComplete && (r.StatusCode != types.StatusCodePartialData || aws.ToString(out.NextToken) == "") {
-					return fmt.Errorf("CloudWatch query %s returned %s: %v", aws.ToString(r.Id), r.StatusCode, r.Messages)
+				if r.StatusCode != cloudaws.StatusCodeComplete && (r.StatusCode != cloudaws.StatusCodePartialData || out.NextToken == "") {
+					return fmt.Errorf("CloudWatch query %s returned %s: %v", r.ID, r.StatusCode, r.Messages)
 				}
 				if len(r.Timestamps) != len(r.Values) {
 					return fmt.Errorf("CloudWatch timestamps/value count mismatch")
 				}
-				q, ok := byID[aws.ToString(r.Id)]
+				q, ok := byID[r.ID]
 				if !ok {
-					return fmt.Errorf("unknown CloudWatch query id %s", aws.ToString(r.Id))
+					return fmt.Errorf("unknown CloudWatch query id %s", r.ID)
 				}
 				s := metrics.Sample{Labels: map[string]string{}}
-				if q.Expression != nil {
-					s.Labels["series"] = aws.ToString(r.Label)
-					s.Metric = aws.ToString(q.Expression)
-					if len(out.MetricDataResults) >= 500 {
+				if q.Expression != "" {
+					s.Labels["series"] = r.Label
+					s.Metric = q.Expression
+					if len(out.Results) >= 500 {
 						return fmt.Errorf("metrics insights returned its series ceiling; completeness cannot be established")
 					}
 				}
 				if q.MetricStat != nil {
-					s.Metric = aws.ToString(q.MetricStat.Metric.MetricName)
-					s.Namespace = aws.ToString(q.MetricStat.Metric.Namespace)
-					s.Statistic = aws.ToString(q.MetricStat.Stat)
-					s.Unit = string(q.MetricStat.Unit)
+					s.Metric = q.MetricStat.Metric.MetricName
+					s.Namespace = q.MetricStat.Metric.Namespace
+					s.Statistic = q.MetricStat.Stat
+					s.Unit = q.MetricStat.Unit
 					for _, d := range q.MetricStat.Metric.Dimensions {
-						s.Labels[aws.ToString(d.Name)] = aws.ToString(d.Value)
+						s.Labels[d.Name] = d.Value
 					}
 				}
 				for i, t := range r.Timestamps {
@@ -355,7 +352,7 @@ func readCloudwatch(ctx stdctx.Context, client cloudwatchReader, queries []types
 					}
 				}
 			}
-			token := aws.ToString(out.NextToken)
+			token := out.NextToken
 			if token == "" {
 				for id := range byID {
 					if !complete[id] {
@@ -368,7 +365,7 @@ func readCloudwatch(ctx stdctx.Context, client cloudwatchReader, queries []types
 				return fmt.Errorf("CloudWatch repeated continuation token")
 			}
 			seen[token] = true
-			input.NextToken = out.NextToken
+			input.NextToken = token
 		}
 	}
 	return nil

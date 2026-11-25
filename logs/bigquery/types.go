@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"time"
 
-	"cloud.google.com/go/bigquery"
 	"github.com/flanksource/commons/utils"
 
+	"github.com/flanksource/commons-db/cloud/gcp"
 	"github.com/flanksource/commons-db/logs"
 )
 
@@ -24,7 +24,7 @@ type Response struct {
 	Rows []Row `json:"rows,omitempty"`
 
 	// Schema contains the column names in the same order as the row values.
-	Schema bigquery.Schema `json:"schema,omitempty"`
+	Schema gcp.BigQuerySchema `json:"schema,omitempty"`
 
 	// NextPageToken for pagination.
 	NextPageToken string `json:"nextPageToken,omitempty"`
@@ -106,4 +106,5 @@ func (r *Response) ToLogResult(mappingConfig logs.FieldMappingConfig) (logs.LogR
 	return output, nil
 }
 
-type Row []bigquery.Value
+// Row holds one result row's values in schema order; see gcp.QueryResult for the Go type of each column.
+type Row []any
