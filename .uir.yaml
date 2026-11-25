@@ -84,3 +84,117 @@ lint:
         WHERE symbol.package = 'github.com/spf13/cobra'
           AND path NOT MATCH '**/cmd/**'
         ORDER BY path, line, name
+
+    # Dependency layering: connection links every cloud SDK and SQL driver, so the
+    # db layer (imported by dbtest, and through it by gavel and captain) must not reach it.
+    - id: db-no-connection
+      severity: error
+      message: "{{.path}} references connection.{{.name}}; db, dbtest and drivers must not import connection (it links every cloud SDK)"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:github.com/flanksource/commons-db/connection)
+        WHERE symbol.package = 'github.com/flanksource/commons-db/connection'
+          AND (path MATCH 'db/**' OR path MATCH 'dbtest/**' OR path MATCH 'drivers/**')
+          AND path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    # The fake clientset links every Kubernetes API group and its apply configurations.
+    - id: no-fake-clientset
+      severity: error
+      message: "{{.path}} references client-go fake.{{.name}} outside tests; the fake clientset links every API group"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:k8s.io/client-go/kubernetes/fake)
+        WHERE path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    - id: echo-only-in-api
+      severity: error
+      message: "{{.path}} references echo.{{.name}} outside api/; keep the HTTP framework in the server layer"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:github.com/labstack/echo/**)
+        WHERE path NOT MATCH 'api/**'
+          AND path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    - id: git-no-valkey
+      severity: error
+      message: "{{.path}} references valkey {{.name}}; git must depend only on the lease.Locker interface"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:github.com/valkey-io/**)
+        WHERE path MATCH 'git/**'
+          AND path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    # Cloud SDKs: services are reached through cloud/{aws,gcp,azure} on commons/http.
+    # The AWS and Azure SDKs remain only in the opt-in credential adapters.
+    - id: aws-sdk-only-in-adapter
+      severity: error
+      message: "{{.path}} references AWS SDK {{.name}}; use cloud/aws (commons/http + awssigv4), or connection/awssdk for SDK-only credential chains"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:github.com/aws/**)
+        WHERE path NOT MATCH 'connection/awssdk/**'
+          AND path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    - id: azure-sdk-only-in-adapter
+      severity: error
+      message: "{{.path}} references Azure SDK {{.name}}; use cloud/azure (commons/http + azuread), or connection/azuresdk for SDK-only credential chains"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:github.com/Azure/**)
+        WHERE path NOT MATCH 'connection/azuresdk/**'
+          AND path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    # golang.org/x/oauth2/google stays allowed: it is the light credential loader.
+    - id: gcp-cloud-sdk-banned
+      severity: error
+      message: "{{.path}} references GCP client library {{.name}}; use cloud/gcp (commons/http + bearer)"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:cloud.google.com/go/**)
+        WHERE path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    - id: gcp-api-client-banned
+      severity: error
+      message: "{{.path}} references google.golang.org/api {{.name}}; use cloud/gcp (commons/http + bearer)"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:google.golang.org/api/**)
+        WHERE path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    - id: gocloud-banned
+      severity: error
+      message: "{{.path}} references gocloud.dev {{.name}}; use secret/keeper and the per-backend pubsub packages"
+      query: |
+        SELECT path, symbol.name AS name
+        FROM references(pkg:gocloud.dev/**)
+        WHERE path NOT MATCH 'pubsub/kafka/**'
+          AND path NOT MATCH 'pubsub/nats/**'
+          AND path NOT MATCH '**/*_test.go'
+        ORDER BY path, line, name
+
+    # Dependency budget: third-party packages reached through a package's own
+    # direct imports (weight behind another in-module package is charged there).
+    # Exempt a package whose weight is inherent with a nested .gavel.yaml ignore.
+    - id: dep-budget-package
+      severity: error
+      message: "{{.package}} imports {{.count}} third-party packages (budget 500); largest: {{.largest}}"
+      query: |
+        SELECT path, package, count, largest
+        FROM package_imports()
+        WHERE count >= 500
+
+    - id: dep-budget-package-warning
+      severity: warning
+      message: "{{.package}} imports {{.count}} third-party packages (warning at 300); largest: {{.largest}}"
+      query: |
+        SELECT path, package, count, largest
+        FROM package_imports()
+        WHERE count >= 300 AND count < 500
