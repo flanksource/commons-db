@@ -29,28 +29,28 @@ func NewSQLServer(db *sql.DB, options Options) (Locker, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := sqlResource(request{scope: options.Scope, key: strings.Repeat("k", maxNameLength)}); err != nil {
+	if _, err := sqlResource(Request{Scope: options.Scope, Key: strings.Repeat("k", maxNameLength)}); err != nil {
 		return nil, err
 	}
-	begin := func(req request, wait bool) acquisition {
+	begin := func(req Request, wait bool) Acquisition {
 		name, err := sqlResource(req)
 		if err != nil {
-			return refusedAcquisition{err}
+			return RefusedAcquisition{err}
 		}
-		acquisition := &sqlAcquisition{db: db, name: name, holder: req.holder, mode: req.mode, waiting: wait}
-		if req.mode == groupMode {
-			acquisition.bits = sqlGroupBits(req.group)
+		acquisition := &sqlAcquisition{db: db, name: name, holder: req.Holder, mode: req.Mode, waiting: wait}
+		if req.Mode == GroupMode {
+			acquisition.bits = sqlGroupBits(req.Group)
 		}
 		return acquisition
 	}
-	holders := func(ctx context.Context, req request) ([]Holder, error) { return sqlHolders(ctx, db, req) }
-	return &locker{options: options, begin: begin, holders: holders}, nil
+	holders := func(ctx context.Context, req Request) ([]Holder, error) { return sqlHolders(ctx, db, req) }
+	return &Backend{Options: options, Begin: begin, Holders: holders}, nil
 }
 
 // sqlResource is the readable app-lock resource of a key. Its gate and group
 // bits are named under "<resource>:".
-func sqlResource(req request) (string, error) {
-	name := req.resource()
+func sqlResource(req Request) (string, error) {
+	name := req.Resource()
 	if len(name)+len(sqlLongestSuffix) > sqlResourceLimit {
 		return "", fmt.Errorf("SQL Server app-lock resource %q with suffix %q exceeds %d characters", name, sqlLongestSuffix, sqlResourceLimit)
 	}
@@ -61,7 +61,7 @@ func sqlResource(req request) (string, error) {
 // (1) mode of each group-bit app lock.
 func sqlGroupBits(group string) string {
 	var bits strings.Builder
-	for _, digit := range digest(group) {
+	for _, digit := range Digest(group) {
 		n, _ := strconv.ParseUint(string(digit), 16, 4)
 		_, _ = fmt.Fprintf(&bits, "%04b", n)
 	}
@@ -72,14 +72,14 @@ type sqlAcquisition struct {
 	db                 *sql.DB
 	conn               *sql.Conn
 	name, bits, holder string
-	mode               mode
+	mode               Mode
 	waiting            bool
 }
 
 type sqlOwnership struct {
 	conn       *sql.Conn
 	name, bits string
-	mode       mode
+	mode       Mode
 }
 
 func (a *sqlAcquisition) pin(ctx context.Context) error {
@@ -91,13 +91,13 @@ func (a *sqlAcquisition) pin(ctx context.Context) error {
 	if err := sqlStatus(ctx, conn, sqlSetHolder, []byte(a.holder)); err != nil {
 		return err
 	}
-	if a.mode == writeMode && a.waiting {
+	if a.mode == WriteMode && a.waiting {
 		return sqlStatus(ctx, conn, sqlRegisterWriter, a.name)
 	}
 	return nil
 }
 
-func (a *sqlAcquisition) try(ctx context.Context) (ownership, error) {
+func (a *sqlAcquisition) Try(ctx context.Context) (Ownership, error) {
 	if a.conn == nil {
 		if err := a.pin(ctx); err != nil {
 			return nil, dropSQLAttempt(err, a)
@@ -105,7 +105,7 @@ func (a *sqlAcquisition) try(ctx context.Context) (ownership, error) {
 	}
 	var err error
 	switch {
-	case a.mode != writeMode:
+	case a.mode != WriteMode:
 		err = sqlStatus(ctx, a.conn, sqlReadLock, a.name, a.bits)
 	case a.waiting:
 		err = sqlStatus(ctx, a.conn, sqlWaitingWriteLock, a.name)
@@ -113,10 +113,10 @@ func (a *sqlAcquisition) try(ctx context.Context) (ownership, error) {
 		err = sqlStatus(ctx, a.conn, sqlTryWriteLock, a.name)
 	}
 	if err != nil {
-		if a.mode != writeMode && err == errSQLReaderGateBusy {
+		if a.mode != WriteMode && err == errSQLReaderGateBusy {
 			return nil, a.release(ctx)
 		}
-		if err == errBusy && a.mode == writeMode && a.waiting {
+		if err == ErrBusy && a.mode == WriteMode && a.waiting {
 			return nil, err
 		}
 		return nil, dropSQLAttempt(err, a)
@@ -139,7 +139,7 @@ func (a *sqlAcquisition) release(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("return SQL Server lock connection to pool: %w", err)
 	}
-	return errBusy
+	return ErrBusy
 }
 
 func dropSQLAttempt(cause error, a *sqlAcquisition) error {
@@ -151,25 +151,25 @@ func dropSQLAttempt(cause error, a *sqlAcquisition) error {
 	return errors.Join(cause, err)
 }
 
-func (a *sqlAcquisition) abandon(context.Context) error {
+func (a *sqlAcquisition) Abandon(context.Context) error {
 	return discardSQLConnection(a.conn)
 }
 
-func (h *sqlOwnership) renew(ctx context.Context) error {
+func (h *sqlOwnership) Renew(ctx context.Context) error {
 	var actual string
 	err := h.conn.QueryRowContext(ctx, "SELECT APPLOCK_MODE(N'public', @p1, N'Session')", h.name).Scan(&actual)
 	if err != nil {
 		return fmt.Errorf("verify SQL Server app lock: %w", err)
 	}
-	if h.mode == writeMode && actual != "Exclusive" || h.mode != writeMode && actual != "Shared" {
-		return errNotOwned
+	if h.mode == WriteMode && actual != "Exclusive" || h.mode != WriteMode && actual != "Shared" {
+		return ErrNotOwned
 	}
 	return nil
 }
 
-// unlock releases the app locks and then ends the session, so the pool never
+// Unlock releases the app locks and then ends the session, so the pool never
 // hands out a session that carries a holder's CONTEXT_INFO.
-func (h *sqlOwnership) unlock(ctx context.Context) error {
+func (h *sqlOwnership) Unlock(ctx context.Context) error {
 	err := sqlStatus(ctx, h.conn, sqlUnlock, h.name, h.bits)
 	if errors.Is(err, sql.ErrConnDone) || errors.Is(err, driver.ErrBadConn) {
 		err = nil
@@ -186,7 +186,7 @@ func sqlStatus(ctx context.Context, conn *sql.Conn, batch string, args ...any) e
 	case 0, 1:
 		return nil
 	case -1:
-		return errBusy
+		return ErrBusy
 	case -10:
 		return errSQLReaderGateBusy
 	default:

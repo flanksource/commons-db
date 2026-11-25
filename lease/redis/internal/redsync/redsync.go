@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	"github.com/flanksource/commons-db/lease/internal/redsync/redis"
+	"github.com/flanksource/commons-db/lease/redis/internal/redsync/redis"
 )
 
 const (

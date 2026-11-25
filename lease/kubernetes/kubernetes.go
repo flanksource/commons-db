@@ -1,4 +1,4 @@
-package lease
+package kubernetes
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/flanksource/commons-db/lease"
 	"github.com/google/uuid"
 	api "k8s.io/api/coordination/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,30 +28,30 @@ const (
 	leaseResourceAnnotation = "commons-db.flanksource.com/resource"
 )
 
-// NewKubernetes uses a namespaced coordination/v1 Lease client.
-func NewKubernetes(client coordination.LeaseInterface, options ExpiringOptions) (Locker, error) {
+// New uses a namespaced coordination/v1 Lease client.
+func New(client coordination.LeaseInterface, options lease.ExpiringOptions) (lease.Locker, error) {
 	if client == nil {
 		return nil, errors.New("a Kubernetes lease client is required")
 	}
-	options, err := normalizeExpiring(options)
+	options, err := lease.NormalizeExpiring(options)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := kubeName(request{scope: options.Scope, key: "k"}); err != nil {
+	if _, err := kubeName(lease.Request{Scope: options.Scope, Key: "k"}); err != nil {
 		return nil, err
 	}
 	backend := &kubeBackend{client: client, ttl: int32(options.TTL / time.Second), observations: make(map[string]kubeObservations)}
-	return &locker{options: options.Options, ttl: options.TTL, begin: backend.begin, holders: backend.holders}, nil
+	return &lease.Backend{Options: options.Options, TTL: options.TTL, Begin: backend.begin, Holders: backend.holders}, nil
 }
 
 // kubeName is "<scope>-<key>" lowercased with "_" as "-", then the first 10
 // hex characters of the exact scope and key's digest, so inputs that differ
 // only in case or separator get distinct Leases.
-func kubeName(req request) (string, error) {
-	readable := strings.ToLower(strings.ReplaceAll(req.scope+"-"+req.key, "_", "-"))
-	name := readable + "-" + digest(req.scope, req.key)[:10]
+func kubeName(req lease.Request) (string, error) {
+	readable := strings.ToLower(strings.ReplaceAll(req.Scope+"-"+req.Key, "_", "-"))
+	name := readable + "-" + lease.Digest(req.Scope, req.Key)[:10]
 	if problems := validation.IsDNS1123Subdomain(name); len(problems) > 0 {
-		return "", fmt.Errorf("invalid Kubernetes lease name %q for %s: %s", name, req.resource(), strings.Join(problems, "; "))
+		return "", fmt.Errorf("invalid Kubernetes lease name %q for %s: %s", name, req.Resource(), strings.Join(problems, "; "))
 	}
 	return name, nil
 }
@@ -73,33 +74,33 @@ type kubeObservation struct {
 }
 
 type kubeHolder struct {
-	Mode      mode      `json:"mode"`
-	Group     string    `json:"group,omitempty"`
-	Name      string    `json:"name"`
-	Since     time.Time `json:"since"`
-	Pending   bool      `json:"pending,omitempty"`
-	Heartbeat uint64    `json:"heartbeat"`
-	Duration  int32     `json:"duration"`
+	Mode      lease.Mode `json:"mode"`
+	Group     string     `json:"group,omitempty"`
+	Name      string     `json:"name"`
+	Since     time.Time  `json:"since"`
+	Pending   bool       `json:"pending,omitempty"`
+	Heartbeat uint64     `json:"heartbeat"`
+	Duration  int32      `json:"duration"`
 }
 
 type kubeAcquisition struct {
 	*kubeBackend
-	request
+	lease.Request
 	name, token  string
 	waiting      bool
 	registered   bool
 	needsCleanup bool
 }
 
-func (b *kubeBackend) begin(req request, wait bool) acquisition {
+func (b *kubeBackend) begin(req lease.Request, wait bool) lease.Acquisition {
 	name, err := kubeName(req)
 	if err != nil {
-		return refusedAcquisition{err}
+		return lease.RefusedAcquisition{Err: err}
 	}
-	return &kubeAcquisition{kubeBackend: b, request: req, name: name, token: uuid.NewString(), waiting: wait && req.mode == writeMode}
+	return &kubeAcquisition{kubeBackend: b, Request: req, name: name, token: uuid.NewString(), waiting: wait && req.Mode == lease.WriteMode}
 }
 
-func (b *kubeBackend) holders(ctx context.Context, req request) ([]Holder, error) {
+func (b *kubeBackend) holders(ctx context.Context, req lease.Request) ([]lease.Holder, error) {
 	name, err := kubeName(req)
 	if err != nil {
 		return nil, err
@@ -111,39 +112,39 @@ func (b *kubeBackend) holders(ctx context.Context, req request) ([]Holder, error
 	if err != nil {
 		return nil, fmt.Errorf("read Kubernetes lease %s: %w", name, err)
 	}
-	holders, err := b.read(obj, req.resource())
+	holders, err := b.read(obj, req.Resource())
 	if err != nil {
 		return nil, err
 	}
-	var result []Holder
+	var result []lease.Holder
 	for _, h := range holders {
 		if !h.Pending {
-			result = append(result, Holder{Name: h.Name, Mode: h.Mode.String(), Group: h.Group, Since: h.Since})
+			result = append(result, lease.Holder{Name: h.Name, Mode: h.Mode.String(), Group: h.Group, Since: h.Since})
 		}
 	}
 	return result, nil
 }
 
-func (a *kubeAcquisition) try(ctx context.Context) (ownership, error) {
+func (a *kubeAcquisition) Try(ctx context.Context) (lease.Ownership, error) {
 	err := a.edit(ctx, true, func(holders map[string]kubeHolder) (bool, error) {
 		current, present := holders[a.token]
 		if a.registered && !present {
-			return false, errNotOwned
+			return false, lease.ErrNotOwned
 		}
-		next := kubeHolder{Mode: a.mode, Group: a.group, Name: a.holder, Since: time.Now().UTC(), Duration: a.ttl, Heartbeat: current.Heartbeat + 1}
+		next := kubeHolder{Mode: a.Mode, Group: a.Group, Name: a.Holder, Since: time.Now().UTC(), Duration: a.ttl, Heartbeat: current.Heartbeat + 1}
 		if !a.admitted(holders) {
 			if a.waiting {
 				next.Pending = true
 				holders[a.token] = next
 			}
-			return a.waiting, errBusy
+			return a.waiting, lease.ErrBusy
 		}
 		holders[a.token] = next
 		return true, nil
 	})
 	if err != nil {
-		a.registered = a.waiting && err == errBusy
-		a.needsCleanup = a.waiting || err != errBusy
+		a.registered = a.waiting && err == lease.ErrBusy
+		a.needsCleanup = a.waiting || err != lease.ErrBusy
 		return nil, err
 	}
 	a.needsCleanup = false
@@ -161,27 +162,27 @@ func (a *kubeAcquisition) admitted(holders map[string]kubeHolder) bool {
 			}
 			continue
 		}
-		if h.Mode == writeMode || a.mode == writeMode || h.Mode == groupMode && a.mode == groupMode && a.group != h.Group {
+		if h.Mode == lease.WriteMode || a.Mode == lease.WriteMode || h.Mode == lease.GroupMode && a.Mode == lease.GroupMode && a.Group != h.Group {
 			return false
 		}
 	}
 	return true
 }
 
-func (a *kubeAcquisition) abandon(ctx context.Context) error {
+func (a *kubeAcquisition) Abandon(ctx context.Context) error {
 	if !a.needsCleanup {
 		return nil
 	}
-	return a.unlock(ctx)
+	return a.Unlock(ctx)
 }
 
-func (a *kubeAcquisition) unlock(ctx context.Context) error {
+func (a *kubeAcquisition) Unlock(ctx context.Context) error {
 	err := a.edit(ctx, false, func(holders map[string]kubeHolder) (bool, error) {
 		_, present := holders[a.token]
 		delete(holders, a.token)
 		return present, nil
 	})
-	if err == nil || errors.Is(err, errNotOwned) {
+	if err == nil || errors.Is(err, lease.ErrNotOwned) {
 		a.mu.Lock()
 		seen := a.observations[a.name]
 		delete(seen.holders, a.token)
@@ -190,17 +191,17 @@ func (a *kubeAcquisition) unlock(ctx context.Context) error {
 		}
 		a.mu.Unlock()
 	}
-	if errors.Is(err, errNotOwned) {
+	if errors.Is(err, lease.ErrNotOwned) {
 		return nil
 	}
 	return err
 }
 
-func (a *kubeAcquisition) renew(ctx context.Context) error {
+func (a *kubeAcquisition) Renew(ctx context.Context) error {
 	return a.edit(ctx, false, func(holders map[string]kubeHolder) (bool, error) {
 		h, present := holders[a.token]
 		if !present || h.Pending {
-			return false, errNotOwned
+			return false, lease.ErrNotOwned
 		}
 		h.Heartbeat++
 		holders[a.token] = h
@@ -218,17 +219,17 @@ func (a *kubeAcquisition) edit(ctx context.Context, create bool, change func(map
 			a.mu.Unlock()
 		}
 		if missing && !create {
-			return errNotOwned
+			return lease.ErrNotOwned
 		}
 		if err != nil && !missing {
 			return fmt.Errorf("read Kubernetes lease %s: %w", a.name, err)
 		}
 		if missing {
-			obj = &api.Lease{ObjectMeta: metav1.ObjectMeta{Name: a.name, Annotations: map[string]string{leaseResourceAnnotation: a.resource()}}}
+			obj = &api.Lease{ObjectMeta: metav1.ObjectMeta{Name: a.name, Annotations: map[string]string{leaseResourceAnnotation: a.Resource()}}}
 		}
 		if err := a.write(ctx, obj, missing, create, change); err != nil {
 			if apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err) || apierrors.IsNotFound(err) {
-				if err := pause(ctx, 10*time.Millisecond); err != nil {
+				if err := lease.Pause(ctx, 10*time.Millisecond); err != nil {
 					return err
 				}
 				continue
@@ -244,7 +245,7 @@ func (a *kubeAcquisition) write(ctx context.Context, obj *api.Lease, missing, ac
 	holders := make(map[string]kubeHolder)
 	if !missing {
 		var err error
-		if holders, err = a.read(obj, a.resource()); err != nil {
+		if holders, err = a.read(obj, a.Resource()); err != nil {
 			return err
 		}
 	}
@@ -321,7 +322,7 @@ func (b *kubeBackend) prune(obj *api.Lease, holders map[string]kubeHolder, now t
 	}
 	b.observations[obj.Name] = seen
 	for token, h := range holders {
-		if token == "" || h.Name == "" || h.Duration < 3 || h.Duration > 86400 || h.Mode > groupMode || h.Pending && h.Mode != writeMode || h.Heartbeat == 0 || h.Mode == groupMode && h.Group == "" {
+		if token == "" || h.Name == "" || h.Duration < 3 || h.Duration > 86400 || h.Mode > lease.GroupMode || h.Pending && h.Mode != lease.WriteMode || h.Heartbeat == 0 || h.Mode == lease.GroupMode && h.Group == "" {
 			return fmt.Errorf("invalid holder state on Kubernetes lease %s", obj.Name)
 		}
 		first := seen.holders[token]

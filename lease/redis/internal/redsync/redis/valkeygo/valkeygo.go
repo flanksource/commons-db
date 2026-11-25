@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	redsyncredis "github.com/flanksource/commons-db/lease/internal/redsync/redis"
+	redsyncredis "github.com/flanksource/commons-db/lease/redis/internal/redsync/redis"
 
 	"github.com/valkey-io/valkey-go/valkeycompat"
 )
