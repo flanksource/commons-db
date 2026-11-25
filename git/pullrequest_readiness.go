@@ -19,9 +19,11 @@ type PullRequestReadinessReader interface {
 	PullRequestReadiness(ctx context.Context, repo RepoURL, number int) (MergeReadiness, error)
 }
 
-// MergeSnapshot is whether a pull request's source branch, and else its target branch, moved past
-// the commits its provider's last trial merge used.
+// MergeSnapshot is a pull request's source and target branches' tips, Head and Base, and whether
+// either moved past the commits its provider's last trial merge used. Base is empty while the
+// provider has made no trial merge.
 type MergeSnapshot struct {
+	Head, Base  string
 	SourceMoved bool
 	TargetMoved bool
 }

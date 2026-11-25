@@ -99,8 +99,8 @@ func (p *azureProvider) PullRequestMergeSnapshot(ctx context.Context, repo RepoU
 	return p.mergeSnapshot(ctx, repo, pull)
 }
 
-// mergeSnapshot compares the commits the pull request's last merge computation used with its
-// source and target branches' tips.
+// mergeSnapshot reads the pull request's source and target branches' tips and compares them with
+// the commits its last merge computation used.
 func (p *azureProvider) mergeSnapshot(ctx context.Context, repo RepoURL, pull azurePull) (MergeSnapshot, error) {
 	source, err := p.pullSource(ctx, pull)
 	if err != nil {
@@ -109,21 +109,19 @@ func (p *azureProvider) mergeSnapshot(ctx context.Context, repo RepoURL, pull az
 	if source.ID == "" || pull.Repository.ID == "" {
 		return MergeSnapshot{}, fmt.Errorf("azure DevOps pull request %d has no repository identity for its branches", pull.ID)
 	}
-	head, err := p.branchTip(ctx, source.Project.Name, source.ID, pull.SourceRefName)
-	if err != nil {
+	var snapshot MergeSnapshot
+	if snapshot.Head, err = p.branchTip(ctx, source.Project.Name, source.ID, pull.SourceRefName); err != nil {
 		return MergeSnapshot{}, err
 	}
-	if head != pull.LastMergeSourceCommit.CommitID {
-		return MergeSnapshot{SourceMoved: true}, nil
-	}
+	snapshot.SourceMoved = snapshot.Head != pull.LastMergeSourceCommit.CommitID
 	if pull.LastMergeTargetCommit.CommitID == "" {
-		return MergeSnapshot{}, nil
+		return snapshot, nil
 	}
-	target, err := p.branchTip(ctx, repo.Project, pull.Repository.ID, pull.TargetRefName)
-	if err != nil {
+	if snapshot.Base, err = p.branchTip(ctx, repo.Project, pull.Repository.ID, pull.TargetRefName); err != nil {
 		return MergeSnapshot{}, err
 	}
-	return MergeSnapshot{TargetMoved: target != pull.LastMergeTargetCommit.CommitID}, nil
+	snapshot.TargetMoved = !snapshot.SourceMoved && snapshot.Base != pull.LastMergeTargetCommit.CommitID
+	return snapshot, nil
 }
 
 // branchTip is the commit branch (refs/heads/...) of repository points at.
