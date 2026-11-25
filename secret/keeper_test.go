@@ -11,10 +11,10 @@ import (
 	dbcontext "github.com/flanksource/commons-db/context"
 	sqlite "github.com/flanksource/commons-db/internal/gormsqlite"
 	"github.com/flanksource/commons-db/models"
+	secretkeeper "github.com/flanksource/commons-db/secret/keeper"
 	"github.com/google/uuid"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	"gocloud.dev/secrets"
 	"golang.org/x/sync/errgroup"
 	"gorm.io/gorm"
 )
@@ -108,7 +108,7 @@ var _ = Describe("KeeperFromConnection", func() {
 		InvalidateKeeper()
 
 		const callers = 8
-		keepers := make([]*secrets.Keeper, callers)
+		keepers := make([]secretkeeper.Keeper, callers)
 		var group errgroup.Group
 		for index := range keepers {
 			group.Go(func() error {

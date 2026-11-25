@@ -282,14 +282,6 @@ func (t ValueExpression) Empty() bool {
 	return t.Value == "" && t.Expr == ""
 }
 
-func (t ValueExpression) Eval(env map[string]any) (string, error) {
-	if t.Value != "" {
-		return t.Value, nil
-	}
-
-	return t.Expr.Eval(env)
-}
-
 // EnvVarResourceSelector is used to select a resource.
 // At least one of the fields must be specified.
 // +kubebuilder:object:generate=true
@@ -312,86 +304,4 @@ func (t EnvVarResourceSelector) Empty() bool {
 	return t.Agent.Empty() && t.Scope == "" && t.Cache == "" && t.ID.Empty() &&
 		t.Name.Empty() && t.Namespace.Empty() && len(t.Types) == 0 && len(t.Statuses) == 0 &&
 		len(t.Healths) == 0 && t.TagSelector.Empty() && t.LabelSelector.Empty() && t.FieldSelector.Empty()
-}
-
-func (t EnvVarResourceSelector) Hydrate(env map[string]any) (*ResourceSelector, error) {
-	rs := ResourceSelector{
-		Scope: t.Scope,
-		Cache: t.Cache,
-	}
-
-	if err := evalValueExpressions(env, []valueExpressionTarget{
-		{name: "agent", expr: t.Agent, target: &rs.Agent},
-		{name: "id", expr: t.ID, target: &rs.ID},
-		{name: "name", expr: t.Name, target: &rs.Name},
-		{name: "namespace", expr: t.Namespace, target: &rs.Namespace},
-	}); err != nil {
-		return nil, err
-	}
-
-	var err error
-	if rs.Types, err = evalValueExpressionList(env, "type", t.Types); err != nil {
-		return nil, err
-	}
-	if rs.Statuses, err = evalValueExpressionList(env, "status", t.Statuses); err != nil {
-		return nil, err
-	}
-
-	for i, expr := range t.Healths {
-		if !expr.Empty() {
-			result, err := expr.Eval(env)
-			if err != nil {
-				return nil, fmt.Errorf("failed to evaluate health at index %d: %v", i, err)
-			}
-			rs.Health.Add(result)
-		}
-	}
-
-	if err := evalValueExpressions(env, []valueExpressionTarget{
-		{name: "tagSelector", expr: t.TagSelector, target: &rs.TagSelector},
-		{name: "labelSelector", expr: t.LabelSelector, target: &rs.LabelSelector},
-		{name: "fieldSelector", expr: t.FieldSelector, target: &rs.FieldSelector},
-	}); err != nil {
-		return nil, err
-	}
-
-	return &rs, nil
-}
-
-type valueExpressionTarget struct {
-	name   string
-	expr   ValueExpression
-	target *string
-}
-
-func evalValueExpressions(env map[string]any, fields []valueExpressionTarget) error {
-	for _, field := range fields {
-		if field.expr.Empty() {
-			continue
-		}
-		value, err := field.expr.Eval(env)
-		if err != nil {
-			return fmt.Errorf("failed to evaluate %s: %v", field.name, err)
-		}
-		*field.target = value
-	}
-	return nil
-}
-
-func evalValueExpressionList(env map[string]any, kind string, exprs []ValueExpression) ([]string, error) {
-	if len(exprs) == 0 {
-		return nil, nil
-	}
-	values := make([]string, len(exprs))
-	for i, expr := range exprs {
-		if expr.Empty() {
-			continue
-		}
-		value, err := expr.Eval(env)
-		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate %s at index %d: %v", kind, i, err)
-		}
-		values[i] = value
-	}
-	return values, nil
 }

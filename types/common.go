@@ -5,23 +5,16 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/flanksource/gomplate/v4"
 	"github.com/lib/pq"
 	"gorm.io/gorm"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
+// CelExpression is a CEL expression; evaluate it with types/eval.Cel.
 type CelExpression string
 
-func (t CelExpression) Eval(env map[string]any) (string, error) {
-	return gomplate.RunTemplate(env, gomplate.Template{Expression: string(t)})
-}
-
+// GoTemplate is a Go template; render it with types/eval.Template.
 type GoTemplate string
-
-func (t GoTemplate) Run(env map[string]any) (string, error) {
-	return gomplate.RunTemplate(env, gomplate.Template{Template: string(t)})
-}
 
 // asMap marshals the given struct into a map.
 func asMap(t any, removeFields ...string) map[string]any {
