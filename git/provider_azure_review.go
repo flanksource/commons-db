@@ -68,6 +68,9 @@ func (p *azureProvider) PullRequestReview(ctx context.Context, repo RepoURL, num
 	return review, nil
 }
 
+// azureRequiredReviewersPolicyType is the type ID of Azure DevOps's required reviewers policy.
+const azureRequiredReviewersPolicyType = "fd2167ab-b0be-447a-8ec8-39368250530e"
+
 // azureProjectIDs memoises each organization's project ids, which never change.
 var azureProjectIDs sync.Map
 
@@ -127,7 +130,8 @@ func (evaluation azurePolicyEvaluation) toPolicy(repo RepoURL) (PullRequestPolic
 	}
 	settings := evaluation.Configuration.Settings
 	policy := PullRequestPolicy{ID: evaluation.Configuration.ID, Name: name, Status: evaluation.Status, Required: evaluation.Configuration.IsBlocking, MinimumApproverCount: settings.MinimumApproverCount,
-		Build: evaluation.Configuration.Type.ID == azureBuildPolicyType, RequiredReviewerIDs: settings.RequiredReviewerIDs, FilenamePatterns: settings.FilenamePatterns}
+		Build: evaluation.Configuration.Type.ID == azureBuildPolicyType, RequiredReviewers: strings.EqualFold(evaluation.Configuration.Type.ID, azureRequiredReviewersPolicyType),
+		RequiredReviewerIDs: settings.RequiredReviewerIDs, FilenamePatterns: settings.FilenamePatterns}
 	if evaluation.Context.BuildID != "" {
 		buildID, err := strconv.Atoi(string(evaluation.Context.BuildID))
 		if err != nil || buildID <= 0 {

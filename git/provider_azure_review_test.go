@@ -46,7 +46,7 @@ var _ = Describe("Azure pull request review", func() {
 		review, err := provider.(git.PullRequestReviewReader).PullRequestReview(ctx, repoURL("https://dev.azure.com/acme/Platform/_git/rules", ""), 9)
 		Expect(err).ToNot(HaveOccurred())
 		Expect(review).To(Equal(git.PullRequestReview{
-			Policies: []git.PullRequestPolicy{{ID: 6, Name: "Required reviewers", Status: "queued", Required: true,
+			Policies: []git.PullRequestPolicy{{ID: 6, Name: "Required reviewers", Status: "queued", Required: true, RequiredReviewers: true,
 				RequiredReviewerIDs: []string{"team-id"}, FilenamePatterns: []string{"/rules/*"}}},
 			Reviewers: []git.PullRequestReviewer{
 				{ID: "team-id", Name: "Rules team", Group: true, Required: true},

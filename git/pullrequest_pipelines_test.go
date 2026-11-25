@@ -121,6 +121,16 @@ var _ = Describe("Azure DevOps pull request executions", func() {
 		Expect([]string{executions[0].Repository.Project, executions[0].Repository.Name}).To(Equal([]string{"Forks", "rules-fork"}))
 	})
 
+	It("refuses a fork lookup that answers with another repository", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9": pull(`"forkSource":{"repository":{"id":"fork-id"}},`),
+			"GET /acme/_apis/git/repositories/fork-id":                       reply(`{"id":"rules-id","name":"rules","project":{"name":"Platform"}}`),
+		})
+		reader := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider.(git.PullRequestPipelineReader)
+		_, err := reader.PullRequestExecutions(ctx, rules(), 9)
+		Expect(err).To(MatchError(ContainSubstring(`resolving head repository "fork-id" found repository "rules-id"`)))
+	})
+
 	It("reads the tail of an execution's log", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"GET /acme/Platform/_apis/build/builds/31/logs": reply(`{"value":[{"id":7,"lineCount":40},{"id":8,"lineCount":3}]}`),
