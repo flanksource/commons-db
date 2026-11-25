@@ -32,6 +32,29 @@ var _ = Describe("Azure pull request review", func() {
 		Expect(api.Calls()[1].Query).To(ContainSubstring("artifactId=vstfs%3A%2F%2F%2FCodeReview%2FCodeReviewId%2F11111111-1111-1111-1111-111111111111%2F9"))
 	})
 
+	It("reads each reviewer's login, avatar and group, and the reviewers and files a required reviewers policy names", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /acme/_apis/projects/Platform": reply(`{"id":"33333333-3333-3333-3333-333333333333"}`),
+			"GET /acme/Platform/_apis/policy/evaluations": reply(`{"value":[{"status":"queued","configuration":{"id":6,"isBlocking":true,"isEnabled":true,
+				"type":{"id":"fd2167ab-b0be-447a-8ec8-39368250530e","displayName":"Required reviewers"},
+				"settings":{"requiredReviewerIds":["team-id"],"filenamePatterns":["/rules/*"]}}}]}`),
+			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/reviewers": reply(`{"value":[
+				{"id":"team-id","displayName":"Rules team","isContainer":true,"isRequired":true,"vote":0},
+				{"id":"r2","displayName":"Lin","uniqueName":"lin@example.com","imageUrl":"https://avatars.example/lin","vote":10}]}`),
+		})
+		provider := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider
+		review, err := provider.(git.PullRequestReviewReader).PullRequestReview(ctx, repoURL("https://dev.azure.com/acme/Platform/_git/rules", ""), 9)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(review).To(Equal(git.PullRequestReview{
+			Policies: []git.PullRequestPolicy{{ID: 6, Name: "Required reviewers", Status: "queued", Required: true,
+				RequiredReviewerIDs: []string{"team-id"}, FilenamePatterns: []string{"/rules/*"}}},
+			Reviewers: []git.PullRequestReviewer{
+				{ID: "team-id", Name: "Rules team", Group: true, Required: true},
+				{ID: "r2", Name: "Lin", Login: "lin@example.com", AvatarURL: "https://avatars.example/lin", Vote: 10},
+			},
+		}))
+	})
+
 	It("reads the project id once per organization and project", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"GET /acme/_apis/projects/Platform":                                        reply(`{"id":"22222222-2222-2222-2222-222222222222"}`),

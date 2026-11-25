@@ -1,3 +1,5 @@
+// Azure DevOps pull request review: the policies evaluated on it and the reviewers with their
+// votes, logins and groups, as a host-neutral review.
 package git
 
 import (
@@ -46,6 +48,9 @@ func (p *azureProvider) PullRequestReview(ctx context.Context, repo RepoURL, num
 		Value []struct {
 			ID       string `json:"id"`
 			Name     string `json:"displayName"`
+			Login    string `json:"uniqueName"`
+			Avatar   string `json:"imageUrl"`
+			Group    bool   `json:"isContainer"`
 			Required bool   `json:"isRequired"`
 			Vote     int    `json:"vote"`
 		} `json:"value"`
@@ -57,7 +62,8 @@ func (p *azureProvider) PullRequestReview(ctx context.Context, repo RepoURL, num
 		if reviewer.ID == "" || reviewer.Name == "" {
 			return PullRequestReview{}, fmt.Errorf("azure pull request #%d has a reviewer without id or display name", number)
 		}
-		review.Reviewers = append(review.Reviewers, PullRequestReviewer{ID: reviewer.ID, Name: reviewer.Name, Required: reviewer.Required, Vote: reviewer.Vote})
+		review.Reviewers = append(review.Reviewers, PullRequestReviewer{ID: reviewer.ID, Name: reviewer.Name, Required: reviewer.Required, Vote: reviewer.Vote,
+			Login: reviewer.Login, AvatarURL: reviewer.Avatar, Group: reviewer.Group})
 	}
 	return review, nil
 }
@@ -95,8 +101,10 @@ type azurePolicyEvaluation struct {
 			DisplayName string `json:"displayName"`
 		} `json:"type"`
 		Settings struct {
-			DisplayName          string `json:"displayName"`
-			MinimumApproverCount int    `json:"minimumApproverCount"`
+			DisplayName          string   `json:"displayName"`
+			MinimumApproverCount int      `json:"minimumApproverCount"`
+			RequiredReviewerIDs  []string `json:"requiredReviewerIds"`
+			FilenamePatterns     []string `json:"filenamePatterns"`
 		} `json:"settings"`
 	} `json:"configuration"`
 	Context struct {
@@ -117,8 +125,9 @@ func (evaluation azurePolicyEvaluation) toPolicy(repo RepoURL) (PullRequestPolic
 	if name == "" {
 		return PullRequestPolicy{}, fmt.Errorf("missing display name")
 	}
-	policy := PullRequestPolicy{ID: evaluation.Configuration.ID, Name: name, Status: evaluation.Status, Required: evaluation.Configuration.IsBlocking, MinimumApproverCount: evaluation.Configuration.Settings.MinimumApproverCount,
-		Build: evaluation.Configuration.Type.ID == azureBuildPolicyType}
+	settings := evaluation.Configuration.Settings
+	policy := PullRequestPolicy{ID: evaluation.Configuration.ID, Name: name, Status: evaluation.Status, Required: evaluation.Configuration.IsBlocking, MinimumApproverCount: settings.MinimumApproverCount,
+		Build: evaluation.Configuration.Type.ID == azureBuildPolicyType, RequiredReviewerIDs: settings.RequiredReviewerIDs, FilenamePatterns: settings.FilenamePatterns}
 	if evaluation.Context.BuildID != "" {
 		buildID, err := strconv.Atoi(string(evaluation.Context.BuildID))
 		if err != nil || buildID <= 0 {
