@@ -4,10 +4,7 @@ import (
 	"fmt"
 	"sync"
 
-	"cloud.google.com/go/bigquery"
-	"google.golang.org/api/iterator"
-	"google.golang.org/api/option"
-
+	"github.com/flanksource/commons-db/cloud/gcp"
 	"github.com/flanksource/commons-db/connection"
 	"github.com/flanksource/commons-db/context"
 	"github.com/flanksource/commons-db/logs"
@@ -17,7 +14,7 @@ import (
 type Searcher struct {
 	conn          connection.GCPConnection
 	mappingConfig *logs.FieldMappingConfig
-	bqClient      *bigquery.Client
+	bqClient      *gcp.BigQueryClient
 	clientMutex   sync.Mutex
 }
 
@@ -67,6 +64,10 @@ func (s *Searcher) initializeClients(ctx context.Context) error {
 		return nil
 	}
 
+	if s.conn.Project == "" {
+		return fmt.Errorf("a GCP project is required to query BigQuery")
+	}
+
 	// The connection arrives hydrated — the provider is the single hydration
 	// point, so nothing here re-reads the row or re-resolves its secret.
 	//
@@ -75,16 +76,21 @@ func (s *Searcher) initializeClients(ctx context.Context) error {
 	// and the client quietly authenticates as whatever ambient default
 	// credentials the process happens to have. A connection that carries none is
 	// asking for exactly that ambient chain.
-	var opts []option.ClientOption
+	var credentials string
 	if s.conn.Credentials != nil && !s.conn.Credentials.IsEmpty() {
-		opts = append(opts, option.WithCredentialsJSON([]byte(s.conn.Credentials.ValueStatic)))
+		credentials = s.conn.Credentials.ValueStatic
+	}
+	opts, err := s.conn.ClientOptions(ctx, credentials, gcp.ScopeBigQuery)
+	if err != nil {
+		return err
+	}
+	if opts.TokenSource == nil {
+		if opts.TokenSource, err = gcp.DefaultTokenSource(ctx, gcp.ScopeBigQuery); err != nil {
+			return err
+		}
 	}
 
-	if s.conn.Endpoint != "" {
-		opts = append(opts, option.WithEndpoint(s.conn.Endpoint))
-	}
-
-	client, err := bigquery.NewClient(ctx, s.conn.Project, opts...)
+	client, err := gcp.NewBigQueryClient(opts)
 	if err != nil {
 		return fmt.Errorf("failed to create BigQuery client: %w", err)
 	}
@@ -99,85 +105,39 @@ func (s *Searcher) executeQuery(ctx context.Context, sqlQuery string) (*Response
 	client := s.bqClient
 	s.clientMutex.Unlock()
 
-	query := client.Query(sqlQuery)
-
-	query.QueryConfig.DryRun = false
-	query.QueryConfig.UseLegacySQL = false
-
-	job, err := query.Run(ctx)
+	result, err := client.Query(ctx, gcp.QueryRequest{Project: s.conn.Project, SQL: sqlQuery})
 	if err != nil {
-		return nil, fmt.Errorf("failed to run query: %w", err)
+		return nil, err
 	}
 
-	status, err := job.Wait(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("query execution failed: %w", err)
+	rows := make([]Row, len(result.Rows))
+	for i, row := range result.Rows {
+		rows[i] = row
 	}
 
-	if err := status.Err(); err != nil {
-		return nil, fmt.Errorf("query job failed: %w", err)
+	response := &Response{
+		Rows:      rows,
+		Schema:    result.Schema,
+		TotalRows: result.TotalRows,
 	}
-
-	it, err := job.Read(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read query results: %w", err)
-	}
-
-	var rows []Row
-	for {
-		var row []bigquery.Value
-		err := it.Next(&row)
-		if err == iterator.Done {
-			break
+	if result.Stats != nil {
+		response.JobStats = &JobStats{
+			CreationTime:   result.Stats.CreationTime,
+			StartTime:      result.Stats.StartTime,
+			EndTime:        result.Stats.EndTime,
+			BytesProcessed: result.Stats.BytesProcessed,
+			BytesBilled:    result.Stats.BytesBilled,
+			TotalSlotMs:    result.Stats.SlotMillis,
 		}
-		if err != nil {
-			return nil, fmt.Errorf("failed to read result row: %w", err)
-		}
-		rows = append(rows, row)
 	}
-
-	jobStats := s.extractJobStats(job)
-	return &Response{
-		Rows:          rows,
-		Schema:        it.Schema,
-		TotalRows:     int64(it.TotalRows),
-		NextPageToken: it.PageInfo().Token,
-		JobStats:      jobStats,
-	}, nil
+	return response, nil
 }
 
-// extractJobStats extracts relevant statistics from a BigQuery job.
-func (s *Searcher) extractJobStats(job *bigquery.Job) *JobStats {
-	stats := job.LastStatus().Statistics
-	if stats == nil {
-		return nil
-	}
-
-	jobStats := &JobStats{
-		CreationTime: stats.CreationTime,
-		StartTime:    stats.StartTime,
-		EndTime:      stats.EndTime,
-	}
-
-	// Extract query-specific statistics if available
-	if queryStats, ok := stats.Details.(*bigquery.QueryStatistics); ok {
-		jobStats.BytesProcessed = queryStats.TotalBytesProcessed
-		jobStats.BytesBilled = queryStats.TotalBytesBilled
-		jobStats.TotalSlotMs = queryStats.SlotMillis
-	}
-
-	return jobStats
-}
-
-// Close closes the clients and releases resources.
+// Close releases the cached client; the REST client holds no connections of its own.
 func (s *Searcher) Close() error {
 	s.clientMutex.Lock()
 	defer s.clientMutex.Unlock()
 
-	if s.bqClient != nil {
-		err := s.bqClient.Close()
-		s.bqClient = nil
-		return err
-	}
+	s.bqClient = nil
 	return nil
 }
