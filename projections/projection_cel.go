@@ -26,7 +26,7 @@ import (
 // target. Compiling here keeps `faro projection verify` able to reject a
 // document without making a request, and the error carries its source position.
 func compileProjectionExpression(expression string) (*gomplate.Template, error) {
-	template := &gomplate.Template{Expression: expression, CelFunctions: projectionStatistics}
+	template := &gomplate.Template{Expression: expression}
 	env, err := cel.NewEnv(gomplate.CompileEnvOptions(projectionActivation(nil, nil, nil, nil), *template)...)
 	if err != nil {
 		return nil, err
