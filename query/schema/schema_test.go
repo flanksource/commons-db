@@ -139,6 +139,17 @@ var _ = Describe("Connection schema", func() {
 		Expect(props["url"].(schema.Schema)["description"]).To(ContainSubstring("file:"))
 	})
 
+	DescribeTable("offers a git provider's access token from a secret reference",
+		func(connectionType string) {
+			token := branchFor(s, connectionType)["properties"].(schema.Schema)["password"].(schema.Schema)
+			Expect(token["x-clicky-component"]).To(Equal("k8s-secret-selector"))
+			Expect(token["x-clicky-default-source"]).To(Equal("secret"))
+		},
+		Entry("azure devops", models.ConnectionTypeAzureDevops),
+		Entry("github", models.ConnectionTypeGithub),
+		Entry("gitlab", models.ConnectionTypeGitlab),
+	)
+
 	It("gives HTTP connections a segmented conditional authentication form", func() {
 		then := branchFor(s, models.ConnectionTypeHTTP)
 		props := then["properties"].(schema.Schema)

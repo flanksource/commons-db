@@ -166,19 +166,19 @@ type GitProvider struct {
 // for github.com and can be set for an enterprise installation.
 type GithubProvider struct {
 	URL      types.EnvVar `json:"url" clicky:"title=API URL,order=2,desc=Defaults to https://api.github.com"`
-	Password types.EnvVar `json:"password" clicky:"title=Access Token,format=password,required,order=5"`
+	Password types.EnvVar `json:"password" clicky:"type=k8s-secret-selector,title=Access Token,format=password,source=secret,required,order=5"`
 }
 
 // GitlabProvider uses a token against a GitLab instance.
 type GitlabProvider struct {
 	URL      types.EnvVar `json:"url" clicky:"title=Instance URL,required,order=2"`
-	Password types.EnvVar `json:"password" clicky:"title=Access Token,format=password,required,order=5"`
+	Password types.EnvVar `json:"password" clicky:"type=k8s-secret-selector,title=Access Token,format=password,source=secret,required,order=5"`
 }
 
 // AzureDevopsProvider uses a personal access token against an organization.
 type AzureDevopsProvider struct {
 	URL      types.EnvVar `json:"url" clicky:"title=Organization URL,required,order=2"`
-	Password types.EnvVar `json:"password" clicky:"title=Personal Access Token,format=password,required,order=5"`
+	Password types.EnvVar `json:"password" clicky:"type=k8s-secret-selector,title=Personal Access Token,format=password,source=secret,required,order=5"`
 }
 
 // S3Provider uses AWS credentials and region, optionally scoped to a bucket.
