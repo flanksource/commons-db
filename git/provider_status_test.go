@@ -222,4 +222,20 @@ var _ = Describe("pull request detail activity", func() {
 			{Kind: git.PullRequestHistory, Author: "Ada", Body: "Updated source", CreatedAt: pr.CreatedAt.Add(2 * time.Hour), URL: pr.URL + "?discussionId=31", ID: "thread:31:comment:2", Action: "system", Mentions: []string{}},
 		}))
 	})
+
+	It("reads an Azure comment type sent as its number by its name", func(ctx SpecContext) {
+		path := "/acme/Platform/_apis/git/repositories/rules/pullrequests/9"
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET " + path + "/threads": reply(`{"value":[{"id":31,"comments":[{"id":1,"content":"Please test","commentType":1,"author":{"displayName":"Grace"}},{"id":2,"content":"Pushed","commentType":2,"author":{"displayName":"Ada"}},{"id":3,"content":"Updated source","commentType":3,"author":{"displayName":"Ada"}}]}]}`),
+		})
+		provider := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider
+		activity, err := provider.ListPullRequestActivity(ctx, repoURL("https://dev.azure.com/acme/Platform/_git/rules", ""), 9)
+		Expect(err).ToNot(HaveOccurred())
+		var kinds, actions []string
+		for _, item := range activity {
+			kinds, actions = append(kinds, string(item.Kind)), append(actions, item.Action)
+		}
+		Expect(kinds).To(Equal([]string{string(git.PullRequestComment), string(git.PullRequestHistory), string(git.PullRequestHistory)}))
+		Expect(actions).To(Equal([]string{"text", "codeChange", "system"}))
+	})
 })
