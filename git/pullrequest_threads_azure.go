@@ -13,13 +13,31 @@ import (
 	"time"
 )
 
+// azureCommentType is a comment's type by name, which Azure sends as the name or its number.
+type azureCommentType string
+
+var azureCommentTypes = map[string]azureCommentType{"0": "unknown", "1": "text", "2": "codeChange", "3": "system"}
+
+func (t *azureCommentType) UnmarshalJSON(data []byte) error {
+	if name, ok := azureCommentTypes[string(data)]; ok {
+		*t = name
+		return nil
+	}
+	var name string
+	if err := json.Unmarshal(data, &name); err != nil {
+		return fmt.Errorf("azure DevOps comment type %s is neither a name nor a known number", data)
+	}
+	*t = azureCommentType(name)
+	return nil
+}
+
 type azureThreadComment struct {
-	ID       int64     `json:"id"`
-	ParentID int64     `json:"parentCommentId"`
-	Body     string    `json:"content"`
-	Kind     string    `json:"commentType"`
-	Deleted  bool      `json:"isDeleted"`
-	Created  time.Time `json:"publishedDate"`
+	ID       int64            `json:"id"`
+	ParentID int64            `json:"parentCommentId"`
+	Body     string           `json:"content"`
+	Kind     azureCommentType `json:"commentType"`
+	Deleted  bool             `json:"isDeleted"`
+	Created  time.Time        `json:"publishedDate"`
 	Author   struct {
 		ID     string `json:"id"`
 		Name   string `json:"displayName"`

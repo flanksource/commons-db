@@ -38,6 +38,21 @@ var _ = Describe("Azure DevOps pull request threads", func() {
 		}), "a system note's thread and a deleted thread have no comments to read")
 	})
 
+	It("reads a comment type Azure sends as its number", func(ctx SpecContext) {
+		api := newFakeAPI(map[string]func(*http.Request) apiReply{
+			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/threads": reply(`{"value":[
+				{"id":5,"status":1,"comments":[{"id":1,"content":"Split this up.","commentType":1,"author":{"displayName":"Grace Hopper"}}]},
+				{"id":7,"comments":[{"id":1,"content":"Updated the PR","commentType":3,"author":{"displayName":"Azure"}}]}]}`),
+		})
+		reader := providerClient(models.ConnectionTypeAzureDevops, api.Server.URL+"/acme", nil).Provider.(git.PullRequestThreadReader)
+		threads, err := reader.PullRequestThreads(ctx, repoURL("https://dev.azure.com/acme/Platform/_git/rules", ""), 9)
+		Expect(err).ToNot(HaveOccurred())
+		Expect(threads).To(Equal([]git.PullRequestThread{
+			{ID: "5", Status: "active", URL: "https://dev.azure.com/acme/Platform/_git/rules/pullrequest/9?discussionId=5",
+				Comments: []git.PullRequestThreadComment{{ID: "1", Author: "Grace Hopper", Body: "Split this up."}}},
+		}), "type 1 is a text comment and type 3 a system note")
+	})
+
 	It("refuses a thread status it doesn't know", func(ctx SpecContext) {
 		api := newFakeAPI(map[string]func(*http.Request) apiReply{
 			"GET /acme/Platform/_apis/git/repositories/rules/pullrequests/9/threads": reply(`{"value":[{"id":5,"status":"reopened","comments":[

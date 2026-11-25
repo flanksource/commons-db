@@ -171,12 +171,12 @@ func (p *azureProvider) ListPullRequestActivity(ctx context.Context, repo RepoUR
 		Value []struct {
 			ID       int `json:"id"`
 			Comments []struct {
-				ID            int       `json:"id"`
-				UpdatedAt     time.Time `json:"lastUpdatedDate"`
-				Content       string    `json:"content"`
-				CommentType   string    `json:"commentType"`
-				PublishedDate time.Time `json:"publishedDate"`
-				IsDeleted     bool      `json:"isDeleted"`
+				ID            int              `json:"id"`
+				UpdatedAt     time.Time        `json:"lastUpdatedDate"`
+				Content       string           `json:"content"`
+				CommentType   azureCommentType `json:"commentType"`
+				PublishedDate time.Time        `json:"publishedDate"`
+				IsDeleted     bool             `json:"isDeleted"`
 				Author        struct {
 					DisplayName string `json:"displayName"`
 				} `json:"author"`
@@ -202,7 +202,7 @@ func (p *azureProvider) ListPullRequestActivity(ctx context.Context, repo RepoUR
 			}
 			activity = append(activity, PullRequestActivity{Kind: kind, Author: comment.Author.DisplayName, Body: comment.Content,
 				CreatedAt: comment.PublishedDate, URL: fmt.Sprintf("%s/pullrequest/%d?discussionId=%d", repo.azureWebBase(), number, thread.ID),
-				ID: fmt.Sprintf("thread:%d:comment:%d", thread.ID, comment.ID), Action: comment.CommentType, UpdatedAt: comment.UpdatedAt, Mentions: ActivityMentions(comment.Content)})
+				ID: fmt.Sprintf("thread:%d:comment:%d", thread.ID, comment.ID), Action: string(comment.CommentType), UpdatedAt: comment.UpdatedAt, Mentions: ActivityMentions(comment.Content)})
 		}
 	}
 	return activity, nil
