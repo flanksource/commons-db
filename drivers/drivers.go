@@ -3,55 +3,59 @@ package drivers
 import (
 	"context"
 	"fmt"
-	"net"
 	"strconv"
 	"strings"
+	"sync"
 
-	"cloud.google.com/go/cloudsqlconn"
 	"github.com/jackc/pgx/v5"
 )
 
-func ParseURL(connection string) (*pgx.ConnConfig, error) {
-	if strings.Contains(connection, "cloudsql-instance-connection-name") {
-		parsed := parseParams(connection)
-		userPrivateIP, _ := strconv.ParseBool(parsed["use-private-ip"])
-		return setupCloudSQL(context.TODO(), cloudSQLOptions{
-			User:                   parsed["user"],
-			Database:               parsed["db"],
-			InstanceConnectionName: parsed["cloudsql-instance-connection-name"],
-			UsePrivateIP:           userPrivateIP,
-		})
-	}
-
-	return nil, nil
-}
-
-type cloudSQLOptions struct {
+// CloudSQLOptions are the Cloud SQL settings a DSN asks for.
+type CloudSQLOptions struct {
 	User, Database, InstanceConnectionName string
 	UsePrivateIP                           bool
 }
 
-func setupCloudSQL(ctx context.Context, cloudSQL cloudSQLOptions) (*pgx.ConnConfig, error) {
-	dialer, err := cloudsqlconn.NewDialer(ctx, cloudsqlconn.WithIAMAuthN())
-	if err != nil {
-		return nil, fmt.Errorf("cloudsqlconn.NewDialer: %w", err)
+// CloudSQLDialer builds the pgx config that dials a Cloud SQL instance.
+type CloudSQLDialer func(ctx context.Context, options CloudSQLOptions) (*pgx.ConnConfig, error)
+
+var (
+	dialerMu       sync.RWMutex
+	cloudSQLDialer CloudSQLDialer
+)
+
+// RegisterDialer wires in the Cloud SQL dialer; it is called by
+// drivers/cloudsql.Install so this package never links the Cloud SQL SDK.
+func RegisterDialer(dialer CloudSQLDialer) {
+	dialerMu.Lock()
+	defer dialerMu.Unlock()
+	cloudSQLDialer = dialer
+}
+
+func registeredDialer() CloudSQLDialer {
+	dialerMu.RLock()
+	defer dialerMu.RUnlock()
+	return cloudSQLDialer
+}
+
+func ParseURL(connection string) (*pgx.ConnConfig, error) {
+	if !strings.Contains(connection, "cloudsql-instance-connection-name") {
+		return nil, nil
 	}
 
-	var opts []cloudsqlconn.DialOption
-	if cloudSQL.UsePrivateIP {
-		opts = append(opts, cloudsqlconn.WithPrivateIP())
+	dialer := registeredDialer()
+	if dialer == nil {
+		return nil, fmt.Errorf("connection asks for cloudsql-instance-connection-name but no Cloud SQL dialer is registered: import github.com/flanksource/commons-db/drivers/cloudsql and call cloudsql.Install()")
 	}
 
-	dsn := fmt.Sprintf("user=%s database=%s", cloudSQL.User, cloudSQL.Database)
-	config, err := pgx.ParseConfig(dsn)
-	if err != nil {
-		return nil, err
-	}
-
-	config.DialFunc = func(ctx context.Context, network, instance string) (net.Conn, error) {
-		return dialer.Dial(ctx, cloudSQL.InstanceConnectionName, opts...)
-	}
-	return config, nil
+	parsed := parseParams(connection)
+	usePrivateIP, _ := strconv.ParseBool(parsed["use-private-ip"])
+	return dialer(context.TODO(), CloudSQLOptions{
+		User:                   parsed["user"],
+		Database:               parsed["db"],
+		InstanceConnectionName: parsed["cloudsql-instance-connection-name"],
+		UsePrivateIP:           usePrivateIP,
+	})
 }
 
 // parseParams takes a string of key-value pairs separated by spaces and returns a map of parsed parameters.
