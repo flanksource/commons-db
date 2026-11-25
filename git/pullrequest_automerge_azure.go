@@ -1,11 +1,12 @@
 // Azure DevOps auto-complete: the connection's identity sets it on the reviewed head, so Azure
-// completes the pull request with the strategy asked once the target's policies pass.
+// completes the pull request with the strategy asked once the target's policies pass, or at once.
 package git
 
 import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 )
 
 // AutoMergePullRequest sets auto-complete on pull request number. Azure has no auto-complete for
@@ -31,6 +32,8 @@ func (p *azureProvider) AutoMergePullRequest(ctx context.Context, repo RepoURL, 
 		"completionOptions": azureCompletionOptions(options),
 	}
 	var updated struct {
+		ID                int    `json:"pullRequestId"`
+		Status            string `json:"status"`
 		AutoCompleteSetBy struct {
 			ID string `json:"id"`
 		} `json:"autoCompleteSetBy"`
@@ -38,8 +41,15 @@ func (p *azureProvider) AutoMergePullRequest(ctx context.Context, repo RepoURL, 
 	if _, err := p.api.do(ctx, restRequest{Method: http.MethodPatch, Endpoint: p.pullEndpoint(repo, fmt.Sprintf("/%d", number)), Body: payload, Out: &updated}); err != nil {
 		return err
 	}
-	if updated.AutoCompleteSetBy.ID == "" {
+	switch setBy := updated.AutoCompleteSetBy.ID; {
+	case updated.ID != number:
+		return fmt.Errorf("azure DevOps answered setting auto-complete on pull request %d with pull request %d", number, updated.ID)
+	case updated.Status == "completed":
+		return nil
+	case setBy == "":
 		return fmt.Errorf("azure DevOps didn't set auto-complete on pull request %d", number)
+	case !strings.EqualFold(setBy, me):
+		return fmt.Errorf("azure DevOps didn't set auto-complete on pull request %d as the connection's identity: it is set by %q", number, setBy)
 	}
 	return nil
 }
