@@ -59,7 +59,7 @@ var _ = Describe("GCS filesystem against fake-gcs-server", Label("integration"),
 	BeforeAll(func(specCtx SpecContext) {
 		skipWithoutDocker()
 		instances, err := start.StartServices(specCtx, []start.ServiceRequest{
-			{Name: fakeGCSService, Options: []start.Option{start.WithVolumeMode(start.VolumeEphemeral)}},
+			{Name: fakeGCSService, Options: []start.Option{start.WithRuntime(start.RuntimeDocker), start.WithVolumeMode(start.VolumeEphemeral)}},
 		})
 		DeferCleanup(func(cleanupCtx SpecContext) {
 			Expect(start.StopServices(cleanupCtx, instances)).To(Succeed())
