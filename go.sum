@@ -277,12 +277,10 @@ github.com/flanksource/clicky v1.21.101 h1:MoAAlfB1GzuVehN/zigM31SykakNi37elzab8
 github.com/flanksource/clicky v1.21.101/go.mod h1:nvsC9q11WNwDVBkGwdDLuexdBpcihl0QRvdAqMO4d2A=
 github.com/flanksource/commons v1.65.0 h1:dQ58sPeE09fJEFb+suQzcR5L3C059PshbZvYt7nmgWc=
 github.com/flanksource/commons v1.65.0/go.mod h1:4VgDi5b1qw6nTvpF9OQciwudvEpnQCa7HzHt6yasGgs=
-github.com/flanksource/deps v1.0.52 h1:4nuwxUcknlwlaV7ovwCPaW26sMJll9apfM5TDXSRHZQ=
-github.com/flanksource/deps v1.0.52/go.mod h1:/AdWJJhDH/Phs+NxR2RLiwM3sHgBzb+LNgqAwtcyYgU=
+github.com/flanksource/deps v1.0.53 h1:M7VMCb3V3Hnrzsdb+Y1XQSmxapov6e7iAS1EHwo94/4=
+github.com/flanksource/deps v1.0.53/go.mod h1:l3DqkfS6B7Eum/XJbv4lj5zufOJRwgpkEkmnuMEvRSI=
 github.com/flanksource/deps/start v1.0.53 h1:Z+bKyjAzJXoJEI2pVVFIOGblb2c0HbOVoHJ9aXBY/ic=
 github.com/flanksource/deps/start v1.0.53/go.mod h1:AKtj95vGQAnmy/eKOLE3LwSpBVa5oNwYVWDOuCL+/1s=
-github.com/flanksource/gomplate/v3 v3.24.90 h1:MAUlwU7REhSL62i4n74yvo+T4LA7HuRpJ9tKH9dbMzk=
-github.com/flanksource/gomplate/v3 v3.24.90/go.mod h1:tcjpBIaHboWVPUYt973dGLCWgTD1sOHdiFgA/AaPBPQ=
 github.com/flanksource/gomplate/v4 v4.0.4 h1:yBEd4YTEnCHrfJfqHhYX2/LlVJ9iCh8IBy8y4RwMFCs=
 github.com/flanksource/gomplate/v4 v4.0.4/go.mod h1:/k3/WaWTr4Vfb1JF568R9gVum8enZrdBqv++axw780M=
 github.com/flanksource/is-healthy v1.0.93 h1:hpXkPfMXG+zawNs0HTjc/3ZIjrW7obAPDR/VoTJk59Q=
@@ -396,8 +394,6 @@ github.com/golang/protobuf v1.5.4/go.mod h1:lnTiLA8Wa4RWRcIUkrtSVa5nRhsEGBg48fD6
 github.com/golang/snappy v0.0.1/go.mod h1:/XxbfmMg8lxefKM7IXC3fBNl/7bRcc72aCRzEWrmP2Q=
 github.com/google/btree v1.1.3 h1:CVpQJjYgC4VbzxeGVHfvZrv1ctoYCAI8vbl07Fcxlyg=
 github.com/google/btree v1.1.3/go.mod h1:qOPhT0dTNdNzV6Z/lhRX0YXUafgPLFUh+gZMl761Gm4=
-github.com/google/cel-go v0.31.0 h1:H0bhpFTqOvmHrBGrWKp7ZlhBm5Hh8PYUEXnwxT1LL7A=
-github.com/google/cel-go v0.31.0/go.mod h1:X0bD6iVNR8pkROSOoHVdgTkzmRcosof7WQqCD6wcMc8=
 github.com/google/gnostic-models v0.7.1 h1:SisTfuFKJSKM5CPZkffwi6coztzzeYUhc3v4yxLWH8c=
 github.com/google/gnostic-models v0.7.1/go.mod h1:whL5G0m6dmc5cPxKc5bdKdEN3UjI7OUGxBlw57miDrQ=
 github.com/google/go-cmp v0.5.2/go.mod h1:v8dTdLbMG2kIc/vJvl+f65V22dbkXbowE6jgT/gNBxE=

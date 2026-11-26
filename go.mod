@@ -27,7 +27,7 @@ require (
 	github.com/fergusstrange/embedded-postgres v1.34.0
 	github.com/flanksource/clicky v1.21.101
 	github.com/flanksource/commons v1.65.0
-	github.com/flanksource/deps v1.0.52
+	github.com/flanksource/deps v1.0.53
 	github.com/flanksource/deps/start v1.0.53
 	github.com/flanksource/gomplate/v4 v4.0.4
 	github.com/flanksource/is-healthy v1.0.93
@@ -184,7 +184,6 @@ require (
 	github.com/emirpasic/gods v1.18.1 // indirect
 	github.com/erikgeiser/coninput v0.0.0-20211004153227-1c3628e74d0f // indirect
 	github.com/felixge/httpsnoop v1.1.0 // indirect
-	github.com/flanksource/gomplate/v3 v3.24.90 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
@@ -217,7 +216,6 @@ require (
 	github.com/golang-sql/civil v0.0.0-20220223132316-b832511892a9 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
 	github.com/google/btree v1.1.3 // indirect
-	github.com/google/cel-go v0.31.0 // indirect
 	github.com/google/gnostic-models v0.7.1 // indirect
 	github.com/google/go-github/v57 v57.0.0 // indirect
 	github.com/google/go-querystring v1.2.0 // indirect
