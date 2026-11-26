@@ -103,9 +103,12 @@ func TestApplyRestoresUnmanagedDependentView(t *testing.T) {
 	assert.True(t, viewExists(t, db, "ext"), "unmanaged view should be restored from its capture")
 }
 
-// TestApplyReportsUnrestorableView proves the loud-failure path: when the schema change makes
-// an unmanaged view impossible to recreate, apply fails naming the view and printing its DDL.
-func TestApplyReportsUnrestorableView(t *testing.T) {
+// TestApplyRefusesToDropColumnReadByUnmanagedView proves the loud-failure path: dropping a column
+// an unmanaged view reads cannot be re-created, so apply fails with PostgreSQL's own dependency
+// error, and the unit rolls back leaving the column and the view in place. The planner re-creates
+// dependent views only around retypes, so unlike the removed viewdeps sweep it does not name the
+// view or print replayable DDL.
+func TestApplyRefusesToDropColumnReadByUnmanagedView(t *testing.T) {
 	dsn, db := startViewDepsDB(t)
 	ctx := t.Context()
 
@@ -130,6 +133,14 @@ table "t" {
 `)}
 	err = Apply(ctx, dsn, fs, WithDir("migrations"), WithName("views"), WithDrops())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "public.ext")
-	assert.Contains(t, err.Error(), "CREATE VIEW", "error must carry replayable DDL")
+	// The plan is refused before anything runs, naming the view and carrying
+	// the DDL that re-creates it.
+	assert.Contains(t, err.Error(), "view public.ext reads column c of table public.t, which the plan drops")
+	assert.Contains(t, err.Error(), `CREATE VIEW "public"."ext" ("c") AS`)
+
+	var columns int
+	require.NoError(t, db.QueryRow(
+		`SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='t' AND column_name='c'`).Scan(&columns))
+	assert.Equal(t, 1, columns, "the refused plan must leave column c in place")
+	assert.True(t, viewExists(t, db, "ext"), "the unmanaged view must survive the refused change")
 }

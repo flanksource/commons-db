@@ -1,26 +1,28 @@
-// Package sqlserver preserves the commons-db API; implementations live in sqlglot-go.
+// Package sqlserver executes reviewed SQL Server migration artifacts through the sqlglot-go engine.
+// It registers the SQL Server dialect, so an engine.Artifact planned for "sqlserver" can be applied or rendered.
 package sqlserver
 
 import (
-	native "github.com/flanksource/sqlglot-go/database/migrate/sqlserver"
+	_ "github.com/flanksource/sqlglot-go/database/migrate/dialect/sqlserver"
+	"github.com/flanksource/sqlglot-go/migrate/engine"
 	planner "github.com/flanksource/sqlglot-go/migrate/sqlserver"
 )
 
-type Request = native.Request
+type Request = engine.ApplyRequest
 
-type Outcome = native.Outcome
+type Outcome = engine.Outcome
 
-const Applied = native.Applied
+const Applied = engine.Applied
 
-const AlreadyApplied = native.AlreadyApplied
+const AlreadyApplied = engine.AlreadyApplied
 
-const Failed = native.Failed
+const Failed = engine.Failed
 
-const CommitUnknown = native.CommitUnknown
+const CommitUnknown = engine.CommitUnknown
 
-type Result = native.Result
+type Result = engine.Result
 
-var Apply = native.Apply
+var Apply = engine.Apply
 
 type ScriptOptions = planner.ScriptOptions
 
