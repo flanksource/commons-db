@@ -3,11 +3,14 @@ BIN_DIR ?= $(ROOT)/.bin
 PNPM ?= pnpm
 UI_BUILD_MODE ?= production
 
-.PHONY: build lint test ui-build ui-install
+.PHONY: build install lint test ui-build ui-install
 
 build: ui-build
 	mkdir -p $(BIN_DIR)
 	go build -o $(BIN_DIR)/query .
+
+install: ui-build
+	go install .
 
 lint: ui-build
 	go vet ./...

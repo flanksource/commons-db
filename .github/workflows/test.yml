@@ -129,7 +129,7 @@ jobs:
       # compiles the benchmarks but runs none; --bench=false would instead re-run
       # that package's ginkgo suite under plain go test.
       - name: Test with gavel
-        uses: flanksource/gavel@4ec24346ade41681a5f1db1de47acd32c32e0879 # v0.0.83
+        uses: flanksource/gavel@cc0bcff1f75edecec333f8879a56ef0e061a1502 # v0.0.103
         with:
           args: test --ignore ./e2e --bench=^$ --timeout 25m --test-timeout 10m
           artifact-name: gavel-test
@@ -195,7 +195,7 @@ jobs:
         run: make tidy-check
 
       - name: Lint with gavel
-        uses: flanksource/gavel@4ec24346ade41681a5f1db1de47acd32c32e0879 # v0.0.83
+        uses: flanksource/gavel@cc0bcff1f75edecec333f8879a56ef0e061a1502 # v0.0.103
         # gavel installs golangci-lint by resolving its stable release through the
         # GitHub API; unauthenticated, a shared runner hits the rate limit and the
         # install fails, so the read-only workflow token authenticates it.

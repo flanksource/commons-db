@@ -4,13 +4,13 @@ go 1.27.4
 
 require (
 	github.com/DATA-DOG/go-sqlmock v1.5.2
-	github.com/flanksource/captain v0.0.85
+	github.com/flanksource/captain v0.0.94
 	// Kept in lockstep with the root module's clicky pin (see ../../go.mod):
 	// a workspace build resolves one clicky for both modules.
-	github.com/flanksource/clicky v1.21.96
-	github.com/flanksource/clicky/aichat v1.21.94
-	github.com/flanksource/clicky/valkey v1.21.94
-	github.com/flanksource/commons v1.64.2
+	github.com/flanksource/clicky v1.21.101
+	github.com/flanksource/clicky/aichat v1.21.101
+	github.com/flanksource/clicky/valkey v1.21.101
+	github.com/flanksource/commons v1.65.0
 	github.com/flanksource/commons-db v0.1.91
 	github.com/flanksource/commons-db/recordstore v0.1.91
 	github.com/flanksource/commons-db/tracing v0.1.91
@@ -155,11 +155,11 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/fergusstrange/embedded-postgres v1.34.0 // indirect
 	github.com/firebase/genkit/go v1.13.1 // indirect
-	github.com/flanksource/gomplate/v4 v4.0.2 // indirect
+	github.com/flanksource/gomplate/v4 v4.0.4 // indirect
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
 	github.com/flanksource/sandbox-runtime v1.0.2 // indirect
-	github.com/flanksource/sqlglot-go v1.2.2 // indirect
+	github.com/flanksource/sqlglot-go v1.3.7 // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
@@ -282,7 +282,7 @@ require (
 	github.com/pb33f/ordered-map/v2 v2.3.1 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pgplex/pgparser v0.2.0 // indirect
-	github.com/pierrec/lz4/v4 v4.1.26 // indirect
+	github.com/pierrec/lz4/v4 v4.1.34 // indirect
 	github.com/pjbgf/sha1cd v0.6.0 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
