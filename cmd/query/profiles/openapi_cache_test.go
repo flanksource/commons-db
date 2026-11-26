@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 
 	"github.com/flanksource/clicky/rpc"
+	"github.com/flanksource/commons-db/query"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"github.com/spf13/cobra"
@@ -120,6 +122,66 @@ var _ = Describe("profile OpenAPI representations", func() {
 		Expect(store.Delete(context.Background(), "Live Sales")).To(Succeed())
 		Expect(mergeStoredProfiles(context.Background(), spec, store)).To(Succeed())
 		Expect(profileFilterComponents(spec, "live-sales")).To(BeEmpty())
+	})
+})
+
+// unlistedBaseStore hides a profile from List that Get still serves: an
+// import-only base, which a profile importing it resolves by name but which is
+// no surface of its own.
+type unlistedBaseStore struct {
+	*FileStore
+	unlisted string
+}
+
+func (s unlistedBaseStore) List(ctx context.Context) ([]query.Profile, error) {
+	listed, err := s.FileStore.List(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return slices.DeleteFunc(listed, func(profile query.Profile) bool { return profile.Name == s.unlisted }), nil
+}
+
+var _ = Describe("profile OpenAPI document over a store with an unlisted import-only base", func() {
+	const baseName = "Sales Base"
+	var store *FileStore
+	var handler http.Handler
+
+	get := func() *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/openapi.json", nil))
+		return response
+	}
+	base := func(column string) query.Profile {
+		return query.Profile{Name: baseName, Columns: []query.ColumnDef{{Name: column, Type: query.ColumnTypeString}}}
+	}
+
+	BeforeEach(func() {
+		var err error
+		store, err = NewFileStore(GinkgoT().TempDir())
+		Expect(err).NotTo(HaveOccurred())
+		Expect(store.Save(context.Background(), base("region"))).To(Succeed())
+		importer := sampleProfile("Live Sales")
+		importer.Imports = []string{baseName}
+		// The base owns the columns, so editing it changes the importer's surface.
+		importer.Columns = nil
+		Expect(store.Save(context.Background(), importer)).To(Succeed())
+		handler = newProfileOpenAPIHandler(&cobra.Command{Use: "query"}, &rpc.Config{}, unlistedBaseStore{FileStore: store, unlisted: baseName}, nil)
+	})
+
+	It("resolves the importer through the base Get serves, and lists no surface for the base", func() {
+		response := get()
+		Expect(response.Code).To(Equal(http.StatusOK), response.Body.String())
+		Expect(response.Body.String()).To(ContainSubstring("/api/v1/profile/profile-live-sales"))
+		Expect(response.Body.String()).NotTo(ContainSubstring("/api/v1/profile/profile-sales-base"))
+	})
+
+	It("rebuilds when only the unlisted base changes", func() {
+		before := get()
+		Expect(before.Code).To(Equal(http.StatusOK), before.Body.String())
+		Expect(store.Save(context.Background(), base("country"))).To(Succeed())
+		after := get()
+		Expect(after.Code).To(Equal(http.StatusOK), after.Body.String())
+		Expect(after.Header().Get("ETag")).NotTo(Equal(before.Header().Get("ETag")))
 	})
 })
 

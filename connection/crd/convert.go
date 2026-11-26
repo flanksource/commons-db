@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"maps"
+	"net/url"
 	"reflect"
 	"strconv"
 	"strings"
@@ -227,6 +228,10 @@ func connectionFromCloudSpec(spec ConnectionSpec, dbObj *models.Connection) {
 
 	if spec.AzureDevops != nil {
 		dbObj.URL = spec.AzureDevops.URL
+		if dbObj.URL == "" && spec.AzureDevops.Organization != "" {
+			// Mission Control names only the organization of an Azure DevOps Services connection.
+			dbObj.URL = "https://dev.azure.com/" + url.PathEscape(spec.AzureDevops.Organization)
+		}
 		dbObj.Type = models.ConnectionTypeAzureDevops
 		dbObj.Username = spec.AzureDevops.Organization
 		dbObj.Password = spec.AzureDevops.PersonalAccessToken.String()

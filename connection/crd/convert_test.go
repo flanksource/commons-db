@@ -67,6 +67,18 @@ var _ = Describe("converting a typed connection", func() {
 				Type: models.ConnectionTypeSlack, URL: "slack://$(password)@$(username)", Username: "C0123", Password: "xoxb",
 				Properties: types.JSONStringMap{"BotName": "", "Icon": ":robot:", "ThreadTS": "", "Title": "", "Color": "good"},
 			}),
+		Entry("azure devops from its organization, its API URL on Azure DevOps Services",
+			"  azureDevops:\n    organization: acme\n    personalAccessToken: {valueFrom: {secretKeyRef: {name: ado, key: pat}}}\n",
+			models.Connection{
+				Type: models.ConnectionTypeAzureDevops, URL: "https://dev.azure.com/acme",
+				Username: "acme", Password: "secret://ado/pat",
+			}),
+		Entry("azure devops with a server url, kept as its API URL",
+			"  azureDevops:\n    url: https://tfs.example.com/collection\n    organization: collection\n    personalAccessToken: {value: pat}\n",
+			models.Connection{
+				Type: models.ConnectionTypeAzureDevops, URL: "https://tfs.example.com/collection",
+				Username: "collection", Password: "pat",
+			}),
 		Entry("loki",
 			"  loki:\n    url: http://loki:3100\n    username: {value: admin}\n",
 			models.Connection{Type: models.ConnectionTypeLoki, URL: "http://loki:3100", Username: "admin"}),
