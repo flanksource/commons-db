@@ -94,6 +94,25 @@ var _ = Describe("Git-aware walk", func() {
 		Expect(err).NotTo(HaveOccurred())
 		Expect(paths).To(ConsistOf(".gitignore", "data.xml"))
 	})
+	It("reports paths under the root it was given when that root is a symlink", func(ctx SpecContext) {
+		repo := fixtureTempDir()
+		gitFixture(repo, "init", "-q")
+		write(repo, ".gitignore", "hidden/\n")
+		write(repo, "pkg/data.xml", "body")
+		write(repo, "hidden/data.xml", "body")
+		link := filepath.Join(fixtureTempDir(), "checkout")
+		Expect(os.Symlink(repo, link)).To(Succeed())
+		var visited []string
+		err := git.WalkDir(ctx, link, func(path string, entry fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			visited = append(visited, path)
+			return nil
+		})
+		Expect(err).NotTo(HaveOccurred())
+		Expect(visited).To(ConsistOf(link, filepath.Join(link, ".gitignore"), filepath.Join(link, "pkg"), filepath.Join(link, "pkg", "data.xml")))
+	})
 	It("honors callback pruning and failures", func(ctx SpecContext) {
 		root := fixtureTempDir()
 		write(root, "skip/data.xml", "body")

@@ -5,10 +5,13 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // WalkDir visits tracked and unignored paths, applying each nested repository's rules.
 // Outside a repository it visits all paths. Git metadata is never visited.
+// Like filepath.WalkDir, every path it reports starts with root, even when root
+// resolves through a symlink.
 func WalkDir(ctx context.Context, root string, fn fs.WalkDirFunc) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -29,6 +32,9 @@ func WalkDir(ctx context.Context, root string, fn fs.WalkDirFunc) error {
 	return filepath.WalkDir(canonical, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
+		}
+		fn := func(path string, entry fs.DirEntry, err error) error {
+			return fn(abs+strings.TrimPrefix(path, canonical), entry, err)
 		}
 		if walkErr != nil {
 			return fn(path, entry, walkErr)
