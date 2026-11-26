@@ -48,13 +48,14 @@ const (
 
 // connectionInfo is everything needed to open TLS connections to an instance.
 type connectionInfo struct {
-	name       connName
-	clientCert tls.Certificate
-	serverCAs  []*x509.Certificate
-	serverName string
-	version    string
-	addrs      map[string]string
-	expiration time.Time
+	name          connName
+	clientCert    tls.Certificate
+	serverCAs     []*x509.Certificate
+	serverName    string
+	perInstanceCA bool
+	version       string
+	addrs         map[string]string
+	expiration    time.Time
 }
 
 // addr returns the instance address for the IP type, or an error naming the
@@ -74,16 +75,19 @@ func (c connectionInfo) tlsConfig() *tls.Config {
 	for _, ca := range c.serverCAs {
 		pool.AddCert(ca)
 	}
-	return &tls.Config{
+	config := &tls.Config{
 		ServerName:   c.serverName,
 		Certificates: []tls.Certificate{c.clientCert},
 		RootCAs:      pool,
 		MinVersion:   tls.VersionTLS13,
-		// Standard verification is replaced entirely by verifyPeerCertificateFunc,
-		// which understands Cloud SQL's certificate naming.
-		InsecureSkipVerify:    true,
-		VerifyPeerCertificate: verifyPeerCertificateFunc(c.serverName, c.name, pool),
+		// Per-instance CAs can issue CN-only certificates. Their chain and
+		// instance identity are verified by the callback below.
+		InsecureSkipVerify: c.perInstanceCA,
 	}
+	if c.perInstanceCA {
+		config.VerifyPeerCertificate = verifyPeerCertificateFunc(c.serverName, c.name, pool)
+	}
+	return config
 }
 
 // instanceCache holds the connection info for one instance and refreshes it
@@ -175,7 +179,18 @@ func (c *instanceCache) infoFromSettings(s *gcp.ConnectSettings) (connectionInfo
 	if len(s.DNSNames) > 0 && s.DNSNames[0].Name != "" {
 		serverName = s.DNSNames[0].Name
 	}
-	return connectionInfo{name: c.name, serverCAs: cas, serverName: serverName, version: s.DatabaseVersion, addrs: addrs}, nil
+	info := connectionInfo{name: c.name, serverCAs: cas, serverName: serverName, version: s.DatabaseVersion, addrs: addrs}
+	switch s.ServerCaMode {
+	case "", "CA_MODE_UNSPECIFIED", "GOOGLE_MANAGED_INTERNAL_CA":
+		info.perInstanceCA = true
+	case "GOOGLE_MANAGED_CAS_CA", "CUSTOMER_MANAGED_CAS_CA":
+		if serverName == "" {
+			return connectionInfo{}, fmt.Errorf("cloudsql: %s: %s requires a server DNS name", c.name, s.ServerCaMode)
+		}
+	default:
+		return connectionInfo{}, fmt.Errorf("cloudsql: %s: unknown server CA mode %q", c.name, s.ServerCaMode)
+	}
+	return info, nil
 }
 
 func parseCertificates(pemData string) ([]*x509.Certificate, error) {

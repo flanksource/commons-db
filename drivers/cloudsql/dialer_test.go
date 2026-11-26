@@ -104,6 +104,8 @@ type fakeCloudSQL struct {
 	admin        *httptest.Server
 	listener     net.Listener
 	serverCA     testCA
+	serverCAMode string
+	dnsName      string
 	clientCA     testCA
 	certValidity time.Duration
 
@@ -117,6 +119,7 @@ type fakeCloudSQL struct {
 func newFakeCloudSQL(serverCA testCA, certValidity time.Duration) *fakeCloudSQL {
 	f := &fakeCloudSQL{serverCA: serverCA, clientCA: newTestCA("client-ca"), certValidity: certValidity, peerCerts: make(chan []*x509.Certificate, 8)}
 	f.admin = httptest.NewServer(http.HandlerFunc(f.serveAdmin))
+	f.dnsName = testServerName
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
 		Certificates: []tls.Certificate{serverCA.serverCertificate()},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
@@ -156,7 +159,7 @@ func (f *fakeCloudSQL) serveAdmin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	if r.Method == http.MethodGet {
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"region": "us-east1", "backendType": "SECOND_GEN", "databaseVersion": "POSTGRES_15", "dnsName": testServerName,
+			"region": "us-east1", "backendType": "SECOND_GEN", "databaseVersion": "POSTGRES_15", "dnsName": f.dnsName, "serverCaMode": f.serverCAMode,
 			"serverCaCert": map[string]string{"cert": f.serverCA.pem()},
 			"ipAddresses": []map[string]string{
 				{"type": "PRIMARY", "ipAddress": "203.0.113.7"},
@@ -273,6 +276,14 @@ var _ = Describe("Cloud SQL dialer", func() {
 		_, err := sql.dialer().Dial(context.Background(), dialOptions{InstanceConnectionName: testInstance})
 
 		Expect(err).To(MatchError(ContainSubstring("verifying server certificate")))
+	})
+
+	It("rejects a shared-CA certificate for another DNS name even with a matching common name", func() {
+		sql = newFakeCloudSQL(newTestCA("shared-ca"), time.Hour)
+		sql.serverCAMode = "GOOGLE_MANAGED_CAS_CA"
+		sql.dnsName = "other.proj.db.test"
+		_, err := sql.dialer().Dial(context.Background(), dialOptions{InstanceConnectionName: testInstance})
+		Expect(err).To(MatchError(ContainSubstring(sql.dnsName)))
 	})
 
 	It("rejects a malformed instance connection name before any request", func() {
