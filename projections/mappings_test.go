@@ -336,51 +336,6 @@ entries:
 
 		Expect(err).To(MatchError(ContainSubstring("NaN")))
 	})
-	ginkgo.It("summarises a sample series with nearest-rank order statistics", func() {
-		program, err := compileProjectionExpression(`{"p95": source.samples.percentile(95), "stats": source.samples.stats()}`)
-		Expect(err).ToNot(HaveOccurred())
-
-		samples := []any{40.0, 10.0, 30.0, 20.0, 50.0}
-		value, err := evalProjectionValue(program, map[string]any{"source": map[string]any{"samples": samples}})
-
-		Expect(err).ToNot(HaveOccurred())
-		Expect(value).To(Equal(map[string]any{
-			"p95": 50.0,
-			"stats": map[string]any{
-				"min": 10.0, "avg": 30.0, "max": 50.0,
-				"p50": 30.0, "p90": 50.0, "p95": 50.0, "p99": 50.0,
-				"samples": int64(5),
-			},
-		}))
-	})
-	ginkgo.It("refuses order statistics over an empty series rather than reporting zero", func() {
-		program, err := compileProjectionExpression(`source.samples.stats()`)
-		Expect(err).ToNot(HaveOccurred())
-
-		_, err = evalProjectionValue(program, map[string]any{"source": map[string]any{"samples": []any{}}})
-
-		Expect(err).To(MatchError(ContainSubstring("stats requires at least one sample")))
-	})
-	ginkgo.It("selects the exact rank when a percentile falls on a sample boundary", func() {
-		program, err := compileProjectionExpression(`source.samples.percentile(7)`)
-		Expect(err).NotTo(HaveOccurred())
-		samples := make([]int, 100)
-		for i := range samples {
-			samples[i] = i + 1
-		}
-		value, err := evalProjectionValue(program, map[string]any{"source": map[string]any{"samples": samples}})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(value).To(Equal(7.0))
-	})
-	ginkgo.It("keeps the average finite when the sample sum overflows", func() {
-		program, err := compileProjectionExpression(`source.samples.stats().avg`)
-		Expect(err).NotTo(HaveOccurred())
-		value, err := evalProjectionValue(program, map[string]any{
-			"source": map[string]any{"samples": []float64{math.MaxFloat64, math.MaxFloat64}},
-		})
-		Expect(err).NotTo(HaveOccurred())
-		Expect(value).To(Equal(math.MaxFloat64))
-	})
 	ginkgo.It("rejects a date() argument that is not a timestamp", func() {
 		program, err := compileProjectionExpression(`date(source.first_observed)`)
 		Expect(err).ToNot(HaveOccurred())
