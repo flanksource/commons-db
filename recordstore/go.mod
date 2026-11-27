@@ -13,7 +13,7 @@ require (
 	github.com/flanksource/commons v1.65.0
 	github.com/flanksource/commons-db v0.1.92
 	github.com/gofrs/flock v0.13.0
-	github.com/google/uuid v1.6.0
+	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518
 	github.com/klauspost/compress v1.18.7
 	github.com/onsi/ginkgo/v2 v2.33.1
 	github.com/onsi/gomega v1.44.0
@@ -59,7 +59,7 @@ require (
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834 // indirect
 	github.com/charmbracelet/x/ansi v0.11.6 // indirect
 	github.com/charmbracelet/x/cellbuf v0.0.15 // indirect
-	github.com/charmbracelet/x/exp/strings v0.0.0-20240722160745-212f7b056ed0 // indirect
+	github.com/charmbracelet/x/exp/strings v0.0.0-20260122224438-b01af16209d9 // indirect
 	github.com/charmbracelet/x/term v0.2.2 // indirect
 	github.com/clipperhouse/displaywidth v0.11.0 // indirect
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
@@ -80,7 +80,7 @@ require (
 	github.com/flanksource/gomplate/v4 v4.0.4 // indirect
 	github.com/flanksource/is-healthy v1.0.93 // indirect
 	github.com/flanksource/kubectl-neat v1.0.4 // indirect
-	github.com/flanksource/sqlglot-go v1.3.7 // indirect
+	github.com/flanksource/sqlglot-go v1.6.2 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.1 // indirect
 	github.com/geoffgarside/ber v1.2.0 // indirect
 	github.com/ghodss/yaml v1.0.0 // indirect
@@ -183,7 +183,7 @@ require (
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opensearch-project/opensearch-go/v2 v2.3.0 // indirect
 	github.com/orcaman/concurrent-map/v2 v2.0.1 // indirect
-	github.com/patrickmn/go-cache v2.1.0+incompatible // indirect
+	github.com/patrickmn/go-cache v2.1.1-0.20191004192108-46f407853014+incompatible // indirect
 	github.com/paulmach/orb v0.12.0 // indirect
 	github.com/peterbourgon/diskv v2.0.1+incompatible // indirect
 	github.com/pierrec/lz4/v4 v4.1.34 // indirect
