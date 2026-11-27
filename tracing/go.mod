@@ -10,7 +10,7 @@ require (
 	github.com/flanksource/commons v1.65.0
 	github.com/flanksource/commons-db v0.1.92
 	github.com/flanksource/commons-db/recordstore v0.1.92
-	github.com/flanksource/sqlglot-go v1.3.7
+	github.com/flanksource/sqlglot-go v1.6.2
 	github.com/google/gops v0.3.29
 	github.com/google/pprof v0.0.0-20260802141513-ef3492d7dac3
 	github.com/google/uuid v1.6.1-0.20241114170450-2d3c2a9cc518

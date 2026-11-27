@@ -219,8 +219,8 @@ github.com/flanksource/is-healthy v1.0.93 h1:hpXkPfMXG+zawNs0HTjc/3ZIjrW7obAPDR/
 github.com/flanksource/is-healthy v1.0.93/go.mod h1:Ee0lzss7zeLlfYOcr4r3eOUJqTD3fjVnxT5cv79UVF8=
 github.com/flanksource/kubectl-neat v1.0.4 h1:t5/9CqgE84oEtB0KitgJ2+WIeLfD+RhXSxYrqb4X8yI=
 github.com/flanksource/kubectl-neat v1.0.4/go.mod h1:Un/Voyh3cmiZNKQrW/TkAl28nAA7vwnwDGVjRErKjOw=
-github.com/flanksource/sqlglot-go v1.3.7 h1:zMftNtunOkDP+J/EfRpro2gvsm0/tt7/YB3CW8khJbo=
-github.com/flanksource/sqlglot-go v1.3.7/go.mod h1:zVZqNPg5/oT4kcaLGF2Q6fcQy/KYnTPxLOo2okSD1dY=
+github.com/flanksource/sqlglot-go v1.6.2 h1:AEj4cdRB42flPbBkxWeoBBx8y1ODyI8r8yl/OthPj7s=
+github.com/flanksource/sqlglot-go v1.6.2/go.mod h1:oPl24cgmSRaSHLTXTkhIqBrTdo4U6OnkYskOWSCf1Z4=
 github.com/fxamacker/cbor/v2 v2.9.1 h1:2rWm8B193Ll4VdjsJY28jxs70IdDsHRWgQYAI80+rMQ=
 github.com/fxamacker/cbor/v2 v2.9.1/go.mod h1:vM4b+DJCtHn+zz7h3FFp/hDAI9WNWCsZj23V5ytsSxQ=
 github.com/geoffgarside/ber v1.1.0/go.mod h1:jVPKeCbj6MvQZhwLYsGwaGI52oUorHoHKNecGT85ZCc=
