@@ -104,10 +104,9 @@ func TestApplyRestoresUnmanagedDependentView(t *testing.T) {
 }
 
 // TestApplyRefusesToDropColumnReadByUnmanagedView proves the loud-failure path: dropping a column
-// an unmanaged view reads cannot be re-created, so apply fails with PostgreSQL's own dependency
-// error, and the unit rolls back leaving the column and the view in place. The planner re-creates
-// dependent views only around retypes, so unlike the removed viewdeps sweep it does not name the
-// view or print replayable DDL.
+// an unmanaged view reads cannot be re-created, so the plan is refused before anything runs. The
+// refusal names the view and the dropped column and carries the CREATE VIEW DDL that re-creates
+// it, and the column and the view stay in place.
 func TestApplyRefusesToDropColumnReadByUnmanagedView(t *testing.T) {
 	dsn, db := startViewDepsDB(t)
 	ctx := t.Context()

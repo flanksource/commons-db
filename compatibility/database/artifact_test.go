@@ -9,12 +9,6 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-var (
-	_ engine.ApplyRequest = sqlserver.Request{}
-	_ engine.Result       = sqlserver.Result{}
-	_ engine.Outcome      = sqlserver.Applied
-)
-
 var _ = Describe("SQL Server artifact seam", func() {
 	It("renders a reviewed engine artifact planned offline as one transactional script under the shared migration lock", func() {
 		desired, err := dialect.DesiredFromHCL("sqlserver", `schema "dbo" {}

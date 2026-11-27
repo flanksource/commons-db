@@ -17,8 +17,6 @@ func NewProvisioner(schemaFS fs.FS, opts ...Option) *SchemaProvisioner {
 
 func WithRoutines(dir string) Option { return native.WithRoutines(dir) }
 
-func WithRebuilds() Option { return native.WithRebuilds() }
-
 func WithDir(dir string) Option { return native.WithDir(dir) }
 
 func WithName(name string) Option { return native.WithName(name) }
