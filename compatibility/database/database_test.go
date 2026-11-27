@@ -24,7 +24,6 @@ import (
 )
 
 var (
-	_ nativemigrate.Option                   = oldmigrate.WithRebuilds()
 	_ nativesqlite.ReconcileOptions          = oldsqlite.ReconcileOptions{AllowRebuilds: true}
 	_ *nativeatlas.Driver                    = new(oldatlas.Driver)
 	_ nativesnapshot.Result                  = oldsnapshot.Result{}
@@ -48,7 +47,7 @@ table "items" {
  schema = schema.public
  column "id" { type = text }
 }`)}}
-		Expect(oldmigrate.Apply(ctx, "", files, oldmigrate.WithDB(db), oldmigrate.WithRebuilds())).To(Succeed())
+		Expect(oldmigrate.Apply(ctx, "", files, oldmigrate.WithDB(db))).To(Succeed())
 		cache := oldinspect.NewMemoryCache()
 		opts := oldinspect.Options{CacheKey: "compat-catalog", Cache: cache}
 		first, err := oldinspect.Inspect(ctx, db, "sqlite", opts)
