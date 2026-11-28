@@ -16,7 +16,10 @@ func buildOpenTelemetryRequest(
 	if req.Search != nil {
 		return canonicalSearchRequest(req, page, options.Layout)
 	}
-	search := openTelemetrySearch(options)
+	search, err := openTelemetrySearch(options)
+	if err != nil {
+		return openSearchRequest{}, err
+	}
 	withTraceTimeFormat(&search, options, timeFieldMapping)
 	// A declared order is the profile's, and it is what a cursor is cut from,
 	// so it wins over the trace-shaped default sort.
@@ -46,7 +49,11 @@ func buildOpenTelemetryRequest(
 // openTelemetrySearch layers the trace-shaped options underneath the
 // specification: they fill what the author left unset and never override it, so
 // a profile can opt out of any default by stating its own.
-func openTelemetrySearch(options OpenTelemetryOptions) esdsl.Search {
+func openTelemetrySearch(options OpenTelemetryOptions) (esdsl.Search, error) {
+	limit, err := openSearchLimit(options.Limit)
+	if err != nil {
+		return esdsl.Search{}, err
+	}
 	var search esdsl.Search
 	if options.Search != nil {
 		search = *options.Search
@@ -64,10 +71,10 @@ func openTelemetrySearch(options OpenTelemetryOptions) esdsl.Search {
 	if len(options.SourceExcludes) > 0 && search.Source == nil {
 		search.Source = &esdsl.Source{Excludes: options.SourceExcludes}
 	}
-	if options.Limit > 0 && search.Size == nil {
-		search.Size = &options.Limit
+	if limit > 0 && search.Size == nil {
+		search.Size = &limit
 	}
-	return search
+	return search, nil
 }
 
 // withTraceTimeFormat fills Jaeger's epoch-millisecond startTimeMillis format

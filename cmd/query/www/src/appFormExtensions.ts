@@ -10,7 +10,7 @@ import {
   profileBuilderFormExtensions,
   processorPipelineFormExtensions,
 } from "@flanksource/clicky-ui/profiles";
-import { mountPath } from "./mount";
+import { connectionsApiBase } from "./connectionsApi";
 import { localFileFormExtensions } from "./localFilePicker";
 import { esParamOptionsFormExtensions } from "./esParamOptions";
 import { jsonPathFormExtensions } from "./jsonPathPicker";
@@ -18,9 +18,6 @@ import { configureProfileConnectionForm } from "./profileConnectionMapping";
 
 const unitFormExtensions = createUnitFormExtensions();
 
-// The connections service is mounted at /api/v1 under the path the server
-// mounted the app at.
-export const connectionsApiBase = `${mountPath}/api/v1`;
 export const connectionFormActions = createConnectionFormActions({ apiBase: connectionsApiBase });
 const connectionFields = connectionSchemaFormExtensions({apiBase:connectionsApiBase,schema:{}});
 

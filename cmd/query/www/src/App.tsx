@@ -22,7 +22,8 @@ import {
   useConnectionFormExtensions,
   useConnectionSchema,
 } from "@flanksource/clicky-ui/connections";
-import { appFormExtensions, connectionFormActions, connectionsApiBase } from "./appFormExtensions";
+import { appFormExtensions, connectionFormActions } from "./appFormExtensions";
+import { connectionsApiBase, connectionsClient } from "./connectionsApi";
 import { logsResultRenderer, useLogsSurfaces } from "./logsProfiles";
 import { tracePaginationMode, tracesResultRenderer, useTraceSurfaces } from "./tracesProfiles";
 import { connectionDetailBodyRenderer, connectionDetailHeaderRenderer } from "./connectionBrowser";
@@ -76,7 +77,14 @@ function Explorer() {
   const { pathname, renderLink } = useRouter();
   const editingProfile = profileEditSurfaceKey(pathname);
   const reconcilingProfile = reconcileSurfaceKey(pathname);
-  const connectionSchema = useConnectionSchema(client);
+  const connectionSchema = useConnectionSchema(connectionsClient);
+  // Without the schema every namespace, URL and secret picker silently renders
+  // as a plain input, so a service that serves none is a broken deployment.
+  if (connectionSchema.data === null) {
+    throw new Error(
+      `GET ${connectionsApiBase}/connection served no connection JSON Schema (Accept: application/schema+json)`,
+    );
+  }
   const { extensions: formExtensions, error: formExtensionsError } = useConnectionFormExtensions({
     apiBase: connectionsApiBase,
     schema: connectionSchema.data,

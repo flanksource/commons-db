@@ -28,3 +28,15 @@ it("keeps the connection and filters when opening a trace and restoring search",
   await vi.waitFor(() => expect(container.querySelector("h2")?.textContent).toBe("Traces"));
   expect(new URLSearchParams(window.location.search).get("minSpans")).toBe("2");
 });
+
+it("searches every trace when the address sets no span-count floor", async () => {
+  window.history.replaceState(null, "", "/connection/search?tab=traces&lookback=1h&limit=100");
+  const fetchMock = vi.fn((_url: string) => Promise.resolve(new Response(JSON.stringify({ traces: [], total: 0, services: [], attributes: [], rootOperations: [] }))));
+  vi.stubGlobal("fetch", fetchMock);
+  vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
+  container = document.createElement("div"); document.body.appendChild(container); root = createRoot(container);
+  await act(async () => { root.render(<QueryClientProvider client={new QueryClient()}><ConnectionOtel id="search" name="Search" /></QueryClientProvider>); });
+  await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+  const search = new URL(fetchMock.mock.calls[0]![0], window.location.origin).searchParams;
+  expect({ minSpans: search.get("minSpans"), lookback: search.get("lookback"), limit: search.get("limit") }).toEqual({ minSpans: null, lookback: "1h", limit: "100" });
+});

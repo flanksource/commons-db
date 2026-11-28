@@ -51,7 +51,7 @@ type OpenTelemetryOptions struct {
 	ServiceField   string   `json:"serviceField,omitempty"`
 	SelectFields   []string `json:"selectFields,omitempty"`
 	SourceExcludes []string `json:"sourceExcludes,omitempty"`
-	Limit          int      `json:"limit,omitempty"`
+	Limit          string   `json:"limit,omitempty"`
 
 	// Search is the structured search specification. The trace-shaped options
 	// above fill whatever it leaves unset.
@@ -90,7 +90,10 @@ func (openTelemetryProvider) InspectColumnFilters(
 	if err != nil {
 		return query.ColumnInspectionResult{}, err
 	}
-	search := openTelemetrySearch(runtime.options)
+	search, err := openTelemetrySearch(runtime.options)
+	if err != nil {
+		return query.ColumnInspectionResult{}, err
+	}
 	return inspectOpenSearchColumnFilters(
 		ctx,
 		req,
@@ -136,7 +139,11 @@ func (p openTelemetryProvider) Pages(ctx context.Context, req query.ProviderRequ
 			yield(query.Page{}, err)
 			return
 		}
-		search := openTelemetrySearch(runtime.options)
+		search, err := openTelemetrySearch(runtime.options)
+		if err != nil {
+			yield(query.Page{}, err)
+			return
+		}
 		var timeFieldMapping *esdsl.TimeFieldMapping
 		if req.Search == nil {
 			timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
@@ -288,6 +295,9 @@ func ResolveSpanLayout(ctx context.Context, request SpanLayoutRequest) (layout.D
 
 // Validate refuses a format the provider cannot shape rows from; empty is flat.
 func (options OpenTelemetryOptions) Validate() error {
+	if _, err := openSearchLimit(options.Limit); err != nil {
+		return err
+	}
 	switch options.Format {
 	case "", "flat", "jaeger":
 		return nil
