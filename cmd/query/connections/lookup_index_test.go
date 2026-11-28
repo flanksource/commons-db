@@ -46,6 +46,16 @@ var _ = Describe("OpenSearch index lookup", func() {
 		}))
 	})
 
+	It("offers a typed wildcard that names an existing group once, as the typed pattern", func() {
+		options, total := indexOptions(targets, "logs-*", 100)
+		Expect(total).To(Equal(3))
+		Expect(options).To(Equal(map[string]entity.LookupNode{
+			"logs-*":          option("logs-*", "Pattern", "matches 2 indexes"),
+			"logs-2026-11-01": option("logs-2026-11-01", "Indexes", ""),
+			"logs-2026-11-02": option("logs-2026-11-02", "Indexes", ""),
+		}))
+	})
+
 	It("still offers a wildcard that matches nothing, saying so", func() {
 		options, total := indexOptions(targets, "metrics-*", 100)
 		Expect(total).To(Equal(1))

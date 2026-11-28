@@ -54,7 +54,7 @@ func (s *Service) serveIndexLookup(w http.ResponseWriter, r *http.Request) {
 // Without a query it offers the wildcard groups and the targets that are not
 // rotations of one; a query matches every target by substring, or — when it
 // holds a `*` — as an OpenSearch wildcard, offering the typed pattern itself
-// with how many indexes it covers. Hidden and system targets are left out, as
+// with how many indexes it covers, in place of a group of the same name. Hidden and system targets are left out, as
 // an OpenSearch wildcard leaves them out. limit caps the options; total counts
 // every match.
 func indexOptions(targets []opensearchinspect.Target, query string, limit int) (map[string]entity.LookupNode, int) {
@@ -68,7 +68,7 @@ func indexOptions(targets []opensearchinspect.Target, query string, limit int) (
 	covered := 0
 	for _, target := range targets {
 		group, known := indexTargetGroups[target.Kind]
-		if !known || target.Hidden || target.System {
+		if !known || target.Hidden || target.System || (glob && target.Name == query) {
 			continue
 		}
 		var matched bool
