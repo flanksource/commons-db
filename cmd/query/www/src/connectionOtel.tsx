@@ -4,18 +4,20 @@ import { Button, useRouter } from "@flanksource/clicky-ui";
 import { OtelTraceSearch, OtelTraceDetail, otelSearchParams, readOtelSearchValues, type OtelTrace, type OtelSearchResult, type OtelSearchValues } from "@flanksource/clicky-ui/data";
 import { mountedRoute } from "./mount";
 
+const SEARCH_DEFAULTS: OtelSearchValues = { lookback: "1h", limit: 100 };
+
 export function ConnectionOtel({ id, name }: { id: string; name: string }) {
   const { navigate, pathname } = useRouter();
   const client = useQueryClient();
   const params = new URLSearchParams(window.location.search);
   const trace = params.get("trace");
   for (const key of ["tab", "trace", "span"]) params.delete(key);
-  const [value, setValue] = useState<OtelSearchValues>(() => ({ lookback: "1h", minSpans: 2, limit: 100, ...readOtelSearchValues(params), source: id }));
+  const [value, setValue] = useState<OtelSearchValues>(() => ({ ...SEARCH_DEFAULTS, ...readOtelSearchValues(params), source: id }));
   useEffect(() => {
     const restore = () => {
       const params = new URLSearchParams(window.location.search);
       for (const key of ["tab", "trace", "span"]) params.delete(key);
-      setValue({ lookback: "1h", minSpans: 2, limit: 100, ...readOtelSearchValues(params), source: id });
+      setValue({ ...SEARCH_DEFAULTS, ...readOtelSearchValues(params), source: id });
     };
     window.addEventListener("popstate", restore);
     return () => window.removeEventListener("popstate", restore);

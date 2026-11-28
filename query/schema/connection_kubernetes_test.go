@@ -21,6 +21,23 @@ var _ = Describe("Kubernetes selection layout", func() {
 		Expect(fields["kubecontext"].(schema.Schema)).NotTo(HaveKeyWithValue("x-col-span", "full"))
 		Expect(fields["max_resources"].(schema.Schema)).To(HaveKeyWithValue("x-col-span", "full"))
 	})
+
+	It("gives every conditional authentication field its own row beside the selectors", func() {
+		component := schema.ConnectionComponents()["opensearch"]["properties"].(schema.Schema)
+		properties := component["properties"].(schema.Schema)
+		Expect(properties).To(HaveKeyWithValue("x-columns", 2))
+		credentials := map[string]any{}
+		for _, branch := range properties["allOf"].([]any) {
+			for name, field := range branch.(schema.Schema)["then"].(schema.Schema)["properties"].(schema.Schema) {
+				credentials[name] = field.(schema.Schema)["x-col-span"]
+			}
+		}
+		Expect(credentials).To(HaveKeyWithValue("username", "full"))
+		Expect(credentials).To(HaveKeyWithValue("password", "full"))
+		for name, span := range credentials {
+			Expect(span).To(Equal("full"), name)
+		}
+	})
 })
 
 // kubernetesSelectionTypes are the connection types whose form in bundled offers a kubeconfig.

@@ -5,7 +5,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // WalkDir visits tracked and unignored paths, applying each nested repository's rules.
@@ -34,7 +33,11 @@ func WalkDir(ctx context.Context, root string, fn fs.WalkDirFunc) error {
 			return err
 		}
 		fn := func(path string, entry fs.DirEntry, err error) error {
-			return fn(abs+strings.TrimPrefix(path, canonical), entry, err)
+			rel, relErr := filepath.Rel(canonical, path)
+			if relErr != nil {
+				return relErr
+			}
+			return fn(filepath.Join(abs, rel), entry, err)
 		}
 		if walkErr != nil {
 			return fn(path, entry, walkErr)

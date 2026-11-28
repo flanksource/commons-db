@@ -439,6 +439,14 @@ func tailoredBranch(typ string, cfg any) Schema {
 }
 
 func customizeOpenSearchPropertiesSchema(properties Schema) {
+	// The saved connection's inspected targets (wildcard groups, indexes, aliases,
+	// data streams); a typed wildcard is offered with the indexes it covers.
+	index := properties["properties"].(Schema)["index"].(Schema)
+	index["description"] = "Index, alias, data stream or wildcard pattern (such as logs-*) queried when a profile names none."
+	index["x-clicky-lookup"] = Schema{
+		"url": "/api/v1/connection", "filter": "index", "searchParam": "__lookup_q", "multi": false,
+		"scope": Schema{"param": "id", "from": "id"},
+	}
 	threshold := properties["properties"].(Schema)["paging_threshold"].(Schema)
 	threshold["description"] = "Requested row threshold for normal page/limit paging (0–10000). Larger or unbounded reads use the paging mode. Zero always uses the paging mode."
 	threshold["default"] = "10000"

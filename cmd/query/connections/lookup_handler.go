@@ -16,6 +16,10 @@ func (s *Service) lookupHandler(prefix string, next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
+		if params.Get("__lookup_filter") == "index" {
+			s.serveIndexLookup(w, r)
+			return
+		}
 		if key := params.Get("__lookup_filter"); key != "" && key != "connection" {
 			entity.WriteError(w, entity.NewStatusErrorf(http.StatusBadRequest, "invalid_filter", "unknown connection lookup filter %q", key))
 			return

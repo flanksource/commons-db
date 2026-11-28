@@ -123,7 +123,8 @@
                 "type": "string",
                 "x-clicky-component": "k8s-secret-selector",
                 "x-clicky-default-source": "secret",
-                "x-clicky-order": 2
+                "x-clicky-order": 2,
+                "x-col-span": "full"
               },
               "username": {
                 "format": "password",
@@ -131,7 +132,8 @@
                 "type": "string",
                 "x-clicky-component": "k8s-secret-selector",
                 "x-clicky-default-source": "value",
-                "x-clicky-order": 1
+                "x-clicky-order": 1,
+                "x-col-span": "full"
               }
             },
             "required": [
@@ -159,7 +161,8 @@
                 "type": "string",
                 "x-clicky-component": "k8s-secret-selector",
                 "x-clicky-default-source": "value",
-                "x-clicky-order": 1
+                "x-clicky-order": 1,
+                "x-col-span": "full"
               },
               "clientSecret": {
                 "format": "password",
@@ -167,18 +170,21 @@
                 "type": "string",
                 "x-clicky-component": "k8s-secret-selector",
                 "x-clicky-default-source": "secret",
-                "x-clicky-order": 2
+                "x-clicky-order": 2,
+                "x-col-span": "full"
               },
               "scopes": {
                 "description": "Comma-separated OAuth scopes",
                 "title": "Scopes",
                 "type": "string",
-                "x-clicky-order": 4
+                "x-clicky-order": 4,
+                "x-col-span": "full"
               },
               "tokenURL": {
                 "title": "Token URL",
                 "type": "string",
-                "x-clicky-order": 3
+                "x-clicky-order": 3,
+                "x-col-span": "full"
               }
             },
             "required": [
@@ -207,7 +213,8 @@
                 "type": "string",
                 "x-clicky-component": "k8s-secret-selector",
                 "x-clicky-default-source": "secret",
-                "x-clicky-order": 1
+                "x-clicky-order": 1,
+                "x-col-span": "full"
               },
               "cert": {
                 "format": "password",
@@ -215,7 +222,8 @@
                 "type": "string",
                 "x-clicky-component": "k8s-secret-selector",
                 "x-clicky-default-source": "secret",
-                "x-clicky-order": 2
+                "x-clicky-order": 2,
+                "x-col-span": "full"
               },
               "key": {
                 "format": "password",
@@ -223,7 +231,8 @@
                 "type": "string",
                 "x-clicky-component": "k8s-secret-selector",
                 "x-clicky-default-source": "secret",
-                "x-clicky-order": 3
+                "x-clicky-order": 3,
+                "x-col-span": "full"
               }
             },
             "required": [
@@ -255,8 +264,19 @@
           }
         },
         "index": {
+          "description": "Index, alias, data stream or wildcard pattern (such as logs-*) queried when a profile names none.",
           "title": "Default index",
           "type": "string",
+          "x-clicky-lookup": {
+            "filter": "index",
+            "multi": false,
+            "scope": {
+              "from": "id",
+              "param": "id"
+            },
+            "searchParam": "__lookup_q",
+            "url": "/api/v1/connection"
+          },
           "x-clicky-order": 4,
           "x-col-span": "full"
         },

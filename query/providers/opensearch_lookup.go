@@ -45,7 +45,10 @@ func (openTelemetryProvider) LookupFilterValues(ctx context.Context, req query.P
 	if err != nil {
 		return nil, nil, err
 	}
-	structured := openTelemetrySearch(runtime.options)
+	structured, err := openTelemetrySearch(runtime.options)
+	if err != nil {
+		return nil, nil, err
+	}
 	var timeFieldMapping *esdsl.TimeFieldMapping
 	if req.Search == nil {
 		timeFieldMapping, err = ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{

@@ -28,4 +28,12 @@ var _ = Describe("connection form lookup HTTP", func() {
 		}))
 		Expect(response.Body.String()).NotTo(ContainSubstring("private-value"))
 	})
+
+	It("refuses an index lookup for a connection that is not saved yet", func() {
+		service := newConflictTestService(newConnectionTestDB(nil))
+		response := httptest.NewRecorder()
+		service.Handler("/api/v1", http.NotFoundHandler()).ServeHTTP(response, httptest.NewRequest("GET", "/api/v1/connection?__lookup=filters&__lookup_filter=index&__lookup_q=logs", nil))
+		Expect(response.Code).To(Equal(http.StatusUnprocessableEntity), response.Body.String())
+		Expect(response.Body.String()).To(ContainSubstring("save the connection to look up its indexes"))
+	})
 })

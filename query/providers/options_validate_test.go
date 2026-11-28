@@ -22,6 +22,7 @@ var _ = Describe("exported provider options", func() {
 		Entry("an http method the provider does not send", providers.HTTPOptions{Method: "FETCH"}, "unsupported http method"),
 		Entry("an opensearch limit that is no number", providers.OpenSearchOptions{Limit: "many"}, "invalid opensearch limit"),
 		Entry("an opensearch tail poll that never waits", providers.OpenSearchOptions{TailPoll: "0s"}, "tailPoll"),
+		Entry("an opentelemetry limit that is no number", providers.OpenTelemetryOptions{Limit: "many"}, "invalid opensearch limit"),
 		Entry("an opentelemetry format it cannot read", providers.OpenTelemetryOptions{Format: "zipkin"}, `unsupported opentelemetry format "zipkin"`),
 		Entry("cloudwatch metrics with no range", providers.CloudWatchMetricsOptions{}, "requires range"),
 		Entry("a cloudwatch metrics language it cannot run", providers.CloudWatchMetricsOptions{Language: "promql", Range: &providers.PrometheusRange{Start: "now-1h", End: "now", Step: "60s"}}, `unsupported cloudwatchmetrics language "promql"`),

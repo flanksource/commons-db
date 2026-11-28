@@ -54,7 +54,10 @@ func ReadOpenTelemetrySpans(ctx context.Context, read OpenTelemetryRead, emit fu
 	if err != nil {
 		return err
 	}
-	search := openTelemetrySearch(runtime.options)
+	search, err := openTelemetrySearch(runtime.options)
+	if err != nil {
+		return err
+	}
 	mapping, err := ResolveOpenSearchTimeFieldMapping(ctx, OpenSearchTimeFieldMappingRequest{
 		Searcher: runtime.searcher, Index: runtime.options.Index, Search: search, Params: openSearchParamBindings(req),
 	})
